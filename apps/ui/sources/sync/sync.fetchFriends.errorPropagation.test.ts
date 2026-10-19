@@ -11,6 +11,7 @@ vi.mock('react-native', async () => {
 
 describe('sync fetchFriends error propagation', () => {
     let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
+    let syncBridge: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
     let friendsStatus: number;
 
     beforeEach(async () => {
@@ -23,9 +24,14 @@ describe('sync fetchFriends error propagation', () => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v2/account/settings') return Response.json({
+                content: { t: 'plain', v: { experiments: true, featureToggles: { 'social.friends': true } } },
+                version: 1,
+            });
             if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: home.accountId });
-            if (path === '/v2/sessions') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v2/sessions/query') return Response.json({
+                sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+            });
             if (path === '/v1/machines') return Response.json([]);
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/kv') return Response.json({ items: [] });
@@ -35,7 +41,7 @@ describe('sync fetchFriends error propagation', () => {
             if (path === '/v1/friends') return Response.json({ friends: [] }, { status: friendsStatus });
             return null;
         });
-        await loadSyncSingletonForTests();
+        syncBridge = await loadSyncSingletonForTests();
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
         await upsertAndActivateServer({ serverUrl: home.serverUrl });
@@ -49,6 +55,8 @@ describe('sync fetchFriends error propagation', () => {
         const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
         await disconnectActiveServerConnection();
         await network.dispose();
+        syncBridge?.dispose();
+        syncBridge = undefined;
         vi.restoreAllMocks();
     });
 

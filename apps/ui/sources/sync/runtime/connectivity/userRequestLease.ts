@@ -11,13 +11,12 @@ export type UserRequestLeaseOwner = Readonly<{
  * waits for requests to settle; explicit disconnect, pagehide, and freeze never do.
  */
 export function createUserRequestLeaseOwner(): UserRequestLeaseOwner {
-    let activeLeaseCount = 0;
+    const activeLeases = new Set<() => void>();
     let deferredRoutineTeardown: (() => void) | null = null;
 
-    const releaseOne = () => {
-        if (activeLeaseCount === 0) return;
-        activeLeaseCount -= 1;
-        if (activeLeaseCount !== 0 || deferredRoutineTeardown === null) return;
+    const releaseOne = (release: () => void) => {
+        if (!activeLeases.delete(release)) return;
+        if (activeLeases.size !== 0 || deferredRoutineTeardown === null) return;
 
         const teardown = deferredRoutineTeardown;
         deferredRoutineTeardown = null;
@@ -26,19 +25,15 @@ export function createUserRequestLeaseOwner(): UserRequestLeaseOwner {
 
     return {
         acquire() {
-            activeLeaseCount += 1;
-            let released = false;
-            return () => {
-                if (released) return;
-                released = true;
-                releaseOne();
-            };
+            const release = () => { releaseOne(release); };
+            activeLeases.add(release);
+            return release;
         },
         hasActiveLease() {
-            return activeLeaseCount > 0;
+            return activeLeases.size > 0;
         },
         deferRoutineTeardown(teardown) {
-            if (activeLeaseCount === 0) {
+            if (activeLeases.size === 0) {
                 teardown();
                 return false;
             }
@@ -49,9 +44,13 @@ export function createUserRequestLeaseOwner(): UserRequestLeaseOwner {
             deferredRoutineTeardown = null;
         },
         crossHardBoundary(teardown) {
-            activeLeaseCount = 0;
+            activeLeases.clear();
             deferredRoutineTeardown = null;
             teardown();
         },
     };
 }
+
+// Sync's visibility policy and ApiSocket's acknowledgement lifecycle share one
+// owner. Transport requests must hold the same lease as longer UI operations.
+export const userRequestLeaseOwner = createUserRequestLeaseOwner();

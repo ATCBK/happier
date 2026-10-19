@@ -9,7 +9,7 @@ import {
 } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import type { ApiEphemeralActivityUpdate, ApiUpdateContainer } from '@/sync/api/types/apiTypes';
 import type { Encryption } from '@/sync/encryption/encryption';
-import { readMachineEncryptionContextInput } from '@/sync/encryption/machineEncryption';
+import { areMachineEncryptionContextInputsEqual, readMachineEncryptionContextInput } from '@/sync/encryption/machineEncryption';
 import { AccessibleMachineAccessStoredReadV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { MachineKeyBasisStoredReadV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -716,6 +716,7 @@ function readCacheOnlyRenderablePatchReadableActivity(sessionId: string) {
     return summarizeSessionListReadableActivityFromMessageRecords(
         sessionMessages.messageIdsOldestFirst,
         sessionMessages.messagesById,
+        sessionMessages.renderableAggregate,
     );
 }
 
@@ -2105,15 +2106,15 @@ export async function handleUpdateContainer(params: {
             let viewerAccountId: string | null = null;
             try { if (params.credentials) viewerAccountId = parseToken(params.credentials.token); } catch { /* No owner fallback without identity. */ }
             const published = { ...machine, ...machineUpdate };
-            const input = readMachineEncryptionContextInput(published, viewerAccountId);
-            const previous = machine ? readMachineEncryptionContextInput(machine, viewerAccountId) : null;
+            // Exact RPC reads can admit crypto before the fleet store hydrates.
+            // Its presence shell must not retire an unchanged admitted context.
+            const previous = encryption?.getMachineEncryptionContext(machineId)
+                ?? (machine ? readMachineEncryptionContextInput(machine, viewerAccountId) : null);
+            const input = readMachineEncryptionContextInput(machineUpdate, viewerAccountId, previous);
             const access = AccessibleMachineAccessStoredReadV1Schema.safeParse(published.access);
             encryption?.captureMachineEncryptionContext(machineId, input);
-            if (!previous || previous.dataEncryptionKey !== input.dataEncryptionKey
-                || previous.expectedDataEncryptionKey !== input.expectedDataEncryptionKey
-                || previous.resourceMode !== input.resourceMode || previous.accessState !== input.accessState
+            if (!areMachineEncryptionContextInputsEqual(previous, input)
                 || ('access' in machineUpdate && (!access.success || access.data.accessState !== 'ready'))) {
-                encryption?.removeMachineEncryption(machineId);
                 if (machine) storage.getState().applyMachines([{
                     ...machine, metadata: null, daemonState: null,
                     availability: { kind: 'locked', reason: 'encryption_material_unavailable' },
@@ -2128,6 +2129,7 @@ export async function handleUpdateContainer(params: {
             updateSeq: updateData.seq,
             updateCreatedAt: updateData.createdAt,
             existingMachine: machine,
+            ...(hintBasis.success ? { keyBasis: hintBasis.data } : {}),
             getMachineEncryption: (id) => encryption?.getMachineEncryption(id) ?? null,
         });
         if (!updatedMachine) {
@@ -2144,11 +2146,9 @@ export async function handleUpdateContainer(params: {
         // Update storage via applyMachines, which may rebuild the active-server session list index if
         // the machine update affects project-group headers (but should stay stable for activity-only changes).
         const access = AccessibleMachineAccessStoredReadV1Schema.safeParse(machineUpdate.access);
-        const keyBasis = MachineKeyBasisStoredReadV1Schema.safeParse(machineUpdate.keyBasis);
         storage.getState().applyMachines([{
             ...updatedMachine,
             ...(access.success ? { access: access.data } : {}),
-            ...(keyBasis.success ? { keyBasis: keyBasis.data } : {}),
         }], false, { sourceServerId });
         if (!encryption?.getMachineEncryption(machineId)) {
             invalidateMachines();
@@ -2537,7 +2537,8 @@ export function handleEphemeralSocketUpdate(params: {
         const address = normalizeSessionAddress(sourceServerId, updateData.sessionId);
         if (address) {
             if (updateData.event === 'source_unavailable') {
-                notifyActivitySessionUpdate({ address, event: updateData.event });
+                notifyActivitySessionUpdate({ address, event: updateData.event,
+                    ...(updateData.stalledOccurrence ? { stalledOccurrence: updateData.stalledOccurrence } : {}) });
             } else if (updateData.event === 'failed' || updateData.event === 'cancelled') {
                 notifyActivitySessionUpdate({ address, event: updateData.event, turnId: updateData.turnId });
             } else if (updateData.event === 'human_message' || updateData.event === 'message') {
@@ -2546,7 +2547,8 @@ export function handleEphemeralSocketUpdate(params: {
                     : { sequenceDomain: 'discussion' as const, discussionId: updateData.message.discussionId, sequence: updateData.message.messageSeq };
                 notifyActivitySessionUpdate(updateData.event === 'human_message'
                     ? { address, event: updateData.event, committedSequence, sourceAccountId: updateData.sourceAccountId }
-                    : { address, event: updateData.event, committedSequence });
+                    : { address, event: updateData.event, committedSequence,
+                        ...(updateData.followEvent ? { followEvent: updateData.followEvent } : {}) });
             } else {
                 presentSessionPersonalEvent(address, updateData);
             }

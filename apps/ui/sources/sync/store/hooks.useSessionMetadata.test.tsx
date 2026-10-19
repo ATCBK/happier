@@ -7,7 +7,8 @@ import { useSessionMetadata } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
-import { useSessionDisplayNameSource } from './hooks';
+import { useSessionDisplayNameSource, useSessionDisplayNameProjections } from './hooks';
+import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 
 afterEach(() => {
     standardCleanup();
@@ -101,6 +102,26 @@ describe('useSessionMetadata', () => {
 });
 
 describe('useSessionDisplayNameSource', () => {
+    it('keeps batched readable titles stable across lifecycle changes and withdraws a cached title when content locks', async () => {
+        const previousState = storage.getState();
+        try {
+            const session = createSessionFixture({ id: 'private-bot', serverId: 'home-a',
+                metadata: { name: 'Payments coordinator', host: 'localhost', path: '/payments' } });
+            storage.setState({ sessions: { [session.id]: session } });
+            const addresses = [{ serverId: 'home-a', sessionId: session.id }];
+            const hook = await renderHook(() => useSessionDisplayNameProjections(addresses, readableSessionDisplayTitle));
+            expect(hook.getCurrent()).toEqual(['Payments coordinator']);
+            const before = hook.getCurrent();
+            await act(async () => { storage.setState({ sessions: { [session.id]: { ...session, thinking: true, updatedAt: 2 } } }); });
+            expect(hook.getCurrent()).toBe(before);
+            await act(async () => { storage.setState({ sessions: { [session.id]: { ...session,
+                encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable' } } }); });
+            expect(hook.getCurrent()).toEqual([null]);
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
     it('does not re-render when turn-lifecycle Session fields change', async () => {
         const previousState = storage.getState();
         try {

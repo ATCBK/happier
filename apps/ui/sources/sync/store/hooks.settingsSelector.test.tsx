@@ -1,4 +1,5 @@
 import { act } from 'react-test-renderer';
+import * as React from 'react';
 import { beforeEach, expect, it } from 'vitest';
 
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
@@ -35,23 +36,22 @@ it('does not recompute settings projections for other store domains', async () =
 });
 
 it('keeps the mounted Session list source stable for unrelated Account settings', async () => {
-    let renders = 0;
+    let commits = 0;
     const input = { enabled: false, homes: [] } as const;
     const hook = await renderHook(() => {
-        renders++;
+        React.useLayoutEffect(() => { commits++; });
         return useSessionListQuerySourceState(input);
     });
-    const before = renders;
+    const before = commits;
     const source = hook.getCurrent();
     await act(async () => {
         storage.getState().applySettingsLocal({ showLineNumbers: !storage.getState().settings.showLineNumbers });
     });
-    console.info(`Session list unrelated-setting render delta: ${renders - before}`);
-    expect(renders - before).toBe(0);
+    expect(commits - before).toBe(0);
     expect(hook.getCurrent()).toBe(source);
     await act(async () => {
         storage.getState().applySettingsLocal({ sessionListActiveGroupingV1: 'date' });
     });
-    expect(renders - before).toBe(1);
+    expect(commits - before).toBe(1);
     await hook.unmount();
 });

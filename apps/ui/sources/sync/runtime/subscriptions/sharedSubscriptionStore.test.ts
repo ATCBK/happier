@@ -75,7 +75,7 @@ describe('createSharedSubscriptionStore', () => {
         expect(store.getState('machine')).toBe(2);
         unsubscribe();
     });
-    it.each(['unavailable', 'rejection', 'changed', 'idle'] as const)('restores publication freshness while an old watch finishes with %s', async outcome => {
+    it.each(['unavailable', 'rejection', 'changed', 'idle', 'retry'] as const)('restores publication freshness while an old watch finishes with %s', async outcome => {
         const pending: Array<{ signal?: AbortSignal; resolve(value: SharedSubscriptionWatchOutcome<number>): void; reject(error: unknown): void }> = [];
         const store = createSharedSubscriptionStore({
             emptyState: 0, createState: () => 0, normalizeInput: (input: string) => input, storeKey: (input: string) => input,

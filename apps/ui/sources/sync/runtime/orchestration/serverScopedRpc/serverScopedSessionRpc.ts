@@ -21,6 +21,7 @@ import {
 import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext';
 import type { ResolvedServerAccountRequestContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
 import type { SessionTransferRoutingV1 } from '@happier-dev/protocol/socketRpc';
 import {
   areServerAccountScopesEqual,
@@ -62,6 +63,7 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
   signal?: AbortSignal;
   transferRouting?: SessionTransferRoutingV1;
 }>): Promise<R> {
+  const releaseRequestLease = userRequestLeaseOwner.acquire();
   let carrierCustodyTransferred = false;
   let socketForCleanup: Awaited<ReturnType<typeof createEphemeralServerSocketClient>> | null = null;
   try {
@@ -152,8 +154,12 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
   } catch (error) {
     throw readRpcRequestDisposition(error) === null ? markRpcRequestDisposition(error, 'notSent') : error;
   } finally {
-    socketForCleanup?.disconnect();
-    if (!carrierCustodyTransferred) await params.context.release?.();
+    try {
+      socketForCleanup?.disconnect();
+      if (!carrierCustodyTransferred) await params.context.release?.();
+    } finally {
+      releaseRequestLease();
+    }
   }
 }
 
@@ -173,9 +179,9 @@ export async function sessionRpcWithServerScope<R, A>(params: Readonly<{
     serverId: params.serverId,
     ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
   }).catch((error: unknown) => { throw markRpcRequestDisposition(error, 'notSent'); });
-  const operationTimeoutMs = params.timeoutMs === null
-    ? null
-    : context.timeoutMs;
+  // Setup has its own connection budget. Only an explicitly supplied operation
+  // deadline may cut off work whose completion belongs to the remote owner.
+  const operationTimeoutMs = typeof params.timeoutMs === 'number' ? context.timeoutMs : null;
   let exactIssuanceAttempted = false;
   const onIssued = () => {
     exactIssuanceAttempted = true;
@@ -237,6 +243,7 @@ export async function sessionRpcWithServerAccountScope<R, A>(params: Readonly<{
   timeoutMs?: number | null;
   onIssued?: () => void;
   signal?: AbortSignal;
+  transferRouting?: SessionTransferRoutingV1;
 }>): Promise<R> {
   if (params.signal?.aborted) throw markRpcRequestDisposition(createSocketRpcAbortError(), 'notSent');
   const context = await resolveServerAccountRequestContext({
@@ -261,8 +268,9 @@ export async function sessionRpcWithServerAccountScope<R, A>(params: Readonly<{
     method: params.method,
     payload: params.payload,
     context,
-    operationTimeoutMs: params.timeoutMs === null ? null : context.timeoutMs,
+    operationTimeoutMs: typeof params.timeoutMs === 'number' ? context.timeoutMs : null,
     onIssued: params.onIssued,
     signal: params.signal,
+    transferRouting: params.transferRouting,
   });
 }

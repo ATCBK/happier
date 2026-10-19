@@ -15,6 +15,7 @@ describe('Voice-history deletion through the bound Account authority', () => {
 
   it.each([
     { status: 404, code: 'session_absent', error: 'Session not found or not owned by user' },
+    { status: 409, code: 'session_active', error: 'Session is active' },
     { status: 409, code: 'session_delete_conflict', error: 'Session delete condition was lost' },
   ])('retains $code so cleanup cannot discard live rows on conflict', async ({ status, code, error }) => {
     const request = vi.fn(async () => new Response(JSON.stringify({ error }), { status }));
@@ -22,8 +23,8 @@ describe('Voice-history deletion through the bound Account authority', () => {
       .toEqual({ success: false, code, message: JSON.stringify({ error }) });
   });
 
-  it('does not classify an unrecognized failure as absence', async () => {
-    const request = vi.fn(async () => new Response('boom', { status: 500 }));
+  it.each([404, 409, 500])('does not classify an unrecognized HTTP %s failure as a typed refusal', async (status) => {
+    const request = vi.fn(async () => new Response('boom', { status }));
     expect(await sessionDeleteWithServerAccountAuthority('session', { request }))
       .toEqual({ success: false, message: 'boom' });
   });

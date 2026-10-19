@@ -1269,10 +1269,11 @@ describe('sync.sendMessage optimistic thinking', () => {
             const profileB = await upsertServerProfile({ serverUrl: `https://held-${operation}-b.example.test`, name: 'Held B' });
             const scopeA = { serverId: profileA.id, accountId: `held-${operation}-account-a` } as const;
             const scopeB = { serverId: profileB.id, accountId: `held-${operation}-account-b` } as const;
-            storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);
 
-            await setActiveServerId(profileA.id, { scope: 'tab' });
+            await setActiveServerId(profileA.id, { scope: 'device' });
+            publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             storage.getState().activateProfileScope(scopeA);
+            storage.getState().applySessions([{ ...createSession({ sessionId }), encryptionMode: 'plain' }]);
 
             let markRefreshStarted!: () => void;
             const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve; });
@@ -1307,7 +1308,8 @@ describe('sync.sendMessage optimistic thinking', () => {
             });
             await refreshStarted;
 
-            await setActiveServerId(profileB.id, { scope: 'tab' });
+            await setActiveServerId(profileB.id, { scope: 'device' });
+            publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             if (transition === 'cleared_profile') {
                 storage.getState().clearProfileScope();
             }
@@ -2690,6 +2692,48 @@ describe('sync.sendMessage optimistic thinking', () => {
         ]);
     });
 
+    it.each([
+        { status: 404, code: 'not-found' },
+        { status: 409, code: 'action-conflict' },
+    ])('reconciles the exact recipient for every requested-action caller on $code', async ({ status, code }) => {
+        const sessionId = 's_pending_stale_action';
+        const localId = 'stale-pending-local';
+        const recipient = { kind: 'execution_run' as const, runId: 'stale-action-run' };
+        storage.getState().applySessions([{
+            ...createSession({ sessionId }), encryptionMode: 'plain',
+        }]);
+        storage.getState().upsertPendingMessage(sessionId, {
+            id: localId, localId, recipient, createdAt: 1, updatedAt: 1,
+            source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
+            text: 'already materialized',
+            rawRecord: { role: 'user', content: { type: 'text', text: 'already materialized' } },
+        });
+        storage.getState().upsertPendingMessage(sessionId, {
+            id: 'main-pending-local', localId: 'main-pending-local', createdAt: 1, updatedAt: 1,
+            source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
+            text: 'keep main conversation input',
+            rawRecord: { role: 'user', content: { type: 'text', text: 'keep main conversation input' } },
+        });
+        const { sync } = await import('./sync');
+        sync.encryption = await Encryption.create(new Uint8Array(32).fill(7));
+        const paths: string[] = [];
+        vi.spyOn(apiSocket, 'request').mockImplementation(async (path, init) => {
+            paths.push(path);
+            if (init?.method === 'PATCH') return Response.json({ error: code }, { status });
+            return Response.json({ pending: [] });
+        });
+
+        await expect(sync.updatePendingRequestedAction(
+            sessionId, localId, { v: 1, kind: 'enqueue' },
+        )).rejects.toMatchObject({ code });
+
+        expect(storage.getState().sessionPending[sessionId]?.messages.map((message) => message.localId)).toEqual(['main-pending-local']);
+        expect(paths).toEqual([
+            `/v2/sessions/${sessionId}/execution-runs/${recipient.runId}/pending/${localId}/action`,
+            `/v2/sessions/${sessionId}/execution-runs/${recipient.runId}/pending?includeDiscarded=1`,
+        ]);
+    });
+
     it('normalizes an omitted pending delivery intent onto the canonical durable action path', async () => {
         const sessionId = 's_pending_default_action';
         const localId = 'pending-default-action-local';
@@ -3653,6 +3697,9 @@ describe('sync.sendMessage rejection and auth through the applied Account', () =
             serverId: restored!.home.id, serverUrl: 'https://optimistic-account.example.test',
         });
         expect(supervisor).not.toBeNull();
+        // The reachability owner coalesces invalidations for 250 ms. Advance
+        // beyond the send's probe before requesting the new auth observation.
+        await vi.advanceTimersByTimeAsync(250);
         supervisor!.invalidate();
         await vi.waitFor(() => expect(supervisor!.getState().phase).toBe('auth_failed'));
         await vi.advanceTimersByTimeAsync(1_000);

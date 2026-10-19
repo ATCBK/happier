@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
@@ -49,6 +52,7 @@ import { getForkedTranscriptSnapshotCached } from './domains/sessionFork/forkedT
 import { insertForkDividersIntoTranscriptItems } from '@/components/sessions/transcript/forkContext/insertForkDividersIntoTranscriptItems';
 import { apiSocket } from './api/session/apiSocket';
 import { runWithServerRequestAuthorityForServerAccountScope } from './runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 function isMainMessagesPageRequest(path: string, params: {
     sessionId: string;
@@ -87,8 +91,9 @@ const initialStorageState = storage.getState();
 
 function createSession(sessionId: string, metadata: Session['metadata'] = null): Session {
     const now = Date.now();
-    return {
+    return createSessionFixture({
         id: sessionId,
+        serverId: account?.serverId,
         seq: 0,
         encryptionMode: 'plain',
         createdAt: now,
@@ -103,7 +108,7 @@ function createSession(sessionId: string, metadata: Session['metadata'] = null):
         thinkingAt: 0,
         presence: 'online',
         optimisticThinkingAt: null,
-    };
+    });
 }
 
 function forkMetadata(parentSessionId: string, parentCutoffSeqInclusive: number): Session['metadata'] {
@@ -404,24 +409,20 @@ describe('sync forked transcript paging', () => {
         syncForTest.sessionMessagesHasMoreOlderByKey.set('parent:main', false);
 
         requestMock.mockImplementation(async (path: string) => {
-            if (path === '/v2/sessions/parent') {
-                return new Response(JSON.stringify({
-                    session: {
+            if (new URL(path, 'https://test.invalid').pathname === '/v2/sessions/parent') {
+                return Response.json({
+                    session: { ...createPlainSessionCurrentProjectionRecordFixture({
                         id: 'parent',
                         createdAt: 1,
                         updatedAt: 2,
                         seq: 3,
                         active: true,
                         activeAt: 2,
-                        encryptionMode: 'plain',
                         metadataVersion: 1,
-                        metadata: JSON.stringify({ readStateV1: null }),
+                        metadata: { path: '/repo', host: 'test' },
                         agentStateVersion: 1,
-                        agentState: JSON.stringify({ controlledByUser: true }),
-                        accessLevel: 'admin',
-                        canApprovePermissions: true,
-                    },
-                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                    }), agentState: JSON.stringify({ controlledByUser: true }) },
+                });
             }
 
             if (path === '/v1/sessions/parent/turns') {
@@ -464,7 +465,9 @@ describe('sync forked transcript paging', () => {
         const result = await syncForTest.loadOlderMessagesForkAware('child');
 
         const requestedPaths = requestMock.mock.calls.map((call) => call[0]);
-        expect(requestedPaths[0]).toBe('/v2/sessions/parent');
+        const parentRequest = new URL(String(requestedPaths[0]), 'https://test.invalid');
+        expect(parentRequest.pathname).toBe('/v2/sessions/parent');
+        expect(parentRequest.searchParams.get('accessProjectionVersion')).toBe('1');
         expect(requestedPaths.some((path) => isMainMessagesPageRequest(String(path), {
             sessionId: 'parent',
             beforeSeq: '4',

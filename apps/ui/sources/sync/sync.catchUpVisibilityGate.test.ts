@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 // C6/D1 (catch-up visibility gate): a loaded session that is not visible and not a
 // full-content consumer must not run catch-up on reconnect. Off-screen catch-up can
 // reset hydrated transcript state while the user is working in another session.

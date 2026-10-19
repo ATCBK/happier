@@ -1,130 +1,114 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
+import { MMKV } from 'react-native-mmkv';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { configureConnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { storage } from '@/sync/domains/state/storageStore';
+import type { StorageState } from '@/sync/store/types';
+import { createSessionsDomain } from './sessions';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { projectManager } from '@/sync/runtime/orchestration/projectManager';
+import * as reachableTargets from '@/sync/domains/session/resolveSessionReachableMachineId';
+import * as warmCachePersistence from '@/sync/domains/state/warmCachePersistence';
+import * as warmCacheAdaptersModule from '@/sync/domains/state/warmCacheAdapters';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { adoptHomeProfile, resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '../../domains/session/listing/sessionListRenderable';
-import { buildSessionListViewData } from '../../domains/session/listing/sessionListViewData';
 import { buildSessionListIndexFromViewData } from '../../domains/sessionList/sessionListIndex';
 import type { SessionListIndexItem } from '../../domains/sessionList/sessionListIndex';
 import { getSessionStorageKind } from '../../domains/session/sessionStorageKind';
+import { readExternalSessionLink } from '../../domains/session/external/readExternalSessionLink';
 import type { ScmWorkingSnapshot, Session } from '../../domains/state/storageTypes';
+import { createDemoOpenCodeSessionFixture } from '@/demoMode/world/sessions';
 
-const normalizeKnownProjectMachineIdMock = (value: unknown): string | null => {
-    const normalized = typeof value === 'string' ? value.trim() : '';
-    return normalized.length > 0 ? normalized : null;
-};
+vi.mock('socket.io-client', async (importOriginal) => (
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
+));
 
-beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.doMock('../../domains/server/serverRuntime', () => ({
-        getActiveServerSnapshot: () => ({ serverId: 'server-active', serverUrl: 'https://example.com', generation: 1 }),
-    }));
+beforeAll(async () => { await warmCachePersistence.prepareWarmCacheStorage(); });
+
+const harnessCleanup: Array<() => void> = [];
+beforeEach(async () => {
+    vi.restoreAllMocks();
+    warmCacheWrites.mockClear();
+    projectManager.clear();
+    await activateTestHome('srv_active');
+});
+afterEach(() => {
+    for (const cleanup of harnessCleanup.splice(0).reverse()) cleanup();
+    vi.restoreAllMocks();
 });
 
-function mockSessionPersistenceBoundaries(options?: { trackWarmCacheEntries?: boolean }): void {
-    let lastWarmCacheEntries: Record<string, unknown> | null = null;
-    const shouldTrackWarmCacheEntries = options?.trackWarmCacheEntries === true;
-    const resolveWarmCacheAccountScope = vi.fn((fallback: string | null | undefined) => fallback ?? null);
-    const peekSessionListWarmCacheEntries = shouldTrackWarmCacheEntries
-        ? vi.fn(() => lastWarmCacheEntries)
-        : vi.fn(() => null);
-    const saveSessionListWarmCacheEntries = shouldTrackWarmCacheEntries
-        ? vi.fn((serverId: string | null | undefined, accountId: string | null | undefined, entries: Record<string, unknown>) => {
-            lastWarmCacheEntries = entries;
-        })
-        : vi.fn();
-    vi.doMock('../../domains/state/persistence', () => ({
-        loadProfile: vi.fn(() => ({ id: 'account_a' })),
-        saveProfile: vi.fn(),
-        loadSessionDrafts: vi.fn(() => ({})),
-        loadSessionLastViewed: vi.fn(() => ({})),
-        loadSessionModelModeUpdatedAts: vi.fn(() => ({})),
-        loadSessionModelModes: vi.fn(() => ({})),
-        loadSessionPermissionModeUpdatedAts: vi.fn(() => ({})),
-        loadSessionPermissionModes: vi.fn(() => ({})),
-        loadSessionActionDrafts: vi.fn(() => ({})),
-        prepareSessionLocalStateScopeForActivation: vi.fn(),
-        loadSessionReviewCommentsDrafts: vi.fn(() => ({})),
-        loadWorkspaceReviewCommentsDrafts: vi.fn(() => ({})),
-        saveSessionDrafts: vi.fn(),
-        saveSessionLastViewed: vi.fn(),
-        loadSettings: vi.fn(() => ({
-            settings: {
-                preferredLanguage: 'en',
-            },
-            version: null,
-        })),
-        loadLocalSettings: vi.fn(() => ({})),
-        loadPurchases: vi.fn(() => ({})),
-        saveSessionModelModeUpdatedAts: vi.fn(),
-        saveSessionModelModes: vi.fn(),
-        saveSessionPermissionModeUpdatedAts: vi.fn(),
-        saveSessionPermissionModes: vi.fn(),
-        saveSessionActionDrafts: vi.fn(),
-        saveSessionReviewCommentsDrafts: vi.fn(),
-        saveWorkspaceReviewCommentsDrafts: vi.fn(),
-        saveLocalSettings: vi.fn(),
-        savePurchases: vi.fn(),
-        saveSettings: vi.fn(),
-    }));
-    vi.doMock('../../domains/state/warmCachePersistence', () => ({
-        resolveWarmCacheAccountScope,
-        peekSessionListWarmCacheEntries,
-        saveSessionListWarmCacheEntries,
-    }));
-    vi.doMock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-        isModelSelectableForSession: vi.fn(() => true),
-    }));
-    vi.doMock('@/agents/catalog/catalog', () => ({
-        AGENT_IDS: [],
-        DEFAULT_AGENT_ID: 'openai',
-        resolveAgentIdFromFlavor: vi.fn(() => null),
-    }));
+const warmCacheWrites = vi.fn<(key: string, bytes: string, entries: Record<string, unknown>) => void>();
+
+function observeSessionListWarmCacheWrites(): void {
+    warmCachePersistence.clearWarmCacheAccountScope();
+    warmCachePersistence.saveSessionListWarmCacheEntries(getActiveServerSnapshot().serverId, 'account_a', {});
+    const write = MMKV.prototype.set;
+    vi.spyOn(MMKV.prototype, 'set').mockImplementation(function (this: MMKV, key, value) {
+        if (key.startsWith('session-list-warm-cache-v1:') && typeof value === 'string') {
+            warmCacheWrites(key, value, JSON.parse(value));
+        }
+        return write.call(this, key, value);
+    });
 }
 
-function createHarness(createSessionsDomain: any, initialState?: Record<string, unknown>) {
-    let setCalls = 0;
-    let state: any = {
-        sessions: {},
-        sessionListRowsByServerId: {},
-        ordinarySessionListMembershipByServerId: {},
-        archivedSessionListMembershipByServerId: {},
-        sessionListIndexByServerId: {},
-        concurrentSessionListCacheByServerId: {},
-        sessionScmStatus: {},
-        sessionLastViewed: {},
-        sessionRepositoryTreeExpandedPathsBySessionId: {},
-        reviewCommentsDraftsBySessionId: {},
-        sessionActionDraftsByAddressKey: {},
-        isDataReady: false,
-        machines: {},
-        machineDisplayById: {},
-        sessionMessages: {},
-        profile: { id: 'account_a' },
-        settings: {},
+async function activateTestHome(serverId: string, serverUrl = 'https://' + serverId + '.test') {
+    const profile = await upsertServerProfile({ serverUrl });
+    if (serverId.startsWith('srv_')) await setServerProfileIdentityForUrl(serverUrl, serverId);
+    await setActiveServerId(profile.id, { scope: 'device' });
+    return profile;
+}
+
+function currentSession(overrides: Parameters<typeof createSessionFixture>[0]) {
+    return createSessionFixture({
+        serverId: getActiveServerSnapshot().serverId,
+        meaningfulActivityAt: overrides?.createdAt ?? 1,
+        ...overrides,
+    });
+}
+
+function createHarness(initialState?: Record<string, unknown>) {
+    const initial = storage.getInitialState();
+    const store = createStore<StorageState>()((set, get) => ({
+        ...initial,
+        ...createSessionsDomain<StorageState>({ set, get }),
+        machines: {}, machineDisplayById: {}, sessionMessages: {}, sessionMessagesHistoryStartLoaded: {},
+        profile: { ...initial.profile, id: 'account_a' },
         ...initialState,
-    };
-
-    const get = () => state;
-    const set = (updater: any) => {
-        setCalls += 1;
-        const next = typeof updater === 'function' ? updater(state) : updater;
-        state = { ...state, ...next };
-    };
-
-    const domain = createSessionsDomain({ get, set } as any);
-    return { get, domain, getSetCalls: () => setCalls };
+        settings: { ...initial.settings, ...(initialState?.settings && typeof initialState.settings === 'object' ? initialState.settings : {}) },
+    }));
+    let notifications = 0;
+    const unsubscribe = store.subscribe(() => { notifications += 1; });
+    const domain = store.getState();
+    harnessCleanup.push(() => { unsubscribe(); domain.clearSessionLocalStateScope(); });
+    return { get: store.getState, domain, set: store.setState, getSetCalls: () => notifications };
 }
 
-function replaceSessionListRows(domain: any, rows: SessionListRenderableSession[]): void {
-    domain.applyServerScopedSessionListRows('server-active', rows, { source: 'ordinary', mode: 'replace' });
+/** A list response publishes ordinary membership separately from detail hydration. */
+function applyOrdinarySnapshot(domain: StorageState, sessions: Parameters<StorageState['applySessions']>[0]): void {
+    domain.applySessions(sessions);
+    const rowsByHome = new Map<string, SessionListRenderableSession[]>();
+    for (const session of sessions) {
+        const serverId = resolveServerProfileScopeIdForIdentifier(session.serverId ?? getActiveServerSnapshot().serverId);
+        const rows = rowsByHome.get(serverId) ?? [];
+        rows.push(buildSessionListRenderableFromSession(session));
+        rowsByHome.set(serverId, rows);
+    }
+    for (const [serverId, rows] of rowsByHome) domain.applyServerScopedSessionListRows(serverId, rows, { source: 'ordinary', mode: 'replace' });
 }
 
-function patchActiveSessionListRows(domain: any, patches: unknown[]): void {
-    domain.applyServerScopedSessionListRowPatches('server-active', patches);
+function replaceSessionListRows(domain: StorageState, rows: SessionListRenderableSession[]): void {
+    domain.applyServerScopedSessionListRows('srv_active', rows, { source: 'ordinary', mode: 'replace' });
+}
+
+function patchActiveSessionListRows(domain: StorageState, patches: Parameters<StorageState['applyServerScopedSessionListRowPatches']>[1]): void {
+    domain.applyServerScopedSessionListRowPatches('srv_active', patches);
 }
 
 function readSessionListIndexSessionIds(
@@ -136,14 +120,42 @@ function readSessionListIndexSessionIds(
 }
 
 describe('sessions domain: sessionListIndex rebuild gating', () => {
+    it('keeps linked-session storage and qualified identity through compact row and index projection', () => {
+        const session = createDemoOpenCodeSessionFixture({ serverId: 'srv_active' });
+        const link = readExternalSessionLink(session.metadata);
+        if (!session.metadata || !link?.qualifiedIdentity) throw new Error('Expected a qualified linked-session fixture');
+        const row = buildSessionListRenderableFromSession(session);
+        expect(getSessionStorageKind(row)).toBe('direct');
+        expect(buildSessionListIndexFromViewData([{ type: 'session', session: row }])).toContainEqual(
+            expect.objectContaining({ type: 'session', sessionId: session.id, storageKind: 'direct' }),
+        );
+        expect(row.metadata?.externalSessionV1).toMatchObject({
+            qualifiedIdentity: link.qualifiedIdentity,
+        });
+        const same = buildSessionListRenderableFromSession({ ...session, metadata: { ...session.metadata,
+            externalSessionV1: { ...link, qualifiedIdentity: { ...link.qualifiedIdentity,
+                agent: { ...link.qualifiedIdentity.agent }, source: { ...link.qualifiedIdentity.source } } },
+        } }, row);
+        expect(same.metadata).toBe(row.metadata);
+
+        const replacementIdentity = { ...link.qualifiedIdentity,
+            agent: { ...link.qualifiedIdentity.agent, pluginId: 'example.agent.opencode' } };
+        const changed = buildSessionListRenderableFromSession({ ...session, metadata: { ...session.metadata,
+            externalSessionV1: { ...link, qualifiedIdentity: replacementIdentity },
+        } }, row);
+        expect(changed.metadata).not.toBe(row.metadata);
+        expect(changed.metadata?.externalSessionV1).toMatchObject({ qualifiedIdentity: replacementIdentity });
+        expect(getSessionStorageKind(changed)).toBe('direct');
+    });
+
     it('lazily registers loaded sessions before writing per-session project SCM snapshots', async () => {
-        mockSessionPersistenceBoundaries();
+        observeSessionListWarmCacheWrites();
         const { projectManager } = await import('../../runtime/orchestration/projectManager');
         projectManager.clear();
 
-        const session = {
+        const session = currentSession({
             id: 's1',
-            serverId: 'server-active',
+            serverId: 'srv_active',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -157,9 +169,9 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 'online',
-        };
+        });
         const snapshot: ScmWorkingSnapshot = {
-            projectKey: 'server-active:m1:/home/u/repo',
+            projectKey: 'srv_active:m1:/home/u/repo',
             fetchedAt: 123,
             repo: {
                 isRepo: true,
@@ -188,8 +200,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             },
         };
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain } = createHarness(createSessionsDomain, {
+        const { domain } = createHarness({
             sessions: { s1: session },
             machines: { m1: { id: 'm1', metadata: { homeDir: '/home/u' } } },
         });
@@ -203,13 +214,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
     });
 
     it('does not notify storage when SCM snapshot refreshes only change fetchedAt', async () => {
-        mockSessionPersistenceBoundaries();
+        observeSessionListWarmCacheWrites();
         const { projectManager } = await import('../../runtime/orchestration/projectManager');
         projectManager.clear();
 
-        const session = {
+        const session = currentSession({
             id: 's1',
-            serverId: 'server-active',
+            serverId: 'srv_active',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -223,9 +234,9 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 'online',
-        } satisfies Session;
+        } satisfies Session);
         const snapshot: ScmWorkingSnapshot = {
-            projectKey: 'server-active:m1:/home/u/repo',
+            projectKey: 'srv_active:m1:/home/u/repo',
             fetchedAt: 123,
             repo: {
                 isRepo: true,
@@ -271,8 +282,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             },
         };
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain, getSetCalls } = createHarness(createSessionsDomain, {
+        const { domain, getSetCalls } = createHarness({
             sessions: { s1: session },
             machines: { m1: { id: 'm1', metadata: { homeDir: '/home/u' } } },
         });
@@ -286,10 +296,10 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         });
         expect(getSetCalls()).toBe(1);
 
-        const scope = { serverId: 'server-active', machineId: 'm1', rootPath: '/home/u/other-repo' };
+        const scope = { serverId: 'srv_active', machineId: 'm1', rootPath: '/home/u/other-repo' };
         const workspaceSnapshot = {
             ...snapshot,
-            projectKey: 'server-active:m1:/home/u/other-repo',
+            projectKey: 'srv_active:m1:/home/u/other-repo',
             repo: {
                 ...snapshot.repo,
                 rootPath: '/home/u/other-repo',
@@ -308,36 +318,28 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
     });
 
     it('builds an empty sessionListIndex when the server snapshot returns zero sessions', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        expect(get().sessionListIndexByServerId?.['server-active']).toBeUndefined();
+        const { get, domain } = createHarness();
+
+        expect(get().sessionListIndexByServerId?.['srv_active']).toBeUndefined();
 
         replaceSessionListRows(domain, []);
 
-        expect(Array.isArray(get().sessionListIndexByServerId?.['server-active'])).toBe(true);
-        expect(get().sessionListIndexByServerId?.['server-active']?.length).toBe(0);
+        expect(Array.isArray(get().sessionListIndexByServerId?.['srv_active'])).toBe(true);
+        expect(get().sessionListIndexByServerId?.['srv_active']?.length).toBe(0);
     });
 
     it('initializes the active-server sessionListIndex when a no-op patch arrives before the index exists', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        const session = {
+        const { get, domain } = createHarness();
+
+        const session = currentSession({
             id: 's1',
-            serverId: 'server-active',
+            serverId: 'srv_active',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -355,40 +357,34 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 'online',
-        } satisfies Session;
+        } satisfies Session);
         replaceSessionListRows(domain, [
             buildSessionListRenderableFromSession(session),
         ]);
         get().sessionListIndexByServerId = {};
 
         patchActiveSessionListRows(domain, [
-            { sessionId: 's1', patch: { pendingCount: (get().sessionListRowsByServerId['server-active'] ?? {}).s1.pendingCount } },
+            { sessionId: 's1', patch: { pendingCount: (get().sessionListRowsByServerId['srv_active'] ?? {}).s1.pendingCount } },
         ]);
 
-        expect(Array.isArray(get().sessionListIndexByServerId?.['server-active'])).toBe(true);
-        const activeServerIndex = get().sessionListIndexByServerId?.['server-active'] as ReadonlyArray<SessionListIndexItem> | undefined;
+        expect(Array.isArray(get().sessionListIndexByServerId?.['srv_active'])).toBe(true);
+        const activeServerIndex = get().sessionListIndexByServerId?.['srv_active'] as ReadonlyArray<SessionListIndexItem> | undefined;
         expect(activeServerIndex?.some(
             (item) => item.type === 'session' && item.sessionId === 's1',
         )).toBe(true);
     });
 
     it('tracks the active-server sessionListIndex in sessionListIndexByServerId', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({ serverId: 'server-active', serverUrl: 'https://example.com', generation: 1 }),
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        await activateTestHome('srv_active');
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -401,27 +397,20 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect(Array.isArray(get().sessionListIndexByServerId?.['server-active'])).toBe(true);
+        expect(Array.isArray(get().sessionListIndexByServerId?.['srv_active'])).toBe(true);
     });
 
     it('reuses the server-scoped previous index when rebuilding the active server index', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn(), getProjectForSession: vi.fn(() => null) },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({ serverId: 'server-b', serverUrl: 'https://example.com', generation: 1 }),
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
+        await activateTestHome('srv_b');
+        observeSessionListWarmCacheWrites();
 
-        const session = {
+        const session = currentSession({
             id: 's1',
-            serverId: 'server-b',
+            serverId: 'srv_b',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -435,69 +424,31 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as any;
+        } as any);
 
-        const precomputedRenderable = buildSessionListRenderableFromSession(session);
-        const precomputedViewData = buildSessionListViewData(
-            { [precomputedRenderable.id]: precomputedRenderable },
-            {},
-            {
-                serverScope: { serverId: 'server-b' },
-            },
-        );
-        const precomputedIndex = buildSessionListIndexFromViewData(precomputedViewData, null);
+        const { get, set, domain } = createHarness();
+        domain.applyServerScopedSessionListRows('srv_b', [buildSessionListRenderableFromSession(session)], {
+            source: 'ordinary', mode: 'replace',
+        });
+        const precomputedIndex = get().sessionListIndexByServerId.srv_b;
+        set({ sessions: {}, sessionListRowsByServerId: {} });
 
-        let state: any = {
-            sessions: {},
-            sessionListRowsByServerId: {},
-            ordinarySessionListMembershipByServerId: {},
-            archivedSessionListMembershipByServerId: {},
-            sessionListIndexByServerId: {
-                'server-b': precomputedIndex,
-            },
-            concurrentSessionListCacheByServerId: {},
-            sessionScmStatus: {},
-            sessionLastViewed: {},
-            sessionRepositoryTreeExpandedPathsBySessionId: {},
-            reviewCommentsDraftsBySessionId: {},
-            sessionActionDraftsByAddressKey: {},
-            isDataReady: false,
-            machines: {},
-            machineDisplayById: {},
-            sessionMessages: {},
-            profile: { id: 'account_a' },
-            settings: {},
-        };
+        domain.applySessions([session]);
 
-        const get = () => state;
-        const set = (updater: any) => {
-            const next = typeof updater === 'function' ? updater(state) : updater;
-            state = { ...state, ...next };
-        };
-
-        const domain = createSessionsDomain({ get, set } as any);
-        state = { ...domain, ...state };
-
-        state.applySessions([session]);
-
-        expect(state.sessionListIndexByServerId['server-b']).toBe(precomputedIndex);
+        expect(get().sessionListIndexByServerId.srv_b).toBe(precomputedIndex);
     });
 
     it('does not call projectManager.updateSessions for non-project-structural session updates', async () => {
-        const updateSessions = vi.fn();
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions },
-        }));
-        mockSessionPersistenceBoundaries();
+        const updateSessions = vi.spyOn(projectManager, 'updateSessions');
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -511,12 +462,12 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
         expect(updateSessions).toHaveBeenCalledTimes(1);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -531,25 +482,21 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
         expect(updateSessions).toHaveBeenCalledTimes(1);
     });
 
     it('keeps the active-server sessionListIndex reference stable for non-structural applySessions updates', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -562,16 +509,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -584,30 +531,27 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
-    it('rebuilds inactive date-grouped sessionListIndex when updatedAt changes ordering', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
+    it('rebuilds inactive date-grouped sessionListIndex when meaningful activity changes ordering', async () => {
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain, {
+        observeSessionListWarmCacheWrites();
+
+        const { get, domain } = createHarness({
             settings: {
+                sessionListSectionModeV1: 'activity',
                 sessionListInactiveGroupingV1: 'date',
             },
         });
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 100,
@@ -621,10 +565,10 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's2',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 2,
                 updatedAt: 200,
@@ -638,16 +582,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(readSessionListIndexSessionIds(initialIndex)).toEqual(['s2', 's1']);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 2,
                 createdAt: 1,
                 updatedAt: 300,
@@ -661,28 +605,24 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const nextIndex = get().sessionListIndexByServerId['server-active'];
+        const nextIndex = get().sessionListIndexByServerId['srv_active'];
         expect(nextIndex).not.toBe(initialIndex);
         expect(readSessionListIndexSessionIds(nextIndex)).toEqual(['s1', 's2']);
     });
 
     it('reuses the previous renderable object for semantically identical applySessions refreshes', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -695,18 +635,18 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialRenderable = (get().sessionListRowsByServerId['server-active'] ?? {})['s1'];
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialRenderable = (get().sessionListRowsByServerId['srv_active'] ?? {})['s1'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(initialRenderable).toBeDefined();
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -719,27 +659,23 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['s1']).toBe(initialRenderable);
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {})['s1']).toBe(initialRenderable);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
     it('preserves ready metadata across applySessions refresh rows that omit it', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 10,
                 createdAt: 1,
                 updatedAt: 1,
@@ -756,13 +692,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 10,
                 createdAt: 1,
                 updatedAt: 2,
@@ -777,26 +713,22 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessions.s1.latestReadyEventSeq).toBe(9);
         expect(get().sessions.s1.latestReadyEventAt).toBe(9_000);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {}).s1.latestReadyEventSeq).toBe(9);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {}).s1.latestReadyEventAt).toBe(9_000);
-        expect(get().sessionListRowsByServerId['server-active'].s1.latestReadyEventSeq).toBe(9);
-        expect(get().sessionListRowsByServerId['server-active'].s1.latestReadyEventAt).toBe(9_000);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {}).s1.latestReadyEventSeq).toBe(9);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {}).s1.latestReadyEventAt).toBe(9_000);
+        expect(get().sessionListRowsByServerId['srv_active'].s1.latestReadyEventSeq).toBe(9);
+        expect(get().sessionListRowsByServerId['srv_active'].s1.latestReadyEventAt).toBe(9_000);
     });
 
     it('keeps terminal unread renderables unread when only a partial transcript slice is cached', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain, {
+        observeSessionListWarmCacheWrites();
+
+        const { get, domain } = createHarness({
             sessionMessages: {
                 s1: {
                     isLoaded: false,
@@ -815,10 +747,10 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             },
         });
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 742,
                 createdAt: 1,
                 updatedAt: 2,
@@ -833,27 +765,23 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect((get().sessionListRowsByServerId['server-active'] ?? {}).s1.hasUnreadMessages).toBe(true);
-        expect(get().sessionListRowsByServerId['server-active'].s1.hasUnreadMessages).toBe(true);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {}).s1.hasUnreadMessages).toBe(true);
+        expect(get().sessionListRowsByServerId['srv_active'].s1.hasUnreadMessages).toBe(true);
     });
 
     it('keeps the active-server sessionListIndex stable when ready metadata only changes row overlay state', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 10,
                 createdAt: 1,
                 updatedAt: 1,
@@ -870,14 +798,14 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 11,
                 createdAt: 1,
                 updatedAt: 2,
@@ -894,32 +822,28 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {}).s1.latestReadyEventSeq).toBe(5);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {}).s1.latestReadyEventAt).toBe(5_000);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {}).s1.hasUnreadMessages).toBe(true);
-        expect(get().sessionListRowsByServerId['server-active'].s1.latestReadyEventSeq).toBe(5);
-        expect(get().sessionListRowsByServerId['server-active'].s1.latestReadyEventAt).toBe(5_000);
-        expect(get().sessionListRowsByServerId['server-active'].s1.hasUnreadMessages).toBe(true);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {}).s1.latestReadyEventSeq).toBe(5);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {}).s1.latestReadyEventAt).toBe(5_000);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {}).s1.hasUnreadMessages).toBe(true);
+        expect(get().sessionListRowsByServerId['srv_active'].s1.latestReadyEventSeq).toBe(5);
+        expect(get().sessionListRowsByServerId['srv_active'].s1.latestReadyEventAt).toBe(5_000);
+        expect(get().sessionListRowsByServerId['srv_active'].s1.hasUnreadMessages).toBe(true);
     });
 
     it('reuses the previous session object for semantically identical applySessions refreshes', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -961,16 +885,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 },
                 accessLevel: 'admin',
                 canApprovePermissions: true,
-            } as any,
+            } as any),
         ]);
 
         const initialSession = get().sessions['s1'];
         expect(initialSession).toBeDefined();
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1012,26 +936,22 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 },
                 accessLevel: 'admin',
                 canApprovePermissions: true,
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessions['s1']).toBe(initialSession);
     });
 
     it('keeps store collection references stable for active session heartbeat updates', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1044,18 +964,18 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any,
+            } as any),
         ]);
 
         const initialSession = get().sessions.s1;
         const initialSessions = get().sessions;
-        const initialRenderables = (get().sessionListRowsByServerId['server-active'] ?? {});
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialRenderables = (get().sessionListRowsByServerId['srv_active'] ?? {});
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1068,31 +988,26 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessions.s1).toBe(initialSession);
         expect(get().sessions.s1?.activeAt).toBe(1);
         expect(get().sessions).toBe(initialSessions);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})).toBe(initialRenderables);
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {})).toBe(initialRenderables);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
     it('skips map churn and warm-cache writes for a semantically identical applySessions batch', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const warmCache = await import('../../domains/state/warmCachePersistence');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1105,20 +1020,20 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         const initialSessions = get().sessions;
-        const initialRenderables = (get().sessionListRowsByServerId['server-active'] ?? {});
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
-        const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        const initialRenderables = (get().sessionListRowsByServerId['srv_active'] ?? {});
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
+        const saveWarmCache = warmCacheWrites;
         expect(Array.isArray(initialIndex)).toBe(true);
         expect(saveWarmCache).toHaveBeenCalledTimes(1);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1131,33 +1046,29 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessions).toBe(initialSessions);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})).toBe(initialRenderables);
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {})).toBe(initialRenderables);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
         expect(saveWarmCache).toHaveBeenCalledTimes(1);
     });
 
     it('preserves previous warm-cache metadata when applySessions receives a stale replacement row', async () => {
+        await activateTestHome('srv_one');
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const warmCache = await import('../../domains/state/warmCachePersistence');
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-1',
+                serverId: 'srv_one',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 10,
@@ -1177,13 +1088,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-1',
+                serverId: 'srv_one',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 20,
@@ -1196,12 +1107,12 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         await vi.advanceTimersByTimeAsync(1_000);
 
-        const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        const saveWarmCache = warmCacheWrites;
         const lastCall = saveWarmCache.mock.calls.at(-1);
         const entries = lastCall?.[2] as Record<string, any>;
 
@@ -1224,18 +1135,14 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
     });
 
     it('preserves transient renderable visibility flags across applySessions refreshes', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        get().sessionListRowsByServerId['server-active'] = {
+        const { get, domain } = createHarness();
+
+        get().sessionListRowsByServerId = { ...get().sessionListRowsByServerId, srv_active: {
             s1: {
-                ...buildSessionListRenderableFromSession({
+                ...buildSessionListRenderableFromSession(currentSession({
                     id: 's1',
                     seq: 1,
                     createdAt: 1,
@@ -1250,13 +1157,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: false,
                     thinkingAt: 0,
                     presence: 'online',
-                } as any),
+                } as any)),
                 keepVisibleWhenInactive: true,
             },
-        };
+        } };
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -1271,24 +1178,20 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['s1']?.keepVisibleWhenInactive).toBe(true);
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {})['s1']?.keepVisibleWhenInactive).toBe(true);
     });
 
     it('keeps the active-server sessionListIndex reference stable for non-structural renderable patches', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
+
+        const { get, domain } = createHarness();
 
         replaceSessionListRows(domain, [
-            buildSessionListRenderableFromSession({
+            buildSessionListRenderableFromSession(currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -1305,10 +1208,10 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any),
+            } as any)),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         patchActiveSessionListRows(domain, [
@@ -1321,30 +1224,24 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             },
         ]);
 
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['s1']).toEqual(expect.objectContaining({
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {})['s1']).toEqual(expect.objectContaining({
             pendingCount: 4,
             pendingVersion: 8,
         }));
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
     it('tracks canonical server-scoped session list index/rows for the active server', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({ serverId: 'server-1', serverUrl: 'https://example.com', generation: 1 }),
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        await activateTestHome('srv_one');
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-1',
+                serverId: 'srv_one',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1357,20 +1254,20 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessionListRowsByServerId).toBeDefined();
         expect(get().sessionListIndexByServerId).toBeDefined();
-        expect(get().sessionListRowsByServerId['server-1']?.s1).toBeDefined();
+        expect(get().sessionListRowsByServerId['srv_one']?.s1).toBeDefined();
 
-        const initialIndex = get().sessionListIndexByServerId['server-1'];
+        const initialIndex = get().sessionListIndexByServerId['srv_one'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-1',
+                serverId: 'srv_one',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -1383,29 +1280,23 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-1']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_one']).toBe(initialIndex);
     });
 
     it('keeps owner-scoped sessions out of the active-server row/index state', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({ serverId: 'server-active', serverUrl: 'https://example.com', generation: 1 }),
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        await activateTestHome('srv_active');
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 'owner-session',
-                serverId: 'server-owner',
+                serverId: 'srv_owner',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1418,118 +1309,97 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListRowsByServerId['server-active']?.['owner-session']).toBeUndefined();
+        expect(get().sessionListRowsByServerId['srv_active']?.['owner-session']).toBeUndefined();
         expect(
-            get().sessionListIndexByServerId['server-active']?.some(
+            get().sessionListIndexByServerId['srv_active']?.some(
                 (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'owner-session',
             ) ?? false,
         ).toBe(false);
-        expect(get().sessionListRowsByServerId['server-owner']?.['owner-session']).toBeDefined();
+        expect(get().sessionListRowsByServerId['srv_owner']?.['owner-session']).toBeDefined();
         expect(
-            get().sessionListIndexByServerId['server-owner']?.some(
+            get().sessionListIndexByServerId['srv_owner']?.some(
                 (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'owner-session',
             ) ?? false,
         ).toBe(true);
     });
 
-    it('repairs active-server indexes when only the session owner server changes', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({ serverId: 'server-active', serverUrl: 'https://example.com', generation: 1 }),
-        }));
-        mockSessionPersistenceBoundaries();
+    it('keeps each Home row and index when another Home publishes the same Session id', async () => {
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        await activateTestHome('srv_active');
+        observeSessionListWarmCacheWrites();
 
-        const baseSession = {
+        const { get, domain } = createHarness();
+
+        const baseSession = currentSession({
             id: 'owner-move-session',
-            serverId: 'server-owner',
+            serverId: 'srv_owner',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
             active: true,
             activeAt: 1,
-            metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+            metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u', name: 'Owner Session' },
             metadataVersion: 1,
             agentState: null,
             agentStateVersion: 0,
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as any;
+        } as any);
 
-        domain.applySessions([baseSession]);
+        applyOrdinarySnapshot(domain, [baseSession]);
 
-        const ownerRenderable = (get().sessionListRowsByServerId['server-active'] ?? {})['owner-move-session'];
-        const initialActiveIndex = get().sessionListIndexByServerId['server-active'];
-        expect(get().sessionListRowsByServerId['server-owner']?.['owner-move-session']).toBe(ownerRenderable);
+        const ownerRenderable = get().sessionListRowsByServerId['srv_owner']?.['owner-move-session'];
+        const ownerIndex = get().sessionListIndexByServerId['srv_owner'];
+        const initialActiveIndex = get().sessionListIndexByServerId['srv_active'];
+        expect(ownerRenderable).toBeDefined();
+        expect(readSessionListIndexSessionIds(ownerIndex)).toContain(baseSession.id);
+        expect(get().sessionListRowsByServerId['srv_owner']?.['owner-move-session']).toBe(ownerRenderable);
         expect(
             initialActiveIndex?.some(
                 (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'owner-move-session',
             ) ?? false,
         ).toBe(false);
 
-        domain.applySessions([
+        applyOrdinarySnapshot(domain, [
             {
                 ...baseSession,
-                serverId: 'server-active',
+                serverId: 'srv_active',
+                metadata: { path: '/repo', host: 'test', ...baseSession.metadata, name: 'Active Session' },
             },
         ]);
 
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['owner-move-session']).toBe(ownerRenderable);
-        expect(get().sessionListRowsByServerId['server-active']?.['owner-move-session']).toBe(ownerRenderable);
+        const activeRenderable = get().sessionListRowsByServerId['srv_active']?.['owner-move-session'];
+        expect(activeRenderable).toMatchObject({ id: baseSession.id });
+        expect(get().sessions[baseSession.id]?.serverId).toBe('srv_active');
+        expect(activeRenderable?.metadata?.name).toBe('Active Session');
+        expect(activeRenderable).not.toBe(ownerRenderable);
         expect(
-            get().sessionListIndexByServerId['server-active']?.some(
+            get().sessionListIndexByServerId['srv_active']?.some(
                 (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'owner-move-session',
             ) ?? false,
         ).toBe(true);
-        expect(get().sessionListRowsByServerId['server-owner']).toBeUndefined();
-        expect(get().sessionListIndexByServerId['server-owner']).toBeUndefined();
+        expect(get().sessionListRowsByServerId['srv_owner']?.['owner-move-session']).toBe(ownerRenderable);
+        expect(ownerRenderable?.metadata?.name).toBe('Owner Session');
+        expect(get().sessionListIndexByServerId['srv_owner']).toBe(ownerIndex);
+        expect(readSessionListIndexSessionIds(ownerIndex)).toContain(baseSession.id);
     });
 
     it('keeps equivalent owner server ids in the active-server row/index state', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({
-                serverId: 'http://localhost:53288',
-                serverUrl: 'http://localhost:53288',
-                generation: 1,
-            }),
-        }));
-        vi.doMock('../../domains/server/serverProfiles', async () => {
-            const actual = await vi.importActual<typeof import('../../domains/server/serverProfiles')>(
-                '../../domains/server/serverProfiles',
-            );
-            return {
-                ...actual,
-                areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => {
-                    const ids = new Set([String(left ?? '').trim(), String(right ?? '').trim()]);
-                    if (ids.has('srv_stack') && ids.has('http://localhost:53288')) {
-                        return true;
-                    }
-                    return actual.areServerProfileIdentifiersEquivalent(left, right);
-                },
-            };
-        });
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        const alias = await activateTestHome('srv_stack', 'http://localhost:53288');
 
-        domain.applySessions([
-            {
+        observeSessionListWarmCacheWrites();
+
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 'equivalent-owner-session',
-                serverId: 'srv_stack',
+                serverId: alias.id,
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1542,11 +1412,11 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const activeServerRows = get().sessionListRowsByServerId['http://localhost:53288'];
-        const activeServerIndex = get().sessionListIndexByServerId['http://localhost:53288'];
+        const activeServerRows = get().sessionListRowsByServerId.srv_stack;
+        const activeServerIndex = get().sessionListIndexByServerId.srv_stack;
 
         expect(activeServerRows?.['equivalent-owner-session']).toBeDefined();
         expect(
@@ -1554,118 +1424,111 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'equivalent-owner-session',
             ) ?? false,
         ).toBe(true);
-        expect(get().sessionListRowsByServerId['srv_stack']?.['equivalent-owner-session']).toBeUndefined();
+        expect(get().sessionListRowsByServerId[alias.id]?.['equivalent-owner-session']).toBeUndefined();
     });
 
     it('removes stale exact-alias row/index projections after equivalent owner sessions converge to the active server', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({
-                serverId: 'http://localhost:53288',
-                serverUrl: 'http://localhost:53288',
-                generation: 1,
-            }),
-        }));
-        vi.doMock('../../domains/server/serverProfiles', async () => {
-            const actual = await vi.importActual<typeof import('../../domains/server/serverProfiles')>(
-                '../../domains/server/serverProfiles',
-            );
-            return {
-                ...actual,
-                areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => {
-                    const ids = new Set([String(left ?? '').trim(), String(right ?? '').trim()]);
-                    if (ids.has('srv_stack') && ids.has('http://localhost:53288')) {
-                        return true;
-                    }
-                    return actual.areServerProfileIdentifiersEquivalent(left, right);
-                },
-            };
-        });
-        mockSessionPersistenceBoundaries();
-
-        const staleSession = {
-            id: 'stale-alias-session',
-            serverId: 'srv_stack',
-            seq: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            active: true,
-            activeAt: 1,
-            metadata: { machineId: 'm1', path: '/home/u/stale', homeDir: '/home/u' },
-            metadataVersion: 1,
-            agentState: null,
-            agentStateVersion: 0,
-            thinking: false,
-            thinkingAt: 0,
-            presence: 1,
-        } as any;
-
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain, {
-            sessionListRowsByServerId: {
-                srv_stack: {
-                    'stale-alias-session': buildSessionListRenderableFromSession(staleSession),
-                },
-            },
-            sessionListIndexByServerId: {
-                srv_stack: [{
-                    type: 'session',
-                    sessionId: 'stale-alias-session',
-                    serverId: 'srv_stack',
-                    groupKey: 'active',
-                }],
-            },
-        });
-
-        domain.applySessions([
-            {
-                id: 'equivalent-owner-session',
-                serverId: 'srv_stack',
+        await initializeRealAppRuntimeForTests();
+        const previousState = storage.getState();
+        storage.setState(storage.getInitialState(), true);
+        const http = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(http);
+        const serverUrl = 'https://session-index-alias.test';
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+        let identifiedConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+        try {
+            const aliasId = await http.addHome({ serverUrl, name: 'Index Home', accountId: 'account_a', active: false });
+            const emptyPage = V2SessionListResponseSchema.parse({
+                sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+            });
+            http.answer(aliasId, '/v2/sessions', { body: emptyPage });
+            http.answer(aliasId, '/v2/sessions/active', { body: emptyPage });
+            http.answer(aliasId, '/v2/session-organization', { body: SessionOrganizationSnapshotResponseSchema.parse({
+                snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0, pins: [], folders: [],
+                    folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+            }) });
+            http.answer(aliasId, '/v1/machines', { body: [] });
+            connection = await restoreServerAccountForTest({
+                serverUrl, accountId: 'account_a', request: http.request, configureSocket: configureConnectedServerSocketBoundary,
+            });
+            const { sync } = await import('@/sync/sync');
+            await sync.refreshSessions({ awaitSessionListHydration: true });
+            const domain = storage.getState();
+            const get = storage.getState;
+            const staleSession = currentSession({
+                id: 'stale-alias-session',
+                serverId: aliasId,
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
                 active: true,
                 activeAt: 1,
-                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                metadata: { machineId: 'm1', host: 'host', path: '/home/u/stale', homeDir: '/home/u' },
                 metadataVersion: 1,
                 agentState: null,
                 agentStateVersion: 0,
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-        ]);
+            });
+            domain.applyServerScopedSessionListRows(aliasId, [buildSessionListRenderableFromSession(staleSession)], {
+                source: 'ordinary', mode: 'replace',
+            });
+            await adoptHomeProfile({
+                source: 'manual', descriptor: { serverUrl, homeServerIdentityId: 'srv_stack' },
+            });
+            identifiedConnection = await restoreServerAccountForTest({
+                serverUrl, serverIdentityId: 'srv_stack', accountId: 'account_a', activation: 'switch',
+                request: http.request, configureSocket: configureConnectedServerSocketBoundary,
+            });
+            await sync.refreshSessions({ awaitSessionListHydration: true });
 
-        expect(get().sessionListRowsByServerId['http://localhost:53288']?.['equivalent-owner-session']).toBeDefined();
-        expect(
-            get().sessionListIndexByServerId['http://localhost:53288']?.some(
-                (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'equivalent-owner-session',
-            ) ?? false,
-        ).toBe(true);
-        expect(get().sessionListRowsByServerId.srv_stack).toBeUndefined();
-        expect(get().sessionListIndexByServerId.srv_stack).toBeUndefined();
+            applyOrdinarySnapshot(domain, [
+                currentSession({
+                    id: 'equivalent-owner-session',
+                    serverId: aliasId,
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    metadata: { machineId: 'm1', host: 'host', path: '/home/u/repo', homeDir: '/home/u' },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 1,
+                }),
+            ]);
+
+            expect(get().sessionListRowsByServerId.srv_stack?.['equivalent-owner-session']).toBeDefined();
+            expect(
+                get().sessionListIndexByServerId.srv_stack?.some(
+                    (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === 'equivalent-owner-session',
+                ) ?? false,
+            ).toBe(true);
+            expect(get().sessionListRowsByServerId[aliasId]).toBeUndefined();
+            expect(get().sessionListIndexByServerId[aliasId]).toBeUndefined();
+        } finally {
+            await identifiedConnection?.dispose();
+            await connection?.dispose();
+            await http.reset();
+            storage.setState(previousState, true);
+        }
     });
 
     it('keeps canonical server-scoped session list index/rows in sync when deleting a session', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        vi.doMock('../../domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => ({ serverId: 'server-1', serverUrl: 'https://example.com', generation: 1 }),
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        await activateTestHome('srv_one');
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-1',
+                serverId: 'srv_one',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -1678,36 +1541,32 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-1'];
-        expect(get().sessionListRowsByServerId['server-1']).toBe((get().sessionListRowsByServerId['server-active'] ?? {}));
+        const initialIndex = get().sessionListIndexByServerId['srv_one'];
+        expect(get().sessionListRowsByServerId['srv_active']).toBeUndefined();
         expect(Array.isArray(initialIndex)).toBe(true);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['s1']).toBeDefined();
+        expect(get().sessionListRowsByServerId['srv_one']?.['s1']).toBeDefined();
 
         domain.deleteSession('s1');
 
-        const nextIndex = get().sessionListIndexByServerId['server-1'];
-        expect(get().sessionListRowsByServerId['server-1']).toBe((get().sessionListRowsByServerId['server-active'] ?? {}));
+        const nextIndex = get().sessionListIndexByServerId['srv_one'];
+        expect(get().sessionListRowsByServerId['srv_active']).toBeUndefined();
         expect(Array.isArray(nextIndex)).toBe(true);
         expect(nextIndex).not.toBe(initialIndex);
         expect(nextIndex?.some((item: any) => item.type === 'session' && item.sessionId === 's1')).toBe(false);
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['s1']).toBeUndefined();
+        expect(get().sessionListRowsByServerId['srv_one']?.['s1']).toBeUndefined();
     });
 
     it('keeps the active-server sessionListIndex reference stable for non-structural renderable replacement', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
+
+        const { get, domain } = createHarness();
 
         replaceSessionListRows(domain, [
-            buildSessionListRenderableFromSession({
+            buildSessionListRenderableFromSession(currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -1724,15 +1583,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any),
+            } as any)),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         replaceSessionListRows(domain, [
             {
-                ...(get().sessionListRowsByServerId['server-active'] ?? {})['s1'],
+                ...(get().sessionListRowsByServerId['srv_active'] ?? {})['s1'],
                 updatedAt: 2,
                 presence: 2,
                 pendingCount: 4,
@@ -1740,22 +1599,19 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             },
         ]);
 
-        expect((get().sessionListRowsByServerId['server-active'] ?? {})['s1']).toEqual(expect.objectContaining({
+        expect((get().sessionListRowsByServerId['srv_active'] ?? {})['s1']).toEqual(expect.objectContaining({
             updatedAt: 2,
             pendingCount: 4,
             pendingVersion: 8,
         }));
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
     it('repairs stale active-server row/index projections when an identical snapshot confirms warm-cache renderables', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const session = {
+        observeSessionListWarmCacheWrites();
+
+        const session = currentSession({
             id: 'warm-cache-session',
             seq: 1,
             createdAt: 1,
@@ -1772,39 +1628,35 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 'online',
-        } as Session;
+        } as Session);
         const warmCachedRenderable = buildSessionListRenderableFromSession(session);
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain, {
+        const { get, domain } = createHarness({
             sessionListRowsByServerId: {
-                'server-active': { [warmCachedRenderable.id]: warmCachedRenderable },
+                'srv_active': { [warmCachedRenderable.id]: warmCachedRenderable },
             },
-            ordinarySessionListMembershipByServerId: { 'server-active': [warmCachedRenderable.id] },
+            ordinarySessionListMembershipByServerId: { 'srv_active': [warmCachedRenderable.id] },
             sessionListIndexByServerId: {
-                'server-active': [],
+                'srv_active': [],
             },
         });
 
-        domain.applySessions([session]);
+        applyOrdinarySnapshot(domain, [session]);
 
-        expect(get().sessionListRowsByServerId['server-active']?.[warmCachedRenderable.id]).toBe(warmCachedRenderable);
-        expect(get().sessionListIndexByServerId['server-active']?.some(
+        expect(get().sessionListRowsByServerId['srv_active']?.[warmCachedRenderable.id]).toBe(warmCachedRenderable);
+        expect(get().sessionListIndexByServerId['srv_active']?.some(
             (item: SessionListIndexItem) => item.type === 'session' && item.sessionId === warmCachedRenderable.id,
         )).toBe(true);
     });
 
     it('keeps sessionListIndex stable when peer updates only change heartbeat and progress fields', async () => {
-        const updateSessions = vi.fn();
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions },
-        }));
-        mockSessionPersistenceBoundaries();
+        const updateSessions = vi.spyOn(projectManager, 'updateSessions');
+
+        observeSessionListWarmCacheWrites();
 
         const { buildMachineDisplayRenderableFromMachine } = await import('../../domains/machines/machineDisplayRenderable');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+
+        const { get, domain } = createHarness();
 
         const machineA = {
             id: 'm-a',
@@ -1828,8 +1680,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             'm-b': buildMachineDisplayRenderableFromMachine(machineB),
         };
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -1843,8 +1695,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's2',
                 seq: 2,
                 createdAt: 2,
@@ -1858,8 +1710,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's3',
                 seq: 3,
                 createdAt: 3,
@@ -1873,15 +1725,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
         expect(updateSessions).toHaveBeenCalledTimes(1);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's2',
                 seq: 4,
                 createdAt: 2,
@@ -1896,38 +1748,23 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
         expect(updateSessions).toHaveBeenCalledTimes(1);
     });
 
     it('skips reachable peer scans for row-only applySessions updates that cannot affect canonical targets', async () => {
-        const updateSessions = vi.fn();
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions },
-        }));
-        mockSessionPersistenceBoundaries();
+        const updateSessions = vi.spyOn(projectManager, 'updateSessions');
 
-        const resolveSessionMachineRpcTargetSpy = vi.fn();
-        vi.doMock('../../domains/session/resolveSessionReachableMachineId', async () => {
-            const actual = await vi.importActual<typeof import('../../domains/session/resolveSessionReachableMachineId')>(
-                '../../domains/session/resolveSessionReachableMachineId',
-            );
-            return {
-                ...actual,
-                resolveSessionMachineRpcTarget: (params: Parameters<typeof actual.resolveSessionMachineRpcTarget>[0]) => {
-                    resolveSessionMachineRpcTargetSpy(params);
-                    return actual.resolveSessionMachineRpcTarget(params);
-                },
-            };
-        });
+        observeSessionListWarmCacheWrites();
+
+        const resolveSessionMachineRpcTargetSpy = vi.spyOn(reachableTargets, 'resolveSessionMachineRpcTarget');
 
         const { buildMachineDisplayRenderableFromMachine } = await import('../../domains/machines/machineDisplayRenderable');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+
+        const { get, domain } = createHarness();
 
         const machineA = {
             id: 'm-a',
@@ -1951,8 +1788,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             'm-b': buildMachineDisplayRenderableFromMachine(machineB),
         };
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -1966,8 +1803,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's2',
                 seq: 2,
                 createdAt: 2,
@@ -1981,8 +1818,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's3',
                 seq: 3,
                 createdAt: 3,
@@ -1996,15 +1833,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
         const initialResolveCallCount = resolveSessionMachineRpcTargetSpy.mock.calls.length;
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's2',
                 seq: 2,
                 createdAt: 2,
@@ -2018,38 +1855,23 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
         expect(resolveSessionMachineRpcTargetSpy).toHaveBeenCalledTimes(initialResolveCallCount);
     });
 
     it('skips reachable peer scans for active metadata-version-only updates with explicit canonical targets', async () => {
-        const updateSessions = vi.fn();
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions },
-        }));
-        mockSessionPersistenceBoundaries();
+        const updateSessions = vi.spyOn(projectManager, 'updateSessions');
 
-        const resolveSessionMachineRpcTargetSpy = vi.fn();
-        vi.doMock('../../domains/session/resolveSessionReachableMachineId', async () => {
-            const actual = await vi.importActual<typeof import('../../domains/session/resolveSessionReachableMachineId')>(
-                '../../domains/session/resolveSessionReachableMachineId',
-            );
-            return {
-                ...actual,
-                resolveSessionMachineRpcTarget: (params: Parameters<typeof actual.resolveSessionMachineRpcTarget>[0]) => {
-                    resolveSessionMachineRpcTargetSpy(params);
-                    return actual.resolveSessionMachineRpcTarget(params);
-                },
-            };
-        });
+        observeSessionListWarmCacheWrites();
+
+        const resolveSessionMachineRpcTargetSpy = vi.spyOn(reachableTargets, 'resolveSessionMachineRpcTarget');
 
         const { buildMachineDisplayRenderableFromMachine } = await import('../../domains/machines/machineDisplayRenderable');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+
+        const { get, domain } = createHarness();
 
         const machine = {
             id: 'm-a',
@@ -2060,8 +1882,8 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         get().machines = { 'm-a': machine };
         get().machineDisplayById = { 'm-a': buildMachineDisplayRenderableFromMachine(machine) };
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -2081,15 +1903,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
         const initialResolveCallCount = resolveSessionMachineRpcTargetSpy.mock.calls.length;
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -2110,41 +1932,23 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
         expect(resolveSessionMachineRpcTargetSpy).toHaveBeenCalledTimes(initialResolveCallCount);
         expect(updateSessions).toHaveBeenCalledTimes(1);
     });
 
-    it('rebuilds sessionListIndex when a peer project lookup changes and can retarget a stale session', async () => {
-        const updateSessions = vi.fn();
-        const resolveSessionMachineRpcTargetSpy = vi.fn();
-        let peerProjectMachineId = 'm-b';
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: {
-                updateSessions,
-            },
-        }));
-        vi.doMock('../../domains/session/resolveSessionReachableMachineId', async () => {
-            const actual = await vi.importActual<typeof import('../../domains/session/resolveSessionReachableMachineId')>(
-                '../../domains/session/resolveSessionReachableMachineId',
-            );
-            return {
-                ...actual,
-                resolveSessionMachineRpcTarget: (params: Parameters<typeof actual.resolveSessionMachineRpcTarget>[0]) => {
-                    resolveSessionMachineRpcTargetSpy(params);
-                    return actual.resolveSessionMachineRpcTarget(params);
-                },
-            };
-        });
-        mockSessionPersistenceBoundaries();
+    it('rebuilds sessionListIndex when a peer Session changes its project machine and can retarget a stale session', async () => {
+        const updateSessions = vi.spyOn(projectManager, 'updateSessions');
+        const resolveSessionMachineRpcTargetSpy = vi.spyOn(reachableTargets, 'resolveSessionMachineRpcTarget');
+
+        observeSessionListWarmCacheWrites();
 
         const { buildMachineDisplayRenderableFromMachine } = await import('../../domains/machines/machineDisplayRenderable');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+
+        const { get, domain } = createHarness();
 
         const machineA = {
             id: 'm-a',
@@ -2167,25 +1971,9 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             'm-a': buildMachineDisplayRenderableFromMachine(machineA),
             'm-b': buildMachineDisplayRenderableFromMachine(machineB),
         };
-        get().getProjectForSession = (sessionId: string) => {
-            if (sessionId === 's2') {
-                return {
-                    id: 'project-s2',
-                    key: {
-                        serverId: 'server-1',
-                        machineId: peerProjectMachineId,
-                        rootPath: '/home/u/repo',
-                    },
-                    sessionIds: ['s2'],
-                    createdAt: 1,
-                    updatedAt: 1,
-                };
-            }
-            return null;
-        };
 
-        domain.applySessions([
-            {
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -2199,66 +1987,61 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's2',
                 seq: 2,
                 createdAt: 2,
                 updatedAt: 100,
                 active: true,
                 activeAt: 100,
-                metadata: { path: '/home/u/repo', homeDir: '/home/u' },
+                metadata: { machineId: 'm-b', path: '/home/u/repo', homeDir: '/home/u' },
                 metadataVersion: 1,
                 agentState: null,
                 agentStateVersion: 0,
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
         const initialResolveCallCount = resolveSessionMachineRpcTargetSpy.mock.calls.length;
 
-        peerProjectMachineId = 'm-a';
         domain.applySessions([
-            {
+            currentSession({
                 id: 's2',
                 seq: 2,
                 createdAt: 2,
                 updatedAt: 101,
                 active: true,
                 activeAt: 100,
-                metadata: { path: '/home/u/repo', homeDir: '/home/u' },
+                metadata: { machineId: 'm-a', path: '/home/u/repo', homeDir: '/home/u' },
                 metadataVersion: 2,
                 agentState: null,
                 agentStateVersion: 0,
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).not.toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).not.toBe(initialIndex);
         expect(resolveSessionMachineRpcTargetSpy.mock.calls.length).toBeGreaterThan(initialResolveCallCount);
         expect(updateSessions).toHaveBeenCalled();
     });
 
     it('rebuilds the active-server sessionListIndex for structural applySessions changes (grouping keys)', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2271,16 +2054,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -2293,26 +2076,22 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).not.toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).not.toBe(initialIndex);
     });
 
     it('rebuilds the active-server sessionListIndex when archivedAt changes (visibility)', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2326,16 +2105,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -2349,26 +2128,22 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).not.toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).not.toBe(initialIndex);
     });
 
     it('rebuilds the active-server sessionListIndex when direct-session storage classification changes', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2382,16 +2157,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -2402,10 +2177,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     machineId: 'm1',
                     path: '/home/u/repo',
                     homeDir: '/home/u',
-                    externalSessionV1: {
-                        v: 1,
-                        agentId: 'codex',
-                    },
+                    externalSessionV1: createDemoOpenCodeSessionFixture({ serverId: 'srv_active' }).metadata?.externalSessionV1,
                 },
                 metadataVersion: 2,
                 agentState: null,
@@ -2413,26 +2185,25 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).not.toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).not.toBe(initialIndex);
+        expect(get().sessionListIndexByServerId.srv_active).toContainEqual(
+            expect.objectContaining({ type: 'session', sessionId: 's1', storageKind: 'direct' }),
+        );
     });
 
     it('preserves linked direct-session metadata when a later refresh omits externalSessionV1', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2458,20 +2229,20 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         expect(getSessionStorageKind(get().sessions.s1)).toBe('direct');
         expect(
-            get().sessionListIndexByServerId['server-active']?.some(
+            get().sessionListIndexByServerId['srv_active']?.some(
                 (item: any) => item.type === 'session' && item.sessionId === 's1' && (item.storageKind ?? 'persisted') === 'direct',
             ),
         ).toBe(true);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -2490,7 +2261,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
         expect((get().sessions.s1?.metadata as any)?.externalSessionV1).toEqual(expect.objectContaining({
@@ -2500,26 +2271,22 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         }));
         expect(getSessionStorageKind(get().sessions.s1)).toBe('direct');
         expect(
-            get().sessionListIndexByServerId['server-active']?.some(
+            get().sessionListIndexByServerId['srv_active']?.some(
                 (item: any) => item.type === 'session' && item.sessionId === 's1' && (item.storageKind ?? 'persisted') === 'direct',
             ),
         ).toBe(true);
     });
 
     it('preserves linked direct-session metadata when a later refresh sets externalSessionV1 to null', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2545,13 +2312,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -2571,7 +2338,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
         expect((get().sessions.s1?.metadata as any)?.externalSessionV1).toEqual(expect.objectContaining({
@@ -2581,26 +2348,22 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         }));
         expect(getSessionStorageKind(get().sessions.s1)).toBe('direct');
         expect(
-            get().sessionListIndexByServerId['server-active']?.some(
+            get().sessionListIndexByServerId['srv_active']?.some(
                 (item: any) => item.type === 'session' && item.sessionId === 's1' && (item.storageKind ?? 'persisted') === 'direct',
             ),
         ).toBe(true);
     });
 
     it('does not rebuild the active-server sessionListIndex when updating a draft for a loaded session', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2613,33 +2376,28 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
     it('does not resurrect a cleared draft when applySessions merges a loaded session update', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const warmCache = await import('../../domains/state/warmCachePersistence');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -2652,13 +2410,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
-        const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        const saveWarmCache = warmCacheWrites;
         expect(saveWarmCache).toHaveBeenCalledTimes(1);
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
                 seq: 2,
                 createdAt: 1,
@@ -2673,7 +2431,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinkingAt: 0,
                 presence: 1,
                 draft: 'server stale draft',
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessions.s1?.draft).toBe('server stale draft');
@@ -2689,26 +2447,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries({ trackWarmCacheEntries: true });
-        vi.doMock('../../domains/state/warmCacheAdapters', async () => {
-            const actual = await vi.importActual<typeof import('../../domains/state/warmCacheAdapters')>('../../domains/state/warmCacheAdapters');
-            return {
-                ...actual,
-                buildPersistedSessionListCacheEntriesFromRenderables: vi.fn(actual.buildPersistedSessionListCacheEntriesFromRenderables),
-            };
-        });
 
-        const warmCache = await import('../../domains/state/warmCachePersistence');
+        observeSessionListWarmCacheWrites();
+        vi.spyOn(warmCacheAdaptersModule, 'buildPersistedSessionListCacheEntriesFromRenderables');
+
         const warmCacheAdapters = await import('../../domains/state/warmCacheAdapters');
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -2722,10 +2470,10 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
-            {
+            } as any),
+            currentSession({
                 id: 's2',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 2,
                 createdAt: 2,
                 updatedAt: 1,
@@ -2738,22 +2486,24 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+        const saveWarmCache = warmCacheWrites;
         const buildPreviousEntries = warmCacheAdapters.buildPersistedSessionListCacheEntriesFromRenderables as unknown as ReturnType<typeof vi.fn>;
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
         expect(saveWarmCache).toHaveBeenCalledTimes(1);
 
-        const firstEntries = saveWarmCache.mock.calls[0]?.[2] as Record<string, unknown>;
+        const firstEntries = warmCachePersistence.peekSessionListWarmCacheEntries('srv_active', 'account_a');
         expect(firstEntries).toBeDefined();
+        expect(saveWarmCache.mock.calls[0]?.[2]).toEqual(firstEntries);
+        buildPreviousEntries.mockClear();
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -2768,13 +2518,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 presence: 2,
                 pendingCount: 1,
                 pendingVersion: 2,
-            } as any,
+            } as any),
         ]);
 
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
         await vi.advanceTimersByTimeAsync(1_000);
         expect(saveWarmCache).toHaveBeenCalledTimes(2);
-        expect(buildPreviousEntries.mock.calls[1]?.[1]).toBe(firstEntries);
+        expect(buildPreviousEntries.mock.calls.at(-1)?.[1]).toBe(firstEntries);
         } finally {
             vi.clearAllTimers();
             vi.useRealTimers();
@@ -2782,17 +2532,13 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
     });
 
     it('does not rebuild the active-server sessionListIndex when marking optimistic thinking', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
 
-        const { createSessionsDomain } = await import('./sessions');
-        const { get, domain } = createHarness(createSessionsDomain);
+        observeSessionListWarmCacheWrites();
 
-        domain.applySessions([
-            {
+        const { get, domain } = createHarness();
+
+        applyOrdinarySnapshot(domain, [
+            currentSession({
                 id: 's1',
                 seq: 1,
                 createdAt: 1,
@@ -2806,34 +2552,29 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
-        const initialIndex = get().sessionListIndexByServerId['server-active'];
+        const initialIndex = get().sessionListIndexByServerId['srv_active'];
         expect(Array.isArray(initialIndex)).toBe(true);
 
         domain.markSessionOptimisticThinking('s1');
-        expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+        expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
     });
 
     it('does not rewrite the warm cache for thinking-only applySessions updates', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-                normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-                projectManager: { updateSessions: vi.fn() },
-            }));
-            mockSessionPersistenceBoundaries();
 
-            const warmCache = await import('../../domains/state/warmCachePersistence');
-            const { createSessionsDomain } = await import('./sessions');
-            const { get, domain } = createHarness(createSessionsDomain);
+            observeSessionListWarmCacheWrites();
 
-            domain.applySessions([
-                {
+            const { get, domain } = createHarness();
+
+            applyOrdinarySnapshot(domain, [
+                currentSession({
                     id: 's1',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -2846,17 +2587,17 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: false,
                     thinkingAt: 0,
                     presence: 1,
-                } as any,
+                } as any),
             ]);
 
-            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            const saveWarmCache = warmCacheWrites;
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
-            const initialIndex = get().sessionListIndexByServerId['server-active'];
+            const initialIndex = get().sessionListIndexByServerId['srv_active'];
 
             domain.applySessions([
-                {
+                currentSession({
                     id: 's1',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -2869,11 +2610,11 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: true,
                     thinkingAt: 1,
                     presence: 1,
-                } as any,
+                } as any),
             ]);
 
             expect(get().sessions.s1?.thinking).toBe(true);
-            expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+            expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
         } finally {
             vi.clearAllTimers();
@@ -2885,19 +2626,14 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-                normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-                projectManager: { updateSessions: vi.fn() },
-            }));
-            mockSessionPersistenceBoundaries();
 
-            const warmCache = await import('../../domains/state/warmCachePersistence');
-            const { createSessionsDomain } = await import('./sessions');
-            const { get, domain } = createHarness(createSessionsDomain);
+            observeSessionListWarmCacheWrites();
 
-            const buildSession = (version: number, title: string) => ({
+            const { get, domain } = createHarness();
+
+            const buildSession = (version: number, title: string) => (currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: version,
                 createdAt: 1,
                 updatedAt: version,
@@ -2915,11 +2651,11 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 'online',
-            } as any);
+            } as any));
 
-            domain.applySessions([buildSession(1, 'Initial title')]);
+            applyOrdinarySnapshot(domain, [buildSession(1, 'Initial title')]);
 
-            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            const saveWarmCache = warmCacheWrites;
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
             saveWarmCache.mockClear();
 
@@ -2944,20 +2680,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-                normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-                projectManager: { updateSessions: vi.fn() },
-            }));
-            mockSessionPersistenceBoundaries();
 
-            const warmCache = await import('../../domains/state/warmCachePersistence');
-            const { createSessionsDomain } = await import('./sessions');
-            const { get, domain } = createHarness(createSessionsDomain);
+            observeSessionListWarmCacheWrites();
 
-            domain.applySessions([
-                {
+            const { get, domain } = createHarness();
+
+            applyOrdinarySnapshot(domain, [
+                currentSession({
                     id: 'streaming',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -2970,19 +2701,19 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: true,
                     thinkingAt: 1,
                     presence: 'online',
-                } as any,
+                } as any),
             ]);
 
-            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            const saveWarmCache = warmCacheWrites;
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
-            const initialIndex = get().sessionListIndexByServerId['server-active'];
+            const initialIndex = get().sessionListIndexByServerId['srv_active'];
             expect(Array.isArray(initialIndex)).toBe(true);
 
             for (let index = 0; index < 10; index += 1) {
                 domain.applySessions([
-                    {
+                    currentSession({
                         id: 'streaming',
-                        serverId: 'server-active',
+                        serverId: 'srv_active',
                         seq: index + 2,
                         createdAt: 1,
                         updatedAt: index + 2,
@@ -2995,11 +2726,11 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                         thinking: true,
                         thinkingAt: 1,
                         presence: 'online',
-                    } as any,
+                    } as any),
                 ]);
             }
 
-            expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+            expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
             vi.runOnlyPendingTimers();
             expect(saveWarmCache).toHaveBeenCalledTimes(2);
@@ -3013,20 +2744,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-                normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-                projectManager: { updateSessions: vi.fn() },
-            }));
-            mockSessionPersistenceBoundaries();
 
-            const warmCache = await import('../../domains/state/warmCachePersistence');
-            const { createSessionsDomain } = await import('./sessions');
-            const { domain } = createHarness(createSessionsDomain);
+            observeSessionListWarmCacheWrites();
 
-            domain.applySessions([
-                {
+            const { domain } = createHarness();
+
+            applyOrdinarySnapshot(domain, [
+                currentSession({
                     id: 'streaming',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -3039,16 +2765,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: true,
                     thinkingAt: 1,
                     presence: 'online',
-                } as any,
+                } as any),
             ]);
 
-            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            const saveWarmCache = warmCacheWrites;
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
 
             domain.applySessions([
-                {
+                currentSession({
                     id: 'streaming',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 2,
                     createdAt: 1,
                     updatedAt: 2,
@@ -3061,12 +2787,12 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: true,
                     thinkingAt: 1,
                     presence: 'online',
-                } as any,
+                } as any),
             ]);
 
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
 
-            domain.activateSessionLocalStateScope({ serverId: 'server-active', accountId: 'account-b' });
+            domain.activateSessionLocalStateScope({ serverId: 'srv_active', accountId: 'account-b' });
             vi.runOnlyPendingTimers();
 
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
@@ -3080,20 +2806,15 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-                normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-                projectManager: { updateSessions: vi.fn() },
-            }));
-            mockSessionPersistenceBoundaries();
 
-            const warmCache = await import('../../domains/state/warmCachePersistence');
-            const { createSessionsDomain } = await import('./sessions');
-            const { domain } = createHarness(createSessionsDomain);
+            observeSessionListWarmCacheWrites();
 
-            domain.applySessions([
-                {
+            const { domain } = createHarness();
+
+            applyOrdinarySnapshot(domain, [
+                currentSession({
                     id: 'streaming',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -3106,16 +2827,16 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: true,
                     thinkingAt: 1,
                     presence: 'online',
-                } as any,
+                } as any),
             ]);
 
-            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            const saveWarmCache = warmCacheWrites;
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
 
             domain.applySessions([
-                {
+                currentSession({
                     id: 'streaming',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 2,
                     createdAt: 1,
                     updatedAt: 2,
@@ -3128,7 +2849,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: true,
                     thinkingAt: 1,
                     presence: 'online',
-                } as any,
+                } as any),
             ]);
 
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
@@ -3147,19 +2868,14 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_700_000_000_000);
         try {
-            vi.doMock('../../runtime/orchestration/projectManager', () => ({
-                normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-                projectManager: { updateSessions: vi.fn() },
-            }));
-            mockSessionPersistenceBoundaries();
 
-            const warmCache = await import('../../domains/state/warmCachePersistence');
-            const { createSessionsDomain } = await import('./sessions');
-            const { get, domain } = createHarness(createSessionsDomain);
+            observeSessionListWarmCacheWrites();
+
+            const { get, domain } = createHarness();
 
             const buildStreamingSession = (seq: number) => ({
                 id: 'streaming',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq,
                 createdAt: 1,
                 updatedAt: seq,
@@ -3174,11 +2890,11 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 presence: 'online',
             } as any);
 
-            domain.applySessions([buildStreamingSession(1)]);
+            applyOrdinarySnapshot(domain, [buildStreamingSession(1)]);
 
-            const saveWarmCache = warmCache.saveSessionListWarmCacheEntries as unknown as ReturnType<typeof vi.fn>;
+            const saveWarmCache = warmCacheWrites;
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
-            const initialIndex = get().sessionListIndexByServerId['server-active'];
+            const initialIndex = get().sessionListIndexByServerId['srv_active'];
             expect(Array.isArray(initialIndex)).toBe(true);
 
             for (let seq = 2; seq <= 11; seq += 1) {
@@ -3187,7 +2903,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 ]);
             }
 
-            expect(get().sessionListIndexByServerId['server-active']).toBe(initialIndex);
+            expect(get().sessionListIndexByServerId['srv_active']).toBe(initialIndex);
             expect(saveWarmCache).toHaveBeenCalledTimes(1);
             vi.runOnlyPendingTimers();
             expect(saveWarmCache).toHaveBeenCalledTimes(2);
@@ -3198,15 +2914,14 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
     });
 
     it('records applySessions telemetry when sync performance telemetry is enabled', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
+
+        observeSessionListWarmCacheWrites();
 
         const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain } = createHarness(createSessionsDomain);
+
+        const { domain } = createHarness({
+            ordinarySessionListMembershipByServerId: { srv_active: ['s1'] },
+        });
 
         syncPerformanceTelemetry.configure({
             enabled: true,
@@ -3217,9 +2932,9 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
 
         try {
             domain.applySessions([
-                {
+                currentSession({
                     id: 's1',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -3232,7 +2947,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: false,
                     thinkingAt: 0,
                     presence: 1,
-                } as any,
+                } as any),
             ]);
 
             const event = syncPerformanceTelemetry
@@ -3271,9 +2986,9 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
             expect(warmCacheEvent?.fields.renderables).toBe(1);
 
             domain.applySessions([
-                {
+                currentSession({
                     id: 's1',
-                    serverId: 'server-active',
+                    serverId: 'srv_active',
                     seq: 1,
                     createdAt: 1,
                     updatedAt: 1,
@@ -3286,7 +3001,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                     thinking: false,
                     thinkingAt: 0,
                     presence: 1,
-                } as any,
+                } as any),
             ]);
 
             const noopEvent = syncPerformanceTelemetry
@@ -3300,18 +3015,17 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
     });
 
     it('publishes changed renderable ids from applySessions', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain, get } = createHarness(createSessionsDomain);
+
+        observeSessionListWarmCacheWrites();
+
+        const { domain, get } = createHarness({
+            ordinarySessionListMembershipByServerId: { srv_active: ['s1'] },
+        });
 
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 1,
@@ -3324,7 +3038,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 1,
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessionListRenderableDelta).toEqual({
@@ -3336,9 +3050,9 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
 
         const firstDelta = get().sessionListRenderableDelta;
         domain.applySessions([
-            {
+            currentSession({
                 id: 's1',
-                serverId: 'server-active',
+                serverId: 'srv_active',
                 seq: 1,
                 createdAt: 1,
                 updatedAt: 2,
@@ -3351,7 +3065,7 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
                 thinking: false,
                 thinkingAt: 0,
                 presence: 2,
-            } as any,
+            } as any),
         ]);
 
         expect(get().sessionListRenderableDelta).toEqual({
@@ -3366,15 +3080,12 @@ describe('sessions domain: sessionListIndex rebuild gating', () => {
 
 describe('sessions domain: qualified rows and ordinary membership', () => {
     it('does not promote an exact or query-only hydrated row into ordinary membership', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
-        const queryOnlySession: Session = {
+
+        observeSessionListWarmCacheWrites();
+
+        const queryOnlySession: Session = currentSession({
             id: 'query-only',
-            serverId: 'server-active',
+            serverId: 'srv_active',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -3388,48 +3099,45 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        };
+        });
         const queryOnly = buildSessionListRenderableFromSession(queryOnlySession);
-        const { domain, get } = createHarness(createSessionsDomain, {
-            sessionListRowsByServerId: { 'server-active': { 'query-only': queryOnly } },
-            ordinarySessionListMembershipByServerId: { 'server-active': [] },
+        const { domain, get } = createHarness({
+            sessionListRowsByServerId: { 'srv_active': { 'query-only': queryOnly } },
+            ordinarySessionListMembershipByServerId: { 'srv_active': [] },
             archivedSessionListMembershipByServerId: {},
-            sessionListIndexByServerId: { 'server-active': [] },
+            sessionListIndexByServerId: { 'srv_active': [] },
         });
 
         domain.applySessions([{
             ...queryOnlySession,
             seq: 2,
             updatedAt: 2,
-            metadata: { ...queryOnlySession.metadata, name: 'Hydrated exact result' },
+            metadata: { path: '/repo', host: 'test', ...queryOnlySession.metadata, name: 'Hydrated exact result' },
         }]);
 
         expect(get().sessions['query-only']).toEqual(expect.objectContaining({
             id: 'query-only',
             updatedAt: 2,
         }));
-        expect(get().sessionListRowsByServerId['server-active']['query-only']).toEqual(expect.objectContaining({
+        expect(get().sessionListRowsByServerId['srv_active']['query-only']).toEqual(expect.objectContaining({
             id: 'query-only',
             updatedAt: 2,
         }));
-        expect(get().ordinarySessionListMembershipByServerId['server-active']).toEqual([]);
-        expect(readSessionListIndexSessionIds(get().sessionListIndexByServerId['server-active'])).toEqual([]);
+        expect(get().ordinarySessionListMembershipByServerId['srv_active']).toEqual([]);
+        expect(readSessionListIndexSessionIds(get().sessionListIndexByServerId['srv_active'])).toEqual([]);
     });
 
     it('keeps query-only rows out of the ordinary list corpus', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain, get } = createHarness(createSessionsDomain, {
+
+        observeSessionListWarmCacheWrites();
+
+        const { domain, get } = createHarness({
             sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {},
         });
-        const queryOnly = buildSessionListRenderableFromSession({
+        const queryOnly = buildSessionListRenderableFromSession(currentSession({
             id: 'query-only',
-            serverId: 'server-a',
+            serverId: 'srv_a',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -3443,55 +3151,52 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as Session);
+        } as Session));
         const ordinary = buildSessionListRenderableFromSession({
             ...queryOnly,
             id: 'ordinary',
             metadata: { machineId: 'm1', path: '/ordinary', host: 'host' },
         } as Session);
 
-        domain.applyServerScopedSessionListRows('server-a', [queryOnly], {
+        domain.applyServerScopedSessionListRows('srv_a', [queryOnly], {
             source: 'rowOnly',
             mode: 'replace',
         });
 
-        expect(get().sessionListRowsByServerId['server-a']).toEqual({
+        expect(get().sessionListRowsByServerId['srv_a']).toEqual({
             'query-only': queryOnly,
         });
-        expect(get().ordinarySessionListMembershipByServerId['server-a']).toBeUndefined();
-        expect(get().archivedSessionListMembershipByServerId['server-a']).toBeUndefined();
-        expect(get().sessionListIndexByServerId['server-a']).toBeUndefined();
+        expect(get().ordinarySessionListMembershipByServerId['srv_a']).toBeUndefined();
+        expect(get().archivedSessionListMembershipByServerId['srv_a']).toBeUndefined();
+        expect(get().sessionListIndexByServerId['srv_a']).toBeUndefined();
 
-        domain.applyServerScopedSessionListRows('server-a', [ordinary], {
+        domain.applyServerScopedSessionListRows('srv_a', [ordinary], {
             source: 'ordinary',
             mode: 'replace',
         });
 
-        expect(get().sessionListRowsByServerId['server-a']).toEqual({
+        expect(get().sessionListRowsByServerId['srv_a']).toEqual({
             'query-only': queryOnly,
             ordinary,
         });
-        expect(get().ordinarySessionListMembershipByServerId['server-a']).toEqual(['ordinary']);
-        expect(readSessionListIndexSessionIds(get().sessionListIndexByServerId['server-a'])).toEqual(['ordinary']);
+        expect(get().ordinarySessionListMembershipByServerId['srv_a']).toEqual(['ordinary']);
+        expect(readSessionListIndexSessionIds(get().sessionListIndexByServerId['srv_a'])).toEqual(['ordinary']);
     });
 
     it('never lets an ad-hoc row-only read publish the ordinary list index', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
+
+        observeSessionListWarmCacheWrites();
+
         // Ordinary membership already exists, but its index has not been built yet — the state a
         // Home reaches after rehydration before its list owner runs.
-        const { domain, get } = createHarness(createSessionsDomain, {
+        const { domain, get } = createHarness({
             sessionListRowsByServerId: {},
-            ordinarySessionListMembershipByServerId: { 'server-a': ['ordinary'] },
+            ordinarySessionListMembershipByServerId: { 'srv_a': ['ordinary'] },
             sessionListIndexByServerId: {},
         });
-        const adHoc = buildSessionListRenderableFromSession({
+        const adHoc = buildSessionListRenderableFromSession(currentSession({
             id: 'ad-hoc',
-            serverId: 'server-a',
+            serverId: 'srv_a',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -3505,34 +3210,31 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as Session);
+        } as Session));
 
-        domain.applyServerScopedSessionListRows('server-a', [adHoc], {
+        domain.applyServerScopedSessionListRows('srv_a', [adHoc], {
             source: 'rowOnly',
             mode: 'replace',
         });
 
         // The row is hydrated for the command that asked for it, and nothing else moves: a Voice
         // or Action read owns no corpus, so it cannot publish a visible list either (L07-I35).
-        expect(get().sessionListRowsByServerId['server-a']).toEqual({ 'ad-hoc': adHoc });
-        expect(get().ordinarySessionListMembershipByServerId['server-a']).toEqual(['ordinary']);
-        expect(get().sessionListIndexByServerId['server-a']).toBeUndefined();
+        expect(get().sessionListRowsByServerId['srv_a']).toEqual({ 'ad-hoc': adHoc });
+        expect(get().ordinarySessionListMembershipByServerId['srv_a']).toEqual(['ordinary']);
+        expect(get().sessionListIndexByServerId['srv_a']).toBeUndefined();
     });
 
     it('rebuilds the ordinary projection when a scoped hydration patch changes a member row', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain, get } = createHarness(createSessionsDomain, {
+
+        observeSessionListWarmCacheWrites();
+
+        const { domain, get } = createHarness({
             sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {},
         });
-        const ordinary = buildSessionListRenderableFromSession({
+        const ordinary = buildSessionListRenderableFromSession(currentSession({
             id: 'ordinary',
-            serverId: 'server-a',
+            serverId: 'srv_a',
             seq: 1,
             createdAt: 1,
             updatedAt: 1,
@@ -3546,41 +3248,38 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as Session);
-        domain.applyServerScopedSessionListRows('server-a', [ordinary], {
+        } as Session));
+        domain.applyServerScopedSessionListRows('srv_a', [ordinary], {
             source: 'ordinary',
             mode: 'replace',
         });
-        expect(get().sessionListIndexByServerId['server-a'].find(
+        expect(get().sessionListIndexByServerId['srv_a']?.find(
             (item: SessionListIndexItem) => item.type === 'session',
         )?.section).toBe('active');
 
-        domain.applyServerScopedSessionListRowPatches('server-a', [{
+        domain.applyServerScopedSessionListRowPatches('srv_a', [{
             sessionId: 'ordinary',
             patch: { active: false, activeAt: 2, presence: 2 },
         }]);
 
-        expect(get().sessionListRowsByServerId['server-a'].ordinary.active).toBe(false);
-        expect(get().sessionListIndexByServerId['server-a'].find(
+        expect(get().sessionListRowsByServerId['srv_a'].ordinary.active).toBe(false);
+        expect(get().sessionListIndexByServerId['srv_a']?.find(
             (item: SessionListIndexItem) => item.type === 'session',
         )?.section).toBe('inactive');
     });
 
     it('owns archived membership separately from ordinary membership and preserves shared rows', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain, get } = createHarness(createSessionsDomain, {
+
+        observeSessionListWarmCacheWrites();
+
+        const { domain, get } = createHarness({
             sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {},
             archivedSessionListMembershipByServerId: {},
         });
-        const archivedA = buildSessionListRenderableFromSession({
+        const archivedA = buildSessionListRenderableFromSession(currentSession({
             id: 'archived-a',
-            serverId: 'server-a',
+            serverId: 'srv_a',
             seq: 1,
             createdAt: 1,
             updatedAt: 2,
@@ -3594,7 +3293,7 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as Session);
+        } as Session));
         const archivedB = buildSessionListRenderableFromSession({
             ...archivedA,
             id: 'archived-b',
@@ -3603,35 +3302,35 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             metadata: { machineId: 'm1', path: '/archived-b', host: 'host' },
         } as Session);
 
-        expect(get().archivedSessionListMembershipByServerId['server-a']).toBeUndefined();
-        domain.applyServerScopedSessionListRows('server-a', [archivedA], {
+        expect(get().archivedSessionListMembershipByServerId['srv_a']).toBeUndefined();
+        domain.applyServerScopedSessionListRows('srv_a', [archivedA], {
             source: 'archived',
             mode: 'replace',
         });
-        domain.applyServerScopedSessionListRows('server-a', [archivedA, archivedB], {
+        domain.applyServerScopedSessionListRows('srv_a', [archivedA, archivedB], {
             source: 'archived',
             mode: 'append',
         });
 
-        expect(get().archivedSessionListMembershipByServerId['server-a']).toEqual([
+        expect(get().archivedSessionListMembershipByServerId['srv_a']).toEqual([
             'archived-a',
             'archived-b',
         ]);
-        expect(get().ordinarySessionListMembershipByServerId['server-a']).toBeUndefined();
-        const retainedRows = get().sessionListRowsByServerId['server-a'];
+        expect(get().ordinarySessionListMembershipByServerId['srv_a']).toBeUndefined();
+        const retainedRows = get().sessionListRowsByServerId['srv_a'];
 
-        domain.applyServerScopedSessionListRows('server-a', [], {
+        domain.applyServerScopedSessionListRows('srv_a', [], {
             source: 'archived',
             mode: 'replace',
         });
-        expect(get().archivedSessionListMembershipByServerId['server-a']).toEqual([]);
-        expect(get().sessionListRowsByServerId['server-a']).toBe(retainedRows);
+        expect(get().archivedSessionListMembershipByServerId['srv_a']).toEqual([]);
+        expect(get().sessionListRowsByServerId['srv_a']).toBe(retainedRows);
 
-        domain.applyServerScopedSessionListRows('server-a', [archivedA, archivedB], {
+        domain.applyServerScopedSessionListRows('srv_a', [archivedA, archivedB], {
             source: 'archived',
             mode: 'replace',
         });
-        domain.applyServerScopedSessionListRows('server-a', [{
+        domain.applyServerScopedSessionListRows('srv_a', [{
             ...archivedA,
             updatedAt: 4,
             archivedAt: null,
@@ -3640,9 +3339,9 @@ describe('sessions domain: qualified rows and ordinary membership', () => {
             mode: 'append',
         });
 
-        expect(get().archivedSessionListMembershipByServerId['server-a']).toEqual(['archived-b']);
-        expect(get().ordinarySessionListMembershipByServerId['server-a']).toEqual(['archived-a']);
-        expect(get().sessionListRowsByServerId['server-a']['archived-a']?.archivedAt).toBeNull();
+        expect(get().archivedSessionListMembershipByServerId['srv_a']).toEqual(['archived-b']);
+        expect(get().ordinarySessionListMembershipByServerId['srv_a']).toEqual(['archived-a']);
+        expect(get().sessionListRowsByServerId['srv_a']['archived-a']?.archivedAt).toBeNull();
     });
 });
 
@@ -3659,7 +3358,7 @@ describe('sessions domain: three-Home ingestion and index rebuild cost', () => {
     const homeServerIds = Array.from({ length: HOME_COUNT }, (_, home) => `ingestion-home-${home}`);
 
     function buildHomeRows(home: number): SessionListRenderableSession[] {
-        return Array.from({ length: ROWS_PER_HOME }, (_, index) => buildSessionListRenderableFromSession({
+        return Array.from({ length: ROWS_PER_HOME }, (_, index) => buildSessionListRenderableFromSession(currentSession({
             id: `ingestion-session-${home}-${index}`,
             serverId: homeServerIds[home],
             seq: index,
@@ -3675,17 +3374,14 @@ describe('sessions domain: three-Home ingestion and index rebuild cost', () => {
             thinking: false,
             thinkingAt: 0,
             presence: 1,
-        } as Session));
+        } as Session)));
     }
 
     it('keeps unrelated Home indexes referentially stable across ingestion, patches and rapid changes', async () => {
-        vi.doMock('../../runtime/orchestration/projectManager', () => ({
-            normalizeKnownProjectMachineId: normalizeKnownProjectMachineIdMock,
-            projectManager: { updateSessions: vi.fn() },
-        }));
-        mockSessionPersistenceBoundaries();
-        const { createSessionsDomain } = await import('./sessions');
-        const { domain, get, getSetCalls } = createHarness(createSessionsDomain, {
+
+        observeSessionListWarmCacheWrites();
+
+        const { domain, get, getSetCalls } = createHarness({
             sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {},
             sessionListIndexByServerId: {},

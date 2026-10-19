@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { projectLegacySessionAccessCapabilitiesV1, SessionAwarenessListResultV1Schema } from '@happier-dev/protocol';
+import { encodeV2SessionListCursorV2, projectLegacySessionAccessCapabilitiesV1, SessionAwarenessListResultV1Schema } from '@happier-dev/protocol';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -13,7 +13,14 @@ import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 import { SessionSystemRecordStoredSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { SessionBoardLayoutV1StoredSchema } from '@happier-dev/protocol/sessions/board/layout';
+import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { PluginAccountDataEraseServerOutputV1Schema } from '@happier-dev/protocol/plugins/data/accountEraseV1';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { parseToken } from '@/utils/auth/parseToken';
 import { openSessionSystemRecord } from './domains/sessionSystemRecords/codec';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 installDisconnectedServerSocketBoundary();
 
@@ -148,11 +155,17 @@ async function applySelectedHomeForSessionListTest(credentials?: import('@/auth/
     setRuntimeFetch((url, init) => runtimeFetchMock(String(url), init));
     onTestFinished(connection.dispose);
     const { sync } = await import('./sync');
-    // Bootstrap's settings queue precedes its Session queue. Join both real
-    // queues before a case installs a held response for an Account mutation.
+    // Bootstrap starts its Session queue only after core/Profile settlement.
+    // Join that phase before draining inventory, or its later reads can consume
+    // a route's held response and replace state installed by the case.
     const settingsQueue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
+    const profileQueue = Reflect.get(sync, 'profileSync') as import('@/utils/sessions/sync').InvalidateSync;
+    const sessionsQueue = Reflect.get(sync, 'sessionsSync') as import('@/utils/sessions/sync').InvalidateSync;
+    await profileQueue.awaitQueue();
     await settingsQueue.awaitQueue();
+    await waitForAssertion(() => expect(storage.getState().isDataReady).toBe(true));
     await sync.refreshSessions();
+    await sessionsQueue.awaitQueue();
     requestMock.mockClear();
     runtimeFetchMock.mockClear();
 }
@@ -206,9 +219,11 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' },
             content: { t: 'encrypted', c: encrypted }, revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
             createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z' });
+        const recordAddress = record.address;
+        if (recordAddress.owner !== 'host') throw new Error('Expected the host layout fixture');
         const address = { serverId: home.id, sessionId };
         const open = () => sync.withSessionSystemRecordRuntime(address, async runtime => {
-            return await openSessionSystemRecord({ record, address: record.address, context: runtime.readContentContext(),
+            return await openSessionSystemRecord({ record, address: recordAddress, context: runtime.readContentContext(),
                 decode: value => {
                     const parsed = SessionBoardLayoutV1StoredSchema.safeParse(value);
                     return parsed.success ? { status: 'ready', value: parsed.data } : { status: 'malformed' };
@@ -225,7 +240,9 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         expect(await open()).toEqual({ status: 'ok', value: { status: 'ready', value: payload } });
     });
 
-    it.each(['current', 'retired'] as const)('upgrades offscreen legacy public-linked Sessions through the real tuple writer only for the %s Account lifetime', async (lifetime) => {
+    it.each([['current', true], ['retired', true], ['current', false]] as const)(
+        'upgrades discovered legacy public-linked Sessions through the real tuple writer only for a current demanded Session (Account=%s, demanded=%s)',
+        async (lifetime, demanded) => {
         const home = await upsertServerProfile({ serverUrl: 'https://owner-first-visit.example.test', name: 'First visit' });
         await setActiveServerId(home.id, { scope: 'device' });
         await applySelectedHomeForSessionListTest({ token: tokenForSub('owner-first-visit') });
@@ -239,10 +256,6 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         const discovery = createDeferred<Response>();
         const request = async (path: string, init?: RequestInit): Promise<Response> => {
             const route = path.split('?')[0];
-            if (route === '/v1/auth/ping') return Response.json({ success: true });
-            if (route === '/v1/account/encryption/currentness') return Response.json({
-                mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
-            });
             if (route === '/v2/sessions/metadata-upgrades') {
                 return patches.length ? Response.json({ sessionIds: [] }) : discovery.promise;
             }
@@ -250,49 +263,63 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                 patches.push(JSON.parse(String(init.body)));
                 return Response.json({ success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 4 }, agentState: { version: 6 } });
             }
-            if (route === '/v2/sessions/legacy-offscreen') return Response.json({ session: {
+            if (route === '/v2/sessions/legacy-offscreen') return Response.json({ session: SessionCurrentProjectionRecordV1Schema.parse({
                 id: 'legacy-offscreen', seq: 1, createdAt: 1, updatedAt: 2, active: false, activeAt: 2,
                 archivedAt: 3, encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
                 metadata: JSON.stringify(legacyMetadata), metadataVersion: 3, agentState: null, agentStateVersion: 5, share: null,
                 effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], audienceContext: null,
                     capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner', canApprovePermissions: true }) },
-            } });
+                responsibleAccountId: null, responsibleAccount: null,
+            }) });
+            if (route === '/v2/sessions/query') return Response.json(SessionListQueryResponseV1Schema.parse({
+                sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+            }));
             if (route === '/v2/sessions' || route === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
             return new Response(null, { status: 404 });
         };
         requestMock.mockImplementation(request);
-        runtimeFetchMock.mockImplementation((url: string, init?: RequestInit) => request(new URL(url).pathname + new URL(url).search, init));
-        const refreshing = sync.refreshSessions({ awaitSessionListHydration: true });
-        await waitForAssertion(() => expect(storage.getState().concurrentSessionListCacheByServerId[home.id]?.listObservation?.phase).toBe('ready'));
-        expect(patches).toEqual([]);
-        if (lifetime === 'retired') storage.setState({ profileScope: { serverId: home.id, accountId: 'different-account' } });
-        discovery.resolve(Response.json({ sessionIds: ['legacy-offscreen'] }));
-        await refreshing;
-        if (lifetime === 'retired') {
-            expect(patches).toEqual([]);
-            return;
+        if (demanded) {
+            markSessionSurfaceVisible('legacy-offscreen', home.id);
+            onTestFinished(() => markSessionSurfaceHidden('legacy-offscreen', home.id));
         }
-        expect(patches).toHaveLength(1);
-        expect(patches[0]).toMatchObject({ mode: 'owner_migration', expectedAccountEncryptionMode: 'plain',
-            source: { metadata: { version: 3, ciphertext: JSON.stringify(legacyMetadata) } },
-            target: { ownerMetadata: { t: 'plain', v: { workspace: { path: '/owner/private', host: 'owner-host' } } } },
-        });
-        const patch = patches[0] as { target: { sharedMetadata: { ciphertext: string } } };
-        expect(patch.target.sharedMetadata.ciphertext).not.toContain('/owner/private');
-        await sync.refreshSessions({ awaitSessionListHydration: true });
-        expect(patches).toHaveLength(1);
+        const refreshing = sync.refreshSessions({ awaitSessionListHydration: true });
+        try {
+            await waitForAssertion(() => expect(storage.getState().concurrentSessionListCacheByServerId[home.id]?.listObservation?.phase).toBe('ready'));
+            expect(patches).toEqual([]);
+            if (lifetime === 'retired') storage.setState({ profileScope: { serverId: home.id, accountId: 'different-account' } });
+            discovery.resolve(Response.json({ sessionIds: ['legacy-offscreen'] }));
+            await refreshing;
+            if (lifetime === 'retired' || !demanded) {
+                expect(patches).toEqual([]);
+                expect(requestMock.mock.calls.some(([path]) => path === '/v2/sessions/legacy-offscreen')).toBe(false);
+                return;
+            }
+            expect(patches).toHaveLength(1);
+            expect(patches[0]).toMatchObject({ mode: 'owner_migration', expectedAccountEncryptionMode: 'plain',
+                source: { metadata: { version: 3, ciphertext: JSON.stringify(legacyMetadata) } },
+                target: { ownerMetadata: { t: 'plain', v: { workspace: { path: '/owner/private', host: 'owner-host' } } } },
+            });
+            const patch = patches[0] as { target: { sharedMetadata: { ciphertext: string } } };
+            expect(patch.target.sharedMetadata.ciphertext).not.toContain('/owner/private');
+            await sync.refreshSessions({ awaitSessionListHydration: true });
+            expect(patches).toHaveLength(1);
+        } finally {
+            discovery.resolve(Response.json({ sessionIds: [] }));
+            await refreshing;
+        }
     });
     it.each([
         ['retired', 'applied'], ['retired', 'conflict'], ['retired', 'outcomeUnknown'],
         ['advanced', 'applied'], ['erase-retired', 'applied'], ['erase-retired', 'outcomeUnknown'],
         ['data-retired', 'applied'], ['data-retired', 'outcomeUnknown'],
-        ['cancel-before-settings', 'applied'],
-        ['cancel-before-post', 'applied'],
+        ['cancel-before-data', 'applied'],
+        ['cancel-after-data-submission', 'applied'],
         ['advanced-ui', 'applied'],
         ['advanced-projection', 'applied'],
     ] as const)('retains plugin secret settlement after %s Account presentation (%s)', async (presentation, outcome) => {
         const { createDeferred } = await import('@/dev/testkit');
-        const isCancellation = presentation === 'cancel-before-settings' || presentation === 'cancel-before-post';
+        const isCancellation = presentation === 'cancel-before-data' || presentation === 'cancel-after-data-submission';
+        const isDataErase = presentation === 'erase-retired' || presentation === 'data-retired' || isCancellation;
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { scopedPluginAccountSecretSettingsAdapter } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime');
         const { executeAccountPluginDataEraseAction } = await import('@/sync/domains/plugins/settings/accountPluginDataEraseAction');
@@ -353,22 +380,10 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             }
             if (path === '/v2/account/settings' && init?.method === 'POST') {
                 expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer ${credentials.token}`);
-                if (isCancellation) return Response.json({ success: true, version: 6 });
                 issued.resolve();
                 return response.promise.then((result) => result.clone());
             }
-            if (path === '/v2/account/settings' && presentation === 'cancel-before-settings') {
-                issued.resolve();
-                return response.promise.then((readResponse) => readResponse.clone());
-            }
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: baseline }, version: 5 });
-            if (path.includes('push-tokens')) {
-                if (presentation === 'cancel-before-post') {
-                    issued.resolve();
-                    return response.promise.then((readResponse) => readResponse.clone());
-                }
-                return new Response(null, { status: 404 });
-            }
             // A peripheral bootstrap route may be unsupported while this Home
             // is reachable; throwing here would manufacture a network outage.
             return new Response(null, { status: 404 });
@@ -416,11 +431,12 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             await waitForAssertion(() => expect(secretProjection?.state.ready).toBe(true));
             await act(async () => { secretProjection!.setDraft('apiToken', 'secret-not-for-renderer'); });
         }
+        if (presentation === 'cancel-before-data') cancellation.abort();
         const write = presentation === 'advanced-ui'
             ? (async () => { await act(async () => { screen!.pressByTestId(saveId); }); return await issued.promise; })()
             : presentation === 'advanced-projection'
             ? secretProjection!.commit({ fieldId: 'apiToken', mutation: { kind: 'set', value: 'secret-not-for-renderer' } })
-            : presentation === 'erase-retired' || presentation === 'data-retired' || isCancellation
+            : isDataErase
             ? executeAccountPluginDataEraseAction({ pluginId: 'acme.settings' }, { signal: cancellation.signal })
             : scopedPluginAccountSecretSettingsAdapter.write({
             pluginId: 'acme.settings', scope: { kind: 'account' }, target: { kind: 'account', serverIdentityId },
@@ -428,20 +444,26 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             mutation: { kind: 'set', value: 'secret-not-for-renderer' },
             expectedRevision: { kind: 'account-secret', value: 5 },
         });
+        if (presentation === 'cancel-before-data') {
+            expect(await write).toEqual({ status: 'partial',
+                settings: { status: 'pending', reason: 'unavailable' },
+                data: { status: 'pending', reason: 'unavailable' },
+            });
+            expect(postPaths).toEqual([]);
+            return;
+        }
         await Promise.race([
             issued.promise,
             write.then((result) => { throw new Error(`Secret mutation settled before issuing a POST: ${JSON.stringify(result)}; HTTP: ${JSON.stringify(runtimeFetchMock.mock.calls.map(([url]) => url))}`); }),
         ]);
-        if (isCancellation) {
+        if (presentation === 'cancel-after-data-submission') {
             cancellation.abort();
-            response.resolve(presentation === 'cancel-before-settings'
-                ? Response.json({ content: { t: 'plain', v: baseline }, version: 5 })
-                : new Response(null, { status: 404 }));
+            response.resolve(Response.json(PluginAccountDataEraseServerOutputV1Schema.parse({ status: 'erased', changed: true })));
             const cancelled = await write;
-            expect(postPaths).toEqual([]);
+            expect(postPaths).toEqual([PLUGIN_ACCOUNT_DATA_ERASE_HTTP_PATH_V1]);
             expect(cancelled).toEqual({ status: 'partial',
                 settings: { status: 'pending', reason: 'unavailable' },
-                data: { status: 'pending', reason: 'unavailable' },
+                data: { status: 'completed', changed: true },
             });
             return;
         }
@@ -467,8 +489,8 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             expect(persistedAccountB).toMatchObject({ version: 20, settings: { analyticsOptOut: true } });
         }
         if (outcome === 'outcomeUnknown') response.reject(new Error('acknowledgement lost'));
-        else response.resolve(Response.json(presentation === 'data-retired'
-            ? { status: 'erased', changed: true }
+        else response.resolve(Response.json(isDataErase
+            ? PluginAccountDataEraseServerOutputV1Schema.parse({ status: 'erased', changed: true })
             : outcome === 'applied'
             ? { success: true, version: 6 }
             : { success: false, error: 'version-mismatch', currentVersion: 6, currentContent: { t: 'plain', v: {} } }));
@@ -490,17 +512,13 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             return;
         }
         stopAdvancement();
-        expect(result).toEqual(presentation === 'data-retired'
-            ? { status: outcome === 'applied' ? 'completed' : 'partial', settings: { status: 'completed', changed: false },
+        expect(result).toEqual(isDataErase
+            ? { status: 'partial', settings: { status: 'pending', reason: 'unavailable' },
                 data: outcome === 'applied' ? { status: 'completed', changed: true } : { status: 'pending', reason: 'outcome-unknown' } }
-            : presentation === 'erase-retired'
-            ? { status: 'partial', settings: outcome === 'applied'
-                ? { status: 'completed', changed: true } : { status: 'pending', reason: 'outcome-unknown' },
-                data: { status: 'pending', reason: 'unavailable' } }
             : outcome === 'applied'
             ? { status: 'applied', revision: { kind: 'account-secret', value: 6 } }
             : { status: outcome });
-        expect(postPaths).toEqual([presentation === 'data-retired' ? PLUGIN_ACCOUNT_DATA_ERASE_HTTP_PATH_V1 : '/v2/account/settings']);
+        expect(postPaths).toEqual([isDataErase ? PLUGIN_ACCOUNT_DATA_ERASE_HTTP_PATH_V1 : '/v2/account/settings']);
         expect(storage.getState().settingsScope).toEqual(nextScope);
         expect(storage.getState().settingsVersion).toBe(20);
         expect(storage.getState().settings).toEqual(nextSettings);
@@ -674,6 +692,8 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         };
         const { sync } = await import('./sync');
         Reflect.set(sync, 'credentials', { token: tokenForSub('account-a'), secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') });
+        const ordinaryCursor = encodeV2SessionListCursorV2({ sessionId: 'page-awareness', meaningfulActivityAt: 2 });
+        const attentionCursor = encodeV2SessionListCursorV2({ sessionId: 'attention-awareness', meaningfulActivityAt: 1 });
         requestMock.mockImplementation(async (_path, init) => {
             const requestBody = JSON.parse(String(init?.body ?? '{}')) as { cursor?: string; attentionCursor?: string };
             return new Response(JSON.stringify({
@@ -696,9 +716,9 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                 },
                 responsibleAccountId: null, responsibleAccount: null,
                 }],
-                nextCursor: requestBody.cursor || requestBody.attentionCursor ? null : 'cursor-next',
+                nextCursor: requestBody.cursor || requestBody.attentionCursor ? null : ordinaryCursor,
                 hasNext: !requestBody.cursor && !requestBody.attentionCursor,
-                attentionNextCursor: 'cursor-attention-next', attentionHasNext: true,
+                attentionNextCursor: attentionCursor, attentionHasNext: true,
                 // Only the ordinary page withheld a row. The supplemental family
                 // stays incomplete but must not duplicate that fixture observation.
                 ...(requestBody.attentionCursor ? {} : { metadataUpgradeRequiredCount: 1 }),
@@ -718,7 +738,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         };
         const result = await listSessionsForVoiceTool({ view: 'awareness', serverId: home.id, query });
         const continuedResult = await listSessionsForVoiceTool({
-            view: 'awareness', serverId: home.id, query, cursor: 'cursor-next',
+            view: 'awareness', serverId: home.id, query, cursor: ordinaryCursor,
         });
         expect(storage.getState().sessionListRowsByServerId).toEqual(expect.objectContaining({
             [home.id]: expect.objectContaining({ 'page-awareness': expect.anything() }),
@@ -734,14 +754,14 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             index: storage.getState().sessionListIndexByServerId,
         }).toEqual(membershipBefore);
         expect(result).toMatchObject({
-            view: 'awareness', projectionVersion: 1, nextCursor: 'cursor-next', hasNext: true,
-            attentionNextCursor: 'cursor-attention-next', attentionHasNext: true,
+            view: 'awareness', projectionVersion: 1, nextCursor: ordinaryCursor, hasNext: true,
+            attentionNextCursor: attentionCursor, attentionHasNext: true,
             metadataUpgradeRequiredCount: 1,
             sessions: [{ sessionId: 'page-awareness', lifecycle: 'failed' }],
         });
         expect(continuedResult).toMatchObject({
             view: 'awareness', projectionVersion: 1, nextCursor: null, hasNext: false,
-            attentionNextCursor: 'cursor-attention-next', attentionHasNext: true,
+            attentionNextCursor: attentionCursor, attentionHasNext: true,
             metadataUpgradeRequiredCount: 1,
             sessions: [],
         });
@@ -1111,6 +1131,12 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                     folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
             }));
             if (target.pathname === '/v1/auth/ping') return Response.json({ success: true });
+            if (target.pathname === '/v1/account/profile') {
+                const authorization = new Headers(init?.headers).get('authorization');
+                const accountId = authorization?.startsWith('Bearer ') ? parseToken(authorization.slice(7)) : null;
+                return accountId ? Response.json(AccountProfileSchema.parse({ id: accountId }))
+                    : Response.json({ error: 'not_authenticated' }, { status: 401 });
+            }
             if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (target.pathname === '/v1/account/encryption/currentness') return Response.json({
                 mode: 'plain', version: 1, updatedAt: 0, signingKeyFingerprint: null, contentKeyFingerprint: null,
@@ -1441,7 +1467,8 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         await (sync as any).activateAccountSettingsScope('account-b');
         response.resolve(Response.json({ content: { t: 'plain', v: {} }, version: 7 }));
         await expect(operation).rejects.toThrow('Account settings scope changed while mutating settings');
-        expect(runtimeFetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+        expect(runtimeFetchMock.mock.calls.some(([url, init]) => new URL(String(url)).pathname === '/v2/account/settings'
+            && init?.method === 'POST')).toBe(false);
     });
 
     it('refuses a retained one-shot mutation before preflush when its rendered Account scope retired', async () => {
@@ -1506,6 +1533,115 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         );
         expect(sessionByIdCalls).toHaveLength(1);
         expect((sync as any).activeServerSessionIds.has(sessionId)).toBe(true);
+    });
+
+    it.each(['available', 'forbidden', 'account_retired'] as const)(
+        'keeps a missing transcript reader loading until exact hydration settles %s',
+        async (outcome) => {
+            const sessionId = `transcript_reader_pending_${outcome}`;
+            const fixture = await createEncryptedSessionFixture(sessionId);
+            const { sync } = await import('./sync');
+            Reflect.set(sync, 'credentials', fixture.credentials);
+            Reflect.set(sync, 'encryption', fixture.encryption);
+            Reflect.set(sync, 'activeServerSessionIds', new Set([sessionId]));
+            storage.getState().applySessions([createSession({ sessionId })]);
+            const requested = createDeferred<void>();
+            const response = createDeferred<Response>();
+            requestMock.mockImplementation(async (path: string) => {
+                if (path === `/v2/sessions/${sessionId}`) {
+                    requested.resolve();
+                    return response.promise;
+                }
+                if (path.startsWith(`/v1/sessions/${sessionId}/messages`)) {
+                    return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
+                }
+                return new Response(null, { status: 404 });
+            });
+            const hydration = sync.ensureSessionVisibleForMessageRoute(sessionId, {
+                forceRefresh: true, hydrateMessages: false,
+            });
+            await requested.promise;
+            const fetchMessages = Reflect.get(sync, 'fetchMessages') as (id: string) => Promise<void>;
+            let readSettled = false;
+            const reading = fetchMessages(sessionId).then(
+                () => { readSettled = true; return null; },
+                (error: unknown) => { readSettled = true; return error; },
+            );
+            try {
+                // Let the real page pipeline reach its missing-reader boundary while
+                // the by-ID HTTP response, and therefore reader installation, is held.
+                await new Promise<void>((resolve) => setTimeout(resolve, 0));
+                expect(readSettled).toBe(false);
+                expect(storage.getState().getSessionTranscriptLoadIssue(sessionId)).toBeNull();
+                expect(storage.getState().sessionMessages[sessionId]?.isLoaded).not.toBe(true);
+                if (outcome === 'account_retired') {
+                    const scope = storage.getState().profileScope;
+                    if (!scope) throw new Error('Expected the restored Account scope');
+                    storage.setState({ profileScope: { ...scope, accountId: 'replacement-account' } });
+                }
+            } finally {
+                response.resolve(outcome !== 'forbidden'
+                    ? Response.json({ session: fixture.row })
+                    : Response.json({ error: 'forbidden' }, { status: 403 }));
+                await hydration;
+                await reading;
+            }
+            if (outcome === 'available') {
+                expect(await reading).toBeNull();
+                expect(storage.getState().sessionMessages[sessionId]?.isLoaded).toBe(true);
+                expect(storage.getState().getSessionTranscriptLoadIssue(sessionId)).toBeNull();
+            } else if (outcome === 'forbidden') {
+                expect(await reading).toMatchObject({ code: 'session_encryption_not_found' });
+                expect(storage.getState().sessionMessages[sessionId]?.isLoaded).not.toBe(true);
+                expect(storage.getState().getSessionTranscriptLoadIssue(sessionId)).toEqual({
+                    kind: 'read_failed', errorCode: 'session_encryption_not_found',
+                });
+            } else {
+                expect(await reading).toBeNull();
+                expect(storage.getState().sessionMessages[sessionId]?.isLoaded).not.toBe(true);
+                expect(storage.getState().getSessionTranscriptLoadIssue(sessionId)).toBeNull();
+            }
+        },
+    );
+
+    it('keeps retry semantics for missing encryption during a same-ID Session hydration on another Home', async () => {
+        const sessionId = 'transcript_reader_other_home';
+        const fixture = await createEncryptedSessionFixture(sessionId);
+        const otherHome = await upsertServerProfile({ serverUrl: 'https://other-reader-home.test', name: 'Other Home' });
+        const { sync } = await import('./sync');
+        Reflect.set(sync, 'credentials', fixture.credentials);
+        Reflect.set(sync, 'encryption', fixture.encryption);
+        Reflect.set(sync, 'activeServerSessionIds', new Set([sessionId]));
+        storage.getState().applySessions([createSession({ sessionId })]);
+        await TokenStorage.setCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id }, fixture.credentials);
+        const requested = createDeferred<void>();
+        const response = createDeferred<Response>();
+        const defaultFetch = runtimeFetchMock.getMockImplementation()!;
+        runtimeFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+            if (url === `${otherHome.serverUrl}/v1/account/encryption/currentness`) {
+                return Response.json({ mode: 'e2ee', version: 1, signingKeyFingerprint: 'fixture',
+                    contentKeyFingerprint: 'fixture', updatedAt: 1 });
+            }
+            if (url === `${otherHome.serverUrl}/v2/sessions/${sessionId}`) {
+                requested.resolve();
+                return response.promise;
+            }
+            return defaultFetch(url, init);
+        });
+        const hydration = sync.ensureSessionVisibleForMessageRoute(sessionId, {
+            serverId: otherHome.id, forceRefresh: true, hydrateMessages: false,
+        });
+        await requested.promise;
+        const fetchMessages = Reflect.get(sync, 'fetchMessages') as (id: string) => Promise<void>;
+        try {
+            await expect(fetchMessages(sessionId)).rejects.toMatchObject({ code: 'session_encryption_not_found' });
+            expect(storage.getState().getSessionTranscriptLoadIssue(sessionId)).toEqual({
+                kind: 'read_failed', errorCode: 'session_encryption_not_found',
+            });
+        } finally {
+            response.resolve(Response.json({ error: 'forbidden' }, { status: 403 }));
+            await hydration;
+        }
     });
 
     it('keeps a recipient with a missing envelope locked after exact-route hydration', async () => {
@@ -1612,6 +1748,9 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             ? Response.json({ sessions: [], nextCursor: null, hasNext: false })
             : new Response('temporary session hydrate failure', { status: 503 }));
 
+        // Exact content hydration follows a live consumer, not an unseen socket row.
+        markSessionSurfaceVisible(sessionId);
+        onTestFinished(() => markSessionSurfaceHidden(sessionId));
         await syncInternals.handleUpdate({
             id: 'u_socket_new_session_reconcile',
             seq: 10,
@@ -2069,8 +2208,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         (sync as any).hasFetchedSessionsSnapshotForActiveServer = false;
         (sync as any).encryption = await Encryption.create(new Uint8Array(32).fill(7));
 
-        const connectivityError = new Error('active server request timed out');
-        connectivityError.name = 'ServerFetchConnectivityTimeoutError';
+        const connectivityError = new TypeError('Network request failed');
         requestMock.mockRejectedValue(connectivityError);
 
         await expect(sync.ensureSessionVisibleForMessageRoute(sessionId)).resolves.toMatchObject({
@@ -2533,7 +2671,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         expect((sync as any).encryption.getSessionEncryption(sessionId)).toBeNull();
     });
 
-    it('hydrates through an explicit serverId override even when the active server differs', async () => {
+    it.each(['owner', 'active'] as const)('hydrates through an explicit serverId override with a retained row from the %s Home', async (retainedHome) => {
         const sessionId = 'deep_link_explicit_server';
         const scopedToken = tokenForSub('scoped-account');
         const activeServer = await upsertServerProfile({ serverUrl: 'https://active.example', name: 'Active' });
@@ -2543,12 +2681,15 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
 
         storage.getState().applySessions([
             {
-                // The deep link names the owner Home, so the local row this case seeds
-                // belongs to that Home and must not appear in the active Home's lists.
-                ...createSession({ sessionId, serverId: ownerServer.id }),
+                ...createSession({ sessionId, serverId: retainedHome === 'owner' ? ownerServer.id : activeServer.id }),
                 encryptionMode: 'plain',
             },
         ]);
+        const activeRowBefore = storage.getState().sessionListRowsByServerId[activeServer.id]?.[sessionId];
+        if (retainedHome === 'active') expect(activeRowBefore).toBeDefined();
+        const activeIndexHasSessionBefore = storage.getState().sessionListIndexByServerId[activeServer.id]?.some(
+            (item) => item.type === 'session' && item.sessionId === sessionId,
+        ) ?? false;
         storage.getState().resetSessionMessages(sessionId);
 
         const { sync } = await import('./sync');
@@ -2595,12 +2736,12 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             scopedToken,
         );
         expect(storage.getState().sessions[sessionId]?.serverId).toBe(ownerServer.id);
-        expect(storage.getState().sessionListRowsByServerId?.[activeServer.id]?.[sessionId]).toBeUndefined();
+        expect(storage.getState().sessionListRowsByServerId?.[activeServer.id]?.[sessionId]).toBe(activeRowBefore);
         expect(
             storage.getState().sessionListIndexByServerId?.[activeServer.id]?.some(
                 (item) => item.type === 'session' && item.sessionId === sessionId,
             ) ?? false,
-        ).toBe(false);
+        ).toBe(activeIndexHasSessionBefore);
         expect(storage.getState().sessionListRowsByServerId?.[ownerServer.id]?.[sessionId]).toBeDefined();
         expect(storage.getState().ordinarySessionListMembershipByServerId?.[ownerServer.id] ?? []).not.toContain(sessionId);
         expect((sync as any).activeServerSessionIds.has(sessionId)).toBe(false);
@@ -2723,7 +2864,8 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         )).toHaveLength(2);
     });
 
-    it('keeps an in-flight non-active Home System Record acquisition current when focus switches to that Home', async () => {
+    it.each(['focus-switch', 'credential-replacement'] as const)(
+      'fences an in-flight exact-Home System Record acquisition across %s', async (change) => {
         const { createDeferred } = await import('@/dev/testkit');
         const sessionId = 'system_record_scoped_during_active_reset';
         const scopedToken = tokenForSub('scoped-account');
@@ -2746,6 +2888,9 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
             if (new URL(url).pathname === '/v1/auth/ping') {
                 return Response.json({ success: true });
             }
+            if (url === 'https://scoped-reset.example/v1/account/encryption/currentness') {
+                return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            }
             if (url === `https://scoped-reset.example/v2/sessions/${sessionId}`) return await response.promise;
             return new Response(null, { status: 404 });
         });
@@ -2761,25 +2906,26 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         // focused Account runtime around it.
         await setActiveServerId(ownerServer.id, { scope: 'device' });
         (sync as any).resetServerScopedRuntimeState();
-        response.resolve(new Response(JSON.stringify({
-            session: {
-                id: sessionId,
-                createdAt: 1,
-                updatedAt: 2,
-                seq: 3,
-                active: true,
-                activeAt: 2,
-                encryptionMode: 'plain',
-                dataEncryptionKey: null,
-                metadataVersion: 0,
-                metadata: 'null',
-                agentStateVersion: 1,
-                agentState: null,
-                share: null,
-            },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        if (change === 'credential-replacement') {
+            // This is an actual Home credential mutation, not an encryption-cache
+            // invalidation or a manually retired callback supplied by the test.
+            await TokenStorage.setCredentialsForServerUrl(ownerServer.serverUrl, { serverId: ownerServer.id }, {
+                token: tokenForSub('replacement-account'),
+            });
+        }
+        response.resolve(Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({
+            id: sessionId, createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
+            metadataVersion: 0, metadata: { path: '/private/captured-account', host: 'owner' }, agentStateVersion: 1,
+        }) }));
 
-        await expect(acquisition).resolves.toEqual({ status: 'ok', value: 'scoped-account' });
+        if (change === 'credential-replacement') {
+            await expect(acquisition).resolves.toEqual({ status: 'forbidden' });
+            expect(storage.getState().sessions[sessionId]).toBeUndefined();
+            expect(sync.readSessionSystemRecordObservation(address)).toBeNull();
+        } else {
+            await expect(acquisition).resolves.toEqual({ status: 'ok', value: 'scoped-account' });
+            expect(readSessionOwnerMetadataView(storage.getState().sessions[sessionId])?.path).toBe('/private/captured-account');
+        }
         expect(requestMock).not.toHaveBeenCalled();
     });
 
@@ -3086,7 +3232,10 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         await setActiveServerId(canonical.id, { scope: 'device' });
         await applySelectedHomeForSessionListTest();
         expect(areServerProfileIdentifiersEquivalent(legacy.id, canonical.id)).toBe(true);
-        const session = createSessionFixture({ id: 'alias-route', serverId: canonical.id, encryptionMode: 'plain' });
+        const { buildSessionTurnsProjectionV1 } = await import('@happier-dev/protocol/sessions/turns/sessionTurnV1');
+        const session = createSessionFixture({ id: 'alias-route', serverId: canonical.id, encryptionMode: 'plain',
+            sessionTurns: buildSessionTurnsProjectionV1({ sessionId: 'alias-route', updatedAt: 0, turns: [] }),
+        });
         storage.setState({ sessions: { [session.id]: session } });
 
         const hook = await renderHook(() => useHydrateSessionForRoute(session.id, 'alias-home', { serverId: legacy.id }));

@@ -145,11 +145,11 @@ export interface SessionsDomainSlice {
     clearWorkspaceRepositoryTreeExpandedPaths: (scope: WorkspaceScopeBase) => void;
     upsertSessionReviewCommentDraft: (sessionId: string, draft: ReviewCommentDraft) => void;
     setSessionReviewCommentDraftIncluded: (sessionId: string, commentId: string, included: boolean) => void;
-    deleteSessionReviewCommentDraft: (sessionId: string, commentId: string) => void;
+    deleteSessionReviewCommentDraft: (sessionId: string, commentId: string, expectedDraft?: ReviewCommentDraft) => void;
     clearSessionReviewCommentDrafts: (sessionId: string) => void;
     upsertWorkspaceReviewCommentDraft: (workspaceCacheKey: string, draft: ReviewCommentDraft) => void;
     setWorkspaceReviewCommentDraftIncluded: (workspaceCacheKey: string, commentId: string, included: boolean) => void;
-    deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string) => void;
+    deleteWorkspaceReviewCommentDraft: (workspaceCacheKey: string, commentId: string, expectedDraft?: ReviewCommentDraft) => void;
     clearWorkspaceReviewCommentDrafts: (workspaceCacheKey: string) => void;
     createSessionActionDraft: (
         scope: ServerAccountScope,

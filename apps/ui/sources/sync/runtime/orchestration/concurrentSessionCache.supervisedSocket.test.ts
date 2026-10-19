@@ -1,1699 +1,380 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSocketIoManagerBoundaryStub } from '@/dev/testkit/mocks/socketIo';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createConcurrentCacheNetworkHarness } from '@/dev/testkit/harness/concurrentCacheNetworkHarness';
+import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
+import { subscribeHomeAccountChange } from './homeAccountChange';
+import * as routes from '@/sync/domains/transfers/runtime/transferRouteCache';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
-import {
-    createPartialServerProfilesModuleMock,
-    createSessionListRenderableSessionFixture,
-    createTokenStorageModuleMock,
-} from '@/dev/testkit';
-import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import type { HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
-// Prepare the real graph before per-case module resets and transport fixtures.
-installDisconnectedServerSocketBoundary();
-const initialSync = await loadSyncSingletonForTests();
-initialSync.dispose();
+const h = await createConcurrentCacheNetworkHarness('cache-supervised');
+const observation = () => h.storage.getState().concurrentSessionListCacheByServerId[h.homeB.id]?.listObservation;
+const status = () => h.storage.getState().machineListStatusByServerId[h.homeB.id];
+const rows = () => h.storage.getState().sessionListRowsByServerId[h.homeB.id];
+const machines = () => h.storage.getState().machineListByServerId[h.homeB.id];
+const disposers: Array<() => void> = [];
+beforeEach(() => h.reset());
+afterEach(async () => { for (const dispose of disposers.splice(0)) dispose(); await h.cleanup(); });
+afterAll(() => h.dispose());
 
-const ioSpy = vi.fn();
-const getCredentialsForServerUrlSpy = vi.fn();
-const listServerProfilesSpy = vi.fn();
-const getActiveServerSnapshotSpy = vi.fn();
-const runtimeFetchSpy = vi.fn();
-const invalidateCachedTransferRoutesForServerSpy = vi.fn();
-const scheduleMachineListDisplayWarmCacheSaveSpy = vi.fn();
-const schedulePushTokenReconciliationSpy = vi.fn();
-const invalidateCachedTransferRoutesForMachineSpy = vi.fn<(
-    input: Readonly<{
-        serverId?: string | null;
-        remoteMachineId: string;
-    }>,
-) => void>();
-type SnapshotRequest = (path: string, init: RequestInit) => Promise<Response>;
-type SessionSnapshotParams = {
-    applySessions: (sessions: unknown[]) => void;
-    request?: SnapshotRequest;
-    sessionListCursor?: string | null;
-    sessionListAttentionCursor?: string | null;
-    sessionListBackgroundHydrationMaxRows?: number;
-};
-type SessionSnapshotResult = Readonly<{
-    sessionIds: string[];
-    nextCursor: string | null;
-    hasNext: boolean;
-    attentionNextCursor: string | null;
-    attentionHasNext: boolean;
-    current: boolean;
-    source: 'v2' | 'v1';
-}>;
-const completeSessionSnapshotResult = (): SessionSnapshotResult => ({
-    sessionIds: [],
-    nextCursor: null,
-    hasNext: false,
-    attentionNextCursor: null,
-    attentionHasNext: false,
-    current: true,
-    source: 'v2',
-});
-const fetchAndApplySessionsSpy = vi.hoisted(() =>
-    vi.fn<(params: SessionSnapshotParams) => Promise<SessionSnapshotResult | void>>(async ({ applySessions }) => {
-        applySessions([]);
-    }),
-);
-const fetchAndApplyMachinesSpy = vi.hoisted(() =>
-    vi.fn<(params: { applyMachines: (machines: unknown[]) => void }) => Promise<void>>(async ({ applyMachines }) => {
-        applyMachines([]);
-    }),
-);
-
-type SocketEventHandler = (...args: unknown[]) => void;
-
-function createSocketStub() {
-    const listeners = new Map<string, Set<SocketEventHandler>>();
-    const socket = {
-        io: createSocketIoManagerBoundaryStub(),
-        connected: false,
-        on: vi.fn((event: string, handler: SocketEventHandler) => {
-            const bucket = listeners.get(event) ?? new Set<SocketEventHandler>();
-            bucket.add(handler);
-            listeners.set(event, bucket);
-            return socket;
-        }),
-        off: vi.fn((event: string, handler?: SocketEventHandler) => {
-            if (!handler) {
-                listeners.delete(event);
-                return socket;
-            }
-            listeners.get(event)?.delete(handler);
-            return socket;
-        }),
-        onAny: vi.fn(),
-        emit: vi.fn(),
-        connect: vi.fn(() => {
-            socket.connected = true;
-            for (const listener of listeners.get('connect') ?? []) {
-                listener();
-            }
-        }),
-        disconnect: vi.fn(() => {
-            const wasConnected = socket.connected;
-            socket.connected = false;
-            if (!wasConnected) {
-                return;
-            }
-            for (const listener of listeners.get('disconnect') ?? []) {
-                listener('io client disconnect');
-            }
-        }),
-        removeAllListeners: vi.fn(() => {
-            listeners.clear();
-        }),
-        emitServerEvent: (event: string, payload: unknown) => {
-            for (const listener of listeners.get(event) ?? []) {
-                listener(payload);
-            }
-        },
-    };
-    return socket;
+function observeAccountChanges() {
+    const observer = vi.fn();
+    disposers.push(subscribeHomeAccountChange(observer));
+    return observer;
 }
-
-function onlineState() {
-    return {
-        phase: 'online' as const,
-        reason: 'initial_connect',
-        attempt: 0,
-        nextRetryAt: null,
-        lastConnectedAt: Date.now(),
-        lastDisconnectedAt: null,
-        lastErrorMessage: null,
-    };
-}
-
-function mockConcurrentSessionCacheRuntimeDeps() {
-    vi.doMock('@/sync/engine/account/syncAccount', () => ({
-        schedulePushTokenReconciliation: () => schedulePushTokenReconciliationSpy(),
-        startPushTokenReconciliation: vi.fn(),
-        stopPushTokenReconciliation: vi.fn(),
-    }));
-    vi.doMock('socket.io-client', () => ({
-        io: (...args: unknown[]) => ioSpy(...args),
-    }));
-    vi.doMock('@/sync/domains/server/serverProfiles', async (importOriginal) => await createPartialServerProfilesModuleMock(importOriginal, {
-        listServerProfiles: () => listServerProfilesSpy(),
-        overrides: {
-            loadHomeViewState: () => null,
-            subscribeHomeViewState: () => () => {},
-            subscribeServerProfiles: () => () => {},
-            // Real TokenStorage resolves exact-target credential scopes through these.
-            getActiveServerId: () => 'server-a',
-            getActiveServerUrl: () => 'https://stack-a.example.test',
-        },
-    }));
-    vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-        getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-    }));
-    vi.doMock('@/sync/domains/transfers/runtime/transferRouteCache', () => ({
-        invalidateCachedTransferRoutesForServer: (...args: unknown[]) => invalidateCachedTransferRoutesForServerSpy(...args),
-        invalidateCachedTransferRoutesForMachine: (
-            input: Readonly<{
-                serverId?: string | null;
-                remoteMachineId: string;
-            }>,
-        ) => invalidateCachedTransferRoutesForMachineSpy(input),
-    }));
-    vi.doMock('@/sync/domains/state/machineDisplayWarmCacheWriter', () => ({
-        scheduleMachineListDisplayWarmCacheSave: (...args: unknown[]) => scheduleMachineListDisplayWarmCacheSaveSpy(...args),
-    }));
-    vi.doMock('@/sync/encryption/encryption', () => ({
-        Encryption: {
-            create: async () => ({}) as unknown,
-        },
-    }));
-    vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-        fetchAndApplySessions: async (params: SessionSnapshotParams) => (
-            await fetchAndApplySessionsSpy(params) ?? completeSessionSnapshotResult()
-        ),
-    }));
-    vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-        fetchAndApplyMachines: (params: { applyMachines: (machines: unknown[]) => void }) => fetchAndApplyMachinesSpy(params),
-    }));
-    vi.doMock('@/log', () => ({
-        log: { log: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    }));
-    vi.doMock('@/utils/system/runtimeFetch', () => ({
-        runtimeFetch: (...args: unknown[]) => runtimeFetchSpy(...args),
-    }));
-}
-
-function mockTokenStorageCredentialReads() {
-    vi.doMock('@/auth/storage/tokenStorage', async (importOriginal) => await createTokenStorageModuleMock({
-        importOriginal: async <T,>() => await importOriginal<T>(),
-        tokenStorage: {
-            getCredentialsForServerUrl: (...args: unknown[]) => getCredentialsForServerUrlSpy(...args),
-        },
-    }));
-}
-
-function mockConcurrentSessionCacheDeps() {
-    mockConcurrentSessionCacheRuntimeDeps();
-    mockTokenStorageCredentialReads();
-}
-
-function mockRealTokenStorageDeviceBoundaries() {
-    vi.doUnmock('@/auth/storage/tokenStorage');
-    // The real credential storage owner runs; only the genuine device/secure-store
-    // boundaries are stood in for (web Platform + in-memory localStorage).
-    vi.doMock('react-native', async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({ Platform: { OS: 'web' } });
-    });
-    vi.doMock('expo-secure-store', () => ({}));
-    vi.doMock('@react-native-async-storage/async-storage', () => ({
-        default: {
-            getItem: vi.fn(async () => null),
-            setItem: vi.fn(async () => {}),
-            removeItem: vi.fn(async () => {}),
-        },
-    }));
-}
-
-async function configureConcurrentSelection(): Promise<void> {
-    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
-    const { publishAppliedActiveServerSnapshot } = await import('./appliedActiveServerRuntime');
-    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-    const { storage } = await import('@/sync/domains/state/storageStore');
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-    storage.setState((state) => ({
-        ...state,
-        settings: {
-            ...state.settings,
-            ...settingsDefaults,
-            serverSelectionGroups: [
-                {
-                    id: 'group-main',
-                    name: 'Main',
-                    serverIds: ['server-a', 'server-b'],
-                    presentation: 'grouped',
-                },
-            ],
-            serverSelectionActiveTargetKind: 'group',
-            serverSelectionActiveTargetId: 'group-main',
-        },
-    }));
-}
-
-async function startConcurrentCacheAndWaitForReconcile(): Promise<{
-    stopConcurrentSessionCacheSync: () => void;
-}> {
-    const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-    startConcurrentSessionCacheSync();
-    await vi.waitFor(() => {
-        expect(ioSpy).toHaveBeenCalled();
-    });
-    return { stopConcurrentSessionCacheSync };
-}
-
-beforeEach(() => {
-    vi.resetModules();
-    vi.useRealTimers();
-    ioSpy.mockReset();
-    getCredentialsForServerUrlSpy.mockReset();
-    listServerProfilesSpy.mockReset();
-    getActiveServerSnapshotSpy.mockReset();
-    runtimeFetchSpy.mockReset();
-    invalidateCachedTransferRoutesForServerSpy.mockReset();
-    invalidateCachedTransferRoutesForMachineSpy.mockReset();
-    scheduleMachineListDisplayWarmCacheSaveSpy.mockReset();
-    schedulePushTokenReconciliationSpy.mockReset();
-    fetchAndApplySessionsSpy.mockReset();
-    fetchAndApplySessionsSpy.mockImplementation(async ({ applySessions }: SessionSnapshotParams) => {
-        applySessions([]);
-    });
-    fetchAndApplyMachinesSpy.mockReset();
-    fetchAndApplyMachinesSpy.mockImplementation(async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-        applyMachines([]);
-    });
-    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-});
-
-afterEach(async () => {
-    vi.useRealTimers();
-    try {
-        const { stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        stopConcurrentSessionCacheSync();
-        const { setServerReachabilityNetworkAllowed, resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-        setServerReachabilityNetworkAllowed(true);
-        await resetServerReachabilitySupervisors();
-    } catch {
-        // ignore
-    }
-    delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
-});
+function sessionUpdate() { h.socket().trigger('update', { body: { t: 'update-session' } }); }
+function machineUpdate() { h.socket().trigger('update', { body: { t: 'update-machine' } }); }
+function offline() { h.pool.reportServerUnreachable(h.homeB.serverUrl, new Error('Home unreachable'), h.homeB.token); }
 
 describe('concurrent session cache supervised sockets', () => {
-    it('retains an open attention frontier across bounded refresh pumps and publishes ready only after it closes', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: new Headers(),
-        }));
-        ioSpy.mockReturnValue(createSocketStub());
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        let finishAttentionContinuation!: () => void;
-        fetchAndApplySessionsSpy
-            .mockResolvedValueOnce({
-                ...completeSessionSnapshotResult(),
-                attentionNextCursor: 'attention-100',
-                attentionHasNext: true,
-            })
-            .mockImplementationOnce(async () => {
-                await new Promise<void>((resolve) => { finishAttentionContinuation = resolve; });
-                return {
-                    ...completeSessionSnapshotResult(),
-                    sessionIds: ['attention-page-101'],
-                };
-            });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-
-        await vi.waitFor(() => expect(fetchAndApplySessionsSpy).toHaveBeenCalledTimes(2), { timeout: 2_000 });
-        expect(fetchAndApplySessionsSpy.mock.calls[0]?.[0]).toMatchObject({
-            sessionListCursor: null,
-            sessionListAttentionCursor: null,
-            sessionListBackgroundHydrationMaxRows: 0,
-        });
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-            .not.toBe('ready');
-        expect(fetchAndApplySessionsSpy.mock.calls[1]?.[0]).toMatchObject({
-            sessionListCursor: null,
-            sessionListAttentionCursor: 'attention-100',
-        });
-        finishAttentionContinuation();
-        await vi.waitFor(() => {
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-                .toBe('ready');
-        });
-
-        stopConcurrentSessionCacheSync();
+    it.each(['matching', 'other'] as const)('applies activation authorization changes only to the %s Home of an open Session', async home => {
+        const waiting = { requestId: 'retained-input', requestedAt: 1, status: 'waiting' as const };
+        h.setSessions(h.homeB, [h.session({ id: 'session-b' })]);
+        await h.start(); await h.ready();
+        h.storage.getState().applySessions([createSessionFixture({ id: 'session-b', serverId: home === 'matching' ? h.homeB.id : h.homeA.id,
+            pendingCount: 1, pendingVersion: 4, pendingActivationAuthorization: waiting })]);
+        h.socket().trigger('update', { id: 'activation-failed', seq: 1, createdAt: 2, body: {
+            t: 'pending-changed', sid: 'session-b', sessionId: 'session-b', pendingCount: 1, pendingVersion: 4,
+            pendingActivationAuthorization: { ...waiting, status: 'failed', failureCode: 'runtime_start_failed' },
+        } });
+        if (home === 'matching') {
+            await vi.waitFor(() => expect(h.storage.getState().sessions['session-b']?.pendingActivationAuthorization)
+                .toMatchObject({ status: 'failed', failureCode: 'runtime_start_failed' }));
+        } else {
+            expect(h.storage.getState().sessions['session-b']?.pendingActivationAuthorization).toEqual(waiting);
+        }
     });
 
-    it('aborts an owned secondary snapshot request before releasing the managed transport', async () => {
-        let snapshotSignal: AbortSignal | null = null;
-        runtimeFetchSpy.mockImplementation(async (url: string, init?: RequestInit) => {
-            if (!url.endsWith('/v1/test-secondary-snapshot')) {
-                return new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() });
+    it('refreshes grant changes after an Account wake even when the secondary Session list is unavailable', async () => {
+        const machine = h.machine(h.homeB);
+        h.setMachines(h.homeB, [{ ...machine, access: { ...machine.access!, role: 'use' } }]);
+        await h.start(); await h.ready();
+        expect(machines()?.[0]?.access?.role).toBe('use');
+        h.setMachines(h.homeB, [{ ...machine, access: { ...machine.access!, role: 'manage' } }]);
+        h.setResponder(async input => new URL(String(input)).pathname === '/v2/sessions'
+            ? Response.json({ error: 'Unavailable' }, { status: 503 }) : null);
+        h.socket().trigger('update', { id: 'grant-changed', seq: 1, createdAt: 2, body: { t: 'account-change' } });
+        await vi.waitFor(() => expect(machines()?.[0]?.access?.role).toBe('manage'));
+    });
+
+    it('retains an open attention frontier until the incumbent paginator explicitly continues it', async () => {
+        let release!: () => void;
+        h.setResponder(async input => {
+            const url = new URL(String(input));
+            if (url.pathname !== '/v2/sessions') return null;
+            if (url.searchParams.has('attentionCursor')) {
+                await new Promise<void>(resolve => { release = resolve; });
+                return Response.json({ sessions: [h.session({ id: 'attention-next' })], nextCursor: null, hasNext: false,
+                    attentionNextCursor: null, attentionHasNext: false });
             }
-            snapshotSignal = init?.signal ?? null;
-            return await new Promise<Response>((_resolve, reject) => {
-                snapshotSignal?.addEventListener('abort', () => {
-                    reject(new DOMException('Aborted', 'AbortError'));
-                }, { once: true });
-            });
+            return Response.json({ sessions: [], nextCursor: null, hasNext: false,
+                attentionNextCursor: 'attention-next-page', attentionHasNext: true });
         });
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
+        await h.start(); await h.ready();
+        expect(h.readConcurrentOrdinarySessionListLifecycle(h.homeB.id).frontier).toMatchObject({
+            attentionNextCursor: 'attention-next-page', attentionHasNext: true,
         });
-        fetchAndApplySessionsSpy.mockImplementation(async ({ request }: SessionSnapshotParams) => {
-            await request?.('/v1/test-secondary-snapshot', { method: 'GET' });
-        });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        await vi.waitFor(() => expect(snapshotSignal).not.toBeNull());
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        storage.setState((state) => ({
-            ...state,
-            machineListStatusByServerId: {
-                ...state.machineListStatusByServerId,
-                'server-b': 'idle',
-            },
-        }));
-
-        stopConcurrentSessionCacheSync();
-
-        expect((snapshotSignal as AbortSignal | null)?.aborted).toBe(true);
-        expect(storage.getState().machineListStatusByServerId['server-b']).toBe('idle');
+        const continuation = h.loadNextConcurrentOrdinarySessionListPage(h.homeB.id);
+        await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+        expect(observation()?.phase).toBe('refreshing');
+        expect(h.requests('/v2/sessions').at(-1)?.url.searchParams.get('attentionCursor')).toBe('attention-next-page');
+        release(); await continuation; await h.ready();
+        expect(rows()?.['attention-next']).toBeDefined();
+        expect(h.readConcurrentOrdinarySessionListLifecycle(h.homeB.id).frontier).toMatchObject({ attentionHasNext: false });
     });
 
-    it('projects an authenticated secondary HTTP rejection through the exact-token reachability owner', async () => {
-        const token = `header.${Buffer.from(JSON.stringify({ sub: 'secondary-account' })).toString('base64url')}.signature`;
-        runtimeFetchSpy.mockImplementation(async (url: string) => new Response(
-            JSON.stringify({ ok: !url.endsWith('/v1/test-secondary-auth') }),
-            { status: url.endsWith('/v1/test-secondary-auth') ? 401 : 200, headers: new Headers() },
-        ));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
+    it('aborts an owned secondary HTTP snapshot before releasing its managed transport', async () => {
+        let signal: AbortSignal | null | undefined;
+        h.setResponder(async (input, init) => {
+            if (new URL(String(input)).pathname !== '/v2/sessions') return null;
+            signal = init?.signal;
+            return await new Promise<Response>((_resolve, reject) => signal?.addEventListener('abort',
+                () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
         });
-        fetchAndApplySessionsSpy.mockImplementation(async ({ request }: SessionSnapshotParams) => {
-            await request?.('/v1/test-secondary-auth', { method: 'GET' });
-        });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const reachability = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-
-        await vi.waitFor(() => {
-            expect(reachability.peekServerReachabilityState('https://stack-b.example.test', token)?.phase).toBe('auth_failed');
-            expect(storage.getState().machineListStatusByServerId['server-b']).toBe('signedOut');
-        });
-        expect(reachability.peekServerReachabilityState('https://stack-b.example.test', 'some-other-token')).toBeNull();
-
-        stopConcurrentSessionCacheSync();
+        await h.start();
+        await vi.waitFor(() => expect(signal).toBeDefined());
+        const socket = h.socket();
+        h.stopConcurrentSessionCacheSync();
+        expect(signal?.aborted).toBe(true);
+        await vi.waitFor(() => expect(socket.socket.connected).toBe(false));
     });
 
-    it('marks a cold secondary Home offline even when it has no cached machine rows', async () => {
-        runtimeFetchSpy.mockRejectedValue(new Error('secondary Home offline'));
-        ioSpy.mockImplementation(() => createSocketStub());
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        mockConcurrentSessionCacheDeps();
-        const reachability = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-        await reachability.startServerReachabilitySupervisor({
-            serverUrl: 'https://stack-b.example.test',
-            token: 'token-b',
-        });
-        expect(reachability.peekServerReachabilityState('https://stack-b.example.test', 'token-b')?.phase).toBe('offline');
-        await configureConcurrentSelection();
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-
-        await vi.waitFor(() => {
-            expect(storage.getState().machineListStatusByServerId['server-b']).toBe('error');
-        });
-        expect(storage.getState().machineListByServerId['server-b']).toBeNull();
-        expect(ioSpy).not.toHaveBeenCalled();
-
-        stopConcurrentSessionCacheSync();
+    it('projects an authenticated HTTP rejection through the exact-token reachability owner', async () => {
+        h.setResponder(async input => new URL(String(input)).pathname === '/v2/sessions'
+            ? Response.json({ error: 'Unauthorized' }, { status: 401 }) : null);
+        await h.start();
+        await vi.waitFor(() => expect(h.pool.peekServerReachabilityState(h.homeB.serverUrl, h.homeB.token)?.phase).toBe('auth_failed'));
+        expect(status()).toBe('signedOut');
+        expect(h.pool.peekServerReachabilityState(h.homeB.serverUrl, 'unrelated-token')).toBeNull();
     });
 
-    it('consumes the reachability pool\'s already-online initial state when constructing a secondary Home transport', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        mockConcurrentSessionCacheDeps();
-
-        // Pre-warm the shared reachability entry for Home B so the pool is already
-        // online BEFORE the concurrent cache constructs its managed entry.
-        const {
-            peekServerReachabilityState,
-            waitForServerReachable,
-        } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-        await waitForServerReachable({ serverUrl: 'https://stack-b.example.test', token: 'token-b', timeoutMs: 5_000 });
-        await vi.waitFor(() => {
-            expect(peekServerReachabilityState('https://stack-b.example.test')?.phase).toBe('online');
-        });
-
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        // The pool synchronously replays its current state to every new subscriber; the
-        // managed entry must consume that initial online state and start its transport
-        // without waiting for any further pool event.
-        expect(ioSpy).toHaveBeenCalledTimes(1);
-        expect(ioSpy).toHaveBeenCalledWith('https://stack-b.example.test', expect.anything());
-        expect(fakeSocket.connect).toHaveBeenCalledTimes(1);
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('publishes the whole observation lifecycle and marks an online secondary Home stale when its Session-list refresh fails', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: new Headers(),
-        }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        fetchAndApplySessionsSpy
-            .mockImplementationOnce(async ({ applySessions }: SessionSnapshotParams) => applySessions([]))
-            .mockRejectedValueOnce(new Error('secondary list unavailable'));
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        // Every phase this Home publishes, in order. A surface reads currentness only from this
-        // fact, so an unobserved Home must say `loading`, a retained one `refreshing`, and a
-        // failed attempt `error` — never silence that reads as "still current".
-        const observedPhases: string[] = [];
-        const unsubscribeObservation = storage.subscribe((state) => {
-            const phase = state.concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase;
-            if (phase && observedPhases[observedPhases.length - 1] !== phase) observedPhases.push(phase);
-        });
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        await vi.waitFor(() => {
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-                .toBe('ready');
-        });
-        // A Home nothing has observed yet announces its first attempt as `loading`, never as
-        // silence that reads as current.
-        expect(observedPhases.slice(0, 2)).toEqual(['loading', 'ready']);
-        const firstSuccessAt = storage.getState()
-            .concurrentSessionListCacheByServerId['server-b']?.listObservation?.lastSuccessAt;
-        expect(firstSuccessAt).toEqual(expect.any(Number));
-
-        fakeSocket.emitServerEvent('update', { body: { t: 'update-session' } });
-
-        await vi.waitFor(() => {
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation)
-                .toEqual({ phase: 'error', lastSuccessAt: firstSuccessAt });
-        });
-        // The retained rows were observed once, so the failed refresh announces itself as a
-        // refresh of known rows rather than a first load, and `loading` never returns.
-        expect(observedPhases.slice(-2)).toEqual(['refreshing', 'error']);
-        expect(observedPhases.slice(1)).not.toContain('loading');
-
-        unsubscribeObservation();
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('keeps a Session list observed by the failing attempt current instead of publishing its own error', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), {
-            status: 200,
-            headers: new Headers(),
-        }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        // The production list path applies its rows during the Session fetch, before the machine
-        // inventory runs, so this attempt really did observe the list.
-        fetchAndApplySessionsSpy.mockImplementation(async (
-            { applySessionListRenderables }: SessionSnapshotParams & {
-                applySessionListRenderables?: (rows: unknown[]) => void;
-            },
-        ) => {
-            applySessionListRenderables?.([createSessionListRenderableSessionFixture({ id: 'session-b' })]);
-        });
-        let machineRefresh = 0;
-        fetchAndApplyMachinesSpy.mockImplementation(async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-            machineRefresh += 1;
-            if (machineRefresh === 1) {
-                applyMachines([]);
-                return;
-            }
-            throw new Error('machine refresh failed');
-        });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-
-        await vi.waitFor(() => {
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-                .toBe('ready');
-        });
-
-        fakeSocket.emitServerEvent('update', { body: { t: 'update-machine' } });
-        await vi.waitFor(() => expect(machineRefresh).toBeGreaterThanOrEqual(2), { timeout: 2_000 });
-
-        // Machine staleness is not list staleness: the list success this same attempt produced is
-        // more current than the attempt's rejection, so it is never downgraded to `error`.
-        expect(storage.getState().machineListStatusByServerId['server-b']).toBe('error');
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-            .toBe('ready');
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('leaves the reachability owner\'s offline fact in place when the refresh it interrupted fails', async () => {
-        let reachable = true;
-        runtimeFetchSpy.mockImplementation(async () => {
-            if (!reachable) throw new Error('secondary Home offline');
-            return Response.json({ ok: true });
-        });
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        let failInterruptedRefresh: (() => void) | null = null;
-        fetchAndApplySessionsSpy
-            .mockImplementationOnce(async ({ applySessions }: SessionSnapshotParams) => applySessions([]))
-            .mockImplementationOnce(async () => {
-                await new Promise<void>((resolve) => {
-                    failInterruptedRefresh = resolve;
-                });
-                throw new Error('secondary list unavailable');
-            });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const reachability = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-
-        await vi.waitFor(() => {
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-                .toBe('ready');
-        });
-
-        fakeSocket.emitServerEvent('update', { body: { t: 'update-session' } });
-        await vi.waitFor(() => expect(failInterruptedRefresh).not.toBeNull());
-
-        reachable = false;
-        reachability.reportServerUnreachable('https://stack-b.example.test', new Error('socket unreachable'));
-        await vi.waitFor(() => {
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-                .toBe('offline');
-        });
-
-        // The machine cache is the one write this Home's failure path always performs, so
-        // clearing it first makes the rejection observable instead of time-based.
-        storage.setState((state) => ({
-            ...state,
-            machineListStatusByServerId: { ...state.machineListStatusByServerId, 'server-b': 'idle' },
-        }));
-        (failInterruptedRefresh as unknown as () => void)();
-        await vi.waitFor(() => {
-            expect(storage.getState().machineListStatusByServerId['server-b']).toBe('error');
-        });
-        // Reachability already answered this Home more recently than the request it cut off. A
-        // late rejection must not relabel an offline Home as a reachable Home that failed.
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
-            .toBe('offline');
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('keeps last-known secondary rows but marks their inventory stale while reachability is offline, then restores currentness without duplication', async () => {
-        let reachable = true;
-        runtimeFetchSpy.mockImplementation(async () => {
-            if (!reachable) throw new Error('secondary Home offline');
-            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() });
-        });
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        fetchAndApplySessionsSpy.mockImplementation(async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-            applySessions([{
-                id: 'session-b',
-                seq: 1,
-                createdAt: 1_000,
-                updatedAt: 2_000,
-                active: true,
-                activeAt: 2_000,
-                metadata: { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-                metadataVersion: 1,
-                agentState: null,
-                agentStateVersion: 0,
-                thinking: false,
-                thinkingAt: 0,
-                presence: 'online',
-            }]);
-        });
-        fetchAndApplyMachinesSpy.mockImplementation(async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-            applyMachines([{
-                id: 'machine-b',
-                seq: 1,
-                createdAt: 1_000,
-                updatedAt: 2_000,
-                active: true,
-                activeAt: 2_000,
-                revokedAt: null,
-                metadata: { host: 'b-host', homeDir: '/home/b' },
-                metadataVersion: 1,
-                daemonState: null,
-                daemonStateVersion: 0,
-            }]);
-        });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { resolveAllProfileMachineInventorySnapshots } = await import('@/sync/domains/machines/machineInventorySnapshots');
-        const reachability = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-
-        await vi.waitFor(() => {
-            expect(storage.getState().machineListStatusByServerId['server-b']).toBe('idle');
-            expect(storage.getState().sessionListRowsByServerId['server-b']?.['session-b']).toBeDefined();
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase).toBe('ready');
-        });
-        const currentRows = storage.getState().sessionListRowsByServerId['server-b'];
-        const currentMachines = storage.getState().machineListByServerId['server-b'];
-        schedulePushTokenReconciliationSpy.mockClear();
-
-        reachable = false;
-        reachability.reportServerUnreachable('https://stack-b.example.test', new Error('socket unreachable'));
-
-        await vi.waitFor(() => {
-            expect(storage.getState().machineListStatusByServerId['server-b']).toBe('error');
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase).toBe('offline');
-        });
-        expect(storage.getState().sessionListRowsByServerId['server-b']).toBe(currentRows);
-        expect(storage.getState().machineListByServerId['server-b']).toBe(currentMachines);
-        expect(resolveAllProfileMachineInventorySnapshots({
-            profiles: [{
-                id: 'server-b',
-                name: 'Server B',
-                serverUrl: 'https://stack-b.example.test',
-                serverIdentityId: 'server-b',
-                createdAt: 1,
-                updatedAt: 1,
-                lastUsedAt: 1,
-            }],
-            activeServerId: 'server-a',
-            activeMachines: [],
-            machineListByServerId: storage.getState().machineListByServerId,
-            machineListStatusByServerId: storage.getState().machineListStatusByServerId,
-            accountScopesByServerId: new Map([['server-b', { serverId: 'server-b', accountId: 'focused-account' }]]),
-            loadWarmEntries: () => ({}),
-        })).toEqual([
-            expect.objectContaining({ kind: 'resolved', observation: 'stale' }),
-        ]);
-
-        reachable = true;
-        await reachability.invalidateServerReachabilitySupervisor({
-            serverUrl: 'https://stack-b.example.test',
-            token: 'token-b',
-        });
-        await vi.waitFor(() => {
-            expect(storage.getState().machineListStatusByServerId['server-b']).toBe('idle');
-            expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase).toBe('ready');
-        });
-        expect(schedulePushTokenReconciliationSpy).toHaveBeenCalledTimes(1);
-        expect(Object.keys(storage.getState().sessionListRowsByServerId['server-b'] ?? {})).toEqual(['session-b']);
-        expect(storage.getState().machineListByServerId['server-b']?.map((machine) => machine.id)).toEqual(['machine-b']);
-        expect(storage.getState().sessionListRowsByServerId['server-b']).toBe(currentRows);
-        expect(storage.getState().machineListByServerId['server-b']).toBe(currentMachines);
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('preserves the complete last-known snapshot and marks it stale when a machine refresh fails', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        fetchAndApplySessionsSpy.mockImplementation(async ({ applySessions }) => {
-            applySessions([{
-                id: 'session-b', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
-                metadata: { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-                metadataVersion: 1, agentState: null, agentStateVersion: 0, thinking: false, thinkingAt: 0,
-            }]);
-        });
-        let machineRefresh = 0;
-        fetchAndApplyMachinesSpy.mockImplementation(async ({ applyMachines }) => {
-            machineRefresh += 1;
-            if (machineRefresh === 1) {
-                applyMachines([{
-                    id: 'machine-b', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
-                    revokedAt: null, metadata: { host: 'b-host' }, metadataVersion: 1,
-                    daemonState: null, daemonStateVersion: 0,
-                }]);
-                return;
-            }
-            throw new Error('machine refresh failed');
-        });
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        await vi.waitFor(() => expect(storage.getState().machineListStatusByServerId['server-b']).toBe('idle'));
-        const currentMachines = storage.getState().machineListByServerId['server-b'];
-        const currentRows = storage.getState().sessionListRowsByServerId['server-b'];
-
-        fakeSocket.emitServerEvent('update', { body: { t: 'update-machine' } });
-        await vi.waitFor(() => expect(machineRefresh).toBeGreaterThanOrEqual(2), { timeout: 2_000 });
-
-        expect(storage.getState().machineListStatusByServerId['server-b']).toBe('error');
-        expect(storage.getState().machineListByServerId['server-b']).toBe(currentMachines);
-        expect(storage.getState().sessionListRowsByServerId['server-b']).toBe(currentRows);
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('disposes a partially constructed managed entry so a later reconcile stays healthy', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const firstSocket = createSocketStub();
-        const secondSocket = createSocketStub();
-        ioSpy.mockReturnValueOnce(firstSocket).mockImplementation(() => secondSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-        mockConcurrentSessionCacheDeps();
-
-        let acquireCalls = 0;
-        let networkAllowedListener: ((allowed: boolean) => void) | null = null;
-        vi.doMock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (importOriginal) => ({
-            ...await importOriginal<typeof import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool')>(),
-            subscribeServerReachabilityNetworkAllowed: (listener: (allowed: boolean) => void) => {
-                networkAllowedListener = listener;
-                listener(true);
-                return () => {
-                    if (networkAllowedListener === listener) {
-                        networkAllowedListener = null;
-                    }
-                };
-            },
-            subscribeServerReachabilityState: (_serverUrl: string, listener: (state: unknown) => void) => {
-                listener(onlineState());
-                return () => {};
-            },
-            acquireServerReachabilitySupervisor: async () => {
-                acquireCalls += 1;
-                if (acquireCalls === 1) throw new Error('acquisition failed after online replay');
-                return { release: async () => {} };
-            },
-            reportServerUnreachable: () => {},
-        }));
-
-        await configureConcurrentSelection();
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-
-        // The synchronous online replay builds and connects the first transport before
-        // reachability acquisition fails. Construction rollback must dispose it exactly.
-        await vi.waitFor(() => expect(ioSpy).toHaveBeenCalled());
-        await vi.waitFor(() => {
-            expect(firstSocket.disconnect).toHaveBeenCalled();
-            expect(firstSocket.removeAllListeners).toHaveBeenCalled();
-        });
-
-        // Construction failures stay local. A later canonical lifecycle event
-        // requests the retry rather than the entry growing its own retry owner.
-        expect(networkAllowedListener).not.toBeNull();
-        (networkAllowedListener as ((allowed: boolean) => void) | null)?.(true);
-        await vi.waitFor(() => {
-            expect(secondSocket.connect).toHaveBeenCalled();
-        });
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('does not connect sockets while network is disallowed, then connects when network is re-enabled', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-        const { setServerReachabilityNetworkAllowed } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
-        setServerReachabilityNetworkAllowed(false);
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        expect(ioSpy).toHaveBeenCalledTimes(0);
-        expect(fakeSocket.connect).toHaveBeenCalledTimes(0);
-
-        setServerReachabilityNetworkAllowed(true);
-
-        await vi.waitFor(() => {
-            expect(ioSpy).toHaveBeenCalled();
-        });
-
-        stopConcurrentSessionCacheSync();
-    });
-
-    it('opens non-active server sockets with server-scoped credentials', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
+    it('marks a cold secondary Home offline without manufacturing machine rows or a socket', async () => {
+        h.setResponder(async input => {
+            if (new URL(String(input)).pathname === '/v1/auth/ping') throw new TypeError('Network unavailable');
             return null;
         });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        expect(ioSpy).toHaveBeenCalledTimes(1);
-        expect(ioSpy).toHaveBeenCalledWith(
-            'https://stack-b.example.test',
-            expect.objectContaining({
-                path: '/v1/updates/',
-                auth: expect.objectContaining({
-                    token: 'token-b',
-                    clientType: 'user-scoped',
-                }),
-                reconnection: false,
-                autoConnect: false,
-            }),
-        );
-        expect(fakeSocket.connect).toHaveBeenCalledTimes(1);
-
-        stopConcurrentSessionCacheSync();
+        h.startConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(status()).toBe('error'));
+        expect(machines()).toBeNull();
+        expect(h.network.socketBoundaries).toHaveLength(0);
     });
 
-    it('invalidates cached transfer routes when the active server generation changes', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        const { getAppliedActiveServerSnapshot, publishAppliedActiveServerSnapshot } = await import('./appliedActiveServerRuntime');
-        publishAppliedActiveServerSnapshot({ ...getAppliedActiveServerSnapshot(), generation: 2 });
-
-        expect(invalidateCachedTransferRoutesForServerSpy).toHaveBeenCalledWith({ serverId: 'server-a' });
-
-        stopConcurrentSessionCacheSync();
+    it('consumes the shared reachability pool already-online initial state', async () => {
+        const lease = await h.pool.acquireServerReachabilitySupervisor({ serverUrl: h.homeB.serverUrl, token: h.homeB.token });
+        await vi.waitFor(() => expect(h.pool.peekServerReachabilityState(h.homeB.serverUrl, h.homeB.token)?.phase).toBe('online'));
+        await h.start(); await h.ready();
+        expect(h.socket().socket.connected).toBe(true);
+        await lease.release();
     });
 
-    it('invalidates both previous and next server transfer caches when the active server id changes', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        const { publishAppliedActiveServerSnapshot } = await import('./appliedActiveServerRuntime');
-        publishAppliedActiveServerSnapshot({ serverId: 'server-b', serverUrl: 'https://stack-b.example.test', generation: 1 });
-
-        expect(invalidateCachedTransferRoutesForServerSpy).toHaveBeenCalledWith({ serverId: 'server-a' });
-        expect(invalidateCachedTransferRoutesForServerSpy).toHaveBeenCalledWith({ serverId: 'server-b' });
-
-        stopConcurrentSessionCacheSync();
+    it('publishes loading, ready, refreshing and error without losing the last successful observation time', async () => {
+        const phases: string[] = [];
+        disposers.push(h.storage.subscribe(state => {
+            const phase = state.concurrentSessionListCacheByServerId[h.homeB.id]?.listObservation?.phase;
+            if (phase && phases.at(-1) !== phase) phases.push(phase);
+        }));
+        await h.start(); await h.ready();
+        const successAt = observation()?.lastSuccessAt;
+        h.setResponder(async input => new URL(String(input)).pathname === '/v2/sessions'
+            ? Response.json({ error: 'Unavailable' }, { status: 503 }) : null);
+        sessionUpdate();
+        await vi.waitFor(() => expect(observation()).toEqual({ phase: 'error', lastSuccessAt: successAt }));
+        expect(phases.slice(0, 2)).toEqual(['loading', 'ready']);
+        expect(phases.slice(-2)).toEqual(['refreshing', 'error']);
+        expect(phases.slice(1)).not.toContain('loading');
     });
 
-    it('subscribes to update and ephemeral channels without using socket.onAny', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        expect(fakeSocket.onAny).not.toHaveBeenCalled();
-        expect(fakeSocket.on).toHaveBeenCalledWith('connect', expect.any(Function));
-        expect(fakeSocket.on).toHaveBeenCalledWith('update', expect.any(Function));
-        expect(fakeSocket.on).toHaveBeenCalledWith('ephemeral', expect.any(Function));
-
-        stopConcurrentSessionCacheSync();
+    it('keeps the successfully observed Session list current when the machine tail fails', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'session-b' })]);
+        await h.start(); await h.ready();
+        h.setResponder(async input => new URL(String(input)).pathname === '/v1/machines'
+            ? Response.json({ error: 'Unavailable' }, { status: 503 }) : null);
+        await h.refresh();
+        expect(status()).toBe('error');
+        expect(observation()?.phase).toBe('ready');
+        expect(rows()?.['session-b']).toBeDefined();
     });
 
-
-    it('feeds concurrent-server machine activity transitions to status-demand recovery', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
+    it('leaves the reachability owner offline fact intact after the interrupted HTTP request fails', async () => {
+        await h.start(); await h.ready();
+        let rejectRefresh!: () => void;
+        h.setResponder(async input => {
+            if (new URL(String(input)).pathname === '/v1/auth/ping') throw new TypeError('Network unavailable');
+            if (new URL(String(input)).pathname !== '/v2/sessions') return null;
+            return await new Promise<Response>((_resolve, reject) => { rejectRefresh = () => reject(new TypeError('Connection lost')); });
         });
+        const refreshing = h.refresh();
+        await vi.waitFor(() => expect(rejectRefresh).toBeTypeOf('function'));
+        offline();
+        await vi.waitFor(() => expect(observation()?.phase).toBe('offline'));
+        rejectRefresh(); await refreshing;
+        expect(observation()?.phase).toBe('offline');
+        expect(status()).toBe('error');
+    });
 
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-        const {
-            replaceExternalSessionStatusDemandViewport,
-            resetExternalSessionStatusDemandCoordinatorForTests,
-        } = await import('./externalSessions/externalSessionStatusDemandCoordinator');
-        replaceExternalSessionStatusDemandViewport('concurrent-server-test', [{
-            serverId: 'server-b',
-            sessionId: 'session-1',
-            machineId: 'machine-1',
-            linkGeneration: 'generation-1',
-            demand: 'visible',
+    it('preserves last-known rows while offline and restores currentness without duplication', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'session-b' })]);
+        h.setMachines(h.homeB, [h.machine(h.homeB)]);
+        await h.start(); await h.ready();
+        const currentRows = rows(); const currentMachines = machines();
+        let reachable = false;
+        h.setResponder(async input => {
+            if (new URL(String(input)).pathname === '/v1/auth/ping' && !reachable) throw new TypeError('Offline');
+            return null;
+        });
+        offline();
+        await vi.waitFor(() => expect(observation()?.phase).toBe('offline'));
+        expect(rows()).toBe(currentRows); expect(machines()).toBe(currentMachines);
+        reachable = true;
+        await h.pool.invalidateServerReachabilitySupervisor({ serverUrl: h.homeB.serverUrl, token: h.homeB.token });
+        await h.ready();
+        await vi.waitFor(() => expect(status()).toBe('idle'));
+        expect(Object.keys(rows() ?? {})).toEqual(['session-b']);
+        expect(machines()?.map(machine => machine.id)).toEqual(['machine-b']);
+        expect(rows()).toBe(currentRows); expect(machines()).toBe(currentMachines);
+    });
+
+    it('preserves the whole last-known snapshot when a machine-only refresh fails', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'session-b' })]); h.setMachines(h.homeB, [h.machine(h.homeB)]);
+        await h.start(); await h.ready();
+        const currentRows = rows(); const currentMachines = machines();
+        h.setResponder(async input => new URL(String(input)).pathname === '/v1/machines'
+            ? Response.json({ error: 'Unavailable' }, { status: 503 }) : null);
+        await h.refreshConcurrentMachineList(h.homeB.id);
+        expect(status()).toBe('error');
+        expect(rows()).toBe(currentRows); expect(machines()).toBe(currentMachines);
+        expect(observation()?.phase).toBe('ready');
+    });
+
+    it('recovers from an external Socket construction failure through canonical reconciliation', async () => {
+        let first = true;
+        h.network.setSocketConfigurator(() => { if (first) { first = false; throw new Error('Socket construction failed'); } });
+        h.startConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(h.network.socketBoundaries).toHaveLength(1));
+        expect(h.network.socketBoundaries[0].socket.connected).toBe(false);
+        h.network.setSocketConfigurator(() => {});
+        await h.profiles.upsertServerProfile({ serverUrl: h.homeB.serverUrl, name: 'Retry B' });
+        await h.ready();
+        expect(h.socket().socket.connected).toBe(true);
+    });
+
+    it('does not connect while the network is disallowed and connects after re-enabling it', async () => {
+        h.pool.setServerReachabilityNetworkAllowed(false);
+        h.startConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(h.isConcurrentOrdinarySessionListHome(h.homeB.id)).toBe(true));
+        expect(h.network.socketBoundaries).toHaveLength(0);
+        h.pool.setServerReachabilityNetworkAllowed(true);
+        await h.ready();
+        expect(h.socket().socket.connected).toBe(true);
+    });
+
+    it('opens the secondary socket with that exact Home Account credential', async () => {
+        await h.start(); await h.ready();
+        expect(h.io).toHaveBeenCalledWith(h.homeB.serverUrl, expect.objectContaining({
+            path: '/v1/updates/', auth: expect.objectContaining({ token: h.homeB.token, clientType: 'user-scoped' }),
+            reconnection: false, autoConnect: false,
+        }));
+        expect(h.network.socketBoundaries.every(socket => socket.serverUrl !== h.homeA.serverUrl)).toBe(true);
+    });
+
+    it('invalidates focused transfer routes when the applied generation changes', async () => {
+        await h.start(); await h.ready();
+        const applied = await import('./appliedActiveServerRuntime');
+        const key = { serverId: h.homeA.id, remoteMachineId: 'machine-a' };
+        routes.recordCachedMachineRpcDirectRouteViable(key);
+        applied.publishAppliedActiveServerSnapshot({ ...applied.getAppliedActiveServerSnapshot(),
+            serverId: h.homeA.id, serverUrl: h.homeA.serverUrl, generation: applied.getAppliedActiveServerSnapshot().generation + 1 });
+        expect(routes.readCachedMachineRpcDirectRoute(key)).toEqual({ status: 'unknown' });
+    });
+
+    it('invalidates previous and next transfer routes when the applied Home changes', async () => {
+        await h.start(); await h.ready();
+        const applied = await import('./appliedActiveServerRuntime');
+        const keys = [h.homeA.id, h.homeB.id].map(serverId => ({ serverId, remoteMachineId: 'machine' }));
+        for (const key of keys) routes.recordCachedMachineRpcDirectRouteViable(key);
+        applied.publishAppliedActiveServerSnapshot({ serverId: h.homeB.id, serverUrl: h.homeB.serverUrl, generation: 1 });
+        for (const key of keys) expect(routes.readCachedMachineRpcDirectRoute(key)).toEqual({ status: 'unknown' });
+        applied.publishAppliedActiveServerSnapshot({ serverId: h.homeA.id, serverUrl: h.homeA.serverUrl, generation: 1 }, false);
+    });
+
+    it('subscribes to explicit update and ephemeral channels without an unbounded onAny listener', async () => {
+        await h.start(); await h.ready();
+        const socket = h.socket();
+        expect(socket.listeners.get('update')?.size).toBeGreaterThan(0);
+        expect(socket.listeners.get('ephemeral')?.size).toBeGreaterThan(0);
+        expect(socket.socket.onAny).not.toHaveBeenCalled();
+    });
+
+    it('feeds machine activity transitions to the real external status-demand recovery owner', async () => {
+        const coordinator = await import('./externalSessions/externalSessionStatusDemandCoordinator');
+        disposers.push(() => coordinator.resetExternalSessionStatusDemandCoordinatorForTests());
+        coordinator.replaceExternalSessionStatusDemandViewport('cache-test', [{
+            serverId: h.homeB.id, sessionId: 'session-b', machineId: 'machine-b', linkGeneration: 'generation-b', demand: 'visible',
         }]);
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        fakeSocket.emit.mockClear();
-
-        fakeSocket.emitServerEvent('ephemeral', {
-            type: 'machine-activity',
-            id: 'machine-1',
-            active: true,
-            activeAt: 1_000,
-        });
-        fakeSocket.emitServerEvent('ephemeral', {
-            type: 'machine-activity',
-            id: 'machine-1',
-            active: true,
-            activeAt: 1_001,
-        });
-
-        expect(fakeSocket.emit).toHaveBeenCalledTimes(1);
-        expect(fakeSocket.emit).toHaveBeenLastCalledWith(
-            'external-session-status-demand-v1',
-            expect.objectContaining({ revision: 3 }),
-        );
-
-        fakeSocket.emitServerEvent('ephemeral', {
-            type: 'machine-activity',
-            id: 'machine-1',
-            active: false,
-            activeAt: 1_002,
-        });
-        fakeSocket.emitServerEvent('ephemeral', {
-            type: 'machine-activity',
-            id: 'machine-1',
-            active: true,
-            activeAt: 1_003,
-        });
-        expect(fakeSocket.emit).toHaveBeenCalledTimes(2);
-        expect(fakeSocket.emit).toHaveBeenLastCalledWith(
-            'external-session-status-demand-v1',
-            expect.objectContaining({ revision: 4 }),
-        );
-
-        stopConcurrentSessionCacheSync();
-        resetExternalSessionStatusDemandCoordinatorForTests();
+        await h.start(); await h.ready();
+        const socket = h.socket(); socket.socket.emit.mockClear();
+        for (const activeAt of [1000, 1001]) socket.trigger('ephemeral', { type: 'machine-activity', id: 'machine-b', active: true, activeAt });
+        expect(socket.socket.emit).toHaveBeenCalledTimes(1);
+        expect(socket.socket.emit).toHaveBeenLastCalledWith('external-session-status-demand-v1', expect.objectContaining({ revision: 3 }));
+        socket.trigger('ephemeral', { type: 'machine-activity', id: 'machine-b', active: false, activeAt: 1002 });
+        socket.trigger('ephemeral', { type: 'machine-activity', id: 'machine-b', active: true, activeAt: 1003 });
+        expect(socket.socket.emit).toHaveBeenCalledTimes(2);
+        expect(socket.socket.emit).toHaveBeenLastCalledWith('external-session-status-demand-v1', expect.objectContaining({ revision: 4 }));
     });
 
-    it('refreshes the remote machine cache when a machine update arrives on the concurrent socket', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        let machineRefreshCount = 0;
-        fetchAndApplyMachinesSpy.mockImplementation(async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-            machineRefreshCount += 1;
-            if (machineRefreshCount === 1) {
-                applyMachines([]);
-                return;
-            }
-
-            applyMachines([{
-                id: 'machine-1',
-                seq: 2,
-                createdAt: 1,
-                updatedAt: 2,
-                active: true,
-                activeAt: 2,
-                revokedAt: null,
-                metadata: null,
-                metadataVersion: 0,
-                daemonState: {
-                    transfer: {
-                        supported: { import: true, export: true },
-                        listenerClasses: {
-                            loopback_http: { enabled: true, configured: true, active: true },
-                            lan_http: { enabled: false, configured: false, active: false },
-                            tailscale_serve_https: { enabled: false, configured: false, active: false, available: false },
-                        },
-                        lifecycle: { mode: 'lazy_idle_shutdown', version: 1 },
-                    },
-                },
-                daemonStateVersion: 2,
-            }]);
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        await vi.waitFor(() => {
-            expect(machineRefreshCount).toBeGreaterThanOrEqual(1);
-        });
-        const sessionRefreshCount = fetchAndApplySessionsSpy.mock.calls.length;
-
-        fakeSocket.emitServerEvent('update', {
-            id: 'update-1',
-            seq: 10,
-            createdAt: 10,
-            body: {
-                t: 'update-machine',
-                machineId: 'machine-1',
-                daemonState: { value: 'encrypted', version: 2 },
-            },
-        });
-
-        await new Promise<void>((resolve) => setTimeout(resolve, 700));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        await vi.waitFor(() => {
-            expect(machineRefreshCount).toBeGreaterThanOrEqual(2);
-            expect(storage.getState().machineListByServerId['server-b']?.[0]?.daemonState?.transfer?.listenerClasses?.loopback_http?.active).toBe(true);
-        });
-        expect(fetchAndApplySessionsSpy).toHaveBeenCalledTimes(sessionRefreshCount);
-
-        stopConcurrentSessionCacheSync();
+    it('refreshes only remote machine inventory after a machine update', async () => {
+        h.setMachines(h.homeB, [h.machine(h.homeB)]);
+        await h.start(); await h.ready();
+        const sessionReads = h.requests('/v2/sessions').length;
+        h.setMachines(h.homeB, [{ ...h.machine(h.homeB), seq: 2, daemonStateVersion: 2 }]);
+        machineUpdate();
+        await vi.waitFor(() => expect(machines()?.[0]?.seq).toBe(2));
+        expect(h.requests('/v2/sessions')).toHaveLength(sessionReads);
     });
 
-    it.each(['session', null])('observes secondary Account and committed usage wakes without refreshing unrelated projections (Session id %s)', async sessionId => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        await vi.waitFor(() => {
-            expect(fetchAndApplySessionsSpy).toHaveBeenCalled();
-            expect(fetchAndApplyMachinesSpy).toHaveBeenCalled();
-        });
-        const sessionRefreshCount = fetchAndApplySessionsSpy.mock.calls.length;
-        const machineRefreshCount = fetchAndApplyMachinesSpy.mock.calls.length;
-        schedulePushTokenReconciliationSpy.mockClear();
-
-        const { subscribeHomeAccountChange } = await import('./homeAccountChange');
-        const accountChangeObserver = vi.fn();
-        const disposeObserver = subscribeHomeAccountChange(accountChangeObserver);
-
-        fakeSocket.emitServerEvent('update', {
-            id: 'update-account-1',
-            seq: 11,
-            createdAt: 11,
-            body: {
-                t: 'update-account',
-                settings: { value: 'encrypted', version: 2 },
-            },
-        });
-
-        expect(schedulePushTokenReconciliationSpy).toHaveBeenCalledTimes(1);
-        // The wake is observable per exact Home, and stays content-free.
-        expect(accountChangeObserver).toHaveBeenCalledTimes(1);
-        expect(accountChangeObserver).toHaveBeenCalledWith({ serverId: 'server-b' });
-        fakeSocket.emitServerEvent('ephemeral', {
-            type: 'usage', id: sessionId, key: 'codex:model', tokens: { total: 1 }, cost: { total: 0 }, timestamp: 1000,
-        });
-        expect(accountChangeObserver).toHaveBeenCalledTimes(2);
-        expect(accountChangeObserver).toHaveBeenLastCalledWith({ serverId: 'server-b' });
-        await new Promise<void>((resolve) => setTimeout(resolve, 700));
-        expect(fetchAndApplySessionsSpy).toHaveBeenCalledTimes(sessionRefreshCount);
-        expect(fetchAndApplyMachinesSpy).toHaveBeenCalledTimes(machineRefreshCount);
-
-        disposeObserver();
-        fakeSocket.emitServerEvent('update', {
-            id: 'update-account-2',
-            seq: 12,
-            createdAt: 12,
-            body: { t: 'update-account' },
-        });
-        expect(accountChangeObserver).toHaveBeenCalledTimes(2);
-
-        stopConcurrentSessionCacheSync();
+    it.each(['session-b', null])('publishes content-free Account and committed usage wakes without unrelated refreshes (%s)', async sessionId => {
+        await h.start(); await h.ready();
+        const observer = observeAccountChanges();
+        const sessionReads = h.requests('/v2/sessions').length;
+        const machineReads = h.requests('/v1/machines').length;
+        const socket = h.socket();
+        socket.trigger('update', { id: 'account-1', seq: 11, createdAt: 11, body: { t: 'update-account', settings: { value: 'encrypted', version: 2 } } });
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id });
+        socket.trigger('ephemeral', { type: 'usage', id: sessionId, key: 'codex:model', tokens: { total: 1 }, cost: { total: 0 }, timestamp: 1000 });
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, entityIds: ['provider-account-usage'] });
+        socket.trigger('ephemeral', { type: 'usage-sources-invalidated', machineId: 'machine-b', installationId: 'installation-b' });
+        expect(observer).toHaveBeenCalledTimes(3);
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, entityIds: ['provider-account-usage'] });
+        expect(h.requests('/v2/sessions')).toHaveLength(sessionReads);
+        expect(h.requests('/v1/machines')).toHaveLength(machineReads);
     });
 
-    it('does not observe a non-account update as an Account-change wake', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        await vi.waitFor(() => {
-            expect(fetchAndApplySessionsSpy).toHaveBeenCalled();
-        });
-
-        const { subscribeHomeAccountChange } = await import('./homeAccountChange');
-        const accountChangeObserver = vi.fn();
-        const disposeObserver = subscribeHomeAccountChange(accountChangeObserver);
-
-        fakeSocket.emitServerEvent('update', { body: { t: 'update-machine' } });
-        expect(accountChangeObserver).not.toHaveBeenCalled();
-
-        disposeObserver();
-        stopConcurrentSessionCacheSync();
+    it('does not interpret a machine update as an Account-change wake', async () => {
+        await h.start(); await h.ready();
+        const observer = observeAccountChanges();
+        machineUpdate();
+        expect(observer).not.toHaveBeenCalled();
     });
 
-    it('conservatively invalidates exact-Home projections when a secondary socket reconnects', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { subscribeHomeAccountChange } = await import('./homeAccountChange');
-        const accountChangeObserver = vi.fn();
-        const disposeObserver = subscribeHomeAccountChange(accountChangeObserver);
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-        await vi.waitFor(() => expect(fakeSocket.connect).toHaveBeenCalledTimes(1));
-        // Initial connection can miss writes after a reader's first snapshot too.
-        expect(accountChangeObserver).toHaveBeenCalledTimes(1);
-        expect(accountChangeObserver).toHaveBeenLastCalledWith({ serverId: 'server-b', source: 'connected' });
-
-        // A reconnect may have missed any number of content-free Account wakes.
-        // The existing projection owners therefore receive one conservative
-        // invalidation for this captured secondary Home, never the focused Home.
-        fakeSocket.emitServerEvent('connect', undefined);
-        expect(accountChangeObserver).toHaveBeenCalledTimes(2);
-        expect(accountChangeObserver).toHaveBeenLastCalledWith({ serverId: 'server-b', source: 'connected' });
-
-        disposeObserver();
-        stopConcurrentSessionCacheSync();
+    it('invalidates exact-Home Account projections when a secondary socket reconnects', async () => {
+        const observer = observeAccountChanges();
+        await h.start(); await h.ready();
+        expect(observer).toHaveBeenLastCalledWith({ serverId: h.homeB.id, source: 'connected' });
+        observer.mockClear();
+        h.socket().trigger('connect');
+        expect(observer).toHaveBeenCalledTimes(1);
+        expect(observer).toHaveBeenCalledWith({ serverId: h.homeB.id, source: 'connected' });
     });
 
-    it('uses supervised sockets without built-in socket.io reconnect loops', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockResolvedValue({ token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockConcurrentSessionCacheDeps();
-        await configureConcurrentSelection();
-
-        const { stopConcurrentSessionCacheSync } = await startConcurrentCacheAndWaitForReconcile();
-
-        const opts = ioSpy.mock.calls[0]?.[1] as { reconnection?: boolean; autoConnect?: boolean } | undefined;
-        expect(opts?.reconnection).toBe(false);
-        expect(opts?.autoConnect).toBe(false);
-        expect(fakeSocket.connect).toHaveBeenCalledTimes(1);
-
-        stopConcurrentSessionCacheSync();
-        await vi.waitFor(() => {
-            expect(fakeSocket.disconnect).toHaveBeenCalled();
-            expect(fakeSocket.removeAllListeners).toHaveBeenCalled();
-        });
+    it('uses one supervised reconnect owner and disposes the secondary transport on stop', async () => {
+        await h.start(); await h.ready();
+        expect(h.io).toHaveBeenCalledWith(h.homeB.serverUrl, expect.objectContaining({ reconnection: false, autoConnect: false }));
+        const socket = h.socket();
+        h.stopConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(socket.socket.connected).toBe(false));
+        expect(socket.listeners.size).toBe(0);
     });
 });
 
 describe('concurrent session cache exact-target credential reconciliation', () => {
-    it('removes a running secondary Home transport promptly after global credential forget', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        ioSpy.mockImplementation(() => createSocketStub());
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockRealTokenStorageDeviceBoundaries();
-        mockConcurrentSessionCacheRuntimeDeps();
-        await configureConcurrentSelection();
-        const localStorageHandle = installLocalStorageMock();
-        let stopConcurrentSessionCacheSync: (() => void) | null = null;
-        let unsubscribeMutations: (() => void) | null = null;
-
-        try {
-            const { TokenStorage, subscribeHomeCredentialMutations } = await import('@/auth/storage/tokenStorage');
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-a.example.test',
-                { serverId: 'server-a' },
-                { token: 'token-a', secret: 'secret-a' },
-            )).resolves.toBe(true);
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-b.example.test',
-                { serverId: 'server-b' },
-                { token: 'token-b', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' },
-            )).resolves.toBe(true);
-            const mutations: HomeCredentialMutationEvent[] = [];
-            unsubscribeMutations = subscribeHomeCredentialMutations((event) => mutations.push(event));
-
-            const cache = await import('./concurrentSessionCache');
-            const { storage } = await import('@/sync/domains/state/storageStore');
-            stopConcurrentSessionCacheSync = cache.stopConcurrentSessionCacheSync;
-            cache.startConcurrentSessionCacheSync();
-            await vi.waitFor(() => expect(ioSpy).toHaveBeenCalledTimes(1));
-            const secondarySocket = ioSpy.mock.results[0]?.value as { disconnect: ReturnType<typeof vi.fn> };
-            // Let all startup-triggered reconciles settle before exercising global forget.
-            await new Promise<void>((resolve) => setTimeout(resolve, 100));
-            expect(ioSpy).toHaveBeenCalledTimes(1);
-            // Initial supervisor/socket convergence can legitimately issue an
-            // intentional disconnect. Observe only the credential-removal edge.
-            secondarySocket.disconnect.mockClear();
-
-            await expect(TokenStorage.removeCredentials()).resolves.toBe(true);
-            expect(mutations).toContainEqual({
-                kind: 'credentials_removed',
-                serverId: 'server-b',
-                serverUrl: 'https://stack-b.example.test',
-            });
-
-            await vi.waitFor(() => {
-                expect(secondarySocket.disconnect).toHaveBeenCalled();
-                expect(storage.getState().machineListStatusByServerId?.['server-b']).toBe('signedOut');
-            }, { timeout: 2_000 });
-            await new Promise<void>((resolve) => setTimeout(resolve, 50));
-            expect(ioSpy).toHaveBeenCalledTimes(1);
-            for (const call of ioSpy.mock.calls) {
-                expect(call[0]).toBe('https://stack-b.example.test');
-            }
-        } finally {
-            unsubscribeMutations?.();
-            stopConcurrentSessionCacheSync?.();
-            localStorageHandle.restore();
-        }
+    it('removes a running secondary transport promptly after global credential forget', async () => {
+        await h.start(); await h.ready();
+        const socket = h.socket();
+        expect(await h.TokenStorage.removeCredentials()).toBe(true);
+        await vi.waitFor(() => expect(status()).toBe('signedOut'));
+        expect(socket.socket.connected).toBe(false);
+        expect(h.network.socketBoundaries).toHaveLength(1);
     });
 
-    it('replaces a managed secondary Home transport promptly after an exact-target credential replacement without touching the focused Home', async () => {
-        // Both credentials belong to the same Account; only the transport token changes.
-        const oldToken = `header.${Buffer.from(JSON.stringify({ sub: 'secondary-account', jti: 'old' })).toString('base64url')}.signature`;
-        const newToken = `header.${Buffer.from(JSON.stringify({ sub: 'secondary-account', jti: 'new' })).toString('base64url')}.signature`;
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        ioSpy.mockImplementation(() => createSocketStub());
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockRealTokenStorageDeviceBoundaries();
-        mockConcurrentSessionCacheRuntimeDeps();
-        await configureConcurrentSelection();
-        const localStorageHandle = installLocalStorageMock();
-        let unsubscribeMutations: (() => void) | null = null;
-        let stopConcurrentSessionCacheSync: (() => void) | null = null;
-
-        try {
-            const { TokenStorage, subscribeHomeCredentialMutations } = await import('@/auth/storage/tokenStorage');
-            const bTarget = { serverId: 'server-b' } as const;
-
-            // Managed secondary Home B starts on the old token.
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-b.example.test',
-                bTarget,
-                { token: oldToken, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' },
-            )).resolves.toBe(true);
-
-            const cache = await import('./concurrentSessionCache');
-            stopConcurrentSessionCacheSync = cache.stopConcurrentSessionCacheSync;
-            const mutations: HomeCredentialMutationEvent[] = [];
-            unsubscribeMutations = subscribeHomeCredentialMutations((event) => {
-                mutations.push(event);
-            });
-            cache.startConcurrentSessionCacheSync();
-
-            await vi.waitFor(() => {
-                expect(ioSpy).toHaveBeenCalledTimes(1);
-            });
-            const oldSocket = ioSpy.mock.results[0]?.value as { disconnect: ReturnType<typeof vi.fn> };
-            expect(ioSpy).toHaveBeenNthCalledWith(
-                1,
-                'https://stack-b.example.test',
-                expect.objectContaining({
-                    auth: expect.objectContaining({ token: oldToken }),
-                }),
-            );
-
-            // Exact-target B credential replacement through the storage owner:
-            // profiles, focus, and HomeView state are untouched by the write.
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-b.example.test',
-                bTarget,
-                { token: newToken, secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' },
-            )).resolves.toBe(true);
-
-            // Promptly (long before the 5-minute periodic reconcile), the stale B
-            // transport stops and the replacement connects with the new token.
-            await vi.waitFor(() => {
-                expect(ioSpy).toHaveBeenCalledTimes(2);
-            }, { timeout: 2_000 });
-            expect(ioSpy).toHaveBeenNthCalledWith(
-                2,
-                'https://stack-b.example.test',
-                expect.objectContaining({
-                    auth: expect.objectContaining({ token: newToken }),
-                }),
-            );
-            const newSocket = ioSpy.mock.results[1]?.value as { connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> };
-            await vi.waitFor(() => {
-                expect(oldSocket.disconnect).toHaveBeenCalled();
-            });
-            expect(newSocket.connect).toHaveBeenCalled();
-
-            // The focused Home A is not a concurrent target and keeps its own runtime.
-            for (const call of ioSpy.mock.calls) {
-                expect(call[0]).toBe('https://stack-b.example.test');
-            }
-            await expect(TokenStorage.getCredentialsForServerUrl('https://stack-a.example.test', { serverId: 'server-a' }))
-                .resolves.toBeNull();
-            expect(mutations).toEqual([
-                { kind: 'credentials_set', serverId: 'server-b', serverUrl: 'https://stack-b.example.test' },
-            ]);
-
-            // Byte-identical re-writes must not churn the replacement transport.
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-b.example.test',
-                bTarget,
-                { token: newToken, secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' },
-            )).resolves.toBe(true);
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, 100);
-            });
-            expect(ioSpy).toHaveBeenCalledTimes(2);
-            expect(newSocket.disconnect).not.toHaveBeenCalled();
-
-        } finally {
-            unsubscribeMutations?.();
-            stopConcurrentSessionCacheSync?.();
-            localStorageHandle.restore();
-        }
+    it('replaces only the exact secondary transport for a changed token and ignores byte-identical writes', async () => {
+        await h.start(); await h.ready();
+        const focused = await h.TokenStorage.getCredentialsForServerUrl(h.homeA.serverUrl, { serverId: h.homeA.id });
+        const socket = h.socket();
+        // A different bearer for the same Account, not a fabricated Account switch.
+        const [header, payload] = h.homeB.token.split('.');
+        const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as Record<string, unknown>;
+        const token = header + '.' + Buffer.from(JSON.stringify({ ...claims, jti: 'replacement' })).toString('base64url') + '.signature';
+        expect(await h.TokenStorage.setCredentialsForServerUrl(h.homeB.serverUrl, { serverId: h.homeB.id }, { token })).toBe(true);
+        await vi.waitFor(() => expect(h.socket().token === token).toBe(true));
+        expect(socket.socket.connected).toBe(false);
+        expect(await h.TokenStorage.getCredentialsForServerUrl(h.homeA.serverUrl, { serverId: h.homeA.id })).toEqual(focused);
+        const replacement = h.socket();
+        expect(await h.TokenStorage.setCredentialsForServerUrl(h.homeB.serverUrl, { serverId: h.homeB.id }, { token })).toBe(true);
+        expect(h.socket()).toBe(replacement);
+        expect(replacement.socket.connected).toBe(true);
     });
 
-    it('emits no credential-mutation notification and restarts nothing when an exact-target credential write fails', async () => {
-        runtimeFetchSpy.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: new Headers() }));
-        ioSpy.mockImplementation(() => createSocketStub());
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        mockRealTokenStorageDeviceBoundaries();
-        mockConcurrentSessionCacheRuntimeDeps();
-        await configureConcurrentSelection();
-        const localStorageHandle = installLocalStorageMock();
-        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-        let unsubscribeMutations: (() => void) | null = null;
-        let stopConcurrentSessionCacheSync: (() => void) | null = null;
-
-        try {
-            const { TokenStorage, subscribeHomeCredentialMutations } = await import('@/auth/storage/tokenStorage');
-            const bTarget = { serverId: 'server-b' } as const;
-
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-b.example.test',
-                bTarget,
-                { token: 'token-b-old', secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' },
-            )).resolves.toBe(true);
-
-            const cache = await import('./concurrentSessionCache');
-            stopConcurrentSessionCacheSync = cache.stopConcurrentSessionCacheSync;
-            const mutations: HomeCredentialMutationEvent[] = [];
-            unsubscribeMutations = subscribeHomeCredentialMutations((event) => {
-                mutations.push(event);
-            });
-            cache.startConcurrentSessionCacheSync();
-
-            await vi.waitFor(() => {
-                expect(ioSpy).toHaveBeenCalledTimes(1);
-            });
-            const oldSocket = ioSpy.mock.results[0]?.value as { disconnect: ReturnType<typeof vi.fn> };
-
-            // Genuine storage failure: the credential write cannot be persisted.
-            localStorageHandle.setItemMock.mockImplementation((key: string, value: string) => {
-                if (key.includes('auth_credentials__srv_')) {
-                    throw new Error('storage write failed');
-                }
-                localStorageHandle.store.set(key, value);
-            });
-
-            await expect(TokenStorage.setCredentialsForServerUrl(
-                'https://stack-b.example.test',
-                bTarget,
-                { token: 'token-b-new', secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' },
-            )).resolves.toBe(false);
-
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, 50);
-            });
-            expect(mutations).toEqual([]);
-            expect(ioSpy).toHaveBeenCalledTimes(1);
-            expect(oldSocket.disconnect).not.toHaveBeenCalled();
-
-        } finally {
-            unsubscribeMutations?.();
-            stopConcurrentSessionCacheSync?.();
-            consoleErrorSpy.mockRestore();
-            localStorageHandle.restore();
-        }
+    it('emits no mutation and restarts no transport when the OS refuses an exact-target credential write', async () => {
+        await h.start(); await h.ready();
+        const socket = h.socket();
+        const events: unknown[] = [];
+        disposers.push(subscribeHomeCredentialMutations(event => events.push(event)));
+        h.rejectCredentialWrites(true);
+        const written = await h.TokenStorage.setCredentialsForServerUrl(h.homeB.serverUrl, { serverId: h.homeB.id }, { token: h.homeB.token + '-replacement' });
+        h.rejectCredentialWrites(false);
+        expect(written).toBe(false);
+        expect(events).toEqual([]);
+        expect(h.socket()).toBe(socket);
+        expect(socket.socket.connected).toBe(true);
     });
 });

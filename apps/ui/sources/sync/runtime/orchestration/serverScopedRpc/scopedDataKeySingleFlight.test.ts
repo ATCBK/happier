@@ -154,8 +154,12 @@ describe('scoped data-key resolution coalesces concurrent callers', () => {
         });
 
         // The failing burst is coalesced into a single attempt...
-        const failed = await Promise.all([request(), request(), request()]);
-        expect(failed).toEqual([null, null, null]);
+        const failed = await Promise.allSettled([request(), request(), request()]);
+        for (const result of failed) {
+            expect(result).toMatchObject({ status: 'rejected', reason: {
+                name: 'HappyError', status: 500, kind: 'server', canTryAgain: true,
+            } });
+        }
         expect(machineCalls).toBe(1);
 
         // ...and a failure is never retained, so the next caller retries for real.

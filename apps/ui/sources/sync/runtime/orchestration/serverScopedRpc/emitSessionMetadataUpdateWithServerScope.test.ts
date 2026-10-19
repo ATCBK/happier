@@ -125,6 +125,43 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
         credentialListeners.clear();
     });
 
+    it.each(['tuple', 'inactive_model_intent'] as const)(
+        'preserves confirmed HTTP rollback as retryable for %s writes', async (mode) => {
+            const { emitSessionMetadataUpdateWithServerScope } = await import('./emitSessionMetadataUpdateWithServerScope');
+            // The injected authority's request is the HTTP boundary; response
+            // parsing and error classification use the production adapter.
+            const request = vi.fn(async () => jsonResponse({
+                error: 'database_transaction_conflict_exhausted', statusCode: 503,
+            }, 503));
+            const authority = {
+                scope: { serverId: 'server-a', accountId: 'account-a' },
+                context: { scope: 'scoped' as const, timeoutMs: 4000, targetServerId: 'server-a',
+                    targetServerUrl: 'https://home.example', targetAccountId: 'account-a', token: 'token', encryption: null },
+                request, release: async () => {},
+            };
+            const write = mode === 'tuple'
+                ? { patch: ownerPatch }
+                : { expectedVersion: 3, metadata: 'ciphertext', sessionExpectation: { kind: 'inactive_model_intent' as const } };
+            await expect(emitSessionMetadataUpdateWithServerScope({
+                sessionId: 'session-1', authority, ...write,
+            })).rejects.toMatchObject({
+                name: 'HappyError', code: 'database_transaction_conflict_exhausted',
+                status: 503, kind: 'server', canTryAgain: true,
+            });
+        },
+    );
+
+    it.each([408, 429, 500, 502, 503, 504])('classifies HTTP %s without exposing server prose or calling it an invalid tuple', async (status) => {
+        resolveContextSpy.mockResolvedValue({ scope: 'active', timeoutMs: 4000 });
+        createResolvedRequestSpy.mockReturnValue(resolvedRequestSpy);
+        resolvedRequestSpy.mockResolvedValue(new Response('private upstream failure', { status }));
+        const { emitSessionMetadataUpdateWithServerScope } = await import('./emitSessionMetadataUpdateWithServerScope');
+        const error: unknown = await emitSessionMetadataUpdateWithServerScope({ sessionId: 'session-1', patch: ownerPatch })
+            .catch((failure: unknown) => failure);
+        expect(error).toMatchObject({ code: 'service_temporarily_unavailable', status, canTryAgain: true });
+        expect(String(error)).not.toContain('private upstream failure');
+    });
+
     it('keeps an ordinary layout-0 write on the active legacy socket RPC', async () => {
         resolvePreferredServerIdForSessionIdSpy.mockReturnValue('server-a');
         resolveContextSpy.mockResolvedValue({
@@ -767,8 +804,8 @@ describe('emitSessionMetadataUpdateWithServerScope', () => {
             },
         },
         {
-            name: 'other error',
-            status: 500,
+            name: 'invalid request',
+            status: 400,
             body: { error: 'Failed to update session' },
         },
     ])('fails closed for $name responses', async ({ status, body }) => {

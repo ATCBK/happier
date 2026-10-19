@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
-import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { profileDefaults } from '@/sync/domains/profiles/profile';
+import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
 
 import type { SessionReadCursorUpdateAck } from '@/sync/api/session/emitSessionReadCursorUpdateWithServerScope';
 
@@ -53,12 +57,20 @@ const emitReadCursorWithServerScopeMock = vi.hoisted(() => vi.fn(
     async (..._args: Parameters<typeof import('@/sync/api/session/emitSessionReadCursorUpdateWithServerScope').emitSessionReadCursorUpdateWithServerScope>): Promise<SessionReadCursorUpdateAck> => ({ result: 'success' }),
 ));
 
-import { storage } from './domains/state/storage';
 import type { Session } from './domains/state/storageTypes';
-import { readSessionOwnerMetadataView } from './domains/session/readSessionOwnerMetadataView';
-import { getActiveServerSnapshot } from './domains/server/serverRuntime';
+// Install the canonical network boundary before the store's Sync dependency graph
+// captures Socket.IO. A late transport mock cannot replace an already loaded SDK.
+let storage: typeof import('./domains/state/storage')['storage'];
+let readSessionOwnerMetadataView: typeof import('./domains/session/readSessionOwnerMetadataView')['readSessionOwnerMetadataView'];
+let getActiveServerSnapshot: typeof import('./domains/server/serverRuntime')['getActiveServerSnapshot'];
 
-const initialStorageState = storage.getState();
+// Prepare the real graph during collection, outside test setup deadlines.
+const collectionBoundary = await installSessionOpsNetworkBoundary();
+try {
+    await loadSyncSingletonForTests();
+} finally {
+    await collectionBoundary.dispose();
+}
 
 const activeAddress = (sessionId: string) => ({
     serverId: getActiveServerSnapshot().serverId,
@@ -134,8 +146,8 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
     let localStorage: ReturnType<typeof installLocalStorageMock>;
     let webLocks: ReturnType<typeof installWebLockManagerMock>;
     let home: Awaited<ReturnType<Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>['addHome']>>;
+    let accountId: string;
     beforeEach(async () => {
-        storage.setState(initialStorageState, true);
         kvStore.clear();
         appStateAddListener.mockClear();
         emitWithAckMock.mockClear();
@@ -145,7 +157,12 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
         localStorage = installLocalStorageMock();
         webLocks = installWebLockManagerMock();
         boundary = await installSessionOpsNetworkBoundary();
+        ({ storage } = await import('./domains/state/storage'));
+        ({ readSessionOwnerMetadataView } = await import('./domains/session/readSessionOwnerMetadataView'));
+        ({ getActiveServerSnapshot } = await import('./domains/server/serverRuntime'));
+        storage.setState(storage.getInitialState(), true);
         home = await boundary.addHome('https://read-cursor.example.test', 'account-a');
+        accountId = home.accountId;
         boundary.setSocketAckResponder(async ({ serverUrl, event, payload }) => {
             emitWithAckMock(event, payload);
             if (event !== 'update-read-cursor') return null;
@@ -160,13 +177,21 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
             if (path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0,
                 signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
-            return await requestMock(path, init) ?? Response.json({}, { status: 404 });
+            const response = await requestMock(path, init);
+            if (response) return response;
+            if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: accountId });
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+            return createEmptyAccountBootstrapHttpResponse(path, init);
         });
         await loadSyncSingletonForTests();
         const { setActiveServerId } = await import('./domains/server/serverProfiles');
         await setActiveServerId(home.id, { scope: 'device' });
         const { restoreConnectionToActiveServer } = await import('./runtime/orchestration/connectionManager');
         await restoreConnectionToActiveServer({ token: home.token });
+        await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true));
+        const { sync } = await import('./sync');
+        await sync.refreshSessions();
 
         emitWithAckMock.mockClear();
         emitReadCursorWithServerScopeMock.mockClear();
@@ -184,7 +209,7 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
 
     it('does not write a read cursor or metadata when browsing an untracked viewer', async () => {
         const sessionId = 'untracked';
-        const session = { ...createPlainSession({ sessionId }), viewer: {
+        const session = { ...createPlainSession({ sessionId }), access: createSessionAccessFixture('view'), viewer: {
             readState: { state: 'not_started' as const },
             relevance: { relevant: false, reasons: [] },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' as const },
@@ -248,7 +273,10 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
         let resolveSnapshot!: (response: Response) => void;
         const delayedSnapshot = new Promise<Response>((resolve) => { resolveSnapshot = resolve; });
         requestMock.mockImplementation(async (path: string) => {
-            if (path.endsWith('/read-state')) return new Response(JSON.stringify({ success: true, state: 'read', lastViewedSessionSeq: 3, viewer: acknowledgedViewer }), { status: 200 });
+            if (path.endsWith('/read-state')) return Response.json({ success: true,
+                ...SessionReadStateSetResultV1Schema.parse({ state: 'read', lastViewedSessionSeq: 3,
+                    didChange: true, viewer: acknowledgedViewer }),
+            });
             if (path.startsWith('/v2/sessions')) return delayedSnapshot.then((response) => response.clone());
             return new Response('{}', { status: 404 });
         });
@@ -264,14 +292,14 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
             }
             expect(storage.getState().sessions[sessionId]?.viewer).toEqual(acknowledgedViewer);
             resolveSnapshot(new Response(JSON.stringify({
-                sessions: [{
+                sessions: [{ ...createPlainSessionCurrentProjectionRecordFixture({
                     id: session.id, seq: session.seq, createdAt: session.createdAt,
                     updatedAt: session.updatedAt, active: true, activeAt: session.activeAt,
-                    archivedAt: null, metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion,
-                    agentState: null, agentStateVersion: session.agentStateVersion,
-                    dataEncryptionKey: null, encryptionMode: 'plain', share: null,
+                    metadata: session.metadata, metadataVersion: session.metadataVersion,
+                    agentStateVersion: session.agentStateVersion,
+                }),
                     viewer, lastViewedSessionSeq: 0,
-                }], nextCursor: null, hasNext: false,
+                }], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
             }), { status: 200 }));
             await refresh;
             expect(Object.values(storage.getState().sessionListRowsByServerId).map((rows) => rows[sessionId]).find(Boolean)?.viewer).toEqual(acknowledgedViewer);
@@ -286,15 +314,22 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
         const sessionId = 'account-switch';
         storage.getState().applySessions([createPlainSession({ sessionId })]);
         const { sync } = await import('./sync');
+        let replacement: Promise<void> | undefined;
         emitReadCursorWithServerScopeMock.mockImplementationOnce(async () => {
-            await boundary.setAccount(home.serverUrl, 'account-b');
-            const { restoreConnectionToActiveServer } = await import('./runtime/orchestration/connectionManager');
-            const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
-            await restoreConnectionToActiveServer({ token: createAccountTokenForTests('account-b') });
-            storage.getState().applySessions([{ ...createPlainSession({ sessionId }), lastViewedSessionSeq: 1 }]);
+            replacement = (async () => {
+                accountId = 'account-b';
+                await boundary.setAccount(home.serverUrl, 'account-b');
+                await sync.refreshSessions();
+                storage.getState().applySessions([{ ...createPlainSession({ sessionId }), lastViewedSessionSeq: 1 }]);
+            })();
+            await replacement;
             return { result: 'success', lastViewedSessionSeq: 3 };
         });
         await sync.markSessionViewed(activeAddress(sessionId));
+        // Credential withdrawal cancels the client ACK wait immediately. The
+        // external responder's Account replacement still owns its async work.
+        expect(replacement).toBeDefined();
+        await replacement;
         expect(storage.getState().sessions[sessionId]?.lastViewedSessionSeq).toBe(1);
     });
 
@@ -359,12 +394,7 @@ describe('sync.markSessionViewed (authoritative read cursor)', () => {
                 return new Response(JSON.stringify({ mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 }));
             }
             const session = createExternalSessionWithObservedAttention({ sessionId });
-            return new Response(JSON.stringify({ session: {
-                ...session,
-                metadata: JSON.stringify(session.metadata),
-                dataEncryptionKey: null,
-                metadataLayoutVersion: 0,
-            } }));
+            return Response.json(createPlainSessionByIdResponseFixture(session));
         });
         await sync.markSessionViewed(activeAddress(sessionId));
 

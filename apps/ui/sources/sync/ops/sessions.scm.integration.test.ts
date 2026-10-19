@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -136,11 +137,11 @@ describe('session scm ops integration (git backend)', () => {
             cwd: '.',
             paths: ['a.txt'],
         });
-        expect(stage.success).toBe(true);
+        assert(stage.success === true);
         expect(git(workspace, ['diff', '--cached', '--name-only'])).toBe('a.txt');
 
         const stagedSnapshot = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(stagedSnapshot.success).toBe(true);
+        assert(stagedSnapshot.success === true);
         expect(stagedSnapshot.snapshot?.totals.includedFiles).toBe(1);
         expect(stagedSnapshot.snapshot?.totals.pendingFiles).toBe(0);
 
@@ -148,7 +149,7 @@ describe('session scm ops integration (git backend)', () => {
             cwd: '.',
             message: 'feat: update a',
         });
-        expect(commit.success).toBe(true);
+        assert(commit.success === true);
         expect(commit.commitSha).toBeTruthy();
 
         const log = await sessionScmLogList('session-1', {
@@ -156,11 +157,11 @@ describe('session scm ops integration (git backend)', () => {
             limit: 1,
             skip: 0,
         });
-        expect(log.success).toBe(true);
+        assert(log.success === true);
         expect(log.entries?.[0]?.subject).toBe('feat: update a');
 
         const status = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(status.success).toBe(true);
+        assert(status.success === true);
         expect(status.snapshot?.totals.includedFiles).toBe(0);
         expect(status.snapshot?.totals.pendingFiles).toBe(0);
     });
@@ -183,10 +184,10 @@ describe('session scm ops integration (git backend)', () => {
                 { path: 'b.txt', kind: 'untracked' },
             ],
         } as any);
-        expect(discard.success).toBe(true);
+        assert(discard.success === true);
 
         const status = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(status.success).toBe(true);
+        assert(status.success === true);
         expect(status.snapshot?.totals.pendingFiles).toBe(0);
         expect(status.snapshot?.totals.untrackedFiles).toBe(0);
     });
@@ -208,12 +209,12 @@ describe('session scm ops integration (git backend)', () => {
             message: 'feat: atomic all pending',
             scope: { kind: 'all-pending' },
         });
-        expect(commit.success).toBe(true);
+        assert(commit.success === true);
         expect(git(workspace, ['show', '--pretty=', '--name-only', 'HEAD'])).toContain('a.txt');
         expect(git(workspace, ['show', '--pretty=', '--name-only', 'HEAD'])).toContain('untracked.txt');
 
         const status = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(status.success).toBe(true);
+        assert(status.success === true);
         expect(status.snapshot?.totals.pendingFiles).toBe(0);
         expect(status.snapshot?.totals.untrackedFiles).toBe(0);
     });
@@ -247,7 +248,7 @@ describe('session scm ops integration (git backend)', () => {
             cwd: '.',
             remote: 'origin',
         });
-        expect(fetch.success).toBe(true);
+        assert(fetch.success === true);
         expect(git(workspace, ['rev-parse', `origin/${branch}`])).toBe(remoteHead);
     });
 
@@ -279,7 +280,7 @@ describe('session scm ops integration (git backend)', () => {
             cwd: '.',
             remote: 'origin',
         });
-        expect(fetch.success).toBe(true);
+        assert(fetch.success === true);
 
         const push = await sessionScmRemotePush('session-1', { cwd: '.' });
         expect(push.success).toBe(false);
@@ -328,7 +329,7 @@ describe('session scm ops integration (git backend)', () => {
         mockSessionRPC.mockImplementation(createGitSessionRpcHarness(workspace));
 
         const push = await sessionScmRemotePush('session-1', { cwd: '.' });
-        expect(push.success).toBe(true);
+        assert(push.success === true);
         expect(git(workspace, ['rev-parse', `origin/${branch}`])).toBe(localHead);
     });
 
@@ -364,7 +365,7 @@ describe('session scm ops integration (git backend)', () => {
             cwd: '.',
             remote: 'origin',
         });
-        expect(fetch.success).toBe(true);
+        assert(fetch.success === true);
 
         const pull = await sessionScmRemotePull('session-1', { cwd: '.' });
         expect(pull.success).toBe(false);
@@ -427,7 +428,7 @@ describe('session scm ops integration (git backend)', () => {
             remote: 'origin',
             branch,
         });
-        expect(push.success).toBe(true);
+        assert(push.success === true);
         expect(git(workspace, ['rev-parse', `origin/${branch}`])).toBe(localHead);
     });
 
@@ -461,7 +462,7 @@ describe('session scm ops integration (git backend)', () => {
             remote: 'origin',
             branch,
         });
-        expect(pull.success).toBe(true);
+        assert(pull.success === true);
         expect(git(workspace, ['rev-parse', 'HEAD'])).toBe(remoteHead);
     });
 
@@ -556,7 +557,7 @@ describe('session scm ops integration (git backend)', () => {
         expect(stage.errorCode).toBe(SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY);
 
         const snapshot = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(snapshot.success).toBe(true);
+        assert(snapshot.success === true);
         expect(snapshot.snapshot?.repo.isRepo).toBe(false);
         expect(snapshot.snapshot?.entries).toEqual([]);
     });
@@ -587,7 +588,7 @@ describe('session scm ops integration (git backend)', () => {
             cwd: '.',
             commit: targetSha,
         });
-        expect(response.success).toBe(true);
+        assert(response.success === true);
         expect(git(workspace, ['log', '-1', '--pretty=%s']).toLowerCase()).toContain('revert');
         expect(git(workspace, ['show', 'HEAD:a.txt'])).toBe('base');
     });

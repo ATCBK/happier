@@ -29,7 +29,7 @@ import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/doma
 import { setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 function makeRenderable(id: string): SessionListRenderableSession {
-    return {
+    return buildSessionListRenderableFromSession(createSessionFixture({
         id,
         seq: 0,
         createdAt: 0,
@@ -57,11 +57,11 @@ function makeRenderable(id: string): SessionListRenderableSession {
         archivedAt: null,
         metadataVersion: 0,
         agentStateVersion: 0,
-        metadata: { path: '' },
+        metadata: { path: '', host: 'test' },
         thinking: false,
         thinkingAt: 0,
         presence: 0,
-    } satisfies SessionListRenderableSession;
+    }));
 }
 
 describe('useSessions', () => {

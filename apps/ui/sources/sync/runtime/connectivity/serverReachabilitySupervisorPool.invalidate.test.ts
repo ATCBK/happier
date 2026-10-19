@@ -35,7 +35,7 @@ describe('serverReachabilitySupervisorPool (invalidate)', () => {
         { status: 200, phase: 'online' },
         { status: 401, phase: 'auth_failed' },
         { status: 503, phase: 'offline' },
-    ])('re-probes a transport failure before publishing Home readiness ($status)', async ({ status, phase }) => {
+    ])('retains Home readiness until the transport-failure probe verdict ($status)', async ({ status, phase }) => {
         const serverUrl = 'https://example.test';
         const token = 'accepted-token';
         let finishProbe: ((response: Response) => void) | undefined;
@@ -59,7 +59,8 @@ describe('serverReachabilitySupervisorPool (invalidate)', () => {
         await vi.advanceTimersByTimeAsync(0);
 
         expect(phases).not.toContain('offline');
-        expect(storage.getState().endpointStatus).toBe('connecting');
+        expect(phases).toEqual([]);
+        expect(storage.getState().endpointStatus).toBe('online');
         expect(finishProbe).toBeDefined();
         finishProbe?.(new Response(null, { status }));
         await vi.advanceTimersByTimeAsync(0);
@@ -164,7 +165,7 @@ describe('serverReachabilitySupervisorPool (invalidate)', () => {
 
         await invalidateServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: null });
 
-        expect(states.at(-1)).toEqual({ phase: 'offline', reason: 'server_restarting' });
+        await vi.waitFor(() => expect(states.at(-1)).toEqual({ phase: 'offline', reason: 'server_restarting' }));
         const healthCalls = runtimeFetchSpy.mock.calls.filter(([input]) => String(input).endsWith('/health'));
         expect(healthCalls).toHaveLength(2);
 

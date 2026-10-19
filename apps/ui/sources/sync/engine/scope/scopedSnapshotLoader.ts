@@ -46,7 +46,8 @@ export type ScopedSnapshotLoadContext = Readonly<{
     /** Publishes a checked read before its retained cleanup, without late obsolete publication. */
     readWithMaintenance: <TProjection>(input: Readonly<{
         read: (publication: ScopedSnapshotReadPublication<TProjection>) => Promise<TProjection>;
-        publish: (projection: TProjection, current: boolean) => void;
+        /** Freshness can lapse during a read while its captured Account still admits display data. */
+        publish: (projection: TProjection, current: boolean, isAccountCurrent?: () => boolean) => void;
         getPublication: () => unknown;
     }>) => Promise<void | ScopedSnapshotLoadMaintenance>;
 }>;
@@ -145,13 +146,13 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                                 const completion = read({ hasPendingCleanup: hasPendingMaintenance,
                                     onReady: (projection, isAccountCurrent) => {
                                         capturedCurrent = isAccountCurrent;
-                                        publish(projection, isCurrent());
+                                        if (isAccountCurrent()) publish(projection, isCurrent(), isAccountCurrent);
                                         published = getPublication();
                                         finishRead();
                                     },
                                 }).then(projection => {
                                     if (!capturedCurrent || (capturedCurrent() && published === getPublication())) {
-                                        publish(projection, isCurrent());
+                                        publish(projection, isCurrent(), capturedCurrent ?? undefined);
                                     }
                                 });
                                 await Promise.race([ready, completion]);

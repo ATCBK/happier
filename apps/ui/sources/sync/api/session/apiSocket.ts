@@ -74,8 +74,9 @@ import { registerExternalSessionStatusDemandTransport } from '@/sync/runtime/orc
 import { isServerRuntimeTransportPublished, resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackTunnels/runtimeOrigin';
 import { getActiveServerHomeCarrier } from '@/sync/domains/server/serverRuntime';
 import { ServerScopedTransportUnavailableError } from '@/sync/runtime/homeCarrier';
-import { MachineLiveStreamPayloadErrorV1, type MachineLiveStreamContentV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
-import { createMachineLiveStreamSocketTransport } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
+import { MachineLiveStreamPayloadErrorV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
+import { createMachineLiveStreamSocketTransport, type ResolvedMachineLiveStreamContent } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
+import { resolveMachineLiveStreamContent } from '@/sync/runtime/orchestration/serverScopedRpc/resolveMachineLiveStreamContent';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
@@ -85,6 +86,7 @@ import {
     type MachineReachabilityScope,
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
 
 const STATIC_EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS =
     process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
@@ -626,6 +628,7 @@ class ApiSocket {
         params: A,
         options?: { timeoutMs?: number | null; onIssued?: () => void; signal?: AbortSignal; transferRouting?: SessionTransferRoutingV1 },
     ): Promise<R> {
+        const releaseRequestLease = userRequestLeaseOwner.acquire();
         try {
             if (options?.signal?.aborted) throw createSocketRpcAbortError();
             const scopedTarget = this.getSessionScopedTarget();
@@ -647,6 +650,8 @@ class ApiSocket {
             });
         } catch (error) {
             throw await this.coerceAckTimeoutAuthError(error);
+        } finally {
+            releaseRequestLease();
         }
     }
 
@@ -666,6 +671,7 @@ class ApiSocket {
             requestId?: string;
         },
     ): Promise<R> {
+        const releaseRequestLease = userRequestLeaseOwner.acquire();
         try {
             if (options?.signal?.aborted) throw createSocketRpcAbortError();
             if (this.getSessionScopedTarget()) throw new Error('Machine RPC is unavailable to a Session-scoped viewer');
@@ -706,6 +712,8 @@ class ApiSocket {
         } catch (error) {
             if (method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE) throw createPrivateContinuationTransportError(error);
             throw await this.coerceAckTimeoutAuthError(error);
+        } finally {
+            releaseRequestLease();
         }
     }
 
@@ -810,6 +818,7 @@ class ApiSocket {
             cancelRequestId?: string;
         },
     ): Promise<T> {
+        const releaseRequestLease = userRequestLeaseOwner.acquire();
         try {
             return await emitWithAckCancellable<T>({
                 socket: this.requireRpcSocket(),
@@ -822,6 +831,8 @@ class ApiSocket {
             });
         } catch (error) {
             throw await this.coerceAckTimeoutAuthError(error);
+        } finally {
+            releaseRequestLease();
         }
     }
 
@@ -1344,15 +1355,12 @@ class ApiSocket {
                 this.pendingReconnectNotification = false;
             }),
             transport.onDisconnected((event: TransportDisconnectEvent) => {
-                if (this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
                 if (!event.intentional && event.reason === 'io server disconnect' && transportConfig?.request) {
                     // Revocation and expiry are server-forced disconnects, not transient transport loss.
                     const supervisor = this.scopedConnectionSupervisor;
                     if (supervisor?.reportProbeResult) {
-                        supervisor.reportProbeResult(
-                            { status: 'auth_failed', statusCode: 401 },
-                            supervisor.captureProbeReportScope?.(),
-                        );
+                        supervisor.reportProbeResult({ status: 'auth_failed', statusCode: 401 }, supervisor.captureProbeReportScope?.());
                     } else {
                         transportConfig.onCredentialRejected?.();
                     }
@@ -1382,6 +1390,7 @@ class ApiSocket {
         machineRequestScope: MachineReachabilityScope | null,
     ) {
         const installedConfig = this.config;
+        const liveStreamLifetime = new AbortController();
         const liveStreamTransport = createMachineLiveStreamSocketTransport({
             emit: (wire) => socket.emit(MACHINE_LIVE_STREAM_SOCKET_EVENT, wire),
             deliver: (decoded) => {
@@ -1391,15 +1400,88 @@ class ApiSocket {
             },
             isCurrent: () => this.socket === socket && this.config === installedConfig && installedConfig?.isCurrent?.() !== false,
             onError: (error) => this.setError(error),
-            resolveContent: async (machineId): Promise<MachineLiveStreamContentV1> => {
+            resolveContent: async (machineId): Promise<ResolvedMachineLiveStreamContent> => {
                 if (!installedConfig) throw new MachineLiveStreamPayloadErrorV1('stream_transport_unavailable');
                 if (this.socket !== socket || this.config !== installedConfig) throw new MachineLiveStreamPayloadErrorV1('stream_transport_unavailable');
+                const initialMode = readMachineStorageModeFromLocalState(machineId);
+                const encryption = this.encryption;
+                if (initialMode === 'plain') return { mode: initialMode };
+                const readyCipher = initialMode === 'e2ee' ? encryption?.getMachineEncryption(machineId) : null;
+                if (initialMode === 'e2ee' && readyCipher) return { mode: initialMode, cipher: readyCipher,
+                    isCurrent: () => encryption?.getMachineEncryption(machineId) === readyCipher
+                        && readMachineStorageModeFromLocalState(machineId) === initialMode };
+                const serverId = resolveServerProfileScopeIdForIdentifier(installedConfig.serverId ?? getActiveServerSnapshot().serverId);
+                const machine = storage.getState().machines[machineId];
+                const samePublishedKey = () => {
+                    const current = storage.getState().machines[machineId];
+                    return (machine?.dataEncryptionKey === undefined || current?.dataEncryptionKey === machine.dataEncryptionKey)
+                        && (machine?.keyBasis?.dataEncryptionKey === undefined || current?.keyBasis?.dataEncryptionKey === machine.keyBasis.dataEncryptionKey);
+                };
+                const hydrationPending = () => {
+                    const state = storage.getState();
+                    const current = state.machines[machineId];
+                    if (state.machineListStatusByServerId[serverId] !== 'loading' || !samePublishedKey()
+                        || (current?.access && current.access.accessState !== 'ready')
+                        || (current?.availability?.kind === 'locked' && current.availability.reason !== 'encryption_material_unavailable')) return false;
+                    const mode = readMachineStorageModeFromLocalState(machineId);
+                    return mode === null || (mode === 'e2ee' && !encryption?.getMachineEncryption(machineId));
+                };
+                // A display shell can still carry its pre-hydration missing-material lock, or a
+                // retained availability fact without this process's cipher. Await the canonical
+                // list read before admitting content; settled locks and missing keys fail closed.
+                if (encryption && hydrationPending()) {
+                    await new Promise<void>((resolve, reject) => {
+                        let unsubscribe = () => {};
+                        const finish = () => {
+                            unsubscribe();
+                            liveStreamLifetime.signal.removeEventListener('abort', check);
+                        };
+                        const check = () => {
+                            if (liveStreamLifetime.signal.aborted) {
+                                finish();
+                                reject(new MachineLiveStreamPayloadErrorV1('stream_transport_unavailable'));
+                                return;
+                            }
+                            if (hydrationPending()) return;
+                            finish();
+                            resolve();
+                        };
+                        unsubscribe = storage.subscribe(check);
+                        liveStreamLifetime.signal.addEventListener('abort', check, { once: true });
+                        check();
+                    });
+                }
+                if (liveStreamLifetime.signal.aborted || this.socket !== socket || this.config !== installedConfig
+                    || this.encryption !== encryption || installedConfig.isCurrent?.() === false) {
+                    throw new MachineLiveStreamPayloadErrorV1('stream_transport_unavailable');
+                }
                 const mode = readMachineStorageModeFromLocalState(machineId);
-                if (!mode) throw new MachineLiveStreamPayloadErrorV1('stream_payload_mode_mismatch');
+                if (!mode || (initialMode !== null && mode !== initialMode)) {
+                    throw new MachineLiveStreamPayloadErrorV1('stream_payload_mode_mismatch');
+                }
                 if (mode === 'plain') return { mode };
-                const cipher = this.encryption?.getMachineEncryption(machineId);
-                if (!cipher) throw new MachineLiveStreamPayloadErrorV1('stream_encryption_material_unavailable');
-                return { mode, cipher };
+                const cipher = encryption?.getMachineEncryption(machineId);
+                if (!samePublishedKey()) throw new MachineLiveStreamPayloadErrorV1('stream_encryption_material_unavailable');
+                if (cipher) return { mode, cipher,
+                    isCurrent: () => encryption?.getMachineEncryption(machineId) === cipher && samePublishedKey() };
+                // An exact Machine read can reopen material after list settlement as well.
+                // Reuse the scoped stream's admitted resolver rather than guessing readiness
+                // from a stale list status or terminally stopping a valid encrypted frame.
+                const credentials = await TokenStorage.getCredentialsForServerUrl(installedConfig.endpoint, { serverId });
+                if (!credentials || credentials.token !== installedConfig.token) {
+                    throw new MachineLiveStreamPayloadErrorV1('stream_encryption_material_unavailable');
+                }
+                const content = await resolveMachineLiveStreamContent({
+                    machineId, targetServerId: serverId, targetServerUrl: installedConfig.endpoint,
+                    targetAccountId: parseToken(installedConfig.token), token: installedConfig.token,
+                    credentials, encryption, runtimeOrigin: installedConfig.runtimeOrigin,
+                    homeCarrier: installedConfig.homeCarrier ?? undefined,
+                });
+                if (liveStreamLifetime.signal.aborted || this.socket !== socket || this.config !== installedConfig
+                    || this.encryption !== encryption || installedConfig.isCurrent?.() === false) {
+                    throw new MachineLiveStreamPayloadErrorV1('stream_transport_unavailable');
+                }
+                return content;
             },
         });
         this.liveStreamTransport = liveStreamTransport;
@@ -1410,11 +1492,12 @@ class ApiSocket {
         };
         socket.on?.('server:restarting', (payload: unknown) => {
             const config = this.config;
-            if (!config) return;
+            if (!config || this.socket !== socket || config !== installedConfig || config.isCurrent?.() === false) return;
             if (config.request) {
                 const retryAfterMs = readPlannedRestartRetryAfterMs(payload);
-                this.scopedConnectionSupervisor?.reportProbeResult?.({ status: 'retry_later', reason: 'server_restarting',
-                    ...(retryAfterMs ? { retryAfterMs } : {}) });
+                const supervisor = this.scopedConnectionSupervisor;
+                supervisor?.reportProbeResult?.({ status: 'retry_later', reason: 'server_restarting',
+                    ...(retryAfterMs ? { retryAfterMs } : {}) }, supervisor.captureProbeReportScope?.());
                 return;
             }
             reportServerRestarting(config.endpoint, readPlannedRestartRetryAfterMs(payload), config.token);
@@ -1480,7 +1563,10 @@ class ApiSocket {
                 },
             );
         });
-        return abortInboundRequests;
+        return () => {
+            liveStreamLifetime.abort();
+            abortInboundRequests();
+        };
     }
 
     /**

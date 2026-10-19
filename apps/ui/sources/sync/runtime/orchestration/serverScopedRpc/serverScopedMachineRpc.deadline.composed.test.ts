@@ -117,6 +117,82 @@ async function closeHttp(http: HttpServer) {
     await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
 }
 
+it('connects the scoped socket while the fresh Machine row is still being read', async () => {
+    const connected = createDeferred<void>();
+    const http = createServer(async (request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/parallel-machine') {
+            // Both are independent network preparations. Holding this response
+            // until the real socket connects distinguishes overlap from serial setup.
+            await connected.promise;
+            if (!response.destroyed) response.end(JSON.stringify({ machine: {
+                id: 'parallel-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            } }));
+        } else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+        else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.on('connection', socket => {
+        connected.resolve();
+        socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
+            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, { ready: true }, decoded.callId) });
+        });
+    });
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'parallel-account' })).toString('base64url')}.signature`;
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Parallel RPC setup' });
+        await expect(machineRpcWithServerScope({ serverId: home.id, accountId: 'parallel-account',
+            machineId: 'parallel-machine', method: 'parallel.read', payload: {}, preferScoped: true,
+            timeoutMs: 2_000 })).resolves.toEqual({ ready: true });
+    } finally {
+        connected.resolve();
+        await serverScopedRpcSocketPool.stopAll();
+        http.closeAllConnections();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
+});
+
+it('releases a late socket after Machine admission fails without sending an RPC', async () => {
+    const allowConnection = createDeferred<void>();
+    const handshakeStarted = createDeferred<void>();
+    let disconnected = false;
+    let rpcReceived = false;
+    const http = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        response.writeHead(request.url === '/health' || request.url === '/v1/auth/ping' ? 200 : 404).end('{}');
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.use((_socket, next) => { handshakeStarted.resolve(); void allowConnection.promise.then(() => next()); });
+    relay.on('connection', socket => {
+        socket.on(SOCKET_RPC_EVENTS.CALL, () => { rpcReceived = true; });
+        socket.on('disconnect', () => { disconnected = true; });
+    });
+    vi.stubEnv('EXPO_PUBLIC_HAPPIER_SCOPED_RPC_SOCKET_IDLE_DISCONNECT_MS', '0');
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'late-account' })).toString('base64url')}.signature`;
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Late RPC setup' });
+        const outcome = await machineRpcWithServerScope({ serverId: home.id, accountId: 'late-account',
+            machineId: 'missing-machine', method: 'late.read', payload: {}, preferScoped: true, timeoutMs: 2_000 })
+            .then(() => null, (error: unknown) => error);
+        expect(outcome).toBeInstanceOf(Error);
+        expect(readRpcRequestDisposition(outcome)).toBe('notSent');
+        await handshakeStarted.promise;
+        allowConnection.resolve();
+        await vi.waitFor(() => { expect(disconnected).toBe(true); });
+        expect(rpcReceived).toBe(false);
+    } finally {
+        allowConnection.resolve();
+        await serverScopedRpcSocketPool.stopAll();
+        http.closeAllConnections();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+        vi.unstubAllEnvs();
+    }
+});
+
 async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>, accountReadDelayMs = 0) {
     const features = FeaturesResponseSchema.parse({ features: { machines: {
         enabled: true, rpc: { enabled: true, directPeer: { enabled: true } },

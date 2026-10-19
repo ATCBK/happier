@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act } from 'react-test-renderer';
-import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
@@ -12,12 +12,13 @@ import {
     useOpenApprovalSessionReferences,
 } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
+import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 function artifact(
     id: string,
     header: NonNullable<DecryptedArtifact['header']>,
     body?: unknown,
-): DecryptedArtifact {
+): Extract<DecryptedArtifact, { isDecrypted: true }> {
     const resolvedHeader = typeof body === 'undefined'
         ? header
         : { ...header, ...buildApprovalRequestArtifactHeaderV1(ApprovalRequestV1Schema.parse(body)) };
@@ -244,6 +245,45 @@ describe('useOpenApprovalSessionReferences', () => {
 });
 
 describe('session detail scoped projections', () => {
+    it('reprojects a hydrated legacy approval when its exact session membership arrives', async () => {
+        const previousState = storage.getState();
+        try {
+            storage.setState({ isDataReady: true, sessions: {}, ordinarySessionListMembershipByServerId: {}, artifacts: {
+                open: artifact('open', { v: 1, kind: 'approval_request.v1', title: 'Approve' }, approvalBody('session-a', 'session.list')),
+            } });
+            const hook = await renderHook(() => useOpenApprovalArtifactsForSession({ serverId: 'legacy-home', sessionId: 'session-a' }));
+            expect(hook.getCurrent()).toEqual([]);
+            const artifactsBefore = storage.getState().artifacts;
+            await act(async () => { storage.setState({ ordinarySessionListMembershipByServerId: { 'legacy-home': ['session-a'] } }); });
+            expect(storage.getState().artifacts).toBe(artifactsBefore);
+            expect(hook.getCurrent().map(entry => entry.artifact.id)).toEqual(['open']);
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
+
+    it('reprojects an existing approval when its local Home profile acquires the portable identity', async () => {
+        const previousState = storage.getState();
+        const serverUrl = 'https://approval-delayed-profile.test';
+        const profile = await upsertServerProfile({ serverUrl });
+        const body = ApprovalRequestV2Schema.parse({ ...approvalBody('session-a', 'session.title.set'), v: 2,
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
+                serverId: 'remote-profile', serverIdentityId: 'srv_delayed_approval_home', sessionId: 'session-a',
+                actionId: 'session.title.set', requestId: 'request-1' } });
+        const header = buildApprovalRequestArtifactHeaderV1(body);
+        try {
+            storage.setState({ isDataReady: true, artifacts: { open: {
+                ...artifact('open', header), body: JSON.stringify(body), bodyVersion: 1,
+            } } });
+            const hook = await renderHook(() => useOpenApprovalArtifactsForSession({ serverId: profile.id, sessionId: 'session-a' }));
+            expect(hook.getCurrent()).toEqual([]);
+            const artifactsBefore = storage.getState().artifacts;
+            await act(async () => { await setServerProfileIdentityForUrl(serverUrl, 'srv_delayed_approval_home'); });
+            expect(storage.getState().artifacts).toBe(artifactsBefore);
+            expect(hook.getCurrent().map(entry => entry.artifact.id)).toEqual(['open']);
+            await hook.unmount();
+        } finally { storage.setState(previousState); }
+    });
+
     it('returns only non-draft open approvals for one session without the global artifacts hook', async () => {
         const previousState = storage.getState();
         try {

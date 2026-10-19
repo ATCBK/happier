@@ -2845,14 +2845,16 @@ export function setServerProfileShareableUrl(
     });
 }
 
-/** Resets process-local profile caches between owner tests without reloading the module graph. */
-export function resetServerProfilesRuntimeForTests(): void {
-    activeServerGeneration = 0;
-    activeRuntimeTargetGeneration = 0;
+/** Resets fixture caches; integrated suites may retain the connection owner's generation lifetime. */
+export function resetServerProfilesRuntimeForTests(options?: Readonly<{ preserveGenerations?: boolean }>): void {
+    if (!options?.preserveGenerations) {
+        activeServerGeneration = 0;
+        activeRuntimeTargetGeneration = 0;
+        serverProfilesGeneration = 0;
+    }
     activeServerSnapshotCache = null;
     activeServerSnapshotBasis = null;
     activeRuntimeOriginLease = null;
-    serverProfilesGeneration = 0;
     persistedStateStorage = null;
     persistedStateParseCache = null;
     demoPersistenceSuspendDepth = 0;

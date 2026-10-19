@@ -100,14 +100,23 @@ function canSkipActiveServerIdSwitch(params: Readonly<{
 }
 
 async function stageActiveServerAndSwitch(
-    stage: () => Promise<void>,
+    stage: () => Promise<string>,
     refreshAuth?: () => Promise<void>,
 ): Promise<void> {
     const previousDeviceServerId = getDeviceDefaultServerId();
     const previousTabServerId = getTabActiveServerId();
-    await stage();
+    const targetServerId = await stage();
+    const stagingFailure = areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, targetServerId)
+        ? null : new Error('Active server selection did not retain the requested Home.');
+    // A failed tab write can leave both selections unchanged; reconnecting that
+    // Home would needlessly retire its Account. A device promotion can instead
+    // commit its default before clearing the tab fails, and needs the rollback.
+    if (stagingFailure && getDeviceDefaultServerId() === previousDeviceServerId && getTabActiveServerId() === previousTabServerId) {
+        throw stagingFailure;
+    }
 
     try {
+        if (stagingFailure) throw stagingFailure;
         await switchConnectionToActiveServer();
         await refreshAuth?.();
     } catch (switchError) {
@@ -159,15 +168,17 @@ export async function upsertActivateAndSwitchServer(params: Readonly<{
                 });
                 await stageActiveServerAndSwitch(async () => {
                     await setActiveServer({ serverId: profile.id, scope });
+                    return profile.id;
                 }, params.refreshAuth ?? undefined);
             } else {
                 await stageActiveServerAndSwitch(async () => {
-                    await upsertAndActivateServer({
+                    const profile = await upsertAndActivateServer({
                         serverUrl: targetServerUrl,
                         name: params.name ?? defaultHomeNameForAddress(targetServerUrl),
                         source,
                         scope,
                     });
+                    return profile.id;
                 }, params.refreshAuth ?? undefined);
             }
         });
@@ -203,6 +214,7 @@ export async function setActiveServerAndSwitch(params: Readonly<{
                     serverId: targetServerId,
                     scope,
                 });
+                return targetServerId;
             }, params.refreshAuth ?? undefined);
         });
     });

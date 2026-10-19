@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+let fetchPort: typeof import('@/utils/system/runtimeFetch');
 
 describe('serverReachabilitySupervisorPool (web online events)', () => {
     const previousRetryMs = process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS;
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        fetchPort = await import('@/utils/system/runtimeFetch');
         vi.useFakeTimers();
         vi.setSystemTime(0);
         vi.spyOn(Math, 'random').mockReturnValue(0);
@@ -14,7 +15,7 @@ describe('serverReachabilitySupervisorPool (web online events)', () => {
 
     afterEach(async () => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = previousRetryMs;
-        resetRuntimeFetch();
+        fetchPort.resetRuntimeFetch();
         vi.useRealTimers();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
@@ -38,7 +39,7 @@ describe('serverReachabilitySupervisorPool (web online events)', () => {
             }
             return new Response(null, { status: 200, headers: new Headers() });
         });
-        setRuntimeFetch(runtimeFetchSpy);
+        fetchPort.setRuntimeFetch(runtimeFetchSpy);
 
         const {
             invalidateAllServerReachabilitySupervisors,
@@ -87,7 +88,7 @@ describe('serverReachabilitySupervisorPool (web online events)', () => {
         vi.stubGlobal('window', windowStub as any);
 
         const runtimeFetchSpy = vi.fn(async () => new Response(null, { status: 200, headers: new Headers() }));
-        setRuntimeFetch(runtimeFetchSpy);
+        fetchPort.setRuntimeFetch(runtimeFetchSpy);
 
         const {
             invalidateAllServerReachabilitySupervisors,
@@ -114,5 +115,32 @@ describe('serverReachabilitySupervisorPool (web online events)', () => {
         setServerReachabilityNetworkAllowed(true);
         unsubscribe();
         await resetServerReachabilitySupervisors();
+    });
+
+    it.each([200, 401])('revalidates an online Home without retiring healthy transports before the HTTP %i verdict', async (status) => {
+        let respond!: (response: Response) => void;
+        fetchPort.setRuntimeFetch(async () => new Response(null, { status: 200 }));
+        const { startServerReachabilitySupervisor, invalidateServerReachabilitySupervisor,
+            resetServerReachabilitySupervisors, subscribeServerReachabilityState } = await import('./serverReachabilitySupervisorPool');
+        const phases: string[] = [];
+        const unsubscribe = subscribeServerReachabilityState('https://example.test', state => { phases.push(state.phase); }, 'token');
+        try {
+            await startServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: 'token' });
+            phases.length = 0;
+            fetchPort.setRuntimeFetch(() => new Promise<Response>(resolve => { respond = resolve; }));
+            const pending = invalidateServerReachabilitySupervisor({ serverUrl: 'https://example.test', token: 'token' });
+            await vi.waitFor(() => expect(respond).toBeTypeOf('function'));
+            const whilePending = [...phases];
+            respond(new Response(null, { status }));
+            await pending;
+            await Promise.resolve();
+            expect(whilePending).toEqual([]);
+            // A successful reprobe must still notify disconnected socket owners
+            // to reconnect, without manufacturing an outage for healthy ones.
+            await vi.waitFor(() => expect(phases).toEqual([status === 200 ? 'online' : 'auth_failed']));
+        } finally {
+            unsubscribe();
+            await resetServerReachabilitySupervisors();
+        }
     });
 });

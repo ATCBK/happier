@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedConnectionState } from '@happier-dev/connection-supervisor';
 import { AccountPetLibraryEntryV1Schema } from '@happier-dev/protocol/pets';
+import { ChangesResponseSchema, CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { flushHookEffects } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -12,6 +14,13 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
+});
+
+const network = await installSessionOpsNetworkBoundary();
+const syncBridge = await loadSyncSingletonForTests();
+afterAll(async () => {
+    try { await network.dispose(); }
+    finally { syncBridge.dispose(); }
 });
 
 const pet = AccountPetLibraryEntryV1Schema.parse({
@@ -27,7 +36,6 @@ const pet = AccountPetLibraryEntryV1Schema.parse({
 });
 
 describe('sync.create initial awaits', () => {
-    let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
     let home: Awaited<ReturnType<typeof network.addHome>>;
     let stallCore: boolean;
     let petsEnabled: boolean;
@@ -36,14 +44,13 @@ describe('sync.create initial awaits', () => {
     let cleanupStateSubscription: (() => void) | undefined;
 
     beforeEach(async () => {
-        vi.resetModules();
         vi.useFakeTimers();
         stallCore = false;
         petsEnabled = false;
         authPing = 'ready';
         accountModeUnavailable = false;
         cleanupStateSubscription = undefined;
-        network = await installSessionOpsNetworkBoundary();
+        network.resetRequests();
         home = await network.addHome('https://initial-sync.example.test', 'plain-account');
         const { profileDefaults } = await import('./domains/profiles/profile');
         network.setHttpResponder(async (input, init) => {
@@ -73,17 +80,16 @@ describe('sync.create initial awaits', () => {
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: home.accountId });
             if (path === '/v1/account/pets') return Response.json({ ok: true, pets: [pet] });
-            if (path === '/v2/sessions') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
-            if (path === '/v1/sessions/active') return Response.json({ sessions: [] });
+            const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+            if (bootstrapResponse) return bootstrapResponse;
             if (path === '/v1/machines') return Response.json([]);
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/friends') return Response.json({ friends: [] });
             if (path === '/v1/kv') return Response.json({ items: [] });
-            if (path === '/v2/cursor') return Response.json({ cursor: 0 });
-            if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
+            if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+            if (path === '/v2/changes') return Response.json(ChangesResponseSchema.parse({ changes: [], nextCursor: 0 }));
             return null;
         });
-        await loadSyncSingletonForTests();
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         await upsertAndActivateServer({ serverUrl: home.serverUrl });
     });
@@ -94,7 +100,10 @@ describe('sync.create initial awaits', () => {
         await syncSwitchServer(null);
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
         apiSocket.disconnect();
-        await network.dispose();
+        // This suite reuses the runtime graph; mimic the Auth owner's logout
+        // cleanup so an encrypted test cannot donate its identity to the next Account.
+        const { trackLogout } = await import('@/track');
+        trackLogout();
         vi.restoreAllMocks();
         vi.useRealTimers();
     });
@@ -208,6 +217,12 @@ describe('sync.create initial awaits', () => {
         const { sync } = await import('./sync');
         const { storage } = await import('./domains/state/storage');
         const { invalidateAllServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        const { loadSyncTuning } = await import('@/sync/runtime/syncTuning');
+        // Initial readiness can precede the ongoing resume's ancillary queues.
+        // Join and finish that public pipeline before observing a new outage.
+        const initialResume = sync.resumeSync('manual');
+        await flushHookEffects({ cycles: 1, turns: 2, advanceTimersMs: loadSyncTuning().resumeQuickInvalidateTimeoutMs });
+        await initialResume;
         const resume = vi.spyOn(sync, 'resumeSync');
         authPing = 'offline';
         await invalidateAllServerReachabilitySupervisors();
@@ -226,7 +241,6 @@ describe('sync.create initial awaits', () => {
         const recovered = resume.mock.calls.findIndex(([reason]) => reason === 'server-reachable');
         // Resume also awaits bounded ancillary queues; their clock must keep
         // advancing even though this test only serves the core Home routes.
-        const { loadSyncTuning } = await import('@/sync/runtime/syncTuning');
         await flushHookEffects({ cycles: 1, turns: 2, advanceTimersMs: loadSyncTuning().resumeQuickInvalidateTimeoutMs });
         await resume.mock.results[recovered]?.value;
         expect(network.httpRequests.map(({ url }) => new URL(url).pathname)).toContain('/v2/changes');
@@ -266,7 +280,9 @@ describe('sync.create initial awaits', () => {
         let modeReadFailed = false;
         const refresh = () => {
             disclosure = null;
-            void fetchAccountEncryptionMode(credentials).then(
+            // This observer checks resume invalidation after a failed attempt;
+            // the default readiness reader intentionally keeps retrying outages.
+            void fetchAccountEncryptionMode(credentials, { retry: 'none' }).then(
                 ({ mode }) => { disclosure = mode; },
                 () => { disclosure = null; modeReadFailed = true; },
             );

@@ -24,7 +24,7 @@ import type {
     AcquireBrowserMachineCarrierEndpointLease,
     MachineCarrierStreamDuplex,
     OpenMachineCarrierStream,
-} from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierBrowserStream';
+} from '@/sync/domains/transfers/runtime/transferRuntime';
 
 import type { BrowserIrohEndpointClient, BrowserIrohLease } from './endpointClient';
 

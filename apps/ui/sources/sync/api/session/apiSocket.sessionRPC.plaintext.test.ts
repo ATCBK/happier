@@ -231,7 +231,7 @@ describe('apiSocket.sessionRPC plaintext sessions', () => {
         });
     });
 
-    it('preserves an explicit unbounded session RPC lifetime without forwarding a timeout', async () => {
+    it('preserves an explicit unbounded session RPC lifetime in the request without arming a socket timeout', async () => {
         storageMock.getState.mockReturnValue({
             sessions: {
                 s1: { id: 's1', encryptionMode: 'plain' },
@@ -262,6 +262,7 @@ describe('apiSocket.sessionRPC plaintext sessions', () => {
             {
                 method: 's1:watch',
                 params: { hello: 'world' },
+                timeoutMs: null,
             },
         );
         expect(response).toEqual({ ok: true, value: 790 });

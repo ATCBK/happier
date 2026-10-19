@@ -1,6 +1,6 @@
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import type { Encryption, MachineEncryptionContext, MachineEncryptionContextInput } from '@/sync/encryption/encryption';
-import { readMachineEncryptionContextInput } from '@/sync/encryption/machineEncryption';
+import { areMachineEncryptionContextInputsEqual, readMachineEncryptionContextInput } from '@/sync/encryption/machineEncryption';
 import { MachineKeyBasisStoredReadV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import {
     createNotAuthenticatedError,
@@ -161,9 +161,7 @@ async function fetchMachineTransport(params: Readonly<{
         const daemonStateVersion = basis.success ? basis.data.daemonStateVersion : machine?.daemonStateVersion;
         if ((metadataVersion !== undefined && cached?.metadataVersion !== undefined && metadataVersion < cached.metadataVersion)
             || (daemonStateVersion !== undefined && cached?.daemonStateVersion !== undefined && daemonStateVersion < cached.daemonStateVersion)) return null;
-        const unchanged = cached && cached.identity.dataEncryptionKey === input.dataEncryptionKey
-            && cached.identity.expectedDataEncryptionKey === input.expectedDataEncryptionKey
-            && cached.identity.resourceMode === input.resourceMode && cached.identity.accessState === input.accessState;
+        const unchanged = cached && areMachineEncryptionContextInputsEqual(cached.identity, input);
         const identity = unchanged ? cached.identity : input;
         const context = params.encryption?.captureMachineEncryptionContext(
             params.machineId,

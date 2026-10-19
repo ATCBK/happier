@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 // Sync imports persistence, which instantiates MMKV. Mock it for deterministic tests.
 const kvStore = vi.hoisted(() => new Map<string, string>());
@@ -65,7 +66,7 @@ vi.mock('@/log', () => ({
 }));
 
 describe('sync socket offline duration tracking', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         vi.useRealTimers();
         vi.resetModules();
         kvStore.clear();
@@ -73,6 +74,7 @@ describe('sync socket offline duration tracking', () => {
         socketReconnectHandlers.clear();
         apiSocketDisconnect.mockClear();
         apiSocketConnect.mockClear();
+        await loadSyncSingletonForTests();
     });
 
     it('captures the last offline duration across disconnected→connected transition', async () => {

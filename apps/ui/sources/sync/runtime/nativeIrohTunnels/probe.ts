@@ -12,14 +12,14 @@ export type IrohHomeTunnelProbeFailureReason =
 
 /**
  * Full verification chain for a native Iroh Home lease, in order:
- * 1. real `/health` readiness against the lease's exact loopback origin;
- * 2. authenticated `/v1/auth/ping` with the endpoint-scoped token when the
- *    caller is already enrolled; pre-token enrollment intentionally skips it;
- * 3. `/v1/features` through the same origin whose `serverIdentityId` equals the
+ * 1. real endpoint readiness against the lease's exact loopback origin:
+ *    `/v1/auth/ping` with the scoped token for an enrolled caller, or `/health`
+ *    for pre-token enrollment (authenticated readiness subsumes health);
+ * 2. `/v1/features` through the same origin whose `serverIdentityId` equals the
  *    expected Home identity.
  *
  * Both existing probe owners are composed (never duplicated): the combined
- * health+auth readiness probe and the explicit-endpoint feature probe with the
+ * mode-aware readiness probe and the explicit-endpoint feature probe with the
  * canonical URL kept as the cache/profile key and the lease origin as transport.
  */
 export async function probeIrohHomeTunnelOrigin(

@@ -514,14 +514,35 @@ export async function invalidateServerReachabilitySupervisor(params: Readonly<{
     }
 
     const now = Date.now();
-    // Avoid repeated stop/start loops when multiple callers attempt to "force reconnect" at once.
+    // Coalesce simultaneous foreground and transport-failure revalidation.
     if (now - entry.lastInvalidateAt < 250) {
         return;
     }
     entry.lastInvalidateAt = now;
 
     const run = (async () => {
-        if (entry.state.phase === 'online' || entry.state.phase === 'connecting' || entry.state.phase === 'offline') {
+        if (entry.state.phase === 'online') {
+            // A request to recheck reachability is not an outage verdict. Stopping
+            // the synthetic supervisor here disconnects healthy request sockets
+            // before the probe can answer, including leased RPCs on foreground return.
+            const scope = entry.supervisor.captureProbeReportScope?.();
+            if (!scope) return;
+            const probe = await probeServerReadiness({
+                endpoint: entry.runtimeOrigin ?? entry.serverUrl,
+                token: entry.token,
+                homeCarrier: entry.homeCarrier,
+            });
+            if (!networkAllowed || entry.supervisor.captureProbeReportScope?.().generation !== scope.generation) return;
+            if (probe.status !== 'ready') {
+                entry.supervisor.reportProbeResult?.(probe, scope);
+            } else {
+                // A disconnected socket still needs the fresh online observation
+                // to dial again; healthy sockets keep their existing transport.
+                entry.subscribers.forEach((listener) => listener(entry.state));
+            }
+            return;
+        }
+        if (entry.state.phase === 'connecting' || entry.state.phase === 'offline') {
             // Explicit invalidation is used after out-of-band evidence such as a Socket.IO transport drop.
             // Force a fresh probe even if the synthetic reachability transport still thinks it is online.
             await entry.supervisor.stop();

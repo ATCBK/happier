@@ -380,7 +380,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             await vi.advanceTimersByTimeAsync(749);
             expect(settled).not.toHaveBeenCalled();
             await vi.advanceTimersByTimeAsync(1);
-            expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 4_000 }));
+            expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: 'MACHINE_RPC_TIMEOUT', timeoutMs: 4_000, scope: 'scoped' }));
             expect(readRpcRequestDisposition(settled.mock.calls[0]?.[0])).toBe('outcomeUnknown');
             await pending;
         } finally {
@@ -472,7 +472,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
                 runId: '11111111-1111-4111-8111-111111111111',
                 source: { kind: 'saved', definitionId: '22222222-2222-4222-8222-222222222222',
                     revision: { headerVersion: 1, bodyVersion: 1 } },
-            }, context: { surface: 'ui', authority: 'present_user', serverId: home.id, runtimeAccountId: 'account-a',
+            }, context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: home.id, runtimeAccountId: 'account-a',
                 externalActionTarget: { kind: 'machine', machineId: 'machine-1',
                     project: { machineId: 'machine-1', directory: '/tmp' } } } }).catch((error: unknown) => error);
             await machineRequested.promise;
@@ -481,6 +481,55 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
             expect(boundary.requests).toHaveLength(0);
             expect(readRpcRequestDisposition(error)).toBe('notSent');
+            machineReply.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.requests).toHaveLength(0);
+        } finally {
+            machineReply.resolve();
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps a connected Machine reachable when real Session spawn setup exhausts its budget', async () => {
+        const machineRequested = createDeferred<void>();
+        const machineReply = createDeferred<void>();
+        boundary.setHttpResponder(async input => {
+            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+            machineRequested.resolve();
+            await machineReply.promise;
+            return Response.json({ machine: { id: 'machine-1', dataEncryptionKey: null } });
+        });
+        const { dispatchSessionSpawnNewToMachine } = await import('@/sync/ops/actions/sessionSpawnNewAction');
+        const { readSpawnSessionRpcTimeoutMsFromEnv } = await import('@/sync/domains/session/spawn/spawnSessionRpcTimeout');
+        const { SessionSpawnNewInputV2Schema } = await import('@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2');
+        const { SessionSpawnNewResultV1Schema } = await import('@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1');
+        const { clearBugReportUserActionTrail, getBugReportUserActionTrail } = await import('@/utils/system/bugReportActionTrail');
+        const { isMachineReachable, isMachineRequestReachabilityFailure } = await import('@/sync/domains/machines/reachability/machineReachability');
+        clearBugReportUserActionTrail();
+        const scope = { serverId: home.id, accountId: 'account-a' };
+        const connectedMachine = { id: 'machine-1', active: true, activeAt: Date.now() };
+        const payload = SessionSpawnNewInputV2Schema.parse({
+            creationKey: 'fix81-setup', executionTarget: { serverId: home.id, machineId: 'machine-1' },
+            directory: { kind: 'path', path: '/tmp' },
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        });
+        vi.useFakeTimers();
+        try {
+            expect(isMachineReachable(scope, connectedMachine)).toBe(true);
+            const pending = dispatchSessionSpawnNewToMachine({ payload });
+            await machineRequested.promise;
+            await vi.advanceTimersByTimeAsync(readSpawnSessionRpcTimeoutMsFromEnv());
+            const result = SessionSpawnNewResultV1Schema.parse(await pending);
+            expect(result).toEqual({ type: 'error', code: 'spawn_failed', retryable: true });
+            expect(isMachineRequestReachabilityFailure(result)).toBe(false);
+            expect(readMachineRequestReachabilityObservation(scope, 'machine-1')).toBeNull();
+            expect(isMachineReachable(scope, { ...connectedMachine, activeAt: Date.now() })).toBe(true);
+            expect(getBugReportUserActionTrail()).toEqual([expect.objectContaining({
+                action: 'session.spawn_new.transport_failure', metadata: expect.objectContaining({
+                    errorCode: 'MACHINE_RPC_TIMEOUT', issued: false, phase: 'setup', transportScope: 'scoped',
+                }),
+            })]);
+            expect(boundary.requests).toHaveLength(0);
             machineReply.resolve();
             await vi.advanceTimersByTimeAsync(0);
             expect(boundary.requests).toHaveLength(0);

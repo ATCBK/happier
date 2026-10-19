@@ -1,7 +1,8 @@
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { attachManagedSessionHumanPresenceSocket } from '@/sync/domains/session/humanPresence/attachManagedSessionHumanPresenceSocket';
 import { publishHomeAccountChange } from './homeAccountChange';
-import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
+import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import { EphemeralUpdateSchema, UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { notifyExecutionRunActivityFromUpdate, notifyExecutionRunActivityReconnect } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import {
     TokenStorage,
@@ -17,6 +18,11 @@ import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEnc
 import { fetchAndApplyMachines, type MachineDataKeyCacheEntry } from '@/sync/engine/machines/syncMachines';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
 import { fetchAndApplySessions } from '@/sync/engine/sessions/sessionSnapshot';
+import { fetchAndApplySessionById } from '@/sync/engine/sessions/sessionById';
+import { buildPendingChangedSessionPatch } from '@/sync/engine/socket/pendingChangedSessionPatch';
+import { readSessionDetailAccessProjectionVersion } from '@/sync/api/session/sessionDetailAccessProjection';
+import { getScopedSessionByIdEncryption } from './serverScopedRpc/fetchSessionByIdWithServerScope';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { resolveUiClientEncryptionRequirementForScope } from '@/sync/domains/settings/clientEncryptionRequirement';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -51,10 +57,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { resolveWarmCacheAccountScope } from '@/sync/domains/state/warmCachePersistence';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
-import {
-    invalidateCachedTransferRoutesForMachine,
-    invalidateCachedTransferRoutesForServer,
-} from '@/sync/domains/transfers/runtime/transferRouteCache';
+import { invalidateCachedTransferRoutesForServer } from '@/sync/domains/transfers/runtime/transferRouteCache';
 import type { ConcurrentSessionListCacheEntry } from '@/sync/domains/session/listing/concurrentSessionListCache';
 import {
     areSessionListHomeObservationsEqual,
@@ -100,7 +103,7 @@ import {
     isAccountChangeUpdate,
 } from './concurrentSessionCacheUpdateClassifier';
 import { startRuntimeActiveGatedInterval } from '@/utils/runtime/isRuntimeActive';
-import { areStoredMachinesEqual, hasMachineDaemonStateAdvanced } from '@/sync/store/domains/areStoredMachinesEqual';
+import { areStoredMachinesEqual } from '@/sync/store/domains/areStoredMachinesEqual';
 import { registerExternalSessionStatusDemandTransport } from './externalSessions/externalSessionStatusDemandCoordinator';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import {
@@ -119,11 +122,12 @@ import { actionOperationPresentationCoordinator } from '@/components/inbox/actio
 import {
     advanceOrdinarySessionListFrontier,
     EMPTY_ORDINARY_SESSION_LIST_FRONTIER,
-    isOrdinarySessionListFrontierExhausted,
     resolveOrdinarySessionListContinuation,
     type OrdinarySessionListFrontier,
 } from '@/sync/engine/sessions/ordinarySessionListFrontier';
 import type { OrdinarySessionListLifecycle } from '@/sync/domains/session/listing/ordinarySessionListHomeState';
+import { computeNextSessionSeqFromUpdate } from '@/sync/domains/session/sequence/realtimeSessionSeq';
+import { invalidateSessionListQueryHome } from '@/sync/domains/session/listing/sessionListQueryInvalidation';
 
 type ConcurrentTarget = Readonly<{
     id: string;
@@ -144,7 +148,7 @@ function toRawConcurrentSelectionSettings(settings: ConcurrentSelectionSettings)
     };
 }
 
-type ConcurrentRefreshIntent = 'machines' | 'continue' | 'replace';
+type ConcurrentRefreshIntent = 'machines' | 'refresh' | 'continue' | 'replace';
 
 type ManagedConcurrentServer = {
     id: string;
@@ -572,19 +576,6 @@ function updateConcurrentMachineListCache(input: {
                 return state.machineListByServerId;
             }
 
-            if (Array.isArray(nextMachines)) {
-                const previousMachinesById = new Map(
-                    (Array.isArray(previous) ? previous : []).map((machine) => [machine.id, machine]),
-                );
-                for (const machine of nextMachines) {
-                    if (!hasMachineDaemonStateAdvanced(previousMachinesById.get(machine.id), machine)) continue;
-                    invalidateCachedTransferRoutesForMachine({
-                        serverId,
-                        remoteMachineId: machine.id,
-                    });
-                }
-            }
-
             return {
                 ...state.machineListByServerId,
                 [serverId]: nextMachines,
@@ -711,7 +702,7 @@ function clearConcurrentMachineListCache(serverIdRaw: string, options?: Readonly
 async function refreshServerSnapshot(
     entry: ManagedConcurrentServer,
     signal: AbortSignal,
-    options: Readonly<{ includeSessions: boolean }> = { includeSessions: true },
+    intent: ConcurrentRefreshIntent,
 ): Promise<void> {
     const startedAt = Date.now();
     let responseBytes = 0;
@@ -765,7 +756,7 @@ async function refreshServerSnapshot(
             inventoryChangedAtOwner: ownedMachines !== previousMachines,
         });
     };
-    if (!options.includeSessions) {
+    if (intent === 'machines') {
         try {
             await refreshMachines();
         } finally {
@@ -773,16 +764,27 @@ async function refreshServerSnapshot(
         }
         return;
     }
-    let fallbackSessions: Session[] = [];
-    let didApplySessionListRenderables = false;
-    const previousFrontier = entry.sessionListFrontier;
-    const continuation = resolveOrdinarySessionListContinuation(previousFrontier);
-    try {
+    const refreshSessions = async () => {
+        let fallbackSessions: Session[] = [];
+        let didApplySessionListRenderables = false;
+        const previousFrontier = entry.sessionListFrontier;
+        const continuation = intent === 'continue'
+            ? resolveOrdinarySessionListContinuation(previousFrontier)
+            : null;
+        // A background refresh revalidates the head without discarding pages the
+        // viewer already acquired or consuming their next cursor.
+        const retainPages = intent === 'refresh' && entry.hasFetchedSessionListSnapshot;
+        const retainedSessionIds = retainPages
+            ? Object.keys(storage.getState().sessionListRowsByServerId[entry.id] ?? {})
+            : [];
+        const retainFrontier = retainPages && resolveOrdinarySessionListContinuation(previousFrontier) !== null;
+        const appendRows = continuation !== null || retainPages;
         const result = await fetchAndApplySessions({
             clientEncryptionRequirement: resolveEntryClientEncryptionRequirement(entry),
             serverId: entry.id,
             sessionListCursor: continuation?.kind === 'ordinary' ? continuation.cursor : null,
             sessionListAttentionCursor: continuation?.kind === 'attention' ? continuation.cursor : null,
+            sessionListAttentionMaxPages: continuation?.kind === 'attention' ? 1 : 0,
             includeActiveSessionRows: continuation === null,
             includeSessionListAttentionRows: continuation === null || continuation.kind === 'attention',
             credentials: entry.credentials,
@@ -806,7 +808,7 @@ async function refreshServerSnapshot(
                 didApplySessionListRenderables = true;
                 storage.getState().applyServerScopedSessionListRows(entry.id, nextRenderables, {
                     source: 'ordinary',
-                    mode: continuation ? 'append' : 'replace',
+                    mode: appendRows ? 'append' : 'replace',
                 });
             },
             applySessionListRenderablePatches: (patches) => {
@@ -822,20 +824,60 @@ async function refreshServerSnapshot(
             log: { log: () => {} },
         });
         if (!result.current || !shouldContinue()) return;
+        // A partial head proves access only for the rows it returned. Older acquired
+        // pages (including archived/query rows) need the canonical exact access read:
+        // a Team/Group withdrawal wakes this Home without naming changed Session ids.
+        const observedSessionIds = new Set(result.sessionIds);
+        const projectionEncryption = getScopedSessionByIdEncryption(encryption);
+        let reconciliationFailed = false;
+        for (const sessionId of retainedSessionIds) {
+            if (observedSessionIds.has(sessionId) || result.isSessionCurrent?.(sessionId) === false) continue;
+            const exact = await fetchAndApplySessionById({
+                sessionId,
+                serverId: entry.id,
+                contentDemand: 'list-projection',
+                credentials: entry.credentials,
+                encryption: projectionEncryption,
+                sessionDataKeys: entry.sessionDataKeys,
+                sessionDataKeyEnvelopes: entry.sessionDataKeyEnvelopes,
+                request,
+                requestAuthority: entry,
+                clientEncryptionRequirement: resolveEntryClientEncryptionRequirement(entry),
+                accessProjectionVersion: readSessionDetailAccessProjectionVersion(entry.id),
+                includeTurnsProjection: false,
+                isCurrent: () => shouldContinue() && result.isSessionCurrent?.(sessionId) !== false,
+                getCurrentSessionListRenderable: (id) => storage.getState().sessionListRowsByServerId[entry.id]?.[id],
+                applySessions: () => {},
+                log: { log: () => {} },
+            });
+            if (!shouldContinue()) return;
+            if (result.isSessionCurrent?.(sessionId) === false) continue;
+            if (!exact.ok) {
+                if (exact.errorCode === 'not_found') {
+                    retireConcurrentSession(entry, sessionId);
+                } else {
+                    reconciliationFailed = true;
+                }
+                continue;
+            }
+            if (!exact.sessionListRenderable) {
+                reconciliationFailed = true;
+                continue;
+            }
+            storage.getState().applyServerScopedSessionListRows(entry.id, [exact.sessionListRenderable], {
+                source: 'rowOnly', mode: 'append',
+            });
+        }
+        if (!shouldContinue()) return;
+        if (reconciliationFailed) throw new Error('Retained Session access reconciliation failed');
         entry.hasFetchedSessionListSnapshot = true;
-        entry.sessionListFrontier = advanceOrdinarySessionListFrontier({
+        entry.sessionListFrontier = retainFrontier ? previousFrontier : advanceOrdinarySessionListFrontier({
             previous: continuation ? previousFrontier : EMPTY_ORDINARY_SESSION_LIST_FRONTIER,
             continuation,
             result,
         });
-        if (isOrdinarySessionListFrontierExhausted(entry.sessionListFrontier)) {
-            noteConcurrentSessionListObserved(entry);
-        } else {
-            entry.refreshQueued ??= 'continue';
-        }
+        noteConcurrentSessionListObserved(entry);
 
-        await refreshMachines();
-        if (!shouldContinue()) return;
         if (!didApplySessionListRenderables) {
             const previousRows = storage.getState().sessionListRowsByServerId?.[entry.id] ?? {};
             const nextRenderables = fallbackSessions.map((session) => (
@@ -843,9 +885,15 @@ async function refreshServerSnapshot(
             ));
             storage.getState().applyServerScopedSessionListRows(entry.id, nextRenderables, {
                 source: 'ordinary',
-                mode: continuation ? 'append' : 'replace',
+                mode: appendRows ? 'append' : 'replace',
             });
         }
+    };
+    try {
+        // A Session-list failure cannot suppress an independent Machine grant read.
+        // Settle both readers before releasing this Home's refresh lifetime.
+        const outcomes = await Promise.allSettled([refreshSessions(), refreshMachines()]);
+        for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
     } finally {
         syncPerformanceTelemetry.recordDuration(
             'sync.concurrent.refresh',
@@ -853,6 +901,14 @@ async function refreshServerSnapshot(
             { responseBytes },
         );
     }
+}
+
+function retireConcurrentSession(entry: ManagedConcurrentServer, sessionId: string): void {
+    if (!isManagedServerActive(entry)) return;
+    getSyncSingleton().retireLocalSession(sessionId, entry.id);
+    entry.sessionDataKeys.delete(sessionId);
+    entry.sessionDataKeyEnvelopes.delete(sessionId);
+    entry.encryption?.removeSessionEncryption(sessionId);
 }
 
 /**
@@ -883,7 +939,10 @@ export function readConcurrentOrdinarySessionListLifecycle(
             frontier: EMPTY_ORDINARY_SESSION_LIST_FRONTIER,
         };
     }
-    const inFlight = entry.refreshInFlight !== null;
+    // The list can finish before the same refresh's machine inventory tail.
+    // Its published observation, not that shared promise, owns list readiness.
+    const phase = storage.getState().concurrentSessionListCacheByServerId?.[serverId]?.listObservation?.phase;
+    const inFlight = entry.refreshInFlight !== null && (phase === 'loading' || phase === 'refreshing');
     return {
         serverId,
         hasFetchedSnapshot: entry.hasFetchedSessionListSnapshot,
@@ -899,7 +958,7 @@ export async function loadNextConcurrentOrdinarySessionListPage(serverIdRaw: str
     if (!entry) return;
     if (entry.refreshInFlight) return entry.refreshInFlight;
     if (!resolveOrdinarySessionListContinuation(entry.sessionListFrontier)) return;
-    await runRefresh(entry, 'other');
+    await runRefresh(entry, 'other', 'continue');
 }
 
 /** Replace this Home's ordinary corpus from page one. */
@@ -1003,7 +1062,7 @@ export async function fetchConcurrentSessionListQueryPage(
         sessionListCursor: page.cursor,
         sessionListAttentionCursor: page.attentionCursor,
         sessionListMaxPages: 1,
-        sessionListAttentionMaxPages: 1,
+        sessionListAttentionMaxPages: page.attentionCursor ? 1 : 0,
         credentials: entry.credentials,
         encryption,
         sessionDataKeys: entry.sessionDataKeys,
@@ -1058,13 +1117,14 @@ function isManagedServerActive(entry: ManagedConcurrentServer): boolean {
 function mergeRefreshIntent(left: ConcurrentRefreshIntent | null, right: ConcurrentRefreshIntent): ConcurrentRefreshIntent {
     if (left === 'replace' || right === 'replace') return 'replace';
     if (left === 'continue' || right === 'continue') return 'continue';
+    if (left === 'refresh' || right === 'refresh') return 'refresh';
     return 'machines';
 }
 
 function queueRefresh(
     entry: ManagedConcurrentServer,
     source: 'socket' | 'other' = 'other',
-    intent: ConcurrentRefreshIntent = 'continue',
+    intent: ConcurrentRefreshIntent = 'refresh',
 ): void {
     if (!isManagedServerActive(entry)) return;
     if (entry.reachabilityState.phase !== 'online') return;
@@ -1081,7 +1141,7 @@ function queueRefresh(
     }
     entry.refreshTimer = setTimeout(() => {
         entry.refreshTimer = null;
-        const refreshIntent = entry.refreshTimerIntent ?? 'continue';
+        const refreshIntent = entry.refreshTimerIntent ?? 'refresh';
         entry.refreshTimerIntent = null;
         void runRefresh(entry, source, refreshIntent);
     }, REFRESH_DEBOUNCE_MS);
@@ -1090,7 +1150,7 @@ function queueRefresh(
 async function runRefresh(
     entry: ManagedConcurrentServer,
     source: 'socket' | 'other',
-    intent: ConcurrentRefreshIntent = 'continue',
+    intent: ConcurrentRefreshIntent = 'refresh',
 ): Promise<void> {
     if (!isManagedServerActive(entry)) return;
     if (entry.reachabilityState.phase !== 'online') return;
@@ -1123,12 +1183,15 @@ async function runRefresh(
             });
         }
         try {
-            await refreshServerSnapshot(entry, abortController.signal, { includeSessions: refreshesSessions });
+            await refreshServerSnapshot(entry, abortController.signal, intent);
         } catch (error) {
             if (abortController.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
                 return;
             }
             if (!isManagedServerActive(entry)) return;
+            // The exact-token reachability owner already retired this Account's
+            // projections. Its signed-out fact outranks this request's rejection.
+            if (entry.reachabilityState.phase === 'auth_failed') return;
             const cachedMachines = storage.getState().machineListByServerId?.[entry.id] ?? null;
             updateConcurrentMachineListCache({
                 serverId: entry.id,
@@ -1336,6 +1399,7 @@ async function connectManagedServer(
                 // Authentication/reachability owns invalid credentials. Action ingress fails closed.
             }
             socket.on('update', (raw: unknown) => {
+                if (!isManagedServerActive(entry)) return;
                 if (isAccountChangeUpdate(raw)) {
                     schedulePushTokenReconciliation();
                     publishHomeAccountChange(entry.id);
@@ -1344,13 +1408,63 @@ async function connectManagedServer(
                 if (impact === null) {
                     return;
                 }
-                queueRefresh(entry, 'socket', impact === 'machines' ? 'machines' : 'continue');
+                if (impact === 'snapshot') {
+                    const update = UpdateContainerSchema.safeParse(raw);
+                    if (update.success && update.data.body.t === 'pending-changed') {
+                        const body = update.data.body;
+                        const session = storage.getState().sessions[body.sid];
+                        // The secondary transport owns only its Home. Reuse the same
+                        // pending projection as the focused socket for an open Session;
+                        // its lightweight list refresh does not hydrate that store row.
+                        if (session && areServerProfileIdentifiersEquivalent(session.serverId, entry.id)) {
+                            storage.getState().applySessions([{ ...session, ...buildPendingChangedSessionPatch(body) }]);
+                        }
+                    }
+                }
+                if (impact === 'delete' || impact === 'archive') {
+                    const update = UpdateContainerSchema.safeParse(raw);
+                    if (update.success && (update.data.body.t === 'delete-session'
+                        || update.data.body.t === 'session-share-revoked')) {
+                        // The shared retirement owner removes every membership for
+                        // this exact Home and fences an older page still in flight.
+                        const sessionId = update.data.body.t === 'delete-session'
+                            ? update.data.body.sid
+                            : update.data.body.sessionId;
+                        retireConcurrentSession(entry, sessionId);
+                        return;
+                    }
+                    if (update.success && update.data.body.t === 'update-session'
+                        && update.data.body.archivedAt !== undefined) {
+                        const body = update.data.body;
+                        const currentRow = storage.getState().sessionListRowsByServerId[entry.id]?.[body.id];
+                        if (currentRow) {
+                            storage.getState().applyServerScopedSessionListRowPatches(entry.id, [{
+                                sessionId: body.id,
+                                patch: {
+                                    archivedAt: body.archivedAt,
+                                    updatedAt: update.data.createdAt,
+                                    seq: computeNextSessionSeqFromUpdate({
+                                        currentSessionSeq: currentRow.seq ?? 0,
+                                        updateType: 'update-session',
+                                        containerSeq: update.data.seq,
+                                        messageSeq: undefined,
+                                    }),
+                                },
+                            }]);
+                            fireAndForget(invalidateSessionListQueryHome(entry.id), {
+                                tag: 'concurrentSessionCache.archive.query',
+                            });
+                            return;
+                        }
+                    }
+                }
+                queueRefresh(entry, 'socket', impact === 'machines' ? 'machines' : 'refresh');
             });
             socket.on('ephemeral', (raw: unknown) => {
                 if (!isManagedServerActive(entry)) return;
                 const usage = EphemeralUpdateSchema.safeParse(raw);
-                if (usage.success && usage.data.type === 'usage') {
-                    publishHomeAccountChange(entry.id);
+                if (usage.success && (usage.data.type === 'usage' || usage.data.type === 'usage-sources-invalidated')) {
+                    publishHomeAccountChange(entry.id, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
                     return;
                 }
                 statusDemandTransport.observeEphemeral(raw);

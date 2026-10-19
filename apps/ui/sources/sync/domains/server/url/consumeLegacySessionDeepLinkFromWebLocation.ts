@@ -2,7 +2,7 @@ import { buildScopedSessionRouteHref, readSessionRouteServerId } from '@/hooks/s
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 
 type LegacySessionDeepLink = Readonly<{
-    route: string;
+    route: ReturnType<typeof buildScopedSessionRouteHref>;
     cleanedRelativeUrl: string;
 }>;
 
@@ -12,7 +12,7 @@ export function resolveLegacySessionDeepLinkRoute(params: Readonly<{
     serverId?: unknown;
     messageId?: string | null;
     jumpChildId?: string | null;
-}>): string | null {
+}>): ReturnType<typeof buildScopedSessionRouteHref> | null {
     const sessionId = normalizeSessionId(params.sessionId);
     if (!sessionId) return null;
     const messageId = String(params.messageId ?? '').trim();
@@ -26,7 +26,7 @@ export function resolveLegacySessionDeepLinkRoute(params: Readonly<{
 
 type ConsumeLegacySessionDeepLinkFromWebLocationOptions = Readonly<{
     isAuthenticated: boolean;
-    navigateToRoute: (route: string) => void;
+    navigateToRoute: (route: ReturnType<typeof buildScopedSessionRouteHref>) => void;
     replaceRelativeUrl: (nextRelativeUrl: string) => void;
 }>;
 

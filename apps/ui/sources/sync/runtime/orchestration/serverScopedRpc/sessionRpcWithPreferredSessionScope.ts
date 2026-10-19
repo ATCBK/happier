@@ -7,7 +7,7 @@ export async function sessionRpcWithPreferredSessionScope<R, A>(params: Readonly
     serverId?: string;
     method: string;
     payload: A;
-    timeoutMs?: number;
+    timeoutMs?: number | null;
     onIssued?: () => void;
     signal?: AbortSignal;
     transferRouting?: SessionTransferRoutingV1;

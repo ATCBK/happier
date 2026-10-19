@@ -3754,6 +3754,36 @@ describe('serverProfiles', () => {
         expect(profiles.getServerProfileById(remote.id)).not.toBeNull();
     });
 
+    it.each([false, true])('resets fixture caches while preserving live-owner generations only on opt-in (%s)', async preserveGenerations => {
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
+        const profiles = await importFresh();
+        const previous = await profiles.upsertServerProfile({ serverUrl: 'https://before-reset.example.test' });
+        await profiles.setActiveServerId(previous.id);
+        const readGenerations = () => ({
+            active: profiles.getActiveServerSnapshot().generation,
+            runtime: profiles.captureActiveServerRuntimeTarget().generation,
+            profiles: profiles.getServerProfilesGeneration(),
+        });
+        const before = readGenerations();
+        expect(Object.values(before).every(generation => generation > 0)).toBe(true);
+        const listener = vi.fn();
+        profiles.subscribeServerProfiles(listener);
+
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
+        profiles.resetServerProfilesRuntimeForTests({ preserveGenerations });
+
+        expect(profiles.getServerProfileById(previous.id)).toBeNull();
+        const after = readGenerations();
+        expect(after).toEqual(preserveGenerations ? before : { active: 0, runtime: 0, profiles: 0 });
+        const next = await profiles.upsertServerProfile({ serverUrl: 'https://after-reset.example.test' });
+        await profiles.setActiveServerId(next.id);
+        const advanced = readGenerations();
+        expect(advanced.active).toBeGreaterThan(after.active);
+        expect(advanced.runtime).toBeGreaterThan(after.runtime);
+        expect(advanced.profiles).toBeGreaterThan(after.profiles);
+        expect(listener).not.toHaveBeenCalled();
+    });
+
     it('emits a server profile generation update when profiles change', async () => {
         const scope = randomScope();
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;

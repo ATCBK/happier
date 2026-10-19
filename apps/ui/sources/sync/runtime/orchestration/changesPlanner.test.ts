@@ -248,6 +248,19 @@ describe('planSyncActionsFromChanges', () => {
         ]) expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([machine, change]))).toBe(true);
     });
 
+    it('ignores unrelated domain pages without suppressing a material Usage change on the same page', () => {
+        const unrelated = [
+            buildChange({ cursor: 1, kind: 'machine', entityId: 'machine-a' }),
+            buildChange({ cursor: 2, kind: 'artifact', entityId: 'approval-a' }),
+            buildChange({ cursor: 3, kind: 'feed', entityId: 'feed-a' }),
+            buildChange({ cursor: 4, kind: 'account', entityId: 'workflow-run:run-42' }),
+        ];
+        expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges(unrelated))).toBe(false);
+        expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([...unrelated,
+            buildChange({ cursor: 5, kind: 'account', entityId: PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 }),
+        ]))).toBe(true);
+    });
+
     it('does not reread Usage for exact workflow Run and draft materialization, while preserving mixed-page freshness', () => {
         const unrelated = [
             buildChange({ cursor: 1, kind: 'account', entityId: 'workflow-run:run-42' }),
@@ -743,6 +756,17 @@ describe('planSyncActionsFromChanges', () => {
 
     it('maps every protocol change kind in the checkpoint coverage matrix', () => {
         expect(Object.keys(CHANGE_CHECKPOINT_COVERAGE).sort()).toEqual([...ChangeKindSchema.options].sort());
+    });
+
+    it('classifies independent Discussion changes without refreshing an owning Session', () => {
+        const change = buildChange({ cursor: 91, kind: 'discussion', entityId: 'discussion-a',
+            hint: { v: 1, discussions: true } });
+        const planned = planSyncActionsFromChanges([change]);
+        expect(planned.unsupportedChanges).toEqual([]);
+        expect(planned.invalidate.sessions).toBe(false);
+        expect(planned.sessionIdsToCatchUp).toEqual([]);
+        expect(classifyChangeForCheckpoint(change, { isSessionMessagesLoaded: () => false }))
+            .toMatchObject({ decision: 'critical', plannerOwner: 'discussions', snapshotDomain: 'discussions-level-triggered' });
     });
 
     it('plans Machine Pool projection materialization before checkpointing its change', () => {

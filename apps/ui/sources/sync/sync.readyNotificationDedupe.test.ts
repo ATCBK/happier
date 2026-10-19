@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -11,6 +11,13 @@ vi.mock('react-native', async () => {
 });
 import type { ActivityLocalNotificationEvent } from '@/activity/notifications/runtime/activityLocalNotificationBus';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
+
+const network = await installSessionOpsNetworkBoundary();
+const syncBridge = await loadSyncSingletonForTests();
+afterAll(async () => {
+    try { await network.dispose(); }
+    finally { syncBridge.dispose(); }
+});
 
 type SyncReadyNotificationTestAccess = Readonly<{
     notifyReadyProjectionAdvance: (sessionId: string, seq: number, serverId: string | null) => void;
@@ -25,7 +32,6 @@ function readyMessage(seq: number): NormalizedMessage {
 }
 
 describe('Sync ready notification dedupe', () => {
-    let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
     let homeA: Awaited<ReturnType<typeof network.addHome>>;
     let homeB: Awaited<ReturnType<typeof network.addHome>>;
     let unsubscribe: () => void;
@@ -33,8 +39,7 @@ describe('Sync ready notification dedupe', () => {
     let voiceOnReady: ReturnType<typeof vi.spyOn>;
 
     beforeEach(async () => {
-        vi.resetModules();
-        network = await installSessionOpsNetworkBoundary();
+        network.resetRequests();
         homeA = await network.addHome('https://ready-a.example.test', 'account-a');
         homeB = await network.addHome('https://ready-b.example.test', 'account-b');
         const { profileDefaults } = await import('./domains/profiles/profile');
@@ -45,14 +50,15 @@ describe('Sync ready notification dedupe', () => {
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: homeA.accountId });
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
-            if (path === '/v2/sessions') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v2/sessions/query') return Response.json({
+                sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+            });
             if (path === '/v1/machines') return Response.json([]);
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/friends') return Response.json({ friends: [] });
             if (path === '/v1/kv') return Response.json({ items: [] });
             return null;
         });
-        await loadSyncSingletonForTests();
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
         await upsertAndActivateServer({ serverUrl: homeA.serverUrl });
@@ -71,7 +77,6 @@ describe('Sync ready notification dedupe', () => {
         unsubscribe();
         const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
         await disconnectActiveServerConnection();
-        await network.dispose();
         vi.restoreAllMocks();
     });
 

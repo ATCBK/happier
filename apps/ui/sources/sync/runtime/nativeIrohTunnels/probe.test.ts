@@ -32,7 +32,7 @@ describe('Iroh Home tunnel origin probe', () => {
         vi.restoreAllMocks();
     });
 
-    it('verifies health, then the authenticated ping, then features identity through the lease origin', async () => {
+    it('verifies authenticated readiness, then features identity through the lease origin', async () => {
         const requests: Array<{ url: string; authorization: string | null }> = [];
         setRuntimeFetch(async (input, init) => {
             const url = String(input);
@@ -50,13 +50,11 @@ describe('Iroh Home tunnel origin probe', () => {
         await expect(probeIrohHomeTunnelOrigin('http://127.0.0.1:45701', createRequest())).resolves.toEqual({ ok: true });
 
         expect(requests.map((request) => request.url)).toEqual([
-            'http://127.0.0.1:45701/health',
             'http://127.0.0.1:45701/v1/auth/ping',
             'http://127.0.0.1:45701/v1/features',
         ]);
-        expect(requests[0]?.authorization).toBeNull();
-        expect(requests[1]?.authorization).toBe('Bearer token-a');
-        expect(requests[2]?.authorization).toBeNull();
+        expect(requests[0]?.authorization).toBe('Bearer token-a');
+        expect(requests[1]?.authorization).toBeNull();
     });
 
     it('verifies a pre-token enrollment origin with health and Home identity but no authenticated ping', async () => {
@@ -109,7 +107,6 @@ describe('Iroh Home tunnel origin probe', () => {
         await expect(probeIrohHomeTunnelOrigin('http://127.0.0.1:45703', createRequest()))
             .resolves.toEqual({ ok: false, reason: 'auth-failed' });
         expect(requests).toEqual([
-            'http://127.0.0.1:45703/health',
             'http://127.0.0.1:45703/v1/auth/ping',
         ]);
     });

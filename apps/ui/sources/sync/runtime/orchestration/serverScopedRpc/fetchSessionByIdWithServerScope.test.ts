@@ -5,7 +5,23 @@ import {
     deriveAccountMachineKeyFromRecoverySecret,
 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+
+import { createOperationAccountCurrentnessSource, fetchSessionByIdWithServerScope } from './fetchSessionByIdWithServerScope';
+
+// Mutation writers escape the read; this test invocation owns their finite
+// Account observation through assertions, including cleanup on assertion failure.
+function fetchMutationSnapshotForTest(params: Omit<Parameters<typeof fetchSessionByIdWithServerScope>[0],
+    'includeMetadataTupleMutationSnapshot' | 'accountCurrentnessSource'>) {
+    const source = createOperationAccountCurrentnessSource({
+        credentials: params.activeCredentials,
+        request: params.activeRequest,
+        serverId: params.serverId,
+    });
+    onTestFinished(() => source.dispose());
+    return fetchSessionByIdWithServerScope({ ...params,
+        includeMetadataTupleMutationSnapshot: true, accountCurrentnessSource: source });
+}
 
 const ACCOUNT_SECRET = new Uint8Array(32).fill(7);
 const ACCOUNT_CONTENT_PUBLIC_KEY = new Uint8Array(
@@ -41,7 +57,8 @@ vi.mock('@/utils/system/runtimeFetch', () => ({
     runtimeFetch: (...args: unknown[]) => runtimeFetchSpy(...args),
 }));
 
-vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
+vi.mock('@/sync/api/account/apiAccountEncryptionMode', async importOriginal => ({
+    ...await importOriginal<typeof import('@/sync/api/account/apiAccountEncryptionMode')>(),
     fetchAccountEncryptionCurrentness: (...args: unknown[]) =>
         fetchAccountEncryptionCurrentnessSpy(...args),
     subscribeAccountEncryptionModeCacheInvalidation: () => () => {},
@@ -71,6 +88,32 @@ describe('fetchSessionByIdWithServerScope', () => {
         runtimeFetchSpy.mockReset();
         fetchAccountEncryptionCurrentnessSpy.mockReset();
         getCachedServerFeaturesSnapshotSpy.mockReset();
+    });
+
+    it.each(['active', 'scoped', 'frame'] as const)('preserves encryption-context demand through the %s reader', async scope => {
+        resolveContextSpy.mockResolvedValue(scope === 'scoped' ? {
+            scope: 'scoped', targetServerId: 'server-b', targetAccountId: 'account-b',
+            targetServerUrl: 'https://server-b.example.test', token: 'scoped-token',
+            credentials: { token: 'scoped-token', secret: 'scoped-secret' }, encryption: null,
+        } : { scope: 'active' });
+        fetchAndApplySessionByIdSpy.mockImplementation(async (params: { contentDemand?: string }) => (
+            params.contentDemand === 'encryption-context'
+                ? { ok: true, session: null, encryptionMode: 'plain' }
+                : { ok: true, session: { id: 'session-1' } }
+        ));
+        const params: Parameters<typeof fetchSessionByIdWithServerScope>[0] = {
+            sessionId: 'session-1', serverId: scope === 'scoped' ? 'server-b' : 'server-a',
+            contentDemand: 'encryption-context',
+            activeCredentials: { token: 'active-token' }, activeEncryption: null,
+            ...(scope === 'frame' ? { sessionKey: null } : {}),
+            sessionDataKeys: new Map(), activeRequest: vi.fn(), applySessions: vi.fn(), log: { log() {} },
+        };
+        await expect(fetchSessionByIdWithServerScope(params)).resolves.toEqual({
+            ok: true, session: null, encryptionMode: 'plain',
+        });
+        expect(fetchAndApplySessionByIdSpy).toHaveBeenCalledWith(expect.objectContaining({
+            contentDemand: 'encryption-context',
+        }));
     });
 
     it('uses the active session-by-id request when the preferred owner server is active', async () => {
@@ -364,9 +407,7 @@ describe('fetchSessionByIdWithServerScope', () => {
             })),
         } as any;
 
-        const { fetchSessionByIdWithServerScope } =
-            await import('./fetchSessionByIdWithServerScope');
-        const result = await fetchSessionByIdWithServerScope({
+        const result = await fetchMutationSnapshotForTest({
             sessionId: 'session-1',
             activeCredentials: {
                 token: 'active-token',
@@ -377,7 +418,6 @@ describe('fetchSessionByIdWithServerScope', () => {
             activeRequest: vi.fn(),
             applySessions: vi.fn(),
             log: { log: vi.fn() },
-            includeMetadataTupleMutationSnapshot: true,
         });
 
         expect(fetchAndApplySessionByIdSpy).toHaveBeenCalledWith(
@@ -420,9 +460,7 @@ describe('fetchSessionByIdWithServerScope', () => {
             },
         });
 
-        const { fetchSessionByIdWithServerScope } =
-            await import('./fetchSessionByIdWithServerScope');
-        const result = await fetchSessionByIdWithServerScope({
+        const result = await fetchMutationSnapshotForTest({
             sessionId: 'session-1',
             activeCredentials: { token: 'active-token' },
             activeEncryption: null,
@@ -430,7 +468,6 @@ describe('fetchSessionByIdWithServerScope', () => {
             activeRequest: vi.fn(),
             applySessions: vi.fn(),
             log: { log: vi.fn() },
-            includeMetadataTupleMutationSnapshot: true,
         });
 
         expect(fetchAccountEncryptionCurrentnessSpy).not.toHaveBeenCalled();
@@ -531,9 +568,7 @@ describe('fetchSessionByIdWithServerScope', () => {
                     decryptMetadata: vi.fn(async () => null),
                 })),
             } as any;
-            const { fetchSessionByIdWithServerScope } =
-                await import('./fetchSessionByIdWithServerScope');
-            const result = await fetchSessionByIdWithServerScope({
+            const result = await fetchMutationSnapshotForTest({
                 sessionId: 'session-1',
                 activeCredentials: accountMode === 'plain'
                     ? { token: 'active-token' }
@@ -548,7 +583,6 @@ describe('fetchSessionByIdWithServerScope', () => {
                 activeRequest: vi.fn(),
                 applySessions: vi.fn(),
                 log: { log: vi.fn() },
-                includeMetadataTupleMutationSnapshot: true,
             });
 
             expect(
@@ -601,9 +635,7 @@ describe('fetchSessionByIdWithServerScope', () => {
             },
         });
 
-        const { fetchSessionByIdWithServerScope } =
-            await import('./fetchSessionByIdWithServerScope');
-        await expect(fetchSessionByIdWithServerScope({
+        await expect(fetchMutationSnapshotForTest({
             sessionId: 'session-1',
             activeCredentials: {
                 token: 'active-token',
@@ -614,7 +646,6 @@ describe('fetchSessionByIdWithServerScope', () => {
             activeRequest: vi.fn(),
             applySessions: vi.fn(),
             log: { log: vi.fn() },
-            includeMetadataTupleMutationSnapshot: true,
         })).rejects.toThrow(
             'Account encryption material does not match current Account state',
         );

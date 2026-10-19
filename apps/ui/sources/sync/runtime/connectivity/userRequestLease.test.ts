@@ -50,4 +50,20 @@ describe('user request lease owner', () => {
             expect(hardTeardown, hardBoundary).toHaveBeenCalledTimes(1);
         }
     });
+
+    it('does not let a retired request release a replacement request across a hard boundary', () => {
+        const owner = createUserRequestLeaseOwner();
+        const releaseRetired = owner.acquire();
+        owner.crossHardBoundary(() => {});
+        const releaseCurrent = owner.acquire();
+        const teardown = vi.fn();
+        owner.deferRoutineTeardown(teardown);
+
+        releaseRetired();
+        expect(teardown).not.toHaveBeenCalled();
+        expect(owner.hasActiveLease()).toBe(true);
+
+        releaseCurrent();
+        expect(teardown).toHaveBeenCalledOnce();
+    });
 });

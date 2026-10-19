@@ -9,7 +9,7 @@ import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveT
 
 import { useSession, useSessionInteractionSource } from './hooks';
 
-globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const SESSION_ID = 'interaction-source-session';
 const ACCESS = createSessionAccessFixture('admin', { approveRuntimePermissions: true });

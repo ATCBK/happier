@@ -8,6 +8,8 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
@@ -150,6 +152,7 @@ async function restoreTestAccount(options: {
     accountMode?: 'plain' | 'e2ee';
     draftsEnabled?: boolean;
     onRequest?: (path: string) => void;
+    runtimeRequest?: (path: string, init?: RequestInit) => Response | undefined;
 } = {}): Promise<void> {
     await loadTestSync();
     const { profileDefaults } = await import('./domains/profiles/profile');
@@ -161,6 +164,10 @@ async function restoreTestAccount(options: {
         request: (url, init) => waitForNetworkResponseForTests((async () => {
             const path = new URL(String(url)).pathname;
             options.onRequest?.(path);
+            if (!bootstrapping) {
+                const response = options.runtimeRequest?.(path, init);
+                if (response) return response;
+            }
             if (path === '/health') return jsonResponse({});
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
                 features: { sessions: { drafts: { enabled: options.draftsEnabled === true } } },
@@ -361,6 +368,80 @@ describe('sync AccountChange catch-up projection', () => {
         webLocks = null;
         vi.clearAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it('refreshes shared Machine access in the open store after an AccountChange wake', async () => {
+        let role: 'use' | 'manage' = 'use';
+        const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'custodian' });
+        await restoreTestAccount({ runtimeRequest: path => path === '/v1/machines'
+            ? jsonResponse([{ ...machine, access: { ...machine.access!, role } }]) : undefined });
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { storage } = await import('./domains/state/storage');
+        const refresh = sync as unknown as { refreshMachines(): Promise<void> };
+        await refresh.refreshMachines();
+        expect(storage.getState().machines['shared-machine']?.access?.role).toBe('use');
+        role = 'manage';
+        changesResponse.mockResolvedValueOnce({ changes: [{ kind: 'machine', entityId: machine.id, cursor: 1, changedAt: 1 }], nextCursor: 1 });
+        await runtime.handleUpdate(accountChangeWake('grant-changed'));
+        await vi.waitFor(() => expect(storage.getState().machines['shared-machine']?.access?.role).toBe('manage'));
+    });
+
+    it('publishes a failed activation authorization into the open Session store without changing the queue version', async () => {
+        await restoreTestAccount();
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { storage } = await import('./domains/state/storage');
+        const scope = runtime.getChangesCursorScope();
+        if (!scope || typeof scope === 'string' || !scope.serverScope) throw new Error('Expected the active Account cursor scope');
+        const serverId = scope.serverScope;
+        const waiting = { requestId: 'pending-one', requestedAt: 1, status: 'waiting' as const };
+        storage.getState().applySessions([createSessionFixture({ id: 'activation-session', serverId,
+            pendingCount: 1, pendingVersion: 4, pendingActivationAuthorization: waiting })]);
+        await runtime.handleUpdate({ id: 'activation-failed', seq: 1, createdAt: 2, body: {
+            t: 'pending-changed', sid: 'activation-session', sessionId: 'activation-session',
+            pendingCount: 1, pendingVersion: 4,
+            pendingActivationAuthorization: { ...waiting, status: 'failed', failureCode: 'runtime_start_failed' },
+        } });
+        expect(storage.getState().sessions['activation-session']?.pendingActivationAuthorization).toMatchObject({
+            status: 'failed', failureCode: 'runtime_start_failed',
+        });
+    });
+
+    it('refreshes the demanded pending hold on Machine access changes without a queue-version change', async () => {
+        let hold = 'managed_power_required';
+        const sessionId = 'grant-held-session';
+        await restoreTestAccount({ runtimeRequest: path => path === `/v2/sessions/${sessionId}/pending`
+            ? jsonResponse({ pending: [{ localId: 'held-input', messageRole: 'user', requestedAction: { v: 1, kind: 'enqueue' },
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained input' } } },
+                status: 'queued', deliveryStatus: { status: 'queued' }, position: 0, createdAt: 1, updatedAt: 1,
+                activationHoldReason: hold }], pendingVersion: 4 }) : undefined });
+        const { sync } = await import('./syncEngine');
+        const runtime = sync as unknown as SyncAccountChangeWakeSchedulingHarness;
+        const { storage } = await import('./domains/state/storage');
+        const scope = runtime.getChangesCursorScope();
+        if (!scope || typeof scope === 'string' || !scope.serverScope) throw new Error('Expected the active Account cursor scope');
+        const serverId = scope.serverScope;
+        storage.getState().applySessions([createSessionFixture({ id: sessionId, serverId, pendingCount: 1, pendingVersion: 4 })]);
+        const { registerSessionRealtimeTranscriptConsumer } = await import('@/sync/runtime/sessionRealtimeTranscriptConsumers');
+        const release = registerSessionRealtimeTranscriptConsumer(sessionId, serverId);
+        const { resolveSessionLiveConsumption } = await import('@/sync/runtime/sessionLiveConsumption');
+        const { subscribeHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const wakes: unknown[] = [];
+        const unsubscribe = subscribeHomeAccountChange(event => wakes.push(event));
+        try {
+            await sync.fetchPendingMessages(sessionId);
+            expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingActivationHoldReason).toBe('managed_power_required');
+            expect(resolveSessionLiveConsumption(sessionId, serverId).isFullContentConsumer).toBe(true);
+            hold = 'resume_not_requested';
+            changesResponse.mockResolvedValueOnce({ changes: [{ kind: 'machine', entityId: 'controller', cursor: 1, changedAt: 1 }], nextCursor: 1 });
+            await runtime.handleUpdate(accountChangeWake('grant-pending-changed'));
+            await vi.waitFor(() => expect(wakes).toContainEqual(expect.objectContaining({ serverId, changeKinds: ['machine'] })));
+            expect(storage.getState().sessions[sessionId]).toMatchObject({ serverId, pendingCount: 1, pendingVersion: 4 });
+            expect(resolveSessionLiveConsumption(sessionId, serverId).isFullContentConsumer).toBe(true);
+            await vi.waitFor(() => expect(storage.getState().sessionPending[sessionId]?.messages[0]?.pendingActivationHoldReason).toBe('resume_not_requested'));
+            expect(storage.getState().sessions[sessionId]?.pendingVersion).toBe(4);
+        } finally { unsubscribe(); release(); }
     });
 
     it('boots and renews the embed session with only its explicit child credential and session corridor', async () => {

@@ -100,6 +100,7 @@ describe('warmCacheAdapters', () => {
         const responsibleAccount = {
             kind: 'account' as const,
             accountId: 'account-alice',
+            name: 'Alice',
             firstName: 'Alice',
             lastName: null,
             username: 'alice',
