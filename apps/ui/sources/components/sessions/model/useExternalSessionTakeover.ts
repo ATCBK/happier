@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { showExternalSessionTakeoverDialog } from '@/components/sessions/external/takeover/showExternalSessionTakeoverDialog';
 import { Modal } from '@/modal';
@@ -45,6 +46,8 @@ type UseExternalSessionTakeoverResult = Readonly<{
 }>;
 
 export function useExternalSessionTakeover(params: UseExternalSessionTakeoverParams): UseExternalSessionTakeoverResult {
+    const presentationActive = useLayoutPresentationActive();
+    const requestControllerRef = React.useRef<AbortController | null>(null);
     const [takeoverInFlight, setTakeoverInFlight] = React.useState<DirectTakeoverMode | null>(null);
     const [takeoverPreflightInFlight, setTakeoverPreflightInFlight] = React.useState(false);
     const mountedRef = React.useRef(true);
@@ -92,7 +95,12 @@ export function useExternalSessionTakeover(params: UseExternalSessionTakeoverPar
     ]);
 
     React.useEffect(() => {
-        mountedRef.current = true;
+        mountedRef.current = presentationActive;
+        const controller = new AbortController();
+        requestControllerRef.current = controller;
+        const lifetime = params.accountLifetime === undefined
+            ? captureActiveServerAccountScopeCurrentness() : params.accountLifetime;
+        const retirement = lifetime?.onRetire(() => controller.abort());
         preflightGenerationRef.current += 1;
         preflightPromiseRef.current = null;
         takeoverIdempotencyKeysRef.current = {
@@ -102,11 +110,13 @@ export function useExternalSessionTakeover(params: UseExternalSessionTakeoverPar
         setTakeoverInFlight(null);
         setTakeoverPreflightInFlight(false);
         return () => {
+            controller.abort();
+            retirement?.dispose();
             mountedRef.current = false;
             preflightGenerationRef.current += 1;
             preflightPromiseRef.current = null;
         };
-    }, [takeoverScopeKey]);
+    }, [takeoverScopeKey, params.accountLifetime, params.externalSessionRuntime.sessionServerId, presentationActive]);
 
     const readLatestStatus = React.useCallback(async () => {
         return await params.externalSessionRuntime.refreshNow();
@@ -127,6 +137,7 @@ export function useExternalSessionTakeover(params: UseExternalSessionTakeoverPar
             : params.accountLifetime;
         const isRequestCurrent = () => (
             mountedRef.current
+            && requestControllerRef.current?.signal.aborted === false
             && preflightGenerationRef.current === requestGeneration
             && currentTakeoverScopeKeyRef.current === requestScopeKey
             && accountCurrentness?.isCurrent() === true
@@ -234,10 +245,10 @@ export function useExternalSessionTakeover(params: UseExternalSessionTakeoverPar
                 ? await machineExternalSessionTakeoverPersist({
                     machineId: externalSessionLink.machineId,
                     request: takeoverInput.request,
-                }, { serverId, ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}) })
+                }, { serverId, signal: requestControllerRef.current?.signal, ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}) })
                 : await machineExternalSessionTakeoverStart(
                     takeoverInput,
-                    { serverId, ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}) },
+                    { serverId, signal: requestControllerRef.current?.signal, ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}) },
                 );
             if (
                 takeoverIdempotencyKeysRef.current[mode]?.idempotencyKey

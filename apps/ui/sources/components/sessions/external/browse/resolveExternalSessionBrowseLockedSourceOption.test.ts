@@ -52,9 +52,41 @@ function createResumeOnlyListingProjection() {
 }
 
 describe('resolveExternalSessionBrowseLockedSource', () => {
+    it('withholds the active Account custom source and label when the requested Home differs', () => {
+        const projection = createResumeOnlyListingProjection();
+        const source = projection.agentsById.fx?.externalSessions?.sources[0];
+        if (!source) throw new Error('Resume source fixture unavailable');
+        source.schema.fields.push({ name: 'configDir', kind: 'string', optional: true });
+        source.key.segments.push({ kind: 'field', field: 'configDir' });
+        source.instances = [{ kind: 'default', constants: {} }, {
+            kind: 'agentSettingOverride', settingId: 'customConfigDir', field: 'configDir',
+            normalization: 'configuredPath', constants: {},
+        }];
+        const inputs = {
+            providerId: 'fx', accountScope: { serverId: 'home-a', accountId: 'account-a' },
+            profile: null, labelsByKey: { privateAccount: 'Private label from Home A' },
+            agentSettings: { customConfigDir: '/private/home-a/config' }, projection,
+            interaction: 'pickRemoteSessionId' as const,
+        };
+        expect(resolveExternalSessionBrowseLockedSource({ ...inputs, serverId: 'home-a' })).toEqual({
+            kind: 'fxAcpSessionList', configDir: '/private/home-a/config',
+        });
+        expect(resolveExternalSessionBrowseLockedSource({ ...inputs, serverId: null })).toEqual({
+            kind: 'fxAcpSessionList', configDir: '/private/home-a/config',
+        });
+        expect(resolveExternalSessionBrowseLockedSource({ ...inputs, serverId: 'home-b' })).toEqual({
+            kind: 'fxAcpSessionList',
+        });
+        expect(resolveExternalSessionBrowseLockedSource({ ...inputs, accountScope: null, serverId: null })).toEqual({
+            kind: 'fxAcpSessionList',
+        });
+    });
+
     it('reaches a resume-only listing source only for the remote-session-id picker', () => {
         const projection = createResumeOnlyListingProjection();
         const lockParams = {
+            accountScope: null,
+            serverId: null,
             providerId: 'fx',
             agentOptionState: null,
             profile: null,
@@ -132,7 +164,9 @@ describe('resolveExternalSessionBrowseLockedSource', () => {
                 },
             },
         });
-        expect(resolveExternalSessionBrowseLockedSource({
+        const lockParams = {
+            accountScope: { serverId: 'home-a', accountId: 'account-a' },
+            serverId: 'home-a',
             providerId: 'codex',
             agentOptionState: {
                 connectedServicesBindingsByServiceId: {
@@ -146,11 +180,16 @@ describe('resolveExternalSessionBrowseLockedSource', () => {
             profile: null,
             labelsByKey: {},
             projection,
-        })).toEqual({
+        };
+        expect(resolveExternalSessionBrowseLockedSource(lockParams)).toEqual({
             kind: 'codexHome',
             home: 'connectedService',
             connectedServiceId: 'openai-codex',
             connectedServiceGroupId: 'primary-pool',
+        });
+        expect(resolveExternalSessionBrowseLockedSource({ ...lockParams, serverId: 'home-b' })).toEqual({
+            kind: 'codexHome',
+            home: 'user',
         });
     });
 });

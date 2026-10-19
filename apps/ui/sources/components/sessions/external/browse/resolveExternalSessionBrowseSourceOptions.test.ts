@@ -9,7 +9,11 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key: string) => key });
+    return createTextModuleMock({ translate: (key, params) => {
+        if (key === 'connectedServicesCollection.accountLabel') return `${params?.service} account`;
+        if (key === 'connectedServicesCollection.accountLabelNumbered') return `${params?.service} account ${params?.number}`;
+        return key;
+    } });
 });
 
 const externalSessionBrowseModulePromise = import('./resolveExternalSessionBrowseSourceOptions');
@@ -449,7 +453,7 @@ describe('resolveExternalSessionBrowseSourceOptions', () => {
             },
             settings: { connectedServicesProfileLabelByKey: { 'openai-codex/work': 'Obsolete Settings label' } },
         };
-        const options = resolveExternalSessionBrowseSourceOptions({
+        const input = {
             ...presentation,
             providerId: 'codex',
             profile: {
@@ -461,7 +465,7 @@ describe('resolveExternalSessionBrowseSourceOptions', () => {
                                 profileId: 'work',
                                 status: 'connected',
                                 kind: null,
-                                providerEmail: null,
+                                providerEmail: 'work@example.com',
                                 providerAccountId: null,
                                 expiresAt: null,
                                 lastUsedAt: null,
@@ -483,7 +487,8 @@ describe('resolveExternalSessionBrowseSourceOptions', () => {
                 ],
             },
             projection: createProjection(['codex']),
-        });
+        } satisfies Parameters<typeof resolveExternalSessionBrowseSourceOptions>[0];
+        const options = resolveExternalSessionBrowseSourceOptions(input);
 
         expect(options).toEqual([
             expect.objectContaining({
@@ -496,6 +501,30 @@ describe('resolveExternalSessionBrowseSourceOptions', () => {
                 detail: 'Work Profile',
             }),
         ]);
+        const unnamed = resolveExternalSessionBrowseSourceOptions({ ...input, labelsByKey: {} });
+        expect(unnamed[1]?.detail).toBe('wo•••@e•••.com');
+        const externalProjection = createProjection(['fx']);
+        externalProjection.agentsById.fx!.externalSessions!.sources = createProjection(['codex']).agentsById.codex!.externalSessions!.sources;
+        const externalOptions = resolveExternalSessionBrowseSourceOptions({ ...input,
+            providerId: 'fx', projection: externalProjection, labelsByKey: {} });
+        expect(externalOptions.find(option => option.source.home === 'connectedService')?.detail).toBe('wo•••@e•••.com');
+    });
+
+    it('distinguishes unnamed connected History sources without exposing profile ids and keeps names stable on reorder', async () => {
+        const { resolveExternalSessionBrowseSourceOptions } = await externalSessionBrowseModulePromise;
+        const profiles = ['profile-b', 'profile-a'].map(profileId => ({ profileId, status: 'connected' as const,
+            kind: null, providerEmail: null, providerAccountId: null, expiresAt: null, lastUsedAt: null, health: null }));
+        const input = { providerId: 'codex', labelsByKey: {}, projection: createProjection(['codex']),
+            profile: { connectedServicesV2: [{ serviceId: 'openai-codex', profiles, groups: [] }] } };
+        const details = (entries: typeof profiles) => resolveExternalSessionBrowseSourceOptions({ ...input,
+            profile: { connectedServicesV2: [{ serviceId: 'openai-codex', profiles: entries, groups: [] }] } })
+            .filter(option => option.source.home === 'connectedService')
+            .map(option => ({ key: option.key, detail: option.detail })).sort((a, b) => a.key.localeCompare(b.key));
+        const names = details(profiles);
+        expect(names).toHaveLength(2);
+        expect(names[0]?.detail).not.toBe(names[1]?.detail);
+        expect(names.every(name => name.detail?.includes('account') && !name.detail.includes('profile-'))).toBe(true);
+        expect(details([...profiles].reverse())).toEqual(names);
     });
 
     it('returns only the default source when no codex connected-service profiles exist', async () => {

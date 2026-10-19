@@ -118,7 +118,7 @@ describe('setExternalSessionFollowPolicy', () => {
         expect(machineExternalSessionFollowPolicySetSpy).toHaveBeenCalledTimes(1);
         expect(machineExternalSessionFollowPolicySetSpy).toHaveBeenNthCalledWith(1,
             expect.objectContaining({ enabled: true }),
-            { serverId: 'server-1' },
+            { serverId: 'server-1', signal: expect.any(AbortSignal) },
         );
 
         resolveEnable?.({ ok: true, enabled: true, leaseActive: true, updatedAtMs: 42 });
@@ -127,7 +127,7 @@ describe('setExternalSessionFollowPolicy', () => {
         expect(machineExternalSessionFollowPolicySetSpy).toHaveBeenCalledTimes(2);
         expect(machineExternalSessionFollowPolicySetSpy).toHaveBeenNthCalledWith(2,
             expect.objectContaining({ enabled: false }),
-            { serverId: 'server-1' },
+            { serverId: 'server-1', signal: expect.any(AbortSignal) },
         );
         resolveDisable?.({ ok: true, enabled: false, leaseActive: false, updatedAtMs: 84 });
 
@@ -299,7 +299,7 @@ describe('setExternalSessionFollowPolicy', () => {
             remoteSessionId: 'remote-1',
             source: { kind: 'claudeConfig', configDir: '/tmp/claude' },
             enabled: false,
-        }, { serverId: 'server-1' });
+        }, { serverId: 'server-1', signal: expect.any(AbortSignal) });
         expect(applySessionMetadataLocallySpy).toHaveBeenCalledWith('session-1', expect.any(Function));
         const updater = applySessionMetadataLocallySpy.mock.calls[0]?.[1] as
             | ((metadata: Metadata) => Metadata)

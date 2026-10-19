@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { ResolvedAgentCatalogEntry } from '@/agents/backendCatalog/agentCatalogProjection';
@@ -19,7 +19,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { ExternalSessionSearchProgress } from './ExternalSessionSearchProgress';
-import { ConversationHitSummary } from './ConversationHitSummary';
+import { ConversationHitStatus, ConversationHitSummary, isConversationHitStatusInMeta, resolveConversationHitSnippet, resolveConversationHitStatusLabel } from './ConversationHitSummary';
 import { ITEM_SUBTITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import {
@@ -43,6 +43,7 @@ import { Typography } from '@/constants/Typography';
 import type { Theme } from '@/theme';
 import { t } from '@/text';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
+import { stripMarkdown } from '@/utils/sessions/messageUtils';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
 import {
@@ -76,6 +77,11 @@ const styles = StyleSheet.create((theme: AppTheme) => ({
     },
     searchProgress: {
         paddingHorizontal: theme.space.s4,
+    },
+    // Level with the filter chips' row above it and the field's edge.
+    searchTargetRow: {
+        paddingHorizontal: theme.space.s8,
+        paddingBottom: theme.space.s8,
     },
     searchIncomplete: {
         color: theme.colors.text.secondary,
@@ -159,6 +165,11 @@ function resolveBrowseCandidateRowIdentity(
     return resolveBrowseCandidateIdentity({ ...context, agentLabel: null, machineLabel: null }, candidate, candidatePath);
 }
 
+/** A hit's where under its project header: the header already names the path, so the line keeps the thread. */
+function resolveConversationHitWhere(identity: ReturnType<typeof resolveBrowseCandidateRowIdentity>): string | null {
+    return identity.pathLabel ? identity.threadLabel : identity.secondaryLabel;
+}
+
 /** The candidate's name without row context (search matching, the delete confirmation): the same owner. */
 function resolveBrowseCandidateMatchingLabel(candidate: ExternalSessionBrowseCandidate): string {
     return resolveExternalSessionBrowseCandidateIdentityPresentation({
@@ -181,13 +192,13 @@ function resolveBrowseCandidateAccessibilityLabel(
         ? null
         : resolveExternalSessionCandidateActivityPresentation(activity);
     return Array.from(new Set([
-        identity.title,
+        candidate.match ? stripMarkdown(identity.title) : identity.title,
         identity.secondaryLabel,
         relativeTime || null,
         activityPresentation ? t(activityPresentation.labelKey) : null,
         candidate.linkedSessionId ? t('externalSessions.browseLinked') : null,
         candidate.imported ? t('externalSessions.browseImported') : null,
-        candidate.match?.snippet,
+        candidate.match?.snippet ? stripMarkdown(candidate.match.snippet) : null,
     ].filter((label): label is string => Boolean(label?.trim())))).join(', ');
 }
 
@@ -364,6 +375,7 @@ function buildCandidateVirtualizedSource(params: Readonly<{
         interaction: ExternalSessionsBrowseInteraction;
         searchTarget: 'metadata' | 'content';
         searchQuery: string;
+        hitStatusInMeta: boolean;
     }>;
     theme: AppTheme;
     density: ReturnType<typeof useResolvedItemDensity>;
@@ -479,6 +491,7 @@ function buildCandidateVirtualizedSource(params: Readonly<{
                 interaction.offline ? 'offline' : 'online',
                 interaction.interaction,
                 interaction.searchTarget,
+                interaction.hitStatusInMeta ? 'status-in-meta' : 'status-beside-title',
             ].join('\u0000');
         },
         getOption: (candidateIndex: number): SelectionListOption => {
@@ -495,11 +508,10 @@ function buildCandidateVirtualizedSource(params: Readonly<{
                 // synchronous matching fallback while the visible title is
                 // resolved only by the mounted SelectionList row.
                 label: resolveBrowseCandidateMatchingLabel(candidate),
-                renderLabel: () => resolveBrowseCandidateIdentity(
-                    presentationContext,
-                    candidate,
-                    candidatePath,
-                ).title,
+                renderLabel: () => {
+                    const title = resolveBrowseCandidateIdentity(presentationContext, candidate, candidatePath).title;
+                    return interaction.searchTarget === 'content' ? stripMarkdown(title) : title;
+                },
                 renderAccessibilityLabel: () => resolveBrowseCandidateAccessibilityLabel(
                     presentationContext,
                     candidate,
@@ -516,14 +528,26 @@ function buildCandidateVirtualizedSource(params: Readonly<{
                     />
                 ) : undefined,
                 subtitle: candidatePath ?? '',
+                // A hit's mark and status belong to its title; the snippet and meta run beneath (lab H2).
+                ...(interaction.searchTarget === 'content'
+                    ? { contentAlign: 'start' as const, labelHighlightQuery: interaction.searchQuery.trim() || undefined } : {}),
                 subtitleContent: () => interaction.searchTarget === 'content'
-                    ? <ConversationHitSummary snippet={candidate.match?.snippet ?? t('externalSessions.browseContentNotSearchable')} query={interaction.searchQuery}
-                        where={resolveBrowseCandidateRowIdentity(presentationContext, candidate, candidatePath).secondaryLabel}
-                        atMs={candidate.updatedAtMs} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />
+                    ? <ConversationHitSummary
+                        snippet={resolveConversationHitSnippet({
+                            title: resolveBrowseCandidateIdentity(presentationContext, candidate, candidatePath).title,
+                            snippet: candidate.match?.snippet ?? t('externalSessions.browseContentNotSearchable'), query: interaction.searchQuery,
+                        })}
+                        query={interaction.searchQuery}
+                        where={resolveConversationHitWhere(resolveBrowseCandidateRowIdentity(presentationContext, candidate, candidatePath))}
+                        atMs={candidate.updatedAtMs} messageCount={candidate.messageCount}
+                        status={interaction.hitStatusInMeta ? resolveConversationHitStatusLabel(candidate) : null} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />
                     : renderBrowseCandidateSubtitle(presentationContext, candidate, candidatePath),
-                rightAccessory: () => renderBrowseCandidateRightAccessory(
+                // A hit says once whether it is already in Happier (lab H2); Titles keeps its Linked/Imported marks.
+                rightAccessory: () => interaction.searchTarget === 'content'
+                    ? interaction.hitStatusInMeta ? null : <ConversationHitStatus candidate={candidate} testID={`external-session-candidate-status:${candidate.remoteSessionId}`} />
+                    : renderBrowseCandidateRightAccessory(
                     candidate,
-                    interaction.candidateDeleteSupported && (interaction.searchTarget !== 'content' || candidate.match !== undefined)
+                    interaction.candidateDeleteSupported
                         ? {
                             candidateKey,
                             candidateTitle: resolveBrowseCandidateMatchingLabel(candidate),
@@ -589,6 +613,8 @@ function buildCandidateVirtualizedSource(params: Readonly<{
                 title: group.path === UNKNOWN_PROJECT_KEY
                     ? t('externalSessions.browseCandidates')
                     : formatSessionPath(group.path, params.machineHomeDir ?? undefined),
+                // A project folder is a path; the "Conversations" fallback is a word.
+                monoTitle: group.path !== UNKNOWN_PROJECT_KEY,
                 count: group.candidateIndexes.length,
                 rightAccessory: params.getInteractionState().searchTarget === 'content'
                     && group.candidateIndexes.some(index => getCandidate(index).searchMode === 'indexed')
@@ -691,6 +717,8 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     contentCoverage?: 'complete' | 'partial' | 'unsupported' | null;
     contentCoverageLabel?: string;
     contentScanAvailable?: boolean;
+    /** Set when Search on demand is off on the machine, so Return cannot scan; opens Settings › Search. */
+    onOpenContentSearchSettings?: () => void;
     onSearchSubmit?: (query: string) => void;
     onSearchQueryChange: (query: string) => void;
     selectionAuthorityGeneration: number;
@@ -716,6 +744,8 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     filters?: ReadonlyArray<SelectionListFilter>;
     /** Controls that trail the search band after the filters (the ⋯ menu, close). */
     bandTrailing?: React.ReactNode;
+    /** What the field searches (Titles | Conversations), on a row beneath it where the band has no room for it. */
+    searchTargetRow?: React.ReactNode;
     /** The search band's placeholder ("Search Claude sessions…"). */
     searchPlaceholder?: string;
     /** Another agent on this machine that can share sessions, offered when this one has none. */
@@ -748,6 +778,12 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     const interaction: ExternalSessionsBrowseInteraction = props.interaction ?? 'openSession';
     const searchTarget = props.searchTarget ?? 'metadata';
     const isContentSearch = searchTarget === 'content';
+    // The list's own width, not the window's: Browse is often a pane or a sheet. Only the boolean is state.
+    const [hitStatusInMeta, setHitStatusInMeta] = React.useState(false);
+    const handleRootLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const next = isConversationHitStatusInMeta(event.nativeEvent.layout.width);
+        setHitStatusInMeta((current) => (current === next ? current : next));
+    }, []);
     const interactionStateRef = React.useRef({
         candidateActionsDisabled,
         linkingSessionId: props.linkingSessionId,
@@ -757,6 +793,7 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
         interaction,
         searchTarget,
         searchQuery: props.searchQuery,
+        hitStatusInMeta,
     });
     interactionStateRef.current = {
         candidateActionsDisabled,
@@ -767,6 +804,7 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
         interaction,
         searchTarget,
         searchQuery: props.searchQuery,
+        hitStatusInMeta,
     };
     const getInteractionState = React.useCallback(() => interactionStateRef.current, []);
     const virtualizedOptionSource = React.useMemo(
@@ -830,17 +868,35 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     const annotationsIncompleteAnnouncement = showAnnotationsIncomplete
         ? t('externalSessions.browseAnnotationsIncomplete')
         : null;
+    // One message per state: with rows on screen, "Search more conversations" or the footer's failure
+    // already says the search is unfinished, so the coverage line speaks only when nothing else does.
     const showContentCoverage = isContentSearch && props.contentCoverage !== 'complete'
-        && (props.candidates.length > 0 || (props.contentCoverage === 'partial' && props.nextCursor !== null));
-    const contentCoverageAnnouncement = isContentSearch && props.contentCoverageLabel ? props.contentCoverageLabel : showContentCoverage
-        ? t('externalSessions.browseContentPartial')
+        && (props.candidates.length > 0
+            ? props.nextCursor === null && !props.error
+            : props.contentCoverage === 'partial' && props.nextCursor !== null && !props.error);
+    // With rows on screen the coverage closes the list (lab H2 "Searched …"); with none and more to search it
+    // says what is true, that nothing has matched yet, rather than blaming coverage.
+    const contentCoverageLine = showContentCoverage
+        ? t(props.candidates.length > 0 ? 'externalSessions.browseContentPartial' : 'externalSessions.browseContentNothingYet')
         : null;
+    // History's words when the search says which machine was not covered (one coverage voice on both surfaces).
+    const contentCoverageText = props.contentCoverageLabel || contentCoverageLine;
+    const contentCoverageAnnouncement = isContentSearch ? contentCoverageText || null : contentCoverageLine;
     const incompleteAnnouncement = [searchIncompleteAnnouncement, contentCoverageAnnouncement, annotationsIncompleteAnnouncement]
         .filter((announcement): announcement is string => announcement !== null)
         .join(' ') || null;
     useIosAccessibilityAnnouncement(incompleteAnnouncement);
 
     const hasLoadedRows = props.candidates.length > 0;
+    // "Search more conversations" that adds no row changes nothing on screen, so the list says what happened.
+    // The row count at the press is the reference; a page that failed is the error line's to report.
+    const [askedAtRows, setAskedAtRows] = React.useState<number | null>(null);
+    const searchMoreConversations = React.useCallback(() => {
+        setAskedAtRows(props.candidates.length);
+        props.onLoadMore();
+    }, [props.candidates.length, props.onLoadMore]);
+    const nothingNewFromMore = isContentSearch && hasLoadedRows && askedAtRows !== null && !props.loading && !props.loadingMore
+        && !props.error && !props.cancelled && props.candidates.length <= askedAtRows;
     /**
      * Once the preparing index serves rows, the full-height loading state stands down
      * and this banner takes over the same progress region and the same cancel
@@ -982,6 +1038,15 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
                 ? t('externalSessions.browseContentNotSearchable')
                 : t('externalSessions.browseContentUpdateRequired', { machine: machineInSentence })}
         />
+    ) : isContentSearch && props.contentSearchSubmitted !== true && props.onOpenContentSearchSettings ? (
+        // A prompt to press Return would invite an action that cannot succeed: say why and lead to the setting.
+        <EmptyState
+            layout="line"
+            testID="direct-session-candidates:content-scan-off"
+            title={t('externalSessions.browseContentScanOff', { machine: machineInSentence })}
+            primaryAction={{ label: t('externalSessions.browseContentScanOffSettings'), onPress: props.onOpenContentSearchSettings,
+                testID: 'direct-session-candidates:content-scan-off:settings' }}
+        />
     ) : isContentSearch && props.contentSearchSubmitted !== true ? (
         <EmptyState
             layout="line"
@@ -1010,7 +1075,9 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
             testID="direct-session-candidates:error"
             kind="error"
             accessibilitySemantics="alert"
-            title={t('externalSessions.browseErrorTitle')}
+            title={isContentSearch
+                ? t('externalSessions.browseContentErrorTitle', { machine: machineInSentence })
+                : t('externalSessions.browseErrorTitle')}
             reason={props.error}
             action={retry}
         />
@@ -1062,18 +1129,18 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     // Stop belongs to a search the user started; the quiet lookup behind a typed phrase still offers Search.
     const contentSearchRunning = props.contentSearchSubmitted === true && (props.loading || props.loadingMore === true);
     const hasStatusRows = indexingBannerVisible
-        || showContentCoverage
+        || (showContentCoverage && props.candidates.length === 0)
         || (!isContentSearch && props.candidates.length > 0 && props.searchIncomplete === true)
         || showAnnotationsIncomplete;
     const statusRows = hasStatusRows ? (
         <View testID="direct-session-candidates-status">
-            {showContentCoverage ? (
+            {showContentCoverage && props.candidates.length === 0 ? (
                 <Text
                     testID="direct-session-candidates-content-partial"
                     style={styles.searchIncomplete}
                     accessibilityLiveRegion="polite"
                 >
-                    {t('externalSessions.browseContentPartial')}
+                    {contentCoverageLine}
                 </Text>
             ) : null}
             {indexingBannerVisible ? (
@@ -1109,7 +1176,7 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     ) : undefined;
 
     return (
-        <View testID="direct-session-candidates-root" style={styles.root}>
+        <View testID="direct-session-candidates-root" style={styles.root} onLayout={handleRootLayout}>
             <PoliteAccessibilityStatus
                 announcement={props.preparation ? t('externalSessions.browseIndexing') : ''}
                 statusTestID="direct-session-candidates:indexing:a11y-status"
@@ -1124,7 +1191,12 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
                 onChangeInputValue={props.onSearchQueryChange}
                 selectionMark="enter"
                 filters={props.filters}
-                inputAccessoryRow={statusRows}
+                inputAccessoryRow={props.searchTargetRow || statusRows ? (
+                    <>
+                        {props.searchTargetRow ? <View style={styles.searchTargetRow}>{props.searchTargetRow}</View> : null}
+                        {statusRows}
+                    </>
+                ) : undefined}
                 inputSuffix={isContentSearch || props.searchAugmenting || props.bandTrailing ? (
                     <View style={styles.searchSuffix}>
                         {/* In Conversations the field's Search becomes Stop in place; the progress band does not repeat it. */}
@@ -1174,12 +1246,18 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
                     // presentation here the footer falls through to the end-of-list
                     // marker and asserts the listing is complete while it is stale.
                     error: presentationError ?? projectionFailureMessage ?? stoppedIndexNotice,
-                    onEndReached: props.onLoadMore,
+                    onEndReached: isContentSearch ? searchMoreConversations : props.onLoadMore,
+                    moreNotice: nothingNewFromMore && props.nextCursor !== null ? t('conversationSearch.moreNothingNew') : null,
                     onRetry: props.onRetry,
                     loadingLabel: t('common.loading'),
                     moreLabel: t(isContentSearch ? 'externalSessions.browseContentMore' : 'common.more'),
                     retryLabel: t('common.retry'),
-                    endReachedLabel: t('common.done'),
+                    // A conversation search ends with what it could not cover, or with nothing at all.
+                    // A conversation search closes with what it could not cover, on the rows' edge like History's line, or with nothing.
+                    endReachedLabel: isContentSearch
+                        ? [nothingNewFromMore ? t('conversationSearch.moreExhausted') : '', showContentCoverage ? contentCoverageText ?? '' : ''].filter(Boolean).join(' ')
+                        : t('common.done'),
+                    ...(isContentSearch ? { endReachedPlacement: 'edge' as const } : {}),
                 } : undefined}
             />
         </View>

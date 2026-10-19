@@ -12,10 +12,10 @@ import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-const boundary = vi.hoisted(() => ({ ensure: vi.fn(), alert: vi.fn() }));
+const boundary = vi.hoisted(() => ({ ensure: vi.fn(), alert: vi.fn(), confirm: vi.fn(async () => true) }));
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { alert: boundary.alert } }).module;
+    return createModalModuleMock({ spies: { alert: boundary.alert, confirm: boundary.confirm } }).module;
 });
 
 import type { ExternalSessionCandidateOpenState } from './openExternalSessionCandidate';
@@ -84,6 +84,9 @@ describe('openExternalSessionCandidate', () => {
         requests.length = 0;
         boundary.ensure.mockReset().mockResolvedValue({ ok: true, sessionId: 'happier-session', created: true });
         boundary.alert.mockReset();
+        // Real Action admission still asks for confirmation; this network/native-boundary
+        // fixture models the person accepting it, independently of source capture consent.
+        boundary.confirm.mockReset().mockResolvedValue(true);
         const serverId = await homes.addHome({ name: 'Candidate Home', serverUrl: 'https://candidate-open.test', accountId: 'account-a' });
         const machine = createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-a' });
         homes.answer(serverId, '/v1/machines/machine-a', { body: { machine } });
@@ -113,9 +116,9 @@ describe('openExternalSessionCandidate', () => {
             query: 'body-only phrase', options: { matchCase: false, regex: false },
             target: {
                 kind: 'route-message-id',
-                routeMessageId: makeExternalSessionHistoricalImportLocalId({
+                routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({
                     agentId: 'fixture-agent', remoteSessionId: 'native-session', directItemId: 'record-uuid',
-                }),
+                })}`,
             },
         });
     });

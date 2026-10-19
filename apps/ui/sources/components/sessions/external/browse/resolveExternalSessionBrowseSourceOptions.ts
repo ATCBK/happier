@@ -14,6 +14,8 @@ import type {
     ExternalSessionBrowseSourceOption,
 } from '@/agents/registry/registryUiBehavior';
 import { resolveQualifiedConnectedAccountServiceKey } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { presentConnectedAccountNames, type ConnectedAccountNameEntry } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
+import { presentConnectedAccountIdentity } from '@/sync/domains/connectedServices/maskAccountEmail';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveCompatibleExternalSessionBrowseLinkSource } from './resolveCompatibleExternalSessionBrowseLinkSource';
 
@@ -101,6 +103,7 @@ function materializeProjectedSourceOptions(params: Readonly<{
     interaction?: 'openSession' | 'pickRemoteSessionId';
 }>): ExternalSessionBrowseSourceOption[] {
     const options: ExternalSessionBrowseSourceOption[] = [];
+    const connectedAccounts: ConnectedAccountNameEntry[] = [];
     const label = params.agent.title ?? resolveAgentCatalogProjection(params.providerId, {
         enabledAgentIds: [params.providerId],
     }).title;
@@ -122,12 +125,23 @@ function materializeProjectedSourceOptions(params: Readonly<{
                 const { serviceId, profileId } = instance.origin;
                 const serviceKey = resolveQualifiedConnectedAccountServiceKey(serviceId);
                 const service = serviceKey ? parseQualifiedPluginContributionKey(serviceKey) : null;
-                options.push({
-                    key: `${params.providerId}:${declaration.sourceKind}:${serviceId}:${profileId}`,
-                    label,
-                    detail: (service ? resolveQualifiedConnectedAccountLabel({
+                const profile = params.profile?.connectedServicesV2?.find(row => row.serviceId === serviceId)
+                    ?.profiles.find(row => row.profileId === profileId);
+                const key = `${params.providerId}:${declaration.sourceKind}:${serviceId}:${profileId}`;
+                connectedAccounts.push({ key, serviceTitle: label, accountId: profileId,
+                    userLabel: service ? resolveQualifiedConnectedAccountLabel({
                         labelsByKey: params.labelsByKey, service, accountId: profileId,
-                    }) : null) ?? profileId,
+                    }) : null,
+                    email: profile?.providerEmail, providerAccountId: profile?.providerAccountId,
+                    // Source detail is passive identity text, not an account
+                    // reveal control. Keep its derived email a private hint.
+                    presentIdentity: identity => presentConnectedAccountIdentity({ ...identity,
+                        hidden: true, label: identity.label ?? null, email: identity.email ?? null,
+                        accountId: identity.accountId ?? null }),
+                });
+                options.push({
+                    key,
+                    label,
                     source,
                 });
                 continue;
@@ -148,7 +162,13 @@ function materializeProjectedSourceOptions(params: Readonly<{
             });
         }
     }
-    return options;
+    // History groups and Browse share these details. Resolve the visible set together so
+    // unnamed accounts use the canonical stable numbering instead of identical fallbacks.
+    const names = presentConnectedAccountNames(connectedAccounts);
+    return options.map(option => {
+        const name = names.get(option.key);
+        return name ? { ...option, detail: name.primaryLabel } : option;
+    });
 }
 
 function enrichProjectedSourceOptions(params: Readonly<{
@@ -181,7 +201,10 @@ function enrichProjectedSourceOptions(params: Readonly<{
         );
         if (!declaration) return projectedOption;
         const sourceKey = resolveExternalSessionsSourceKeyForDeclaration(declaration, projectedOption.source);
-        return presentationBySourceKey.get(sourceKey) ?? projectedOption;
+        const presentation = presentationBySourceKey.get(sourceKey);
+        if (!presentation) return projectedOption;
+        return { ...presentation,
+            ...(presentation.detail === undefined && projectedOption.detail !== undefined ? { detail: projectedOption.detail } : {}) };
     });
 }
 

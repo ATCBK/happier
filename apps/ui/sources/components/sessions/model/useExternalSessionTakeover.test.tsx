@@ -199,7 +199,7 @@ describe('useExternalSessionTakeover', () => {
           targetDirectory: TARGET_DIRECTORY,
         }),
       },
-      { serverId: 'server-owned', accountLifetime },
+      { serverId: 'server-owned', accountLifetime, signal: expect.any(AbortSignal) },
     );
     await harness.unmount();
   });
@@ -220,7 +220,7 @@ describe('useExternalSessionTakeover', () => {
           targetStorageMode: 'external-linked',
         }),
       },
-      { serverId: 'server-runtime' },
+      { serverId: 'server-runtime', signal: expect.any(AbortSignal) },
     );
     await harness.unmount();
   });
@@ -252,7 +252,7 @@ describe('useExternalSessionTakeover', () => {
           targetStorageMode: 'external-linked',
         }),
       },
-      { serverId: 'server-runtime' },
+      { serverId: 'server-runtime', signal: expect.any(AbortSignal) },
     );
     expect(refreshSessionsSpy).toHaveBeenCalledTimes(1);
     expect(refreshSessionMessagesSpy).toHaveBeenCalledWith('s1');
@@ -291,7 +291,7 @@ describe('useExternalSessionTakeover', () => {
         targetDirectory: TARGET_DIRECTORY,
         targetRuntimeMode: 'terminal',
       },
-    }, { serverId: 'server-runtime' });
+    }, { serverId: 'server-runtime', signal: expect.any(AbortSignal) });
     expect(machineExternalSessionTakeoverSpy).not.toHaveBeenCalled();
     expect(modalAlertSpy).not.toHaveBeenCalled();
     await harness.unmount();
@@ -364,7 +364,7 @@ describe('useExternalSessionTakeover', () => {
           targetDirectory: '/Users/tester/repo ',
         }),
       }),
-      { serverId: 'server-runtime' },
+      { serverId: 'server-runtime', signal: expect.any(AbortSignal) },
     );
     await harness.unmount();
   });
@@ -449,7 +449,7 @@ describe('useExternalSessionTakeover', () => {
           targetStorageMode: 'external-linked',
         }),
       },
-      { serverId: 'server-owned' },
+      { serverId: 'server-owned', signal: expect.any(AbortSignal) },
     );
     await harness.unmount();
   });

@@ -5,13 +5,21 @@ import { machineExternalSessionTranscriptPage } from '@/sync/ops/machineExternal
 import { normalizeExternalSessionTranscriptMessages } from '@/sync/runtime/external/normalizeExternalSessionTranscriptMessages';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
-/** Read just the selected turn through the incumbent paged reader; no import or index is needed. */
+export type ExternalSessionExchange = Readonly<{
+    /** The prompt, when available, followed by only the selected message's display blocks. */
+    messages: readonly Message[];
+    /** Projected message identity, including when a tool-result hit updates a prior tool call. */
+    matchedMessageId: string | null;
+    elidedMessageCount: number;
+}>;
+
+/** Read a hit-centred preview through the incumbent paged reader; never publish the full turn. */
 export async function readExternalSessionExchange(input: Readonly<{
     request: Omit<ExternalSessionTranscriptPageRequest, 'direction' | 'cursor'>;
     sourceItemId: string;
     accountLifetime: ServerAccountScopeLifetime;
     signal: AbortSignal;
-}>): Promise<readonly Message[]> {
+}>): Promise<ExternalSessionExchange> {
     let cursor: string | undefined;
     let adjacent: readonly ExternalSessionTranscriptRawMessageV1[] = [];
     const visited = new Set<string>();
@@ -43,7 +51,19 @@ export async function readExternalSessionExchange(input: Readonly<{
             if (hasPrompt || !page.hasMore) {
                 const state = createReducer();
                 const result = reducer(state, normalized.slice(from, to).filter(message => message.sidechainId === scope));
-                return scope ? [...projectSidechainMessages(state, scope)] : result.messages;
+                const messages = scope ? [...projectSidechainMessages(state, scope)] : result.messages;
+                const selected = normalized[target]!;
+                const toolIds = selected.role === 'agent' ? new Set(selected.content.flatMap(content =>
+                    content.type === 'tool-result' ? [content.tool_use_id] : content.type === 'tool-call' ? [content.id] : [])) : new Set<string>();
+                const matched = messages.filter(message => message.realID === input.sourceItemId
+                    || (message.kind === 'tool-call' && message.tool.id !== undefined && toolIds.has(message.tool.id)));
+                const prompt = hasPrompt ? messages.find(message => message.realID === normalized[from]!.id) : undefined;
+                const firstMatch = matched[0];
+                return {
+                    messages: [...(prompt && !matched.includes(prompt) ? [prompt] : []), ...matched],
+                    matchedMessageId: firstMatch?.id ?? null,
+                    elidedMessageCount: prompt && firstMatch ? Math.max(0, messages.indexOf(firstMatch) - messages.indexOf(prompt) - 1) : 0,
+                };
             }
             // The prompt is across the page boundary. Keep this turn until its preceding page arrives.
             for (const message of normalized.slice(from, to)) {
@@ -67,7 +87,7 @@ export async function readExternalSessionExchange(input: Readonly<{
         // normalization context (for example a suppressed empty tool call).
         adjacent = items.filter((item, index) => index <= lastRetained
             && (retainedIds.has(item.id) || !normalizedIds.has(item.id)));
-        if (!page.hasMore) return [];
+        if (!page.hasMore) return { messages: [], matchedMessageId: null, elidedMessageCount: 0 };
         if (!page.nextCursor || visited.has(page.nextCursor)) throw new Error('Transcript cursor did not advance');
         visited.add(page.nextCursor);
         cursor = page.nextCursor;
