@@ -1764,7 +1764,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     /** Live controller capability for daemon-owned host methods. */
     isMethodAvailable?: (method: PluginUiHostMethodV1) => boolean;
     /** Context stays with the bound controller; error provenance stays with the facade. */
-    resolveUnavailableMessage?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => string | undefined;
+    resolveUnavailableError?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => PluginUiHostApiErrorPayloadV1 | undefined;
     isConnectionPending?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => boolean;
     /** Live controller capability for the daemon branch of `executeAction`. */
     isContributedActionAvailable?: () => boolean;
@@ -1787,7 +1787,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             surfaceContext: input.surfaceContext,
             ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
             ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
-            ...(input.resolveUnavailableMessage ? { resolveUnavailableMessage: input.resolveUnavailableMessage } : {}),
+            ...(input.resolveUnavailableError ? { resolveUnavailableError: input.resolveUnavailableError } : {}),
             ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
             handlers: {
@@ -1880,7 +1880,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         surfaceContext: input.surfaceContext,
         ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
         ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
-        ...(input.resolveUnavailableMessage ? { resolveUnavailableMessage: input.resolveUnavailableMessage } : {}),
+        ...(input.resolveUnavailableError ? { resolveUnavailableError: input.resolveUnavailableError } : {}),
         ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         handlers: {

@@ -2532,6 +2532,12 @@ function PluginSurfaceHostMount(props: Readonly<(
     // semantics, surface activity, or target reads on the whole Machine describe.
     const machineConnectionPending = (needsMachineExecution && pluginExecution.selection.loading)
         || (mountedTargetSnapshotRequired && !mountedTargetReady && mountedTargetRead.phase === 'loading');
+    const mountedTargetFallback = mountedTargetRead.phase === 'failed'
+        ? resolveMountedTargetProjectionFallback(mountedTargetRead) : null;
+    const daemonConnectionFailure = mountedTargetFallback?.state === 'unavailable'
+        ? { code: mountedTargetRead.failure?.reason === 'timeout' ? 'timeout' as const : 'unavailable' as const,
+            reasonCode: mountedTargetFallback.reasonCode }
+        : undefined;
     // A fresh process whose machine has no reachable daemon can still mount the
     // destination it last confirmed, because the retained presentation slice it
     // booted from carries the target admission that accompanied it. This is the
@@ -2938,6 +2944,8 @@ function PluginSurfaceHostMount(props: Readonly<(
             }) }
             : {}),
         isDaemonConnectionPending: () => machineConnectionPending,
+        daemonConnectionFailure: !needsMachineExecution || pluginExecution.selection.state.kind === 'selected'
+            ? daemonConnectionFailure : undefined,
         resolveContributedAction,
         ...(currentUiContextReader
             ? { readCurrentUiContext: currentUiContextReader.readCurrentUiContext }

@@ -32,6 +32,7 @@ import {
     type PluginUiApplyComposerRequestV1,
     type PluginUiHostMethodV1,
     type PluginUiHostApiRequestEnvelopeV1,
+    type PluginUiHostApiErrorPayloadV1,
     type PluginUiInstanceKeyV1,
     type PluginUiExecuteActionRequestV1,
     type PluginUiJsonValueV1,
@@ -51,7 +52,7 @@ import {
 } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { PluginMachineExecutionOriginStateV1, PluginMachineOriginRejectionReasonV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
-import { describePluginExecutionOriginRefusal } from '@/sync/domains/surfaces/copy/resolveReasonCopy';
+import { describePluginExecutionOriginRefusal, resolveReasonCopy } from '@/sync/domains/surfaces/copy/resolveReasonCopy';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
@@ -200,6 +201,11 @@ export type BoundPluginSurfaceFacts = Readonly<{
     executionOriginRefusal?: Readonly<{
         reasons: readonly (PluginMachineOriginRejectionReasonV1 | 'no_materialization')[];
         machineDisplayName?: string | null;
+    }>;
+    /** The target-read owner's classified failure; it does not establish Machine incapability. */
+    daemonConnectionFailure?: Readonly<{
+        code: PluginUiHostApiErrorPayloadV1['code'];
+        reasonCode: string;
     }>;
     serverId?: string | null;
     /** The projection generation this mount is bound to. */
@@ -1194,6 +1200,9 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const describeMachineNotice = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): WidgetFrameBodyNotice | undefined => {
         const daemonUnavailable = isMachineUnavailable(diagnostics, request);
         if (!daemonUnavailable || input.facts.isDaemonConnectionPending?.() === true) return undefined;
+        if (input.facts.daemonConnectionFailure) {
+            return { sentence: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: input.facts.daemonConnectionFailure.reasonCode }).body };
+        }
         // The plugin is installed somewhere but Administration refused it: say why, never "install it".
         const refusal = input.facts.executionOriginRefusal;
         const refusedPlugin = input.facts.pluginDisplayName?.trim();
@@ -1251,13 +1260,18 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             : {}),
         ...(interactionRequester ? { interactionRequester } : {}),
         isMethodAvailable,
-        resolveUnavailableMessage: (error, request) => {
+        resolveUnavailableError: (error, request) => {
             const sentence = describeMachineUnavailable(error.diagnostics, request);
             if (sentence && !machineNoticeLent) {
                 machineNoticeLent = true;
                 input.facts.onMachineUnavailable?.(() => describeMachineNotice(error.diagnostics, request));
             }
-            return sentence;
+            const failure = !isConnectionPending(error.diagnostics, request) && isMachineUnavailable(error.diagnostics, request)
+                ? input.facts.daemonConnectionFailure : undefined;
+            if (failure) return { code: failure.code,
+                diagnostics: [...error.diagnostics, failure.reasonCode],
+                ...(sentence ? { message: sentence } : {}) };
+            return error.message || !sentence ? undefined : { ...error, message: sentence };
         },
         isConnectionPending: (error, request) => isConnectionPending(error.diagnostics, request),
         isContributedActionAvailable: isDaemonInteractionEnabled,
@@ -1440,6 +1454,8 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     executionOriginSelectionKindRef.current = facts.executionOriginSelectionKind;
     const executionOriginRefusalRef = React.useRef(facts.executionOriginRefusal);
     executionOriginRefusalRef.current = facts.executionOriginRefusal;
+    const daemonConnectionFailureRef = React.useRef(facts.daemonConnectionFailure);
+    daemonConnectionFailureRef.current = facts.daemonConnectionFailure;
     const interactionEnabledRef = React.useRef(facts.interactionEnabled);
     interactionEnabledRef.current = facts.interactionEnabled;
     const isInteractionEnabled = React.useCallback(() => interactionEnabledRef.current, []);
@@ -1493,6 +1509,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             facts: { ...facts, get machineDisplayName() { return machineDisplayNameRef.current; },
                 get executionOriginSelectionKind() { return executionOriginSelectionKindRef.current; },
                 get executionOriginRefusal() { return executionOriginRefusalRef.current; },
+                get daemonConnectionFailure() { return daemonConnectionFailureRef.current; },
                 isDaemonInteractionEnabled, isDaemonConnectionPending, isInteractionEnabled, onMachineUnavailable,
                 resolveContributedAction: hasContributedActionResolver ? resolveContributedAction : undefined },
             binding: { ...binding, isExecutionOriginCurrent },

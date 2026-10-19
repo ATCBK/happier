@@ -343,6 +343,45 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         }
     });
 
+    it('preserves a failed target read through Action and Resource refusals instead of claiming Machine incapability', async () => {
+        let failed = true;
+        let pending = true;
+        const facts = {
+            ...FACTS,
+            machineDisplayName: 'Studio Mac',
+            isDaemonConnectionPending: () => pending,
+            get daemonInteractionEnabled() { return !failed; },
+            get daemonConnectionFailure() {
+                return failed ? { code: 'timeout' as const, reasonCode: 'targeted_contributions_timeout' } : undefined;
+            },
+        };
+        const executeContributedAction = vi.fn(async () => ({ supported: true as const, result: { ok: true as const, result: { refreshed: true } } }));
+        const controller = createBoundPluginSurfaceController({ facts, binding: { executeContributedAction } });
+        try {
+            const waiting = request('executeAction', { action: 'refresh-index', input: {} });
+            await expect(settlePluginSurfaceHostApiRequest(waiting, () => controller.hostApi.handleRequest(waiting)))
+                .resolves.toMatchObject({ kind: 'error', payload: { code: 'unavailable',
+                    diagnostics: expect.arrayContaining(['plugin_surface_connection_pending']) } });
+            pending = false;
+            for (const [method, payload] of [
+                ['executeAction', { action: 'refresh-index', input: {} }],
+                ['readResource', { resource: 'status' }],
+            ] as const) {
+                const invocation = request(method, payload);
+                const result = await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+                expect(result).toMatchObject({ kind: 'error', payload: {
+                    code: 'timeout', diagnostics: expect.arrayContaining(['targeted_contributions_timeout']),
+                    message: t('pluginRuntime.transportUnavailable'),
+                } });
+            }
+            expect(executeContributedAction).not.toHaveBeenCalled();
+            expect(controller.isCurrent()).toBe(true);
+            failed = false;
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' }, {}))
+                .resolves.toEqual({ refreshed: true });
+        } finally { controller.dispose(); }
+    });
+
     it('says once what to do when no Machine exists at all, instead of naming a Machine that is not there', async () => {
         const controller = createBoundPluginSurfaceController({ facts: {
             ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,

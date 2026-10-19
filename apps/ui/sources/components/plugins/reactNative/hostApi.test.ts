@@ -1980,6 +1980,7 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
         // author the mount can never serve it and turns an outage into a
         // permanent capability verdict.
         let daemonReachable = false;
+        let targetReadTimedOut = false;
         const unavailableMessage = 'NLDW6-3-11-20 · f759 is unavailable for this operation.';
         const host = createPluginSurfaceHostApi({
             surfaceContext: surface,
@@ -1988,7 +1989,9 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
                 watchResource: async () => ({ ok: true }),
             },
             isMethodAvailable: (method) => method === 'context' || daemonReachable,
-            resolveUnavailableMessage: () => unavailableMessage,
+            resolveUnavailableError: error => targetReadTimedOut
+                ? { code: 'timeout', diagnostics: [...error.diagnostics, 'targeted_contributions_timeout'], message: 'Target read timed out' }
+                : { ...error, message: unavailableMessage },
         });
         const adapter = createCanonicalPluginReactNativeHostApiAdapter({
             surface: canonicalSurface,
@@ -2013,6 +2016,18 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
             message: unavailableMessage,
             diagnostics: [{ code: 'host_api_method_unavailable:watchResource', severity: 'error' }],
         });
+
+        // The real host producer and SDK consumer preserve a classified read
+        // failure, without turning a settled timeout into absent capability.
+        targetReadTimedOut = true;
+        await expect(adapter.api.watchResource(
+            { pluginId: 'acme.preview', localId: 'review-summary' },
+            () => undefined,
+        )).rejects.toMatchObject({
+            name: 'PluginError', code: 'timeout', retryable: true,
+            diagnostics: expect.arrayContaining([{ code: 'targeted_contributions_timeout', severity: 'error' }]),
+        });
+        targetReadTimedOut = false;
 
         // A method this mount never installs stays permanently unsupported.
         await expect(adapter.api.readClipboard()).rejects.toMatchObject({
