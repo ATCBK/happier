@@ -16,6 +16,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { SelectionCheckGlyph } from '@/components/ui/selection/SelectionCheckGlyph';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { Text } from '@/components/ui/text/Text';
+import { useDeviceType } from '@/utils/platform/responsive';
 
 export type CapabilityRowProps = Readonly<{
   title: string;
@@ -59,6 +60,9 @@ export const CapabilityRow = React.memo(function CapabilityRow(
   props: CapabilityRowProps,
 ) {
   const density = props.density ?? 'page';
+  // A page row on a phone has the width for two description lines (lab phone rows); everywhere else one keeps the list dense.
+  const onPhone = useDeviceType() === 'phone';
+  const descriptionLines = density === 'page' && onPhone ? 2 : 1;
   // Menu density recomposes on a narrow row (a phone sheet): the scope leaves its column for line 3, and
   // a wide action (`stackActionWhenNarrow`) leaves its column for the line under the text.
   const [narrow, setNarrow] = React.useState(false);
@@ -93,14 +97,24 @@ export const CapabilityRow = React.memo(function CapabilityRow(
   // description (a session change), else the facts. On a narrow row the scope follows it as line 3.
   const menuLine2: React.ReactNode =
     status !== null || props.description == null ? factsLine : props.description;
+  // Plain facts share the scope's line ("Everywhere · 1.2k tokens"); a status or a change is its own line 2.
+  const narrowScopeLeadsFacts = status === null && props.description == null && factsLine !== null;
   const menuSubtitle: React.ReactNode =
     menuNarrow && summary !== null ? (
-      <View style={[styles.narrowLines, dimmed ? styles.dimmed : null]}>
-        {typeof menuLine2 === 'string' ? (
-          <Text variant="meta" numberOfLines={1} style={styles.summary}>{menuLine2}</Text>
-        ) : menuLine2}
-        <View testID={`${props.testID}:scope`}>{summary}</View>
-      </View>
+      narrowScopeLeadsFacts ? (
+        <View style={[styles.narrowFactsLine, dimmed ? styles.dimmed : null]}>
+          <View testID={`${props.testID}:scope`}>{summary}</View>
+          <Text variant="meta" style={styles.dot} aria-hidden>·</Text>
+          {factsLine}
+        </View>
+      ) : (
+        <View style={[styles.narrowLines, dimmed ? styles.dimmed : null]}>
+          {typeof menuLine2 === 'string' ? (
+            <Text variant="meta" numberOfLines={1} style={styles.summary}>{menuLine2}</Text>
+          ) : menuLine2}
+          <View testID={`${props.testID}:scope`}>{summary}</View>
+        </View>
+      )
     ) : (
       menuLine2
     );
@@ -120,7 +134,7 @@ export const CapabilityRow = React.memo(function CapabilityRow(
       </>
     );
   const right = stackedAction !== null ? null : menuNarrow ? (
-    (props.action ?? null)
+    props.action == null ? null : <View style={styles.narrowAction}>{props.action}</View>
   ) : menu ? (
     summary === null && props.action == null ? null : (
       <View style={styles.menuColumns}>
@@ -144,7 +158,7 @@ export const CapabilityRow = React.memo(function CapabilityRow(
         {...(menu
           ? menuSubtitle == null ? {} : { subtitle: menuSubtitle }
           : props.description == null ? {} : { subtitle: props.description })}
-        subtitleLines={1}
+        subtitleLines={descriptionLines}
         {...(menu || summary === null ? {} : { titleMeta: summary })}
         {...(props.checked !== undefined
           ? {
@@ -215,6 +229,10 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: 'flex-end',
     gap: theme.space.s8,
   },
-  narrowLines: { gap: theme.space.s2, alignItems: 'flex-start' },
+  // Stretch, so a long status chip truncates inside the row instead of running past it.
+  narrowLines: { gap: theme.space.s2, alignItems: 'stretch', minWidth: 0 },
+  narrowAction: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+  narrowFactsLine: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, minWidth: 0 },
+  dot: { color: theme.colors.text.tertiary },
   dimmed: { opacity: 0.6 },
 }));
