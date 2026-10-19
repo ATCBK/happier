@@ -2891,6 +2891,7 @@ export async function startDaemonSessionControlRuntime(
       (await requesterRuntimeAccess?.resolve(
         sessionId,
         attribution,
+        signal,
       )) ?? null;
     if (context) {
       try {
@@ -2932,6 +2933,7 @@ export async function startDaemonSessionControlRuntime(
     sessionId: string | null,
     expected: RequesterSessionRuntimeContext | null,
     retainedAttribution?: TrackedSession['requesterWorkAttributionV1'],
+    signal?: AbortSignal,
   ): Promise<void> => {
     if (sessionId === null) {
       if (expected || controlRuntimeResourcesDisposed || isRuntimePublicationQuiescing()) {
@@ -2941,7 +2943,8 @@ export async function startDaemonSessionControlRuntime(
     }
     await assertRequesterSessionAccountContextCurrent({
       expected,
-      resolveCurrent: () => resolveSessionAccountContext(sessionId, retainedAttribution),
+      signal,
+      resolveCurrent: () => resolveSessionAccountContext(sessionId, retainedAttribution, signal),
       readTrackedContext: () =>
         findTrackedSessionByHappySessionId(
           params.pidToTrackedSession.values(),
@@ -13143,7 +13146,7 @@ export async function startDaemonSessionControlRuntime(
         const context = await resolveSessionAccountContext(parentSessionId, undefined, input.signal);
         let retained = false;
         try {
-          await assertSessionAccountCurrent(parentSessionId, context);
+          await assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal);
           const resolved = await withSessionAccountHome(context, () =>
             resolveConnectedServiceAuthForSpawn({
               ...input,
@@ -13177,7 +13180,7 @@ export async function startDaemonSessionControlRuntime(
                     allowNativeAccountState: false,
                     connectedAccountsOwner: context.connectedAccountsOwner,
                     isAccountRuntimeCurrent: async () => {
-                      await assertSessionAccountCurrent(parentSessionId, context);
+                      await assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal);
                       return true;
                     },
                   }
@@ -13185,7 +13188,7 @@ export async function startDaemonSessionControlRuntime(
             }),
           );
           try {
-            await assertSessionAccountCurrent(parentSessionId, context);
+            await assertSessionAccountCurrent(parentSessionId, context, undefined, input.signal);
           } catch (error) {
             try { await resolved?.cleanupOnFailure?.(); }
             finally { await resolved?.materializationPurposeLease?.dispose(); }
@@ -13198,9 +13201,9 @@ export async function startDaemonSessionControlRuntime(
           if (!retained) await releaseSessionAccountContext(context);
         }
       },
-      registerRunTargets: (registration) => {
+      registerRunTargets: (registration, signal) => {
         return registerExecutionRunConnectedServicesTarget({ registry: connectedServiceRuntimeRegistry,
-          registration, withSessionAccountContext, assertSessionAccountCurrent });
+          registration, withSessionAccountContext, assertSessionAccountCurrent, signal });
       },
       unregisterRunTargets: (runKey) => {
         connectedServiceRuntimeRegistry.unregisterRunKey(runKey);
