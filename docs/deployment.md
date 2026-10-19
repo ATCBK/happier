@@ -211,6 +211,7 @@ console plan §3.5):
   - Changing either value changes the WorkOS runtime fingerprint, which invalidates
     already-started OAuth attempts bound to the previous runtime.
 - Logging format (development source): `HAPPIER_SERVER_LOG_FORMAT=json` opts Node into structured stdout through the server configuration registry and post-Home-overlay logger initialization; unset or invalid values retain pretty output.
+- Sentry native CPU profiling (development source): `SENTRY_PROFILE_SESSION_SAMPLE_RATE` defaults to `0`. A positive rate enables the native integration on Node. Bun-based servers cannot load the V8 profiler; they emit a `profiling-unavailable` warning and retain Sentry error capture. Native profiling is not available in Bun-compiled server binaries.
 - Debug logging: `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING` (enables file logging + dev log endpoint).
 
 ## Happier Cloud as the default Account Service (0.3)
