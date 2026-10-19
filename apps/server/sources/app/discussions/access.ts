@@ -13,27 +13,38 @@ import { projectResourceRecipientEnvelope, resourceGrantRelationsSelect, resolve
     resolveResourceGrantAudienceFromFacts, readResourceGrantPrincipalAudienceInTx, type ResourceGrantAccess, type ResourceGrantAccessFacts,
     type ResourceGrantStorageAdapter } from "@/app/teams/resourceGrantAccess";
 import type { Tx } from "@/storage/inTx";
-import { TransactionReplayRequiredError } from '@/storage/inTx';
-import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
-import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { inReadSnapshot, TransactionReplayRequiredError } from '@/storage/inTx';
+import { getDbProviderFromEnv } from '@/storage/prisma';
+import { beforeAccountChangePublication } from '@/app/changes/markAccountChanged';
+import { fenceSessionAccountCursorAudienceInTx, readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 
-/** Stabilize lifecycle and key authority before a Discussion mutation takes resource locks. */
-export async function acquireDiscussionMutationAccountsInTx(tx: Tx, input: Readonly<{
+type DiscussionMutationAudienceInput = Readonly<{
     discussionId: string; actorAccountId?: string; additionalAccountIds?: readonly string[];
     additionalSessionIds?: readonly string[]; includeParticipantSessions?: boolean;
     additionalGrantPrincipal?: PrincipalRefV1;
     includeDiscussionPublication?: boolean;
-}>): Promise<void> {
+}>;
+
+async function readDiscussionParticipantSessionIdsInTx(tx: Tx, input: DiscussionMutationAudienceInput) {
+    if (!input.includeParticipantSessions) return [];
+    const [participants, edges] = await Promise.all([
+        tx.discussionParticipant.findMany({ where: { discussionId: input.discussionId, removedAt: null },
+            select: { sessionId: true } }),
+        tx.sessionFollowEdge.findMany({ where: { sourceDiscussionId: input.discussionId },
+            select: { destinationSessionId: true } }),
+    ]);
+    return [...participants.flatMap(participant => participant.sessionId ? [participant.sessionId] : []),
+        ...edges.map(edge => edge.destinationSessionId)];
+}
+
+/** One census serves both pre-attempt preparation and in-transaction admission. */
+async function readDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutationAudienceInput) {
     const discussion = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { ownerAccountId: true } });
-    const readParticipantSessionIds = async () => input.includeParticipantSessions
-        ? (await tx.discussionParticipant.findMany({ where: { discussionId: input.discussionId, removedAt: null },
-            select: { sessionId: true } })).flatMap(participant => participant.sessionId ? [participant.sessionId] : [])
-        : [];
     const sessionIds = [...new Set([
-        ...await readParticipantSessionIds(),
+        ...await readDiscussionParticipantSessionIdsInTx(tx, input),
         ...input.additionalSessionIds ?? [],
     ])];
-    const readPublicationAudience = async () => [
+    const publicationAudience = [
         ...(input.includeDiscussionPublication === false ? [] : await resolveDiscussionAudienceInTx(tx, input.discussionId)),
         ...(discussion && input.additionalGrantPrincipal ? await readResourceGrantPrincipalAudienceInTx(tx, {
             ownerAccountId: discussion.ownerAccountId, principal: input.additionalGrantPrincipal,
@@ -43,20 +54,48 @@ export async function acquireDiscussionMutationAccountsInTx(tx: Tx, input: Reado
         ...(discussion ? [discussion.ownerAccountId] : []),
         ...(input.actorAccountId ? [input.actorAccountId] : []),
         ...input.additionalAccountIds ?? [],
-        ...await readPublicationAudience(),
+        ...publicationAudience,
     ];
     const audience = await readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds);
-    await acquireAccountChangePublicationLocksInTx(tx, audience.accountIds, { includeSingleAccount: true });
-    const current = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { ownerAccountId: true } });
-    const currentAudience = await readSessionAccountCursorAudienceInTx(tx, sessionIds,
-        [...additionalAccountIds, ...await readPublicationAudience()]);
+    return { ownerAccountId: discussion?.ownerAccountId, sessionIds, additionalAccountIds, audience };
+}
+
+async function fenceDiscussionMutationAudienceInTx(tx: Tx, input: DiscussionMutationAudienceInput,
+    { ownerAccountId, sessionIds, additionalAccountIds, audience }: Awaited<ReturnType<typeof readDiscussionMutationAudienceInTx>>) {
+    await fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds);
+    const current = await readDiscussionMutationAudienceInTx(tx, input);
     const admittedAccounts = new Set(audience.accountIds);
     const admittedSessions = new Set(sessionIds);
-    if (current?.ownerAccountId !== discussion?.ownerAccountId
-        || (await readParticipantSessionIds()).some(sessionId => !admittedSessions.has(sessionId))
-        || currentAudience.accountIds.some(accountId => !admittedAccounts.has(accountId))) {
+    if (current.ownerAccountId !== ownerAccountId
+        || current.sessionIds.some(sessionId => !admittedSessions.has(sessionId))
+        || current.audience.accountIds.some(accountId => !admittedAccounts.has(accountId))) {
         throw new TransactionReplayRequiredError('transaction-account-audience-changed');
     }
+    if (input.includeParticipantSessions) {
+        // Fanout consumes the actual Follow destinations. A newly observed
+        // Session must replay the complete cohort, never acquire a parent lock
+        // after this mutation has already taken its child locks.
+        beforeAccountChangePublication(tx, audience.accountIds, async client => {
+            if ((await readDiscussionParticipantSessionIdsInTx(client, input)).some(sessionId => !admittedSessions.has(sessionId))) {
+                throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+            }
+        });
+    }
+}
+
+/** Stabilize lifecycle and key authority before a Discussion mutation takes resource locks. */
+export async function acquireDiscussionMutationAccountsInTx(tx: Tx, input: DiscussionMutationAudienceInput): Promise<void> {
+    await fenceDiscussionMutationAudienceInTx(tx, input, await readDiscussionMutationAudienceInTx(tx, input));
+}
+
+/** Refresh outside each mutation attempt, then admit Accounts before any domain reads. */
+export async function prepareDiscussionMutationAccounts(input: DiscussionMutationAudienceInput): Promise<(tx: Tx) => Promise<void>> {
+    // SQLite already owns its single writer; retain its existing in-transaction census.
+    if (getDbProviderFromEnv(process.env, 'postgres') === 'sqlite') {
+        return tx => acquireDiscussionMutationAccountsInTx(tx, input);
+    }
+    const audience = await inReadSnapshot(tx => readDiscussionMutationAudienceInTx(tx, input));
+    return tx => fenceDiscussionMutationAudienceInTx(tx, input, audience);
 }
 
 export type DiscussionStorageMode = "plain" | "e2ee";

@@ -7,9 +7,8 @@ import { computeSessionMutationEqualityPlainDigestV1, SessionMutationEqualityEvi
 import type { StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { inTx, type Tx } from '@/storage/inTx';
-import { acquireDiscussionMutationAccountsInTx, isDiscussionCredentialCurrentInTx, resolveDiscussionContextInTx, filterAccountsWithCurrentDiscussionReadAccessInTx, discussionContextStorageAdapter, newDiscussionContextStorageAdapter, type DiscussionContext } from './access';
-import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
-import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { acquireDiscussionMutationAccountsInTx, prepareDiscussionMutationAccounts, isDiscussionCredentialCurrentInTx, resolveDiscussionContextInTx, filterAccountsWithCurrentDiscussionReadAccessInTx, discussionContextStorageAdapter, newDiscussionContextStorageAdapter, type DiscussionContext } from './access';
+import { fenceSessionAccountCursorAudienceInTx, readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { admitDiscussionDocSourceInTx, readDiscussionDocSourceAuthorityAccountIdsInTx, resolveDiscussionDocSourcesInTx, resolveDiscussionDocTargetInTx, validateDiscussionDocContentSource } from './docPassages';
 import { admitDiscussionSecondOpinionSourceInTx } from './secondOpinion';
 import { validateInitialDiscussionGrantsInTx, applyInitialDiscussionGrantsInTx, inviteDiscussionParticipantInTx } from './accessService';
@@ -127,11 +126,12 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
         ...(request.firstMessage.mentionedSessionIds ?? []),
         ...(request.participants ?? []).flatMap(participant => participant.kind === 'session' ? [participant.sessionId] : []),
     ].filter((id): id is string => typeof id === 'string');
-    const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionIds, [input.actorAccountId,
+    const admissionAccountIds = [input.actorAccountId,
         ...(request.participants ?? []).flatMap(participant => participant.kind === 'account' ? [participant.accountId] : []),
         ...await readDiscussionDocSourceAuthorityAccountIdsInTx(tx,
-            request.firstMessage.replyTarget?.kind === 'doc_passage' ? request.firstMessage.replyTarget.doc : null)]);
-    await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
+            request.firstMessage.replyTarget?.kind === 'doc_passage' ? request.firstMessage.replyTarget.doc : null)];
+    const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionIds, admissionAccountIds);
+    await fenceSessionAccountCursorAudienceInTx(tx, admissionAudience, admissionSessionIds, admissionAccountIds);
     if (!await isDiscussionCredentialCurrentInTx(tx, { accountId: input.actorAccountId, authentication: input.authentication })) {
         return discussionFailure('discussion_post_denied');
     }
@@ -431,7 +431,7 @@ async function manageDiscussion(input: ExactDiscussion & Readonly<{
     intent: 'rename' | 'archive' | 'restore'; titleContent?: StrictSessionStoredMessageContentEnvelope;
 }>): Promise<DiscussionResult<DiscussionDetailsResponseV1>> {
     return inTx(async tx => {
-        await acquireDiscussionMutationAccountsInTx(tx, { ...input, includeParticipantSessions: input.intent !== 'rename' });
+        if (input.intent === 'rename') await acquireDiscussionMutationAccountsInTx(tx, input);
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         if (context.access.level !== 'owner' && context.access.level !== 'admin') return discussionFailure('discussion_manage_denied');
@@ -451,11 +451,18 @@ async function manageDiscussion(input: ExactDiscussion & Readonly<{
             const archivedAt = input.intent === 'archive' ? discussion.archivedAt ?? new Date() : null;
             changed = archivedAt !== discussion.archivedAt;
             if (changed) {
-                await tx.discussion.update({ where: { id: discussion.id }, data: { archivedAt } });
                 if (archivedAt) {
-                    await withdrawDiscussionInputRepliesInTx(tx, { discussionId: discussion.id });
-                    await detachDiscussionFollowSourceInTx(tx, { discussionId: discussion.id });
+                    // A concurrent archive may have committed after this read.
+                    // Keep its accepted timestamp and run lifecycle effects only
+                    // for the transaction that actually changes the state.
+                    const archived = await tx.discussion.updateMany({ where: { id: discussion.id, archivedAt: null }, data: { archivedAt } });
+                    changed = archived.count === 1;
+                    if (changed) {
+                        await withdrawDiscussionInputRepliesInTx(tx, { discussionId: discussion.id });
+                        await detachDiscussionFollowSourceInTx(tx, { discussionId: discussion.id });
+                    }
                 } else {
+                    await tx.discussion.update({ where: { id: discussion.id }, data: { archivedAt } });
                     const participants = await tx.discussionParticipant.findMany({ where: { discussionId: discussion.id,
                         removedAt: null, sessionId: { not: null } }, select: { sessionId: true } });
                     for (const participant of participants) if (participant.sessionId) await attachDiscussionFollowSourceInTx(tx, {
@@ -480,7 +487,9 @@ async function manageDiscussion(input: ExactDiscussion & Readonly<{
             return discussionSuccess({ discussion: projected.value, ownedSessions });
         }
         return discussionSuccess({ discussion: projected.value });
-    }, { isolationLevel: 'Serializable' });
+    }, input.intent === 'rename' ? { isolationLevel: 'Serializable' } : {
+        prepare: () => prepareDiscussionMutationAccounts({ ...input, includeParticipantSessions: true }),
+    });
 }
 
 export const renameDiscussion = (input: ExactDiscussion & Readonly<{ titleContent: StrictSessionStoredMessageContentEnvelope }>): Promise<DiscussionResult<DiscussionDetailsResponseV1>> => manageDiscussion({ ...input, intent: 'rename' });
