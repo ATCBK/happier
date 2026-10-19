@@ -82,3 +82,26 @@ export function mapMarkdownSourceToRenderedRange(input: Readonly<{
     }
     return first === null || last === null ? null : { start: first, end: last + 1 };
 }
+
+/**
+ * The passage a rendered block stands for, in the Markdown source: from its first to its last drawn
+ * character, so the block's own marks (`# `, `- **`) stay out. Native renderers report a selection in
+ * their own drawn text, which cannot be placed in the source without searching; there the block the
+ * reader chose is the passage. Returns `null` when the block draws nothing from the source.
+ */
+export function mapMarkdownSourceBlockToPassage(input: Readonly<{
+    markdown: string;
+    start: number;
+    end: number;
+}>): Readonly<{ start: number; end: number }> | null {
+    const display = projectMarkdownFindText(input.markdown);
+    let first: number | null = null;
+    let last: number | null = null;
+    for (let index = 0; index < display.text.length; index++) {
+        if (isSpace(display.text[index]!)) continue;
+        if (display.sourceOffsets[index]! < input.start || display.sourceEnds[index]! > input.end) continue;
+        first ??= index;
+        last = index;
+    }
+    return first === null || last === null ? null : { start: display.sourceOffsets[first]!, end: display.sourceEnds[last]! };
+}

@@ -1,11 +1,12 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createFileFindSeedHandoff } from './fileFindSeedHandoff';
+import { createFileFindSeedHandoff, openChatWithFindSeed } from './fileFindSeedHandoff';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -20,8 +21,9 @@ const initialState = getStorage().getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId = '';
 beforeEach(async () => {
-    serverId = await homes.addHome({ name: 'Native History Home', serverUrl: 'https://native-history-home.test', accountId: 'account' });
-    connection = await restoreServerAccountForTest({ serverUrl: 'https://native-history-home.test', accountId: 'account', request: homes.request });
+    await homes.addHome({ name: 'Native History Home', serverUrl: 'https://native-history-home.test', accountId: 'account', serverIdentityId: 'srv_native_history_test' });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://native-history-home.test', accountId: 'account', serverIdentityId: 'srv_native_history_test', request: homes.request });
+    serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
     getStorage().setState({ profileScope: { serverId, accountId: 'account' } });
 });
 afterEach(async () => {
@@ -32,6 +34,26 @@ afterEach(async () => {
 });
 
 describe('native History launch input at the chat handoff owner', () => {
+    it('keeps the native query when reopening an existing Session through its local Home alias', async () => {
+        const handoff = createFileFindSeedHandoff();
+        const authority = captureActiveServerAccountScopeLifetime();
+        if (!authority) throw new Error('Expected real Account lifetime');
+        const seed = { query: 'violet harbor lantern', target: { kind: 'native-message' as const,
+            agentId: 'claude', remoteSessionId: 'native', sourceItemId: 'matched-item' } };
+        const open = vi.fn();
+        expect(connection!.home.id).not.toBe(serverId);
+        // Routes retain the device-local profile id; credential custody uses the
+        // portable Home identity. Both identify this same restored Home.
+        await openChatWithFindSeed({ handoff,
+            destination: { sessionId: 'already-linked', serverId: connection!.home.id },
+            seed, authority, open });
+        expect(open).toHaveBeenCalledOnce();
+        expect(handoff.takeChatCurrent({ sessionId: 'already-linked', serverId })?.seed).toMatchObject({
+            query: seed.query, target: { kind: 'route-message-id', routeMessageId:
+                `server:${makeExternalSessionHistoricalImportLocalId({ agentId: 'claude', remoteSessionId: 'native', directItemId: 'matched-item' })}` },
+        });
+        handoff.dispose();
+    });
     it('normalizes native identity once and retains the incumbent one-shot Account retirement contract', async () => {
         const handoff = createFileFindSeedHandoff();
         const authority = captureActiveServerAccountScopeLifetime();

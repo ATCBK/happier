@@ -10,13 +10,26 @@ vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit');
   return createTextModuleMock();
 });
+const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock('expo-router', async () => {
+  const { createExpoRouterMock } = await import('@/dev/testkit');
+  return createExpoRouterMock({ router: { push: navigation.push } }).module;
+});
+vi.mock('@/modal', async () => {
+  const { createModalModuleMock } = await import('@/dev/testkit');
+  return createModalModuleMock().module;
+});
 
 const { getStorage } = await import('@/sync/domains/state/storage');
+const { Modal } = await import('@/modal');
+const { getSessionComposerDraftSnapshot, resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 const { createArtifactActionsClient } = await import('./artifactActionsClient');
 const { ArtifactEditProposal } = await import('./ArtifactEditProposal');
 
 afterEach(() => {
   standardCleanup();
+  resetSessionDraftRepositoryForTests();
+  navigation.push.mockClear();
 });
 
 const scope = { serverId: 'home', accountId: 'alice' };
@@ -71,6 +84,7 @@ async function render(
   disposition?: React.ComponentProps<
     typeof ArtifactEditProposal
   >['disposition'],
+  proposer?: React.ComponentProps<typeof ArtifactEditProposal>['proposer'],
 ) {
   const screen = await renderScreen(
     <ArtifactEditProposal
@@ -81,6 +95,7 @@ async function render(
       disposition={disposition}
       viewerAccountId="alice"
       resolveAccountLabel={() => 'Ana'}
+      proposer={proposer}
     />,
   );
   await flushHookEffects();
@@ -196,6 +211,38 @@ describe('ArtifactEditProposal', () => {
     expect(screen.findByTestId('proposal.accept')).toBeNull();
     expect(screen.findByTestId('proposal.compare')).not.toBeNull();
     expect(screen.findByTestId('proposal.decline')).not.toBeNull();
+  });
+
+  it('compares the reviewed version with the current Doc through History, not by opening the current Doc', async () => {
+    const door = frontDoor({ 'doc.read': docRead({ headerVersion: 3, bodyVersion: 16 }) });
+    const screen = await render(door.client);
+    await act(async () => { await screen.pressByTestIdAsync('proposal.compare'); });
+    expect(Modal.show).toHaveBeenLastCalledWith(expect.objectContaining({
+      props: expect.objectContaining({ artifactId: 'runbook', compareFromBodyVersion: 14 }),
+    }));
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+
+  it('asks the author to redo only when pressed: an addressed reply to the suggestion waits in the same thread, unsent', async () => {
+    const door = frontDoor({ 'doc.read': docRead({ headerVersion: 3, bodyVersion: 16 }) });
+    const address = { kind: 'discussion', discussionId: 'd1' } as const;
+    const screen = await render(door.client, undefined, { label: 'Support runbook', mention: { sessionId: 'runbook-session' } });
+    expect(getSessionComposerDraftSnapshot(scope, address)).toBeNull();
+    await act(async () => { await screen.pressByTestIdAsync('proposal.askRedo'); });
+    const draft = getSessionComposerDraftSnapshot(scope, address);
+    expect(draft?.composer.text.value).toMatch(/^@Support runbook /);
+    expect(draft?.composer.mentions.value).toEqual([{ start: 0, end: 16, sessionId: 'runbook-session' }]);
+    expect(navigation.push).toHaveBeenCalledWith(expect.stringContaining('messageId=m1'));
+    // Nothing is posted for the person: only the Doc read ran.
+    expect(door.calls.map((call) => call.actionId)).toEqual(['doc.read']);
+    // The suggestion itself stays: Decline is still there.
+    expect(screen.findByTestId('proposal.decline')).not.toBeNull();
+  });
+
+  it('never offers to ask yourself to redo your own suggestion', async () => {
+    const door = frontDoor({ 'doc.read': docRead({ headerVersion: 3, bodyVersion: 16 }) });
+    const screen = await render(door.client, undefined, { label: 'You', mention: { accountId: 'alice' } });
+    expect(screen.findByTestId('proposal.askRedo')).toBeNull();
   });
 
   it('turns a refused stale Accept into the moved-on state instead of a receipt', async () => {

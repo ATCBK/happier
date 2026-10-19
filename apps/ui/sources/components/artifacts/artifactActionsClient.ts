@@ -6,12 +6,15 @@ import { ArtifactActionOutputSchemasV1, type ArtifactActionInputV1, type Artifac
 import { DocCollaborationActionInputSchemasV1, DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { ArtifactAccessActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { writeDiscussionSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
+import type { DiscussionMentionSpan } from '@/components/discussions/discussionComposerDocument';
+import { seedDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
 
 /**
  * The Artifacts surfaces reach document writes, history, restore and storage through the canonical `artifact.*`
@@ -90,6 +93,16 @@ export function createArtifactActionsClient(scope: ServerAccountScope, execute =
                 passage.range.start, passage.range.end]), uuidv5.URL);
             writeDiscussionSessionDraft({ scope, address: { kind: 'newDiscussion', draftId }, patch: { passage } });
             return buildDiscussionRouteHref({ target: { kind: 'new', address: { serverId: scope.serverId }, draftId } });
+        },
+        /**
+         * Prepare (never send) a reply to a suggested edit in its own thread: the thread's draft gets the
+         * addressed request unless it already holds the person's words, and the thread opens replying to it.
+         */
+        beginProposalReply: (input: Readonly<{ proposalRef: DiscussionMessageRefV1; text: string; mentions: readonly DiscussionMentionSpan[] }>) => {
+            const { discussionId } = input.proposalRef.discussion;
+            seedDiscussionDraft({ scope, address: { kind: 'discussion', discussionId }, text: input.text, mentions: input.mentions });
+            return buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: scope.serverId }, discussionId,
+                messageId: input.proposalRef.messageId } });
         },
         readDoc: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.read']>) => run('doc.read', input),
         replyToPassage: (input: z.infer<typeof DocCollaborationActionInputSchemasV1['doc.comment.reply']>) => runMutation('doc.comment.reply', input),

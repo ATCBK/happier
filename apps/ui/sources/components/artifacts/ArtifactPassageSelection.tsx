@@ -13,9 +13,11 @@ import {
   type Href,
 } from '@/components/appShell/workspace/destinationRoute';
 import {
+  mapMarkdownSourceBlockToPassage,
   mapMarkdownSourceToRenderedRange,
   mapRenderedSelectionToMarkdownSource,
 } from '@/components/markdown/rendering/markdownSelectionSource';
+import { MarkdownView, type MarkdownSelectionAction, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Text } from '@/components/ui/text/Text';
@@ -70,7 +72,10 @@ const MARGIN_WIDTH = 288;
  *   revision being read, and opens the one Discussion composer with that passage;
  * - each commented passage is marked where its stored source range lands in this revision, and its
  *   thread sits beside it in the margin; a mark and its thread focus each other.
- * Web reads the browser selection and geometry; elsewhere the body renders unchanged.
+ * Web reads the browser selection and geometry. iOS/Android renderers report a selection only in
+ * their own drawn text, which cannot be placed in the source without searching for it, so there the
+ * selection menu's Comment takes the block the reader selected in as the passage; marks are drawn by
+ * the Markdown owner at their source offsets, and a marked block opens its thread.
  */
 export function ArtifactPassageSelection(
   props: Readonly<{
@@ -78,12 +83,85 @@ export function ArtifactPassageSelection(
     markdown: string;
     revision: Revision | null;
     margin?: ArtifactPassageMargin;
-    children: React.ReactNode;
   }>,
 ): React.ReactElement {
-  if (Platform.OS !== 'web' || props.revision === null)
-    return <>{props.children}</>;
+  if (props.revision === null)
+    return <MarkdownView testID="artifact:body" markdown={props.markdown} />;
+  if (Platform.OS !== 'web')
+    return <NativePassageSelection {...props} revision={props.revision} />;
   return <WebPassageSelection {...props} revision={props.revision} />;
+}
+
+function overlapsBlock(range: Readonly<{ start: number; end: number }>, block: MarkdownSourceRangeAction): boolean {
+  return range.start < block.sourceStart + block.sourceLength && range.end > block.sourceStart;
+}
+
+function NativePassageSelection(
+  props: Readonly<{
+    artifactId: string;
+    markdown: string;
+    revision: Revision;
+    margin?: ArtifactPassageMargin;
+  }>,
+) {
+  const router = useRouter();
+  const client = useArtifactActionsClient();
+  const scope = useActiveServerAccountScope();
+  const margin = props.margin;
+  // Native has no margin beside the body: a passage opens its thread (the phone thread page).
+  const reportShown = margin?.reportShown;
+  React.useEffect(() => {
+    reportShown?.(false);
+  }, [reportShown]);
+  const placed = React.useMemo(
+    () => (margin?.passages ?? []).flatMap((passage) =>
+      passage.location.state === 'detached' ? [] : [{ id: passage.id, range: passage.location.range }]),
+    [margin?.passages],
+  );
+  const focusedId = margin?.focusedId ?? null;
+  const marks = React.useMemo(
+    () => placed.length === 0 ? undefined
+      : placed.map((passage) => ({ ...passage.range, current: passage.id === focusedId }))
+        .sort((left, right) => left.start - right.start),
+    [focusedId, placed],
+  );
+  const marginRef = React.useRef(margin);
+  marginRef.current = margin;
+  const passageIn = React.useCallback(
+    (block: MarkdownSourceRangeAction) => placed.find((passage) => overlapsBlock(passage.range, block)) ?? null,
+    [placed],
+  );
+  const openPassage = React.useCallback((block: MarkdownSourceRangeAction) => {
+    const passage = passageIn(block);
+    if (passage) marginRef.current?.onOpen(passage.id);
+  }, [passageIn]);
+  const isMarked = React.useCallback((block: MarkdownSourceRangeAction) => passageIn(block) !== null, [passageIn]);
+  const { artifactId, markdown, revision } = props;
+  const selectionActions = React.useMemo<readonly MarkdownSelectionAction[] | undefined>(() => !client || !scope ? undefined : [{
+    label: t('artifacts.browser.passage.comment'),
+    onPress: (block) => {
+      const range = mapMarkdownSourceBlockToPassage({ markdown, start: block.sourceStart, end: block.sourceStart + block.sourceLength });
+      if (!range) return;
+      const passage = captureDocPassageV1({
+        ref: { kind: 'doc', artifactId, serverId: scope.serverId },
+        revision,
+        source: markdown,
+        range,
+      });
+      router.push(client.beginPassageComment(passage) as Href);
+    },
+  }], [artifactId, client, markdown, revision, router, scope]);
+  return (
+    <MarkdownView
+      testID="artifact:body"
+      markdown={markdown}
+      selectionActions={selectionActions}
+      sourceMarkKind="passage"
+      findSourceRanges={marks}
+      onPressSourceRange={marks ? openPassage : undefined}
+      sourceRangePressable={isMarked}
+    />
+  );
 }
 
 /** Text nodes in document order with their offsets in the element's `textContent`. */
@@ -117,7 +195,6 @@ function WebPassageSelection(
     markdown: string;
     revision: Revision;
     margin?: ArtifactPassageMargin;
-    children: React.ReactNode;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -371,7 +448,7 @@ function WebPassageSelection(
             />
           ));
         })}
-        {props.children}
+        <MarkdownView testID="artifact:body" markdown={props.markdown} />
         {selected && client && scope ? (
           <View
             style={[styles.anchor, { top: selected.top, left: selected.left }]}

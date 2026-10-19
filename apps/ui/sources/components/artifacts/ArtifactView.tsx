@@ -171,7 +171,7 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
     if (readArtifactCodeLanguage(props.artifact) || props.artifact.bodyVersion === undefined) return body;
     return <ArtifactPassageSelection artifactId={props.artifact.id} markdown={markdown}
         revision={{ headerVersion: props.artifact.headerVersion, bodyVersion: props.artifact.bodyVersion }}
-        margin={props.collaboration?.margin}>{body}</ArtifactPassageSelection>;
+        margin={props.collaboration?.margin} />;
 }
 
 function readFacts(artifact: DecryptedArtifact, collaboration: DocCollaboration | null): readonly PageHeaderMetaFact[] {

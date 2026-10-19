@@ -5,6 +5,7 @@ import { HappierArtifactRevisionList, useHappierTextPresentation, type HappierAr
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -85,8 +86,10 @@ const HISTORY_PANE_HOST: HappierArtifactRevisionListProps['host'] = { ...HISTORY
 /**
  * An artifact's History (lab A6): earlier versions newest first → preview → Restore. Restore is the one
  * primary action and adds the chosen body as a new version; history is never rewritten (ART-A1).
+ * Opened to compare (a suggestion or comment written against an earlier version, C5 Compare), it starts
+ * on that version and each preview shows what changed from it to the current text.
  */
-function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore: boolean; onClose: () => void }>) {
+function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore: boolean; compareFromBodyVersion?: number; onClose: () => void }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const client = useArtifactActionsClient();
@@ -115,6 +118,7 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     const [refreshIntent, requestRefresh] = React.useReducer((intent: number) => intent + 1, 0);
     const artifactId = props.artifactId;
     const current = artifact?.bodyVersion;
+    const compareFrom = props.compareFromBodyVersion;
     const history = state?.client === client && state.artifactId === artifactId ? state : null;
     const selected = selection?.client === client && selection.artifactId === artifactId ? selection.bodyVersion : null;
 
@@ -136,11 +140,14 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
             setSelection(previous => {
                 if (previous?.client === client && previous.artifactId === artifactId
                     && earlier.some(revision => revision.bodyVersion === previous.bodyVersion)) return previous;
+                // Opened to compare: the version the reader reviewed leads, on a phone too.
+                if (compareFrom !== undefined && earlier.some(revision => revision.bodyVersion === compareFrom))
+                    return { client, artifactId, bodyVersion: compareFrom };
                 return sideBySideRef.current && earlier[0] ? { client, artifactId, bodyVersion: earlier[0].bodyVersion } : null;
             });
         });
         return () => { active = false; };
-    }, [client, artifactId, current, refreshIntent]);
+    }, [client, artifactId, compareFrom, current, refreshIntent]);
 
     const restore = React.useCallback(async (bodyVersion: number) => {
         if (!client || !artifact || artifact.bodyVersion === undefined) return;
@@ -192,6 +199,7 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     const earlier = history.data.revisions.filter((revision) => revision.bodyVersion !== current);
     const chosen = earlier.find((revision) => revision.bodyVersion === selected) ?? (sideBySide ? earlier[0] ?? null : null);
     const versionNumber = (revision: Revision) => revision.bodyVersion;
+    const currentBody = history.data.revisions.find(revision => revision.bodyVersion === current)?.body ?? artifact?.body ?? null;
 
     const list = (
         <HappierArtifactRevisionList
@@ -233,7 +241,10 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
                 {`${t('artifacts.browser.history.version', { n: versionNumber(chosen) })} · ${formatRelativeTimeShort(chosen.createdAt, Date.now())}`}
             </Text>
             <ScrollView style={styles.previewScroll}>
-                {typeof chosen.body === 'string' ? <MarkdownView markdown={chosen.body} />
+                {compareFrom !== undefined && typeof chosen.body === 'string' && typeof currentBody === 'string'
+                    ? <ProseDiffViewer mode="text" testID="artifact-history:changes" oldText={chosen.body} newText={currentBody}
+                        prose={{ oldLabel: t('artifacts.browser.history.version', { n: versionNumber(chosen) }), newLabel: t('artifacts.browser.history.now') }} />
+                    : typeof chosen.body === 'string' ? <MarkdownView markdown={chosen.body} />
                     : chosen.body ? <ArtifactBinaryBody artifactId={props.artifactId} reference={chosen.body} name={artifact?.title || t('artifacts.untitled')} readBytes={sync.fetchArtifactBinary} />
                         : <Text style={styles.caption}>{t('artifacts.noContent')}</Text>}
             </ScrollView>
@@ -274,16 +285,19 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     );
 }
 
-type HistoryModalProps = CustomModalInjectedProps & Readonly<{ artifactId: string; canRestore: boolean }>;
+type HistoryModalProps = CustomModalInjectedProps & Readonly<{ artifactId: string; canRestore: boolean; compareFromBodyVersion?: number }>;
 
 function ArtifactHistoryModal(props: HistoryModalProps): React.ReactElement {
-    return <ArtifactHistoryContent artifactId={props.artifactId} canRestore={props.canRestore} onClose={props.onClose} />;
+    return <ArtifactHistoryContent artifactId={props.artifactId} canRestore={props.canRestore}
+        compareFromBodyVersion={props.compareFromBodyVersion} onClose={props.onClose} />;
 }
 
-export function showArtifactHistorySheet(params: Readonly<{ artifactId: string; name: string; canRestore: boolean }>): void {
+/** `compareFromBodyVersion` opens History on that version, showing its changes up to the current text. */
+export function showArtifactHistorySheet(params: Readonly<{ artifactId: string; name: string; canRestore: boolean; compareFromBodyVersion?: number }>): void {
     Modal.show({
         component: ArtifactHistoryModal,
-        props: { artifactId: params.artifactId, canRestore: params.canRestore },
+        props: { artifactId: params.artifactId, canRestore: params.canRestore,
+            ...(params.compareFromBodyVersion === undefined ? {} : { compareFromBodyVersion: params.compareFromBodyVersion }) },
         chrome: {
             kind: 'card',
             testID: 'artifact-history-modal',

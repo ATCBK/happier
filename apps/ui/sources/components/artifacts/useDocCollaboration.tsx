@@ -161,9 +161,10 @@ export function useDocCollaboration(
       prose.access === 'edit' ||
       prose.access === 'admin');
   const proseName = prose?.title || t('artifacts.untitled');
-  const openHistory = React.useCallback(() => {
+  // A changed passage opens History on the version its comment was written against, compared with now.
+  const openHistory = React.useCallback((compareFromBodyVersion: number) => {
     if (artifactId)
-      showArtifactHistorySheet({ artifactId, name: proseName, canRestore });
+      showArtifactHistorySheet({ artifactId, name: proseName, canRestore, compareFromBodyVersion });
   }, [artifactId, canRestore, proseName]);
   const open = React.useCallback(
     (discussionId: string) => {

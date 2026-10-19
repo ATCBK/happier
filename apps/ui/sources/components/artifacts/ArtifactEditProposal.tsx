@@ -20,6 +20,7 @@ import { publishPresentationNotice } from '@/components/sessions/presentation/pr
 import { readViewportClass } from '@/utils/platform/useViewportClass';
 import type { ArtifactActionsClient } from './artifactActionsClient';
 import { artifactViewRoute } from './artifactBrowserModel';
+import { showArtifactHistorySheet } from './ArtifactHistorySheet';
 
 type Revision = Readonly<{ headerVersion: number; bodyVersion: number }>;
 type Currency = 'unknown' | 'current' | 'movedOn';
@@ -53,6 +54,8 @@ export function ArtifactEditProposal(
     disposition: DocEditProposalDispositionV1 | undefined;
     viewerAccountId: string | null;
     resolveAccountLabel: (accountId: string) => string | null;
+    /** Who suggested the edit, as the thread names and mentions them; Ask to redo addresses them. */
+    proposer?: ProposalAuthor | null;
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
@@ -169,6 +172,26 @@ export function ArtifactEditProposal(
           : { state: 'failed' },
     );
   }, [artifactId, base.bodyVersion, busy, client, disposition]);
+
+  const docTitle = getStorage()((state) => state.artifacts[artifactId]?.title ?? null);
+  const readOnly = refusal === 'cantEdit' || admitted?.access === 'view';
+  // Compare: the version the suggestion was reviewed against beside the current text, in History.
+  const compare = React.useCallback(() => showArtifactHistorySheet({
+    artifactId, name: docTitle || t('artifacts.untitled'), canRestore: !readOnly, compareFromBodyVersion: base.bodyVersion,
+  }), [artifactId, base.bodyVersion, docTitle, readOnly]);
+  const proposer = props.proposer ?? null;
+  const askable = proposalRef !== null && proposer !== null
+    && !('accountId' in proposer.mention && proposer.mention.accountId === props.viewerAccountId);
+  // Ask to redo prepares an addressed reply in this thread; the person still reads and sends it.
+  const askToRedo = React.useCallback(() => {
+    if (!proposalRef || !proposer) return;
+    const mention = `@${proposer.label}`;
+    router.push(client.beginProposalReply({
+      proposalRef,
+      text: `${mention} ${t('artifacts.browser.proposal.redoRequest')}`,
+      mentions: [{ start: 0, end: mention.length, ...proposer.mention }],
+    }) as never);
+  }, [client, proposalRef, proposer, router]);
 
   const openDocument = React.useCallback(
     () => router.push(artifactViewRoute(artifactId) as never),
@@ -298,32 +321,54 @@ export function ArtifactEditProposal(
         </View>
       ) : null}
       {movedOn ? (
-        <Line
-          testID={`${testID}.movedOn`}
-          tone="warning"
-          icon="warning"
-          text={
-            refusal === 'failed'
-              ? t('artifacts.browser.proposal.failed')
-              : t('artifacts.browser.proposal.movedOn')
-          }
-          action={{
-            label: t('artifacts.browser.proposal.compare'),
-            onPress: openDocument,
-            testID: `${testID}.compare`,
-          }}
-          // A suggestion that can no longer apply can still be declined: that needs no Doc rewrite.
-          before={
-            proposalRef && refusal !== 'cantEdit'
-              ? {
-                  label: t('artifacts.browser.proposal.decline'),
-                  busy: busy === 'decline',
-                  onPress: () => void decide('decline'),
-                  testID: `${testID}.decline`,
-                }
-              : undefined
-          }
-        />
+        <>
+          <Line
+            testID={`${testID}.movedOn`}
+            tone="warning"
+            icon="warning"
+            text={
+              refusal === 'failed'
+                ? t('artifacts.browser.proposal.failed')
+                : t('artifacts.browser.proposal.movedOn')
+            }
+          />
+          {/* Two ways forward (lab K1-ST): see what changed, or ask for a fresh suggestion. A suggestion
+              that can no longer apply can still be declined; that needs no Doc rewrite. */}
+          <View style={styles.foot}>
+            <RoundButton
+              testID={`${testID}.compare`}
+              size="small"
+              display="inverted"
+              title={t('artifacts.browser.proposal.compare')}
+              textStyle={{ color: theme.colors.text.secondary }}
+              onPress={compare}
+            />
+            <View style={styles.grow} />
+            <View style={styles.buttons}>
+              {proposalRef && !readOnly ? (
+                <RoundButton
+                  testID={`${testID}.decline`}
+                  size="small"
+                  display="inverted"
+                  title={t('artifacts.browser.proposal.decline')}
+                  textStyle={{ color: theme.colors.text.secondary }}
+                  loading={busy === 'decline'}
+                  disabled={busy !== null}
+                  onPress={() => void decide('decline')}
+                />
+              ) : null}
+              {askable ? (
+                <RoundButton
+                  testID={`${testID}.askRedo`}
+                  size="small"
+                  title={t('artifacts.browser.proposal.askRedo')}
+                  disabled={busy !== null}
+                  onPress={askToRedo}
+                />
+              ) : null}
+            </View>
+          </View>
+        </>
       ) : refusal === 'cantEdit' || admitted?.access === 'view' ? (
         <Line
           testID={`${testID}.cantEdit`}
@@ -388,6 +433,11 @@ export function ArtifactEditProposal(
   );
 }
 
+export type ProposalAuthor = Readonly<{
+  label: string;
+  mention: Readonly<{ accountId: string }> | Readonly<{ sessionId: string }>;
+}>;
+
 type LineAction = Readonly<{
   label: string;
   onPress: () => void;
@@ -423,8 +473,6 @@ function Line(
     tone?: 'warning' | 'danger';
     strong?: boolean;
     action?: LineAction;
-    /** A quieter choice that sits before `action` (Decline beside Compare). */
-    before?: LineAction;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -452,18 +500,6 @@ function Line(
       >
         {props.text}
       </Text>
-      {props.before ? (
-        <RoundButton
-          testID={props.before.testID}
-          size="small"
-          display="inverted"
-          title={props.before.label}
-          textStyle={{ color: theme.colors.text.secondary }}
-          loading={props.before.busy}
-          disabled={props.before.busy}
-          onPress={props.before.onPress}
-        />
-      ) : null}
       {props.action ? (
         <RoundButton
           testID={props.action.testID}
@@ -510,6 +546,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
   },
   buttons: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
+  grow: { flex: 1 },
   // One line: the receipt text takes what is left and wraps inside itself, so its action stays at
   // the end of the line even in a narrow Doc margin (lab K1-R).
   line: {

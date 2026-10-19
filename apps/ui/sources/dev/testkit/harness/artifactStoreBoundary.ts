@@ -28,7 +28,7 @@ import { ChangesResponseSchema, CurrentCursorResponseSchema, CursorGoneErrorSche
  * its at-rest sealing is opened again.
  */
 export type ArtifactStoreBoundary = Readonly<{
-    /** Answers one Artifact route, or returns `null` for any other path. */
+    /** Answers Artifact routes and their Account cursor/change feed; other paths return `null`. */
     handle(path: string, init?: RequestInit): Promise<Response> | null;
     /** The stored row, exactly as the Home would serve it. */
     read(artifactId: string): Artifact | null;

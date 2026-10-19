@@ -5,7 +5,7 @@ import type { TranscriptJumpTarget } from '@/components/sessions/transcript/view
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
 import type { WorkspaceChatFindSeedSchema } from '@happier-dev/protocol/actions/workspaceActionFamily';
 import type { z } from 'zod/mini';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /** A travelling query is launch input for one file, never a tab resource or URL parameter. */
 export type FileFindSeed = Readonly<{
@@ -106,8 +106,9 @@ export function createFileFindSeedHandoff() {
             return { seed: record.seed, authority: record.authority };
         },
         stageChat(destination: ChatFindSeedDestination, seed: ChatFindLaunchSeed, authority: ServerAccountScopeLifetime): () => void {
-            const key = JSON.stringify(['chat', destination.sessionId, destination.serverId, destination.accountId]);
-            return stage(key, { kind: 'chat', destination, seed: resolveChatFindSeed(seed) }, authority);
+            const addressed = { ...destination, serverId: resolveServerProfileScopeIdForIdentifier(destination.serverId) };
+            const key = JSON.stringify(['chat', addressed.sessionId, addressed.serverId, addressed.accountId]);
+            return stage(key, { kind: 'chat', destination: addressed, seed: resolveChatFindSeed(seed) }, authority);
         },
         peekChatCurrent(destination: ChatFindSeedHostDestination): ChatFindSeed | null {
             return findChatCurrent(destination)?.seed ?? null;

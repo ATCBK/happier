@@ -79,6 +79,9 @@ import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { isWorkspaceScopeReachable } from '@/sync/domains/workspaces/workspaceReachability';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { isSessionContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { Icon } from '@/components/ui/icons/Icon';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { t } from '@/text';
@@ -146,6 +149,7 @@ const styles = StyleSheet.create(() => ({
 }));
 
 type PendingActivation = () => Promise<unknown>;
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 const MEMORY_SEARCH_CORPORA: readonly MemorySearchCorpusV1[] = ['documents', 'sessions', 'external_transcripts'];
 
 function useUniversalSearchDynamicCache(
@@ -298,6 +302,11 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const canonicalScopeServerId = scope.serverId
         ? resolveServerProfileScopeIdForIdentifier(scope.serverId)
         : null;
+    // Results name Sessions from encrypted content: the undecided ones are demanded like visible list rows.
+    const undecidedSessions = React.useMemo(() => Object.values(readSessionListRowsForServerId(sessionListRowsByServerId, canonicalScopeServerId) ?? {})
+        .filter(row => typeof row.archivedAt !== 'number' && isSessionContentUnsettled(row))
+        .map((row): SessionAddress => ({ serverId: canonicalScopeServerId ?? '', sessionId: row.id })), [canonicalScopeServerId, sessionListRowsByServerId]);
+    useSessionContentDemand(canonicalScopeServerId ? undecidedSessions : NO_SESSION_ADDRESSES, { tag: 'search.hydrateSessionRows', hydrate: 'unsettled' });
     const sessionOrganizationProjection = useSessionOrganizationProjection(canonicalScopeServerId);
     const sessionOrganizationListViewState = React.useMemo(() => buildSessionOrganizationListViewState({
         serverId: canonicalScopeServerId ?? '',

@@ -28,6 +28,7 @@ vi.mock('@/text', async () => {
 
 import { Modal, ModalProvider } from '@/modal';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
 import { sync } from '@/sync/sync';
 import { showArtifactHistorySheet } from './ArtifactHistorySheet';
 
@@ -53,7 +54,8 @@ afterEach(async () => {
     navigation.push.mockClear();
 });
 
-async function setup(route: Parameters<typeof serveActionHomes>[0]['route'], settings?: Readonly<Record<string, unknown>>, initialWidth = 900) {
+async function setup(route: Parameters<typeof serveActionHomes>[0]['route'], settings?: Readonly<Record<string, unknown>>, initialWidth = 900,
+    compareFromBodyVersion?: number) {
     const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://history.test', accountId: 'owner', currentAccount: true, settings }],
         route: request => route(request) ?? (request.path === '/v1/artifacts/document' ? Response.json(storedHead) : undefined) });
     disposeHome = served.dispose;
@@ -64,7 +66,7 @@ async function setup(route: Parameters<typeof serveActionHomes>[0]['route'], set
     let commits = 0;
     const content = () => <React.Profiler id="history" onRender={() => { commits++; }}><ModalProvider>{null}</ModalProvider></React.Profiler>;
     const screen = await renderScreen(content());
-    await act(async () => { showArtifactHistorySheet({ artifactId: artifact.id, name: 'Notes', canRestore: true }); });
+    await act(async () => { showArtifactHistorySheet({ artifactId: artifact.id, name: 'Notes', canRestore: true, compareFromBodyVersion }); });
     await flushHookEffects();
     return { served, screen, commits: () => commits,
         resize: async (nextWidth: number) => { width = nextWidth; await screen.update(content()); },
@@ -86,6 +88,15 @@ describe('Artifact History continuity', () => {
         expect(served.requests.filter(request => request.path.endsWith('/revisions'))).toHaveLength(1);
         await screen.pressByTestIdAsync('artifact-history:version:1');
         expect(screen.getTextContent()).toContain('Notes 1');
+    });
+
+    it('opened to compare, shows what changed from the reviewed version to the current one, on a phone too', async () => {
+        for (const width of [900, 390]) {
+            const { screen } = await setup(request => request.path.endsWith('/revisions') ? Response.json(revisions) : undefined, undefined, width, 1);
+            expect(screen.findByType(ProseDiffViewer).props).toMatchObject({ oldText: 'Notes 1', newText: 'Notes 3' });
+            expect(screen.findAllByType(HappierArtifactRevisionList).map(list => list.props.selectedVersion)).toEqual(width === 900 ? [1] : []);
+            await act(async () => { Modal.hideAll(); await disposeHome?.(); disposeHome = undefined; });
+        }
     });
 
     it('uses the body measured during initial loading at 200% text size and retains the selected revision', async () => {

@@ -1,11 +1,11 @@
 import * as React from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { EnrichedMarkdownTextAdapter } from '../enriched/EnrichedMarkdownTextAdapter';
 import type { Option, OptionLongPressHandler } from '../MarkdownBlockView';
-import type { MarkdownSourceRange, MarkdownSourceRangeAction, MarkdownSourceRangeLayoutObserver } from '../MarkdownView';
+import type { MarkdownSelectionAction, MarkdownSourceRange, MarkdownSourceRangeAction, MarkdownSourceRangeLayoutObserver } from '../MarkdownView';
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import type { MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { MarkdownInlineReferences } from '../markdownInlineReferences';
@@ -34,6 +34,8 @@ type MarkdownSegmentViewProps = Readonly<{
     sourceRangeInteractionsActive: boolean;
     sourceRangeLayoutObserver?: MarkdownSourceRangeLayoutObserver;
     onPressSourceRange?: (action: MarkdownSourceRangeAction) => void;
+    sourceRangePressable?: (action: MarkdownSourceRangeAction) => boolean;
+    selectionActions?: readonly MarkdownSelectionAction[];
     renderAfterSourceRange?: (action: MarkdownSourceRangeAction) => React.ReactNode;
     highlightSourceRange?: MarkdownSourceRange | null;
     findSourceRanges?: readonly FindTextRange[];
@@ -46,9 +48,20 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     const sourceAction = React.useMemo<MarkdownSourceRangeAction>(() => ({
         sourceRange: props.segment.sourceRange,
         markdown: props.segment.markdown,
+        sourceStart: props.segment.sourceStart,
+        sourceLength: props.segment.sourceLength,
     }), [props.segment]);
     const highlighted = rangesOverlap(props.segment.sourceRange, props.highlightSourceRange ?? null);
-    const content = props.segment.type === 'enriched-markdown' && (props.findActive || props.findSourceRanges?.length)
+    // Only a block a mark touches leaves the native renderer for the decorating one (it has no
+    // character decoration); the rest keep native text and its selection menu.
+    const segmentEnd = props.segment.sourceStart + props.segment.sourceLength;
+    const marked = props.findSourceRanges?.some((range) => range.start < segmentEnd && range.end > props.segment.sourceStart) === true;
+    // The renderer's selection menu (native) offers the caller's actions for this block.
+    const selectionActions = props.selectionActions;
+    const contextMenuItems = React.useMemo(() => Platform.OS === 'web' || !selectionActions?.length ? undefined
+        : selectionActions.map((action) => ({ text: action.label, onPress: () => action.onPress(sourceAction) })),
+    [selectionActions, sourceAction]);
+    const content = props.segment.type === 'enriched-markdown' && (props.findActive || marked)
         ? <MarkdownFindFallback markdown={props.segment.markdown} sourceStart={props.segment.sourceStart}
             ranges={props.findSourceRanges ?? EMPTY_FIND_RANGES} profile={props.profile} selectable={props.selectable}
             first={props.segment.first} last={props.segment.last} onLinkPress={props.onLinkPress}
@@ -65,6 +78,7 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
                 streamingAnimated={props.streamingReveal}
                 streamingRevealPreset={props.streamingRevealPreset}
                 testID="markdown-enriched-run"
+                contextMenuItems={contextMenuItems}
                 suppressLeadingTopMargin={props.segment.first}
                 agentTexMath={props.agentTexMath}
                 inlineReferences={props.inlineReferences}
@@ -113,7 +127,7 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
     // the open file at once; swapping `Pressable` for `View` on that flip would remount all of them.
     // A disabled `Pressable` claims no touch responder, so the non-review pass behaves like the
     // plain container it replaces and selection and link presses inside still reach the content.
-    const pressable = props.onPressSourceRange !== undefined;
+    const pressable = props.onPressSourceRange !== undefined && (props.sourceRangePressable?.(sourceAction) ?? true);
     return (
         <View style={styles.sourceRangeContainer}
             onLayout={props.sourceRangeLayoutObserver

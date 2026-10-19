@@ -118,6 +118,8 @@ type EnrichedMarkdownTextAdapterProps = Readonly<{
     fillContainer?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
+    /** Items the native selection menu offers beside Copy; each reports only that it was chosen. */
+    contextMenuItems?: readonly Readonly<{ text: string; onPress: () => void }>[];
 }>;
 
 /**
@@ -274,6 +276,7 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
             md4cFlags={md4cFlags}
             onLinkPress={handleLinkPress}
             selectable={selectable}
+            {...(props.contextMenuItems ? { contextMenuItems: props.contextMenuItems.map((item) => ({ text: item.text, onPress: item.onPress })) } : {})}
             allowTrailingMargin={false}
             flavor={flavor}
         />
