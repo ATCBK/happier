@@ -1,4 +1,5 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "./sessionAccessEffects";
 import { readHomeGovernancePolicyInTx } from "@/app/home/governance/governancePolicy";
 import { readTeamIdentityConnectionInTx } from "@/app/teams/identity/teamIdentityConnectionLifecycle";
 import { readOAuthAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
@@ -36,6 +37,7 @@ export async function finalizeTeamOAuthAdmissionInTx(
         source: TeamOAuthAdmissionSource | null | undefined;
     }>,
 ): Promise<TeamOAuthAdmissionResult> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
     const [team, connection, membership] = await Promise.all([
         tx.team.findUnique({
             where: { id: input.teamId },

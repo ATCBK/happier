@@ -14,7 +14,7 @@ import {
     type TeamCredentialUsageCapabilitiesV1,
 } from '@happier-dev/protocol/teams';
 import type { Tx } from '@/storage/inTx';
-import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
+import { acquireTeamMutationAccountAdmissionInTx } from '../memberships/sessionAccessEffects';
 import type { Prisma } from '@prisma/client';
 import { AccountStatus } from '@/storage/enums.generated';
 import { resolveEffectiveTeamGroupIdsForAccountInTx } from '../groups/effectiveGroupMembership';
@@ -238,8 +238,9 @@ export async function upsertTeamCredentialUsageLimitInTx(
     const parsed = TeamCredentialUsageLimitUpsertInputV1Schema.safeParse(input.body);
     if (!parsed.success) return { ok: false, error: 'invalid_limit' };
     const body = parsed.data;
-    await acquireAccountChangePublicationLocksInTx(tx, [input.actorAccountId,
-        ...(body.limit.subjectKind === 'team_member' ? [body.limit.subjectId] : [])], { includeSingleAccount: true });
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: body.resourceId }, select: { teamId: true } });
+    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId,
+        accountIds: [input.actorAccountId, ...(body.limit.subjectKind === 'team_member' ? [body.limit.subjectId] : [])] });
     const auth = await resolveManagerResourceInTx(tx, input.actorAccountId, body.resourceId, input.authentication);
     if (!auth.ok) return auth;
     if (auth.resource.revision !== body.expectedRevision) return { ok: false, error: 'resource_changed' };
@@ -312,7 +313,8 @@ export async function deleteTeamCredentialUsageLimitInTx(
 ): Promise<Readonly<{ ok: true; resourceId: string; revision: number } | { ok: false; error: LimitError }>> {
     const parsed = TeamCredentialUsageLimitDeleteInputV1Schema.safeParse(input.body);
     if (!parsed.success) return { ok: false, error: 'invalid_limit' };
-    await acquireAccountChangePublicationLocksInTx(tx, [input.actorAccountId], { includeSingleAccount: true });
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: parsed.data.resourceId }, select: { teamId: true } });
+    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [input.actorAccountId] });
     const auth = await resolveManagerResourceInTx(tx, input.actorAccountId, parsed.data.resourceId, input.authentication);
     if (!auth.ok) return auth;
     if (auth.resource.revision !== parsed.data.expectedRevision) return { ok: false, error: 'resource_changed' };

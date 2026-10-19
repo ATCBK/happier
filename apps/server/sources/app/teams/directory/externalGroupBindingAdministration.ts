@@ -84,8 +84,9 @@ function projectBinding(row: BindingRow): TeamExternalGroupBindingV1 {
 async function authorizeInTx(
     tx: Tx,
     input: Partial<TeamOperationAuthenticationContext> & Readonly<{ teamId: string; actorAccountId: string }>,
+    operation: "view" | "mutate" = "mutate",
 ): Promise<Result<Readonly<{ defaultSessionHistoryAccess: "all_existing" | "from_membership" }>>> {
-    const identityAuthority = await authorizeTeamIdentityAdministrationInTx(tx, input);
+    const identityAuthority = await authorizeTeamIdentityAdministrationInTx(tx, input, operation);
     if (!identityAuthority.ok) return identityAuthority;
     const context = await resolveTeamActorContextInTx(tx, input);
     if (!context || !context.teamCapabilities.viewTeam) return { ok: false, error: "team_not_found" };
@@ -166,7 +167,7 @@ export async function listExternalGroupBindingsForActor(
     input: TeamExternalGroupBindingsListInputV1 & Partial<TeamOperationAuthenticationContext> & Readonly<{ actorAccountId: string }>,
 ): Promise<Result<TeamExternalGroupBindingsPageV1>> {
     return inTx(async (tx) => {
-        const authorized = await authorizeInTx(tx, input);
+        const authorized = await authorizeInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const owner = ownerFromListInput(input);
         const validOwner = await validateOwnerInTx(tx, {

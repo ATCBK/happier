@@ -1,7 +1,6 @@
-import { withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
 import { publishTeamChangedInTx } from "../teamChanges";
 import { inTx, type Tx } from "@/storage/inTx";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import {
     acquireExternalSourceAccountAdmissionInTx,
     applyExternalGroupContributionInTx,
@@ -730,7 +729,7 @@ export async function applyReadyDirectorySourceFactsForAccountInTx(
     tx: Tx,
     params: Readonly<{ sourceId: string; teamId: string; accountId: string }>,
 ): Promise<boolean> {
-    await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: params.teamId, accountIds: [params.accountId], affectedAccountIds: [params.accountId], membershipChange: { kind: "teamMembership", teamId: params.teamId } });
     const current = await tx.teamDirectorySource.findFirst({
         where: {
             id: params.sourceId,

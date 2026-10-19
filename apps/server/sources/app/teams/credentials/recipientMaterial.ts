@@ -3,7 +3,10 @@ import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams
 import { type TeamCredentialPreparationOutputV1 } from '@happier-dev/protocol/teams/credentials/actionsV1';
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
+import { readSessionAccountCursorAudienceInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialEntitlementInTx } from "./resourceAccess";
 import { qualifyTeamCredentialOperationInTx } from "./resourceRead";
@@ -404,6 +407,7 @@ export async function withdrawTeamCredentialRecipientMaterialInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ) {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     const resource = await tx.teamCredentialResource.findUnique({
         where: { id: input.resourceId },
         select: { id: true, teamId: true, custodianAccountId: true, revision: true, directSourceVersionsJson: true },
@@ -551,11 +555,21 @@ export async function readCurrentTeamCredentialRecipientMaterialInTx(
         authentication: TeamOperationAuthenticationContext;
     }>,
 ): Promise<CurrentTeamCredentialRecipientMaterialResult> {
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({
+        where: { id: input.resourceId }, select: { custodianAccountId: true },
+    });
+    const admissionSessionId = input.consumer.kind === "session" ? input.consumer.sessionId : input.consumer.parentSessionId;
+    const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionId ? [admissionSessionId] : [],
+        [input.recipientAccountId, ...(resourceIdentity ? [resourceIdentity.custodianAccountId] : [])]);
+    await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
     const resource = await tx.teamCredentialResource.findUnique({
         where: { id: input.resourceId },
         select: { teamId: true, custodianAccountId: true, displayName: true, enabled: true, revision: true, sourceBindingJson: true, directSourceVersionsJson: true },
     });
     if (!resource || resource.teamId !== input.teamId) return { ok: false as const, outcome: "unavailable" as const, reason: "access_removed" as const };
+    if (resource.custodianAccountId !== resourceIdentity?.custodianAccountId) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
     if (!resource.enabled) return { ok: false as const, outcome: "unavailable" as const, reason: "disabled" as const };
     const actor = await resolveTeamActorContextInTx(tx, {
         teamId: resource.teamId,
@@ -710,6 +724,7 @@ export async function upsertTeamCredentialRecipientMaterialInTx(
         select: { id: true, teamId: true, custodianAccountId: true, enabled: true, revision: true, sourceBindingJson: true, directSourceVersionsJson: true },
     });
     if (!resource) return { ok: false, reason: "resource_not_found" };
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resource.teamId, accountIds: [input.actorAccountId, input.recipientAccountId] });
     if (resource.custodianAccountId !== input.actorAccountId) return { ok: false, reason: "source_owner_required" };
     const qualification = await qualifyCurrentTeamCredentialSourceCustodianInTx(tx, {
         teamId: resource.teamId,
