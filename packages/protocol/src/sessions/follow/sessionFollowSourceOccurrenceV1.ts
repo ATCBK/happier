@@ -6,6 +6,7 @@ import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { SessionFollowRuleWitnessV1Schema } from './sessionFollowRuleV1.js';
 import { TurnIdSchema } from '../idsV1.js';
 import { isProjectedSessionStalledV1 } from '../awareness/runtime.js';
+import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 /** Existing committed presence fence + exact in-flight Turn; not a Message or a delivery cursor. */
 export const SessionFollowStalledOccurrenceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -39,6 +40,9 @@ export const SessionFollowRelationWitnessesV1Schema = lazyZodSchema(() => z.arra
   value.relation, 'source' in value ? value.source : null,
 ]))).size === values.length)));
 export type SessionFollowRelationWitnessV1 = z.infer<typeof SessionFollowRelationWitnessesV1Schema>[number];
+// Routing custody is closed even on retained reads. Dropping Run fields could
+// reinterpret its witness as the less specific Session follower union arm.
+defineStoredReadProjection(SessionFollowRelationWitnessesV1Schema, () => SessionFollowRelationWitnessesV1Schema);
 export const SessionFollowSourceMessageV1Schema = lazyZodSchema(() => z.strictObject({
   localId: PendingLocalIdSchema, seq: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
 }));

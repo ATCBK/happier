@@ -342,6 +342,7 @@ export function createSessionFollowContextReconciler(input: Readonly<{
         && observed.observations!.some(original => 'kind' in original
           && followDeliveries.some(queued => queued.localInputId === original.localInputId
             && sameStrictJsonValue(queued.delivery, original.delivery))
+          && 'sourceSessionId' in original.delivery.original
           && original.delivery.original.sourceSessionId === observation.sourceSessionId
           && 'sourceRequests' in original.delivery.original && original.delivery.original.sourceRequests.requests.some(request =>
             request.turnId === observation.observed.turn?.id))));

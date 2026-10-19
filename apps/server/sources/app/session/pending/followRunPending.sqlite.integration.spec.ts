@@ -83,6 +83,10 @@ describe('Run original Follow input at Pending admission and provider acceptance
         expect((await db.sessionFollowEdge.findUniqueOrThrow({ where: { destinationSessionId_sourceKey_relation: {
             destinationSessionId: f.destination.id, sourceKey: edge.sourceKey, relation: 'follower' } } })).deliveredWorkflowRunRevision).toBe(1);
         await f.accept(localId);
+        expect(await db.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId: f.destination.id, localId } } }))
+            .toMatchObject({ acceptedFollowOriginalKey: expect.any(String), inputAdmissionReceipt: {
+                followDeliveryV1: delivery, followRelations: input.followRelations,
+            } });
         expect((await db.sessionFollowEdge.findUniqueOrThrow({ where: { destinationSessionId_sourceKey_relation: {
             destinationSessionId: f.destination.id, sourceKey: edge.sourceKey, relation: 'follower' } } })).deliveredWorkflowRunRevision).toBe(2);
         await db.sessionFollowEdge.update({ where: { destinationSessionId_sourceKey_relation: {
@@ -124,10 +128,10 @@ describe('Run original Follow input at Pending admission and provider acceptance
             status: 'succeeded', terminalEventId } });
         expect(await enqueuePendingMessageByAuthenticatedMachine(input)).toMatchObject({ status: 'rejected',
             code: 'session_input_target_unavailable' });
-        expect(await enqueuePendingMessageByAuthenticatedMachine({ ...input, followDeliveryV1: {
-            ...delivery, original: { source, terminalEventId: randomUUID() } } })).toMatchObject({ status: 'rejected' });
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ ...input, followDeliveryV1: SessionFollowInputV1Schema.parse({
+            ...delivery, original: { source, terminalEventId: randomUUID() } }) })).toMatchObject({ status: 'rejected' });
         expect(await enqueuePendingMessageByAuthenticatedMachine(input)).toEqual({ status: 'accepted', localId });
-        expect(forwardRpcForUser).toHaveBeenCalledWith(expect.objectContaining({ params: { runId: source.runId } }));
+        expect(forwardRpcForUser).toHaveBeenCalledWith(expect.objectContaining({ params: { sessionId: parent.id, runId: source.runId } }));
         expect(JSON.stringify(forwardRpcForUser.mock.calls)).not.toContain('Run finished');
         expect((await db.sessionFollowEdge.findUniqueOrThrow({ where: { destinationSessionId_sourceKey_relation: {
             destinationSessionId: f.destination.id, sourceKey: edge.sourceKey, relation: 'follower' } } })).deliveredExecutionRunTerminalEventId).toBeNull();

@@ -7,6 +7,7 @@ import { resolveSessionFollowFactsInTx } from '@/app/session/personal/followFact
 import { createSessionListScopeWhere } from '@/app/session/personal/queries';
 import {
     setSessionAutoFollowPreferences,
+    setOtherAccountFollow,
     getAccountSessionFollow as getAccountSessionFollowWithAuthentication,
     removeAccountSessionFollow as removeAccountSessionFollowWithAuthentication,
     setAccountSessionFollow as setAccountSessionFollowWithAuthentication,
@@ -272,6 +273,22 @@ describe('Account Follow service', () => {
         await expect(replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [] }))
             .resolves.toMatchObject({ ok: true, value: { changed: true, sessionIds: [] } });
         expect(await db.accountSessionFollow.findMany({ where: { accountId: viewer.id, includeInVoice: true } })).toEqual([]);
+    });
+
+    it('replaces Session Voice inclusions without rewriting a generic source policy', async () => {
+        const { viewer, session, key } = await fixture();
+        const discussion = await createDiscussion({ sessionId: session.id, creatorAccountId: viewer.id, messageSeq: 1 });
+        const source = { kind: 'discussion' as const, discussionId: discussion.id };
+        const policy = { preset: 'important' as const, voice: true };
+        expect(await setOtherAccountFollow({ accountId: viewer.id, source, policy, authentication: defaultAuthentication }))
+            .toMatchObject({ ok: true });
+        expect(await replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [key.sessionId] }))
+            .toMatchObject({ ok: true, value: { sessionIds: [key.sessionId] } });
+        expect(await replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [] }))
+            .toMatchObject({ ok: true, value: { sessionIds: [] } });
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sourceKey: {
+            accountId: viewer.id, sourceKey: `discussion:${discussion.id}`,
+        } } })).toMatchObject({ following: true, followPolicy: JSON.stringify(policy) });
     });
 
     it('validates the complete replacement before mutating durable Voice inclusions', async () => {

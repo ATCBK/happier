@@ -5,6 +5,8 @@ import { SessionFollowObservePendingRequestV1Schema, SessionFollowAcknowledgeReq
 import { SessionFollowSourceProjectionRequestV1Schema } from './sessionFollowSourceProjectionV1.js';
 import { deriveSessionFollowOriginalOccurrenceKeyV1, SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
 import { FOLLOW_EVENT_KINDS_V1 } from './sessionFollowPolicyV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { SessionFollowRelationWitnessesV1Schema } from './sessionFollowSourceOccurrenceV1.js';
 
 const witness = { sourceSessionId: 'source', destinationSessionId: 'receiver',
   sourceMessage: { localId: 'report', seq: 3 }, expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'install',
@@ -15,6 +17,19 @@ const request = { v: 1, producer: 'sessionAction', permission: {},
   sourceSession: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' }, followDeliveryV1: delivery };
 
 describe('protected source-selected Follow input', () => {
+  it('retains exact Run relation custody on stored reads and never downgrades a malformed Run to a Session follower', () => {
+    const relations = SessionFollowRelationWitnessesV1Schema.parse([
+      { relation: 'follower', source: { kind: 'workflow_run', runId: 'workflow' }, attachedAt: 1, expectedRevision: 2 },
+      { relation: 'follower', source: { kind: 'execution_run', sessionId: 'source', runId: 'run' },
+        attachedAt: 1, expectedTerminalEventId: null },
+    ]);
+    expect(createStoredReadSchema(SessionFollowRelationWitnessesV1Schema).parse(relations)).toEqual(relations);
+    expect(createStoredReadSchema(SessionFollowRelationWitnessesV1Schema).safeParse([
+      { ...relations[0], source: { kind: 'unknown_run', runId: 'workflow' } },
+    ]).success).toBe(false);
+    expect(createStoredReadSchema(SessionFollowRelationWitnessesV1Schema).parse([{ relation: 'follower' }]))
+      .toEqual([{ relation: 'follower' }]);
+  });
   it('requires needs_you to name a current request original, never an immutable message', () => {
     for (const type of ['decision', 'approval', 'blocked'] as const) {
       const event = { kind: 'needs_you', type, mode: 'wait', handling: 'person' };

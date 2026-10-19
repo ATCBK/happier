@@ -161,7 +161,7 @@ describe('SessionFollowEdge service', () => {
                 { sourceKey: `session:${source.id}`, sourceSessionId: source.id, sourceDiscussionId: null, deliveredTranscriptSeq: '0' },
             ]);
         expect(await listSessionFollowSources({ accountId: owner.id, destinationSessionId: destination.id }))
-            .toMatchObject({ ok: true, value: [{ sourceSessionId: source.id }] });
+            .toMatchObject({ ok: true, value: { sources: [{ sourceSessionId: source.id }] } });
         expect(await inTx(tx => removeUnsafeSessionFollowEdgesForAccessChangeInTx(tx, { sessionId: destination.id }))).toBe(0);
         expect(await removeSessionFollowSource({ accountId: owner.id, sourceSessionId: source.id, destinationSessionId: destination.id }))
             .toMatchObject({ ok: true, value: { changed: true } });
@@ -193,7 +193,7 @@ describe('SessionFollowEdge service', () => {
         const result = await setSessionFollowSource(input);
         expect(result).toMatchObject({ ok: true, value: { source: { policy } } });
         expect(await listSessionFollowSources({ accountId: owner.id, destinationSessionId: destination.id }))
-            .toMatchObject({ ok: true, value: [{ policy }] });
+            .toMatchObject({ ok: true, value: { sources: [{ policy }] } });
         await db.session.update({ where: { id: source.id }, data: { seq: 7 } });
         const before = await inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
             principal: runtimePrincipal(owner.id), destinationSessionId: destination.id,
@@ -1304,22 +1304,22 @@ describe('SessionFollowEdge service', () => {
             destinationSessionId: destination.id,
         });
         expect(collaboratorView).toMatchObject({ ok: true });
-        expect(collaboratorView.ok && collaboratorView.value.map((entry) => entry.sourceSessionId)).toEqual([readable.id]);
+        expect(collaboratorView.ok && collaboratorView.value.sources.flatMap(entry => 'sourceSessionId' in entry ? [entry.sourceSessionId] : [])).toEqual([readable.id]);
 
         await db.session.update({ where: { id: readable.id }, data: { seq: { increment: 1 } } });
         const pendingView = await listSessionFollowSources({
             accountId: collaborator.id,
             destinationSessionId: destination.id,
         });
-        expect(pendingView.ok && pendingView.value[0]?.hasPendingUpdates).toBe(true);
+        expect(pendingView.ok && pendingView.value.sources[0]?.hasPendingUpdates).toBe(true);
 
         await db.session.update({ where: { id: readable.id }, data: { archivedAt: new Date() } });
         const archivedView = await listSessionFollowSources({
             accountId: collaborator.id,
             destinationSessionId: destination.id,
         });
-        expect(archivedView.ok && archivedView.value[0]?.deliveryState).toBe('paused_archived');
-        expect(archivedView.ok && archivedView.value[0]?.hasPendingUpdates).toBe(true);
+        expect(archivedView.ok && archivedView.value.sources[0]?.deliveryState).toBe('paused_archived');
+        expect(archivedView.ok && archivedView.value.sources[0]?.hasPendingUpdates).toBe(true);
     });
 
     it('observes an exact terminal-turn change but ignores a timestamp-only change, and stays silent while archived', async () => {

@@ -41,6 +41,8 @@ import { SessionInputAdmissionRejectionCodeV1Schema, type SessionInputAdmissionR
 import { isDeliveryMutedInTx } from '@/app/session/follow/sessionDeliveryMuteService';
 import { reconcileAutonomousExchangeAcceptedTurnInTx } from '@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx';
 import { backgroundDeliveryAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import type { Fastify } from '@/app/api/types';
+import { readCurrentExecutionRunFollowSource, type ExecutionRunFollowFrontierWitness } from '@/app/session/follow/executionRunFollowSource';
 import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInTx,
     isAutonomousExchangeRootReceiptForAccount } from '@/app/session/messages/readAutonomousExchangeSourceRoot';
 import { AutonomousExchangeStateV1Schema, createAutonomousExchangeStateV1,
@@ -103,8 +105,8 @@ import { createSessionInputReplyProgressInTx, bindSessionInputReplyAcceptedTurnI
 import { admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx, admitSessionFollowRelationsForInputInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import type { SessionPendingEnqueueByMachineRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
-import { admitSessionFollowRuleOccurrenceInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowWaitingTurnInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
-import { deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { admitSessionFollowRuleOccurrenceInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowInputInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
 import { markDiscussionReadersChangedInTx } from '@/app/discussions/changes';
 import { resolveDiscussionAudienceInTx } from '@/app/discussions/access';
@@ -658,6 +660,7 @@ export type EnqueuePendingMessageResult =
     | { ok: false; error: "transaction-unavailable"; retryAfterMs: number; correlationId?: string };
 
 type EnqueuePendingMessageInput = {
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
     followSources?: SessionInputAdmissionReceiptV1['followSources'];
     followRelations?: SessionInputAdmissionReceiptV1['followRelations'];
     followDeliveryV1?: SessionInputAdmissionReceiptV1['followDeliveryV1'];
@@ -992,6 +995,7 @@ async function enqueuePendingMessageWithAdmission(
                 }
                 const progresses: SessionFollowRuleProgressAdmission[] = [];
                 for (const witness of inputAdmissionReceipt.followSources ?? []) {
+                    if (!('sourceSessionId' in delivery.original)) return { ok: false, error: 'invalid-params' } as const;
                     if (witness.destinationSessionId !== sessionId || witness.sourceSessionId !== delivery.original.sourceSessionId
                         || !isDeepStrictEqual(witness.sourceMessage ?? witness.sourceRequests,
                             'sourceMessage' in delivery.original ? delivery.original.sourceMessage : delivery.original.sourceRequests)) {
@@ -1008,6 +1012,7 @@ async function enqueuePendingMessageWithAdmission(
                     ...(admission.kind === 'machine' ? { sourceMachineId: admission.sourceMachineId }
                         : { authentication: admission.authentication }),
                     delivery, relations: inputAdmissionReceipt.followRelations,
+                    ...(params.executionRunFrontier ? { executionRunFrontier: params.executionRunFrontier } : {}),
                 }) : [];
                 if (!relations) return { ok: false, error: 'forbidden' } as const;
                 const originalKey = deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original);
@@ -1576,6 +1581,8 @@ async function enqueuePendingMessageWithAdmission(
  * are revalidated transactionally; only the admitted exact target is retained in the receipt.
  */
 export async function enqueuePendingMessageByAuthenticatedMachine(params: Readonly<{
+    followSourceApp?: Pick<Fastify, 'forwardRpcForUser'>;
+    sourceAuthentication?: SessionAccessAuthentication;
     reply?: SessionMessageReplyAdmissionV1;
     accountId: string;
     sourceMachineId: string;
@@ -1592,6 +1599,17 @@ export async function enqueuePendingMessageByAuthenticatedMachine(params: Readon
     followRelations?: SessionPendingEnqueueByMachineRequestV1['followRelations'];
     followDeliveryV1?: SessionPendingEnqueueByMachineRequestV1['followDeliveryV1'];
 }>): Promise<SessionInputAdmissionResultV1> {
+    let executionRunFrontier: ExecutionRunFollowFrontierWitness | undefined;
+    const original = params.followDeliveryV1?.original;
+    if (original && isRunFollowOriginalV1(original) && 'terminalEventId' in original) {
+        if (!params.followSourceApp) return { status: 'rejected', code: 'session_input_target_unavailable' };
+        const read = await readCurrentExecutionRunFollowSource({ app: params.followSourceApp, accountId: params.accountId,
+            sessionId: original.source.sessionId, runId: original.source.runId,
+            authentication: params.sourceAuthentication ?? backgroundDeliveryAuthentication() });
+        if (!read.ok || read.value.terminalEventId !== original.terminalEventId)
+            return { status: 'rejected', code: 'session_input_target_unavailable' };
+        executionRunFrontier = read.value;
+    }
     const inputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.parse({
         ...buildSessionInputAdmissionReceipt({ issuer: "authenticatedMachine", callerInputConstraints: params.callerInputConstraints }),
         ...(params.followSources ? { followSources: params.followSources } : {}),
@@ -1602,6 +1620,7 @@ export async function enqueuePendingMessageByAuthenticatedMachine(params: Readon
         throw new Error("Machine admission receipt parsed to the wrong issuer arm");
     }
     const result = await enqueuePendingMessageWithAdmission({
+        ...(executionRunFrontier ? { executionRunFrontier } : {}),
         ...(params.reply ? { reply: params.reply } : {}),
         actorUserId: params.accountId,
         sessionId: params.sessionId,
@@ -3531,7 +3550,7 @@ async function commitResolvedPendingDelivery(
             ? deriveSessionFollowOriginalOccurrenceKeyV1(receipt.followDeliveryV1.original) : null;
         if (originalKey && receipt && (params.acceptedDelivery || params.acceptedTurn)) {
             await tx.sessionMessage.update({ where: { id: committed.message.id }, data: { acceptedFollowOriginalKey: originalKey } });
-            await settleAcceptedSessionFollowWaitingTurnInTx(tx, { destinationSessionId: params.sessionId, receipt });
+            await settleAcceptedSessionFollowInputInTx(tx, { destinationSessionId: params.sessionId, receipt });
         }
         const acceptedTurn = params.acceptedTurn
             ?? (params.acceptedDelivery?.t === 'plain' ? params.acceptedDelivery.v.delivery : undefined);

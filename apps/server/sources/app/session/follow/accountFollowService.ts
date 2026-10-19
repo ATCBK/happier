@@ -591,10 +591,10 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
             sessions.set(sessionId, session);
         }
         const desired = new Set(sessionIds);
-        const existing = await tx.accountSessionFollow.findMany({
-            where: { accountId: input.accountId },
+        const existing = (await tx.accountSessionFollow.findMany({
+            where: { accountId: input.accountId, sessionId: { not: null } },
             select: FOLLOW_SELECT,
-        });
+        })).filter((row): row is typeof row & { sessionId: string } => row.sessionId !== null);
         const existingBySessionId = new Map(existing.map(row => [row.sessionId, row] as const));
         let changed = false;
         for (const row of existing) {
@@ -633,9 +633,9 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
             changed = true;
         }
         if (changed) await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
-        const effective = await tx.accountSessionFollow.findMany({ where: { accountId: input.accountId, following: true },
+        const effective = await tx.accountSessionFollow.findMany({ where: { accountId: input.accountId, following: true, sessionId: { not: null } },
             select: { sessionId: true, includeInVoice: true, followPolicy: true }, orderBy: { sessionId: 'asc' } });
-        return { ok: true, value: { changed, sessionIds: effective.filter(row => resolveAccountVoiceSelection(row) !== null).map(row => row.sessionId) } };
+        return { ok: true, value: { changed, sessionIds: effective.flatMap(row => row.sessionId !== null && resolveAccountVoiceSelection(row) !== null ? [row.sessionId] : []) } };
     });
 }
 
@@ -729,13 +729,14 @@ export async function observePendingAccountVoiceFollowInTx(tx: Tx, input: Readon
     const muteScopes = await readDeliveryMuteScopesInTx(tx, { receiver: { kind: 'account' }, accountId: input.accountId });
     if (muteScopes === null) return null;
     const follows = await tx.accountSessionFollow.findMany({
-        where: { accountId: input.accountId, following: true,
+        where: { accountId: input.accountId, following: true, sessionId: { not: null },
             OR: [{ includeInVoice: true }, { followPolicy: { not: null } }] },
         select: { sessionId: true, voiceDeliveredFrontier: true, includeInVoice: true, followPolicy: true },
         orderBy: { sessionId: 'asc' },
     });
     const pending: PendingAccountVoiceFollowObservationV1[] = [];
     for (const follow of follows) {
+        if (follow.sessionId === null) continue;
         const selection = resolveAccountVoiceSelection(follow);
         if (selection === null) continue;
         if (follow.sessionId === input.voiceSessionId) continue;

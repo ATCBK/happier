@@ -60,6 +60,7 @@ import {
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMachineMutationV1Schema, type SessionMessageReplyMutationResultV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { mutateSessionMessageReplyForMachineInTx } from '@/app/session/messages/sessionMessageReply';
+import { createServerRpcForwarder } from './serverRpcForwarder';
 
 async function acquireMachinePublicationLocksInTx(tx: Tx, machineId: string): Promise<string[]> {
     // SQLite already admits one writer. PostgreSQL/MySQL use the same ordered
@@ -338,6 +339,8 @@ export function machineUpdateHandler(
                     return;
                 }
                 const result = await enqueuePendingMessageByAuthenticatedMachine({
+                    followSourceApp: { forwardRpcForUser: createServerRpcForwarder({ io: socket.nsp.server }) },
+                    sourceAuthentication: readSessionAccessAuthenticationFromSocket(socket),
                     ...(parsed.data.reply ? { reply: parsed.data.reply } : {}),
                     ...(parsed.data.followSources ? { followSources: parsed.data.followSources } : {}),
                     ...(parsed.data.followRelations ? { followRelations: parsed.data.followRelations } : {}),

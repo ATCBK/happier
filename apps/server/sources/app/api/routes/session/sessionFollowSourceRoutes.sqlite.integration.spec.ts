@@ -18,6 +18,8 @@ import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lig
 
 import { createAuthenticatedTestApp } from '../../testkit/sqliteFastify';
 import { registerSessionFollowSourceRoutes } from './registerSessionFollowSourceRoutes';
+import { registerSessionFollowRoutes } from './registerSessionFollowRoutes';
+import type { Fastify as AppFastify } from '@/app/api/types';
 import { registerPublicShareReadRoutes } from '../share/registerPublicShareReadRoutes';
 import { createPublicShareMessagesAccessToken, PUBLIC_SHARE_MESSAGES_ACCESS_TOKEN_HEADER, requirePublicShareAccessGrantSecret } from '../share/publicShareMessageAccessGrant';
 
@@ -31,10 +33,12 @@ async function createSession(accountId: string, overrides: Record<string, unknow
     });
 }
 
-async function buildApp(accountId: string) {
+async function buildApp(accountId: string, forwardRpcForUser?: AppFastify['forwardRpcForUser']) {
     const app = createAuthenticatedTestApp();
+    if (forwardRpcForUser) app.decorate('forwardRpcForUser', forwardRpcForUser);
     app.addHook('onRequest', async (request: FastifyRequest) => { request.headers['x-test-user-id'] = accountId; });
     registerSessionFollowSourceRoutes(app);
+    registerSessionFollowRoutes(app);
     registerPublicShareReadRoutes(app);
     await app.ready();
     return app;
@@ -63,6 +67,64 @@ describe('Session Follow source routes', () => {
     });
 
     afterAll(async () => harness.close());
+
+    it.each(['account', 'session'] as const)('keeps an exact retained Execution Run source for a %s receiver', async kind => {
+        const owner = await createAccount();
+        const parent = await createSession(owner.id, { publisherGeneration: 1n });
+        const destination = await createSession(owner.id);
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id,
+            installationId: randomUUID(), metadata: encodePlainMachineStoredContent({}),
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER) } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: parent.id, data: 'opaque' } });
+        await db.session.update({ where: { id: parent.id }, data: { runtimeMachineTarget: {
+            homeId: 'srv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', accountId: owner.id, sessionId: parent.id,
+            machineId: machine.id, installationId: machine.installationId! } } });
+        const source = { kind: 'execution_run' as const, sessionId: parent.id, runId: 'exact-run' };
+        const receiver = kind === 'account' ? { kind: 'account' as const }
+            : { kind: 'session' as const, sessionId: destination.id };
+        const policy = { preset: 'important' as const };
+        let online = true;
+        let wrongRun = true;
+        const app = await buildApp(owner.id, async () => {
+            if (!online) throw new Error('Machine transport disconnected');
+            return { ok: true, result: {
+                sessionId: parent.id, runId: wrongRun ? 'another-run' : source.runId,
+                status: 'succeeded', terminalEventId: 'retained-terminal',
+            } };
+        });
+        const path = resolveSessionFollowActionRequest('follow.set', { receiver, source, policy }).path;
+        try {
+            // Parent readability alone cannot fabricate Run identity or seed its original frontier.
+            expect((await app.inject({ method: 'PUT', url: path, payload: { policy } })).statusCode).toBe(409);
+            wrongRun = false;
+            const saved = await app.inject({ method: 'PUT', url: path, payload: { policy } });
+            expect(saved.statusCode, saved.body).toBe(200);
+            const parsed = parseSessionFollowActionResponse('follow.set', { receiver, source, policy }, saved.json());
+            expect(parsed).toMatchObject(kind === 'account' ? { follow: { source, policy } } : { source: { source, policy } });
+            const key = sourceKeyForSessionFollowSourceV1(source);
+            const row = kind === 'account'
+                ? await db.accountSessionFollow.findUnique({ where: { accountId_sourceKey: { accountId: owner.id, sourceKey: key } } })
+                : await db.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceKey_relation: {
+                    destinationSessionId: destination.id, sourceKey: key, relation: 'follower' } } });
+            expect(row).toMatchObject({ sourceExecutionRunSessionId: parent.id, sourceExecutionRunId: source.runId,
+                deliveredExecutionRunTerminalEventId: 'retained-terminal' });
+            expect(parseSessionFollowActionResponse('follow.get', { receiver, source },
+                (await app.inject({ method: 'GET', url: path })).json()))
+                .toMatchObject(kind === 'account' ? { follow: { source } } : { source: { source } });
+            const listInput = { direction: 'following' as const, receiver };
+            const listed = await app.inject({ method: 'GET', url: resolveSessionFollowActionRequest('follow.list', listInput).path });
+            expect(parseSessionFollowActionResponse('follow.list', listInput, { ...listed.json(), rules: [],
+                ...(kind === 'account' ? { sources: [] } : { follows: [] }), coverage: 'complete' }))
+                .toMatchObject(kind === 'account' ? { follows: [{ source }] } : { sources: [{ source }] });
+            online = false;
+            expect((await app.inject({ method: 'PUT', url: path, payload: { policy: { preset: 'quiet' } } })).statusCode).toBe(200);
+            expect((await app.inject({ method: 'DELETE', url: path })).json()).toEqual({ changed: true });
+            if (kind === 'account') {
+                // Restoring an opt-out needs a fresh frontier, while editing an active choice does not.
+                expect((await app.inject({ method: 'PUT', url: path, payload: { policy } })).statusCode).toBe(409);
+            }
+        } finally { await app.close(); }
+    });
 
     it('authors one exact Discussion source through the existing Follow edge', async () => {
         const owner = await createAccount();
@@ -164,7 +226,7 @@ describe('Session Follow source routes', () => {
             const body = parseSessionFollowActionResponse('follow.list', input, result.json());
             expect(body.peopleCount).toBe(2);
             expect(body.follows).toHaveLength(1);
-            expect(body.follows[0]?.sessionId).toBe(source.id);
+            expect(body.follows[0]).toMatchObject({ sessionId: source.id });
             expect(body.sources).toHaveLength(2);
             expect(body.sources.every(row => row.destinationSessionId === visible.id)).toBe(true);
             expect(body.sources.map(row => row.relation).sort()).toEqual(['follower', 'manager']);

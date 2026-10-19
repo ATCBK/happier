@@ -103,8 +103,8 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
             destinationSessionId: params.data.destinationSessionId,
             authentication: readSessionAccessAuthenticationFromRequest(request) });
         if (!result.ok) return reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
-        return reply.send({ source: result.value.sources.find(row => 'source' in row
-            && JSON.stringify(row.source) === JSON.stringify(source)) ?? null });
+        return reply.send(GetOtherSessionFollowSourceResponseSchema.parse({ source: result.value.sources.find(row => 'source' in row
+            && JSON.stringify(row.source) === JSON.stringify(source)) ?? null }));
     });
 
     app.put(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.otherSource, {
@@ -265,7 +265,7 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
             ...query.data,
         });
         if (!result.ok) return reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
-        return reply.send(result.value);
+        return reply.send(ListSessionFollowSourcesResponseSchema.parse(result.value));
     });
 
     app.put("/v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId", {

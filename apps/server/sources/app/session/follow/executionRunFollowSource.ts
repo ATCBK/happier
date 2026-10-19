@@ -52,9 +52,14 @@ export async function readCurrentExecutionRunFollowSource(input: Readonly<{
             ? { target, publisherGeneration: session.publisherGeneration.toString() } : null;
     });
     if (!captured) return { ok: false, error: 'session_follow_source_unavailable' };
-    const rpc = await input.app.forwardRpcForUser({ userId: captured.target.accountId,
-        method: `${captured.target.machineId}:${SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER}`,
-        params: { sessionId: input.sessionId, runId: input.runId } });
+    let rpc: Awaited<ReturnType<Fastify['forwardRpcForUser']>>;
+    try {
+        rpc = await input.app.forwardRpcForUser({ userId: captured.target.accountId,
+            method: `${captured.target.machineId}:${SESSION_RPC_METHODS.EXECUTION_RUN_FOLLOW_FRONTIER}`,
+            params: { sessionId: input.sessionId, runId: input.runId } });
+    } catch {
+        return { ok: false, error: 'session_follow_source_unavailable' };
+    }
     if (!rpc.ok) return { ok: false, error: 'session_follow_source_unavailable' };
     const parsed = ExecutionRunFollowFrontierResponseSchema.safeParse(rpc.result);
     if (!parsed.success || parsed.data.sessionId !== input.sessionId || parsed.data.runId !== input.runId)

@@ -6,11 +6,13 @@ import { isApiTokenGrantRestrictedV1 } from '@happier-dev/protocol/auth/apiToken
 import type { SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 import { mutateReservedAccountScopedKvRowInTx } from '@/app/kv/reservedAccountScopedKvRow';
-import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { assertSessionFollowSourceReadInTx, evaluateCurrentSessionContextPairInTx, mayInjectSessionContextInTx, type SessionFollowRuntimePrincipalV1 } from '@/app/session/access/sessionContextInjection';
 import { readCurrentCommittedSessionInputMachineTargetInTx, readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
 import { isDeepStrictEqual } from 'node:util';
-import { deriveSessionFollowOriginalOccurrenceKeyV1, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { admitSessionFollowRelationsForInputInTx } from './sessionFollowEdgeService';
+import { resolveSessionFollowRuntimePrincipalAuthenticationInTx } from '@/app/session/access/sessionContextInjection';
 import { readStoredSessionFollowFrontier, writeSessionFollowFrontierColumns, type SessionFollowDeliveredColumns } from '@/app/session/relations/sessionEdgeFrontier';
 import { invalidateSessionRelationProjectionsInTx } from '@/app/session/relations/sessionRelationChanges';
 import { TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
@@ -210,6 +212,17 @@ export async function readAdmittedSessionFollowInputInTx(tx: Tx, input: Readonly
         && materialized.acceptedFollowOriginalKey === deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original)
         && await hasCanonicalFollowProviderInputAcceptanceInTx(tx, { destinationSessionId: input.destinationSessionId,
             localInputId: input.localInputId, userMessageSeq: materialized.seq, requireProviderAccepted: true });
+    if (!('sourceSessionId' in delivery.original)) {
+        if (input.sourceSessionId !== undefined || receipt.followSources?.length || !receipt.followRelations?.length) return null;
+        const authentication = input.principal
+            ? await resolveSessionFollowRuntimePrincipalAuthenticationInTx(tx, input.principal)
+            : input.authority.authentication;
+        const relations = await admitSessionFollowRelationsForInputInTx(tx, {
+            accountId: destination.accountId, destinationSessionId: input.destinationSessionId,
+            delivery, relations: receipt.followRelations, authentication, admittedOriginal: true,
+        });
+        return relations ? { delivery, receipt, admissions: [], relations, nativeAccepted } : null;
+    }
     if (input.sourceSessionId !== undefined && delivery.original.sourceSessionId !== input.sourceSessionId) return null;
     const pair = { sourceSessionId: delivery.original.sourceSessionId, destinationSessionId: input.destinationSessionId };
     const source = await tx.session.findUnique({ where: { id: pair.sourceSessionId },
@@ -258,7 +271,7 @@ export function sessionFollowInputFrontiers(delivery: SessionFollowInputV1) {
     if ('sourceMessage' in delivery.original) {
         expected.transcriptSeq = delivery.original.sourceMessage.seq - 1;
         observed.transcriptSeq = delivery.original.sourceMessage.seq;
-    } else {
+    } else if ('sourceRequests' in delivery.original) {
         expected.agentStateVersion = delivery.original.sourceRequests.agentStateVersion - 1;
         observed.agentStateVersion = delivery.original.sourceRequests.agentStateVersion;
     }
@@ -267,6 +280,9 @@ export function sessionFollowInputFrontiers(delivery: SessionFollowInputV1) {
 
 export type SessionFollowInputRelation = SessionFollowDeliveredColumns & Readonly<{
     destinationSessionId: string; sourceSessionId: string | null; relation: string; attachedAt: Date;
+    sourceKey?: string;
+    deliveredWorkflowRunRevision?: number | null;
+    deliveredExecutionRunTerminalEventId?: string | null;
 }>;
 
 /** Shared settlement for native ACK and indexed late-route rejoin; callers supply actual acceptance. */
@@ -276,6 +292,23 @@ export async function settleSessionFollowInputReasonsInTx(tx: Tx, input: Readonl
     observed: SessionFollowFrontierV1;
     delivery: SessionFollowInputV1;
 }>): Promise<boolean> {
+    const original = input.delivery.original;
+    if (isRunFollowOriginalV1(original)) {
+        for (const edge of input.relations) {
+            if (!edge.sourceKey) return false;
+            if ('revision' in original && (edge.deliveredWorkflowRunRevision ?? 0) >= original.revision) continue;
+            if ('terminalEventId' in original && edge.deliveredExecutionRunTerminalEventId === original.terminalEventId) continue;
+            const updated = await tx.sessionFollowEdge.updateMany({ where: {
+                destinationSessionId: edge.destinationSessionId, sourceKey: edge.sourceKey,
+                relation: edge.relation, attachedAt: edge.attachedAt,
+                ...('revision' in original ? { deliveredWorkflowRunRevision: edge.deliveredWorkflowRunRevision }
+                    : { deliveredExecutionRunTerminalEventId: edge.deliveredExecutionRunTerminalEventId }),
+            }, data: 'revision' in original ? { deliveredWorkflowRunRevision: original.revision }
+                : { deliveredExecutionRunTerminalEventId: original.terminalEventId } });
+            if (updated.count !== 1) throw new TransactionReplayRequiredError('follow-relation-progress-conflict');
+        }
+        return true;
+    }
     const waitingTurn = await readExactFollowWaitingTurnInTx(tx, input.delivery);
     const advance = (current: SessionFollowFrontierV1, manager = false) => ({ ...current,
         transcriptSeq: Math.max(current.transcriptSeq, input.observed.transcriptSeq),
@@ -307,17 +340,28 @@ async function readExactFollowWaitingTurnInTx(tx: Tx, delivery: SessionFollowInp
 }
 
 /**
- * Native acceptance settles an exactly witnessed manager waiting fact in the
- * same transaction. Optional Follow ACK loss cannot reoffer that question as a
- * second Turn update. This advances no original/rule cursor and grants no read
- * authority; stale attachments and uncorrelated/no-original Turns stay pending.
+ * Provider acceptance settles a Run's original cursor or an exactly witnessed
+ * manager waiting fact in the same transaction. Optional Follow ACK loss cannot
+ * reoffer that accepted occurrence; stale attachments remain pending.
  */
-export async function settleAcceptedSessionFollowWaitingTurnInTx(tx: Tx, input: Readonly<{
+export async function settleAcceptedSessionFollowInputInTx(tx: Tx, input: Readonly<{
     destinationSessionId: string;
     receipt: SessionInputAdmissionReceiptV1;
 }>): Promise<void> {
     const delivery = input.receipt.followDeliveryV1;
-    if (!delivery || !('sourceRequests' in delivery.original)) return;
+    if (!delivery) return;
+    if (isRunFollowOriginalV1(delivery.original) && input.receipt.admittedTarget) {
+        const relations = await admitSessionFollowRelationsForInputInTx(tx, {
+            accountId: input.receipt.admittedTarget.accountId, destinationSessionId: input.destinationSessionId,
+            delivery, relations: input.receipt.followRelations ?? [],
+            authentication: backgroundDeliveryAuthentication(), admittedOriginal: true,
+        });
+        if (relations) await settleSessionFollowInputReasonsInTx(tx, {
+            progresses: [], relations, delivery, observed: SESSION_FOLLOW_ZERO_FRONTIER_V1,
+        });
+        return;
+    }
+    if (!('sourceRequests' in delivery.original)) return;
     const relations: SessionFollowInputRelation[] = [];
     for (const reason of input.receipt.followRelations ?? []) {
         if (reason.relation !== 'manager') continue;
