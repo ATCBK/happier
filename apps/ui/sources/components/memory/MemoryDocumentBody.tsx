@@ -8,7 +8,7 @@ import {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import * as React from 'react';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -18,6 +18,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { reanimatedDisclosureMotion } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { motionTokens } from '@/components/ui/motion';
@@ -32,6 +33,7 @@ import {
   memoryDocumentActions,
   readMemoryActionOutcome,
   readMemoryCreationReceipt,
+  readMemoryDuplicateReview,
   type MemoryCreationReceipt,
   type MemoryDocumentTarget,
   type MemorySessionTarget,
@@ -52,10 +54,25 @@ const JUST_NOW_MS = 60_000;
 
 type Notice = 'pending' | 'conflict' | 'refused' | null;
 
+export type DuplicateReview = NonNullable<ReturnType<typeof readMemoryDuplicateReview>>;
+export type DuplicateChoiceKind = 'update' | 'replace' | 'keep_both';
+
+/** The candidate the review leads with: a word-for-word match before a related one. */
+export function leadingCandidateId(review: DuplicateReview): string | null {
+  return (review.candidates.find((entry) => entry.match === 'exact') ?? review.candidates[0])?.factId ?? null;
+}
+
 /** A forgotten fact holding its place while its row collapses; `settled` once the row has closed. */
 type CollapsingFact = Readonly<{ fact: MemoryFactV1; index: number; settled: boolean }>;
 
 const NO_FACT_IDS: ReadonlySet<string> = new Set();
+const NO_FACTS: readonly MemoryFactV1[] = [];
+
+function orderDecisionsFirst(facts: readonly MemoryFactV1[] | undefined): readonly MemoryFactV1[] {
+  if (!facts || facts.length === 0) return NO_FACTS;
+  if (!facts.some((fact) => fact.decision)) return facts;
+  return [...facts.filter((fact) => fact.decision), ...facts.filter((fact) => !fact.decision)];
+}
 
 /**
  * The rows to draw: the shown facts, with each forgotten fact kept at its place until its row has
@@ -130,6 +147,8 @@ export type MemoryDocumentBodyProps = Readonly<{
   preparationScope?: MemorySearchScope;
   preparationBasis?: string;
   onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
+  /** The composition owner presents these candidates in the current save sheet, preserving its draft. */
+  onDuplicateReview?: (review: NonNullable<ReturnType<typeof readMemoryDuplicateReview>>) => void;
   emptyText: string;
   /**
    * How the host says "nothing remembered yet" in its own empty treatment (the Work pane's one quiet
@@ -138,6 +157,12 @@ export type MemoryDocumentBodyProps = Readonly<{
   renderEmpty?: (line: Readonly<{ testID: string; text: string }>) => React.ReactNode;
   /** Opens the Session a fact came from, through the host's Session navigation owner. */
   onOpenSession?: (ref: Readonly<{ serverId: string; sessionId: string }>) => void;
+  /** The document's own pages open a fact's detail (reason, source, approval, history) from its row. */
+  onOpenFact?: (fact: MemoryFactV1) => void;
+  /** The fact whose detail is open beside the list. */
+  selectedFactId?: string | null;
+  /** The signed-in Account, so its own approvals read "you" even while no write target is admitted. */
+  viewerAccountId?: string | null;
 }>;
 
 /**
@@ -161,16 +186,18 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const readSummary = useMemoryDocumentSummary({ source, serverId,
     scope: props.preparationScope, preparationBasis: props.preparationBasis,
     enabled: topic === null });
-  // Counts that are being read again keep their last-known values for this document; a first read
-  // reserves the one line instead of printing "Loading…" for each count.
+  // Counts being read again keep their last-known values for this document. Without known
+  // counts, the caller-lived status read reports unavailability rather than reserving a spinner.
   const fresh = source.status === 'ready' && !source.stale;
   const countsKey = view ? JSON.stringify(view.ref) : null;
   const lastKnownCounts = React.useRef<Readonly<{ key: string; summary: MemoryDocumentSummary }> | null>(null);
   React.useEffect(() => {
     if (countsKey !== null && fresh && readSummary.state === 'ready') lastKnownCounts.current = { key: countsKey, summary: readSummary };
   }, [countsKey, fresh, readSummary]);
+  const countsPending = readSummary.state === 'pending' || (readSummary.state === 'unavailable'
+    && (readSummary.cause?.reason === 'status_pending' || readSummary.cause?.reason === 'coverage_pending'));
   const summary: MemoryDocumentSummary = !fresh ? { state: 'unavailable' }
-    : readSummary.state === 'pending' && lastKnownCounts.current?.key === countsKey
+    : countsPending && lastKnownCounts.current?.key === countsKey
       ? lastKnownCounts.current.summary
       : readSummary;
   const countLabel = (count: number) => t('memoryContext.memory.factCount', { count });
@@ -182,17 +209,31 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   const [storedDraft, setDraft] = React.useState('');
   const [storedDraftTopic, setDraftTopic] = React.useState('');
   const [draftCustody, setDraftCustody] = React.useState<MemoryDocumentSource['draftCustody']>(null);
+  // A similar saved fact, found by the write owner before anything was saved: the same form asks
+  // what to do with it, keeping what was typed.
+  const [storedReview, setReview] = React.useState<DuplicateReview | null>(null);
+  const [choiceKind, setChoiceKind] = React.useState<DuplicateChoiceKind>('update');
+  const [candidateId, setCandidateId] = React.useState<string | null>(null);
+  // An Undo whose restore met a related saved fact: the same comparison asks before it comes back.
+  const [restoring, setRestoring] = React.useState<Readonly<{
+    fact: MemoryFactV1; target: MemoryDocumentTarget; topic?: string;
+  }> | null>(null);
+  const draftCustodyRef = React.useRef(source.draftCustody);
+  draftCustodyRef.current = source.draftCustody;
   const draftCurrent = draftCustody !== null && draftCustody.isCurrent()
     && draftCustody.key === source.draftCustody?.key;
   const editingId = draftCurrent ? storedEditingId : null;
   const draft = draftCurrent ? storedDraft : '';
   const draftTopic = draftCurrent ? storedDraftTopic : '';
+  const review = draftCurrent ? storedReview : null;
   const draftRef = React.useRef<React.ElementRef<typeof FieldTextInput>>(null);
   const reducedMotion = useReducedMotionPreference();
   // A forgotten fact keeps its place while its row collapses (lab `c-mem` Motion), then leaves.
   const [collapsing, setCollapsing] = React.useState<readonly CollapsingFact[]>([]);
   const factsRef = React.useRef<readonly MemoryFactV1[]>([]);
-  factsRef.current = view?.facts ?? [];
+  // Decisions lead, then notes, each in their saved order (lab K2): one list, not a second destination.
+  const orderedFacts = React.useMemo(() => orderDecisionsFirst(view?.facts), [view?.facts]);
+  factsRef.current = orderedFacts;
 
   const refresh = source.refresh;
   const settle = React.useCallback(
@@ -203,13 +244,21 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         const result = await run();
         const outcome = readMemoryActionOutcome(result);
         const receipt = readMemoryCreationReceipt(result);
+        const review = readMemoryDuplicateReview(result);
+        if (review) {
+          setReview(review);
+          setCandidateId(leadingCandidateId(review));
+          setChoiceKind('update');
+          props.onDuplicateReview?.(review);
+        }
         // A refusal is said in place, beside what it did not change, until the next attempt.
         if (outcome === 'pending' || outcome === 'conflict' || outcome === 'refused') setNotice(outcome);
         // An attachment conflict still saved this fact. Keep the exact document reachable,
         // and close its draft so retrying cannot create a second copy of that fact.
         if (receipt) onCreatedMemory?.(receipt);
-        // A conflict hands back the current version; show it and keep what was typed.
-        const target = outcome !== 'refused' ? await refresh() : null;
+        // A conflict hands back the current version; show it and keep what was typed. A review saved
+        // nothing, so the document is not read again under the open comparison.
+        const target = outcome !== 'refused' && outcome !== 'review' ? await refresh() : null;
         return { applied: outcome === 'applied' || receipt !== null, target };
       } catch {
         setNotice('refused');
@@ -218,7 +267,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         setBusy(false);
       }
     },
-    [onCreatedMemory, refresh],
+    [onCreatedMemory, props.onDuplicateReview, refresh],
   );
 
   const closeDraft = React.useCallback(() => {
@@ -226,6 +275,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     setEditingId(null);
     setDraft('');
     setDraftTopic('');
+    setReview(null);
+    setRestoring(null);
     onComposingChange(false);
   }, [onComposingChange]);
 
@@ -255,6 +306,10 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     const named = draftTopic.trim();
     const fallback = sessionTarget;
     if (!target && !canCreate) return;
+    const duplicateChoice = review ? reviewedDuplicateChoice(review, choiceKind, candidateId) : undefined;
+    const choice = duplicateChoice ? { duplicateChoice } : {};
+    // Replaying a choice through a Session or scope names the document that was reviewed.
+    const reviewed = review ? { reviewedTarget: { ref: review.ref, expectedRevision: review.revision } } : {};
     fireAndForget(
       (async () => {
         const { applied } = await settle(() => {
@@ -262,22 +317,27 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
             return memoryDocumentActions.update(target, {
               factId: editingId,
               text,
+              ...choice,
             });
           if (target) {
             return memoryDocumentActions.remember(
               topic || !named ? target : { ...target, topic: named },
-              { text },
+              { text, ...choice },
             );
           }
           if (scopeTarget)
             return memoryDocumentActions.rememberInScope(scopeTarget, {
               text,
               ...(named ? { topic: named } : {}),
+              ...choice,
+              ...reviewed,
             }, serverId);
           if (!fallback) throw new Error('memory_target_unavailable');
           return memoryDocumentActions.rememberInSession(fallback, {
             text,
             ...(named ? { topic: named } : {}),
+            ...choice,
+            ...reviewed,
           });
         });
         if (applied) closeDraft();
@@ -285,6 +345,9 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       { tag: 'MemoryDocumentBody.save' },
     );
   }, [
+    candidateId,
+    choiceKind,
+    review,
     closeDraft,
     draft,
     draftTopic,
@@ -299,6 +362,24 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     target,
     topic,
   ]);
+
+  // Resubmits the exact Undo with the chosen effect; the archived fact's own text comes back unchanged.
+  const saveRestore = React.useCallback(() => {
+    if (!restoring || !review || !draftCustody?.isCurrent()) return;
+    if (!restoring.target.isCurrent()) {
+      setNotice('refused');
+      return;
+    }
+    const duplicateChoice = reviewedDuplicateChoice(review, choiceKind, candidateId);
+    fireAndForget(
+      (async () => {
+        const { applied } = await settle(() => memoryDocumentActions.restore(
+          restoring.target, restoring.fact.id, restoring.topic, undefined, duplicateChoice));
+        if (applied) closeDraft();
+      })(),
+      { tag: 'MemoryDocumentBody.restoreWithChoice' },
+    );
+  }, [candidateId, choiceKind, closeDraft, draftCustody, restoring, review, settle]);
 
   const forget = React.useCallback(
     (fact: MemoryFactV1) => {
@@ -340,8 +421,14 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
                 }
                 // Undo puts the row back in place: it stops leaving and returns with the restored view.
                 setCollapsing((list) => list.filter((entry) => entry.fact.id !== fact.id));
+                // A restore that needs a duplicate choice opens it in place, under this document's custody.
+                setDraftCustody(draftCustodyRef.current);
+                setRestoring({ fact, target: restoreTarget, ...(restoreTopic === undefined ? {} : { topic: restoreTopic }) });
                 fireAndForget(
-                  settle(() => memoryDocumentActions.restore(restoreTarget, fact.id, restoreTopic)),
+                  (async () => {
+                    const { applied } = await settle(() => memoryDocumentActions.restore(restoreTarget, fact.id, restoreTopic));
+                    if (applied) setRestoring(null);
+                  })(),
                   { tag: 'MemoryDocumentBody.undoForget' },
                 );
               },
@@ -378,6 +465,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     (fact: MemoryFactV1) => {
       if (!source.draftCustody?.isCurrent()) return;
       onComposingChange(false);
+      setRestoring(null);
+      setReview(null);
       setDraftCustody(source.draftCustody);
       setEditingId(fact.id);
       setDraft(fact.text);
@@ -402,7 +491,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   }, [router, view]);
 
   const status = source.status;
-  const facts = view?.facts ?? [];
+  const facts = orderedFacts;
   const limit = props.collapsedFactCount;
   const shown =
     limit === undefined || facts.length <= limit
@@ -426,12 +515,25 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       saveDisabled={busy || draft.trim().length === 0}
       cancelLabel={t('common.cancel')}
       saveLabel={
-        editingId ? t('common.save') : t('memoryContext.memory.rememberSave')
+        review ? duplicateSaveLabel(choiceKind)
+          : editingId ? t('common.save') : t('memoryContext.memory.rememberSave')
       }
       autoFocusRef={draftRef}
       saveTestID={`${testID}.draft.save`}
       cancelTestID={`${testID}.draft.cancel`}
     >
+      {review ? (
+        <MemoryDuplicateChoice
+          testID={`${testID}.draft.duplicate`}
+          review={review}
+          newText={draft}
+          candidateId={candidateId}
+          onCandidateChange={setCandidateId}
+          choice={choiceKind}
+          onChoiceChange={setChoiceKind}
+          disabled={busy}
+        />
+      ) : null}
       <FieldTextInput
         ref={draftRef}
         testID={`${testID}.draft`}
@@ -455,6 +557,33 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       ) : null}
     </InlineAddExpander>
   );
+
+  const restoreForm = restoring && review ? (
+    <InlineAddExpander
+      isOpen
+      onOpenChange={() => {}}
+      trigger={null}
+      title={t('memoryContext.memory.undo')}
+      onCancel={closeDraft}
+      onSave={saveRestore}
+      saveDisabled={busy}
+      cancelLabel={t('common.cancel')}
+      saveLabel={duplicateSaveLabel(choiceKind)}
+      saveTestID={`${testID}.restore.save`}
+      cancelTestID={`${testID}.restore.cancel`}
+    >
+      <MemoryDuplicateChoice
+        testID={`${testID}.restore.duplicate`}
+        review={review}
+        newText={restoring.fact.text}
+        candidateId={candidateId}
+        onCandidateChange={setCandidateId}
+        choice={choiceKind}
+        onChoiceChange={setChoiceKind}
+        disabled={busy}
+      />
+    </InlineAddExpander>
+  ) : null;
 
   return (
     <>
@@ -493,7 +622,9 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           }}
         />
       ) : null}
-      {view ? (
+      {/* A stale view keeps its facts; it has no counts to reserve a line for, so the line steps aside. */}
+      {/* An open duplicate comparison is the one thing in progress; the count line steps aside until it closes. */}
+      {view && (fresh || topic || summary.state === 'ready') && !(review && !topic) ? (
         summary.state === 'unavailable' && fresh && !topic ? (
           <SurfaceStateCard
             testID={`${testID}.summaryUnavailable`}
@@ -533,7 +664,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           />
         )
       ) : null}
-      {props.composing && !editingId && writable && (target || canCreate) ? draftForm : null}
+      {restoreForm}
+      {props.composing && !editingId && !restoring && writable && (target || canCreate) ? draftForm : null}
       {editingId && view && !rows.some(({ fact }) => fact.id === editingId) ? draftForm : null}
       {rows.map(({ fact, leaving }) =>
         editingId === fact.id ? (
@@ -555,9 +687,12 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
               writable={writable && target !== null && !leaving}
               disabled={busy}
               arrived={arrivedFactIds.has(fact.id)}
+              viewerAccountId={target?.accountId ?? props.viewerAccountId ?? null}
               onEdit={startEdit}
               onForget={forget}
               onOpenSession={props.onOpenSession}
+              onOpenFact={props.onOpenFact}
+              selected={props.selectedFactId === fact.id}
             />
           </MemoryFactSlot>
         ),
@@ -659,6 +794,121 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
 
 function ignoreExpandedChange() {}
 
+/** The reviewed effect bound to the exact revision it was reviewed at. */
+function reviewedDuplicateChoice(review: DuplicateReview, kind: DuplicateChoiceKind, candidateId: string | null) {
+  const factId = candidateId ?? leadingCandidateId(review);
+  return kind === 'keep_both' || factId === null
+    ? { kind: 'keep_both' as const, expectedRevision: review.revision }
+    : { kind, factId, expectedRevision: review.revision };
+}
+
+function duplicateSaveLabel(choice: DuplicateChoiceKind): string {
+  return choice === 'update' ? t('memoryContext.memory.duplicateSaveUpdate')
+    : choice === 'replace' ? t('memoryContext.memory.duplicateSaveReplace')
+      : t('memoryContext.memory.duplicateKeepBoth');
+}
+
+/**
+ * The write owner found a saved fact like this one before saving anything (lab K2 `Sd`). The same
+ * form leads with one grouped comparison: what is saved, what is new, the explicit effect and one line
+ * saying what that effect does. Replace strikes the saved text; the main button names the effect.
+ */
+export function MemoryDuplicateChoice(props: Readonly<{
+  testID: string;
+  review: DuplicateReview;
+  /** What the person has typed now; the New line follows the draft. */
+  newText: string;
+  candidateId: string | null;
+  onCandidateChange: (factId: string) => void;
+  choice: DuplicateChoiceKind;
+  onChoiceChange: (choice: DuplicateChoiceKind) => void;
+  disabled: boolean;
+}>) {
+  const { review, candidateId, onCandidateChange, choice } = props;
+  const styles = stylesheet;
+  const candidates = React.useMemo(
+    () => [...review.candidates].sort((a, b) => (a.match === b.match ? 0 : a.match === 'exact' ? -1 : 1)),
+    [review.candidates],
+  );
+  const tabs = React.useMemo(() => [
+    { id: 'update' as const, label: t('memoryContext.memory.duplicateUpdate') },
+    { id: 'replace' as const, label: t('memoryContext.memory.duplicateReplace') },
+    { id: 'keep_both' as const, label: t('memoryContext.memory.duplicateKeepBoth') },
+  ], []);
+  const effect = choice === 'update' ? t('memoryContext.memory.duplicateUpdateHint')
+    : choice === 'replace' ? t('memoryContext.memory.duplicateReplaceHint')
+      : t('memoryContext.memory.duplicateKeepBothHint');
+  const selectable = candidates.length > 1 && choice !== 'keep_both';
+  const newText = props.newText.trim();
+  return (
+    <View testID={props.testID} style={styles.duplicate} accessibilityLiveRegion="polite">
+      <Text style={styles.duplicateTitle} accessibilityRole="header">
+        {candidates.length > 1
+          ? t('memoryContext.memory.duplicateTitleMany', { count: candidates.length })
+          : t('memoryContext.memory.duplicateTitle')}
+      </Text>
+      <View style={styles.compare} accessibilityRole={selectable ? 'radiogroup' : undefined}>
+        {candidates.map((candidate, index) => {
+          const chosen = candidate.factId === (candidateId ?? candidates[0]?.factId);
+          const retiring = choice === 'replace' && chosen;
+          const meta = [
+            candidate.match === 'exact' ? t('memoryContext.memory.duplicateExact') : t('memoryContext.memory.duplicateRelated'),
+            candidate.topic ? memoryTopicLabel(candidate.topic) : null,
+            candidate.decision ? (candidate.decision.approvedBy ? t('memoryContext.memory.decision') : t('memoryContext.memory.decisionNotApproved')) : null,
+          ].filter((part): part is string => Boolean(part)).join(' · ');
+          return (
+            <Pressable
+              key={candidate.factId}
+              testID={`${props.testID}.candidate.${candidate.factId}`}
+              style={({ hovered, pressed }: Readonly<{ hovered?: boolean; pressed: boolean }>) => [
+                styles.compareRow,
+                selectable && chosen ? styles.compareRowChosen : null,
+                selectable && !chosen && (hovered || pressed) ? styles.compareRowHover : null,
+              ]}
+              disabled={!selectable || props.disabled}
+              onPress={selectable ? () => onCandidateChange(candidate.factId) : undefined}
+              accessibilityRole={selectable ? 'radio' : undefined}
+              accessibilityState={selectable ? { checked: chosen, disabled: props.disabled } : undefined}
+            >
+              <Text style={styles.compareLabel}>{index === 0 ? t('memoryContext.memory.duplicateSaved') : ''}</Text>
+              <View style={styles.compareBody}>
+                <Text
+                  testID={`${props.testID}.candidate.${candidate.factId}.text`}
+                  style={[styles.compareText, retiring ? styles.retired : null]}
+                  numberOfLines={3}
+                >
+                  {candidate.text}
+                </Text>
+                {meta ? <Text style={styles.factMeta} numberOfLines={1}>{meta}</Text> : null}
+              </View>
+            </Pressable>
+          );
+        })}
+        <View style={styles.compareRow}>
+          <Text style={styles.compareLabel}>{t('memoryContext.memory.duplicateNew')}</Text>
+          <View style={styles.compareBody}>
+            <Text testID={`${props.testID}.new`} style={styles.compareText} numberOfLines={3}>{newText}</Text>
+          </View>
+        </View>
+      </View>
+      <View style={styles.choiceBar}>
+        <SegmentedTabBar<DuplicateChoiceKind>
+          tabs={tabs}
+          activeTabId={choice}
+          onSelectTab={props.onChoiceChange}
+          segmentSizing="content"
+          targetSize="platform"
+          role="radiogroup"
+          accessibilityLabel={t('memoryContext.memory.duplicateChoice')}
+          disabled={props.disabled}
+          testIDPrefix={`${props.testID}.choice`}
+        />
+      </View>
+      <Text testID={`${props.testID}.effect`} style={styles.effect}>{effect}</Text>
+    </View>
+  );
+}
+
 /**
  * A fact's place in the list. Forgetting collapses its height and opacity together on the
  * disclosure owner's clock (lab `c-mem` Motion); reduced motion removes it at once.
@@ -730,20 +980,27 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     disabled: boolean;
     /** It landed while the list was on screen: it arrives with a soft wash that fades. */
     arrived: boolean;
+    /** The Account reading this document, so its own approval reads "approved by you". */
+    viewerAccountId: string | null;
     onEdit: (fact: MemoryFactV1) => void;
     onForget: (fact: MemoryFactV1) => void;
     onOpenSession?: (
       ref: Readonly<{ serverId: string; sessionId: string }>,
     ) => void;
+    onOpenFact?: (fact: MemoryFactV1) => void;
+    selected?: boolean;
   }>,
 ) {
-  const { fact, onEdit, onForget, onOpenSession } = props;
+  const { fact, onEdit, onForget, onOpenSession, onOpenFact } = props;
   const [highlighting, setHighlighting] = React.useState(props.arrived);
   React.useEffect(() => {
     if (props.arrived) setHighlighting(true);
   }, [props.arrived]);
   const endHighlight = React.useCallback(() => setHighlighting(false), []);
-  const source = fact.sourceSessionRef;
+  const decision = fact.decision;
+  // A decision links the Session message it was decided in; a note links the Session it came from.
+  const decisionSession = decision?.sourceMessageRef.kind === 'session' ? decision.sourceMessageRef.session : null;
+  const source = fact.sourceSessionRef ?? decisionSession;
   // Row-local: only this fact's source Session title, and only when that Session is loaded here.
   const sourceName = useSessionSelector(
     source?.sessionId ?? '',
@@ -753,7 +1010,14 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   );
   const now = Date.now();
   const expired = fact.expiresAtMs !== undefined && fact.expiresAtMs <= now;
+  // Approval is a stored fact, said in words: the person who approved, or its true absence.
+  const approval = !decision ? null
+    : decision.approvedBy === null ? t('memoryContext.memory.decisionNotApproved')
+      : decision.approvedBy.accountId === props.viewerAccountId ? t('memoryContext.memory.decisionApprovedByYou')
+        : t('memoryContext.memory.decisionApproved', { date: formatMemoryDate(decision.approvedBy.atMs) });
   const facts = [
+    decision ? t('memoryContext.memory.decision') : null,
+    approval,
     now - fact.createdAtMs < JUST_NOW_MS
       ? t('memoryContext.memory.justNow')
       : formatMemoryDate(fact.createdAtMs),
@@ -766,7 +1030,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
         : t('memoryContext.memory.until', {
             date: formatMemoryDate(fact.expiresAtMs),
           }),
-    source ? null : t('memoryContext.memory.addedByYou'),
+    source || decision ? null : t('memoryContext.memory.addedByYou'),
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
@@ -800,9 +1064,12 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
       testID={props.testID}
       text={fact.text}
       metadata={facts}
+      detail={decision?.reason}
       source={source ? { label: sourceName || t('memoryContext.memory.openSource'), accessibilityLabel: t('memoryContext.memory.openSource'), onPress: sourceLink } : undefined}
       archived={props.archived}
       expired={expired}
+      onPress={onOpenFact ? () => onOpenFact(fact) : undefined}
+      selected={props.selected}
       host={memoryFactHost}
       arrival={highlighting ? <MemoryFactArrival testID={`${props.testID}.arrived`} onDone={endHighlight} /> : null}
       actions={
@@ -821,7 +1088,8 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
 
 const memoryFactHost: HappierMemoryFactRowHost = {
   Row: function MemoryFactItem(props) {
-    return <Item testID={props.testID} mode="info" title={props.text}
+    return <Item testID={props.testID} mode={props.onPress ? 'interactive' : 'info'} title={props.text}
+      onPress={props.onPress} selected={props.selected}
       titleLines={props.archived ? undefined : 2}
       titleStyle={props.retired ? [stylesheet.factText, stylesheet.retired] : stylesheet.factText}
       subtitle={props.subtitle} subtitleLines={1} showChevron={false} rightElement={props.actions} />;
@@ -831,6 +1099,9 @@ const memoryFactHost: HappierMemoryFactRowHost = {
   },
   Source: function MemoryFactSource(props) {
     return <Text {...props} style={stylesheet.factSource} />;
+  },
+  Detail: function MemoryFactDetail(props) {
+    return <Text {...props} numberOfLines={2} style={stylesheet.factDetail} />;
   },
 };
 
@@ -879,11 +1150,76 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.text.tertiary,
     fontVariant: ['tabular-nums'],
   },
+  factDetail: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
   factSource: {
     color: theme.colors.text.secondary,
   },
   topicField: {
     marginTop: theme.space.s8,
+  },
+  duplicate: {
+    // One grouped comparison on the inset ground, its text on the form fields' edge (lab K2 `Sd`).
+    marginBottom: theme.space.s12,
+    paddingVertical: theme.space.s12,
+    paddingHorizontal: theme.space.s12,
+    gap: theme.space.s8,
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: theme.colors.surface.inset,
+  },
+  duplicateTitle: {
+    paddingHorizontal: theme.space.s4,
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('rowTitle'),
+    color: theme.colors.text.primary,
+  },
+  compare: {
+    gap: theme.space.s2,
+  },
+  compareRow: {
+    flexDirection: 'row',
+    gap: theme.space.s12,
+    paddingVertical: theme.space.s4,
+    paddingHorizontal: theme.space.s4,
+    borderRadius: theme.borderRadius.md,
+  },
+  compareRowChosen: {
+    backgroundColor: theme.colors.surface.selected,
+  },
+  compareRowHover: {
+    backgroundColor: theme.colors.surface.pressed,
+  },
+  compareLabel: {
+    // One label column, so Saved and New texts start on one edge; the label sits on the text's line.
+    minWidth: 48,
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    lineHeight: happierPageTextMetrics('rowTitle').lineHeight,
+    color: theme.colors.text.tertiary,
+  },
+  compareBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.space.s2,
+  },
+  compareText: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowTitle'),
+    color: theme.colors.text.primary,
+  },
+  choiceBar: {
+    flexDirection: 'row',
+    paddingHorizontal: theme.space.s4,
+    paddingTop: theme.space.s4,
+  },
+  effect: {
+    paddingHorizontal: theme.space.s4,
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    color: theme.colors.text.secondary,
   },
   arrival: {
     position: 'absolute',

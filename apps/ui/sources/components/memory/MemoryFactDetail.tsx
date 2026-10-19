@@ -1,0 +1,253 @@
+import {
+  MEMORY_ARCHIVE_TOPIC_TITLE_V1,
+  renderMemoryDocV1,
+  type MemoryFactV1,
+} from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { useSessionSelector } from '@/sync/domains/state/storage';
+import { t } from '@/text';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
+
+import { formatMemoryDate } from './MemoryDocumentBody';
+import { useMemoryDocument } from './useMemoryDocument';
+
+/**
+ * One remembered fact on its own (lab K2 `A` detail, `Dp`): the fact as the title, then what makes it
+ * trustworthy — the reason and the Session it was decided in, who approved it (or that no person did),
+ * when it was saved and when it expires — then the exact line agents load, and its history (the facts
+ * it replaced, read from the document's archive). The desktop list shows it beside the facts; a phone
+ * pushes it.
+ */
+export const MemoryFactDetail = React.memo(function MemoryFactDetail(
+  props: Readonly<{
+    testID: string;
+    fact: MemoryFactV1;
+    documentRef: PromptDocArtifactRefV1 | null;
+    serverId: string | null;
+    /** The Account reading the document, so its own approval reads "You". */
+    viewerAccountId: string | null;
+    /** The fact sits in the archive: it is history already and agents never load it. */
+    archived: boolean;
+    onOpenSession?: (
+      ref: Readonly<{ serverId: string; sessionId: string }>,
+    ) => void;
+  }>,
+) {
+  const { fact, onOpenSession } = props;
+  const decision = fact.decision;
+  const decisionSession =
+    decision?.sourceMessageRef.kind === 'session'
+      ? decision.sourceMessageRef.session
+      : null;
+  const source = fact.sourceSessionRef ?? decisionSession;
+  const sourceName = useSessionSelector(
+    source?.sessionId ?? '',
+    source?.serverId ?? props.serverId ?? '',
+    (session) =>
+      session && source ? getSessionName(session, source.serverId) : null,
+  );
+  // Only a fact that replaced another reads the archive, where the replaced facts keep their words.
+  const archive = useMemoryDocument({
+    ref:
+      fact.supersedes !== undefined && !props.archived
+        ? props.documentRef
+        : null,
+    serverId: props.serverId,
+    topic: MEMORY_ARCHIVE_TOPIC_TITLE_V1,
+  });
+  const replaced = React.useMemo(() => {
+    const byId = new Map(
+      (archive.view?.facts ?? []).map((entry) => [entry.id, entry]),
+    );
+    const chain: MemoryFactV1[] = [];
+    let next = fact.supersedes;
+    while (
+      next !== undefined &&
+      byId.has(next) &&
+      !chain.some((entry) => entry.id === next)
+    ) {
+      const entry = byId.get(next)!;
+      chain.push(entry);
+      next = entry.supersedes;
+    }
+    return chain;
+  }, [archive.view?.facts, fact.supersedes]);
+  const now = Date.now();
+  const expired = fact.expiresAtMs !== undefined && fact.expiresAtMs <= now;
+  // The exact line agents load, from the same renderer that prepares their context.
+  const agentLine = props.archived
+    ? ''
+    : renderMemoryDocV1({ body: { v: 1, index: [fact], topics: [] }, nowMs: now }).markdown.trim();
+  const approval = !decision
+    ? null
+    : decision.approvedBy === null
+      ? t('memoryContext.memory.decisionNotApproved')
+      : decision.approvedBy.accountId === props.viewerAccountId
+        ? t('memoryContext.memory.detailApprovedByYou', {
+            date: formatMemoryDate(decision.approvedBy.atMs),
+          })
+        : t('memoryContext.memory.detailApprovedOn', {
+            date: formatMemoryDate(decision.approvedBy.atMs),
+          });
+  const expiry =
+    fact.expiresAtMs === undefined
+      ? t('memoryContext.memory.sheetExpiresNever')
+      : expired
+        ? t('memoryContext.memory.detailExpired', {
+            date: formatMemoryDate(fact.expiresAtMs),
+          })
+        : formatMemoryDate(fact.expiresAtMs);
+  const openSource =
+    source && onOpenSession ? () => onOpenSession(source) : undefined;
+  const sourceLabel = sourceName || t('memoryContext.memory.openSource');
+  return (
+    <ItemList testID={props.testID}>
+      <PageHeader
+        title={fact.text}
+        meta={[
+          {
+            key: 'kind',
+            icon: decision ? 'check-circle' : 'note',
+            text: decision
+              ? t('memoryContext.memory.decision')
+              : t('memoryContext.memory.note'),
+            testID: `${props.testID}.kind`,
+          },
+        ]}
+      />
+      <ItemGroup>
+        {decision ? (
+          <Item
+            testID={`${props.testID}.reason`}
+            mode="info"
+            title={t('memoryContext.memory.sheetReasonLabel')}
+            accessoryLayout="adaptive"
+            rightElement={
+              <Text variant="body" style={styles.value}>
+                {decision.reason}
+              </Text>
+            }
+            showChevron={false}
+          />
+        ) : null}
+        {source ? (
+          <Item
+            testID={`${props.testID}.source`}
+            title={
+              decision
+                ? t('memoryContext.memory.detailDecidedIn')
+                : t('memoryContext.memory.detailCameFrom')
+            }
+            detail={sourceLabel}
+            onPress={openSource}
+            mode={openSource ? 'interactive' : 'info'}
+            showChevron={Boolean(openSource)}
+          />
+        ) : null}
+        {decision ? (
+          <Item
+            testID={`${props.testID}.approval`}
+            mode="info"
+            title={t('memoryContext.memory.detailApprovedBy')}
+            detail={approval ?? undefined}
+            showChevron={false}
+          />
+        ) : null}
+        <Item
+          testID={`${props.testID}.saved`}
+          mode="info"
+          title={t('memoryContext.memory.detailSaved')}
+          detail={
+            source || decision
+              ? formatMemoryDate(fact.createdAtMs)
+              : `${formatMemoryDate(fact.createdAtMs)} · ${t('memoryContext.memory.addedByYou')}`
+          }
+          showChevron={false}
+        />
+        <Item
+          testID={`${props.testID}.expires`}
+          mode="info"
+          title={t('memoryContext.memory.sheetExpires')}
+          detail={expiry}
+          showChevron={false}
+          showDivider={false}
+        />
+      </ItemGroup>
+      <ItemGroup
+        title={t('memoryContext.memory.whatAgentsSee')}
+        description={
+          agentLine
+            ? t('memoryContext.memory.whatAgentsSeeLoaded')
+            : t('memoryContext.memory.whatAgentsSeeNotLoaded')
+        }
+      >
+        {agentLine ? (
+          <View testID={`${props.testID}.agentLine`} style={styles.agentLine}>
+            <Text selectable style={styles.agentLineText}>
+              {agentLine}
+            </Text>
+          </View>
+        ) : null}
+      </ItemGroup>
+      {replaced.length > 0 ? (
+        <ItemGroup title={t('memoryContext.memory.historyTitle')}>
+          {replaced.map((entry, index) => (
+            <Item
+              key={entry.id}
+              testID={`${props.testID}.history.${entry.id}`}
+              mode="info"
+              title={entry.text}
+              titleLines={0}
+              titleStyle={styles.replaced}
+              subtitle={[
+                t('memoryContext.memory.historyReplaced', {
+                  date: formatMemoryDate(
+                    (index === 0 ? fact : replaced[index - 1]!).createdAtMs,
+                  ),
+                }),
+                entry.decision?.reason,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              subtitleLines={2}
+              showChevron={false}
+              showDivider={index < replaced.length - 1}
+            />
+          ))}
+        </ItemGroup>
+      ) : null}
+    </ItemList>
+  );
+});
+
+const styles = StyleSheet.create((theme) => ({
+  value: {
+    color: theme.colors.text.primary,
+  },
+  agentLine: {
+    // The group's own sheet is the frame; the line sits in it as the agents read it.
+    paddingVertical: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+  },
+
+  agentLineText: {
+    ...Typography.mono(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
+  replaced: {
+    color: theme.colors.text.tertiary,
+    textDecorationLine: 'line-through',
+  },
+}));
