@@ -1811,7 +1811,8 @@ describe('managed Machine detail', () => {
             handlers: { reinstall: () => retried.push('wrong') } }} />));
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-retry').length).toBe(0);
     });
-    it('reviews a supported Start on the same stopped resource in the saved Home before native dispatch', async () => {
+    it.each(['stop', 'start'] as const)('reviews power on the same stopped resource with desired %s in the saved Home before native dispatch', async desired => {
+        const intent = desired === 'start' ? 'stop' : 'start';
         const target = await upsertAndActivateServer({ serverUrl: 'https://managed-start-approval.test', scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_start');
         await upsertAndActivateServer({ serverUrl: 'https://other-managed-start.test', scope: 'tab' });
@@ -1821,7 +1822,7 @@ describe('managed Machine detail', () => {
         const machine: ManagedMachineV1 = { id: 'start-existing', homeId: 'srv_managed_start', custodianAccountId: 'owner', launch,
             controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
             resource: { contributionRef: launch.provider, schemaVersion: 1, value: { resourceId: 'same-native' } },
-            desired: 'stop', desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            desired, desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
             observation: { availability: 'present', observedAt: 2, power: 'stopped', storage: 'retained' },
             reviewedFacts: { launch, controller: { machineId: 'controller', installationId: 'installation' }, optionStatus: 'current',
                 billing: { location: 'cloud', stoppedBilling: 'not-billed' }, prerequisites: [],
@@ -1848,15 +1849,15 @@ describe('managed Machine detail', () => {
         const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
             executeAction={createDefaultActionExecutor().execute} />);
         await flushHookEffects({ cycles: 20 });
-        const start = screen.tree.findAll(node => node.props?.testID === 'managed-machine.start' && typeof node.props.onPress === 'function')[0];
+        const start = screen.tree.findAll(node => node.props?.testID === `managed-machine.${intent}` && typeof node.props.onPress === 'function')[0];
         expect(start).toBeDefined();
         await act(async () => start!.props.onPress());
         await flushHookEffects({ cycles: 20 });
         expect(nativeRequests).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'controller' },
-            input: { homeId: machine.homeId, managedId: machine.id, when: 'now', expectedRevision: 4, intent: 'start' } })]);
+            input: { homeId: machine.homeId, managedId: machine.id, when: 'now', expectedRevision: 4, intent } })]);
         expect(artifacts.list()).toHaveLength(0);
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.approval').length).toBeGreaterThan(0);
-        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.start' && node.props.disabled === true).length).toBeGreaterThan(0);
+        expect(screen.tree.findAll(node => node.props?.testID === `managed-machine.${intent}` && node.props.disabled === true).length).toBeGreaterThan(0);
         expect(screen.tree.findByType(ManagedCreationProgress).props.machine.observation.power).toBe('stopped');
     });
     it.each(['online', 'offline', 'replaced', 'missing-schema'] as const)('reviews fresh Devcontainer effects only on the same reachable controller (%s)', async controllerState => {

@@ -3552,6 +3552,17 @@ daemon control credential cannot supply that admission. The CLI's existing
 for local and remote controllers, without disclosing foreign Account custody
 for an owned Machine.
 
+After a managed power intent is acknowledged by Home, a later controller HTTP
+failure does not roll it back. In 0.3 development the controller returns
+`action_outcome_unknown` and retains the same operation with an
+`outcome_uncertain` observation. An unreadable admission acknowledgement also
+retains an unconfirmed outcome; Home's typed acquisition/rollback refusals
+remain definite. Read the managed row before retrying; Stop
+remains available to retract desired Start even while the last observation
+says stopped. Definite native refusals retain their existing failure result.
+The shared `project_requester_home_unavailable` code also applies to Machine
+root-authority reads: its historical name does not imply a Project dependency.
+
 Settings discovery, mutation and operations also respect the declaration's page feature
 gate and host availability. Optional unset values are explicit, rather than
 invented defaults. Compound choices keep their domain owner and update atomically.

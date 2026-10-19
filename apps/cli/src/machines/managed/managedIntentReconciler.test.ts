@@ -44,6 +44,7 @@ import { createActionOperationStore } from '@/daemon/actionOperations/actionOper
 import { executeActionOperationActionV1 } from '@happier-dev/protocol/actions/executor/actionOperationActions';
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { ActionOperationGetV1ResponseSchema as PredecessorOperationGetSchema } from '@/daemon/actionOperations/testFixtures/predecessorActionOperationV1';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const unavailable = async (): Promise<never> => { throw new Error('Unexpected credential transport'); };
 function signedIdle(machine: ReturnType<typeof ManagedMachineV1Schema.parse>, since: number, confirmedAt: number) {
@@ -171,6 +172,40 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('unused Stop through guest drain and controller operation custody', () => {
+    it.each(['admit-control', 'submit-intent'] as const)('distinguishes an unavailable %s from an already committed power intent', async boundary => {
+        const test = setup(undefined, undefined, 'start');
+        const machine = test.readMachine();
+        const home = test.post.getMockImplementation()!;
+        test.post.mockImplementation(async (url, body, config) => String(url).endsWith(`/${boundary}`)
+            ? { status: 503, data: { error: 'database_connection_unavailable' } }
+            : await home(url, body, config));
+        const operations = createHostActionOperationRuntime({ machineId: machine.controller.machineId,
+            resolveAccountId: async () => 'owner', generateOperationId: () => `unavailable-${boundary}` });
+        const input = { homeId: machine.homeId, managedId: machine.id, intent: 'start' as const,
+            when: 'now' as const, expectedRevision: machine.intentRevision };
+        let work: ReturnType<typeof test.driver.execute> | undefined;
+        const observed = operations.observeExecution({ actionId: 'machines.managed.power.set', input, actionRequestId: 'control',
+            execute: async context => {
+                work = test.driver.execute('machines.managed.power.set', input, { requestId: 'control', context, signal: context.signal });
+                const result = await work;
+                const failure = ActionExecuteFailureSchema.safeParse(result);
+                return failure.success ? failure.data : { ok: true, result };
+            } });
+        if (boundary === 'admit-control') {
+            await expect(observed).rejects.toMatchObject({ code: 'database_connection_unavailable' });
+        } else {
+            await expect(observed).resolves.toMatchObject({ ok: true, result: { kind: 'accepted', managedId: machine.id } });
+            await expect(work).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown', details: {
+                path: '/v1/machines/managed/controller/submit-intent', status: 503, code: 'database_connection_unavailable',
+            } });
+        }
+        expect(test.effects).toEqual([]);
+        expect(await operations.handlers.getV2({ operationId: `unavailable-${boundary}` })).toMatchObject({ kind: 'found', operation:
+            boundary === 'submit-intent' ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' },
+                domainRef: { kind: 'managedMachine', id: machine.id } }
+                : { state: 'failed', error: { errorCode: 'database_connection_unavailable' } },
+        });
+    });
     it('does not recreate unused Stop operations after observed settlement and resumes the policy after observed Start', async () => {
         const test = setup(undefined, undefined, 'stop', {
             observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained',

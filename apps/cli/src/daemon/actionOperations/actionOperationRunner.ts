@@ -100,6 +100,9 @@ function isRetryableSessionCreation(actionId: string, result: ActionExecuteResul
 }
 
 function isUnconfirmedOwnedOutcome(actionId: string, result: ActionExecuteResult): boolean {
+  if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild') {
+    return !result.ok && result.errorCode === 'action_outcome_unknown';
+  }
   if (actionId === 'daemon.filesystem.upload' || actionId === 'daemon.filesystem.download' || actionId === 'daemon.filesystem.copy') {
     return !result.ok && result.errorCode === 'indeterminate';
   }
@@ -125,6 +128,8 @@ export function createActionOperationRunner(deps: Readonly<{
     scope: ActionOperationScope;
     requesterWorkAttributionV1?: RequesterWorkAttributionV1;
     cancellation?: 'unsupported' | 'supported';
+    /** Report the canonical receipt even when an exact request rejoins a settled operation. */
+    onOperation?: (operation: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1) => void;
     execute: (context: Readonly<{
       actionRequestId?: string;
       resumeActionRequest?: true;
@@ -319,6 +324,7 @@ export function createActionOperationRunner(deps: Readonly<{
       return await response;
     };
     if (existing) {
+      request.onOperation?.(existing);
       const invocation = active.get(existing.operationId);
       if (invocation) {
         if (existing.setupReview) invocation.resumeSetupReview();
@@ -358,7 +364,7 @@ export function createActionOperationRunner(deps: Readonly<{
     }
     const operationId = generateOperationId();
     const cancellation = request.cancellation ?? 'unsupported';
-    deps.store.create({
+    const created = deps.store.create({
       operationId,
       actionId: action.actionId,
       scope: request.scope,
@@ -369,6 +375,7 @@ export function createActionOperationRunner(deps: Readonly<{
       ...(request.domainRef ? { domainRef: request.domainRef } : {}),
       inputIdentity,
     });
+    request.onOperation?.(created);
     if (!isFiniteProjectCommand(action.actionId)) deps.store.markRunning(operationId);
     return await invoke(operationId, cancellation);
   };

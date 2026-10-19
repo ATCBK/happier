@@ -8,6 +8,7 @@ import { ManagedAcquireInputV1Schema, ManagedAdmissionOutputV1Schema, ManagedCon
 import { ManagedAdmissionInputV1Schema, ManagedControlAdmissionInputV1Schema, MANAGED_CONTROL_ACTION_IDS_V1, resolveManagedAcquireReviewV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { ManagedIntentResultSchema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { ManagedControllerRequestFailureDetailsV1Schema, type ManagedControllerRequestFailureDetailsV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { MANAGED_POLICY_PROOF_HEADER, createManagedPolicyProofV1, encodeManagedPolicyProofV1,
     ManagedPolicyAdmissionInputV1Schema, ManagedPolicyAdmissionOutputV1Schema, type ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
@@ -406,22 +407,53 @@ export function createManagedMachineAcquisitionDriver(input: ManagedMachineAcqui
             if (MANAGED_CONTROL_ACTION_IDS_V1.some(control => control === action)) {
                 if (review.homeId !== input.homeId) throw new ManagedMachineControllerError('controller_unavailable');
                 const operationId = options.context?.operationAcceptance?.operationId;
-                if ((action === 'machines.managed.power.set' || action === 'machines.managed.rebuild' || action === 'machines.managed.delete') && !operationId) {
+                const executesIntent = action === 'machines.managed.power.set' || action === 'machines.managed.rebuild' || action === 'machines.managed.delete';
+                if (executesIntent && !operationId) {
                     throw new ManagedMachineControllerError('admission_unavailable');
                 }
-                const admission = await client.post('/v1/machines/managed/controller/admit-control',
-                    ManagedControlAdmissionInputV1Schema.parse({ action, requestId: options.requestId, input: parsed }), ManagedAdmissionOutputV1Schema);
+                const request = ManagedControlAdmissionInputV1Schema.parse({ action, requestId: options.requestId, input: parsed });
+                const unconfirmed = (error: ManagedMachineControllerError, committed: true | null) => {
+                    const failure = projectUnexpectedActionFailureV1(committed, options.requestId);
+                    return { ok: false, errorCode: failure.errorCode, error: failure.error,
+                        ...(error.details ? { details: { ...error.details } } : {}) };
+                };
+                let admission: ReturnType<typeof ManagedAdmissionOutputV1Schema.parse>;
+                try {
+                    admission = await client.post('/v1/machines/managed/controller/admit-control', request, ManagedAdmissionOutputV1Schema);
+                } catch (error) {
+                    // Lost transport/schema acknowledgement cannot establish that
+                    // this write rolled back. Home's named acquisition/rollback
+                    // refusals and pre-request currentness failures remain definite.
+                    if (!executesIntent || !operationId || !(error instanceof ManagedMachineControllerError)) throw error;
+                    const details = error.details;
+                    const unknown = details && (details.category === 'transport' || details.category === 'schema'
+                        || details.category === 'status' && (details.status ?? 0) >= 500
+                            && error.code !== 'database_connection_unavailable' && error.code !== 'database_transaction_conflict_exhausted');
+                    if (!unknown) throw error;
+                    const managedId = 'managedMachineId' in request.input ? request.input.managedMachineId : request.input.managedId;
+                    options.context?.operationOwnerUpdate?.update({ domainRef: { kind: 'managedMachine', id: managedId } });
+                    return unconfirmed(error, null);
+                }
                 // Move's destination is in the input; the current executor is
                 // validated by the admitted row/server, not that destination.
-                if (action !== 'machines.managed.power.set' && action !== 'machines.managed.rebuild' && action !== 'machines.managed.delete') return admission.machine;
+                if (!executesIntent) return admission.machine;
                 client.assertConnection(admission.machine);
                 if (!operationId) throw new ManagedMachineControllerError('admission_unavailable');
                 const accepted = ManagedIntentResultSchema.parse({ kind: 'accepted', managedId: admission.machine.id,
                     intentRevision: admission.machine.intentRevision, operation: { operationId } });
                 options.context?.operationOwnerUpdate?.update({ domainRef: { kind: 'managedMachine', id: admission.machine.id } });
                 options.context?.operationAcceptance?.accept(accepted);
-                await reconcileManagedIntent({ input, options, client, machine: admission.machine, action,
-                    ...(action === 'machines.managed.rebuild' ? { rebuild: ManagedMachineActionInputSchemasV1['machines.managed.rebuild'].parse(parsed) } : {}) });
+                try {
+                    await reconcileManagedIntent({ input, options, client, machine: admission.machine, action,
+                        ...(action === 'machines.managed.rebuild' ? { rebuild: ManagedMachineActionInputSchemasV1['machines.managed.rebuild'].parse(parsed) } : {}) });
+                } catch (error) {
+                    // The successful admission response proves desired intent committed.
+                    // A later unreadable Home cannot prove that intent was withdrawn
+                    // or that native submission did not commit. Keep the same operation
+                    // unconfirmed; definite native refusals keep their own settlement.
+                    if (!(error instanceof ManagedMachineControllerError) || !error.details) throw error;
+                    return unconfirmed(error, true);
+                }
                 return accepted;
             }
             if (review.homeId !== input.homeId || ('controller' in review && review.controller

@@ -463,8 +463,8 @@ export function ManagedMachineSections(props: SectionProps) {
     })(), { tag: 'ManagedMachineSections.rebuildReview' });
     // Native controls sit at the receipt's foot, where its cost and recipe state the consequence.
     const receiptActions: NonNullable<ManagedReceiptModel['secondary']> = bound && machine.creationState === 'active' && machine.archivedAt === undefined ? [
-        // An observed power state leaves only the operations that change it (lab: "Stop server" while it runs).
-        ...powerIntents.filter(intent => !(intent === 'stop' ? observedPower === 'stopped' : intent === 'suspend'
+        // Stop also retracts a retained Start that has not reached native power.
+        ...powerIntents.filter(intent => !(intent === 'stop' ? observedPower === 'stopped' && machine.desired === 'stop' : intent === 'suspend'
             ? observedPower === 'suspended' : observedPower === 'running')).map(intent => {
             return { label: t(`managedMachines.actions.${intent}`), testID: `managed-machine.${intent}`, tone: 'bordered' as const,
                 ...(intent === 'stop' ? { icon: <Icon name="stop" size={14} color={theme.colors.text.primary} /> } : {}),
