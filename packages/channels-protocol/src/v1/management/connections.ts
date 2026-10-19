@@ -38,8 +38,8 @@ const authorityEpochV1 = defineProtocolNumber({
     minimum: 1,
     maximum: Number.MAX_SAFE_INTEGER,
 });
-/** One exact Account Collection row revision witness; see its Protocol owner. */
-const collectionRowRevision = ConversationCollectionRowRevisionV1ProtocolSchema;
+/** Logical connection configuration revision; physical storage CAS is private. */
+const configurationRevision = ConversationCollectionRowRevisionV1ProtocolSchema;
 const observationAgeV1 = ConversationMaximumObservationAgeV1ProtocolSchema;
 const protocolBoolean = defineProtocolUnion([
     defineProtocolLiteral(true),
@@ -159,7 +159,7 @@ const conversationConnectionMutationResultV1 = defineProtocolObject({
         defineProtocolLiteral('unchanged'),
     ]),
     connectionId: ConversationConnectionIdV1ProtocolSchema,
-    revision: collectionRowRevision,
+    revision: configurationRevision,
     authorityEpoch: authorityEpochV1,
 }, { policy: 'closed' });
 
@@ -217,7 +217,7 @@ const conversationConnectionTransferResultV1 = defineProtocolUnion([
             defineProtocolLiteral('transferPendingOldStop'),
         ]),
         connectionId: ConversationConnectionIdV1ProtocolSchema,
-        revision: collectionRowRevision,
+        revision: configurationRevision,
         authorityEpoch: authorityEpochV1,
     }, { policy: 'closed' }),
     conversationConnectionEndpointRequiredResultV1,
@@ -232,7 +232,7 @@ const conversationConnectionDeleteResultV1 = defineProtocolObject({
         defineProtocolLiteral('rejoined'),
     ]),
     connectionId: ConversationConnectionIdV1ProtocolSchema,
-    revision: collectionRowRevision,
+    revision: configurationRevision,
     authorityEpoch: authorityEpochV1,
     acceptedPossibleLoss: protocolBoolean,
 }, { policy: 'closed' });
@@ -278,7 +278,7 @@ export const ConversationConnectionCreateInputV1JsonSchema: PluginJsonSchema =
  */
 export const ConversationConnectionTransferInputV1Schema = defineProtocolObject({
     connectionId: ConversationConnectionIdV1ProtocolSchema,
-    expectedRevision: collectionRowRevision,
+    expectedRevision: configurationRevision,
     expectedAuthorityEpoch: authorityEpochV1,
     providerSelection: targetedContributionSelectionV1,
     providerSetupInput: ConversationJsonValueV1ProtocolSchema,
@@ -297,7 +297,7 @@ export const ConversationConnectionTransferInputV1JsonSchema: PluginJsonSchema =
 
 export const ConversationConnectionUpdateInputV1Schema = defineProtocolObject({
     connectionId: ConversationConnectionIdV1ProtocolSchema,
-    expectedRevision: collectionRowRevision,
+    expectedRevision: configurationRevision,
     enabled: protocolBoolean,
     maximumObservationAgeMs: observationAgeV1,
 }, { policy: 'closed' });
@@ -316,7 +316,7 @@ export const ConversationConnectionUpdateResultV1JsonSchema: PluginJsonSchema =
 
 export const ConversationConnectionDeleteInputV1Schema = defineProtocolObject({
     connectionId: ConversationConnectionIdV1ProtocolSchema,
-    expectedRevision: collectionRowRevision,
+    expectedRevision: configurationRevision,
 }, { policy: 'closed' });
 export type ConversationConnectionDeleteInputV1 = ReturnType<
     typeof ConversationConnectionDeleteInputV1Schema.parse

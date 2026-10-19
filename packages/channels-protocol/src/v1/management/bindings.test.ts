@@ -181,6 +181,23 @@ describe('Channels V1 binding management mutation contracts', () => {
         } as const;
 
         expect(ConversationBindingCreateInputV1Schema.safeParse(input).success).toBe(true);
+        const multiQuerySelection = {
+            query: input.principalSelection.query,
+            selected: [
+                ...input.principalSelection.selected,
+                { id: 'principal-b', kind: 'human', query: 'exact-provider-query-b' },
+            ],
+        } as const;
+        expect(ConversationBindingCreateInputV1Schema.parse({
+            ...input, principalSelection: multiQuerySelection,
+        }).principalSelection).toEqual(multiQuerySelection);
+        expect(ConversationBindingUpdateInputV1Schema.parse({
+            bindingId: 'binding-1', expectedRevision: 7,
+            audienceSelection: {
+                expectedConnectionRevision: 7, endpointSelection: input.endpointSelection,
+                principalSelection: multiQuerySelection,
+            },
+        }).audienceSelection?.principalSelection).toEqual(multiQuerySelection);
         expect(ConversationBindingCreateInputV1Schema.safeParse({
             ...input,
             allowBotSenders: true,

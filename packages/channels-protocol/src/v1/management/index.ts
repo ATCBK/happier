@@ -68,6 +68,7 @@ import type {
 
 export {
     ConversationSessionLastDeliveryOutcomeV1Schema,
+    ConversationSessionLastDeliveryOutcomeV1JsonSchema,
     ConversationSessionLastDeliveryV1Schema,
     ConversationSessionLastDeliveryV1JsonSchema,
     ConversationSessionLastDeliveriesV1Schema,

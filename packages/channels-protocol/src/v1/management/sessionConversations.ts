@@ -15,6 +15,7 @@ export const ConversationSessionLastDeliveryOutcomeV1Schema = defineProtocolUnio
     defineProtocolLiteral('pending'),
     defineProtocolLiteral('unknown'),
 ]);
+export const ConversationSessionLastDeliveryOutcomeV1JsonSchema: PluginJsonSchema = ConversationSessionLastDeliveryOutcomeV1Schema.jsonSchema;
 
 /** A read-only custody summary; resolution never proves complete provider delivery. */
 export const ConversationSessionLastDeliveryV1Schema = defineProtocolObject({
