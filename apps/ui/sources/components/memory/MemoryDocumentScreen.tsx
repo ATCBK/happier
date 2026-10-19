@@ -25,6 +25,8 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
 
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -96,6 +98,13 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
     },
     [navigateToSession],
   );
+  const openDiscussion = React.useCallback((target: DiscussionMessageRefV1) => {
+    const result = runGuardedNavigation(() => router.push(buildDiscussionRouteHref({
+      target: { kind: 'discussion', address: target.discussion,
+        discussionId: target.discussion.discussionId, messageId: target.messageId },
+    }) as never));
+    if (result !== true) fireAndForget(result, { tag: 'MemoryDocumentScreen.discussionSource' });
+  }, [router]);
   const [composing, setComposing] = React.useState(false);
   const view = source.view;
   // Only the qualified document read admits access; ambient same-id rows cannot grant it.
@@ -323,6 +332,7 @@ export const MemoryDocumentScreen = React.memo(function MemoryDocumentScreen(
                   }
                   archived={archive}
                   onOpenSession={openSession}
+                  onOpenDiscussion={openDiscussion}
                   // Beside the list the form opens in place; a phone's fact page returns to the list to edit.
                   onEdit={canRemember ? () => openFact(split ? selectedFact : null, true, selectedFact.id) : undefined}
                 />

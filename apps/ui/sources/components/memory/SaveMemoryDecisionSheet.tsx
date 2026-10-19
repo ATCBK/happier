@@ -29,6 +29,8 @@ import {
   memoryDocumentActions,
   readMemoryActionOutcome,
   readMemoryDuplicateReview,
+  readMemoryCreationReceipt,
+  type MemoryCreationReceipt,
 } from '@/sync/ops/promptLibrary/memoryDocuments';
 import { t } from '@/text';
 
@@ -54,6 +56,8 @@ type FormProps = Readonly<{
   seed: SaveMemoryDecisionSeed;
   onClose: () => void;
   onSaved: () => void;
+  /** The saved document can be opened/attached through the existing Context flow. */
+  onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
 }>;
 
 type Notice = 'pending' | 'conflict' | 'refused' | null;
@@ -103,6 +107,7 @@ export function SaveMemoryDecisionForm(props: FormProps) {
   const [candidateId, setCandidateId] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<Notice>(null);
   const [busy, setBusy] = React.useState(false);
+  const [creationReceipt, setCreationReceipt] = React.useState<MemoryCreationReceipt | null>(null);
   const [controller] = React.useState(() => new AbortController());
   React.useEffect(() => () => controller.abort(), [controller]);
   const expiresAtMs =
@@ -111,6 +116,7 @@ export function SaveMemoryDecisionForm(props: FormProps) {
       : null;
   const canSave =
     !busy &&
+    creationReceipt === null &&
     notice !== 'pending' &&
     text.trim().length > 0 &&
     reason.trim().length > 0 &&
@@ -162,8 +168,13 @@ export function SaveMemoryDecisionForm(props: FormProps) {
         return;
       }
       const outcome = readMemoryActionOutcome(result);
+      const receipt = readMemoryCreationReceipt(result);
+      if (receipt) {
+        setCreationReceipt(receipt);
+        props.onCreatedMemory?.(receipt);
+      }
       if (outcome === 'applied') props.onSaved();
-      else setNotice(outcome === 'review' ? null : outcome);
+      else setNotice(outcome === 'review' || outcome === 'saved_unattached' ? null : outcome);
     } catch {
       if (!controller.signal.aborted) setNotice('refused');
     } finally {
@@ -328,6 +339,7 @@ function SaveMemoryDecisionModal(
   return (
     <SaveMemoryDecisionForm
       seed={props.seed}
+      onCreatedMemory={props.onCreatedMemory}
       onSaved={() => {
         props.onSaved();
         props.onClose();
@@ -355,6 +367,7 @@ export function SaveMemoryDecisionSheet(
       props: {
         seed: props.seed,
         onSaved: props.onSaved,
+        onCreatedMemory: props.onCreatedMemory,
         onCancel: props.onClose,
       },
       onRequestClose: props.onClose,
@@ -387,6 +400,7 @@ export function SaveMemoryDecisionSheet(
           <View style={styles.popoverBody}>
             <SaveMemoryDecisionForm
               seed={props.seed}
+              onCreatedMemory={props.onCreatedMemory}
               onClose={props.onClose}
               onSaved={props.onSaved}
             />

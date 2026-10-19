@@ -7,7 +7,8 @@ import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspac
 import * as React from 'react';
 
 import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
-import { useActiveServerAccountScope, useProjectOrganizations } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 
 import { readSourceTeamId } from '../sources/projectSourceGroups';
@@ -35,6 +36,7 @@ export type ProjectContextModel = Readonly<{
     }>;
     /** The viewer's own Project layer: only their sessions here read it. */
     personal: Readonly<{
+        status: Exclude<ProjectContextSharedStatus, 'none'>;
         entries: readonly PromptStackEntryV1[];
         available: boolean;
         update: (intent: ProjectContextIntentV1) => Promise<ProjectContextOutcome>;
@@ -61,9 +63,10 @@ export function useProjectContext(workspaceRef: WorkspaceRefV1): ProjectContextM
     const serverId = workspaceRef.serverId;
     const scope = useActiveServerAccountScope(serverId);
     const project = React.useMemo(() => projectWorkspaceRefV1(workspaceRef), [workspaceRef]);
-    const organizations = useProjectOrganizations();
+    const rows = useProjectAccountRows();
+    const organizations = rows?.organizations;
     const row = React.useMemo(
-        () => organizations.find((candidate) => candidate.key.serverId === project.serverId && candidate.key.projectKey === project.projectKey) ?? null,
+        () => organizations?.find((candidate) => candidate.key.serverId === project.serverId && candidate.key.projectKey === project.projectKey) ?? null,
         [organizations, project.projectKey, project.serverId],
     );
     const sourceId = workspaceRef.source?.sourceId ?? null;
@@ -93,15 +96,18 @@ export function useProjectContext(workspaceRef: WorkspaceRefV1): ProjectContextM
 
     const revision = row?.revision ?? 'absent';
     const accountId = scope?.accountId ?? null;
+    const personalStatus = !scope ? 'unavailable'
+        : rows?.status === 'error' || rows?.status === 'locked' || rows?.status === 'refused' ? 'unavailable'
+            : rows?.status === 'ready' && (row !== null || rows.coverage === 'complete') ? 'ready' : 'loading';
     const updatePersonal = React.useCallback(async (intent: ProjectContextIntentV1): Promise<ProjectContextOutcome> => {
-        if (!accountId) return 'refused';
+        if (!accountId || personalStatus !== 'ready') return 'refused';
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         return readPersonalOutcome(await createDefaultActionExecutor().execute('projects.context.update', {
             target: { serverId: project.serverId, projectKey: project.projectKey },
             expectedRevision: revision,
             intent,
         }, { surface: 'ui', authority: 'present_user', serverId: project.serverId, expectedAccountId: accountId }));
-    }, [accountId, project.projectKey, project.serverId, revision]);
+    }, [accountId, personalStatus, project.projectKey, project.serverId, revision]);
 
     const sharedStatus: ProjectContextSharedStatus = !sourceId ? 'none'
         : source ? 'ready'
@@ -118,6 +124,6 @@ export function useProjectContext(workspaceRef: WorkspaceRefV1): ProjectContextM
             update: updateShared,
             retry: retryShared,
         },
-        personal: { entries: personalEntries, available: accountId !== null, update: updatePersonal },
-    }), [accountId, personalEntries, retryShared, serverId, sharedEntries, sharedStatus, state.canManage, state.mutation, teamName, updatePersonal, updateShared]);
+        personal: { status: personalStatus, entries: personalEntries, available: personalStatus === 'ready', update: updatePersonal },
+    }), [personalStatus, personalEntries, retryShared, serverId, sharedEntries, sharedStatus, state.canManage, state.mutation, teamName, updatePersonal, updateShared]);
 }

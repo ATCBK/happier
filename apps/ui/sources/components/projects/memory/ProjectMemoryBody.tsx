@@ -50,7 +50,7 @@ export const ProjectMemoryBody = React.memo(function ProjectMemoryBody(
     projectRef.serverId,
   );
   const hasSource = shared.status !== 'none';
-  const { entry } = React.useMemo(
+  const { entry, resolved: memoryResolved } = React.useMemo(
     () =>
       selectProjectMemoryEntry({
         hasSource,
@@ -149,6 +149,7 @@ export const ProjectMemoryBody = React.memo(function ProjectMemoryBody(
         description={t('contextPages.project.memoryDescription')}
         serverId={model.serverId}
         entry={entry}
+        attachmentStatus={!memoryResolved ? 'unavailable' : shared.status === 'none' ? personal.status : shared.status}
         searchScope={page.searchScope}
         scopeTarget={canWrite ? { scope: 'project', projectRef } : undefined}
         footer={() => undefined}

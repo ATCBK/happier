@@ -108,6 +108,8 @@ export function useMemoryDocument(
     topic?: string;
     /** A closed or switched-off surface reads nothing. */
     enabled?: boolean;
+    /** An unresolved context attachment is unknown, not a successful empty read. */
+    attachmentStatus?: 'loading' | 'ready' | 'unavailable';
   }>,
 ): MemoryDocumentSource {
   const { ref, serverId, topic } = params;
@@ -309,7 +311,7 @@ export function useMemoryDocument(
   return React.useMemo((): MemoryDocumentSource => {
     if (!enabled || !ref || !serverId)
       return {
-        status: 'none',
+        status: !ref && params.attachmentStatus && params.attachmentStatus !== 'ready' ? params.attachmentStatus : 'none',
         view: null,
         stale: false,
         target: null,
@@ -342,5 +344,5 @@ export function useMemoryDocument(
           : null,
       refresh,
     };
-  }, [activeLifetime, enabled, homeId, identity, key, loaded, ref, refresh, serverId, topic]);
+  }, [activeLifetime, enabled, homeId, identity, key, loaded, params.attachmentStatus, ref, refresh, serverId, topic]);
 }

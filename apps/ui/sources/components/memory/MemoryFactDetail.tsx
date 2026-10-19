@@ -4,6 +4,7 @@ import {
   type MemoryFactV1,
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
@@ -16,12 +17,11 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { useSessionSelector } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
 
 import { formatMemoryDate } from './MemoryDocumentBody';
 import { useMemoryDocument } from './useMemoryDocument';
+import { useMemoryFactSource } from './useMemoryFactSource';
 
 /**
  * One remembered fact on its own (lab K2 `A` detail, `Dp`): the fact as the title, then what makes it
@@ -43,23 +43,14 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
     onOpenSession?: (
       ref: Readonly<{ serverId: string; sessionId: string }>,
     ) => void;
+    onOpenDiscussion?: (ref: DiscussionMessageRefV1) => void;
     /** Present when this reader may change the fact: its edit form opens in the list. */
     onEdit?: () => void;
   }>,
 ) {
-  const { fact, onOpenSession } = props;
+  const { fact, onOpenSession, onOpenDiscussion } = props;
   const decision = fact.decision;
-  const decisionSession =
-    decision?.sourceMessageRef.kind === 'session'
-      ? decision.sourceMessageRef.session
-      : null;
-  const source = fact.sourceSessionRef ?? decisionSession;
-  const sourceName = useSessionSelector(
-    source?.sessionId ?? '',
-    source?.serverId ?? props.serverId ?? '',
-    (session) =>
-      session && source ? getSessionName(session, source.serverId) : null,
-  );
+  const { source, title: sourceName } = useMemoryFactSource(fact);
   // Only a fact that replaced another reads the archive, where the replaced facts keep their words.
   const archive = useMemoryDocument({
     ref:
@@ -113,9 +104,13 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
             date: formatMemoryDate(fact.expiresAtMs),
           })
         : formatMemoryDate(fact.expiresAtMs);
-  const openSource =
-    source && onOpenSession ? () => onOpenSession(source) : undefined;
-  const sourceLabel = sourceName || t('memoryContext.memory.openSource');
+  const openSource = source?.kind === 'session' && onOpenSession
+    ? () => onOpenSession(source.session)
+    : source?.kind === 'discussion' && onOpenDiscussion
+      ? () => onOpenDiscussion(source)
+      : undefined;
+  const sourceLabel = sourceName || (source?.kind === 'discussion'
+    ? t('session.collaboration.discussion.secondOpinion.open') : t('memoryContext.memory.openSource'));
   return (
     <ItemList testID={props.testID}>
       <PageHeader

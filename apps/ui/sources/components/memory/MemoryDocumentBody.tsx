@@ -269,7 +269,7 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
         }
         // A refusal is said in place, beside what it did not change, until the next attempt.
         if (outcome === 'pending' || outcome === 'conflict' || outcome === 'refused') setNotice(outcome);
-        // An attachment conflict still saved this fact. Keep the exact document reachable,
+        // A saved-but-unattached result is not an unsaved revision conflict. Keep its exact document reachable,
         // and close its draft so retrying cannot create a second copy of that fact.
         if (receipt) onCreatedMemory?.(receipt);
         // A conflict hands back the current version; show it and keep what was typed. A review saved

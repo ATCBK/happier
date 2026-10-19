@@ -78,7 +78,7 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
   const personalAddRef = React.useRef<View>(null);
 
   const hasSource = shared.status !== 'none';
-  const { entry: memory, layer: memoryLayer } = React.useMemo(
+  const { entry: memory, layer: memoryLayer, resolved: memoryResolved } = React.useMemo(
     () => selectProjectMemoryEntry({ hasSource, sharedEntries: shared.entries, personalEntries: personal.entries, presentations }),
     [hasSource, personal.entries, presentations, shared.entries],
   );
@@ -380,6 +380,7 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
         description={t('contextPages.project.memoryDescription')}
         serverId={model.serverId}
         entry={memory}
+        attachmentStatus={!memoryResolved ? 'unavailable' : shared.status === 'none' ? personal.status : shared.status}
         searchScope={memorySearchScope}
         scopeTarget={(!hasSource && personal.available) || (hasSource && shared.canManage)
           ? { scope: 'project', projectRef }

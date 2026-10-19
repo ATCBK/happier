@@ -422,7 +422,7 @@ function serveProjectContext(conflict = false, withWorkspace = false,
         }) }) });
     homes.answer(serverId, 'POST ' + PROJECT_ACCOUNT_ROWS_ROUTE_V1 + '/mutate', { select: input => {
         const mutation = ProjectAccountRowMutationRequestV1Schema.parse(input).mutations[0]!;
-        if (conflict || mutation.expectedRevision !== revision) return { status: 409, body: { status: 'conflict', key, revision: revision + 1 } };
+        if (conflict || mutation.expectedRevision !== revision) return { body: { status: 'conflict', key, revision: revision + 1 } };
         if (mutation.content?.t !== 'plain' || !mutation.content.v || typeof mutation.content.v !== 'object' || !('value' in mutation.content.v)) {
             throw new Error('Expected plain Project organization');
         }
@@ -777,7 +777,7 @@ describe('MemoryDocumentBody', () => {
         await screen.pressByTestIdAsync('session-work-memory.doc.draft.save');
         await settled(() => expect(!screen.findByTestId('session-work-memory.doc.draft') || vi.mocked(Modal.alert).mock.calls.length > 0).toBe(true));
         expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
-        expect(screen.findByTestId('session-work-memory.doc.conflict'), boundaryDiagnostic()).toBeTruthy();
+        expect(screen.findByTestId('session-work-memory.doc.conflict'), boundaryDiagnostic()).toBeNull();
         await flushHookEffects();
         expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
         const rows = homes.artifacts(serverId).list();
@@ -1229,7 +1229,7 @@ describe('MemoryDocumentBody', () => {
         await React.act(async () => { screen.changeTextByTestId('memory.draft', 'A durable unattached fact.'); });
         await screen.pressByTestIdAsync('memory.draft.save');
         await settled(() => {
-            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(true);
+            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(false);
             expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
         });
         expect(account?.read() ?? project?.read().promptStack).toEqual([]);
@@ -1255,7 +1255,7 @@ describe('MemoryDocumentBody', () => {
         await React.act(async () => { screen.changeTextByTestId('context.memory.draft', 'Preserve the exact saved document.'); });
         await screen.pressByTestIdAsync('context.memory.draft.save');
         await settled(() => {
-            expect(Boolean(screen.findByTestId('context.memory.conflict'))).toBe(true);
+            expect(Boolean(screen.findByTestId('context.memory.conflict'))).toBe(false);
             expect(Boolean(screen.findByTestId('context.memory.draft'))).toBe(false);
             expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
         });

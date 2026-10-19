@@ -8,11 +8,12 @@ import type { SessionContextIntentV1 } from '@happier-dev/protocol/sessions/cont
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { MemoryMutationResultV1Schema, MemoryDuplicateChoiceRequiredV1Schema,
-  type MemoryDuplicateChoiceV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
+  type MemoryDuplicateChoiceV1, type MemoryAttachmentFailureV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 
 export type MemoryCreationReceipt = Readonly<{
   ref: PromptDocArtifactRefV1;
   attachment: 'attached' | 'conflict';
+  attachmentFailure?: MemoryAttachmentFailureV1;
 }>;
 
 /** Creation saves the fact before attachment CAS; retain its exact document even on conflict. */
@@ -20,7 +21,8 @@ export function readMemoryCreationReceipt(result: ActionExecuteResult): MemoryCr
   if (!result.ok) return null;
   const parsed = MemoryMutationResultV1Schema.safeParse(result.result);
   return parsed.success && parsed.data.ref && parsed.data.attachment
-    ? { ref: parsed.data.ref, attachment: parsed.data.attachment }
+    ? { ref: parsed.data.ref, attachment: parsed.data.attachment,
+      ...(parsed.data.attachmentFailure ? { attachmentFailure: parsed.data.attachmentFailure } : {}) }
     : null;
 }
 
@@ -52,6 +54,7 @@ export type MemoryActionOutcome =
   | 'review'
   | 'pending'
   | 'conflict'
+  | 'saved_unattached'
   | 'refused';
 
 /** An Action receipt as the memory surfaces report it; a conflict means "the document moved". */
@@ -62,7 +65,7 @@ export function readMemoryActionOutcome(
     return result.errorCode === 'version_mismatch' ? 'conflict' : 'refused';
   if (readMemoryDuplicateReview(result)) return 'review';
   if (result.result && typeof result.result === 'object' && 'ok' in result.result && result.result.ok === false) return 'refused';
-  if (readMemoryCreationReceipt(result)?.attachment === 'conflict') return 'conflict';
+  if (readMemoryCreationReceipt(result)?.attachment === 'conflict') return 'saved_unattached';
   return ActionApprovalRequestCreatedResultSchema.safeParse(result.result)
     .success
     ? 'pending'

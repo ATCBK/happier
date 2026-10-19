@@ -1,6 +1,6 @@
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 
-import { isMemoryStackEntry, type PromptStackEntryPresentations } from '@/components/settings/prompts/stacks/promptStackEntryPresentation';
+import type { PromptStackEntryPresentations } from '@/components/settings/prompts/stacks/promptStackEntryPresentation';
 
 export type ProjectContextLayer = 'shared' | 'personal';
 
@@ -14,8 +14,14 @@ export function selectProjectMemoryEntry(input: Readonly<{
   sharedEntries: readonly PromptStackEntryV1[];
   personalEntries: readonly PromptStackEntryV1[];
   presentations: PromptStackEntryPresentations;
-}>): Readonly<{ entry: PromptStackEntryV1 | null; layer: ProjectContextLayer }> {
+}>): Readonly<{ entry: PromptStackEntryV1 | null; layer: ProjectContextLayer; resolved: boolean }> {
   const layer: ProjectContextLayer = input.hasSource ? 'shared' : 'personal';
   const entries = input.hasSource ? input.sharedEntries : input.personalEntries;
-  return { entry: entries.find((entry) => isMemoryStackEntry(entry, input.presentations)) ?? null, layer };
+  let resolved = true;
+  for (const entry of entries) {
+    const kind = input.presentations(entry).kind;
+    if (kind === 'memory') return { entry, layer, resolved: true };
+    if (kind === 'unknown') resolved = false;
+  }
+  return { entry: null, layer, resolved };
 }

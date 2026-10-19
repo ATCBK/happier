@@ -59,6 +59,16 @@ describe('ProjectContextBody', () => {
         ['Context', ProjectContextBody, 'project-context.memory'],
         ['Memory', ProjectMemoryBody, 'project-memory.memory'],
     ] as const)('%s Project read status', (_name, Body, memoryTestID) => {
+        it('does not turn an unresolved attached document kind into confirmed empty memory', async () => {
+            storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
+                workspaceRefs: [workspaceRef], relationships: [], organizations: [{ key: {
+                    kind: 'project-organization', serverId: scope.serverId, projectKey: 'happier',
+                }, revision: 4, value: { promptStack: [entry('unknown-kind', 'not-opened')] } }], revisionsByPhysicalKey: {} });
+            const screen = await renderScreen(<Body workspaceRef={workspaceRef} />);
+            expect(Boolean(screen.findByTestId(`${memoryTestID}.none`))).toBe(false);
+            expect(Boolean(screen.findByTestId(`${memoryTestID}.remember`))).toBe(false);
+        });
+
         it('keeps unknown memory loading until a complete Project read establishes absence', async () => {
             storage.getState().clearProjectAccountRowsScope();
             storage.getState().activateProjectAccountRowsScope(scope);

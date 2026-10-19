@@ -261,7 +261,7 @@ describe('MemorySearchPanel corpus coverage', () => {
         expect(screen.getTextContent()).toContain('1 facts');
         expect(screen.getTextContent()).not.toContain('2 facts');
     });
-    it('reports the selected unavailable Machine for counts while the document remains readable', async () => {
+    it('reports the selected unavailable Machine for counts while the document remains readable, then recovers on the same Machine', async () => {
         const serverId = administration.serverIds[0]!;
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
             v: 1, index: [{ id: 'key', text: 'Keep the saved fact readable.', createdAtMs: 1, sourceSessionRef: null }], topics: [],
@@ -285,6 +285,15 @@ describe('MemorySearchPanel corpus coverage', () => {
                 reason: 'machine_unavailable', target: { serverId: administration.targets[0]!.serverIdentityId, machineId },
             } });
             expect(machineRpc).not.toHaveBeenCalled();
+            machineRpc.mockResolvedValue({ ...status, documents: { state: 'ready', facts: [{
+                ref, revision: { headerVersion: 1, bodyVersion: 1 }, indexedFactCount: 5, loadedFactCount: 1,
+            }] } });
+            homes.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' })] });
+            await act(async () => storage.getState().applyMachines([{ ...machine, active: true, activeAt: Date.now() }], false, { sourceServerId: serverId }));
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().summary).toEqual({ state: 'ready', indexedFactCount: 5, loadedFactCount: 1 });
+            });
         } finally { await hook.unmount(); clock.mockRestore(); }
     });
     it('keeps a fresh summary stable and refuses late scoped status after its context changes', async () => {
