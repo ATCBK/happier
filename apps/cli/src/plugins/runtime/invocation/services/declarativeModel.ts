@@ -1,10 +1,10 @@
 import {
     createStablePluginDeclarativeModel as createProtocolDeclarativeModel,
-    PluginUiDeclarationProjectionErrorV1,
     type StablePluginQualifiedReference,
     type StablePluginAvailabilityInput,
     type StablePluginDeclarativeModel,
-} from '@happier-dev/protocol/plugins/contributions/ui';
+} from '@happier-dev/protocol/plugins/contributions/ui/declarativeModel';
+import { PluginUiDeclarationProjectionErrorV1 } from '@happier-dev/protocol/plugins/contributions/ui/settingsDescriptors';
 export type {
     StablePluginDeclarativeTone,
     StablePluginDeclarativeActionVariant,
@@ -23,7 +23,7 @@ export type {
     StablePluginDeclarativeSettingsBinding,
     StablePluginDeclarativeInventory,
     StablePluginDeclarativeModel,
-} from '@happier-dev/protocol/plugins/contributions/ui';
+} from '@happier-dev/protocol/plugins/contributions/ui/declarativeModel';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';

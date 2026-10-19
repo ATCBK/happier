@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createPluginActionPresentUserGate, projectPluginActionFailureCode, type PluginActionInputParserIssue } from '@happier-dev/protocol/plugins/actions/invocation';
-import type { ApprovalExecutionOriginV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
+import type { ApprovalExecutionOriginV1, ApprovalRequesterConfirmationV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginActionHandlerInvocation } from '@happier-dev/plugin-sdk/actions';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
@@ -116,6 +116,7 @@ export type TargetActionCurrentIntentRequest = Readonly<{
   replayPlacement?: TargetActionApprovalReplayPlacementV1;
   /** Immutable outer Action authority captured before a deferred decision. */
   executionOriginV1?: ApprovalExecutionOriginV1;
+  requesterConfirmation?: ApprovalRequesterConfirmationV1;
   signal?: AbortSignal;
   reportUnavailable?: (reason: TargetActionCurrentIntentUnavailableReason) => void;
 }>;
@@ -126,6 +127,8 @@ export type TargetActionCurrentIntentResult = Readonly<
     fingerprint: string;
     /** Durable identity when approval is Artifact-owned. */
     artifactId?: string;
+    /** Live ingress proof retained only by the original invocation. */
+    revalidateRequesterDecision?: () => Promise<boolean>;
   }
   | { status: 'deferred'; artifactId: string }
   | { status: 'rejected' | 'unavailable'; code: string }

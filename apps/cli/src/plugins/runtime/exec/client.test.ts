@@ -432,6 +432,67 @@ describe('A.13p spawned protocol client runtime', () => {
         protocol.dispose();
     });
 
+    it('accepts a response after a platform timer chunk within the authored JSON-RPC budget', async () => {
+        vi.useFakeTimers();
+        const { stdout, protocol } = createInMemoryJsonRpcProcess();
+        let settled = false;
+        const pending = protocol.client.request('child/long-work', {}, { timeoutMs: 2_147_483_647 + 100 })
+            .then(
+                (value) => { settled = true; return value; },
+                (error: unknown) => { settled = true; return error; },
+            );
+        try {
+            await vi.advanceTimersByTimeAsync(2_147_483_647 + 25);
+            expect(settled).toBe(false);
+            stdout.write('{"jsonrpc":"2.0","id":1,"result":{"completed":true}}\n');
+            await expect(pending).resolves.toEqual({ completed: true });
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            protocol.dispose();
+            vi.useRealTimers();
+        }
+    });
+
+    it('times out a long JSON-RPC request only at its full authored deadline', async () => {
+        vi.useFakeTimers();
+        const { protocol } = createInMemoryJsonRpcProcess();
+        let settled = false;
+        const pending = protocol.client.request('child/long-work', {}, { timeoutMs: 2_147_483_647 + 100 })
+            .then(
+                (value) => { settled = true; return value; },
+                (error: unknown) => { settled = true; return error; },
+            );
+        try {
+            await vi.advanceTimersByTimeAsync(2_147_483_647 + 99);
+            expect(settled).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            await expect(pending).resolves.toMatchObject({ code: 'PLUGIN_EXEC_CLIENT_REQUEST_TIMEOUT' });
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            protocol.dispose();
+            vi.useRealTimers();
+        }
+    });
+
+    it('cancels a long JSON-RPC request and its rearmed timer when aborted', async () => {
+        vi.useFakeTimers();
+        const { protocol } = createInMemoryJsonRpcProcess();
+        const controller = new AbortController();
+        const pending = protocol.client.request('child/long-work', {}, {
+            timeoutMs: 2_147_483_647 + 100,
+            signal: controller.signal,
+        }).catch((error: unknown) => error);
+        try {
+            await vi.advanceTimersByTimeAsync(2_147_483_647 + 25);
+            controller.abort();
+            await expect(pending).resolves.toMatchObject({ code: 'PLUGIN_EXEC_CLIENT_ABORTED' });
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            protocol.dispose();
+            vi.useRealTimers();
+        }
+    });
+
     it('retains more than 256 concurrent child requests through handler settlement and recovery', async () => {
         const onFailure = vi.fn();
         const { stdout, writes, protocol } = createInMemoryJsonRpcProcess({ onFailure });
@@ -439,6 +500,7 @@ describe('A.13p spawned protocol client runtime', () => {
         const blocked = new Promise<void>((resolve) => { release = resolve; });
         const admitted: string[] = [];
         protocol.client.registerRequestHandler('host/work', async (_params, context) => {
+            if (context.requestId === undefined) throw new Error('Expected a child request identity');
             admitted.push(context.requestId);
             await blocked;
             return { requestId: context.requestId };

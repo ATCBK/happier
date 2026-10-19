@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import {
@@ -145,36 +147,24 @@ function registry(params: Readonly<{
     actions: readonly ResolvedActionContribution[];
     activationTargets: readonly ReturnType<typeof activationTarget>[];
 }>): ResolvedContributionRegistry {
-    return {
-        uiViewsV2: [],
-        uiRenderersV2: [],
-        uiTranslationsV2: [],
-        agents: [],
+    return createResolvedContributionRegistry({
         actions: params.actions,
         commands: [],
         tools: [],
         resources: [],
         activationTargets: params.activationTargets,
-        actionsById: new Map(params.actions.map((action) => [
-            `${action.pluginId}/${action.definition.id}`,
-            action,
-        ])),
-        commandsById: new Map(),
-        toolsById: new Map(),
-        catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-        pluginDiagnosticsByPluginId: {},
-    };
+    });
 }
 
-function executableRegistry(params: Readonly<{
+async function executableRegistry(params: Readonly<{
     contributes: ResolvedContributionRegistry;
     targetActionInvocations: ReturnType<typeof buildTargetActionInvocationRegistry>;
     resolveCurrentPluginMaterializationRef: (pluginId: string) => PluginMachineMaterializationRefV1 | null;
     readPluginOccurrenceId?: (pluginId: string) => PluginRuntimeOccurrenceId | null;
     activateContributionsOnDemand: ResolvedExecutablePluginRuntimeRegistry['activateContributionsOnDemand'];
-}>): ResolvedExecutablePluginRuntimeRegistry {
+}>): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     return {
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: params.contributes, pluginIds: [] }),
         contributes: params.contributes,
         targetActionInvocations: params.targetActionInvocations,
         resolveCurrentPluginMaterializationRef: params.resolveCurrentPluginMaterializationRef,
@@ -442,7 +432,7 @@ describe('buildTargetActionInvocationRegistry caller currentness', () => {
                 materializations.get(pluginId) ?? null
             ),
         });
-        runtimeRegistry = executableRegistry({
+        runtimeRegistry = (await executableRegistry({
             contributes,
             targetActionInvocations,
             resolveCurrentPluginMaterializationRef: (pluginId) => (
@@ -450,7 +440,7 @@ describe('buildTargetActionInvocationRegistry caller currentness', () => {
             ),
             readPluginOccurrenceId: (pluginId) => occurrenceIds.get(pluginId) ?? null,
             activateContributionsOnDemand,
-        });
+        }));
         const committedRuntimeRegistry: ResolvedExecutablePluginRuntimeRegistry = runtimeRegistry;
 
         await expect(executeContributedAction({
@@ -534,7 +524,7 @@ type AdmittedOperation = ReturnType<
     typeof createAdmittedTargetedOperationExecutionHandle
 >;
 
-function createComposedAdmittedOperationFixture() {
+async function createComposedAdmittedOperationFixture() {
     const callerManifest = actionManifest('acme.caller', 'request', ['cli']);
     const contributorManifest = actionManifest('acme.contributor', 'publish', ['plugin']);
     const callerAction = resolvedAction({
@@ -710,7 +700,7 @@ function createComposedAdmittedOperationFixture() {
             materializations.get(pluginId) ?? null
         ),
     });
-    runtimeRegistry = executableRegistry({
+    runtimeRegistry = (await executableRegistry({
         contributes,
         targetActionInvocations,
         resolveCurrentPluginMaterializationRef: (pluginId) => (
@@ -718,7 +708,7 @@ function createComposedAdmittedOperationFixture() {
         ),
         readPluginOccurrenceId: (pluginId) => currentOccurrenceIds.get(pluginId) ?? null,
         activateContributionsOnDemand,
-    });
+    }));
 
     const publishContributor = (handler: TargetActionHandler): void => {
         const contributorOccurrenceId = currentOccurrenceIds.get('acme.contributor')!;
@@ -839,7 +829,7 @@ function createComposedAdmittedOperationFixture() {
 
 describe('admitted targeted-operation currentness through production Actions', () => {
     it.each(['settled', 'thrown'] as const)('reports retirement when demand activation is %s without publishing H', async (settlement) => {
-        const fixture = createComposedAdmittedOperationFixture();
+        const fixture = await createComposedAdmittedOperationFixture();
         fixture.setDemandContributorActivation(() => {
             fixture.setCurrentContributorOccurrence('immutable-contributor-h');
             if (settlement === 'thrown') throw new Error('activation failed after retirement');
@@ -866,7 +856,7 @@ describe('admitted targeted-operation currentness through production Actions', (
     });
 
     it('rechecks the target occurrence after awaited Action binding and before the contributor handler starts', async () => {
-        const fixture = createComposedAdmittedOperationFixture();
+        const fixture = await createComposedAdmittedOperationFixture();
         const inputSchema = defineProtocolObject({
             kind: defineProtocolLiteral('accepted'),
         }, { policy: 'additive-open/drop' });
@@ -908,7 +898,7 @@ contributorOccurrenceId: 'immutable-contributor-g',
     });
 
     it('validates an admitted target protocol at the canonical contributor dispatcher and fences exact target and contributor occurrences', async () => {
-        const fixture = createComposedAdmittedOperationFixture();
+        const fixture = await createComposedAdmittedOperationFixture();
         const inputSchema = defineProtocolObject({
             kind: defineProtocolLiteral('accepted'),
         }, { policy: 'additive-open/drop' });
@@ -1017,7 +1007,7 @@ fixture.setCurrentContributorOccurrence('immutable-contributor-h');
     });
 
     it('refuses reconstructed and stale G handles before demand activation, then refuses G after activation installs H', async () => {
-        const preDemandFixture = createComposedAdmittedOperationFixture();
+        const preDemandFixture = await createComposedAdmittedOperationFixture();
         const originalG = preDemandFixture.admit('immutable-contributor-g');
         const spread = Object.freeze({ ...originalG });
         const reconstructed = Object.freeze({
@@ -1061,7 +1051,7 @@ fixture.setCurrentContributorOccurrence('immutable-contributor-h');
             await preDemandFixture.dispose();
         }
 
-        const activationFixture = createComposedAdmittedOperationFixture();
+        const activationFixture = await createComposedAdmittedOperationFixture();
         const originalGAfterDemand = activationFixture.admit('immutable-contributor-g');
         const replacementHHandler = vi.fn<TargetActionHandler>(async () => ({ handledBy: 'H' }));
         activationFixture.setDemandContributorActivation(() => {
@@ -1088,7 +1078,7 @@ fixture.setCurrentContributorOccurrence('immutable-contributor-h');
     });
 
     it('preserves a known G result after its handler installs H, while a fresh H handle executes', async () => {
-        const fixture = createComposedAdmittedOperationFixture();
+        const fixture = await createComposedAdmittedOperationFixture();
         const originalG = fixture.admit('immutable-contributor-g');
         const freshH = fixture.admit('immutable-contributor-h');
         const replacementHHandler = vi.fn<TargetActionHandler>(async () => ({ handledBy: 'H' }));

@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
@@ -15,7 +17,7 @@ class FakePermissionSession {
     // authenticated server stamps the RPC authorization context, so this test
     // drives the canonical server-bound boundary instead of the raw handler.
     rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager(this.sessionId);
-    agentState: { requests: Record<string, unknown>; completedRequests: Record<string, unknown> } = { requests: {}, completedRequests: {} };
+    agentState: AgentState = { requests: {}, completedRequests: {} };
     stateReadFailure: Error | null = null;
 
     getAgentStateSnapshot() {
@@ -23,7 +25,7 @@ class FakePermissionSession {
         return this.agentState;
     }
 
-    updateAgentState(updater: (state: typeof this.agentState) => typeof this.agentState) {
+    updateAgentState(updater: (state: AgentState) => AgentState) {
         this.agentState = updater(this.agentState);
         return this.agentState;
     }
@@ -80,6 +82,12 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('createSessionScopedMcpServices permission integration', () => {
+    beforeEach(() => {
+        setActiveAccountSettingsSnapshot({ scopeKey: 'session-mcp-permission-test', source: 'network', settingsVersion: 1,
+            settings: accountSettingsParse({}), rawSettings: {}, settingsSecretsReadKeys: [], loadedAtMs: 1,
+            promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+    });
+    afterEach(() => resetActiveAccountSettingsSnapshotForTests());
     it('presents long schema context through the real session interaction and permission owners', async () => {
         const fixture = createMcpInteractionFixture();
         const { service, session } = fixture;
@@ -90,8 +98,8 @@ describe('createSessionScopedMcpServices permission integration', () => {
                     mode: { type: 'string', title: 'Which deployment mode?', enum: ['safe', 'fast'] },
                 }, required: ['mode'] },
             });
-            await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
-            const [id, request] = Object.entries(session.agentState.requests)[0]!;
+            await vi.waitFor(() => expect(Object.keys(session.agentState.requests ?? {})).toHaveLength(1));
+            const [id, request] = Object.entries(session.agentState.requests ?? {})[0]!;
             expect(request).toMatchObject({
                 tool: 'AskUserQuestion', kind: 'user_action',
                 arguments: { questions: [{ question: expect.stringContaining('Which deployment mode?') }] },
@@ -131,7 +139,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             input,
         });
 
-        await vi.waitFor(() => expect(session.agentState.requests['mcp-allow-session']).toMatchObject({
+        await vi.waitFor(() => expect(session.agentState.requests?.['mcp-allow-session']).toMatchObject({
             tool: 'mcp__shell__run_command',
             arguments: input,
             owner: ownerA,
@@ -146,7 +154,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             status: 'accepted',
             decision: 'approved_for_session',
         });
-        expect(session.agentState.completedRequests['mcp-allow-session']).toMatchObject({
+        expect(session.agentState.completedRequests?.['mcp-allow-session']).toMatchObject({
             status: 'approved',
             decision: 'approved_for_session',
             owner: ownerA,
@@ -161,8 +169,8 @@ describe('createSessionScopedMcpServices permission integration', () => {
             status: 'accepted',
             decision: 'approved_for_session',
         });
-        expect(session.agentState.requests['mcp-auto-owner-a']).toBeUndefined();
-        expect(session.agentState.completedRequests['mcp-auto-owner-a']).toMatchObject({
+        expect(session.agentState.requests?.['mcp-auto-owner-a']).toBeUndefined();
+        expect(session.agentState.completedRequests?.['mcp-auto-owner-a']).toMatchObject({
             status: 'approved',
             decision: 'approved_for_session',
             owner: ownerA,
@@ -174,7 +182,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             toolName: 'run_command',
             input,
         });
-        await vi.waitFor(() => expect(session.agentState.requests['mcp-owner-b']).toMatchObject({
+        await vi.waitFor(() => expect(session.agentState.requests?.['mcp-owner-b']).toMatchObject({
             tool: 'mcp__shell__run_command',
             arguments: input,
             owner: ownerB,
@@ -192,7 +200,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             toolName: 'run_command',
             input: { command: 'printf cancelled' },
         });
-        await vi.waitFor(() => expect(session.agentState.requests['mcp-cancelled']).toBeDefined());
+        await vi.waitFor(() => expect(session.agentState.requests?.['mcp-cancelled']).toBeDefined());
         await respond?.({ id: 'mcp-cancelled', approved: false, decision: 'abort' });
         await expect(cancelled).resolves.toEqual({
             status: 'cancelled',
@@ -206,10 +214,10 @@ describe('createSessionScopedMcpServices permission integration', () => {
             toolName: 'run_command',
             input: { command: 'printf aborted' },
         }, { signal: controller.signal });
-        await vi.waitFor(() => expect(session.agentState.requests['mcp-aborted-by-caller']).toBeDefined());
+        await vi.waitFor(() => expect(session.agentState.requests?.['mcp-aborted-by-caller']).toBeDefined());
         controller.abort(new Error('caller retired'));
         await expect(aborted).rejects.toThrow('caller retired');
-        await vi.waitFor(() => expect(session.agentState.requests['mcp-aborted-by-caller']).toBeUndefined());
+        await vi.waitFor(() => expect(session.agentState.requests?.['mcp-aborted-by-caller']).toBeUndefined());
     });
 
     it('returns typed form content and confirmation outcomes through real session interactions', async () => {
@@ -232,8 +240,8 @@ describe('createSessionScopedMcpServices permission integration', () => {
                 },
                 meta: { decision: 'approved_for_session', owner: { pluginId: 'forged-plugin' }, correlation: ['data-only', 1, true] },
             });
-            await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
-            const [id, request] = Object.entries(session.agentState.requests)[0]!;
+            await vi.waitFor(() => expect(Object.keys(session.agentState.requests ?? {})).toHaveLength(1));
+            const [id, request] = Object.entries(session.agentState.requests ?? {})[0]!;
             expect(request).toMatchObject({
                 tool: 'AskUserQuestion', kind: 'user_action',
                 owner: { kind: 'plugin', pluginId: 'happier.agent.test', runtimeId: 'test' },
@@ -259,8 +267,8 @@ describe('createSessionScopedMcpServices permission integration', () => {
             const emptyForm = { toolName: 'confirm_deployment', prompt: 'Proceed with deployment?',
                 schema: { type: 'object' as const, properties: {} } };
             const confirming = service.elicit({ ...emptyForm, requestId: 'mcp-empty-form' });
-            await vi.waitFor(() => expect(Object.keys(session.agentState.requests)).toHaveLength(1));
-            const [confirmationId, confirmation] = Object.entries(session.agentState.requests)[0]!;
+            await vi.waitFor(() => expect(Object.keys(session.agentState.requests ?? {})).toHaveLength(1));
+            const [confirmationId, confirmation] = Object.entries(session.agentState.requests ?? {})[0]!;
             expect(confirmation).toMatchObject({ tool: 'AskUserQuestion', kind: 'user_action', arguments: {
                 questions: [{ id: 'confirmation', question: 'Proceed with deployment?', required: true,
                     options: [{ id: 'confirm', label: 'Confirm' }, { id: 'decline', label: 'Cancel' }] }],
@@ -271,7 +279,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             await expect(service.elicit({ ...emptyForm, requestId: 'mcp-empty-form-cancelled' })).resolves.toEqual({
                 status: 'cancelled', decision: 'abort',
             });
-            expect(Object.keys(session.agentState.requests)).toEqual([]);
+            expect(Object.keys(session.agentState.requests ?? {})).toEqual([]);
 
             // A missing host Session lifetime makes the real native owner unavailable.
             const unbound = createMcpInteractionFixture(false);
@@ -279,7 +287,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
                 await expect(unbound.service.elicit({ ...emptyForm, requestId: 'mcp-empty-form-unavailable' })).resolves.toEqual({
                     status: 'unavailable', reason: 'mcp_elicitation_interaction_unavailable',
                 });
-                expect(Object.keys(unbound.session.agentState.requests)).toEqual([]);
+                expect(Object.keys(unbound.session.agentState.requests ?? {})).toEqual([]);
             } finally {
                 await unbound.dispose();
             }
@@ -299,7 +307,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
                 requestId: 'mcp-exec-policy', toolName: 'shell',
                 input: { command: 'git status', proposedExecpolicyAmendment: amendment },
             });
-            await vi.waitFor(() => expect(session.agentState.requests['mcp-exec-policy']).toBeDefined());
+            await vi.waitFor(() => expect(session.agentState.requests?.['mcp-exec-policy']).toBeDefined());
             await respond!({ id: 'mcp-exec-policy', approved: true, decision: 'approved_execpolicy_amendment',
                 execPolicyAmendment: { command: amendment } });
             await expect(unsupported).resolves.toEqual({ status: 'failed', reason: 'mcp_elicitation_effect_unsupported' });
@@ -307,7 +315,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
                 requestId: 'mcp-invalid-meta', toolName: 'shell', input: { command: 'git status' },
                 meta: { decision: () => 'approved' },
             })).resolves.toEqual({ status: 'failed', reason: 'mcp_elicitation_meta_invalid' });
-            expect(Object.keys(session.agentState.requests)).toEqual([]);
+            expect(Object.keys(session.agentState.requests ?? {})).toEqual([]);
 
             const deeplyNestedMeta: Record<string, unknown> = {};
             let cursor = deeplyNestedMeta;
@@ -318,7 +326,7 @@ describe('createSessionScopedMcpServices permission integration', () => {
             }
             cursor.decision = 'approved_for_session';
             const deep = service.elicit({ requestId: 'mcp-deep-meta', toolName: 'shell', meta: deeplyNestedMeta });
-            await vi.waitFor(() => expect(session.agentState.requests['mcp-deep-meta']).toMatchObject({
+            await vi.waitFor(() => expect(session.agentState.requests?.['mcp-deep-meta']).toMatchObject({
                 tool: 'shell', owner: { kind: 'plugin', pluginId: 'happier.agent.test', runtimeId: 'test' },
             }));
             expect(await settledState(deep)).toBe('pending');

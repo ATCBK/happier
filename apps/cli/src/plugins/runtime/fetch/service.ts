@@ -10,6 +10,7 @@ import type {
     PluginWebSocketOpenInput,
 } from '@happier-dev/plugin-sdk/http';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 import type {
     TargetPluginInterceptedRequest as PluginInterceptedRequest,
     TargetPluginInterceptorResult as PluginInterceptorResult,
@@ -763,13 +764,19 @@ function createTerminalFetchAdapter(params: CreatePluginHttpServiceParams): Http
                 pluginId: params.pluginId,
                 recordDisclosureMismatch: params.recordDisclosureMismatch,
             });
-            if (!params.adapter) {
+            const adapter = params.adapter;
+            if (!adapter) {
                 throw new PluginError({
                     code: 'plugin_fetch_adapter_unavailable',
                     message: 'Plugin fetch network access is unavailable in this host context',
                 });
             }
-            return await params.adapter.request(request, options);
+            const diagnostic: { httpStatus?: number } = {};
+            return await runTracedExternalActionInnerStage('contributed.http.transport', async () => {
+                const response = await adapter.request(request, options);
+                diagnostic.httpStatus = response.status;
+                return response;
+            }, diagnostic);
         },
         async openWebSocket() {
             throw new PluginError({
@@ -906,22 +913,22 @@ export function createPluginHttpService(params: CreatePluginHttpServiceParams): 
         const timeout = withTimeout(request, signal);
         const maxAttempts = params.retry?.maxAttempts ?? 1;
         try {
-            const interceptedRequest = await raceWithAbort(
+            const interceptedRequest = await runTracedExternalActionInnerStage('contributed.http.interceptors', () => raceWithAbort(
                 applyInterceptors(request, timeout.signal),
                 timeout.signal,
-            );
+            ));
             for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
                 assertNotAborted(timeout.signal);
                 try {
                     let finalPolicy: PluginHttpFinalPolicyResolution | undefined;
                     if (params.revalidateFinalPolicy) {
-                        const policyResult = await raceWithAbort(
-                            Promise.resolve(params.revalidateFinalPolicy(Object.freeze({
+                        const policyResult = await runTracedExternalActionInnerStage('contributed.http.policy', () => raceWithAbort(
+                            Promise.resolve(params.revalidateFinalPolicy!(Object.freeze({
                                 request: interceptedRequest,
                                 attempt,
                             }))),
                             timeout.signal,
-                        );
+                        ));
                         if (policyResult) finalPolicy = policyResult;
                     }
                     assertNotAborted(timeout.signal);

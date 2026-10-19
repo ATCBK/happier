@@ -185,7 +185,7 @@ describe('createManagedServiceProcessSupervisorHost', () => {
         expect(failure).toBeInstanceOf(PluginError);
         if (!(failure instanceof PluginError)) throw failure;
         const details = failure.details;
-        const evidence = LocalServiceEstablishmentFailureV1Schema.parse(details && typeof details === 'object' && !Array.isArray(details)
+        const evidence = LocalServiceEstablishmentFailureV1Schema.parse(details && typeof details === 'object' && !Array.isArray(details) && 'establishmentFailure' in details
             ? details.establishmentFailure : undefined);
         expect(evidence).toMatchObject({ cause: 'process_exited', exitCode: 23 });
         if (_shape === 'bounded redacted exception') {

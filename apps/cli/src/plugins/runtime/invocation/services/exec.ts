@@ -1,4 +1,3 @@
-import { findCatalogEntry } from '@/agent/catalog/registry';
 import type { PluginAgentCliReadinessServiceForHost } from '../../context/agents';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { realpath } from 'node:fs/promises';
@@ -48,11 +47,14 @@ import { createHappierLinuxScopeName } from '@/daemon/platform/linux/systemdUser
 import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
 import { logger } from '@/ui/logger';
 
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
 /** Prepared by the host Project owner, never accepted from an SDK Exec request. */
 export type HostProjectNativeLaunchAdmission =
     | Readonly<{
         status: 'ready';
         reviewedEffectDigest: string;
+        verifyCurrent?: () => Promise<void>;
         environment: Omit<ProjectNativeEnvironmentInput, 'cwd' | 'env' | 'signal' | 'pluginAdapter'>;
         nativeAdapter?: Omit<ProjectNativePluginAdapterInput, 'launch'>;
         secretReferences?: ProjectSecretReferenceEnvironmentInput;
@@ -67,10 +69,63 @@ export type HostProjectNativeLaunchAdmission =
 
 export type HostPluginExecLaunchOptions = Readonly<{
     signal?: AbortSignal;
+    nativeLaunch?: AgentNativeLaunchQualifier;
     projectLaunch?: HostProjectNativeLaunchAdmission;
     /** The selected native adapter's invocation, not the original Agent's. */
     nativeExecutableOwner?: ExecService;
+    prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
 }>;
+
+export type HostAgentNativeLaunchPreparation = (
+    signal: AbortSignal,
+    cwd?: string,
+    environment?: Readonly<Record<string, string>>,
+) => Promise<Readonly<{
+    projectLaunch: HostProjectNativeLaunchAdmission;
+    nativeExecutableOwner?: ExecService;
+}> | undefined>;
+
+type NativeLaunchQualifiers = WeakSet<object>;
+const INTERNAL_NATIVE_LAUNCH_QUALIFIERS = new WeakMap<ExecService, NativeLaunchQualifiers>();
+const INTERNAL_RESOLVED_AGENT_LAUNCH_AUTHORIZERS = new WeakMap<ExecService, (
+    launch: ResolvedHostExecLaunch,
+    signal?: AbortSignal,
+    nativeLaunch?: AgentNativeLaunchQualifier,
+) => Promise<HostAuthorizedPluginExecLaunch>>();
+
+function assertNativeLaunchQualifier(qualifiers: NativeLaunchQualifiers, nativeLaunch?: AgentNativeLaunchQualifier): void {
+    if (nativeLaunch === undefined) return;
+    if (typeof nativeLaunch !== 'object' || nativeLaunch === null || !qualifiers.has(nativeLaunch)) {
+        fail('plugin_exec_native_launch_qualifier_invalid', 'Native Agent launch qualifier does not belong to this Exec service');
+    }
+}
+
+/** Only host composition qualifies cold native launch intent; ordinary admission still applies. */
+export function issueAgentNativeLaunchQualifierForHost(service: ExecService): AgentNativeLaunchQualifier {
+    let qualifiers = INTERNAL_NATIVE_LAUNCH_QUALIFIERS.get(service);
+    if (!qualifiers) {
+        qualifiers = new WeakSet();
+        INTERNAL_NATIVE_LAUNCH_QUALIFIERS.set(service, qualifiers);
+    }
+    const qualifier = Object.freeze({});
+    qualifiers.add(qualifier);
+    return qualifier as AgentNativeLaunchQualifier;
+}
+
+/** Resolved native transports still consume this exact service's preparation and finalizer. */
+export async function authorizeResolvedAgentNativeExecLaunchForHost(
+    service: ExecService,
+    launch: ResolvedHostExecLaunch,
+    signal?: AbortSignal,
+    nativeLaunch?: AgentNativeLaunchQualifier,
+): Promise<HostAuthorizedPluginExecLaunch> {
+    const authorize = INTERNAL_RESOLVED_AGENT_LAUNCH_AUTHORIZERS.get(service);
+    if (!authorize) {
+        launch.release?.();
+        return fail('plugin_exec_native_launch_unavailable', 'Native Agent launch authority is unavailable');
+    }
+    return await authorize(launch, signal, nativeLaunch);
+}
 
 export type ResolvedPluginExecutable = Readonly<{
     command: string;
@@ -226,6 +281,7 @@ export function spawnAuthorizedHostExecLaunchForHost(
     options: Readonly<{
         signal?: AbortSignal;
         processCustody?: ProcessCustodySpawnSpec;
+        processTreeSystemBoundary?: Parameters<typeof spawnSupervisedPluginProcess>[0]['processTreeSystemBoundary'];
         descendantDisposition?: NonNullable<Parameters<ExecService['spawn']>[1]>['descendantDisposition'];
         linuxProcessLaunchScope?: LinuxProcessLaunchScope | null;
         recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
@@ -263,6 +319,7 @@ export function spawnAuthorizedHostExecLaunchForHost(
             ...(launch.waitForGracefulRootExitBeforeTreeStop ? { waitForGracefulRootExitBeforeTreeStop: true } : {}),
             signals: options.signal ? [options.signal] : [],
             ...(custody ? { processCustody: custody } : {}),
+            ...(options.processTreeSystemBoundary ? { processTreeSystemBoundary: options.processTreeSystemBoundary } : {}),
             spawnOptions: {
                 detached: process.platform !== 'win32',
                 ...(custody ? {} : { windowsVerbatimArguments: launch.windowsVerbatimArguments }),
@@ -294,6 +351,7 @@ const INTERNAL_LAUNCH_AUTHORIZERS = new WeakMap<
         options?: Readonly<{ signal?: AbortSignal }>,
         projectLaunch?: HostProjectNativeLaunchAdmission,
         nativeExecutableOwner?: ExecService,
+        prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation,
     ) => Promise<HostAuthorizedPluginExecLaunch>
 >();
 
@@ -328,7 +386,7 @@ export async function authorizePluginExecLaunchForHost(
     }
     // Only this host entry point supplies the third argument. Extra properties
     // on public run/spawn options cannot opt a plugin into Project effects.
-    return await authorize(request, options, options?.projectLaunch, options?.nativeExecutableOwner);
+    return await authorize(request, options, options?.projectLaunch, options?.nativeExecutableOwner, options?.prepareAgentNativeLaunch);
 }
 
 export function createStableRunnerPluginExecService(
@@ -350,8 +408,12 @@ export function createStableRunnerPluginExecService(
         authorizeLaunch(
             request: Parameters<ExecService['spawn']>[0]
                 & Readonly<{ timeoutMs?: number }>,
-            options?: Readonly<{ signal?: AbortSignal }>,
+            options?: Readonly<{ signal?: AbortSignal; agentNativeLaunch?: true }>,
             systemToolResolutionId?: string,
+        ): Promise<HostAuthorizedPluginExecLaunch>;
+        authorizeResolvedAgentNativeLaunch?(
+            launch: ResolvedHostExecLaunch,
+            options?: Readonly<{ signal?: AbortSignal }>,
         ): Promise<HostAuthorizedPluginExecLaunch>;
         transformAgentChildLaunchEnvironment?(
             environment: Readonly<Record<string, string>>,
@@ -423,6 +485,36 @@ export function createStableRunnerPluginExecService(
     });
     INTERNAL_OWNER_REBINDERS.set(service, (owner, signal) => createStableRunnerPluginExecService({ ...params,
         processOwner: owner, signal: signal ? AbortSignal.any([params.signal, signal]) : params.signal }));
+    INTERNAL_NATIVE_LAUNCH_QUALIFIERS.set(service, INTERNAL_NATIVE_LAUNCH_QUALIFIERS.get(base)!);
+    INTERNAL_RESOLVED_AGENT_LAUNCH_AUTHORIZERS.set(service, async (launch, signal, nativeLaunch) => {
+        const assertCurrent = () => {
+            if (!params.isOccurrenceCurrent()) fail('plugin_generation_stale', 'Plugin occurrenceId is stale');
+            if (params.signal.aborted || signal?.aborted) fail('plugin_exec_aborted', 'Process operation was aborted');
+        };
+        let authorized: HostAuthorizedPluginExecLaunch;
+        try {
+            assertCurrent();
+            const qualifiers = INTERNAL_NATIVE_LAUNCH_QUALIFIERS.get(service)!;
+            assertNativeLaunchQualifier(qualifiers, nativeLaunch);
+            if (!params.authorizeResolvedAgentNativeLaunch) fail('plugin_exec_native_launch_unavailable', 'Daemon native Agent launch authority is unavailable');
+            const processOwnerTag = params.processOwner
+                ? formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir, owner: params.processOwner }) : readHostProcessOwnerTag();
+            authorized = await params.authorizeResolvedAgentNativeLaunch({ ...launch,
+                ...(processOwnerTag ? { processOwnerTag } : {}) }, { signal });
+            try { assertCurrent(); }
+            catch (error) { await authorized.release(); throw error; }
+        } catch (error) {
+            launch.release?.();
+            throw error;
+        }
+        let released = false;
+        return Object.freeze({ ...authorized, async release() {
+            if (released) return;
+            released = true;
+            try { await authorized.release(); }
+            finally { launch.release?.(); }
+        } });
+    });
     return service;
 }
 
@@ -554,12 +646,15 @@ async function produceHostProjectEnvironment(input: HostProjectEnvironmentInput,
         fail('project_launch_preparation_unavailable', 'Project launch requires its admitted root and reviewed effect');
     }
     const { produceProjectNativeEnvironment } = await import('@/workspaces/environment/produceProjectNativeEnvironment');
+    await admitted.verifyCurrent?.();
+    assertCurrent();
     const native = await produceProjectNativeEnvironment({
         ...admitted.environment, cwd: input.cwd, env: input.env, signal: input.signal,
         ...(admitted.nativeAdapter ? { pluginAdapter: { ...admitted.nativeAdapter,
             ...(launch ? { launch } : {}),
         } } : {}),
     });
+    await admitted.verifyCurrent?.();
     assertCurrent();
     if (native.status === 'refused') fail(native.code, 'Project native environment production was refused');
     // Complete replacement preserves native removals. Only exact bindings may
@@ -636,6 +731,8 @@ async function finalizeHostExecLaunch(input: Readonly<{
         const invocation = resolveStablePluginExecInvocation({
             command, args, env: environment,
         });
+        if (input.projectLaunch?.status === 'ready') await input.projectLaunch.verifyCurrent?.();
+        assertCurrent();
         return Object.freeze({
             ...input.launch,
             command: invocation.command,
@@ -656,22 +753,40 @@ async function finalizeHostExecLaunch(input: Readonly<{
  * SDK requests still resolve their declared executable through ExecService. */
 export async function authorizeResolvedProjectExecLaunchForHost(input: Readonly<{
     launch: ResolvedHostExecLaunch;
-    projectLaunch: HostProjectNativeLaunchAdmission;
+    projectLaunch?: HostProjectNativeLaunchAdmission;
     nativeExecutableOwner?: ExecService;
+    prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
     signal: AbortSignal;
     assertCurrent(): void;
 }>): Promise<HostAuthorizedPluginExecLaunch> {
-    const nativeExecutableOwner = input.nativeExecutableOwner;
+    const assertCurrent = () => {
+        if (input.signal.aborted) fail('plugin_exec_aborted', 'Process operation was aborted');
+        input.assertCurrent();
+    };
+    let projectLaunch = input.projectLaunch;
+    let nativeExecutableOwner = input.nativeExecutableOwner;
+    try {
+        assertCurrent();
+        validateExecLaunchInput(input.launch);
+        if (!projectLaunch && input.prepareAgentNativeLaunch) {
+            const prepared = await input.prepareAgentNativeLaunch(input.signal, input.launch.cwd, input.launch.env);
+            assertCurrent();
+            projectLaunch = prepared?.projectLaunch;
+            nativeExecutableOwner = prepared?.nativeExecutableOwner;
+        }
+    } catch (error) {
+        input.launch.release?.();
+        throw error;
+    }
+    const executableOwner = nativeExecutableOwner;
     return await finalizeHostExecLaunch({
         ...input,
-        ...(nativeExecutableOwner ? {
+        projectLaunch,
+        ...(executableOwner ? {
             resolveNativeExecutable: (executable: ManagedExecutableRef, signal: AbortSignal) =>
-                resolveNativeExecutableForHost(nativeExecutableOwner, executable, signal),
+                resolveNativeExecutableForHost(executableOwner, executable, signal),
         } : {}),
-        assertCurrent() {
-            if (input.signal.aborted) fail('plugin_exec_aborted', 'Process operation was aborted');
-            input.assertCurrent();
-        },
+        assertCurrent,
     });
 }
 
@@ -854,6 +969,7 @@ export function adaptStablePluginExecLegacyProcessHandle(
 export function createStablePluginExecService(params: Readonly<{
     /** Prepared by the host invocation owner, never an Exec request field. */
     processOwner?: ProcessOwnerRef;
+    processTreeSystemBoundary?: Parameters<typeof spawnSupervisedPluginProcess>[0]['processTreeSystemBoundary'];
     allowedExecutables: readonly ManagedExecutableRef[];
     allowedEnvKeys?: readonly string[];
     environment?: Readonly<Record<string, string>>;
@@ -871,10 +987,11 @@ export function createStablePluginExecService(params: Readonly<{
     resolvePath(path: PluginPath): Promise<string>;
     agentCli?: PluginAgentCliReadinessServiceForHost;
     systemTools?: ExecSystemToolServiceV1;
+    prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
     authorizeLaunch?(
         request: Parameters<ExecService['spawn']>[0]
             & Readonly<{ timeoutMs?: number }>,
-        options?: Readonly<{ signal?: AbortSignal }>,
+        options?: Readonly<{ signal?: AbortSignal; agentNativeLaunch?: true }>,
     ): Promise<HostAuthorizedPluginExecLaunch>;
     transformAgentChildLaunchEnvironment?(
         environment: Readonly<Record<string, string>>,
@@ -887,6 +1004,7 @@ export function createStablePluginExecService(params: Readonly<{
         ? formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir, owner: params.processOwner })
         : readHostProcessOwnerTag();
     const { custody, retain, assertOpen } = createNativeProcessCustodyForHost();
+    const nativeLaunchQualifiers = new WeakSet<object>();
     const allowedExecutables = new Set(params.allowedExecutables.map(executableKey));
     const preResolvedSystemTools = new WeakMap<object, Readonly<{
         launch: ResolvedPluginExecutable;
@@ -941,6 +1059,7 @@ export function createStablePluginExecService(params: Readonly<{
             const result = await params.agentCli.checkReadiness(request, request.includeVersion === true ? {
                 ...(params.environment ? { environment: params.environment } : {}),
                 async runVersionCommand(input) {
+                    const { findCatalogEntry } = await import('@/agent/catalog/registry');
                     guard(input.signal);
                     const toolId = findCatalogEntry(input.agentId)?.agentCliSystemTool?.toolId;
                     if (!toolId) fail('plugin_exec_agent_cli_version_unavailable', 'Agent CLI has no declared system-tool execution binding');
@@ -1025,14 +1144,21 @@ export function createStablePluginExecService(params: Readonly<{
 
     async function authorizeLaunch(
         request: Parameters<ExecService['spawn']>[0] & Readonly<{ timeoutMs?: number }>,
-        options?: { signal?: AbortSignal },
+        options?: { signal?: AbortSignal; nativeLaunch?: AgentNativeLaunchQualifier },
         projectLaunch?: HostProjectNativeLaunchAdmission,
         nativeExecutableOwner?: ExecService,
+        prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation,
         lifetime?: ManagedPluginExecLifetimeForHost,
     ): Promise<HostAuthorizedPluginExecLaunch> {
         const assertCurrent = () => guard(options?.signal, lifetime);
         const resolveManagedExecutable = lifetime?.resolveManagedExecutable ?? params.resolveManagedExecutable;
         assertCurrent();
+        const nativeLaunch = options?.nativeLaunch;
+        const agentNativeLaunch = nativeLaunch !== undefined;
+        assertNativeLaunchQualifier(nativeLaunchQualifiers, nativeLaunch);
+        if (agentNativeLaunch && !params.authorizeLaunch && !params.prepareAgentNativeLaunch && !prepareAgentNativeLaunch) {
+            fail('plugin_exec_native_launch_unavailable', 'Native Agent launch preparation is unavailable');
+        }
         if (lifetime && (!resolveManagedExecutable || params.authorizeLaunch)) {
             return fail('plugin_exec_managed_launch_authorization_unavailable', 'Physical process launch authorization is unavailable');
         }
@@ -1046,7 +1172,8 @@ export function createStablePluginExecService(params: Readonly<{
             }
             const launch = await params.authorizeLaunch(
                 request,
-                options,
+                agentNativeLaunch ? { ...(options?.signal ? { signal: options.signal } : {}), agentNativeLaunch: true }
+                    : options === undefined ? undefined : { ...(options.signal ? { signal: options.signal } : {}) },
             );
             try {
                 assertCurrent();
@@ -1139,8 +1266,21 @@ export function createStablePluginExecService(params: Readonly<{
             ...(resolved.env ?? {}),
             ...(request.env ?? {}),
         };
+        const signal = options?.signal ? AbortSignal.any([lifetime?.signal ?? params.signal, options.signal]) : lifetime?.signal ?? params.signal;
+        try {
+            const prepare = prepareAgentNativeLaunch ?? (agentNativeLaunch ? params.prepareAgentNativeLaunch : undefined);
+            if (prepare && !projectLaunch) {
+                const prepared = await prepare(signal, cwd, environment);
+                assertCurrent();
+                projectLaunch = prepared?.projectLaunch;
+                nativeExecutableOwner = prepared?.nativeExecutableOwner;
+            }
+        } catch (error) {
+            releaseExecutable();
+            throw error;
+        }
         return await finalizeHostExecLaunch({
-            signal: options?.signal ? AbortSignal.any([lifetime?.signal ?? params.signal, options.signal]) : lifetime?.signal ?? params.signal,
+            signal,
             assertCurrent,
             projectLaunch,
             ...(nativeExecutableOwner ? { resolveNativeExecutable: (executable: ManagedExecutableRef, signal: AbortSignal) =>
@@ -1172,7 +1312,7 @@ export function createStablePluginExecService(params: Readonly<{
             return fail('plugin_exec_managed_handoff_forbidden', 'Managed process custody cannot be handed to a native tool');
         }
         const lifetime = managedCustody?.lifetime;
-        const launch = await authorizeLaunch(request, options, undefined, undefined, lifetime);
+        const launch = await authorizeLaunch(request, options, undefined, undefined, undefined, lifetime);
         const authorizedAt = performance.now();
         try { guard(options?.signal, lifetime); }
         catch (error) { await launch.release(); throw error; }
@@ -1193,6 +1333,7 @@ export function createStablePluginExecService(params: Readonly<{
         const supervised = spawnAuthorizedHostExecLaunchForHost({ ...launch, env: environment,
             processOwnerTag: managedCustody?.processOwnerTag ?? processOwnerTag }, {
             readSpawnFailureLimits: params.readSpawnFailureLimits,
+            ...(params.processTreeSystemBoundary ? { processTreeSystemBoundary: params.processTreeSystemBoundary } : {}),
             ...(options?.descendantDisposition ? { descendantDisposition: options.descendantDisposition } : {}),
             ...(lifetime ? { signal: lifetime.signal } : options?.signal ? { signal: options.signal } : {}),
             ...(managedCustody?.processCustody ? { processCustody: managedCustody.processCustody } : {}),
@@ -1548,6 +1689,25 @@ export function createStablePluginExecService(params: Readonly<{
         clients,
     });
     INTERNAL_PREAUTHORIZED_SPAWNS.set(service, preauthorizedSpawns);
+    INTERNAL_NATIVE_LAUNCH_QUALIFIERS.set(service, nativeLaunchQualifiers);
+    INTERNAL_RESOLVED_AGENT_LAUNCH_AUTHORIZERS.set(service, async (launch, signal, nativeLaunch) => {
+        const combinedSignal = signal ? AbortSignal.any([params.signal, signal]) : params.signal;
+        try {
+            guard(combinedSignal);
+            assertNativeLaunchQualifier(nativeLaunchQualifiers, nativeLaunch);
+            if (nativeLaunch !== undefined && !params.prepareAgentNativeLaunch) {
+                fail('plugin_exec_native_launch_unavailable', 'Native Agent launch preparation is unavailable');
+            }
+        } catch (error) {
+            launch.release?.();
+            throw error;
+        }
+        return await authorizeResolvedProjectExecLaunchForHost({
+            launch: { ...launch, ...(processOwnerTag ? { processOwnerTag } : {}) },
+            signal: combinedSignal, assertCurrent: () => guard(combinedSignal),
+            prepareAgentNativeLaunch: params.prepareAgentNativeLaunch,
+        });
+    });
     INTERNAL_OWNER_REBINDERS.set(service, (owner, signal) => createStablePluginExecService({ ...params,
         processOwner: owner, signal: signal ? AbortSignal.any([params.signal, signal]) : params.signal }));
     INTERNAL_LAUNCH_AUTHORIZERS.set(service, authorizeLaunch);

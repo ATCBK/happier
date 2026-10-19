@@ -200,6 +200,26 @@ function invokeEstablished(
 }
 
 describe('connected-account runtime invoker', () => {
+    it('reads status credential fields from its admitted snapshot without reopening remote currentness', async () => {
+        const isCurrent = vi.fn(() => true);
+        let currentnessChecksAtCallbackEntry = 0;
+        const invoker = createEstablishedInvoker({
+            ...runtime(() => {}),
+            async status(context) {
+                currentnessChecksAtCallbackEntry = isCurrent.mock.calls.length;
+                await context.credentials.get('accessToken');
+                await context.credentials.get('refreshToken');
+                await context.credentials.get('providerAccountId');
+                expect(isCurrent).toHaveBeenCalledTimes(currentnessChecksAtCallbackEntry);
+                return { status: 'connected' };
+            },
+        });
+
+        await expect(invokeEstablished(invoker, { kind: 'status' }, isCurrent))
+            .resolves.toEqual({ status: 'connected' });
+        expect(isCurrent.mock.calls.length).toBeGreaterThan(currentnessChecksAtCallbackEntry);
+    });
+
     it('invokes a built-in host account without a plugin package and fences established work on disposal', async () => {
         const ref = { pluginId: 'happier', localId: 'mcp-sign-in' };
         const registry = createConnectedAccountContributionRegistry({
@@ -225,7 +245,7 @@ describe('connected-account runtime invoker', () => {
                     observed.push(context);
                     const token = await context.credentials.get('token');
                     return {
-                        status: token === 'host-secret' ? 'connected' : 'needs_reauth',
+                        status: token === 'host-secret' ? 'connected' : 'reconnectRequired',
                         diagnostic: { code: 'host_status', severity: 'warning', message: `Status for ${token}` },
                     };
                 },
@@ -790,11 +810,13 @@ describe('connected-account runtime invoker', () => {
         await owners.dispose();
     });
 
-    it('registers staged refresh credential reads and writes for the invocation redactor', async () => {
+    it('registers refresh credential fields without reopening remote currentness for each field', async () => {
         const existingCredential = 'existing-refresh-secret';
         const issuedCredential = 'issued-refresh-secret';
         const registerRawForRedaction = vi.fn();
         const stagedSet = vi.fn(async () => {});
+        const isConfigurationCurrent = vi.fn(() => true);
+        const isCredentialRevisionCurrent = vi.fn(() => true);
         const registeredRuntime: PluginConnectedAccountRuntime = {
             ...runtime(() => {}),
             async refresh(context) {
@@ -806,8 +828,15 @@ describe('connected-account runtime invoker', () => {
                     configurationRevision: 'configuration-1',
                 });
                 expect(Object.hasOwn(context.operation, 'update')).toBe(false);
+                const credentialCurrentnessChecksAtCallbackEntry =
+                    isCredentialRevisionCurrent.mock.calls.length;
+                await context.credentials.get('existing-token');
                 await context.stagedCredentials.get('existing-token');
                 await context.stagedCredentials.set('issued-token', issuedCredential);
+                await context.stagedCredentials.delete('retired-token');
+                expect(isCredentialRevisionCurrent).toHaveBeenCalledTimes(
+                    credentialCurrentnessChecksAtCallbackEntry,
+                );
                 return { status: 'connected' };
             },
         };
@@ -862,8 +891,8 @@ describe('connected-account runtime invoker', () => {
                 }),
                 credentials: Object.freeze({ get: async () => null }),
             }),
-            isConfigurationCurrent: () => true,
-            isCredentialRevisionCurrent: () => true,
+            isConfigurationCurrent,
+            isCredentialRevisionCurrent,
         })).resolves.toEqual({ status: 'connected' });
 
         expect(registerRawForRedaction.mock.calls.map(([, value]) => value))
@@ -1058,7 +1087,9 @@ describe('connected-account runtime invoker', () => {
             pluginId: service.pluginId,
             definition: serviceDescriptor,
         };
-        let identity: Pick<ConnectedAccountRuntimeLease, 'occurrenceId' | 'sourceCustody'> = runtimeIdentity;
+        let identity: Pick<ConnectedAccountRuntimeLease, 'occurrenceId'> & Readonly<{
+            sourceCustody: Exclude<ConnectedAccountRuntimeLease['sourceCustody'], { kind: 'host' }>;
+        }> = runtimeIdentity;
         const createRegistry = () => createConnectedAccountContributionRegistry({
             readPluginOccurrenceId: () => identity.occurrenceId,
             readPluginSourceCustody: () => identity.sourceCustody,

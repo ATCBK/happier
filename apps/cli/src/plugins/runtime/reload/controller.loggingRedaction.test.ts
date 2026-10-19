@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -28,22 +30,11 @@ vi.mock('../../../configuration', () => ({
     },
 }));
 
-function createRuntimeRegistry(): ResolvedExecutablePluginRuntimeRegistry {
+async function createRuntimeRegistry(): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     return {
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }),
         claimReleaseLessDeclarations: async () => undefined,
-        contributes: {
-            agents: Object.freeze([]),
-            providers: Object.freeze([]),
-            actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            uiViewsV2: Object.freeze([]),
-            uiRenderersV2: Object.freeze([]),
-            uiTranslationsV2: Object.freeze([]),
-            activationTargets: Object.freeze([]),
-            catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-            pluginDiagnosticsByPluginId: Object.freeze({}),
-        },
+        contributes: createResolvedContributionRegistry({}),
         hookHandlersByHookId: new Map(),
         agentRuntimesByAgentId: new Map(),
         scmHostingProvidersById: new Map(),
@@ -144,7 +135,7 @@ describe('plugin reload listener diagnostic logging', () => {
             isolatedLogger.debug(message, ...args);
         });
         const controller = createPluginReloadController({
-            resolveRuntimeRegistry: async () => createRuntimeRegistry(),
+            resolveRuntimeRegistry: async () => (await createRuntimeRegistry()),
         });
         controller.subscribe(() => {
             throw createListenerError();
@@ -192,7 +183,7 @@ describe('plugin reload listener diagnostic logging', () => {
     it('keeps trust-rejected cold plugins visible while publishing the healthy registry', async () => {
         const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
         const registry = Object.freeze({
-            ...createRuntimeRegistry(),
+            ...(await createRuntimeRegistry()),
             pluginDiagnosticsByPluginId: Object.freeze({
                 'acme.trust-rejected': Object.freeze([
                     Object.freeze({

@@ -3,7 +3,7 @@ import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRu
 
 describe('current runtime execution origin', () => {
     it('uses the admitted source custody and refuses a retired occurrence', async () => {
-        const pluginId = 'happier.triage';
+        const pluginId = 'happier.inspector';
         const context = { serverIdentityId: 'srv_runtime_source_origin', machineId: 'machine-source-origin' };
         let retireDuringContextRead = false;
         let contextMachineId = context.machineId;
@@ -16,8 +16,11 @@ describe('current runtime execution origin', () => {
             },
         } });
         try {
+            expect(await fixture.registry.activatePluginsForValidation?.([pluginId])).toEqual([
+                { pluginId, diagnostics: [] },
+            ]);
             const sourceCustody = fixture.registry.readPluginSourceCustody?.(pluginId);
-            expect(sourceCustody).toBeDefined();
+            expect(sourceCustody).toBeTruthy();
             await expect(fixture.registry.resolveCurrentPluginExecutionOrigin?.(pluginId)).resolves.toEqual({
                 serverIdentityId: context.serverIdentityId,
                 sourceRef: { machineId: context.machineId, pluginId, sourceCustody },

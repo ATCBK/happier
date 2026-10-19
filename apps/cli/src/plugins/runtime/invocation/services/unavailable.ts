@@ -229,6 +229,7 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
         ) => ReturnType<Parameters<typeof createStablePluginExecService>[0]['resolveExecutable']>;
         resolvePath: Parameters<typeof createStablePluginExecService>[0]['resolvePath'];
         environment?: Readonly<Record<string, string>>;
+        prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
         agentCli?: Parameters<typeof createStablePluginExecService>[0]['agentCli'];
         systemTools?: ExecSystemToolServiceV1;
         systemToolsForPlugin?: (
@@ -693,6 +694,7 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
         },
         createAvailable({ seed, params }): ActionsService | null {
             if (params.actionExecutor === undefined || params.invokeContributedAction === undefined) return null;
+            const actionRequestAttributionV1 = seed.actionRequestAttributionV1 ?? seed.approvalContext?.actionRequestAttributionV1;
             return createPluginInvocationActionsService({
                 seed: Object.freeze({
                     plugin: seed.plugin,
@@ -712,6 +714,7 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                     ...(seed.externalActionContext
                         ? { externalActionContext: seed.externalActionContext }
                         : {}),
+                    ...(seed.approvalContext ? { approvalContext: seed.approvalContext } : {}),
                     ...(seed.resolveCurrentPluginMaterializationRef
                         ? {
                             resolveCurrentPluginMaterializationRef:
@@ -720,6 +723,9 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                         : {}),
                     ...(seed.selectedActionInputCarrier
                         ? { selectedActionInputCarrier: seed.selectedActionInputCarrier }
+                        : {}),
+                    ...(seed.resolveCurrentPluginExecutionOrigin
+                        ? { resolveCurrentPluginExecutionOrigin: seed.resolveCurrentPluginExecutionOrigin }
                         : {}),
                     ...(seed.isMountedCallerCurrent
                         ? { isMountedCallerCurrent: seed.isMountedCallerCurrent }
@@ -731,6 +737,9 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                     // silently strips both and makes every Agent Action fail closed.
                     ...(seed.readActiveTurnAdmissionWitness
                         ? { readActiveTurnAdmissionWitness: seed.readActiveTurnAdmissionWitness }
+                        : {}),
+                    ...(actionRequestAttributionV1
+                        ? { actionRequestAttributionV1 }
                         : {}),
                     signal: seed.signal,
                     isOccurrenceCurrent: seed.isOccurrenceCurrent,
@@ -992,6 +1001,7 @@ export function createPluginInvocationServicesFromDescriptors(
                 ? { systemTools: params.exec!.systemToolsForPlugin(seed.plugin.id) }
                 : {}),
             ...(params.exec!.environment ? { environment: params.exec!.environment } : {}),
+            ...(params.exec!.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: params.exec!.prepareAgentNativeLaunch } : {}),
             ...(params.recordRuntimeLimitMeasurement
                 ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
                 : {}),

@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { describe, expect, it } from 'vitest';
@@ -9,24 +11,13 @@ import { createPluginReloadController } from './controller';
 
 type RunningSessionDisposition = 'retainRunningSessions' | 'revokeRunningSessions';
 
-function createRuntimeRegistry(
+async function createRuntimeRegistry(
     retirePluginConsumers: (pluginIds: readonly string[]) => void | Promise<void> = () => undefined,
-): ResolvedExecutablePluginRuntimeRegistry {
+): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     return {
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }),
         claimReleaseLessDeclarations: async () => undefined,
-        contributes: {
-            agents: Object.freeze([]),
-            providers: Object.freeze([]),
-            actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            uiViewsV2: Object.freeze([]),
-            uiRenderersV2: Object.freeze([]),
-            uiTranslationsV2: Object.freeze([]),
-            activationTargets: Object.freeze([]),
-            catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-            pluginDiagnosticsByPluginId: Object.freeze({}),
-        },
+        contributes: createResolvedContributionRegistry({}),
         hookHandlersByHookId: new Map(),
         agentRuntimesByAgentId: new Map(),
         scmHostingProvidersById: new Map(),
@@ -49,7 +40,7 @@ function createRuntimeRegistry(
 describe('createPluginReloadController running Session disposition', () => {
     it('uses the authenticated cause for identical contribution shapes instead of treating absence as hard revocation', async () => {
         const controller = createPluginReloadController({
-            resolveRuntimeRegistry: async () => createRuntimeRegistry(),
+            resolveRuntimeRegistry: async () => (await createRuntimeRegistry()),
         });
         const observedDispositions: unknown[] = [];
         controller.subscribe((result) => {
@@ -67,7 +58,7 @@ describe('createPluginReloadController running Session disposition', () => {
         ) => ReturnType<typeof controller.adoptPreparedRuntimeRegistry>;
 
         const ordinaryResult = await adopt({
-            registry: createRuntimeRegistry(),
+            registry: (await createRuntimeRegistry()),
             changedPluginIds: ['acme.agent'],
             durableRevision: 2,
             runningSessionDisposition: 'retainRunningSessions',
@@ -76,7 +67,7 @@ describe('createPluginReloadController running Session disposition', () => {
             .toBe('retainRunningSessions');
 
         const hardResult = await adopt({
-            registry: createRuntimeRegistry(),
+            registry: (await createRuntimeRegistry()),
             changedPluginIds: ['acme.agent'],
             durableRevision: 3,
             runningSessionDisposition: 'revokeRunningSessions',

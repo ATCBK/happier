@@ -176,11 +176,12 @@ describe('installed external plugin Lane 09 awareness Action', () => {
                     pluginId: PLUGIN_ID,
                     localId: ACTION_ID,
                     input: { sessionId },
+                    sessionId,
                     surface: 'cli',
                 })
             ));
 
-            expect(result?.status).toBe('executed');
+            expect(result).toEqual({ status: 'executed', value: expect.anything() });
             if (result?.status !== 'executed') throw new Error('External awareness Action did not execute');
             expect(SessionAwarenessProjectionV1Schema.safeParse(result.value).success).toBe(true);
             expect(result.value).toMatchObject({

@@ -3,6 +3,8 @@ import { lstat, realpath } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
 
 import {
+    evaluateManifestPluginDevelopmentCandidate,
+    evaluatePluginDevelopmentCandidate,
     resolvePluginAuthorStagingModule,
     type PreparedPluginDevelopmentActivationGraph,
 } from '@/plugins/authoring/sourceModule';
@@ -22,12 +24,12 @@ import {
     resolvePluginModuleCandidatePaths,
     resolvePluginModuleLoadMode,
 } from './loadPluginModule';
-import { bindPluginRuntimeSourceAuthority } from './sourceAuthority';
+import { bindPluginRuntimeSourceAuthority, type DevelopmentPluginSourceCustody, type PluginRuntimeSourceAuthority } from './sourceAuthority';
 import type { PluginDaemonModuleNamespace, PreparedPluginActivationGraph } from './types';
 
 /**
  * The per-plugin activation-source factory: selects exactly one source for a
- * plugin — a prepared development graph, the bundled first-party packaged
+ * plugin — an admitted development graph, the bundled first-party packaged
  * runtime, or the plugin's committed managed immutable generation — and binds
  * its source authority. It owns no registry state; the executable-registry
  * composition root calls it once per activation target.
@@ -37,6 +39,10 @@ export function createPluginActivationSourceResolver(deps: Readonly<{
     resolveBundledActivationSource: (target: ActivationTarget) => PluginActivationSource<PluginDaemonModuleNamespace> | null;
     preparedActivationGraphsByPluginId?: ReadonlyMap<string, PreparedPluginActivationGraph>;
     preparedDevelopmentActivationGraphsByPluginId?: ReadonlyMap<string, PreparedPluginDevelopmentActivationGraph>;
+    resolveDevelopmentSourceAuthority?: (input: Readonly<{
+        pluginId: string;
+        rootPath: string;
+    }>) => Extract<PluginRuntimeSourceAuthority, DevelopmentPluginSourceCustody> | null;
     happyHomeDir?: string;
     /** Records which manifest authority each activated plugin was admitted under. */
     activatedManifestAuthorityByPluginId: Map<string, 'external' | 'bundled_first_party'>;
@@ -48,30 +54,71 @@ export function createPluginActivationSourceResolver(deps: Readonly<{
         }> = {},
     ): PluginActivationSource<PluginDaemonModuleNamespace> | null => {
         const development = deps.preparedDevelopmentActivationGraphsByPluginId?.get(target.pluginId);
-        if (development) {
-            if (
+        const sourceSpec = target.sourceSpec;
+        // Source-in-place installations have no immutable generation. Cold
+        // start and registry changes rejoin the same registered-root authority
+        // and accepted manifest used by prepared development candidates.
+        const developmentAuthority = development?.sourceAuthority ?? (
+            sourceSpec?.kind === 'path' && sourceSpec.devWatch === true
+            && sourceSpec.trustPolicy === 'local_trusted'
+            && !deps.committed?.generations.has(target.pluginId)
+                ? deps.resolveDevelopmentSourceAuthority?.({
+                    pluginId: target.pluginId,
+                    rootPath: sourceSpec.locator,
+                })
+                : null
+        );
+        if (developmentAuthority) {
+            const rootPathCandidate = development?.rootPath ?? sourceSpec?.resolvedPath ?? developmentAuthority.canonicalRoot;
+            if (typeof rootPathCandidate !== 'string') {
+                throw new TypeError(`Development activation root path is invalid for '${target.pluginId}'`);
+            }
+            const rootPath = realpathSync(resolve(rootPathCandidate));
+            const entryPath = realpathSync(resolve(development?.entryPath ?? target.devDaemonEntryPath ?? ''));
+            if (development && (
                 realpathSync(resolve(development.rootPath)) !== development.sourceAuthority.canonicalRoot
                 || realpathSync(resolve(development.entryPath)) !== realpathSync(resolve(target.devDaemonEntryPath ?? target.daemonEntryPath ?? ''))
-            ) {
+            )) {
                 throw new Error(`Prepared development activation graph identity does not match '${target.pluginId}'`);
             }
-            return {
-                kind: 'prepared',
-                module: development.module,
-                sourceAuthority: development.sourceAuthority,
+            if (rootPath !== developmentAuthority.canonicalRoot
+                || !isCanonicalAbsolutePathInsideRoot(rootPath, entryPath)) {
+                throw new Error(`Development activation entry escapes registered root for '${target.pluginId}'`);
+            }
+            let graph = development ? Promise.resolve(development) : undefined;
+            const readGraph = () => graph ??= (
+                developmentAuthority.registeredRootId === entryPath
+                    ? evaluatePluginDevelopmentCandidate({ locator: entryPath, sourceAuthority: developmentAuthority })
+                    : evaluateManifestPluginDevelopmentCandidate({
+                        source: {
+                            ok: true,
+                            pluginRootPath: rootPath,
+                            manifestPath: target.manifestPath,
+                            manifestAuthority: 'external',
+                            manifest: target.manifest,
+                            sourceSpec: sourceSpec!,
+                        },
+                        sourceAuthority: developmentAuthority,
+                    })
+            ).then(result => result.graph);
+            const sharedSource = {
+                sourceAuthority: developmentAuthority,
                 resolveRelativeModule: async (module) => await resolvePluginAuthorStagingModule({
                     graph: {
-                        rootPath: development.rootPath,
-                        entryPath: development.entryPath,
-                        loadModule: (entryPath) => loadVerifiedPluginModule({
+                        rootPath,
+                        entryPath,
+                        loadModule: async (entryPath) => loadVerifiedPluginModule({
                             entryPath,
                             loadMode: 'source-ts',
-                            generationScope: development.candidateScope,
+                            generationScope: (await readGraph()).candidateScope,
                         }),
                     },
                     module,
                 }),
-            };
+            } satisfies Pick<PluginActivationSource<PluginDaemonModuleNamespace>, 'sourceAuthority' | 'resolveRelativeModule'>;
+            return development
+                ? { ...sharedSource, kind: 'prepared', module: development.module }
+                : { ...sharedSource, kind: 'bundled', moduleId: entryPath, load: async () => (await readGraph()).module };
         }
         const bundled = deps.resolveBundledActivationSource(target);
         if (bundled) {

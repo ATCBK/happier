@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RuntimeTurnOperations } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { Credentials, StoredCredentials } from '@/persistence';
 import { logger } from '@/ui/logger';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
+import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeNormalizer, type SessionProviderInputOutcome } from '@/agent/runtime/session/input/providerInputOutcome';
+import type { AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   ProviderConnectionIdSchema,
   PluginAgentContributionV2Schema,
@@ -135,12 +140,17 @@ function createRuntimeTurnOperations(): RuntimeTurnOperations & Readonly<{
 }
 
 function createHostFactoryParams() {
+  const session = createMutableApiSessionClientFixture({ overrides: { sessionId: 'host-session-1' } });
   return {
     directory: '/tmp/plugin-backend',
     metadata: {} as never,
     machineId: 'machine-1',
     agentTargetKey: 'agent:happier.agent.claude/claude',
-    session: { sessionId: 'host-session-1' } as never,
+    session,
+    currentSessionPresentation: createCurrentSessionPresentationHost({
+      session,
+      signal: new AbortController().signal,
+    }).bindCurrentSession,
     transcriptSession: {} as never,
     messageBuffer: {} as never,
     mcpServers: {},
@@ -173,6 +183,64 @@ function createHostFactoryParams() {
 }
 
 describe('plugin session runtime adapters', () => {
+  it.each([false, true])('preserves exact native custody through composed runtime retirement (cleanup fails: %s)', async (cleanupFails) => {
+    const cleanupFailure = new Error('native cleanup failed');
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
+    let cleanupEntered!: () => void;
+    const disposing = new Promise<void>(resolve => { cleanupEntered = resolve; });
+    // The native process is the boundary. Host correlation, replacement and
+    // Pending outcome normalization below use their production composition.
+    const native: AgentSessionRuntime = {
+      send: async () => ({ status: 'admitted' }),
+      watch: () => ({ dispose() {} }),
+      dispose: async () => {
+        cleanupEntered();
+        await cleanup;
+        if (cleanupFails) throw cleanupFailure;
+      },
+    };
+    const operations = createNativeAgentSessionOperations(native, 'host-session-1', undefined, undefined, undefined, undefined, undefined, {
+      context: { signal: new AbortController().signal } as AgentSessionRuntimeContext,
+      cwd: '/tmp/plugin-backend', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+      cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    const plan = await createPublicPluginSessionRuntimePlan({
+      backend: createBackendFixture(), agent: createAgentFixture(),
+      createSessionRuntime: async () => operations,
+      sessionInput: buildPluginSessionBindingInput({ credentials, startedBy: 'daemon', startingMode: 'remote' }),
+    });
+    const created = await plan.config.createSessionRuntime?.(createHostFactoryParams());
+    const runtime = created?.nativeRuntime;
+    if (!runtime) throw new Error('Missing composed native runtime');
+    const settlements: SessionProviderInputOutcome[] = [];
+    const target = {
+      sessionId: 'host-session-1', hasPendingProviderInput: (localId: string) => localId === 'native-retirement-input',
+      observeProviderInputSettlement: (outcome: SessionProviderInputOutcome) => { settlements.push(outcome); },
+    };
+    const unbind = bindSessionProviderInputOutcome({
+      runtime,
+      observe: createSessionProviderInputOutcomeNormalizer({ getTarget: () => target }),
+      wakePendingMaterialization: () => undefined,
+    });
+    await runtime.sendTurnPrompt('waiting for native trust', { localId: 'native-retirement-input', turnId: 'native-retirement-turn' });
+    await runtime.cancelTurn();
+    const retirement = runtime.resetOrDisposeRuntime('session_closed');
+    const result = cleanupFails ? expect(retirement).rejects.toBe(cleanupFailure) : retirement;
+    try {
+      await disposing;
+      expect(settlements).toEqual([{
+        kind: 'effect_may_have_occurred', localId: 'native-retirement-input', userMessageSeq: null,
+        issue: { code: 'native_runtime_disposed_with_input_in_flight', severity: 'warning' },
+      }]);
+    } finally {
+      finishCleanup();
+      await result;
+      unbind();
+    }
+  });
+
   it('threads the exact selected Agent provider declaration into the host runtime plan', async () => {
     const providerRequirements = Object.freeze({
       acceptsProtocols: ['openai-responses'],

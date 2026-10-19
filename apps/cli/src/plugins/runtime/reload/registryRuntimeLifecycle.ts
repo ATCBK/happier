@@ -392,7 +392,7 @@ export function createDaemonPluginRegistryRuntimeLifecycle(params: Readonly<{
       // plugin whose component cannot serve a successor (fenced by a durable
       // commit whose publication failed) is prepared again on its own; its
       // peers are never re-activated for it.
-      const servingSlots = (activeRegistry
+      const servingSlots: ReturnType<NonNullable<PluginReloadController['retainServingSlots']>> = (activeRegistry
         ? params.reloadController.retainServingSlots?.(replacedPluginIds)
         : undefined)
         ?? Object.freeze({

@@ -40,6 +40,7 @@ import { bindPluginRuntimeSourceAuthority } from '../sourceAuthority';
 import { resolveBuiltInContributions } from '../../projection/registry/resolveBuiltInContributions';
 import { projectManifestAgentContribution } from '../../projection/registry/projectManifestAgentContribution';
 import { createRunnerManagedServiceInvocationOwner } from '../invocation/services/createRunnerManagedServiceInvocationOwner';
+import { resolveNativeAgentSessionNativeHomeService } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 
 async function prepareRetainedFactory(input: Readonly<{
   happyHomeDir: string;
@@ -49,10 +50,12 @@ async function prepareRetainedFactory(input: Readonly<{
   moduleBytes: string;
   loadMode: 'immutable-js' | 'source-ts';
   pluginId?: string;
+  agentId?: string;
   localAgentId?: string;
   manifestEngines?: Readonly<Record<string, string>>;
   externalSessionsExport?: string;
   additionalFiles?: Readonly<Record<string, string>>;
+  manifestOverrides?: Readonly<Record<string, unknown>>;
   /**
    * Acquisition identity the generation record is minted from. It decides the
    * record's `sourceProvenance`, and with it the two registry-lifecycle
@@ -97,6 +100,7 @@ async function prepareRetainedFactory(input: Readonly<{
           },
         }],
       },
+      ...input.manifestOverrides,
     })),
     'utf8',
   );
@@ -163,7 +167,7 @@ async function prepareRetainedFactory(input: Readonly<{
     v: 1,
     pluginId: record.pluginId,
     pluginVersion: '1.0.0',
-    agentId: localAgentId,
+    agentId: input.agentId ?? localAgentId,
     localAgentId,
     sourceCustody: {
       kind: 'managed',
@@ -420,6 +424,143 @@ async function prepareHostDeclarativeBinding(input: Readonly<{
 }
 
 describe('loadRetainedAgentRuntimeLeaf', () => {
+  it('retains experimental resume without Connected Accounts and retires its predicate with the leaf', async () => {
+    const tempRoot = await realpath(await mkdtemp(join(tmpdir(), 'happier-retained-resume-')));
+    let leaf: Awaited<ReturnType<typeof loadRetainedAgentRuntimeLeaf>> | undefined;
+    try {
+      const fixture = await prepareRetainedFactory({
+        happyHomeDir: join(tempRoot, 'home'), sourceRootPath: join(tempRoot, 'source'),
+        immutableGenerationId: 'retained-resume', modulePath: 'agent/runtime/factory.mjs',
+        agentId: 'acme.runner-loader/fixture', loadMode: 'immutable-js',
+        moduleBytes: 'export function createFixtureAgentRuntime() { return { sessions: {} }; }',
+        manifestOverrides: { contributes: { agents: [{
+          id: 'fixture', title: 'Fixture', runtime: { kind: 'custom' }, primary: 'sessions',
+          catalog: { vendorResume: { support: 'experimental' } },
+          capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
+        }] } },
+        additionalFiles: { 'daemon.mjs': [
+          'import { createFixtureAgentRuntime } from "./agent/runtime/factory.mjs";',
+          'export function activate(api) { api.agents.register("fixture", createFixtureAgentRuntime, {',
+          '  sessionRunnerFactory: { module: "./agent/runtime/factory", export: "createFixtureAgentRuntime", runtimeApiVersion: 1 },',
+          '  vendorResumeSupport: { supportsVendorResume: input => input.runtimeDescriptorV1?.agent.backendMode === "resumable" },',
+          '}); }',
+        ].join('\n') },
+      });
+      leaf = await loadRetainedAgentRuntimeLeaf({ paths: fixture.paths, binding: fixture.binding });
+      const supportsResume = await leaf.catalogEntry?.getVendorResumeSupport?.();
+      expect(supportsResume?.({ runtimeDescriptorV1: {
+        v: 1, agentId: 'acme.runner-loader/fixture', agent: { backendMode: 'resumable' },
+      } })).toBe(true);
+      expect(supportsResume?.({})).toBe(false);
+      await leaf.dispose();
+      expect(supportsResume?.({ runtimeDescriptorV1: {
+        v: 1, agentId: 'acme.runner-loader/fixture', agent: { backendMode: 'resumable' },
+      } })).toBe(false);
+    } finally {
+      await leaf?.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retains executable Connected Account launch facts from its own module generation', async () => {
+    const tempRoot = await realpath(await mkdtemp(join(tmpdir(), 'happier-retained-native-home-')));
+    try {
+      const home = {
+        environmentKey: 'FIXTURE_HOME', defaultRelativePath: '.fixture', materializedDirectoryName: 'retained-home',
+      };
+      const launchUses = {
+        requestAuthUses: [{ purpose: 'model_upstream', materialization: {
+          kind: 'httpHeaders', origin: 'https://retained.example.test', headerNames: ['authorization'],
+        } }],
+        fileEnvironmentUses: [{ purpose: 'model_upstream', fileId: 'credentials', environmentKey: 'FIXTURE_CREDENTIALS' }],
+        environmentUses: [{ purpose: 'model_upstream', environmentKey: 'FIXTURE_TOKEN' }],
+        environmentUnsetUses: [{ purpose: 'model_upstream', environmentKey: 'FIXTURE_AMBIENT_TOKEN' }],
+      };
+      const fixture = await prepareRetainedFactory({
+        happyHomeDir: join(tempRoot, 'home'), sourceRootPath: join(tempRoot, 'source'),
+        immutableGenerationId: 'retained-native-home', modulePath: 'agent/runtime/factory.mjs',
+        agentId: 'acme.runner-loader/fixture',
+        loadMode: 'immutable-js',
+        moduleBytes: 'let active = false; export function setActive(value) { active = value; } export function createFixtureAgentRuntime() { return { sessions: {}, retainedCatalogActive: active }; }',
+        manifestOverrides: {
+          hostAccess: { required: [{ id: 'fixture-env', capability: 'environment',
+            reason: 'Read the declared native home and launch environment.',
+            scope: { keys: ['FIXTURE_HOME', 'FIXTURE_CREDENTIALS', 'FIXTURE_TOKEN', 'FIXTURE_AMBIENT_TOKEN'] } }], optional: [] },
+          contributes: {
+            agents: [{ id: 'fixture', title: 'Fixture', runtime: { kind: 'custom' }, primary: 'sessions',
+              capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+              connectedAccounts: [{ service: 'login', purpose: 'model_upstream', required: false,
+                credentialKinds: ['token'], materializationKinds: ['environment'] }],
+            }],
+            connectedAccountDescriptors: [{ id: 'login', title: 'Login', authentication: {
+              defaultModeId: 'token', modes: [{ id: 'token', title: 'Token', kind: 'manual',
+                outcomeReconciliation: 'none', fields: [{ id: 'token', title: 'Token', secret: true,
+                  schema: { type: 'string', minLength: 1 } }],
+              }],
+            } }],
+          },
+        },
+        additionalFiles: {
+          'daemon.mjs': [
+            'import { createFixtureAgentRuntime, setActive } from "./agent/runtime/factory.mjs";',
+            'export function activate(api) {',
+            '  setActive(true);',
+            '  const unused = async () => { throw new Error("Authentication is outside this fixture"); };',
+            '  api.connectedAccounts.register("login", { refresh: unused, revoke: unused, status: unused, materialize: unused,',
+            '    authentication: { modes: { token: { kind: "manual", complete: unused } } } });',
+            '  api.agents.register("fixture", createFixtureAgentRuntime, {',
+            '    sessionRunnerFactory: { module: "./agent/runtime/factory", export: "createFixtureAgentRuntime", runtimeApiVersion: 1 },',
+            `    connectedAccountLaunch: { ...${JSON.stringify(launchUses)}, stateSharingDescriptor: {`,
+            '      providerSupportStatus: "supported",',
+            '      config: { supported: true, modes: ["isolated"], entries: [] },',
+            '      state: { supported: true, modes: ["isolated"], entries: [], symlinkUnavailableDegradePolicy: "block_continuity" },',
+            '      authIsolation: { mode: "materialized_home", secretEntries: ["auth.json"] },',
+            `      nativeHome: ${JSON.stringify(home)},`,
+            '    } },',
+            '  });',
+            '  return () => setActive(false);',
+            '}',
+          ].join('\n'),
+        },
+      });
+      const leaf = await loadRetainedAgentRuntimeLeaf({ paths: fixture.paths, binding: fixture.binding });
+      expect(leaf).toMatchObject({ catalogEntry: {
+        id: 'acme.runner-loader/fixture', connectedAccountNativeHome: home,
+        connectedAccountRequestAuthUses: launchUses.requestAuthUses,
+        connectedAccountFileEnvironmentUses: launchUses.fileEnvironmentUses,
+        connectedAccountEnvironmentUses: launchUses.environmentUses,
+        connectedAccountEnvironmentUnsetUses: launchUses.environmentUnsetUses,
+      } });
+      expect(await leaf.factory({} as never)).toMatchObject({ retainedCatalogActive: true });
+      const nativeHomeRoot = join(tempRoot, 'native-home');
+      await mkdir(nativeHomeRoot);
+      await writeFile(join(nativeHomeRoot, 'auth.json'), '{"fixture":"retained-auth"}');
+      const agent = projectManifestAgentContribution({
+        definition: { id: 'fixture', title: 'Fixture', runtime: { kind: 'custom' }, primary: 'sessions',
+          capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } },
+        provenance: 'external', source: { kind: 'package' }, pluginId: 'acme.runner-loader',
+      });
+      const nativeHome = await resolveNativeAgentSessionNativeHomeService({
+        agent: { ...agent, catalogEntry: leaf.catalogEntry },
+        sourceEnvironment: { FIXTURE_HOME: nativeHomeRoot },
+      });
+      expect(nativeHome).not.toBeNull();
+      expect(new TextDecoder().decode((await nativeHome!.readFiles(['auth.json']))['auth.json']))
+        .toBe('{"fixture":"retained-auth"}');
+      await expect(nativeHome!.readFiles(['undeclared.json'])).rejects.toThrow(
+        'connected_service_native_home_credential_file_undeclared',
+      );
+      await leaf.dispose();
+      expect(await leaf.factory({} as never)).toMatchObject({ retainedCatalogActive: false });
+      await expect(loadRetainedAgentRuntimeLeaf({ paths: fixture.paths,
+        binding: { ...fixture.binding, sourceCustody: { ...fixture.binding.sourceCustody,
+          kind: 'managed', immutableGenerationId: 'foreign-generation', installSource: 'localPath' } },
+      })).rejects.toThrow();
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('attests an older pinned runner snapshot after daemon reload and rejects changed custody or unknown source', async () => {
     const tempRoot = await realpath(await mkdtemp(join(tmpdir(), 'happier-retained-older-runner-')));
     const snapshotsDir = join(tempRoot, '.runner-snapshots');
@@ -558,7 +699,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
         paths: fixture.paths,
         binding: fixture.binding,
         developmentOccurrenceId: 'occurrence:development-runner:1',
-      })).resolves.toEqual({ factory: expect.any(Function) });
+      })).resolves.toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -585,13 +726,13 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
           return authority.kind === 'development' ? authority : null;
         },
       });
-      const source = resolver({ pluginId: agent.pluginId, daemonEntryPath: agent.daemonEntryPath });
+      const source = resolver({ pluginId: agent.identity.pluginId, daemonEntryPath: agent.daemonEntryPath });
       if (source?.sourceAuthority?.kind !== 'development') {
         throw new Error('Real Claude source-mode producer did not admit a development root');
       }
       const binding = createAgentSessionRunnerFactoryBinding({
         v: 1,
-        pluginId: agent.pluginId,
+        pluginId: agent.identity.pluginId,
         pluginVersion: '0.0.0',
         agentId: agent.id,
         localAgentId: agent.identity.localId,
@@ -782,7 +923,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
         binding: fixture.binding,
       });
 
-      expect(leaf).toEqual({
+      expect(leaf).toMatchObject({
         factory: expect.any(Function),
         externalSessions: expect.any(Object),
       });
@@ -835,7 +976,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
       await expect(loadRetainedAgentRuntimeLeaf({
         paths: fixture.paths,
         binding: fixture.binding,
-      })).resolves.toEqual({ factory: expect.any(Function) });
+      })).resolves.toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -864,7 +1005,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
       await expect(loadRetainedAgentRuntimeLeaf({
         paths: fixture.paths,
         binding: fixture.binding,
-      })).resolves.toEqual({ factory: expect.any(Function) });
+      })).resolves.toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -1011,7 +1152,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
       await expect(loadRetainedAgentRuntimeLeaf({
         paths: fixture.paths,
         binding: fixture.binding,
-      })).resolves.toEqual({ factory: expect.any(Function) });
+      })).resolves.toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -1284,7 +1425,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
           rootPath: sourceRootPath,
           cacheIdentity: 'pinned_runner_snapshot:runner-snapshot-a',
         }),
-      })).resolves.toEqual({ factory: expect.any(Function) });
+      })).resolves.toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -1368,7 +1509,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
       });
 
       expect(Reflect.has(leaf, 'workflowRunRecordSessionOpen')).toBe(false);
-      expect(leaf).toEqual({ factory: expect.any(Function) });
+      expect(leaf).toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -1402,7 +1543,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
       });
 
       expect(Reflect.has(leaf, 'workflowRunRecordSessionOpen')).toBe(false);
-      expect(leaf).toEqual({ factory: expect.any(Function) });
+      expect(leaf).toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });
@@ -1490,7 +1631,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
         binding: fixture.binding,
       });
 
-      expect(leaf).toEqual({ factory: expect.any(Function) });
+      expect(leaf).toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
       expect(await leaf.factory({
         plugin: {
           id: 'acme.runner-loader',
@@ -1618,7 +1759,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
       await expect(loadRetainedAgentRuntimeLeaf({
         paths: fixture.paths,
         binding: fixture.binding,
-      })).resolves.toEqual({ factory: expect.any(Function) });
+      })).resolves.toEqual({ factory: expect.any(Function), catalogEntry: expect.any(Object), dispose: expect.any(Function) });
     } finally {
       await rm(happyHomeDir, { recursive: true, force: true });
       await rm(sourceRootPath, { recursive: true, force: true });

@@ -13,7 +13,9 @@ describe('Agent catalog acquisition cost', () => {
         const fixture = await createAdmittedPluginRuntimeFixture();
         try {
             const runtime = fixture.registry;
-            const first = await runtime.acquireAgentCatalogEntry('claude');
+            const acquireAgentCatalogEntry = runtime.acquireAgentCatalogEntry;
+            if (!acquireAgentCatalogEntry) throw new Error('Expected the admitted runtime catalog owner');
+            const first = await acquireAgentCatalogEntry('claude');
             expect(first).not.toBeNull();
             // Compare CPU, not wall time or an invented production deadline.
             // A warm leaf lookup must cost less than rebuilding every family.
@@ -22,7 +24,7 @@ describe('Agent catalog acquisition cost', () => {
             const rebuildCpu = cpuMicroseconds(rebuildStart);
             const lookupStart = process.cpuUsage();
             for (let i = 0; i < 3; i += 1) {
-                expect(await runtime.acquireAgentCatalogEntry('claude')).toMatchObject({ id: first?.id });
+                expect(await acquireAgentCatalogEntry('claude')).toMatchObject({ id: first?.id });
             }
             // The bundled catalog spans dozens of plugins/families. Warm
             // single-Agent projection should consume only a small fraction of

@@ -35,6 +35,10 @@ const CHANNEL_STATE_COLLECTION_ID = 'channel-state';
 const INGRESS_PREPARATION_BATCH_LIMIT_BYTES = 16 * 1024 * 1024;
 const INGRESS_PREPARATION_OPERATION_LIMIT = 100;
 const ACCOUNT_SCOPE_KEY = 'channels-c3-physical-account';
+const TELEGRAM_EXECUTION_ORIGIN = {
+    serverIdentityId: 'srv_account_one',
+    materializationRef: { machineId: 'machine-1', materializationId: 'telegram-install-1', pluginId: 'happier.channel.telegram' },
+} as const;
 const E2EE_MACHINE_KEY = new Uint8Array(32).fill(7);
 const E2EE_CREDENTIALS = {
     token: 'channels-c3-e2ee-token',
@@ -156,23 +160,16 @@ function createCurrentConnection(
                 service: { pluginId: 'happier.channel.telegram', localId: 'telegram-bot' },
                 accountId: 'telegram-account-1',
             },
-            transportOrigin: {
-                serverIdentityId: 'srv_account_one',
-                materializationRef: {
-                    machineId: 'machine-1',
-                    materializationId: 'telegram-install-1',
-                    pluginId: 'happier.channel.telegram',
-                },
-            },
+            transportOrigin: TELEGRAM_EXECUTION_ORIGIN,
             providerConnectionKey: 'telegram-bot:12345',
             providerConfig: { botUsername: 'happier_bot' },
             routingIdentityKey: 'r'.repeat(43),
             integrationPrincipal: { id: 'telegram:bot:12345', label: 'Happier' },
             authorityEpoch: 4,
         },
-        transport: { kind: 'checkpointedPull' },
-        overlapSafety: 'providerExclusive',
-        replayContinuity: 'checkpointed',
+        transport: { kind: 'socket' },
+        overlapSafety: 'safe',
+        replayContinuity: 'none',
         outboundTextLimit: { maximum: 4_096, unit: 'utf8Bytes' },
     }));
 }
@@ -221,7 +218,7 @@ function createIngress(now: number): ConversationProviderObservationIngestInputV
                     v: 1,
                     occurrenceId: 'telegram:update:channels-c3-physical',
                     occurredAt: now,
-                    transport: { kind: 'poll' },
+                    transport: { kind: 'socket' },
                     endpoint: { kind: 'direct', audience: 'direct', id: 'telegram:chat:100' },
                     actor: {
                         principalId: 'telegram:user:999',
@@ -257,7 +254,7 @@ function matchesExpectedRevision(
         : row?.revision === expectedRevision;
 }
 
-function createHttpCollectionBoundary() {
+function createHttpCollectionBoundary(indexes: CurrentChannelsSources['channelStateCollection']['indexes']) {
     const rows = new Map<string, PluginCollectionRowV1>();
     const capturedMutationRequests: PluginCollectionMutationRequestV1[] = [];
     let changeCursor = 0;
@@ -278,12 +275,15 @@ function createHttpCollectionBoundary() {
                 }
                 if (url.endsWith(PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1)) {
                     const request = PluginCollectionQueryRequestV1Schema.parse(JSON.parse(body));
-                    if (request.indexId !== 'by-kind') {
+                    const index = indexes.find(index => index.id === request.indexId);
+                    if (!index) {
                         throw new Error(`Unexpected Channel Collection query index ${request.indexId}`);
                     }
-                    const recordKind = request.prefix[0];
                     const matched = [...rows.values()]
-                        .filter((row) => row.projection['record-kind'] === recordKind)
+                        .filter((row) => request.prefix.every((value, position) => {
+                            const field = index.fields[position];
+                            return field !== undefined && row.projection[field.field] === value;
+                        }))
                         .sort((left, right) => left.rowId.localeCompare(right.rowId));
                     const offset = request.cursor === undefined ? 0 : Number.parseInt(request.cursor, 10);
                     if (!Number.isSafeInteger(offset) || offset < 0) {
@@ -380,7 +380,7 @@ async function readEveryRowOfKind(input: Readonly<{
 describe('Channels C3 physical E2EE ingress batches', () => {
     it('fills every sealed 256-binding, 64 KiB ingress batch to the deployment operation bound', async () => {
         const channels = await loadCurrentChannelsSources();
-        const boundary = createHttpCollectionBoundary();
+        const boundary = createHttpCollectionBoundary(channels.channelStateCollection.indexes);
         const admittedContract = normalizePluginAccountCollectionContractV1({
             pluginId: CHANNELS_PLUGIN_ID,
             contribution: channels.channelStateCollectionDeclaration,
@@ -444,6 +444,7 @@ describe('Channels C3 physical E2EE ingress batches', () => {
                     materializationId: 'telegram-install-1',
                     pluginId: 'happier.channel.telegram',
                 },
+                executionOrigin: TELEGRAM_EXECUTION_ORIGIN,
             },
             invokedAtMs: 1,
             signal: new AbortController().signal,

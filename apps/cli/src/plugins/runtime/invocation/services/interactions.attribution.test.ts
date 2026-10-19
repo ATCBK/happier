@@ -252,6 +252,7 @@ describe('plugin interaction caller attribution', () => {
             readActiveTurnAdmissionWitness: () => Object.freeze({
                 inputId: 'input-opencode-read-only',
                 turnId: 'turn-opencode-read-only',
+                callerPermissionMode: 'read-only' as const,
                 userMessageSeq: 1,
                 userMessageSeqs: Object.freeze([1]),
                 causalPermissionAuthority: Object.freeze({
@@ -274,6 +275,7 @@ describe('plugin interaction caller attribution', () => {
         await vi.waitFor(() => expect(Object.keys(requests(session))).toHaveLength(1));
         expect(handleToolCall.mock.calls[0]?.[3]).toMatchObject({
             turnId: 'turn-opencode-read-only',
+            callerPermissionMode: 'read-only',
             causalPermissionAuthority: {
                 kind: 'admittedSessionInputV1',
                 admittedPermissionCeiling: 'read-only',

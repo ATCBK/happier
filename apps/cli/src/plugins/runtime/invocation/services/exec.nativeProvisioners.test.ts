@@ -7,6 +7,7 @@ import { LIMA_PLUGIN } from '@happier-dev/plugins-machine-lima/manifest';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createDaemonizingProcessFixture } from '@/testkit/process/daemonizingProcess';
 import { waitForProcessExit } from '@/testkit/process/spawn';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 
 import { createProductionPluginInvocationServiceOwners } from './production';
 
@@ -14,7 +15,7 @@ describe('native provisioner production process composition', () => {
     it.for(['run', 'spawn'] as const)('preserves native descendants through the public %s projection after invocation retirement', async (method, { task }) => {
         await withTempDir('happier-native-exec-composed-', async directory => {
             const fixture = createDaemonizingProcessFixture(directory);
-            const manifest = LIMA_PLUGIN.manifest;
+            const manifest = normalizePluginManifestV2(LIMA_PLUGIN.manifest);
             const controller = new AbortController();
             let failNextDiscovery = method === 'run';
             const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} },
@@ -67,7 +68,7 @@ describe('native provisioner production process composition', () => {
         });
     });
 
-    it.each([LUME_PLUGIN.manifest, CUA_PLUGIN.manifest, DOCKER_SANDBOXES_PLUGIN.manifest])(
+    it.each([LUME_PLUGIN.manifest, CUA_PLUGIN.manifest, DOCKER_SANDBOXES_PLUGIN.manifest].map(manifest => normalizePluginManifestV2(manifest)))(
         'preserves the selected native environment without disclosing unrelated ambient values for $id',
         async (manifest) => {
             vi.stubEnv('UNRELATED_SECRET', 'ambient-secret');

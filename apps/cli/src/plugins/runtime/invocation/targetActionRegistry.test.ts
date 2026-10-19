@@ -9,6 +9,7 @@ import {
 } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import * as actionContractProducer from '../../../../../../packages/plugin-sdk/examples/action-contract-producer/src/index';
 import type { MessageActionAvailableSnapshotV1, PluginHostAccessRequestV2 } from '@happier-dev/protocol';
@@ -21,6 +22,8 @@ import {
 import type { HostCurrentSessionPresentationService } from '@/agent/runtime/state/currentSessionUiTypes';
 
 import { createTargetActionInvocationRegistry } from './targetActionRegistry';
+import { logger } from '@/ui/logger';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { createTargetActionCurrentIntentAdapter, targetActionApprovalMatchesCurrentIntent } from '@/session/actions/approvals/targetActionCurrentIntent';
 import { StoredTargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { TargetActionCurrentIntentRequest } from './actionExecutor';
@@ -103,11 +106,32 @@ function createRegistry(
 }
 
 describe('target action invocation registry', () => {
+    it('splits preparation, account binding and authored execution under the ingress request without content', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+        const registry = createRegistry({
+            actions: [{ ...action(), handler: async () => ({ echoed: 'private-result-marker' }) }],
+        });
+        try {
+            expect(await runTracedExternalActionStage('action.invoke', `rpc_${requestId}`, 'contributed.target_invoke', () =>
+                registry.invoke({ pluginId: 'acme.alpha', localId: 'run', surface: 'cli', input: { value: 'private-input-marker' } })))
+                .toMatchObject({ status: 'executed', value: { echoed: 'private-result-marker' } });
+            const records = sink.mock.calls.filter(([message]) => message === '[external-action-stage]');
+            for (const phase of ['contributed.services.prepare', 'contributed.connected_account.bind', 'contributed.handler']) {
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    rootRequestId: requestId, stage: `${phase}.end`, elapsedMs: expect.any(Number),
+                })]);
+            }
+            expect(JSON.stringify(records)).not.toContain('private-');
+        } finally { registry.dispose(); sink.mockRestore(); vi.unstubAllEnvs(); }
+    });
+
     it('uses the authored reversible own-UI default without weakening automation or explicit Ask', async () => {
         const { createCollectionDetailPlugin } = await import('../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
         const module = createCollectionDetailPlugin();
         const plugin = await createPluginTestkit({ manifest: module.manifest, module });
-        const declaration = module.manifest.contributes?.actions?.find(candidate => candidate.id === 'set-complete');
+        const declaration = normalizePluginManifestV2(module.manifest).contributes.actions.find(candidate => candidate.id === 'set-complete');
         if (!declaration) throw new Error('Collection completion declaration missing');
         const handler = plugin.registration('actions', declaration.id);
         if (!handler) throw new Error('Collection completion handler missing');
@@ -121,7 +145,7 @@ describe('target action invocation registry', () => {
         const registry = createRegistry({ actions: [{
             ...action(), pluginId: module.manifest.id, localId: declaration.id,
             sourceCustody: caller.sourceCustody,
-            definition: { ...declaration, inputSchema: declaration.inputSchema },
+            definition: { ...declaration, inputSchema: declaration.inputSchema ?? undefined },
             handler: (input, context) => { contexts.push(context); return handler(input, context); },
         }] });
         const read = async () => {
@@ -192,12 +216,12 @@ describe('target action invocation registry', () => {
         const records: PluginInvocationLogRecord[] = [];
         const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
         const raw = { bundle: phase === 'result' ? 738291642 : { pin: 738291642, enabled: true, optional: null }, public: 31 };
-        let parsedOperand: unknown;
+        let parsedOperand: JsonValue = null;
         const registry = createRegistry({ ...owners, actions: [{
             ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['bundle'], surfaces: ['agent', 'mcp', 'cli'],
                 dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } }),
             inputParser: candidate => {
-                parsedOperand = isJsonRecord(candidate) ? candidate.bundle : undefined;
+                parsedOperand = isJsonRecord(candidate) ? candidate.bundle ?? null : null;
                 return { success: true as const, data: { public: 31 } };
             },
             ...(phase === 'result' ? { resultParser: () => ({ success: false as const,
@@ -486,7 +510,7 @@ describe('target action invocation registry', () => {
                     }
                     expect(JSON.stringify(result)).toContain(normalized.endpoint);
                     expect(JSON.stringify(records)).toContain(normalized.endpoint);
-                    if (!context) throw new Error('Handler did not start');
+                    if (!context?.invocationId) throw new Error('Handler did not start with an invocation id');
                     // The incumbent scope ends after failure projection, rather than
                     // retaining raw invocation material after the result settles.
                     expect(owners.redactDiagnosticText({ pluginId: context.plugin.id, occurrenceId: '7',
@@ -533,7 +557,7 @@ describe('target action invocation registry', () => {
 
     it.each(['agent', 'mcp', 'cli'] as const)('keeps the real rotation token out of an approvable Artifact on %s', async surface => {
         const localId = 'rotate-document-review-webhook-token';
-        const declaration = actionContractProducer.manifest.contributes?.actions?.find(entry => entry.id === localId);
+        const declaration = normalizePluginManifestV2(actionContractProducer.manifest).contributes.actions.find(entry => entry.id === localId);
         if (!declaration) throw new Error('Rotation example declaration missing');
         // This maintained producer must declare its credential operand; unrelated
         // undeclared strings remain literal under the declaration-only rule.
@@ -574,7 +598,7 @@ describe('target action invocation registry', () => {
                 scopes: declaration.scopes,
                 surfaces: declaration.surfaces,
                 inputSchema: declaration.inputSchema,
-                resultSchema: declaration.outputSchema,
+                resultSchema: declaration.resultSchema,
                 secretInputPaths: (declaration.inputHints?.fields ?? []).filter(field => field.widget === 'secret').map(field => field.path),
             },
             handler: input => plugin.invokeAction(localId, input, { surface }),
@@ -1967,7 +1991,7 @@ describe('target action invocation registry', () => {
                     seed.retainCleanup!({ dispose: async () => { throw removalFailure; } });
                     return unavailableServices(seed, binding);
                 },
-                actions: [{ ...action(), handler: async () => validResult ? { echoed: 'x' } : { wrong: true } }],
+                actions: [{ ...action(), handler: async (): Promise<JsonValue> => validResult ? { echoed: 'x' } : { wrong: true } }],
             });
             await expect(registry.invoke({
                 pluginId: 'acme.alpha', localId: 'run', input: { value: 'x' }, surface: 'cli',

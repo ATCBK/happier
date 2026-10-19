@@ -86,6 +86,7 @@ function isComposerReferenceRegistration(
 export function createTargetComposerReferenceRegistry(params: Readonly<{
     composerReferences: readonly ResolvedComposerReferenceContribution[];
     targetRegistrations: readonly TargetRegistration[];
+    activateReferenceOnDemand(reference: PluginContributionIdentityV1): Promise<void>;
     resolveOccurrenceLifecycle(pluginId: string): OccurrenceLifecycle;
     createInvocationContext: TargetComposerReferenceInvocationContextFactory;
 }>): Readonly<{
@@ -139,9 +140,21 @@ export function createTargetComposerReferenceRegistry(params: Readonly<{
         sessionId?: string;
         operation(runtime: ComposerReferenceRuntime, context: PluginInvocationContext): Promise<TResult>;
     }>): Promise<TResult> {
+        if (!findDeclaration(paramsForCall.reference)) throw unavailableError(paramsForCall.reference);
+        const lifecycle = params.resolveOccurrenceLifecycle(paramsForCall.reference.pluginId);
+        if (!lifecycle.isCurrent()) throw staleError(paramsForCall.reference);
+        if (paramsForCall.signal.aborted) throw notCurrentError(paramsForCall.reference);
+        try {
+            await params.activateReferenceOnDemand(paramsForCall.reference);
+        } catch (error) {
+            if (!lifecycle.isCurrent()) throw staleError(paramsForCall.reference);
+            if (paramsForCall.signal.aborted) throw notCurrentError(paramsForCall.reference);
+            throw error;
+        }
+        if (!lifecycle.isCurrent()) throw staleError(paramsForCall.reference);
+        if (paramsForCall.signal.aborted) throw notCurrentError(paramsForCall.reference);
         const entry = find(paramsForCall.reference);
         if (!entry) throw unavailableError(paramsForCall.reference);
-        const lifecycle = params.resolveOccurrenceLifecycle(paramsForCall.reference.pluginId);
         if (!isEntryCurrent(entry, lifecycle)) throw staleError(paramsForCall.reference);
 
         const signal = AbortSignal.any([
@@ -195,18 +208,10 @@ export function createTargetComposerReferenceRegistry(params: Readonly<{
     return Object.freeze({
         list() {
             const identities: PluginContributionIdentityV1[] = [];
-            const seen = new Set<string>();
-            for (const candidate of params.targetRegistrations) {
-                if (
-                    !isComposerReferenceRegistration(candidate.registration)
-                ) continue;
-                const identity = { pluginId: candidate.pluginId, localId: candidate.registration.localId };
-                if (!findDeclaration(identity)) continue;
-                const key = `${identity.pluginId}\u0000${identity.localId}`;
-                if (seen.has(key)) continue;
+            for (const declaration of declarations.values()) {
+                const identity = { pluginId: declaration.identity.pluginId, localId: declaration.identity.localId };
                 const lifecycle = params.resolveOccurrenceLifecycle(identity.pluginId);
-                if (!isEntryCurrent(candidate as ComposerReferenceRegistration, lifecycle)) continue;
-                seen.add(key);
+                if (!lifecycle.isCurrent()) continue;
                 identities.push(Object.freeze(identity));
             }
             return Object.freeze(identities);

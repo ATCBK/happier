@@ -13,7 +13,7 @@ import type { ResolvedInstallableContribution } from '@/plugins/projection/regis
 import { activateContributionModule } from '@/plugins/runtime/lifecycle/activation/activateContributionModule';
 import { createDevelopmentPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
-import { createTargetActionInvocationRegistry } from '../targetActionRegistry';
+import { createTargetActionInvocationRegistry, type TargetActionInvocationRegistration } from '../targetActionRegistry';
 import { withTempDir } from '@/testkit/fs/tempDir';
 
 import { createProductionPluginInvocationServiceOwners } from './production';
@@ -53,7 +53,7 @@ describe('Lima declared native process environment', () => {
             vi.stubEnv('HOME', root);
             vi.stubEnv('PATH', root);
             vi.stubEnv('UNRELATED_SECRET', 'not-admitted');
-            onTestFinished(() => vi.unstubAllEnvs());
+            onTestFinished(() => { vi.unstubAllEnvs(); });
             const manifest = normalizePluginManifestV2(LIMA_PLUGIN.manifest);
             const pluginId = manifest.id;
             const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);
@@ -86,14 +86,16 @@ describe('Lima declared native process environment', () => {
                 }), resolvePath: async () => root },
             });
             const activated = await activateContributionModule({
-                pluginId, occurrenceId, manifest, moduleNamespace: LIMA_PLUGIN, isOccurrenceCurrent: () => true,
+                pluginId, occurrenceId, manifest, moduleNamespace: { activate: LIMA_PLUGIN.activate }, isOccurrenceCurrent: () => true,
             });
             const registry = createTargetActionInvocationRegistry({
-                actions: activated.registrations.flatMap(registration => {
+                actions: activated.registrations.flatMap((registration): TargetActionInvocationRegistration[] => {
                     if (registration.family !== 'actions') return [];
                     const declaration = manifest.contributes.actions.find(action => action.id === registration.localId)!;
                     return [{ pluginId, pluginVersion: manifest.version, occurrenceId, sourceCustody,
-                        localId: registration.localId, handler: registration.value,
+                        localId: registration.localId,
+                        // The loaded module ABI is the native plugin boundary.
+                        handler: (input, context) => Reflect.apply(registration.value, undefined, [input, context]),
                         definition: { ...declaration, hostAccessRequests: manifest.hostAccess.required
                             .filter(request => declaration.hostAccess?.includes(request.id))
                             .map(request => ({ request, required: true })) },
@@ -117,7 +119,7 @@ describe('Lima declared native process environment', () => {
                 const invoke = async (input: unknown) => {
                     const result = await registry.invoke({ pluginId, localId, input, surface: 'cli' });
                     expect(result.status).toBe('executed');
-                    if (result.status !== 'executed') throw new Error(`Options failed: ${result.code}`);
+                    if (result.status !== 'executed') throw new Error(`Options failed: ${result.status}`);
                     return MachineProvisionerOptionsResultV1Schema.parse(result.value);
                 };
                 expect(launchSchema.parse(recipe)).toEqual(recipe);
@@ -144,7 +146,7 @@ describe('Lima declared native process environment', () => {
     });
 
     it('checks an installed Lima through the admitted HOME and PATH without inheriting unrelated environment', async () => {
-        const requests = LIMA_PLUGIN.manifest.hostAccess.required.map((request) => ({ request, required: true }));
+        const requests = normalizePluginManifestV2(LIMA_PLUGIN.manifest).hostAccess.required.map((request) => ({ request, required: true }));
         vi.stubEnv('HOME', '/fixture/lima-home');
         vi.stubEnv('PATH', '/fixture/native-tools');
         vi.stubEnv('UNRELATED_SECRET', 'not-admitted');

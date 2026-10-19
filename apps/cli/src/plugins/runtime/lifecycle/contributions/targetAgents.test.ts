@@ -1860,7 +1860,9 @@ describe('target Agent runtime registry', () => {
                 locator: publishedFactory.locator,
                 normalizedModulePath: publishedFactory.normalizedModulePath,
             });
-            expect(lease.sessionRunnerFactoryBinding?.locator).not.toEqual(registeredLocator);
+            const factoryBinding = lease.sessionRunnerFactoryBinding;
+            if (!factoryBinding || !('locator' in factoryBinding)) throw new Error('Expected the published Agent factory binding');
+            expect(factoryBinding.locator).not.toEqual(registeredLocator);
         } finally {
             await activation?.dispose();
             await rm(runtimeRoot, { recursive: true, force: true });

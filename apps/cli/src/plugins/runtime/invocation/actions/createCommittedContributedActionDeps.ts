@@ -70,7 +70,7 @@ function projectExternalActionContext(
   if (
     context.authority !== 'account_automation'
     || !authorization
-    || !credential
+    || ('grant' in authorization.binding && !credential)
     || !target
     || (!signer && !allowMissingApprovalSigner)
     || typeof serverId !== 'string'
@@ -84,7 +84,7 @@ function projectExternalActionContext(
     serverId,
     serverIdentityId,
     actionRequestId,
-    externalActionCredential: credential,
+    ...(credential ? { externalActionCredential: credential } : {}),
     externalActionExecutionAuthorization: authorization,
     externalActionTarget: target,
     ...(signer ? { signExternalActionApprovalInput: signer } : {}),

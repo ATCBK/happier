@@ -1,9 +1,11 @@
 import type { DaemonPluginStructuredMessageActionInvocationV1 } from '@happier-dev/protocol';
-import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { PluginInvocationCaller } from '@happier-dev/plugin-sdk';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { pluginSourceCustodyEqual } from '@/plugins/runtime/sourceAuthority';
+import { listComposerSurfaceDeclarations } from '@/plugins/projection/registry/composer';
+import { resolvePluginMachineExecutionOrigin } from '@/plugins/runtime/resolvePluginMachineExecutionOrigin';
 
 /**
  * Convert a mounted UI or client Action binding into invocation provenance only
@@ -80,7 +82,11 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         // Source-backed occurrences may omit a portable ref; a declared materialization must be supplied.
         return Object.freeze({ status: 'unavailable' as const });
     }
-    const initialMachineContext = machineContext;
+    const executionOrigin = resolvePluginMachineExecutionOrigin({
+        pluginId, context: machineContext, sourceCustody,
+        ...(materialization === undefined ? {} : { materializationId: materialization.materializationId }),
+    });
+    if (!executionOrigin) return Object.freeze({ status: 'unavailable' as const });
 
     let contributionIdentity: Readonly<{ pluginId: string; localId: string }> | null = null;
     if (invocation?.kind === 'clientPluginAction') {
@@ -108,6 +114,7 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         const mountedContribution = [
             ...(contributes.uiViewsV2 ?? []),
             ...(contributes.uiSettingsPagesV2 ?? []),
+            ...listComposerSurfaceDeclarations(contributes).map(({ contribution }) => contribution),
             // Plugin manifest ingestion reserves local contribution IDs across
             // families, so this exact pluginId/localId pair is unambiguous for a
             // mounted app-shell Voice invocation too.
@@ -117,8 +124,31 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
             && entry.identity.pluginId === pluginId
             && entry.identity.localId === binding.contributionLocalId
         ));
-        if (!mountedContribution) return Object.freeze({ status: 'unavailable' as const });
-        contributionIdentity = mountedContribution.identity;
+        if (mountedContribution) {
+            contributionIdentity = mountedContribution.identity;
+        } else {
+            // A target-owned embedded surface is mounted under its contributor
+            // identity, rather than a top-level view id. Only cold admission's
+            // current surfaces authorize this caller; a declaration alone does not.
+            const declaration = contributes.targetedPluginContributions?.find((entry) => (
+                entry.pluginId === pluginId
+                && entry.identity.pluginId === pluginId
+                && entry.identity.localId === binding.contributionLocalId
+            ));
+            const admitted = declaration && contributes.readAdmittedTargetedContributions?.({
+                targetPluginId: declaration.definition.target.pluginId,
+                pointId: declaration.definition.target.pointId,
+                protocol: declaration.definition.protocol,
+            });
+            const surface = admitted?.contributions.find((entry) => (
+                entry.contributor.pluginId === pluginId
+                && entry.contributor.contributionId === binding.contributionLocalId
+                && entry.contributor.occurrenceId === occurrenceId
+                && entry.surfaces.length > 0
+            ));
+            if (!declaration || !surface) return Object.freeze({ status: 'unavailable' as const });
+            contributionIdentity = declaration.identity;
+        }
     }
     if (!contributionIdentity) return Object.freeze({ status: 'unavailable' as const });
 
@@ -133,6 +163,7 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
             }),
             occurrenceId,
             sourceCustody,
+            executionOrigin,
             ...(materialization === undefined
                 ? {}
                 : { materialization: Object.freeze({ ...materialization }) }),
@@ -142,8 +173,10 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
         }),
         isMountedCallerCurrent: async (): Promise<boolean> => {
             let current: Readonly<{ serverIdentityId: string; machineId: string }> | null = null;
+            let currentSource: typeof sourceCustody | null;
             try {
                 current = await input.resolveExecutionOriginContext?.() ?? null;
+                currentSource = input.registry.readPluginSourceCustody?.(pluginId) ?? null;
             } catch {
                 return false;
             }
@@ -157,9 +190,12 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
                     return false;
                 }
             }
-            return current !== null
-                && current.serverIdentityId === initialMachineContext.serverIdentityId
-                && current.machineId === initialMachineContext.machineId
+            const currentOrigin = current ? resolvePluginMachineExecutionOrigin({
+                pluginId, context: current, sourceCustody: currentSource,
+                ...(liveMaterialization ? { materializationId: liveMaterialization.materializationId } : {}),
+            }) : null;
+            return current !== null && currentOrigin !== null
+                && arePluginMachineExecutionOriginsEqual(executionOrigin, currentOrigin)
                 && current.machineId === input.request.machineId
                 && input.registry.isPluginOccurrenceCurrent?.(
                     pluginId,

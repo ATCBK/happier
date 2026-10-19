@@ -46,6 +46,7 @@ function accountProfile(
         id: 'current-global-account',
         timestamp: 0,
         firstName: null,
+        name: null,
         lastName: null,
         username: null,
         avatar: null,

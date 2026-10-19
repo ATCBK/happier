@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     createActionExecutor,
     getActionSpec,
-    type ActionExecutorDeps,
     type ActionId,
     type ScmActionExecute,
     buildWorktreeRelativePath,
@@ -17,7 +17,7 @@ import { createPluginActionCallerMaterializationFixture } from './actionCaller.t
 import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
 import { createScmBackendRegistry } from '@/scm/registry';
 import type { ScmBackend } from '@/scm/types';
-import { createLocalScmRepositoryFixture, runScmExecutable } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
 import { createGitScmBackendRuntimeRegistration } from '../../../../../../../packages/plugins/scm-git/src/backend';
 import { createScmHostingProviderRuntimeServicesForTest } from '../../../../../../../packages/plugins/scm-git/src/testkit/scmRuntime.test-support';
@@ -106,13 +106,14 @@ describe('plugin invocation SCM actions', () => {
             hostingProviderRuntimeServices: createScmHostingProviderRuntimeServicesForTest(),
         })]);
         const actionExecutor = createActionExecutor({
+            ...createUnavailableActionTransportDeps(),
             scmActionExecute: async ({ actionId, input, context }) => await executeScmActionOperation({
                 actionId, input, workingDirectory: fixture.nestedPath,
                 accessPolicy: { kind: 'restrictedRoots', roots: [selectedRoot] },
                 registry, ...(context.signal ? { signal: context.signal } : {}),
             }),
             isActionApprovalRequired: () => false,
-        } as ActionExecutorDeps);
+        });
         const service = createPluginInvocationActionsService({
             seed: {
                 plugin: { id: 'acme.scm', version: '1.0.0' },
@@ -280,9 +281,10 @@ describe('plugin invocation SCM actions', () => {
             error: 'test_stop_after_scm_dispatch',
         }));
         const actionExecutor = createActionExecutor({
+            ...createUnavailableActionTransportDeps(),
             scmActionExecute,
             isActionApprovalRequired: () => false,
-        } as unknown as ActionExecutorDeps);
+        });
         const service = createPluginInvocationActionsService({
             seed: {
                 plugin: { id: 'acme.scm', version: '1.0.0' },
@@ -349,6 +351,7 @@ describe('plugin invocation SCM actions', () => {
                 },
             } as unknown as ScmBackend]);
             const actionExecutor = createActionExecutor({
+                ...createUnavailableActionTransportDeps(),
                 scmActionExecute: async ({ actionId, input, context }: Parameters<ScmActionExecute>[0]) => await executeScmActionOperation({
                     actionId,
                     input,
@@ -358,7 +361,7 @@ describe('plugin invocation SCM actions', () => {
                     ...(context.signal ? { signal: context.signal } : {}),
                 }),
                 isActionApprovalRequired: () => false,
-            } as unknown as ActionExecutorDeps);
+            });
             const service = createPluginInvocationActionsService({
                 seed: {
                     plugin: { id: 'acme.scm', version: '1.0.0' },

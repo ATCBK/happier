@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import type { Socket } from 'socket.io-client';
 
 import { PROVIDER_WIRE_PROTOCOL_LIMITS_V1 } from '@happier-dev/protocol/providers/capabilities/v1';
@@ -80,6 +81,12 @@ import {
 } from './factory';
 import { withPluginInvocationServiceBindingAvailability } from './unavailable';
 import { createSharedManagedProviderSessionAccess } from '@/daemon/startup/sharedManagedProviderSessionAccess';
+import { listHappierProcessRoots } from '@/daemon/processes/roots/listHappierProcessRoots';
+import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
+import { resolveProcessOwnerRequester } from '@/daemon/processes/ownership/resolveProcessOwnerRequester';
+import { projectMachineProcesses } from '@/daemon/processes/view/projectMachineProcesses';
+import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import type { ProcessCensusSnapshot } from '@/processes/census/processCensus';
 
 type CredentialFileMaterializeInput = Parameters<
     ManagedServiceCredentialFileOwner['materialize']
@@ -109,6 +116,49 @@ const MANAGED_SERVICE_CLEAN_EXIT: PluginProcessResult = Object.freeze({
     stderrTruncated: false,
 });
 
+describe('managed service requester process projection', () => {
+    it('retains sessionless admitted requester evidence through the real service custody and recipient projections', async () => {
+        const target = { serverId: 'server', machineId: 'machine', installationId: 'installation' };
+        const requester = { ...target, accountId: 'guest' };
+        const { owner, exec } = createLifecycleHarness([createLifecycleProcess(77)], 'daemon');
+        const service = await owner.bindScope({ ...lifecycleScope({ occurrenceId: 'requester-service' }),
+            requesterWorkAttributionV1: requester }, exec).supervise(lifecycleSpec({ id: 'sessionless', port: 49152 }));
+        try {
+            const [resource] = owner.readResourceTargets();
+            expect(resource.root.owner).toMatchObject({ kind: 'service', pluginId: 'acme.providers' });
+            if (resource.root.owner.kind !== 'service') throw new Error('Expected managed-service process owner');
+            const scope = '123456789abc';
+            const snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }> = {
+                status: 'ok', capturedAtMs: Date.now(), logicalCpus: 4,
+                rows: [{ pid: 10, ppid: 1, name: 'happier' },
+                    { pid: 77, ppid: 10, name: 'private-service', argv: ['private-service'], cwd: '/private/guest',
+                        ownerTag: `v1.${scope}.service.${resource.root.owner.serviceId}` }].map(row => ({ ...row,
+                    start: { startTimeMs: row.pid }, principal: { kind: 'uid', value: '1000' }, memory: { bytes: 10, kind: 'rss' }, cpuTimeUs: 0 })),
+            };
+            const runtime = createProcessOwnershipRuntime({ selfPid: 10, platform: 'darwin', daemonScopeKey: scope,
+                listRoots: snapshot => listHappierProcessRoots({ snapshot, selfPid: 10, platform: 'darwin', daemonScopeKey: scope,
+                    managedServices: owner.readProcessRoots() }) });
+            const read = await runtime.resolveSnapshot(snapshot);
+            const options = { platform: 'darwin' as const, selfPid: 10, allProcessesVisible: false, confirmed: [],
+                requesterForOwner: (processOwner: Parameters<typeof resolveProcessOwnerRequester>[0], roots: Parameters<typeof resolveProcessOwnerRequester>[1]) =>
+                    resolveProcessOwnerRequester(processOwner, roots, { target, custodianAccountId: 'custodian',
+                        requesterIdentities: new Map([['guest', { accountId: 'guest', displayName: 'Guest' }]]) }) };
+            const request = { machineId: target.machineId, scope: 'happier' as const, view: 'tree' as const };
+            const project = (accountId: string) => projectMachineProcesses(read, request, { accountId, custodianAccountId: 'custodian' }, options);
+            expect(project('custodian')).toMatchObject({ state: 'live', owners: expect.arrayContaining([
+                expect.objectContaining({ owner: resource.root.owner, requester: { accountId: 'guest', displayName: 'Guest' } }),
+            ]) });
+            expect(project('guest').owners.map(row => row.owner)).toEqual([resource.root.owner]);
+            const other = project('other');
+            expect(other.owners).toEqual([]);
+            expect(other.othersWork).toEqual({ count: 2 });
+            expect(JSON.stringify(other)).not.toMatch(/private-service|\/private\/guest|acme.providers/);
+            expect((await owner.activity.read()).items).toEqual([expect.objectContaining({ attribution: requester, state: 'active' })]);
+            expect(MachineProcessesAnswerV1Schema.safeParse(project('custodian')).success).toBe(true);
+        } finally { await service.dispose(); await owner.dispose(); }
+    });
+});
+
 describe('shared managed Provider physical Exec custody', () => {
     it.each(['running', 'establishing'] as const)('keeps a real shared child serving the remaining consumer after the first invocation closes (%s)', async stage => {
         const directory = await mkdtemp(join(tmpdir(), 'happier-shared-exec-custody-'));
@@ -133,12 +183,13 @@ describe('shared managed Provider physical Exec custody', () => {
             mode: { kind: 'spawn', launch: { executable, args: ['-e',
                 'require("node:http").createServer((req,res)=>{res.end(req.url==="/pid"?String(process.pid):req.url)}).listen(Number(process.env.PORT),"127.0.0.1")',
             ] }, endpoint: { kind: 'assignAndInject', port: { kind: 'allocated' }, inject: { portEnvironmentKey: 'PORT' } } },
-            healthCheck: { kind: 'http', target: { path: '/healthz' } },
+            healthCheck: { kind: 'http', target: { kind: 'servicePath', path: '/healthz' } },
             requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
             clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' },
         };
         const bind = (consumerId: string, signal?: AbortSignal) => owner.bindScope(
-            lifecycleScope({ occurrenceId: 'shared-real-occurrence', operationId: consumerId, signal }), service,
+            { ...lifecycleScope({ occurrenceId: 'shared-real-occurrence', operationId: consumerId, signal }),
+                requesterWorkAttributionV1: { serverId: 'server', accountId: 'account', machineId: 'machine', installationId: 'installation' } }, service,
             { managedProvider: { realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => !signal?.aborted,
                 isPhysicalOccurrenceCurrent: () => true,
                 sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId } },
@@ -177,6 +228,9 @@ describe('shared managed Provider physical Exec custody', () => {
             await firstStart;
             if (stage === 'establishing') expect(firstFailure).toBeInstanceOf(Error);
             pid ??= await readChildPid(second);
+            expect(owner.readProcessRoots()[0]?.requesterWorkAttributionV1).toEqual({
+                serverId: 'server', accountId: 'account', machineId: 'machine', installationId: 'installation',
+            });
             expect(process.kill(pid, 0)).toBe(true);
             await first?.dispose();
             const response = await second.request({ pathAndQuery: '/v1/models' });
@@ -550,6 +604,7 @@ describe('managed-services SVC09 owner', () => {
             clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' },
         });
         try {
+            if (!harness.owner.projectManagedProviderEndpointAccess) throw new Error('Managed Provider endpoint projection missing');
             const projection = await harness.owner.projectManagedProviderEndpointAccess({
                 service, endpoints: [{ endpointTemplateId: 'responses', servicePath: '/v1' }],
                 signal: new AbortController().signal, isCurrent: () => true,
@@ -600,7 +655,7 @@ describe('managed-services SVC09 owner', () => {
                 id: 'factory-gateway', mode: { kind: 'spawn', launch: { executable, args: ['-e',
                     'require("node:http").createServer((req,res)=>{res.end(req.url==="/pid"?String(process.pid):req.url)}).listen(Number(process.env.PORT),"127.0.0.1")',
                 ] }, endpoint: { kind: 'assignAndInject', port: { kind: 'allocated' }, inject: { portEnvironmentKey: 'PORT' } } },
-                healthCheck: { kind: 'http', target: { path: '/healthz' } },
+                healthCheck: { kind: 'http', target: { kind: 'servicePath', path: '/healthz' } },
                 requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
                 clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' },
             });
@@ -652,6 +707,7 @@ describe('managed-services SVC09 owner', () => {
         try {
             const first = await bind('first', isFirstCurrent).supervise(spec);
             const second = await bind('second', () => true).supervise(spec);
+            if (!harness.owner.projectManagedProviderEndpointAccess) throw new Error('Managed Provider endpoint projection missing');
             const projection = await harness.owner.projectManagedProviderEndpointAccess({ service: first,
                 endpoints: [{ endpointTemplateId: 'responses', servicePath: '/v1' }], signal, isCurrent: isFirstCurrent });
             if (!projection) throw new Error('Expected admitted first consumer projection');
@@ -766,13 +822,14 @@ describe('managed-services SVC09 owner', () => {
             requestAuth: { kind: 'connectedAccountConsumerAccessPath', injectEnvironmentKey: 'CONSUMER_ACCESS_PATH' },
             clientAccess: { kind: 'hostBearer', injectEnvironmentKey: 'MANAGEMENT_TOKEN', headerName: 'authorization', scheme: 'Bearer' },
         };
+        const gateway = { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine' };
         const bind = (consumerId: string, purpose: string) => harness.owner.bindScope(
             lifecycleScope({ occurrenceId: 'gateway-occurrence', operationId: consumerId }),
             harness.exec,
             {
                 managedProvider: {
                     realm: 'managedProviderStart', providerLocalId: 'gateway', isCurrent: () => true, isPhysicalOccurrenceCurrent: () => true,
-                    sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'connection', machineId: 'machine', consumerId },
+                    sharedGateway: { ...gateway, consumerId },
                 },
                 requestAuth: {
                     realm: 'managedProviderStart', capabilityPath: join(directory, `${consumerId}.capability`), isCurrent: () => true,
@@ -2475,15 +2532,17 @@ describe('managed-services SVC09 owner', () => {
         }
     });
 
-    it('applies the default timeout while response headers remain unavailable', async () => {
+    it('lets the caller own an ordinary prompt while response headers remain unavailable', async () => {
         vi.useFakeTimers();
         let fetchSignal: AbortSignal | undefined;
+        const response = deferred<Response>();
         let handle: ManagedServiceHandle | undefined;
         try {
             const hostFetch = vi.fn<typeof globalThis.fetch>(async (
                 _request,
                 init,
-            ) => await new Promise<Response>((_resolve, reject) => {
+            ) => await new Promise<Response>((resolve, reject) => {
+                void response.promise.then(resolve, reject);
                 fetchSignal = init?.signal ?? undefined;
                 if (!fetchSignal) {
                     reject(new Error('fetch signal missing'));
@@ -2507,16 +2566,14 @@ describe('managed-services SVC09 owner', () => {
                     },
                 },
             });
-            const result = expect(handle.request({
-                pathAndQuery: '/session/events',
-            })).rejects.toMatchObject({
-                code: 'plugin_managed_service_unavailable',
-            });
+            const result = handle.request({ pathAndQuery: '/session/native/message', method: 'POST' })
+                .then(value => ({ status: value.status }), error => ({ error }));
 
-            await vi.advanceTimersByTimeAsync(300_000);
+            await vi.advanceTimersByTimeAsync(300_001);
 
-            expect(fetchSignal?.aborted).toBe(true);
-            await result;
+            expect(fetchSignal?.aborted).toBe(false);
+            response.resolve(new Response(null, { status: 200 }));
+            expect(await result).toEqual({ status: 200 });
         } finally {
             await handle?.dispose();
             vi.useRealTimers();
@@ -6543,6 +6600,7 @@ describe('Project Local Services control composition', () => {
                         }
                         const settings = normalizeActionsSettingsV1(rawSettings);
                         const executor = createActionExecutor({
+                            ...createUnavailableActionTransportDeps(),
                             isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(
                                 actionId, settings, { surface: context.surface ?? null, authority: context.authority },
                             ),

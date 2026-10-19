@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { PluginWebhookActionResultV1Schema, type PluginWebhookClaimResultV1 } from '@happier-dev/protocol';
+import { PluginSourceCustodyV1Schema, PluginWebhookActionResultV1Schema, type PluginWebhookClaimResultV1 } from '@happier-dev/protocol';
 
 import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
 import { createUnavailablePluginServicesFactory } from '@/plugins/runtime/invocation/services/factory';
 import { createTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/targetActionRegistry';
-import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
+import { executeContributedAction, type PluginActionExecutionAttempt } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
@@ -39,9 +39,14 @@ describe('webhook delivery canonical Action admission', () => {
     let available = false;
     let attempts = 0;
     const effects: number[] = [];
+    const executions: PluginActionExecutionAttempt[] = [];
+    const occurrenceId = createPluginRuntimeOccurrenceId('acme.github');
     const target = createTargetActionInvocationRegistry({
       actions: [{
-        pluginId: 'acme.github', pluginVersion: '1.0.0', occurrenceId: createPluginRuntimeOccurrenceId('acme.github'), localId: 'handle-webhook',
+        pluginId: 'acme.github', pluginVersion: '1.0.0', occurrenceId, localId: 'handle-webhook',
+        sourceCustody: PluginSourceCustodyV1Schema.parse({
+          kind: 'managed', immutableGenerationId: 'webhook-handler-generation', installSource: 'archive',
+        }),
         definition: { id: 'handle-webhook', dangerLevel: 'safe', scopes: ['global'], surfaces: ['plugin'] },
         handler: async (input) => {
           const delivery = (input as { delivery: { attempt: number } }).delivery;
@@ -55,6 +60,7 @@ describe('webhook delivery canonical Action admission', () => {
       }),
       resolveHostBinding: createTargetActionHostBindingResolver(),
       createServices: createUnavailablePluginServicesFactory(),
+      readCurrentPluginOccurrenceId: (pluginId) => pluginId === 'acme.github' ? occurrenceId : null,
     });
     // Only the catalog fields consumed by this Action corridor are populated;
     // dispatch, preparation, policy and invocation below are the real owners.
@@ -63,6 +69,7 @@ describe('webhook delivery canonical Action admission', () => {
         pluginId: 'acme.github', definition: { id: 'handle-webhook', surfaces: { plugin: true } },
       }]]) },
       targetActionInvocations: target,
+      readPluginOccurrenceId: (pluginId: string) => pluginId === 'acme.github' ? occurrenceId : null,
     } as unknown as ResolvedExecutablePluginRuntimeRegistry;
     const processDelivery = () => processClaimedPluginWebhookDeliveryV1({
       claim: claim(), credentials: { token: 'token', encryption: null },
@@ -79,6 +86,7 @@ describe('webhook delivery canonical Action admission', () => {
           runtimeRegistry, actionId: 'acme.github/handle-webhook', input,
           context: { surface: 'plugin', ...options },
         });
+        executions.push(execution);
         return execution.matched && execution.result.ok
           ? PluginWebhookActionResultV1Schema.parse(execution.result.result)
           : { kind: 'retry', code: 'handler_unavailable' };
@@ -88,7 +96,12 @@ describe('webhook delivery canonical Action admission', () => {
       await processDelivery();
       expect({ attempts, effects }).toEqual({ attempts: 0, effects: [] });
       available = true;
-      await expect(processDelivery()).resolves.toEqual({ kind: 'settled', state: 'succeeded' });
+      const result = await processDelivery();
+      expect(executions.at(-1)).toEqual({
+        matched: true,
+        result: { ok: true, result: { kind: 'settled', disposition: 'accepted' } },
+      });
+      expect(result).toEqual({ kind: 'settled', state: 'succeeded' });
       expect({ attempts, effects }).toEqual({ attempts: 1, effects: [1] });
     } finally {
       target.dispose();

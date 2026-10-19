@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it, onTestFailed, vi } from 'vitest';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import type { ManagedServiceHandle } from '@happier-dev/plugin-sdk/managed-services';
 
 import { waitForProcessExit } from '@/testkit/process/spawn';
@@ -13,6 +14,8 @@ import type { ResolvedManagedProviderRuntimeInvocationServices } from './resolve
 import type { PluginRuntimeRegistryLease } from './reload/controller';
 import { createDaemonPluginRegistryRuntimeLifecycle } from './reload/registryRuntimeLifecycle';
 import { createSharedGatewayRegistryTestkit } from './sharedGatewayRegistry.testkit';
+import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
+import { configuration } from '@/configuration';
 
 const filesystemBoundary = vi.hoisted(() => ({ beforeStat: undefined as undefined | ((path: unknown) => Promise<void>) }));
 // Only the operating-system read may pause; every stat and all admission,
@@ -51,7 +54,7 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
         expect(runtime.isCurrent(), `${consumerId} exact retained native runtime currentness`).toBe(true);
         expect(lease.registry.readPluginOccurrenceId?.(pluginId)).toBe(runtime.activationOccurrenceId);
         const invocation = await lease.registry.createManagedProviderRuntimeInvocationServices?.({ identity,
-            sharedGateway: { homeId: 'home', accountId: 'account', connectionId: 'pc_shared', machineId: 'machine', consumerId },
+            sharedGateway: { homeId: 'home', accountId: 'account', connectionId: ProviderConnectionIdSchema.parse('pc_shared'), machineId: 'machine', consumerId },
             ...(consumerId === 'explicit-start' ? { operationClaim: { kind: 'explicitStart' as const, machineId: 'machine' } } : {}),
             purposeBindings,
             signal: new AbortController().signal, isCurrent: () => true,
@@ -59,7 +62,7 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
         if (!invocation) throw new Error('Expected admitted shared invocation');
         if (stage === 'unbound') expect(invocation.lifetime).toBeUndefined();
         invocations.push(invocation);
-        const result = await runtime.runtime.start({ connectionId: 'pc_shared', reason: 'catalogProbe', endpointTemplateIds: ['api'] }, {
+        const result = await runtime.runtime.start({ connectionId: ProviderConnectionIdSchema.parse('pc_shared'), connectionRevision: 1, reason: 'catalogProbe', endpointTemplateIds: ['api'] }, {
             managedServices: invocation.managedServices, connectedAccounts: invocation.connectedAccounts, signal: new AbortController().signal,
         });
         handles.push(result.service);
@@ -80,6 +83,7 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
     try {
         await install(pluginId, '1.0.0', true);
         await install(peerId, '1.0.0', false);
+        const installation = await readOrCreateInstallationIdentity(join(fixture.happyHomeDir, 'installation-identity.json'));
         phase = 'initial registry';
         const initial = await controller.acquireRuntimeRegistry({ resolveRuntimeRegistry: () => createRegistry(new Set()) });
         await initial.release();
@@ -106,6 +110,16 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
         const firstServing = !pausesResolution ? await firstPending : null;
         if (pausesResolution) await statEntered;
         const incumbentPid = firstServing ? await readPid(firstServing.service) : null;
+        if (stage === 'serving') {
+            const attribution = { serverId: configuration.activeServerId, accountId: 'account', machineId: 'machine',
+                installationId: installation.installationId };
+            expect(firstServing!.lease.registry.projectManagedServices.readResourceTargets()).toEqual([
+                expect.objectContaining({ root: expect.objectContaining({ pid: incumbentPid, requesterWorkAttributionV1: attribution }) }),
+            ]);
+            expect((await firstServing!.lease.registry.projectManagedServices.activity.read()).items).toEqual([
+                expect.objectContaining({ attribution, state: 'active' }),
+            ]);
+        }
         const explicitBinding = { homeId: 'home', accountId: 'account', connectionId: 'pc_shared', machineId: 'machine', consumerId: 'explicit-start' };
         let explicit: Awaited<ReturnType<typeof acquire>> | undefined;
         if (stage === 'explicitStart') {
@@ -164,7 +178,7 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
             let published!: () => void;
             const publication = new Promise<void>(resolve => { published = resolve; });
             const adoption = controller.adoptPreparedRuntimeRegistry({ registry: changed, changedPluginIds: [pluginId],
-                runningSessionDisposition: 'keepRunningSessions', beforePublish: async (_registry, publish) => { publish(); published(); } });
+                runningSessionDisposition: 'retainRunningSessions', beforePublish: async (_registry, publish) => { publish(); published(); } });
             void adoption.catch(() => undefined);
             await publication;
             resumeStat();
@@ -178,7 +192,7 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
             phase = 'physical source withdrawal';
             await install(pluginId, '1.0.1', true);
             const changed = await createRegistry(new Set([pluginId]));
-            await controller.adoptPreparedRuntimeRegistry({ registry: changed, changedPluginIds: [pluginId], runningSessionDisposition: 'keepRunningSessions' });
+            await controller.adoptPreparedRuntimeRegistry({ registry: changed, changedPluginIds: [pluginId], runningSessionDisposition: 'retainRunningSessions' });
             await expect(firstServing!.service.request({ pathAndQuery: '/pid' })).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
             expect(await waitForProcessExit(incumbentPid!)).toBe(true);
             await expect(firstServing!.service.dispose()).resolves.toBeUndefined();
@@ -195,7 +209,7 @@ it.each(['serving', 'resolving', 'explicitStart', 'withdrawn', 'withdrawnResolvi
         phase = 'unrelated publication';
         await install(peerId, '1.0.1', false);
         const next = await createRegistry(new Set([peerId]));
-        await controller.adoptPreparedRuntimeRegistry({ registry: next, changedPluginIds: [peerId], runningSessionDisposition: 'keepRunningSessions' });
+        await controller.adoptPreparedRuntimeRegistry({ registry: next, changedPluginIds: [peerId], runningSessionDisposition: 'retainRunningSessions' });
         phase = 'second consumer';
         const secondPending = acquire('new-consumer');
         void secondPending.catch(() => undefined);

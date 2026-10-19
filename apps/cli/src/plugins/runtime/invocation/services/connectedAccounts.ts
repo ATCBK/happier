@@ -21,6 +21,7 @@ import type {
     PluginContributionRef,
 } from '@happier-dev/plugin-sdk';
 import { isPluginError, PluginError, type Disposable } from '@happier-dev/plugin-sdk';
+import { runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 import type {
     PluginConnectedAccountBindingScope,
     PluginInvocationServicesSeed,
@@ -107,7 +108,11 @@ export type StablePluginConnectedAccountsOwner = Readonly<{
         input: StablePluginConnectedAccountsAuthorizedPurpose & Readonly<{
             exactPurposeBindingSubjectId?: string;
             sessionId?: string;
-            listener(): Promise<void>;
+            /** Host-private affected target, including the previous account on removal. */
+            listener(change?: Readonly<{
+                account: PluginConnectedAccountRef | null;
+                group?: Readonly<{ groupId: string; generation: number }>;
+            }>): Promise<void>;
         }>,
     ): Disposable;
 }>;
@@ -710,7 +715,7 @@ export function createStablePluginConnectedAccountsHost(
                     const signals = combineSignals(seed.signal, optionSnapshot.signal);
                     assertCurrent(seed);
                     try {
-                        const result = await owner.materialize({
+                        const result = await runTracedExternalActionInnerStage('contributed.connected_account.materialize', () => owner.materialize({
                             ...authorizedPurpose(seed, scope),
                             ...(exactPurposeBindingSubjectId
                                 ? { exactPurposeBindingSubjectId }
@@ -724,7 +729,7 @@ export function createStablePluginConnectedAccountsHost(
                                 : {}),
                             request: requestSnapshot,
                             signal: signals.signal,
-                        });
+                        }));
                         assertCurrent(seed);
                         const snapshot = snapshotMaterialization(requestSnapshot, result);
                         registerMaterializationForRedaction(snapshot, seed, hostOptions);
@@ -780,7 +785,7 @@ export function createStablePluginConnectedAccountsHost(
                     const signals = combineSignals(seed.signal, options.signal);
                     assertCurrent(seed);
                     try {
-                        const result = await owner.materializeListedAccount({
+                        const result = await runTracedExternalActionInnerStage('contributed.connected_account.materialize_listed', () => owner.materializeListedAccount({
                             ...authorizedPurpose(seed, scope),
                             ...(exactPurposeBindingSubjectId
                                 ? { exactPurposeBindingSubjectId }
@@ -789,7 +794,7 @@ export function createStablePluginConnectedAccountsHost(
                             account: requestSnapshot.account,
                             request: requestSnapshot.materialization,
                             signal: signals.signal,
-                        });
+                        }));
                         assertCurrent(seed);
                         const snapshot = snapshotMaterialization(
                             requestSnapshot.materialization,

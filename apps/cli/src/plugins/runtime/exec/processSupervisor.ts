@@ -10,7 +10,7 @@ import type {
 } from '@happier-dev/plugin-sdk/exec';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
-import { captureProcessTree, terminateProcessTree, type ProcessTreeCapture } from '@/processes/terminate/terminateProcessTree';
+import { captureProcessTree, createProcessTreeTerminator, terminateProcessTree, type ProcessTreeCapture } from '@/processes/terminate/terminateProcessTree';
 import {
     removeProcessCustodyHandshakeFile,
     waitForProcessCustodyHandshake,
@@ -126,6 +126,8 @@ type SpawnSupervisedPluginProcessInput = Readonly<{
     waitForGracefulRootExitBeforeTreeStop?: true;
     /** Native containment facts; present only when the command is the custody helper. */
     processCustody?: SpawnProcessCustodySpec;
+    /** Host-only native observation/termination boundaries, never plugin options. */
+    processTreeSystemBoundary?: Parameters<typeof createProcessTreeTerminator>[0];
     spawnOptions?: Omit<SpawnOptionsWithoutStdio, 'cwd' | 'env'>;
     recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
     readSpawnFailureLimits?: SpawnFailureLimitsReader;
@@ -185,6 +187,8 @@ function terminationIncompleteError(cause?: unknown): PluginError {
 }
 
 export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcessInput): SupervisedPluginProcess {
+    const terminateCustody = input.processTreeSystemBoundary
+        ? createProcessTreeTerminator(input.processTreeSystemBoundary) : terminateProcessTree;
     const ownerTag = (input.env ?? process.env)[PROCESS_OWNER_ENV_KEY];
     const processOwner = parseProcessOwnerTag(ownerTag)?.owner;
     const sharedOwner = ownerTag === undefined || processOwner?.kind === 'session'
@@ -410,7 +414,7 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
                     if (input.processCustody) {
                         // Native custody establishes this generation-unique Job.
                         // One terminator rereads its membership and each native identity.
-                        const result = await terminateProcessTree({ targets: [],
+                        const result = await terminateCustody({ targets: [],
                             containment: { kind: 'windows_job', name: input.processCustody.jobName }, policy: 'kill' });
                         if (result.status !== 'complete') throw terminationIncompleteError();
                         return;

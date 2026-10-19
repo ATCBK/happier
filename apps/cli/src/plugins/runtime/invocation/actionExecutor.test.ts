@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from '@happier-dev/plugins-channels/manifest';
 import type { PluginActionDangerLevelV2 } from '@happier-dev/protocol';
@@ -61,7 +62,7 @@ describe('target action executor', () => {
     const localId = 'connection/pairing-cancel-v1';
     const parsed = parsePluginManifest(PLUGIN_MANIFEST);
     if (!parsed.ok) throw new Error('Channels manifest admission failed.');
-    const declaration = parsed.manifest.contributes.actions?.find((action) => action.id === localId);
+    const declaration = normalizePluginManifestV2(parsed.manifest).contributes.actions.find((action) => action.id === localId);
     if (!declaration) throw new Error('Missing Channels pairing cancellation declaration.');
     const testkit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: CHANNELS_PLUGIN });
     const actionInput = { generationId: 'retired-pairing', challengeId: 'unknown-challenge' };

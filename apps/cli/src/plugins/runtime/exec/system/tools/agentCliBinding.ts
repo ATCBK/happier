@@ -12,12 +12,57 @@ import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import {
   resolveAgentCliLaunchSpecForRuntime,
   type AgentCliLaunchSpec,
+  type BoundAgentCliLaunchSpec,
 } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 
 import type { PluginExecSystemToolDefinition } from './definitions';
 import { createPluginExecSystemToolResolver } from './resolveGrant';
+
+/** Shared composition for current and retained Agent CLI system-tool consumers. */
+export function createDeclaredAgentCliSystemToolService<T extends ExecSystemToolServiceV1 | undefined>(params: Readonly<{
+    agentId: string;
+    localAgentId: string;
+    binding?: AgentCliSystemToolBinding;
+    runtimeSpec?: AgentCliRuntimeDescriptor | null;
+    agentCliLaunch?: BoundAgentCliLaunchSpec;
+    definitions: readonly PluginExecSystemToolDefinition[];
+    processEnv: NodeJS.ProcessEnv;
+    delegate: T;
+}>): ExecSystemToolServiceV1 | T {
+    if (params.agentCliLaunch && params.agentCliLaunch.localAgentId !== params.localAgentId) {
+        throw new PluginError({
+            code: 'plugin_agent_cli_system_tool_unavailable',
+            message: `Agent '${params.agentId}' CLI launch binding does not match its declared identity`,
+        });
+    }
+    const binding = params.binding;
+    if (!binding) return params.delegate;
+    const definition = params.definitions.find(candidate => candidate.toolId === binding.toolId);
+    if (!definition || !params.delegate) {
+        throw new PluginError({
+            code: 'plugin_agent_cli_system_tool_unavailable',
+            message: `Agent '${params.agentId}' CLI system tool is unavailable`,
+        });
+    }
+    if (params.agentCliLaunch) {
+        return createRetainedAgentCliSystemToolService({
+            agentId: params.agentId, binding, definition,
+            launch: params.agentCliLaunch.spec, delegate: params.delegate,
+        });
+    }
+    if (!params.runtimeSpec) {
+        throw new PluginError({
+            code: 'plugin_agent_cli_runtime_metadata_unavailable',
+            message: `Agent '${params.agentId}' CLI runtime metadata is unavailable`,
+        });
+    }
+    return createAgentCliSystemToolService({
+        agentId: params.agentId, binding, definition,
+        runtimeSpec: params.runtimeSpec, processEnv: params.processEnv, delegate: params.delegate,
+    });
+}
 
 export type AgentCliSystemToolBinding = Readonly<{
     toolId: string;

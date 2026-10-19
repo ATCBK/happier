@@ -21,6 +21,8 @@ import {
     type PluginAccountCollectionContributionV1,
 } from '@happier-dev/protocol';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { logger } from '@/ui/logger';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import type { AccountKvTransaction } from '@happier-dev/plugin-sdk/storage';
@@ -333,7 +335,7 @@ describe('Account plugin Data storage host', () => {
         // calls: repeating it for each Action was the profiled daemon hotspot.
         const preparedReads = { declarationReads, compilerSchemaReads };
         expect(declarationReads).toBeGreaterThan(0);
-        expect(compilerSchemaReads).toBeGreaterThan(0);
+        expect(compilerSchemaReads).toBe(1);
         firstController.abort();
         if (process.env.HAPPIER_RUN_DAEMON_STALL_BENCH === '1') {
             const started = performance.now();
@@ -918,6 +920,53 @@ describe('Account plugin Data storage host', () => {
                 return readResponse;
             };
         }
+
+        it('measures a shared background claim wait and its HTTP result without publishing request content', async () => {
+            vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+            const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+            let release!: () => void;
+            let started!: () => void;
+            const claimStarted = new Promise<void>(resolve => { started = resolve; });
+            const claimBoundary = new Promise<void>(resolve => { release = resolve; });
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => declaredManifest,
+                scopeKey: () => 'private-account-scope-marker',
+                post: async (url) => {
+                    if (url === CLAIM_URL) { started(); await claimBoundary; return { status: 200, data: {} }; }
+                    return { status: 200, data: { row: null, absenceEpoch: 0 } };
+                },
+            });
+            try {
+                const collection = bind().collection(collectionDefinition);
+                await claimStarted;
+                const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+                const pending = runTracedExternalActionStage('action.invoke', `rpc_${requestId}`, 'contributed.target_invoke', () =>
+                    collection.get('private-row-marker'));
+                release();
+                await expect(pending).resolves.toBeNull();
+                const records = sink.mock.calls.filter(([message]) => message === '[external-action-stage]');
+                const claimHttp = records.find(([, record]) => record && typeof record === 'object'
+                    && 'stage' in record && record.stage === 'collection.http.claim.end');
+                expect(claimHttp).toEqual(['[external-action-stage]', expect.objectContaining({
+                    claimAttemptId: expect.any(String), httpStatus: 200, elapsedMs: expect.any(Number),
+                })]);
+                const claimRecord = claimHttp?.[1];
+                const claimId = claimRecord && typeof claimRecord === 'object' && 'claimAttemptId' in claimRecord
+                    ? claimRecord.claimAttemptId : undefined;
+                expect(claimId).toEqual(expect.any(String));
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    rootRequestId: requestId, stage: 'collection.writer_claim.wait.end', claimAttemptId: claimId,
+                    elapsedMs: expect.any(Number),
+                })]);
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    stage: 'collection.writer_claim.start', claimAttemptId: claimId, claimAbsent: true,
+                })]);
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    rootRequestId: requestId, stage: 'collection.http.get.end', httpStatus: 200,
+                })]);
+                expect(JSON.stringify(records)).not.toContain('private-');
+            } finally { release(); sink.mockRestore(); vi.unstubAllEnvs(); }
+        });
 
         it('claims a daemon-selected plugin declaration once per Account before its first Collection operation', async () => {
             const calls: string[] = [];

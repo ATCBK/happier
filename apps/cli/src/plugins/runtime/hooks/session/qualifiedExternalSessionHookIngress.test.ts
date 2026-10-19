@@ -149,12 +149,16 @@ function createRuntimeLease(
             // the wrapper is exercised against the real leaf in
             // `qualifiedExternalSessionHookDaemonIngress.test.ts`.
             externalSessions: {
+                ...bindFixtureExternalSessions({
+                    resolveSource,
+                    resolveLinkIdentity,
+                    resolveLinkedIdentity: vi.fn(),
+                    listCandidates: vi.fn(),
+                    pageTranscript: vi.fn(),
+                    readAfterTranscript: vi.fn(),
+                }),
                 resolveSource,
                 resolveLinkIdentity,
-                resolveLinkedIdentity: vi.fn(),
-                listCandidates: vi.fn(),
-                pageTranscript: vi.fn(),
-                readAfterTranscript: vi.fn(),
             } satisfies BoundedAgentExternalSessionsContribution,
             occurrenceId: 'plugin-generation-1',
             retirementSignal: retirement.signal,
@@ -334,6 +338,18 @@ describe('qualified External Session hook ingress', () => {
             isCurrent: () => !retirement.signal.aborted,
             async release() {},
         };
+        // The real leaf now carries accounting evidence beside its source.
+        // Prove the canonical invocation reader accepts that same envelope
+        // before handing its source to the hook ingress reader below.
+        await expect(runtime.externalSessions.resolveSource({
+            source: { kind: 'claudeConfig' },
+            signal: retirement.signal,
+            deadlineAtMs: Date.now() + AGENT_EXTERNAL_SESSION_HOOK_LIMITS.totalHookDeadlineMs,
+            maxSerializedBytes: 262_144,
+        })).resolves.toMatchObject({ ok: true, value: {
+            source: { kind: 'claudeConfig', configDir },
+            accountingSource: { rootPath: configDir },
+        } });
         type IngressParams = Parameters<
             typeof createQualifiedExternalSessionHookIngress
         >[0];
@@ -487,6 +503,22 @@ describe('qualified External Session hook ingress', () => {
         expect(harness.resolveCurrentLink).not.toHaveBeenCalled();
         expect(harness.readAutoLinkPolicy).not.toHaveBeenCalled();
         expect(harness.ensureLink).not.toHaveBeenCalled();
+        expect(harness.admitFacts).not.toHaveBeenCalled();
+    });
+
+    it.each<Readonly<Record<string, JsonValue>>>([
+        { unexpectedAuthority: true },
+        { accountingSource: { rootPath: '/unvalidated' } },
+        { transcriptMediaReadRoots: ['relative-path'] },
+    ])('rejects invalid source resolution evidence before link lookup (%j)', async (fields) => {
+        const runtime = createRuntimeLease();
+        const response = { ok: true as const, value: { source, ...fields } };
+        runtime.resolveSource.mockResolvedValue(response);
+        const harness = createHarness({ runtime });
+
+        await expect(harness.ingress.handleAuthenticatedEvent(delivery(harness.principal.token)))
+            .resolves.toEqual({ state: 'rejected' });
+        expect(harness.resolveCurrentLink).not.toHaveBeenCalled();
         expect(harness.admitFacts).not.toHaveBeenCalled();
     });
 

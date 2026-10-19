@@ -141,7 +141,8 @@ import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionR
 import { buildExecutionRunConfiguration } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 
-import { createDefaultPluginTerminalHostService, createDefaultPreparedTerminalHostOwner, createPluginTerminalHostService } from './terminalHost';
+import { createDefaultPluginTerminalHostService, createDefaultPreparedTerminalHostOwner, createPluginTerminalHostService, installAgentChildLaunchEnvironmentTransformerForTerminalHost } from './terminalHost';
+import { createStablePluginExecService } from '../invocation/services/exec';
 
 describe('plugin terminal-host creation rollback', () => {
     it.skipIf(process.platform === 'win32')('opens explicit-model Claude child tmux hosts without colliding with their parent or sibling Run', async () => {
@@ -398,6 +399,13 @@ describe('plugin terminal-host creation rollback', () => {
             inventory.socketPath = api.socketPath;
             const owner = createDefaultPreparedTerminalHostOwner({ happyHomeDir, readSessionId: () => 'cleanup-session',
                 herdrRuntime: { herdrSessionName: 'work', herdrSocketPath: api.socketPath } });
+            const exec = createStablePluginExecService({
+                allowedExecutables: [], signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+                resolveExecutable: async () => { throw new Error('Prepared Agent must not resolve another executable'); },
+                resolvePath: async () => happyHomeDir,
+                prepareAgentNativeLaunch: async () => { throw new Error('Prepared launch must not evaluate the Project twice'); },
+            });
+            const binding = installAgentChildLaunchEnvironmentTransformerForTerminalHost(owner.service, environment => environment, { exec });
             const created = await owner.createPreparedHost({ preference: 'herdr', sessionName: 'work', workingDirectory: happyHomeDir,
                 spawnArgv: [process.execPath, '--version'], spawnEnv: {} });
             const extra = join(dirname(created.launch.specPath), 'retained.fixture');
@@ -411,6 +419,7 @@ describe('plugin terminal-host creation rollback', () => {
                 expect(api.requests.filter(request => request.method === 'pane.close')).toHaveLength(1);
                 expect(await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId: 'cleanup-session' })).toBeNull();
             } finally {
+                binding.dispose();
                 await unlink(extra).catch(() => undefined);
                 await created.launch.discard();
             }

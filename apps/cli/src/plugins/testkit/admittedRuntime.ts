@@ -37,6 +37,26 @@ type AuthoredAdmittedPluginRuntimeFixture = Awaited<ReturnType<typeof createAdmi
     preparedActivationGraphsByPluginId: Map<string, PreparedPluginActivationGraph>;
 }>;
 
+/** Retire a fixture's publication without ending the caller-owned daemon lifetime. */
+export async function retireAdmittedPluginRuntimeRegistry(params: Readonly<{
+    controller: PluginReloadController;
+    registry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>>;
+    happyHomeDir?: string;
+}>) {
+    if (!params.controller.isRuntimeRegistryCurrent(params.registry)) return;
+    await params.controller.adoptPreparedRuntimeRegistry({
+        registry: await resolveExecutablePluginRuntimeRegistry({
+            happyHomeDir: params.happyHomeDir,
+            pluginIds: [],
+            contributes: createResolvedContributionRegistry({}),
+            currentGlobalExternalSessionsRouter: params.controller.currentGlobalExternalSessions,
+            targetedContributions: params.controller.getTargetedContributionsOwner(),
+        }),
+        changedPluginIds: params.registry.contributes.activationTargets.map(target => target.pluginId),
+        runningSessionDisposition: 'retainRunningSessions',
+    });
+}
+
 /** Exercises the real source-admission, activation, and publication owners. */
 export async function createAdmittedPluginRuntimeFixture(params: Readonly<{
     happyHomeDir?: string;
@@ -47,6 +67,7 @@ export async function createAdmittedPluginRuntimeFixture(params: Readonly<{
     const happyHomeDir = params.happyHomeDir
         ?? await mkdtemp(join(tmpdir(), 'happier-admitted-plugin-runtime-'));
     const controller = params.controller ?? createPluginReloadController({ happyHomeDir });
+    const ownsController = params.controller === undefined;
     const developmentRoots = createDaemonPluginDevelopmentRootsOwner({
         happyHomeDir,
         // These fixtures consume product-build membership for exact first-party
@@ -94,7 +115,11 @@ export async function createAdmittedPluginRuntimeFixture(params: Readonly<{
                     try {
                         await lease.release();
                     } finally {
-                        await controller.shutdown();
+                        if (ownsController) {
+                            await controller.shutdown();
+                        } else {
+                            await retireAdmittedPluginRuntimeRegistry({ controller, registry: lease.registry, happyHomeDir });
+                        }
                     }
                 } finally {
                     await developmentRoots.stop();
@@ -104,7 +129,7 @@ export async function createAdmittedPluginRuntimeFixture(params: Readonly<{
         };
     } catch (error) {
         try {
-            await controller.shutdown();
+            if (ownsController) await controller.shutdown();
         } finally {
             await developmentRoots.stop();
             if (ownsHome) await rm(happyHomeDir, { recursive: true, force: true });
@@ -123,6 +148,7 @@ export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonl
     plugins: readonly Readonly<{
         manifest: unknown;
         files: Readonly<Record<string, string>>;
+        replaceExisting?: boolean;
         instantiateCommittedModule?: (
             module: PluginDaemonModuleNamespace,
         ) => PluginDaemonModuleNamespace | Promise<PluginDaemonModuleNamespace>;
@@ -130,6 +156,8 @@ export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonl
     happyHomeDir?: string;
     controller?: PluginReloadController;
     runtimeOptions?: RuntimeOptions;
+    /** Project an isolated declaration universe after these physical plugins are seeded. */
+    resolveContributes?(happyHomeDir: string): Promise<NonNullable<RuntimeOptions['contributes']>>;
     /** Omit the explicit plugin scope to exercise normal demand-only startup. */
     coldStart?: boolean;
 }>): Promise<AuthoredAdmittedPluginRuntimeFixture> {
@@ -157,6 +185,7 @@ export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonl
             }
             await seedCurrentLocalPathPluginFixture({
                 happyHomeDir, pluginRoot, pluginId: manifest.id, manifestVersion: manifest.version,
+                replaceExisting: plugin.replaceExisting,
             });
         }
         const committed = await readCurrentCommittedPluginGenerations(resolvePluginStorePaths({ happyHomeDir }));
@@ -200,10 +229,14 @@ export async function createAuthoredAdmittedPluginRuntimeFixture(params: Readonl
             ...(params.controller ? { controller: params.controller } : {}),
             runtimeOptions: {
                 ...params.runtimeOptions,
+                ...(params.resolveContributes ? {
+                    contributes: await params.resolveContributes(happyHomeDir),
+                    generationAuthority: committed,
+                } : {}),
                 // Use the installed fixture's real declaration producer without
                 // activating unrelated bundled background services. Omit the
                 // plugin-id scope so normal demand-only activation remains real.
-                ...(params.coldStart && !params.runtimeOptions?.contributes ? {
+                ...(params.coldStart && !params.runtimeOptions?.contributes && !params.resolveContributes ? {
                     contributes: createResolvedContributionRegistry(await resolvePluginContributes({ happyHomeDir })),
                 } : {}),
                 ...(params.coldStart ? {} : { pluginIds: params.runtimeOptions?.pluginIds ?? manifests.map((manifest) => manifest.id) }),

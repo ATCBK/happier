@@ -86,7 +86,7 @@ describe('updateActivePluginAccountSettings', () => {
 
         await updateActivePluginAccountSettings(
             {
-                operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }],
+                operations: [{ op: 'set', key: 'sessionPendingQueueDeliveryTiming', value: 'after_foreground_ready' }],
             },
             {
                 readCredentials: async () => credentials,
@@ -324,7 +324,7 @@ describe('updateActivePluginAccountSettings', () => {
 
         await expect(updateActivePluginAccountSettings(
             {
-                operations: [{ op: 'set', key: 'reviewPromptLikedApp', value: true }],
+                operations: [{ op: 'set', key: 'sessionPendingQueueDeliveryTiming', value: 'after_foreground_ready' }],
             },
             {
                 assertCurrent,

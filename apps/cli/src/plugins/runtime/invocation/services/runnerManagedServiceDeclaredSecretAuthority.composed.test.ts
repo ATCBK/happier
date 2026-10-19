@@ -32,6 +32,7 @@ import {
     createDaemonPluginSecretCustodyRouter,
 } from '@/plugins/runtime/context/secrets';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { verifyRunnerAgentBindingAgainstGeneration } from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
 import {
     createImmutablePluginGenerationRecordFromSource,
     persistValidatedAgentSessionRunnerFactories,
@@ -173,7 +174,7 @@ function createStubDaemon(input: Readonly<{
                     requestId: operation.requestId,
                     ...await resolveRunnerManagedServiceDeclaredSecret({
                         paths: input.paths,
-                        binding: input.binding,
+                        attested: await verifyRunnerAgentBindingAgainstGeneration({ paths: input.paths, binding: input.binding }),
                         request: {
                             phase: operation.phase,
                             secretId: operation.secretId,
@@ -577,7 +578,7 @@ describe('runner managed-service declared-secret authority', () => {
             >[0]['request'],
         ) => await resolveRunnerManagedServiceDeclaredSecret({
             paths: fixture.paths,
-            binding: fixture.retainedAgent,
+            attested: await verifyRunnerAgentBindingAgainstGeneration({ paths: fixture.paths, binding: fixture.retainedAgent }),
             request,
         });
 

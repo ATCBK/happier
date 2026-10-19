@@ -47,6 +47,7 @@ function fixture(
   const triggers: readonly ('@' | '$' | '/')[] = options.triggers ?? ['@'];
   const registry = createTargetComposerReferenceRegistry({
     targetRegistrations: [entry],
+    async activateReferenceOnDemand() {},
     resolveOccurrenceLifecycle: () => ({
       isCurrent: () => current,
       retirementSignal: retirement.signal,
@@ -204,9 +205,11 @@ describe('target composer reference registry', () => {
     try {
       let observedSignal: AbortSignal | undefined;
       const pending = deferred<Array<{ id: string; label: string }>>();
+      const started = deferred<void>();
       const subject = fixture({
         search: vi.fn<ComposerReferenceRuntime['search']>(async (_query, context) => {
           observedSignal = context.signal;
+          started.resolve();
           return await pending.promise;
         }),
       });
@@ -217,8 +220,8 @@ describe('target composer reference registry', () => {
         trigger: '@',
         signal: new AbortController().signal,
       });
-      expect(subject.runtime.search).toHaveBeenCalledTimes(1);
       const outcome = search.then((value) => ({ value }), (error: unknown) => ({ error }));
+      await started.promise;
 
       await vi.advanceTimersByTimeAsync(5_001);
       pending.resolve([{ id: 'issue:42', label: 'Issue 42' }]);

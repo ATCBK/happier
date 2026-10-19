@@ -28,7 +28,6 @@ import type {
     EngineResolutionAgent,
     EngineResolutionBackend,
 } from '@/agent/runtime/registry/engineRegistryTypes';
-import { createProviderTerminalDisplay } from '@/ui/providers/providerTerminalDisplay';
 import {
     getAgentResumeConfig,
     resolveModelSelectionIntentFromSessionMetadata,
@@ -275,7 +274,10 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
         const bindingEpoch = runtimeBindingEpoch;
         currentOperations.setOnPromptDeliveryOutcome(promptDeliveryOutcomeHandler
             ? (outcome) => {
-                if (runtimeClosed || bindingEpoch !== runtimeBindingEpoch) return;
+                // Retirement itself publishes exact unresolved custody. Keep
+                // that path bound until native disposal has finished; all
+                // other runtime sources are fenced as soon as closing begins.
+                if (bindingEpoch !== runtimeBindingEpoch) return;
                 promptDeliveryOutcomeHandler?.(outcome);
             }
             : null);
@@ -566,6 +568,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             return currentOperations.readSessionIdentity();
         },
         readSessionStartupInstructions: () => currentOperations.readSessionStartupInstructions?.() ?? null,
+        readSessionStartupInstructionsSupport: () => currentOperations.readSessionStartupInstructionsSupport?.(),
         ...(hasRefreshSkills ? {
             async refreshSkills(request: Parameters<NonNullable<PluginRuntimeHookOperations['refreshSkills']>>[0],
                 options?: Parameters<NonNullable<PluginRuntimeHookOperations['refreshSkills']>>[1]) {
@@ -594,7 +597,6 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
                 }
                 await replacementLifecycle?.beforeReplacement();
                 runtimeClosed = true;
-                runtimeBindingEpoch += 1;
                 let detachError: unknown;
                 let detachFailed = false;
                 try {
@@ -608,6 +610,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
                     await currentOperations.resetOrDisposeRuntime(reason);
                 } finally {
                     runtimeClosed = true;
+                    runtimeBindingEpoch += 1;
                 }
                 if (detachFailed) throw detachError;
                 if (nextSessionOpenIntent) {
@@ -944,11 +947,6 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
             ? { registeredAgentIdentity: params.registeredAgentIdentity }
             : {}),
     });
-    const TerminalDisplay = createProviderTerminalDisplay({
-        title: displayName,
-        footerName: displayName,
-        accentColor: 'cyan',
-    });
     const providerSessionMetadataKey = resolveNativeAgentVendorResumeIdField(policyAgentId);
     const augmentSessionMetadata: HostSessionRuntimeConfig['augmentSessionMetadata'] = (metadata) => {
         const projected = params.sessionProjection?.augmentSessionMetadata?.(metadata) ?? metadata;
@@ -1001,7 +999,14 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
                 ...(params.agent.catalogEntry?.runtimeActivityApplicability !== undefined
                     ? { runtimeActivityApplicability: params.agent.catalogEntry.runtimeActivityApplicability }
                     : {}),
-                terminalDisplay: TerminalDisplay,
+                loadTerminalDisplay: async () => {
+                    const { createProviderTerminalDisplay } = await import('@/ui/providers/providerTerminalDisplay');
+                    return createProviderTerminalDisplay({
+                        title: displayName,
+                        footerName: displayName,
+                        accentColor: 'cyan',
+                    });
+                },
                 formatPromptErrorMessage: (error) => `Error: ${error instanceof Error ? error.message : String(error)}`,
                 ...(providerSessionMetadataKey ? { providerSessionMetadataKey } : {}),
                 createNativeRuntime: async (runtimeParams) => {

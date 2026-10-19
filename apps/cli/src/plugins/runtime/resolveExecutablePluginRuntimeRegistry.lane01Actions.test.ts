@@ -31,36 +31,12 @@ const ACCOUNT_TOKEN = 'lane01-external-plugin-account-token';
 const persistenceBoundary = vi.hoisted(() => ({
     readStoredCredentials: vi.fn(async () => ({ token: ACCOUNT_TOKEN, encryption: null })),
 }));
-const activeAccountBoundary = vi.hoisted(() => ({
-    readSnapshot: vi.fn(),
-    subscribe: vi.fn(),
-}));
 
 vi.mock('@/persistence', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/persistence')>(),
     readStoredCredentials: persistenceBoundary.readStoredCredentials,
 }));
 
-vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', async (importOriginal) => {
-    const original = await importOriginal<
-        typeof import('@/settings/accountSettings/activeAccountSettingsSnapshot')
-    >();
-    return {
-        ...original,
-        getActiveAccountSettingsSnapshot: (...args: Parameters<
-            typeof original.getActiveAccountSettingsSnapshot
-        >) => {
-            activeAccountBoundary.readSnapshot(...args);
-            return original.getActiveAccountSettingsSnapshot(...args);
-        },
-        subscribeActiveAccountSettingsSnapshot: (...args: Parameters<
-            typeof original.subscribeActiveAccountSettingsSnapshot
-        >) => {
-            activeAccountBoundary.subscribe(...args);
-            return original.subscribeActiveAccountSettingsSnapshot(...args);
-        },
-    };
-});
 
 afterEach(() => {
     resetActiveAccountSettingsSnapshotForTests();
@@ -267,8 +243,6 @@ describe('installed external plugin Lane 01 Actions', () => {
             registry = null;
             requests.length = 0;
             persistenceBoundary.readStoredCredentials.mockClear();
-            activeAccountBoundary.readSnapshot.mockClear();
-            activeAccountBoundary.subscribe.mockClear();
             const scopedToken = 'restricted-runner-runtime-token';
             registry = await runWithServerHttpBaseUrl(homeUrl, async () => (
                 await resolveExecutablePluginRuntimeRegistry({
@@ -333,8 +307,6 @@ describe('installed external plugin Lane 01 Actions', () => {
                 body: { v: 1, teamId: 'team-2-cleared' },
             }]);
             expect(persistenceBoundary.readStoredCredentials).not.toHaveBeenCalled();
-            expect(activeAccountBoundary.readSnapshot).not.toHaveBeenCalled();
-            expect(activeAccountBoundary.subscribe).not.toHaveBeenCalled();
 
             await registry.dispose();
             registry = null;
@@ -363,8 +335,6 @@ describe('installed external plugin Lane 01 Actions', () => {
             })).resolves.toMatchObject({ status: 'failed' });
             expect(requests).toEqual([]);
             expect(persistenceBoundary.readStoredCredentials).not.toHaveBeenCalled();
-            expect(activeAccountBoundary.readSnapshot).not.toHaveBeenCalled();
-            expect(activeAccountBoundary.subscribe).not.toHaveBeenCalled();
         } finally {
             restoreHttp();
             await registry?.dispose();

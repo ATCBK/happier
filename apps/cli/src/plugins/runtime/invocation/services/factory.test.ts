@@ -250,10 +250,10 @@ describe('unavailable plugin invocation services factory', () => {
         const createServices = createUnavailablePluginServicesFactory();
 
         expect(() => createServices(seed, createUnavailablePluginInvocationServiceBinding('8', 'binding')))
-            .toThrow(/occurrenceId/i);
+            .toThrow(/occurrence/i);
     });
 
-    it('keeps the unavailable Sessions service shape-identical to the six-method External Sessions author service', async () => {
+    it('keeps the unavailable Sessions service shape-identical to the External Sessions author service', async () => {
         const services = createUnavailablePluginServicesFactory()(
             seed,
             createUnavailablePluginInvocationServiceBinding('7', 'binding'),
@@ -268,6 +268,7 @@ describe('unavailable plugin invocation services factory', () => {
         expect(Object.keys(external).sort()).toEqual([
             'attach',
             'capabilities',
+            'closeList',
             'followTranscript',
             'list',
             'readTranscript',
@@ -371,7 +372,12 @@ describe('unavailable plugin invocation services factory', () => {
             isCurrent: seed.isOccurrenceCurrent,
         });
         await expect(observation.readCurrent()).resolves.toEqual({
-            occurrenceId: 'immutable-target-a',
+            occurrenceId: 'target-occurrence-a',
+            sourceCustody: {
+                kind: 'managed',
+                immutableGenerationId: 'immutable-target-a',
+                installSource: 'localPath',
+            },
             contributions: [],
         });
         expect(observeForSelf).toHaveBeenCalledOnce();

@@ -5,6 +5,7 @@ import type {
     AgentSessionOpenRequest,
     AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type {
     NormalizedPluginDeclarativeAcpRuntime,
@@ -25,6 +26,16 @@ export function createHostDeclarativeAcpAgentRuntimeFactory(
             ...(options.executionRunContextV1
                 ? {
                     executionRunContextV1: Object.freeze({
+                        async openConversation(
+                            request: AgentExecutionRunOpenRequest,
+                            context: AgentExecutionRunRuntimeContextV1,
+                        ) {
+                            if (!context.protocols.acp.openExecutionRunConversationV1) {
+                                throw new PluginError({ code: 'execution_run_protocol_unsupported',
+                                    message: 'This host does not support retained detached ACP conversations.' });
+                            }
+                            return await context.protocols.acp.openExecutionRunConversationV1(request, runtime);
+                        },
                         async open(
                             request: AgentExecutionRunOpenRequest,
                             context: AgentExecutionRunRuntimeContextV1,

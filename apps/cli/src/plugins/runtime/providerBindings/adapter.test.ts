@@ -9,6 +9,7 @@ import { CLAUDE_PROVIDER_BINDING_ADAPTER_V1, PLUGIN_MANIFEST as CLAUDE_PLUGIN_MA
 
 import type { ResolvedExecutablePluginRuntimeRegistry } from '../resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeRegistryLease } from '../reload/controller';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import {
     materializeCapturedAgentProviderBinding,
     materializeLeasedAgentProviderBinding,
@@ -110,7 +111,7 @@ const binding = {
 };
 
 it('materializes admitted Claude helper pins through the real adapter and closed host boundary', async () => {
-    const support = CLAUDE_PLUGIN_MANIFEST.contributes.agents[0]!.providerRequirements!;
+    const support = normalizePluginManifestV2(CLAUDE_PLUGIN_MANIFEST).contributes.agents![0]!.providerRequirements!;
     const materialization = await materializeCapturedAgentProviderBinding({
         resolved: {
             pluginId: 'happier.agent.claude',

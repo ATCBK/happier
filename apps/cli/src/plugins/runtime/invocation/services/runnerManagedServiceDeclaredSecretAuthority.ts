@@ -2,12 +2,9 @@ import { join } from 'node:path';
 
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import type { PluginStorePaths } from '@/plugins/store/paths';
-import {
-    verifyRunnerAgentBindingAgainstGeneration,
-} from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
 import type {
-    AgentSessionRunnerBindingV1,
-} from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+    RetainedRunnerAgentServiceBinding,
+} from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
 import {
     collectDeclaredPluginSecrets,
 } from '@/plugins/runtime/context/declaredPluginSecrets';
@@ -49,26 +46,20 @@ const UNAVAILABLE: RunnerManagedServiceDeclaredSecretResult =
 export async function resolveRunnerManagedServiceDeclaredSecret(
     input: Readonly<{
         paths: PluginStorePaths;
-        binding: AgentSessionRunnerBindingV1;
+        attested: RetainedRunnerAgentServiceBinding;
         request: RunnerManagedServiceDeclaredSecretRequest;
         signal?: AbortSignal;
     }>,
 ): Promise<RunnerManagedServiceDeclaredSecretResult> {
     if (input.signal?.aborted) return UNAVAILABLE;
-    let manifest: Awaited<
-        ReturnType<typeof verifyRunnerAgentBindingAgainstGeneration>
-    >['manifest'];
     try {
-        ({ manifest } = await verifyRunnerAgentBindingAgainstGeneration({
-            paths: input.paths,
-            binding: input.binding,
-        }));
+        await input.attested.assertStillAvailable();
     } catch {
         return UNAVAILABLE;
     }
     const declarations = collectDeclaredPluginSecrets([{
-        pluginId: input.binding.pluginId,
-        manifest,
+        pluginId: input.attested.binding.pluginId,
+        manifest: input.attested.manifest,
     }]);
     if (declarations.length === 0) return UNAVAILABLE;
     const secretsHost = createStableDeclaredPluginSecretsHost({
@@ -87,7 +78,7 @@ export async function resolveRunnerManagedServiceDeclaredSecret(
         }).resolve,
     });
     const readPort = secretsHost.bindManagedServiceSecretReadPort({
-        pluginId: input.binding.pluginId,
+        pluginId: input.attested.binding.pluginId,
         signal: input.signal ?? new AbortController().signal,
         // This binding exists only for this one operation, after the retained
         // occurrenceId was verified above. Redaction belongs to the runner

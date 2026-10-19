@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
     createPluginActionCallerCurrentnessCheck,
     resolvePluginActionCaller,
+    resolvePluginInvocationCallerExecutionOrigin,
 } from './actionCaller';
+import { resolvePluginMachineExecutionOrigin } from '@/plugins/runtime/resolvePluginMachineExecutionOrigin';
 import { createPluginActionCallerMaterializationFixture } from './actionCaller.testkit';
 
 describe('resolvePluginActionCaller', () => {
@@ -81,5 +83,50 @@ describe('resolvePluginActionCaller', () => {
             revalidateMaterialization,
             revalidateOccurrence,
         })()).resolves.toEqual({ kind: 'current' });
+    });
+
+    describe('resolvePluginInvocationCallerExecutionOrigin', () => {
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'root-a' };
+        const context = { serverIdentityId: 'srv_home-1', machineId: 'machine-1' };
+        const materialization = createPluginActionCallerMaterializationFixture('acme.plugin').materialization;
+
+        // A release-less plugin runs under its source custody yet still carries a
+        // published materialization; the current-origin owner decides which identity
+        // is exact, and the caller check must follow that decision rather than
+        // re-deriving it from whichever custody facts happen to be present.
+        it('accepts the current source origin of a caller that also carries a release-less materialization', async () => {
+            const current = resolvePluginMachineExecutionOrigin({ pluginId: 'acme.plugin', context, sourceCustody });
+            await expect(resolvePluginInvocationCallerExecutionOrigin(
+                { pluginId: 'acme.plugin', sourceCustody, materialization },
+                async () => current,
+            )).resolves.toEqual(current);
+        });
+
+        it('accepts the current materialization origin of a caller carrying that materialization', async () => {
+            const current = resolvePluginMachineExecutionOrigin({
+                pluginId: 'acme.plugin', context, materializationId: materialization.materializationId,
+            });
+            await expect(resolvePluginInvocationCallerExecutionOrigin(
+                { pluginId: 'acme.plugin', sourceCustody, materialization },
+                async () => current,
+            )).resolves.toEqual(current);
+        });
+
+        it('rejects a current origin that disagrees with the admitted caller custody', async () => {
+            const otherSource = resolvePluginMachineExecutionOrigin({
+                pluginId: 'acme.plugin', context, sourceCustody: { ...sourceCustody, registeredRootId: 'root-b' },
+            });
+            const otherMaterialization = resolvePluginMachineExecutionOrigin({
+                pluginId: 'acme.plugin', context, materializationId: 'materialization-replaced',
+            });
+            await expect(resolvePluginInvocationCallerExecutionOrigin(
+                { pluginId: 'acme.plugin', sourceCustody, materialization },
+                async () => otherSource,
+            )).resolves.toBeNull();
+            await expect(resolvePluginInvocationCallerExecutionOrigin(
+                { pluginId: 'acme.plugin', sourceCustody, materialization },
+                async () => otherMaterialization,
+            )).resolves.toBeNull();
+        });
     });
 });

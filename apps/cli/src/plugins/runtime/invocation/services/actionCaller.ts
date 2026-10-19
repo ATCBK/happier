@@ -6,6 +6,37 @@ import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runti
 import type { PluginMachineMaterializationRefV1 } from '@happier-dev/protocol';
 import type { ActionCaller, ActionPluginCaller } from '@happier-dev/protocol/actions';
 import type { PluginInvocationCaller } from '@happier-dev/plugin-sdk';
+import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
+import { resolvePluginMachineExecutionOrigin } from '@/plugins/runtime/resolvePluginMachineExecutionOrigin';
+
+/** Stamp only the current origin that agrees with the already admitted caller custody. */
+export async function resolvePluginInvocationCallerExecutionOrigin(
+    caller: Pick<ActionPluginCaller, 'pluginId' | 'sourceCustody' | 'materialization'>,
+    resolveCurrentOrigin: ((signal?: AbortSignal) => Promise<PluginMachineExecutionOriginV1 | null>) | undefined,
+    signal?: AbortSignal,
+): Promise<PluginMachineExecutionOriginV1 | null | undefined> {
+    if (!resolveCurrentOrigin) return undefined;
+    try {
+        const current = await resolveCurrentOrigin(signal);
+        if (!current) return null;
+        // The current-origin owner decides whether this plugin runs as a release
+        // materialization or from its source custody. A release-less plugin carries
+        // both facts, so the caller is checked against the identity kind the owner
+        // chose instead of whichever fact happens to be present.
+        const currentRef = getPluginMachineExecutionOriginRef(current);
+        const expected = resolvePluginMachineExecutionOrigin({
+            pluginId: caller.pluginId,
+            context: { serverIdentityId: current.serverIdentityId, machineId: caller.materialization?.machineId ?? currentRef.machineId },
+            ...('materializationId' in currentRef
+                ? (caller.materialization ? { materializationId: caller.materialization.materializationId } : {})
+                : { sourceCustody: caller.sourceCustody }),
+        });
+        return expected && arePluginMachineExecutionOriginsEqual(expected, current) ? current : null;
+    } catch {
+        return null;
+    }
+}
 
 // The broker owns a delivery scope, including an explicitly independent event.
 // This keeps callback Actions causal without changing their authorization caller.
@@ -23,7 +54,8 @@ type PluginActionCallerSeed = Readonly<{
     startedBy?: ActionPluginCaller['startedBy'];
     caller?: PluginInvocationCaller;
     /** Immediate host-stamped contribution. It is never accepted from plugin input. */
-    contribution?: Readonly<{ id: string }>;
+    contribution?: Readonly<{ id: string; qualifiedId?: string }>;
+    surface?: NonNullable<ActionPluginCaller['originSurface']> | 'plugin';
     /** Exact process-local occurrence, supplied by the runtime owner only. */
     occurrenceId?: string;
     /** Durable source custody, supplied by the runtime owner only. */
@@ -145,10 +177,15 @@ export function resolvePluginActionCaller(
             cause: cause.data,
         };
     }
+    const originSurface = seed.surface === 'plugin'
+        ? seed.caller?.kind === 'plugin' ? seed.caller.originSurface : undefined
+        : seed.surface;
     return Object.freeze({
         kind: 'plugin' as const,
         pluginId: seed.plugin.id,
         ...(seed.contribution ? { contributionLocalId: seed.contribution.id } : {}),
+        ...(seed.contribution?.qualifiedId ? { contributionQualifiedId: seed.contribution.qualifiedId } : {}),
+        ...(originSurface ? { originSurface } : {}),
         ...(occurrenceId === undefined ? {} : { occurrenceId }),
         ...(sourceCustody === undefined ? {} : { sourceCustody: sourceCustody.data }),
         ...(materialization?.success === true ? { materialization: materialization.data } : {}),

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
 import { readTargetActionDiagnosticConfidentiality } from './diagnostics';
+import { runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 
 import { ActionOperationProgressV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
@@ -141,6 +142,8 @@ export type InvokeTargetActionParams = Readonly<{
     startedBy?: import('@happier-dev/protocol').WorkflowRunStartedByV1;
     /** Host-private external API authority; never projected into plugin context. */
     externalActionContext?: PluginExternalActionContext;
+    /** Original host-admitted source, distinct from immediate plugin capability identity. */
+    approvalContext?: import('@happier-dev/protocol').ActionExecutorContext;
     /**
      * Exact target-occurrence fact from an admitted targeted operation. It is
      * private Action-dispatch evidence, not a caller assertion or SDK input.
@@ -170,7 +173,7 @@ export type InvokeTargetActionParams = Readonly<{
     /** Current host Action-settings enablement for this exact qualified target Action. */
     isEnabledByActionSettings?: () => boolean;
     /** Current host Action-settings policy for this exact qualified target Action. */
-    isApprovalRequiredByActionSettings?: (manifestDefault: boolean) => boolean;
+    isApprovalRequiredByActionSettings?: (manifestDefault: boolean, input?: unknown) => boolean;
     /** Present only when the daemon operation runner already owns this invocation. */
     operationProgress?: TargetActionOperationProgressPort;
     /** Host-private custody admission; never projected into plugin context. */
@@ -276,6 +279,8 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
     ) => PluginActionPresentUserGatePolicy | null;
     resolveHostBinding: ResolveTargetActionHostBinding;
     createServices: CreatePluginInvocationServices;
+    /** Join the host's exact demand before synchronous invocation services are exposed, including warm Actions. */
+    prepareInvocationServices?(input: Readonly<{ pluginId: string; localId: string }>): Promise<void>;
     beginDiagnosticScope?: BeginPluginInvocationDiagnosticScope;
     redactDiagnosticText?: (
         scope: Readonly<{ pluginId: string; occurrenceId: string; correlationId: string }>,
@@ -531,6 +536,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     ...(invocation.externalActionContext
                         ? { externalActionContext: invocation.externalActionContext }
                         : {}),
+                    ...(invocation.approvalContext ? { approvalContext: invocation.approvalContext } : {}),
                     ...(invocation.selectedActionInputCarrier
                         ? { selectedActionInputCarrier: invocation.selectedActionInputCarrier }
                         : {}),
@@ -574,11 +580,24 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                     { once: true },
                 );
                 try {
+                    await runTracedExternalActionInnerStage('contributed.services.prepare', () =>
+                        params.prepareInvocationServices?.({
+                            pluginId: registration.pluginId,
+                            localId: registration.localId,
+                        }), { invocationId: correlationId });
+                    if (params.prepareInvocationServices) {
+                        if (signal.aborted || lifetime.signal.aborted || !indexed.isCurrent()) {
+                            throw new PluginError({
+                                code: 'plugin_action_generation_retired',
+                                message: 'Plugin action retired during service preparation',
+                            });
+                        }
+                    }
                     // Currentness was admitted in `prepare` and re-checked once
                     // immediately before this handler (the executor `invoke`
                     // callback). Admitted work now runs under its captured
                     // lease; only cancellation stops it.
-                    const operationResult = invocation.exactPurposeBindingSubjectId === undefined
+                    const operationResult = await runTracedExternalActionInnerStage('contributed.connected_account.bind', async () => invocation.exactPurposeBindingSubjectId === undefined
                         ? await params.bindConnectedAccountActionOperation?.({
                         pluginId: registration.pluginId,
                         localId: registration.localId,
@@ -591,7 +610,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                             && indexed.isCurrent()
                         ),
                         })
-                        : null;
+                        : null, { invocationId: correlationId });
                     if (operationResult && 'status' in operationResult) {
                         throw new PluginError({
                             code: operationResult.code,
@@ -658,7 +677,8 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                         }
                     }
                     actionHandlerInvocation = undefined;
-                    return await registration.handler(input, context);
+                    return await runTracedExternalActionInnerStage('contributed.handler', () =>
+                        registration.handler(input, context), { invocationId: correlationId });
                 } finally {
                     signal.removeEventListener(
                         'abort',
@@ -760,7 +780,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
             if (preparedInput.kind === 'settled') {
                 try {
                     return Object.freeze({ kind: 'settled' as const,
-                        result: projectTargetActionFailure(preparedInput.result, params.redactDiagnosticText
+                        result: projectTargetActionFailure({ ...preparedInput.result, actionHandlerInvocation: 'notStarted' }, params.redactDiagnosticText
                             ? value => params.redactDiagnosticText!(diagnosticScope, value) : undefined,
                             rawInput.success ? { input: rawInput.data, secretInputPaths: indexed.registration.definition.secretInputPaths ?? [] } : undefined) });
                 } finally { await complete(); }
@@ -786,7 +806,7 @@ export function createTargetActionInvocationRegistry(params: Readonly<{
                             invocation.invocationSurface ?? invocation.surface,
                             preparedInput.input,
                             invocation.invocationAuthority,
-                        ));
+                        ), preparedInput.input);
                 } catch {
                     // A failed host settings re-read cannot authorize a plugin Action.
                     approvalRequiredByActionSettings = true;

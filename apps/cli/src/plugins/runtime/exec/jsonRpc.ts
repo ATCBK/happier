@@ -8,6 +8,7 @@ import type {
     JsonRpcRequestHandlerV1,
     JsonRpcRequestOptionsV1,
 } from './privateContract';
+import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { createJsonlRequestCorrelator } from '@/plugins/runtime/jsonlRequestCorrelator';
 
 import { attachJsonlLineReader } from '@/agent/runtime/jsonl/attachJsonlLineReader';
@@ -465,13 +466,11 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
                 : options?.timeoutMs ?? params.requestTimeoutMs;
             const abortSignal = options?.signal;
             const requestId = String(id);
-            let timeout: NodeJS.Timeout | null = null;
+            let cancelTimeout: (() => void) | undefined;
             let onAbort: (() => void) | null = null;
             const cleanup = () => {
                 pendingRequestMethods.delete(requestId);
-                if (timeout) {
-                    clearTimeout(timeout);
-                }
+                cancelTimeout?.();
                 if (abortSignal && onAbort) {
                     abortSignal.removeEventListener('abort', onAbort);
                 }
@@ -489,13 +488,13 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
                     },
                 });
                 if (requestTimeoutMs !== undefined) {
-                    timeout = setTimeout(() => {
+                    cancelTimeout = armDeadlineTimer(Date.now() + Math.max(0, requestTimeoutMs), () => {
                         correlator.reject(requestId, new PluginExecClientError(
                             'PLUGIN_EXEC_CLIENT_REQUEST_TIMEOUT',
                             `JSON-RPC request '${method}' timed out`,
                             { stderrPreview: readStderrPreview() },
                         ));
-                    }, Math.max(0, requestTimeoutMs));
+                    });
                 }
                 if (abortSignal) {
                     onAbort = () => {

@@ -6,7 +6,8 @@ import type { ActionExecutorContext, ActionId, QualifiedPluginActionId } from '@
 import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/actionExecutor';
 import { randomUUID } from 'node:crypto';
 import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
-import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
+import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent, pluginActionDeclarationRequiresConfirmationForInput } from '@happier-dev/protocol/plugins/actions/invocation';
+import { buildApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
@@ -33,7 +34,7 @@ import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult 
 import type { TargetActionOperationProgressPort } from '@/plugins/runtime/invocation/targetActionRegistry';
 import type { PluginExternalActionContext } from '@/plugins/runtime/invocation/services/types';
 import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
-import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { isApprovalRequiredByActionsSettings, isSharedRequesterActionV1 } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveRegistryConnectedAccountActionPurposeAuthorizations } from '@/daemon/connectedServices/purposeBindings/deriveRegistryConnectedAccountPurposeAuthorizations';
 
@@ -835,6 +836,8 @@ export async function executeContributedAction(params: Readonly<{
         })
       : params.context.caller;
     const replayPlacement = params.expectedApprovalReplayPlacement;
+    let revalidateRequesterDecision: (() => Promise<boolean>) | undefined;
+    const sharedRequester = params.approvalContext !== undefined && isSharedRequesterActionV1(params.approvalContext);
     const requestCurrentIntent = params.requestCurrentIntent
       ? async (request: TargetActionCurrentIntentRequest): Promise<TargetActionCurrentIntentResult> => {
           const requestedSurface = request.invocationSurface ?? request.surface;
@@ -842,7 +845,7 @@ export async function executeContributedAction(params: Readonly<{
             || requestedSurface === 'agent' || requestedSurface === 'mcp' ? requestedSurface : null;
           const createsConfidentialApproval = requestedSurface !== 'ui' && requestedSurface !== 'voice'
             && (projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? [])?.confidentialPaths.length ?? 0) > 0;
-          const needsApprovalPlacement = (deferredSurface !== null || createsConfidentialApproval)
+          const needsApprovalPlacement = (deferredSurface !== null || createsConfidentialApproval || sharedRequester)
             && pluginActionRequiresPresentUserIntent(request.action, requestedSurface, request.action.input);
           if (!needsApprovalPlacement) return await params.requestCurrentIntent!(request);
           const currentPlacement = await resolveCurrentTargetApprovalReplayPlacement(
@@ -865,24 +868,38 @@ export async function executeContributedAction(params: Readonly<{
               ? {}
               : { defaultSessionId: params.context.defaultSessionId }),
           });
-          const executionOriginV1 = params.approvalExecutionOrigin ?? (deferredSurface === null ? null : buildApprovalExecutionOriginV1({
+          const projectedInput = projectTargetActionApprovalInput(request.action.input, request.action.secretInputPaths ?? []);
+          const retainedInput = { action: { pluginId: request.action.pluginId, localId: request.action.localId },
+            input: projectedInput?.input ?? request.action.input };
+          const requesterConfirmation = sharedRequester && params.approvalContext
+            ? buildApprovalRequesterConfirmationV1({ context: params.approvalContext, actionId: 'action.invoke', input: retainedInput }) : null;
+          if (sharedRequester && !requesterConfirmation) return { status: 'unavailable', code: 'approval_requester_unavailable' };
+          const originSurface = deferredSurface ?? (requestedSurface === 'plugin' ? 'plugin' : null);
+          const executionOriginV1 = (!requesterConfirmation ? params.approvalExecutionOrigin : undefined) ?? (originSurface === null ? null : buildApprovalExecutionOriginV1({
             actionId: 'action.invoke',
-            input: { action: { pluginId: request.action.pluginId, localId: request.action.localId }, input: request.action.input },
+            input: requesterConfirmation ? retainedInput : { action: { pluginId: request.action.pluginId, localId: request.action.localId }, input: request.action.input },
+            ...(requesterConfirmation ? { requesterConfirmation } : {}),
             context: {
               ...params.approvalContext,
-              surface: deferredSurface,
+              surface: originSurface,
               actionCaller: params.approvalContext?.actionCaller ?? params.context.initiatingActionCaller ?? { kind: 'host' },
               serverId: placement.serverId,
               executionRunTargetMachineId: placement.machineId,
-              actionRequestId: params.approvalContext?.actionRequestId ?? randomUUID(),
+              actionRequestId: params.approvalContext?.actionRequestId ?? params.approvalExecutionOrigin?.requestId ?? randomUUID(),
             },
             targetSessionId: placement.defaultSessionId ?? null,
           }));
-          return await params.requestCurrentIntent!({
+          if (requesterConfirmation && (!executionOriginV1?.externalActionExecutionAuthorization || !executionOriginV1.externalActionInputSignature)) {
+            return { status: 'unavailable', code: 'approval_context_unavailable' };
+          }
+          const result = await params.requestCurrentIntent!({
             ...request,
             replayPlacement: placement,
             ...(executionOriginV1 ? { executionOriginV1 } : {}),
+            ...(requesterConfirmation ? { requesterConfirmation } : {}),
           });
+          if (result.status === 'approved') revalidateRequesterDecision = result.revalidateRequesterDecision;
+          return result;
         }
       : params.requestCurrentIntent;
     const exactPurposeBindingSubjectId = params.admittedManagedProviderOperation?.exactPurposeBindingSubjectId
@@ -894,6 +911,7 @@ export async function executeContributedAction(params: Readonly<{
       surface: actionSurface,
       invocationSurface,
       invocationAuthority: params.approvalContext?.authority ?? 'account_automation',
+      ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       ...(caller ? { caller } : {}),
       ...(params.context.initiatingActionCaller ? { initiatingActionCaller: params.context.initiatingActionCaller } : {}),
       ...(params.context.startedBy ? { startedBy: params.context.startedBy } : {}),
@@ -921,13 +939,16 @@ export async function executeContributedAction(params: Readonly<{
       ...(params.context.operationProgress
         ? { operationProgress: params.context.operationProgress }
         : {}),
-      ...(params.admittedManagedProviderOperation || params.admittedConnectedAccountPurposeBinding || params.context.beforeHandlerInvocation
+      ...(params.admittedManagedProviderOperation || params.admittedConnectedAccountPurposeBinding || params.context.beforeHandlerInvocation || sharedRequester
         ? { beforeHandlerInvocation: async () => {
             const check = async () => {
               const refusal = await checkManagedCustody();
               if (refusal && !refusal.ok) throw new PluginError({ code: refusal.errorCode, message: refusal.error });
             };
             await check();
+            if (revalidateRequesterDecision && !await revalidateRequesterDecision()) {
+              throw new PluginError({ code: 'approval_stale', message: 'approval_stale' });
+            }
             if (params.context.beforeHandlerInvocation) {
               await params.context.beforeHandlerInvocation();
               await check();
@@ -966,12 +987,13 @@ export async function executeContributedAction(params: Readonly<{
             actionSettingsProvider.getActionsSettings(),
             { surface: actionSurface },
           ),
-          isApprovalRequiredByActionSettings: (manifestDefault: boolean) => isApprovalRequiredByActionsSettings(
+          isApprovalRequiredByActionSettings: (manifestDefault: boolean, parsedInput?: unknown) => isApprovalRequiredByActionsSettings(
             contributedActionSettingsId,
             actionSettingsProvider.getActionsSettings(),
             { surface: actionSurface },
             undefined,
-            manifestDefault,
+            manifestDefault || sharedRequester && action.definition.dangerLevel === 'writesRemote'
+              && pluginActionDeclarationRequiresConfirmationForInput(action.definition, invocationSurface, parsedInput, params.approvalContext?.authority),
           ),
         }),
       ...(requestCurrentIntent ? { requestCurrentIntent } : {}),

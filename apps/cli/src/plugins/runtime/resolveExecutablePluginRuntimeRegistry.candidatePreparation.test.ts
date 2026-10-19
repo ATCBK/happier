@@ -15,6 +15,7 @@ import type {
 } from './context/accountPluginDataStorage';
 import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
 import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveLocalPathPluginSource } from '@/plugins/discovery/sources/localPath';
 import { evaluateManifestPluginDevelopmentCandidate } from '@/plugins/authoring/sourceModule';
 import { bindPluginRuntimeSourceAuthority } from './sourceAuthority';
@@ -66,12 +67,13 @@ const targetCollection = Object.freeze({
     indexes: [],
     uiQueries: [],
     relations: [],
+    identityFields: [],
     migrations: [{
         id: 'tasks-v1-to-v2',
         fromSchemaVersion: 1,
         toSchemaVersion: 2,
     }],
-} as const);
+} satisfies PluginAccountCollectionContributionV1);
 
 function accountStorageDependencies(postCalls: unknown[]): AccountPluginDataStorageHostDependencies {
     const credentials = { token: 'candidate-account-token', encryption: null } satisfies StoredCredentials;
@@ -220,7 +222,9 @@ describe('Collection candidate preparation runtime owner', () => {
             const contributes = await resolvePluginContributes({ happyHomeDir, existingAgentIds: new Set() });
             const target = contributes.activationTargets?.find((entry) => entry.pluginId === pluginId);
             if (!target?.daemonEntryPath) throw new Error('Expected the fixture daemon entry');
-            const physicalSource = await resolveLocalPathPluginSource({ locator: target.sourceSpec?.resolvedPath ?? pluginRoot });
+            const sourceRoot = target.sourceSpec?.resolvedPath ?? pluginRoot;
+            if (typeof sourceRoot !== 'string') throw new Error('Expected the resolved fixture source root');
+            const physicalSource = await resolveLocalPathPluginSource({ locator: sourceRoot });
             if (!physicalSource.ok) throw new Error('Expected the physical fixture source');
             // The process-boundary fixture admits a real evaluated development graph,
             // not a callback/loader replacement or an unaccepted devWatch flag.
@@ -234,7 +238,7 @@ describe('Collection candidate preparation runtime owner', () => {
             const dependencies = accountStorageDependencies([]);
             runtime = await resolveExecutablePluginRuntimeRegistry({
                 happyHomeDir, pluginIds: [pluginId],
-                contributes,
+                contributes: createResolvedContributionRegistry(contributes),
                 preparedDevelopmentActivationGraphsByPluginId: new Map([[pluginId, development.graph]]),
                 resolveCurrentMachineId: () => 'candidate-machine',
                 resolveCurrentMachineExecutionOriginContext: async () => ({

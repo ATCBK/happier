@@ -4,6 +4,7 @@ import type {
   PluginActionConfirmationV2,
   PluginActionDangerLevelV2,
   PluginActionPresentUserAuthorizationFacts,
+  PluginActionPresentUserGatePolicy,
 } from '@happier-dev/protocol';
 import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
 import { evaluatePluginPolicyExpressionV2 } from '@happier-dev/protocol/plugins/contributions/public-types';
@@ -90,6 +91,7 @@ export type NormalizedTargetActionPolicy = Readonly<{
   hostAccess: readonly TargetActionHostAccessDecision[];
   availability?: Readonly<{ status: 'visible' | 'disabled' | 'denied' | 'unavailable'; code: string }>;
   confirmation?: PluginActionConfirmationV2;
+  confirmationWhen?: PluginActionPresentUserGatePolicy['confirmationWhen'];
   /** Host-resolved effective decision; absent means the manifest default. */
   approvalRequiredByActionSettings?: boolean;
 }>;

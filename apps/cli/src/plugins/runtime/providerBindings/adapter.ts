@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AgentProviderBindingMaterializationV1Schema } from '@happier-dev/protocol/providers/materialization/v1';
 import { AgentProviderRequirementsV1Schema } from '@happier-dev/protocol/providers/compatibility/v1';
 import { ProviderAdapterBindingKeyV1Schema } from '@happier-dev/protocol/providers/sessions/adapterBindingKeyV1';
@@ -21,56 +21,56 @@ import type { PluginRuntimeRegistryLease } from '../reload/controller';
 
 const MaterializationKindSchema = z.enum(['spawnEnv', 'engineConfig', 'configFile']);
 
-const ProviderBindingKeySchema = z.string().trim().min(1).max(512);
+const ProviderBindingKeySchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(512));
 
-const PrepareInputBaseSchema = z.object({
+const PrepareInputBaseSchema = z.strictObject({
     v: z.literal(1),
     agentTargetKey: ProviderAgentTargetKeySchema,
     model: z.optional(ProviderModelDescriptorV1Schema),
     claudeHelperModels: z.optional(ProviderClaudeHelperModelsV1Schema),
-    reservedBindingCandidate: z.object({
+    reservedBindingCandidate: z.optional(z.strictObject({
         contributionKey: ProviderContributionKeySchema,
         endpointTemplateId: ProviderLocalIdSchema,
         protocol: ProviderWireProtocolSchema,
         normalizedUrl: ProviderEndpointUrlSyntaxSchema,
-    }).strict().optional(),
-}).strict();
+    })),
+});
 
 const PrepareInputSchema = z.union([
-    PrepareInputBaseSchema.extend({ bindingKey: ProviderBindingKeySchema }),
-    PrepareInputBaseSchema.extend({ connectionId: ProviderConnectionIdSchema }),
+    z.extend(PrepareInputBaseSchema, { bindingKey: ProviderBindingKeySchema }),
+    z.extend(PrepareInputBaseSchema, { connectionId: ProviderConnectionIdSchema }),
 ]);
 
-const PreparedSchema = z.object({
+const PreparedSchema = z.strictObject({
     v: z.literal(1),
     materialization: MaterializationKindSchema,
     adapterBindingKey: z.optional(ProviderAdapterBindingKeyV1Schema),
-}).strict();
+});
 
-const ResolvedSelectionBaseSchema = z.object({
+const ResolvedSelectionBaseSchema = z.strictObject({
     model: ProviderModelDescriptorV1Schema,
-}).strict();
+});
 
 const ResolvedSelectionSchema = z.union([
-    ResolvedSelectionBaseSchema.extend({ bindingKey: ProviderBindingKeySchema }),
-    ResolvedSelectionBaseSchema.extend({ connectionId: ProviderConnectionIdSchema }),
+    z.extend(ResolvedSelectionBaseSchema, { bindingKey: ProviderBindingKeySchema }),
+    z.extend(ResolvedSelectionBaseSchema, { connectionId: ProviderConnectionIdSchema }),
 ]);
 
-const ResolvedFactsSchema = z.object({
+const ResolvedFactsSchema = z.strictObject({
     v: z.literal(1),
     agentTargetKey: ProviderAgentTargetKeySchema,
     selection: ResolvedSelectionSchema,
     contributionKey: z.nullable(ProviderContributionKeySchema),
-    endpoint: z.object({
+    endpoint: z.strictObject({
         endpointTemplateId: ProviderLocalIdSchema,
         normalizedUrl: ProviderEndpointUrlSyntaxSchema,
         protocol: ProviderWireProtocolSchema,
         publicHeaders: z.record(z.string(), z.string()),
-    }).strict(),
+    }),
     runtimeCredentialTransport: z.nullable(ProviderCredentialTransportV1Schema),
     claudeHelperModels: z.optional(ProviderClaudeHelperModelsV1Schema),
-    compatibilityFingerprint: z.string().min(1).max(512),
-}).strict();
+    compatibilityFingerprint: z.string().check(z.minLength(1), z.maxLength(512)),
+});
 
 function deepFreeze<T>(value: T, seen = new Set<object>()): T {
     if (typeof value !== 'object' || value === null || seen.has(value)) return value;

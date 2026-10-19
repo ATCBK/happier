@@ -1,3 +1,4 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { describe, expect, it, vi } from 'vitest';
@@ -267,13 +268,13 @@ function createSubject(options?: Readonly<{
     };
 }
 
-function runtimeRegistry(
+async function runtimeRegistry(
     target: AbortController,
     retireLiveSubscriptionConsumers: NonNullable<
         ResolvedExecutablePluginRuntimeRegistry['retireLiveSubscriptionConsumers']
     > = vi.fn(),
     admittedTargetedSnapshot: unknown = null,
-): ResolvedExecutablePluginRuntimeRegistry {
+): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     const readAdmittedTargetedContributions = vi.fn(
         (_request: Parameters<NonNullable<
             ResolvedExecutablePluginRuntimeRegistry['readAdmittedTargetedContributions']
@@ -284,22 +285,9 @@ function runtimeRegistry(
         readonly PluginCompatibilityDiagnostic[]
     > = {};
     const registry = {
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }),
         claimReleaseLessDeclarations: async () => undefined,
-        contributes: {
-            agents: Object.freeze([]),
-            providers: Object.freeze([]),
-            actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            uiViewsV2: Object.freeze([]),
-            uiRenderersV2: Object.freeze([]),
-            uiTranslationsV2: Object.freeze([]),
-            // This observation fixture never dispatches an activation; an empty
-            // registry avoids inventing an incomplete activation target.
-            activationTargets: Object.freeze([]),
-            catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-            pluginDiagnosticsByPluginId: Object.freeze({}),
-        },
+        contributes: createResolvedContributionRegistry({}),
         hookHandlersByHookId: new Map(),
         agentRuntimesByAgentId: new Map(),
         scmHostingProvidersById: new Map(),
@@ -326,10 +314,10 @@ function runtimeRegistry(
     return registry;
 }
 
-function runtimeRegistryForResolvedContributions(
+async function runtimeRegistryForResolvedContributions(
     target: AbortController,
     contributes: ResolvedContributionRegistry,
-): ResolvedExecutablePluginRuntimeRegistry {
+): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     const pluginDiagnosticsByPluginId: Record<
         string,
         readonly PluginCompatibilityDiagnostic[]
@@ -337,6 +325,7 @@ function runtimeRegistryForResolvedContributions(
         ...contributes.pluginDiagnosticsByPluginId,
     };
     return {
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes, pluginIds: [] }),
         claimReleaseLessDeclarations: async () => undefined,
         contributes,
         hookHandlersByHookId: new Map(),
@@ -371,7 +360,7 @@ describe('targeted contribution observation service', () => {
     it('projects real bundled Telegram and GitHub providers through cold admission and the reload service', async () => {
         const target = new AbortController();
         const contributes = resolveRealChannelsProviderRegistry();
-        const registry = runtimeRegistryForResolvedContributions(target, contributes);
+        const registry = (await runtimeRegistryForResolvedContributions(target, contributes));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -440,7 +429,7 @@ describe('targeted contribution observation service', () => {
     it('projects the registry semantic snapshot even when a target runtime ref has no carrier', async () => {
         const target = new AbortController();
         const contributes = resolveRealChannelsProviderRegistry();
-        const registry = runtimeRegistryForResolvedContributions(target, contributes);
+        const registry = (await runtimeRegistryForResolvedContributions(target, contributes));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -489,7 +478,7 @@ describe('targeted contribution observation service', () => {
             id: 'example-admitted-surface',
             version: 2,
         });
-        const registry = runtimeRegistry(target, vi.fn(), Object.freeze({
+        const registry = (await runtimeRegistry(target, vi.fn(), Object.freeze({
             target: Object.freeze({
                 pluginId: 'acme.target',
                 pointId: 'providers',
@@ -527,7 +516,7 @@ describe('targeted contribution observation service', () => {
                     })]),
                 }),
             ]),
-        }));
+        })));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -581,7 +570,7 @@ describe('targeted contribution observation service', () => {
             id: 'example-admitted-surface',
             version: 1,
         });
-        const registry = runtimeRegistry(target, vi.fn(), Object.freeze({
+        const registry = (await runtimeRegistry(target, vi.fn(), Object.freeze({
             target: Object.freeze({
                 pluginId: 'acme.target',
                 pointId: 'providers',
@@ -629,7 +618,7 @@ describe('targeted contribution observation service', () => {
                     })]),
                 }),
             ]),
-        }));
+        })));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -667,10 +656,10 @@ describe('targeted contribution observation service', () => {
 
     it('executes opaque real bundled-provider handles, including a typed arbitrary GitHub role', async () => {
         const target = new AbortController();
-        const registry = runtimeRegistryForResolvedContributions(
+        const registry = (await runtimeRegistryForResolvedContributions(
             target,
             resolveRealChannelsProviderRegistry(),
-        );
+        ));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -918,7 +907,7 @@ describe('targeted contribution observation service', () => {
             contributionId: 'github',
             occurrenceId: 'immutable-contributor-a',
         });
-        const registry = runtimeRegistry(target, vi.fn(), Object.freeze({
+        const registry = (await runtimeRegistry(target, vi.fn(), Object.freeze({
             target: Object.freeze({
                 pluginId: 'acme.target',
                 pointId: 'providers',
@@ -942,7 +931,7 @@ describe('targeted contribution observation service', () => {
                     contributor,
                 })]),
             })]),
-        }));
+        })));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -1010,7 +999,7 @@ describe('targeted contribution observation service', () => {
             contributionId: 'github',
             occurrenceId: 'immutable-contributor-a',
         });
-        const registry = runtimeRegistry(target, vi.fn(), Object.freeze({
+        const registry = (await runtimeRegistry(target, vi.fn(), Object.freeze({
             target: Object.freeze({
                 pluginId: 'acme.target',
                 pointId: 'providers',
@@ -1037,7 +1026,7 @@ describe('targeted contribution observation service', () => {
                     contributor,
                 })]),
             })]),
-        }));
+        })));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -1063,14 +1052,14 @@ describe('targeted contribution observation service', () => {
         });
         expect(registry.pluginDiagnosticsByPluginId).toEqual({});
 
-        const cleanSnapshot = runtimeRegistry(new AbortController(), vi.fn(), Object.freeze({
+        const cleanSnapshot = (await runtimeRegistry(new AbortController(), vi.fn(), Object.freeze({
             target: Object.freeze({
                 pluginId: 'acme.target',
                 pointId: 'providers',
                 occurrenceId: 'immutable-target-a',
             }),
             contributions: Object.freeze([]),
-        }));
+        })));
         await controller.adoptPreparedRuntimeRegistry({
             registry: cleanSnapshot,
             changedPluginIds: ['acme.contributor'],
@@ -1097,15 +1086,15 @@ describe('targeted contribution observation service', () => {
             contributionId: 'provider',
             occurrenceId: 'immutable-contributor-a',
         });
-        const registryInitiallyEmpty = runtimeRegistry(target, retireLiveA, Object.freeze({
+        const registryInitiallyEmpty = (await runtimeRegistry(target, retireLiveA, Object.freeze({
             target: Object.freeze({
                 pluginId: 'acme.target',
                 pointId: 'providers',
                 occurrenceId: 'immutable-target-a',
             }),
             contributions: Object.freeze([]),
-        }));
-        const registryAfterContributorInstall = runtimeRegistry(new AbortController(), vi.fn(), Object.freeze({
+        })));
+        const registryAfterContributorInstall = (await runtimeRegistry(new AbortController(), vi.fn(), Object.freeze({
             // A contributor install keeps the target occurrenceId stable and
             // arrives through the observation that was reserved while empty.
             target: Object.freeze({
@@ -1125,13 +1114,13 @@ describe('targeted contribution observation service', () => {
                 })]),
                 surfaces: Object.freeze([]),
             })]),
-        }));
+        })));
         const contributorB = Object.freeze({
             pluginId: 'acme.contributor',
             contributionId: 'provider',
             occurrenceId: 'immutable-contributor-b',
         });
-        const registryAfterContributorUpdate = runtimeRegistry(new AbortController(), vi.fn(), Object.freeze({
+        const registryAfterContributorUpdate = (await runtimeRegistry(new AbortController(), vi.fn(), Object.freeze({
             // A contributor replacement keeps the target occurrenceId stable.
             target: Object.freeze({
                 pluginId: 'acme.target',
@@ -1150,8 +1139,8 @@ describe('targeted contribution observation service', () => {
                 })]),
                 surfaces: Object.freeze([]),
             })]),
-        }));
-        const registryAfterContributorUninstall = runtimeRegistry(
+        })));
+        const registryAfterContributorUninstall = (await runtimeRegistry(
             new AbortController(),
             vi.fn(),
             Object.freeze({
@@ -1164,7 +1153,7 @@ describe('targeted contribution observation service', () => {
                 }),
                 contributions: Object.freeze([]),
             }),
-        );
+        ));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registryInitiallyEmpty,
         });
@@ -1310,15 +1299,15 @@ describe('targeted contribution observation service', () => {
 
     it('keeps one real bundled-provider observation current through install, update, uninstall, and reinstall', async () => {
         const target = new AbortController();
-        const registryInitiallyEmpty = runtimeRegistryForResolvedContributions(
+        const registryInitiallyEmpty = (await runtimeRegistryForResolvedContributions(
             target,
             resolveRealChannelsProviderRegistry({ providerPlugins: [] }),
-        );
-        const registryAfterInstall = runtimeRegistryForResolvedContributions(
+        ));
+        const registryAfterInstall = (await runtimeRegistryForResolvedContributions(
             target,
             resolveRealChannelsProviderRegistry(),
-        );
-        const registryAfterUpdate = runtimeRegistryForResolvedContributions(
+        ));
+        const registryAfterUpdate = (await runtimeRegistryForResolvedContributions(
             target,
             resolveRealChannelsProviderRegistry({
                 providerPlugins: [
@@ -1332,12 +1321,12 @@ describe('targeted contribution observation service', () => {
                     }),
                 ],
             }),
-        );
-        const registryAfterUninstall = runtimeRegistryForResolvedContributions(
+        ));
+        const registryAfterUninstall = (await runtimeRegistryForResolvedContributions(
             target,
             resolveRealChannelsProviderRegistry({ providerPlugins: [] }),
-        );
-        const registryAfterReinstall = runtimeRegistryForResolvedContributions(
+        ));
+        const registryAfterReinstall = (await runtimeRegistryForResolvedContributions(
             target,
             resolveRealChannelsProviderRegistry({
                 providerPlugins: [
@@ -1351,7 +1340,7 @@ describe('targeted contribution observation service', () => {
                     }),
                 ],
             }),
-        );
+        ));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registryInitiallyEmpty,
         });
@@ -1474,8 +1463,8 @@ describe('targeted contribution observation service', () => {
 
     it('retires the observation when the real reload controller replaces its target occurrenceId', async () => {
         const target = new AbortController();
-        const registryA = runtimeRegistry(target);
-        const registryB = runtimeRegistry(new AbortController());
+        const registryA = (await runtimeRegistry(target));
+        const registryB = (await runtimeRegistry(new AbortController()));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registryA,
         });

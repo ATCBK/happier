@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { PluginSourceCustodyV1Schema, pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
@@ -27,8 +27,8 @@ export function runnerPluginSourceCustodyIdentity(
 const SortedUniqueBoundedStringsSchema = (
     maxEntries: number,
 ) => z.array(
-    z.string().trim().min(1).max(512),
-).max(maxEntries).superRefine((values, context) => {
+    z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+).check(z.maxLength(maxEntries), z.superRefine((values, context) => {
     if (
         new Set(values).size !== values.length
         || values.some((value, index) => (
@@ -40,27 +40,27 @@ const SortedUniqueBoundedStringsSchema = (
             message: 'Runner managed-dependency retention facts must be unique and sorted',
         });
     }
-});
+}));
 
-export const RunnerManagedProviderRetainedAuthorityV1Schema = z.object({
+export const RunnerManagedProviderRetainedAuthorityV1Schema = z.strictObject({
     pluginId: HostPluginIdSchema,
     sourceCustody: HostPluginSourceCustodyV1Schema,
     manifestAuthority: z.enum(['external', 'bundled_first_party']),
     hardRevocationRevisionAtAdmission:
-        z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict();
+        z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+});
 
 export type RunnerManagedProviderRetainedAuthorityV1 = Readonly<z.infer<
     typeof RunnerManagedProviderRetainedAuthorityV1Schema
 >>;
 
-export const RunnerManagedDependencySourceCandidateV1Schema = z.object({
+export const RunnerManagedDependencySourceCandidateV1Schema = z.strictObject({
     qualifiedDependencyId:
-        z.string().trim().min(1).max(512),
+        z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
     sourceCustody: HostPluginSourceCustodyV1Schema,
     manifestAuthority:
         z.enum(['external', 'bundled_first_party']),
-}).strict();
+});
 
 export type RunnerManagedDependencySourceCandidateV1 = Readonly<z.infer<
     typeof RunnerManagedDependencySourceCandidateV1Schema
@@ -81,7 +81,7 @@ function compareSourceCandidates(
 
 const SortedUniqueSourceCandidatesSchema = z.array(
     RunnerManagedDependencySourceCandidateV1Schema,
-).max(8_192).superRefine((values, context) => {
+).check(z.maxLength(8_192), z.superRefine((values, context) => {
     if (values.some((value, index) => (
         index > 0
         && compareSourceCandidates(values[index - 1]!, value) >= 0
@@ -92,7 +92,7 @@ const SortedUniqueSourceCandidatesSchema = z.array(
                 'Runner managed-dependency source candidates must be unique and sorted',
         });
     }
-});
+}));
 
 export function areRunnerManagedProviderRetainedAuthoritiesEqual(
     left: RunnerManagedProviderRetainedAuthorityV1 | null | undefined,
@@ -106,12 +106,11 @@ export function areRunnerManagedProviderRetainedAuthoritiesEqual(
             === right.hardRevocationRevisionAtAdmission;
 }
 
-export const RunnerManagedDependencyRetentionV1Schema = z.object({
+export const RunnerManagedDependencyRetentionV1Schema = z.strictObject({
     v: z.literal(1),
     adoptedManagedProviderAuthority:
-        RunnerManagedProviderRetainedAuthorityV1Schema.optional(),
-    sourceCustodies: z.array(HostPluginSourceCustodyV1Schema).max(64)
-        .superRefine((values, context) => {
+        z.optional(RunnerManagedProviderRetainedAuthorityV1Schema),
+    sourceCustodies: z.array(HostPluginSourceCustodyV1Schema).check(z.maxLength(64), z.superRefine((values, context) => {
             const identities = values.map(runnerPluginSourceCustodyIdentity);
             if (identities.some((value, index) => (
                 index > 0 && identities[index - 1]! >= value
@@ -121,12 +120,12 @@ export const RunnerManagedDependencyRetentionV1Schema = z.object({
                     message: 'Runner source custodies must be unique and sorted',
                 });
             }
-        }),
+        })),
     qualifiedDependencyIds:
         SortedUniqueBoundedStringsSchema(8_192),
     sourceCandidates:
-        SortedUniqueSourceCandidatesSchema.optional(),
-}).strict();
+        z.optional(SortedUniqueSourceCandidatesSchema),
+});
 
 export type RunnerManagedDependencyRetentionV1 = z.infer<
     typeof RunnerManagedDependencyRetentionV1Schema

@@ -900,6 +900,7 @@ describe('production invocation service owners', () => {
             getPluginUiResourceCapability: () => Object.freeze({ readable: false, dynamic: false }),
             getPluginBrandAsset: () => undefined,
             bind: () => unavailableResources,
+            preparePlugin: async () => {},
             bindForResource: async () => unavailableResources,
             applySessionAccessWitness: () => {},
             retirePlugin,

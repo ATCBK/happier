@@ -133,6 +133,7 @@ type ResolvePluginExecutable = (
 export type { PluginSecretDeclaration } from '../../context/declaredPluginSecrets';
 
 type PluginOperationServicesInput = Readonly<{
+    prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
     filesystemRoots: PluginFileSystemRoots;
     environment?: Readonly<Record<string, string>>;
     systemTools?: ExecSystemToolServiceV1;
@@ -257,6 +258,10 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
     resolveCurrentPluginMaterializationRef?(
         pluginId: string,
     ): PluginMachineMaterializationRefV1 | null;
+    resolveCurrentPluginExecutionOrigin?(
+        pluginId: string,
+        signal?: AbortSignal,
+    ): Promise<import('@happier-dev/protocol').PluginMachineExecutionOriginV1 | null>;
 }>) {
     const attachCurrentPluginCallerResolvers = (
         seed: PluginInvocationServicesSeed,
@@ -266,6 +271,8 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             ...seed,
             ...(!seed.resolveCurrentPluginMaterializationRef && params?.resolveCurrentPluginMaterializationRef
                 ? { resolveCurrentPluginMaterializationRef: () => params.resolveCurrentPluginMaterializationRef!(pluginId) } : {}),
+            ...(!seed.resolveCurrentPluginExecutionOrigin && params?.resolveCurrentPluginExecutionOrigin
+                ? { resolveCurrentPluginExecutionOrigin: (signal?: AbortSignal) => params.resolveCurrentPluginExecutionOrigin!(pluginId, signal) } : {}),
         });
         // Caller enrichment preserves this invocation's logger and sequence.
         invocationLoggers.set(resolvedSeed, resolveInvocationLogger(seed));
@@ -574,6 +581,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                 ManagedProviderRuntimeOperationBinding;
             exactPurposeBindingSubjectId?: string;
             resolveExecutable?: ResolvePluginExecutable;
+            prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
         }>,
     ) => {
         const operationEvents =
@@ -698,6 +706,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                         ?? params.exec.resolveExecutable,
                     resolvePath: async (path) => resolvePluginPathWithinRoots(roots, path),
                     environment,
+                    ...(overrides?.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: overrides.prepareAgentNativeLaunch } : {}),
                 },
             } : {}),
             ...(recordRuntimeLimitMeasurement ? { recordRuntimeLimitMeasurement } : {}),
@@ -981,6 +990,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                 operation.environment ?? Object.freeze({}),
                 operation.systemTools,
                 {
+                    ...(operation.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: operation.prepareAgentNativeLaunch } : {}),
                     ...(operation.settingsDeclarations
                         ? { settingsDeclarations: operation.settingsDeclarations }
                         : {}),

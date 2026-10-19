@@ -1,9 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
+import type { PromptBlockV1 } from '@happier-dev/protocol';
 
 import type { ResolvedActivatedHookRegistration } from '@/plugins/projection/registry/types';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { ResolvedPluginHookHandler } from '@/plugins/runtime/types';
+import type { PluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { logger } from '@/ui/logger';
+import { resolvePromptAssetContributionBlocks } from '@/agent/prompting/contributions/resolvePromptAssetContributionBlocks';
+import { createTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/targetActionRegistry';
+import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
+import { createUnavailablePluginServicesFactory } from '@/plugins/runtime/invocation/services/factory';
+import { evaluateTargetActionCatalogPolicy } from '@/plugins/runtime/policy/evaluate';
 
 import {
   resolveAgentCompositionThroughRuntimeRegistry,
@@ -11,13 +19,34 @@ import {
   transformAgentRequestThroughRuntimeRegistry,
 } from './dispatchAgentTurnHooks';
 
-const { readAgentCatalogSnapshot } = vi.hoisted(() => ({
-  readAgentCatalogSnapshot: vi.fn(),
-}));
-
-vi.mock('@/agent/catalog/snapshot', () => ({
-  readAgentCatalogSnapshot,
-}));
+const actionRegistries: ReturnType<typeof createTargetActionInvocationRegistry>[] = [];
+function compositionActionRegistry(pluginIds: readonly string[]) {
+  const authorizationFacts = (occurrenceId: string) => ({
+    generation: { targetGeneration: occurrenceId, desiredGeneration: occurrenceId, appliedGeneration: occurrenceId },
+    resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [],
+  });
+  const registry = createTargetActionInvocationRegistry({
+    actions: pluginIds.map((pluginId) => ({
+      pluginId, pluginVersion: '1.0.0', occurrenceId: `occurrence-${pluginId}` as PluginRuntimeOccurrenceId,
+      localId: `${pluginId.split('.')[0]}-action`,
+      definition: { id: `${pluginId.split('.')[0]}-action`, dangerLevel: 'safe' as const, scopes: ['global'], surfaces: ['agent'] },
+      handler: async () => null,
+    })),
+    resolveAuthorizationFacts: (action) => authorizationFacts(action.occurrenceId),
+    evaluateCatalogPolicy: ({ pluginId, localId }) => evaluateTargetActionCatalogPolicy({
+      action: {
+        qualifiedId: `${pluginId}/actions/${localId}`,
+        occurrenceId: `occurrence-${pluginId}`,
+        dangerLevel: 'safe', scopes: ['global'], surfaces: ['agent'], hostAccess: [],
+      },
+      authorizationFacts: authorizationFacts(`occurrence-${pluginId}`),
+    }),
+    resolveHostBinding: createTargetActionHostBindingResolver(),
+    createServices: createUnavailablePluginServicesFactory(),
+  });
+  actionRegistries.push(registry);
+  return registry;
+}
 
 function createAgentRequestRegistration(): ResolvedActivatedHookRegistration {
   return {
@@ -98,27 +127,14 @@ function createInstructionOnlyCompositionRuntimeRegistry(
       promptAssets: [],
       actionsById: new Map(),
     },
-    targetActionInvocations: {
-      evaluateCatalogPolicy: () => ({ outcome: 'visible' as const }),
-    },
-    resolvePromptAssetBlocks: vi.fn(async () => Object.freeze([])),
+    targetActionInvocations: compositionActionRegistry([]),
+    resolvePromptAssetBlocks: async () => Object.freeze([]),
   };
 }
 
 describe('agent turn hook dispatch bridge', () => {
-  beforeEach(() => {
-    readAgentCatalogSnapshot.mockReturnValue({
-      agentDefinitionsById: new Map(),
-      catalogEntriesById: {
-        claude: { id: 'claude', cliSubcommand: 'claude', toolDelivery: 'native_mcp' },
-        codex: { id: 'codex', cliSubcommand: 'codex', toolDelivery: 'native_mcp' },
-        'review-agent': {
-          id: 'review-agent',
-          cliSubcommand: 'review-agent',
-          toolDelivery: 'native_mcp',
-        },
-      },
-    });
+  afterEach(() => {
+    for (const registry of actionRegistries.splice(0)) registry.dispose();
   });
 
   it('resolves a Composer candidate through the canonical composerReferences registry field', async () => {
@@ -215,9 +231,9 @@ describe('agent turn hook dispatch bridge', () => {
       ]),
       contributes: {
         agents: [{
-          id: 'review-agent',
+          id: 'claude',
           pluginId: 'companion.plugin',
-          definition: { id: 'review-agent' },
+          definition: { id: 'claude' },
         }],
         tools: [
           {
@@ -228,7 +244,7 @@ describe('agent turn hook dispatch bridge', () => {
               name: 'companion_tool',
               title: 'Companion tool',
               surfaces: ['agent'],
-              actionId: 'companion-action',
+              actionId: 'companion.plugin/companion-action',
               promptSnippet: 'Use the companion tool when the review needs context.',
             },
           },
@@ -240,7 +256,7 @@ describe('agent turn hook dispatch bridge', () => {
               name: 'hostile_tool',
               title: 'Hostile tool',
               surfaces: ['agent'],
-              actionId: 'hostile-action',
+              actionId: 'hostile.plugin/hostile-action',
               promptSnippet: 'This must not become enabled by a foreign result.',
             },
           },
@@ -252,7 +268,7 @@ describe('agent turn hook dispatch bridge', () => {
               name: 'failing_tool',
               title: 'Failing tool',
               surfaces: ['agent'],
-              actionId: 'failing-action',
+              actionId: 'failing.plugin/failing-action',
               promptSnippet: 'This handler fails before selection.',
             },
           },
@@ -262,46 +278,46 @@ describe('agent turn hook dispatch bridge', () => {
             pluginId: 'companion.plugin',
             definition: {
               id: 'companion-context',
+              kind: 'context' as const,
+              resource: 'companion-context-resource',
               target: {
-                kind: 'agent',
-                agent: 'review-agent',
+                kind: 'agent' as const,
+                agent: 'claude',
               },
             },
           },
         ],
         actionsById: new Map([
-          ['companion-action', {
+          ['companion.plugin/companion-action', {
             provenance: 'external' as const,
             pluginId: 'companion.plugin',
+            identity: createPluginContributionIdentity({ pluginId: 'companion.plugin', localId: 'companion-action' }),
             definition: { id: 'companion-action' },
           }],
-          ['hostile-action', {
+          ['hostile.plugin/hostile-action', {
             provenance: 'external' as const,
             pluginId: 'hostile.plugin',
+            identity: createPluginContributionIdentity({ pluginId: 'hostile.plugin', localId: 'hostile-action' }),
             definition: { id: 'hostile-action' },
           }],
-          ['failing-action', {
+          ['failing.plugin/failing-action', {
             provenance: 'external' as const,
             pluginId: 'failing.plugin',
+            identity: createPluginContributionIdentity({ pluginId: 'failing.plugin', localId: 'failing-action' }),
             definition: { id: 'failing-action' },
           }],
         ]),
       },
-      readPluginOccurrenceId: (pluginId: string) => ({
-        'companion.plugin': 'occurrence-g',
-        'hostile.plugin': 'occurrence-h',
-        'failing.plugin': 'occurrence-f',
-      }[pluginId] ?? null),
-      targetActionInvocations: {
-        evaluateCatalogPolicy: () => ({ outcome: 'visible' as const }),
-      },
-      resolvePromptAssetBlocks: vi.fn(async (params: Readonly<{
+      readPluginOccurrenceId: (pluginId: string) => `occurrence-${pluginId}`,
+      targetActionInvocations: compositionActionRegistry(['companion.plugin', 'hostile.plugin', 'failing.plugin']),
+      resolvePromptAssetBlocks: async (params: Readonly<{
         selectedAsset?: Readonly<{ pluginId: string; localId: string }>;
-      }>) => params.selectedAsset ? Object.freeze([Object.freeze({
-        id: `plugin_prompt_asset.${params.selectedAsset.pluginId}/${params.selectedAsset.localId}`,
-        scope: 'turn' as const,
-        text: `Prompt asset ${params.selectedAsset.localId}`,
-      })]) : Object.freeze([])),
+      }>): Promise<readonly PromptBlockV1[]> => resolvePromptAssetContributionBlocks({
+        agent: { pluginId: 'companion.plugin', localId: 'claude' },
+        selectedAsset: params.selectedAsset,
+        contributions: runtimeRegistry.contributes.promptAssets.map((asset) => ({ ...asset, occurrenceId: `occurrence-${asset.pluginId}` as PluginRuntimeOccurrenceId })),
+        readResourceText: async () => 'Current companion context.',
+      }),
     };
 
     const composition = await resolveAgentCompositionThroughRuntimeRegistry(
@@ -310,7 +326,7 @@ describe('agent turn hook dispatch bridge', () => {
       runtimeRegistry as unknown as Parameters<typeof resolveAgentCompositionThroughRuntimeRegistry>[0],
       {
         sessionId: 'session-1',
-        agentId: 'review-agent',
+        agentId: 'claude',
         runtimeFamily: 'hostSession',
       },
     );
@@ -344,20 +360,13 @@ describe('agent turn hook dispatch bridge', () => {
         text: 'Use the bounded review context for this turn.',
       },
     ]);
-    expect(runtimeRegistry.resolvePromptAssetBlocks).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'review-agent',
-      sessionId: 'session-1',
-      selectedAsset: {
-        pluginId: 'companion.plugin',
-        localId: 'companion-context',
-      },
-    }));
+    expect(composition.promptAssetBlocks[0]?.text).toBe('Current companion context.');
 
     const nativeMcpComposition = await resolveAgentCompositionThroughRuntimeRegistry(
       runtimeRegistry as unknown as Parameters<typeof resolveAgentCompositionThroughRuntimeRegistry>[0],
       {
         sessionId: 'session-1',
-        agentId: 'claude',
+        agentId: 'codex',
         runtimeFamily: 'hostSession',
       },
     );
@@ -377,7 +386,7 @@ describe('agent turn hook dispatch bridge', () => {
           toolId: 'companion.plugin/companion-tool',
           name: 'companion_tool',
         }),
-        expectedContributorOccurrenceId: 'occurrence-g',
+        expectedContributorOccurrenceId: 'occurrence-companion.plugin',
       }),
     ]);
     const selectedBinding = nativeMcpComposition.selectedToolBindings[0];
@@ -461,7 +470,7 @@ describe('agent turn hook dispatch bridge', () => {
                 name: 'fast_tool',
                 title: 'Fast tool',
                 surfaces: ['agent'],
-                actionId: 'fast-action',
+                actionId: 'fast.plugin/fast-action',
                 promptSnippet: 'Fast tool prompt.',
               },
             },
@@ -473,29 +482,30 @@ describe('agent turn hook dispatch bridge', () => {
                 name: 'slow_tool',
                 title: 'Slow tool',
                 surfaces: ['agent'],
-                actionId: 'slow-action',
+                actionId: 'slow.plugin/slow-action',
                 promptSnippet: 'Slow tool prompt.',
               },
             },
           ],
           promptAssets: [],
           actionsById: new Map([
-            ['fast-action', {
+            ['fast.plugin/fast-action', {
               provenance: 'external' as const,
               pluginId: 'fast.plugin',
+              identity: createPluginContributionIdentity({ pluginId: 'fast.plugin', localId: 'fast-action' }),
               definition: { id: 'fast-action' },
             }],
-            ['slow-action', {
+            ['slow.plugin/slow-action', {
               provenance: 'external' as const,
               pluginId: 'slow.plugin',
+              identity: createPluginContributionIdentity({ pluginId: 'slow.plugin', localId: 'slow-action' }),
               definition: { id: 'slow-action' },
             }],
           ]),
         },
-        targetActionInvocations: {
-          evaluateCatalogPolicy: () => ({ outcome: 'visible' as const }),
-        },
-        resolvePromptAssetBlocks: vi.fn(async () => Object.freeze([])),
+        targetActionInvocations: compositionActionRegistry(['fast.plugin', 'slow.plugin']),
+        readPluginOccurrenceId: (pluginId: string) => `occurrence-${pluginId}`,
+        resolvePromptAssetBlocks: async () => Object.freeze([]),
       };
 
       const resolutionPromise = resolveAgentCompositionThroughRuntimeRegistry(

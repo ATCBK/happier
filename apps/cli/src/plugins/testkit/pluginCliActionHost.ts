@@ -1,5 +1,5 @@
 import fastify from 'fastify';
-import type { ActionExecutorContext } from '@happier-dev/protocol';
+import type { ActionExecutorContext, PluginDevLoopActionIdV1 } from '@happier-dev/protocol';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
@@ -37,6 +37,7 @@ export async function createPluginCliActionHost(options: Readonly<{ happyHomeDir
   const previous = getActiveAccountSettingsSnapshot();
   const policy = { v: 1 as const, approvalWaivedSurfaces: {
     'plugins.install': ['cli' as const, 'agent' as const], 'plugins.uninstall': ['cli' as const],
+    'plugins.enable': ['cli' as const],
   } };
   // This suite deliberately exercises the allowed Settings waiver. It must not
   // waive the separate daemon-issued Install & Trust decision.
@@ -75,18 +76,18 @@ export async function createPluginCliActionHost(options: Readonly<{ happyHomeDir
   }));
   // HTTP is the genuine Home→Machine dispatch boundary. The selected receiver
   // runs the real Action/source owner below it, rather than a canned install.
-  app.post('/v1/actions/plugins.install', async request => {
+  app.post<{ Params: { actionId: PluginDevLoopActionIdV1 } }>('/v1/actions/:actionId', async request => {
     const envelope = ExternalActionRequestEnvelopeSchema.parse(request.body);
     delivered.push(envelope);
-    if (envelope.v !== 1 || envelope.target.kind !== 'machine') throw new Error('Expected Plain Machine delivery');
+    if (envelope.v !== 1 || envelope.target?.kind !== 'machine') throw new Error('Expected Plain Machine delivery');
+    const currentMachineId = envelope.target.machineId;
     const receiver = runWithServerHttpBaseUrl(origin, () => createCliActionExecutor({
       token: credentials.token, credentials, mode: 'plain', ctx: null, sessionId: 'fixture-receiver',
       rawSession: { path: '/fixture-workspace' }, serverId: 'plugin-command-home', serverHttpBaseUrl: origin,
       ...(options.happyHomeDir ? { happyHomeDir: options.happyHomeDir } : {}),
       pluginActionExecutionOwner: 'current_process',
     }));
-    const currentMachineId = envelope.target.machineId;
-    const response = await executeExternalAction({ actionId: 'plugins.install', envelope,
+    const response = await executeExternalAction({ actionId: request.params.actionId, envelope,
       principal: { authority: 'present_user' }, surface: 'cli', currentMachineId,
       currentAccountId: 'plugin-command-account', currentServerId: 'plugin-command-home',
       currentServerHttpBaseUrl: origin,
@@ -98,14 +99,16 @@ export async function createPluginCliActionHost(options: Readonly<{ happyHomeDir
   });
   await app.ready();
   const restore = installAxiosFastifyAdapter({ app, origin });
+  const executePluginAction = async (actionId: PluginDevLoopActionIdV1, input: unknown,
+    context: ActionExecutorContext = {}, machineId?: string) => await runWithServerHttpBaseUrl(origin,
+    () => createCliActionExecutorFromCredentials({ credentials, serverId: 'plugin-command-home', serverApiUrl: origin,
+      ...(machineId ? { machineId } : {}),
+    }).execute(actionId, input, { surface: 'cli', authority: 'present_user', ...context }));
   return {
     delivered,
+    executePluginAction,
     async executeInstall(input: unknown, context: ActionExecutorContext = {}, machineId?: string) {
-      return await runWithServerHttpBaseUrl(origin, () => createCliActionExecutorFromCredentials({
-        credentials, serverId: 'plugin-command-home', serverApiUrl: origin,
-        ...(machineId ? { machineId } : {}),
-        pluginActionExecutionOwner: 'current_process',
-      }).execute('plugins.install', input, { surface: 'cli', authority: 'present_user', ...context }));
+      return await executePluginAction('plugins.install', input, context, machineId);
     },
     async run(args: readonly string[]) {
       const argv = ['plugins', ...args];
@@ -115,7 +118,6 @@ export async function createPluginCliActionHost(options: Readonly<{ happyHomeDir
         readCredentialsFn: async () => credentials,
         createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params,
           credentials, serverId: 'plugin-command-home', serverApiUrl: origin,
-          pluginActionExecutionOwner: 'current_process',
         }),
       } }));
     },

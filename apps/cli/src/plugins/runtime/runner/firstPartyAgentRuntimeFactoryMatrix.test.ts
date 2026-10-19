@@ -275,7 +275,7 @@ function createMatrixSettingsService(
                 get: async <T extends JsonValue = JsonValue>(
                     key: string,
                 ): Promise<T | null> => (values[key] ?? null) as T | null,
-                snapshot: async () => ({ values }),
+                snapshot: async () => ({ scope, revision: 'matrix-fixture', values }),
             };
         },
     };

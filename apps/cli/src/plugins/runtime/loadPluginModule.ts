@@ -535,6 +535,14 @@ export async function loadPluginModule<TModule extends PluginModuleNamespace>(pa
         }) as TModule;
     }
 
+    if (params.source.sourceAuthority?.kind === 'development') {
+        // Mutable development graphs belong to this activation source's scope.
+        // A serving registry can retain its generation across disable/enable;
+        // the process-wide bundled cache would then resurrect an older graph.
+        await assertTrusted(undefined, params.source.sourceAuthority);
+        return await params.source.load();
+    }
+
     return await loadBundledModule({
         moduleId: params.source.moduleId,
         load: params.source.load,

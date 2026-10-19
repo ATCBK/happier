@@ -4,6 +4,9 @@ import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValu
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { resolvePluginInvocationCallerExecutionOrigin } from '../services/actionCaller';
+import { PluginError } from '@happier-dev/plugin-sdk';
+import { createPluginActionHandlerNotStartedError } from '@happier-dev/plugin-sdk/host/registration';
+import { readPluginActionFailureAuthorPayload } from '@happier-dev/protocol/plugins/actions/invocation';
 
 import type { InvokeContributedAction } from '../services/actions';
 import type {
@@ -83,13 +86,22 @@ export function createHostContributedActionInvoker(params: Readonly<{
             ...(requiredDangerLevel ? { requiredDangerLevel } : {}),
             ...(parsedInput === undefined ? { input: undefined } : { input: parsedInput.data }),
             surface: 'plugin',
+            ...(caller.originSurface ? { originSurface: caller.originSurface } : {}),
             initiatingActionCaller: caller,
+            approvalContext: context,
+            ...(context.contributedActionExecutionOrigin ? {
+                captureExecutionOrigin: true as const,
+                ...(context.contributedActionExecutionOrigin.expectedExecutionOrigin === undefined ? {} : {
+                    expectedExecutionOrigin: context.contributedActionExecutionOrigin.expectedExecutionOrigin }),
+                ...(context.contributedActionExecutionOrigin.expectedExecutionRouting === undefined ? {} : {
+                    expectedExecutionRouting: context.contributedActionExecutionOrigin.expectedExecutionRouting }),
+            } : {}),
             caller: {
                 kind: 'plugin',
                 pluginId: caller.pluginId,
                 contribution: {
                     id: caller.contributionLocalId,
-                    qualifiedId: buildQualifiedPluginContributionKey(
+                    qualifiedId: caller.contributionQualifiedId ?? buildQualifiedPluginContributionKey(
                         createPluginContributionIdentity({
                             pluginId: caller.pluginId,
                             localId: caller.contributionLocalId,
@@ -98,9 +110,11 @@ export function createHostContributedActionInvoker(params: Readonly<{
                 },
                 occurrenceId: callerOccurrenceId,
                 sourceCustody: caller.sourceCustody,
-                materialization: callerMaterialization,
+                ...(callerMaterialization ? { materialization: callerMaterialization } : {}),
                 ...(executionOrigin === undefined ? {} : { executionOrigin }),
+                ...(caller.originSurface ? { originSurface: caller.originSurface } : {}),
             },
+            ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}),
             signal: invocationSignal,
         });
         if (!await isCallerCurrent()) {
@@ -111,12 +125,19 @@ export function createHostContributedActionInvoker(params: Readonly<{
             if (!current || !arePluginMachineExecutionOriginsEqual(executionOrigin, current)) return callerNoLongerCurrent();
         }
         if (result.status === 'executed') {
+            if (result.executionOrigin) context.contributedActionExecutionOrigin?.onExecuted(result.executionOrigin);
             return { ok: true, result: result.value };
         }
+        const failure = { code: result.code, message: result.message,
+            ...(result.retryable === undefined ? {} : { retryable: result.retryable }),
+            ...readPluginActionFailureAuthorPayload(result.data) };
+        const error = result.actionHandlerInvocation === 'notStarted'
+            ? createPluginActionHandlerNotStartedError(failure) : new PluginError(failure);
         return {
             ok: false,
             errorCode: result.code,
             error: result.message,
+            details: error.data,
         };
     };
 }

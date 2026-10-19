@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +20,7 @@ import {
     isPluginRunningSessionDispositionTarget,
 } from './controller';
 
-function createRuntimeRegistry(
+async function createRuntimeRegistry(
     label: string,
     params?: Readonly<{
         diagnostics?: readonly PluginCompatibilityDiagnostic[];
@@ -39,7 +41,7 @@ function createRuntimeRegistry(
         retirementControllers?: Readonly<Record<string, AbortController>>;
         durableRevision?: number;
     }>,
-): ResolvedExecutablePluginRuntimeRegistry {
+): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     const retiredPluginIds = new Set<string>();
     const fencePluginConsumers = (pluginIds: readonly string[]): void => {
         const newlyRetiredPluginIds = [...new Set(pluginIds)].filter((pluginId) => (
@@ -55,19 +57,8 @@ function createRuntimeRegistry(
         params?.fencePluginConsumers?.(newlyRetiredPluginIds);
     };
     return {
-        contributes: {
-            agents: Object.freeze([]),
-                        providers: Object.freeze([]),
-            actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            uiViewsV2: Object.freeze([]),
-            uiRenderersV2: Object.freeze([]),
-            uiTranslationsV2: Object.freeze([]),
-            activationTargets: Object.freeze([]),
-                        catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-                        pluginDiagnosticsByPluginId: Object.freeze({}),
-        },
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }),
+        contributes: createResolvedContributionRegistry({}),
         hookHandlersByHookId: new Map(),
         agentRuntimesByAgentId: new Map(),
         scmHostingProvidersById: new Map(),
@@ -156,7 +147,7 @@ describe('createPluginReloadController', () => {
 
     it('exposes no arbitrary reload owner and joins concurrent cold acquisitions through one resolver', async () => {
         const deferred = createDeferred<ResolvedExecutablePluginRuntimeRegistry>();
-        const registry = createRuntimeRegistry('cold');
+        const registry = (await createRuntimeRegistry('cold'));
         const resolveRuntimeRegistry = vi.fn(async () => await deferred.promise);
         const controller = createPluginReloadController({ resolveRuntimeRegistry });
 
@@ -188,7 +179,7 @@ describe('createPluginReloadController', () => {
 
     it('starts background services after publication and changed-predecessor settlement', async () => {
         const calls: string[] = [];
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retireLiveSubscriptionConsumers: (pluginIds) => {
                 calls.push(`retire-live:${pluginIds?.join(',') ?? '*'}`);
             },
@@ -199,10 +190,10 @@ describe('createPluginReloadController', () => {
                 calls.push(`settle:${pluginIds.join(',')}`);
             },
             startAdoptedBackgroundServices: () => calls.push('start:initial'),
-        });
-        const replacementRegistry = createRuntimeRegistry('replacement', {
+        }));
+        const replacementRegistry = (await createRuntimeRegistry('replacement', {
             startAdoptedBackgroundServices: () => calls.push('start:replacement'),
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -239,22 +230,22 @@ describe('createPluginReloadController', () => {
                 ResolvedExecutablePluginRuntimeRegistry['currentGlobalExternalSessionsTarget']
             >['resolveCurrent']>>;
         const replacementOwner = { label: 'H' } as unknown as typeof initialOwner;
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             currentGlobalExternalSessionsTarget: {
                 resolveCurrent: () => initialOwner,
                 activateConfiguredSources: async (agentId) => {
                     activations.push(`G:${agentId ?? '*'}`);
                 },
             },
-        });
-        const replacementRegistry = createRuntimeRegistry('replacement', {
+        }));
+        const replacementRegistry = (await createRuntimeRegistry('replacement', {
             currentGlobalExternalSessionsTarget: {
                 resolveCurrent: () => replacementOwner,
                 activateConfiguredSources: async (agentId) => {
                     activations.push(`H:${agentId ?? '*'}`);
                 },
             },
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -326,22 +317,22 @@ describe('createPluginReloadController', () => {
         let preparedCurrent = false;
         const initialBinding = bindHandler('G', () => initialCurrent);
         const preparedBinding = bindHandler('H', () => preparedCurrent);
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             publishDeclaredEventSubscriptions: () => {
                 initialCurrent = true;
             },
             retireLiveSubscriptionConsumers: () => {
                 initialCurrent = false;
             },
-        });
-        const preparedRegistry = createRuntimeRegistry('prepared', {
+        }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared', {
             publishDeclaredEventSubscriptions: () => {
                 preparedCurrent = true;
             },
             retireLiveSubscriptionConsumers: () => {
                 preparedCurrent = false;
             },
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -382,7 +373,7 @@ describe('createPluginReloadController', () => {
     });
 
     it('reuses the initialized registry without resolving again', async () => {
-        const registry = createRuntimeRegistry('cold');
+        const registry = (await createRuntimeRegistry('cold'));
         const resolveRuntimeRegistry = vi.fn(async () => registry);
         const controller = createPluginReloadController({ resolveRuntimeRegistry });
 
@@ -398,7 +389,7 @@ describe('createPluginReloadController', () => {
     it('does not publish a cold registry when its pre-publication reconciliation fails', async () => {
         const failure = new Error('purpose reconciliation failed');
         const dispose = vi.fn(async () => {});
-        const registry = createRuntimeRegistry('cold', { dispose });
+        const registry = (await createRuntimeRegistry('cold', { dispose }));
         const controller = createPluginReloadController();
         const beforePublish = vi.fn(async () => {
             expect(controller.getState().activeRegistry).toBeNull();
@@ -419,7 +410,7 @@ describe('createPluginReloadController', () => {
     });
 
     it('publishes a cold candidate synchronously inside the pre-publication writer fence', async () => {
-        const registry = createRuntimeRegistry('cold');
+        const registry = (await createRuntimeRegistry('cold'));
         const controller = createPluginReloadController();
         const beforePublish = vi.fn(async (
             _registry: ResolvedExecutablePluginRuntimeRegistry,
@@ -444,7 +435,7 @@ describe('createPluginReloadController', () => {
         const beforePublishEntered = createDeferred<void>();
         const releaseBeforePublish = createDeferred<void>();
         const dispose = vi.fn(async () => {});
-        const registry = createRuntimeRegistry('cold-shutdown-race', { dispose });
+        const registry = (await createRuntimeRegistry('cold-shutdown-race', { dispose }));
         const controller = createPluginReloadController();
         const acquisition = controller.acquireRuntimeRegistry({
             resolveRuntimeRegistry: async () => registry,
@@ -468,9 +459,9 @@ describe('createPluginReloadController', () => {
         const published = createDeferred<void>();
         const releaseStartupGate = createDeferred<void>();
         const startAdoptedBackgroundServices = vi.fn();
-        const registry = createRuntimeRegistry('cold-published-shutdown-race', {
+        const registry = (await createRuntimeRegistry('cold-published-shutdown-race', {
             startAdoptedBackgroundServices,
-        });
+        }));
         const controller = createPluginReloadController();
         const acquisition = controller.acquireRuntimeRegistry({
             resolveRuntimeRegistry: async () => registry,
@@ -491,12 +482,12 @@ describe('createPluginReloadController', () => {
 
     it('isolates a cold plugin activation failure without withholding the healthy runtime registry', async () => {
         const dispose = vi.fn(async () => {});
-        const registry = createRuntimeRegistry('acme.healthy', {
+        const registry = (await createRuntimeRegistry('acme.healthy', {
             additionalPluginDiagnostics: {
                 'acme.broken': [{ code: 'plugin_activation_failed', message: 'activation failed' }],
             },
             dispose,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -527,14 +518,14 @@ describe('createPluginReloadController', () => {
     });
 
     it('allows trust-only diagnostics during cold restart initialization', async () => {
-        const registry = createRuntimeRegistry('healthy.plugin', {
+        const registry = (await createRuntimeRegistry('healthy.plugin', {
             additionalPluginDiagnostics: {
                 'untrusted.plugin': [
                     { code: 'plugin_untrusted', message: 'Untrusted' },
                     { code: 'plugin_trust_approval_required', message: 'Approval required' },
                 ],
             },
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -546,7 +537,7 @@ describe('createPluginReloadController', () => {
     });
 
     it('can retry cold initialization after the resolver rejects', async () => {
-        const registry = createRuntimeRegistry('recovered');
+        const registry = (await createRuntimeRegistry('recovered'));
         const resolveRuntimeRegistry = vi.fn()
             .mockRejectedValueOnce(new Error('cold failure'))
             .mockResolvedValueOnce(registry);
@@ -563,13 +554,13 @@ describe('createPluginReloadController', () => {
     it('adopts a prepared registry without resolving it again or waiting for predecessor cleanup', async () => {
         const cleanupStarted = createDeferred<void>();
         const allowCleanup = createDeferred<void>();
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             dispose: async () => {
                 cleanupStarted.resolve();
                 await allowCleanup.promise;
             },
-        });
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const resolveRuntimeRegistry = vi.fn(async () => initialRegistry);
         const controller = createPluginReloadController({ resolveRuntimeRegistry });
         const initialLease = await controller.acquireRuntimeRegistry();
@@ -598,12 +589,12 @@ describe('createPluginReloadController', () => {
     it('forwards one Account-change Session access witness to every live generation and a replacement', async () => {
         const applyPredecessorWitness = vi.fn();
         const applyActiveWitness = vi.fn();
-        const predecessorRegistry = createRuntimeRegistry('predecessor', {
+        const predecessorRegistry = (await createRuntimeRegistry('predecessor', {
             applyResourceSessionAccessWitness: applyPredecessorWitness,
-        });
-        const activeRegistry = createRuntimeRegistry('active', {
+        }));
+        const activeRegistry = (await createRuntimeRegistry('active', {
             applyResourceSessionAccessWitness: applyActiveWitness,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => predecessorRegistry,
         });
@@ -670,12 +661,12 @@ describe('createPluginReloadController', () => {
     it('keeps the newest Session-access witness for a replacement when an older page settles late', async () => {
         const applyPredecessorWitness = vi.fn();
         const applyReplacementWitness = vi.fn();
-        const predecessorRegistry = createRuntimeRegistry('predecessor', {
+        const predecessorRegistry = (await createRuntimeRegistry('predecessor', {
             applyResourceSessionAccessWitness: applyPredecessorWitness,
-        });
-        const replacementRegistry = createRuntimeRegistry('replacement', {
+        }));
+        const replacementRegistry = (await createRuntimeRegistry('replacement', {
             applyResourceSessionAccessWitness: applyReplacementWitness,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => predecessorRegistry,
         });
@@ -726,12 +717,12 @@ describe('createPluginReloadController', () => {
     it('forwards a newer Session-access witness to a lease-held predecessor while its adoption hook is still settling', async () => {
         const applyPredecessorWitness = vi.fn();
         const applyPreparedWitness = vi.fn();
-        const predecessorRegistry = createRuntimeRegistry('predecessor', {
+        const predecessorRegistry = (await createRuntimeRegistry('predecessor', {
             applyResourceSessionAccessWitness: applyPredecessorWitness,
-        });
-        const preparedRegistry = createRuntimeRegistry('prepared', {
+        }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared', {
             applyResourceSessionAccessWitness: applyPreparedWitness,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => predecessorRegistry,
         });
@@ -792,10 +783,10 @@ describe('createPluginReloadController', () => {
     });
 
     it('keeps prepared registry adoption monotonic by durable desired revision', async () => {
-        const revisionOne = createRuntimeRegistry('revision-one');
-        const revisionTwo = createRuntimeRegistry('revision-two');
-        const staleRevisionOne = createRuntimeRegistry('stale-revision-one');
-        const duplicateRevisionTwo = createRuntimeRegistry('duplicate-revision-two');
+        const revisionOne = (await createRuntimeRegistry('revision-one'));
+        const revisionTwo = (await createRuntimeRegistry('revision-two'));
+        const staleRevisionOne = (await createRuntimeRegistry('stale-revision-one'));
+        const duplicateRevisionTwo = (await createRuntimeRegistry('duplicate-revision-two'));
         const controller = createPluginReloadController();
 
         await expect(controller.adoptPreparedRuntimeRegistry({
@@ -836,11 +827,11 @@ describe('createPluginReloadController', () => {
         const lowerEntered = createDeferred<void>();
         const releaseLower = createDeferred<void>();
         const lowerRetired = vi.fn();
-        const lowerRegistry = createRuntimeRegistry('revision-two');
-        const higherRegistry = createRuntimeRegistry('revision-three');
-        const initialRegistry = createRuntimeRegistry('revision-one', {
+        const lowerRegistry = (await createRuntimeRegistry('revision-two'));
+        const higherRegistry = (await createRuntimeRegistry('revision-three'));
+        const initialRegistry = (await createRuntimeRegistry('revision-one', {
             retirePluginConsumers: lowerRetired,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -903,11 +894,11 @@ describe('createPluginReloadController', () => {
         const retireInitialPluginConsumers = vi.fn();
         const disposeLower = vi.fn(async () => {});
         const disposeHigher = vi.fn(async () => {});
-        const initialRegistry = createRuntimeRegistry('revision-one', {
+        const initialRegistry = (await createRuntimeRegistry('revision-one', {
             retirePluginConsumers: retireInitialPluginConsumers,
-        });
-        const lowerRegistry = createRuntimeRegistry('revision-two', { dispose: disposeLower });
-        const higherRegistry = createRuntimeRegistry('revision-three', { dispose: disposeHigher });
+        }));
+        const lowerRegistry = (await createRuntimeRegistry('revision-two', { dispose: disposeLower }));
+        const higherRegistry = (await createRuntimeRegistry('revision-three', { dispose: disposeHigher }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -964,9 +955,9 @@ describe('createPluginReloadController', () => {
         const recoveryEntered = createDeferred<void>();
         const releaseRecovery = createDeferred<void>();
         const disposeFailed = vi.fn(async () => {});
-        const initialRegistry = createRuntimeRegistry('revision-one', { durableRevision: 1 });
-        const failedRegistry = createRuntimeRegistry('revision-two', { dispose: disposeFailed });
-        const successorRegistry = createRuntimeRegistry('revision-three');
+        const initialRegistry = (await createRuntimeRegistry('revision-one', { durableRevision: 1 }));
+        const failedRegistry = (await createRuntimeRegistry('revision-two', { dispose: disposeFailed }));
+        const successorRegistry = (await createRuntimeRegistry('revision-three'));
         const controller = createPluginReloadController({ resolveRuntimeRegistry: async () => initialRegistry });
         const initialLease = await controller.acquireRuntimeRegistry();
         await initialLease.release();
@@ -1028,12 +1019,12 @@ describe('createPluginReloadController', () => {
         const retireColdConsumers = vi.fn();
         const retireColdPluginConsumers = vi.fn();
         const disposeLower = vi.fn(async () => {});
-        const lowerRegistry = createRuntimeRegistry('revision-two', { dispose: disposeLower });
-        const coldRegistry = createRuntimeRegistry('cold', {
+        const lowerRegistry = (await createRuntimeRegistry('revision-two', { dispose: disposeLower }));
+        const coldRegistry = (await createRuntimeRegistry('cold', {
             retireConsumers: retireColdConsumers,
             retirePluginConsumers: retireColdPluginConsumers,
-        });
-        const higherRegistry = createRuntimeRegistry('revision-three');
+        }));
+        const higherRegistry = (await createRuntimeRegistry('revision-three'));
         const controller = createPluginReloadController();
 
         const lowerAdoption = controller.adoptPreparedRuntimeRegistry({
@@ -1101,7 +1092,7 @@ describe('createPluginReloadController', () => {
         const fenceInitialPluginConsumers = vi.fn();
         const retireInitialPluginConsumers = vi.fn();
         const incumbentRetirement = new AbortController();
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retireConsumers: retireInitialConsumers,
             fencePluginConsumers: fenceInitialPluginConsumers,
             retirePluginConsumers: retireInitialPluginConsumers,
@@ -1113,11 +1104,11 @@ describe('createPluginReloadController', () => {
             retirementControllers: {
                 'acme.plugin': incumbentRetirement,
             },
-        });
+        }));
         const disposePrepared = vi.fn(async () => {});
-        const preparedRegistry = createRuntimeRegistry('prepared', {
+        const preparedRegistry = (await createRuntimeRegistry('prepared', {
             dispose: disposePrepared,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1174,10 +1165,10 @@ describe('createPluginReloadController', () => {
             calls.push('fence');
             return retirementSettled.promise;
         });
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retirePluginConsumers: retireInitialPluginConsumers,
-        });
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1218,13 +1209,13 @@ describe('createPluginReloadController', () => {
         const retireInitialPluginConsumers = vi.fn(async () => {
             throw retirementFailure;
         });
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retirePluginConsumers: retireInitialPluginConsumers,
-        });
+        }));
         const disposePrepared = vi.fn(async () => {});
-        const preparedRegistry = createRuntimeRegistry('prepared', {
+        const preparedRegistry = (await createRuntimeRegistry('prepared', {
             dispose: disposePrepared,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1259,12 +1250,12 @@ describe('createPluginReloadController', () => {
             expect(controller.getState().activeRegistry).toBe(initialRegistry);
         });
         const retireInitialPluginConsumers = vi.fn();
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retireConsumers: retireInitialConsumers,
             fencePluginConsumers: fenceInitialPluginConsumers,
             retirePluginConsumers: retireInitialPluginConsumers,
-        });
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1298,7 +1289,7 @@ describe('createPluginReloadController', () => {
         const beforePublishEntered = createDeferred<void>();
         const releaseBeforePublish = createDeferred<void>();
         const dispose = vi.fn(async () => {});
-        const registry = createRuntimeRegistry('prepared-shutdown-race', { dispose });
+        const registry = (await createRuntimeRegistry('prepared-shutdown-race', { dispose }));
         const controller = createPluginReloadController();
         const adoption = controller.adoptPreparedRuntimeRegistry({
             registry,
@@ -1325,9 +1316,9 @@ describe('createPluginReloadController', () => {
         const published = createDeferred<void>();
         const releaseAdoptionGate = createDeferred<void>();
         const startAdoptedBackgroundServices = vi.fn();
-        const registry = createRuntimeRegistry('prepared-published-shutdown-race', {
+        const registry = (await createRuntimeRegistry('prepared-published-shutdown-race', {
             startAdoptedBackgroundServices,
-        });
+        }));
         const controller = createPluginReloadController();
         const adoption = controller.adoptPreparedRuntimeRegistry({
             registry,
@@ -1352,8 +1343,8 @@ describe('createPluginReloadController', () => {
     it('keeps a published predecessor under shutdown custody across a blocked adoption hook', async () => {
         const disposeInitial = vi.fn(async () => {});
         const disposePrepared = vi.fn(async () => {});
-        const initialRegistry = createRuntimeRegistry('initial', { dispose: disposeInitial });
-        const preparedRegistry = createRuntimeRegistry('prepared', { dispose: disposePrepared });
+        const initialRegistry = (await createRuntimeRegistry('initial', { dispose: disposeInitial }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared', { dispose: disposePrepared }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1386,8 +1377,8 @@ describe('createPluginReloadController', () => {
 
     it('does not dispose a leased predecessor through an ordinary release while its adoption hook settles', async () => {
         const disposeInitial = vi.fn(async () => {});
-        const initialRegistry = createRuntimeRegistry('initial', { dispose: disposeInitial });
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        const initialRegistry = (await createRuntimeRegistry('initial', { dispose: disposeInitial }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1422,8 +1413,8 @@ describe('createPluginReloadController', () => {
 
     it('waits for cold initialization before adopting a prepared registry', async () => {
         const coldDeferred = createDeferred<ResolvedExecutablePluginRuntimeRegistry>();
-        const coldRegistry = createRuntimeRegistry('cold');
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        const coldRegistry = (await createRuntimeRegistry('cold'));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => await coldDeferred.promise,
         });
@@ -1453,8 +1444,8 @@ describe('createPluginReloadController', () => {
     it('does not make a prepared publication a global cold-initialization barrier', async () => {
         const preparedEntered = createDeferred<void>();
         const releasePrepared = createDeferred<void>();
-        const preparedRegistry = createRuntimeRegistry('prepared');
-        const coldRegistry = createRuntimeRegistry('cold');
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
+        const coldRegistry = (await createRuntimeRegistry('cold'));
         const resolveRuntimeRegistry = vi.fn(async () => coldRegistry);
         const controller = createPluginReloadController({ resolveRuntimeRegistry });
         const adoption = controller.adoptPreparedRuntimeRegistry({
@@ -1492,10 +1483,10 @@ describe('createPluginReloadController', () => {
         const preparedEntered = createDeferred<void>();
         const releasePrepared = createDeferred<void>();
         const retireInitialPluginConsumers = vi.fn();
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retirePluginConsumers: retireInitialPluginConsumers,
-        });
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1540,9 +1531,9 @@ describe('createPluginReloadController', () => {
         const releaseFirst = createDeferred<void>();
         const secondEntered = createDeferred<void>();
         const releaseSecond = createDeferred<void>();
-        const firstRegistry = createRuntimeRegistry('first');
-        const secondRegistry = createRuntimeRegistry('second');
-        const coldRegistry = createRuntimeRegistry('cold');
+        const firstRegistry = (await createRuntimeRegistry('first'));
+        const secondRegistry = (await createRuntimeRegistry('second'));
+        const coldRegistry = (await createRuntimeRegistry('cold'));
         const resolveRuntimeRegistry = vi.fn(async () => coldRegistry);
         const controller = createPluginReloadController({ resolveRuntimeRegistry });
         const firstFailure = new Error('first publication failed');
@@ -1586,8 +1577,8 @@ describe('createPluginReloadController', () => {
 
     it('keeps a predecessor registry alive until every outstanding lease is released', async () => {
         const disposeInitial = vi.fn(async () => {});
-        const initialRegistry = createRuntimeRegistry('initial', { dispose: disposeInitial });
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        const initialRegistry = (await createRuntimeRegistry('initial', { dispose: disposeInitial }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1611,19 +1602,19 @@ describe('createPluginReloadController', () => {
     it('rejects and disposes a prepared registry with blocking diagnostics', async () => {
         const retireInitialConsumers = vi.fn();
         const retireInitialPluginConsumers = vi.fn();
-        const initialRegistry = createRuntimeRegistry('initial', {
+        const initialRegistry = (await createRuntimeRegistry('initial', {
             retireConsumers: retireInitialConsumers,
             retirePluginConsumers: retireInitialPluginConsumers,
             activatedPluginIds: ['acme.broken'],
             occurrenceIds: {
                 'acme.broken': 'broken-before' as PluginRuntimeOccurrenceId,
             },
-        });
+        }));
         const dispose = vi.fn(async () => {});
-        const registry = createRuntimeRegistry('acme.broken', {
+        const registry = (await createRuntimeRegistry('acme.broken', {
             diagnostics: [{ code: 'plugin_daemon_module_load_failed', message: 'load failed' }],
             dispose,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1657,7 +1648,7 @@ describe('createPluginReloadController', () => {
         const retireInitialPluginConsumers = vi.fn();
         const alphaRetirement = new AbortController();
         const betaRetirement = new AbortController();
-        const initialRegistry = createRuntimeRegistry('acme.alpha', {
+        const initialRegistry = (await createRuntimeRegistry('acme.alpha', {
             activatedPluginIds: ['acme.alpha', 'acme.beta'],
             additionalPluginDiagnostics: { 'acme.beta': Object.freeze([]) },
             occurrenceIds: {
@@ -1670,9 +1661,9 @@ describe('createPluginReloadController', () => {
             },
             fencePluginConsumers: fenceInitialPluginConsumers,
             retirePluginConsumers: retireInitialPluginConsumers,
-        });
+        }));
         const disposePrepared = vi.fn(async () => {});
-        const preparedRegistry = createRuntimeRegistry('acme.alpha', {
+        const preparedRegistry = (await createRuntimeRegistry('acme.alpha', {
             activatedPluginIds: ['acme.alpha', 'acme.beta'],
             additionalPluginDiagnostics: { 'acme.beta': Object.freeze([]) },
             occurrenceIds: {
@@ -1680,7 +1671,7 @@ describe('createPluginReloadController', () => {
                 'acme.beta': 'beta-incumbent' as PluginRuntimeOccurrenceId,
             },
             dispose: disposePrepared,
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1719,7 +1710,7 @@ describe('createPluginReloadController', () => {
     });
 
     it('rotates only changed plugin occurrences when publishing a peer update', async () => {
-        const initialRegistry = createRuntimeRegistry('acme.alpha', {
+        const initialRegistry = (await createRuntimeRegistry('acme.alpha', {
             activatedPluginIds: ['acme.alpha', 'acme.beta'],
             additionalPluginDiagnostics: {
                 'acme.beta': Object.freeze([]),
@@ -1736,8 +1727,8 @@ describe('createPluginReloadController', () => {
                     kind: 'development', registeredRootId: 'beta-root',
                 },
             },
-        });
-        const replacementRegistry = createRuntimeRegistry('acme.alpha', {
+        }));
+        const replacementRegistry = (await createRuntimeRegistry('acme.alpha', {
             activatedPluginIds: ['acme.alpha', 'acme.beta'],
             additionalPluginDiagnostics: {
                 'acme.beta': Object.freeze([]),
@@ -1754,7 +1745,7 @@ describe('createPluginReloadController', () => {
                     kind: 'development', registeredRootId: 'beta-root',
                 },
             },
-        });
+        }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => initialRegistry,
         });
@@ -1789,8 +1780,8 @@ describe('createPluginReloadController', () => {
     });
 
     it('notifies listeners once for cold initialization and each prepared adoption', async () => {
-        const coldRegistry = createRuntimeRegistry('cold');
-        const preparedRegistry = createRuntimeRegistry('prepared');
+        const coldRegistry = (await createRuntimeRegistry('cold'));
+        const preparedRegistry = (await createRuntimeRegistry('prepared'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => coldRegistry,
         });
@@ -1811,7 +1802,7 @@ describe('createPluginReloadController', () => {
     });
 
     it('returns a synchronous lease only while an active registry is available', async () => {
-        const registry = createRuntimeRegistry('active');
+        const registry = (await createRuntimeRegistry('active'));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => registry,
         });
@@ -1826,8 +1817,8 @@ describe('createPluginReloadController', () => {
     });
 
     it('binds each active runtime lease to the durable revision that established it', async () => {
-        const coldRegistry = createRuntimeRegistry('cold', { durableRevision: 0 });
-        const preparedRegistry = createRuntimeRegistry('prepared', { durableRevision: -1 });
+        const coldRegistry = (await createRuntimeRegistry('cold', { durableRevision: 0 }));
+        const preparedRegistry = (await createRuntimeRegistry('prepared', { durableRevision: -1 }));
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => coldRegistry,
         });
@@ -1860,7 +1851,7 @@ describe('createPluginReloadController', () => {
         await preparedLease?.release();
 
         await expect(controller.adoptPreparedRuntimeRegistry({
-            registry: createRuntimeRegistry('failed-publication', { durableRevision: -1 }),
+            registry: (await createRuntimeRegistry('failed-publication', { durableRevision: -1 })),
             changedPluginIds: ['acme.plugin'],
             durableRevision: 5,
             runningSessionDisposition: 'retainRunningSessions',
@@ -1879,7 +1870,7 @@ describe('createPluginReloadController', () => {
     it('waits for a held registry lease during shutdown before disposing its generation', async () => {
         const dispose = vi.fn(async () => {});
         const controller = createPluginReloadController({
-            resolveRuntimeRegistry: async () => createRuntimeRegistry('shutdown-leased', { dispose }),
+            resolveRuntimeRegistry: async () => (await createRuntimeRegistry('shutdown-leased', { dispose })),
         });
         const lease = await controller.acquireRuntimeRegistry();
 
@@ -1896,9 +1887,9 @@ describe('createPluginReloadController', () => {
     it('bounds shutdown disposal when the active registry hangs', async () => {
         vi.useFakeTimers();
         const controller = createPluginReloadController({
-            resolveRuntimeRegistry: async () => createRuntimeRegistry('shutdown-hangs', {
+            resolveRuntimeRegistry: async () => (await createRuntimeRegistry('shutdown-hangs', {
                 dispose: async () => await new Promise<void>(() => {}),
-            }),
+            })),
         });
         const lease = await controller.acquireRuntimeRegistry();
         await lease.release();
@@ -1919,7 +1910,7 @@ describe('createPluginReloadController', () => {
         const cleanupEntered = createDeferred<void>();
         const cleanupGate = createDeferred<void>();
         let cleanupStarted = false;
-        const fixture = createRuntimeRegistry('slow-shutdown');
+        const fixture = (await createRuntimeRegistry('slow-shutdown'));
         const activated = await activatePluginRuntimeRegistry({
             contributes: fixture.contributes,
             generation: 1,
@@ -1980,7 +1971,7 @@ describe('createPluginReloadController', () => {
         await resolutionStarted.promise;
 
         await controller.shutdown({ timeoutMs: 50 });
-        deferred.resolve(createRuntimeRegistry('late', { dispose }));
+        deferred.resolve((await createRuntimeRegistry('late', { dispose })));
 
         await expect(leasePromise).rejects.toThrow(/shut down/i);
         expect(dispose).toHaveBeenCalledTimes(1);

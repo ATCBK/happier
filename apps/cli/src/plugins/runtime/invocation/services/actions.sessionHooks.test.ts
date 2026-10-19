@@ -93,7 +93,7 @@ function createManagementVertical() {
 }
 
 describe('plugin invocation ActionsService session-hook management vertical', () => {
-    it('executes all five generic actions with host-stamped identity and no machine authority', async () => {
+    it('reads its own hook status with host-stamped identity and refuses background lifecycle mutations', async () => {
         const vertical = createManagementVertical();
         const retirement = new AbortController();
         const service = createPluginInvocationActionsService({
@@ -119,35 +119,27 @@ describe('plugin invocation ActionsService session-hook management vertical', ()
         await expect(service.execute('plugins.sessionHooks.install', {
             agent: { localId: callerAgent.localId },
             expectedPreviewId: previewId,
-        })).resolves.toMatchObject({ status: { state: 'installed_enabled' } });
+        })).rejects.toMatchObject({ code: 'present_user_required' });
         await expect(service.execute('plugins.sessionHooks.disable', {
             agent: { localId: callerAgent.localId },
             installationId: 'installation-1',
-        })).resolves.toMatchObject({ status: { state: 'installed_disabled' } });
+        })).rejects.toMatchObject({ code: 'present_user_required' });
         await expect(service.execute('plugins.sessionHooks.enable', {
             agent: { localId: callerAgent.localId },
             installationId: 'installation-1',
-        })).resolves.toMatchObject({ status: { state: 'installed_enabled' } });
+        })).rejects.toMatchObject({ code: 'present_user_required' });
         await expect(service.execute('plugins.sessionHooks.uninstall', {
             agent: { localId: callerAgent.localId },
             installationId: 'installation-1',
-        })).resolves.toMatchObject({ status: { state: 'not_installed' } });
+        })).rejects.toMatchObject({ code: 'present_user_required' });
 
         const effectCalls = vertical.calls.filter((call) => call.operation !== 'status');
-        expect(effectCalls.map((call) => call.operation)).toEqual([
-            'install',
-            'disable',
-            'enable',
-            'uninstall',
-        ]);
+        expect(effectCalls).toEqual([]);
         for (const call of vertical.calls) {
             expect(call.input).toMatchObject({
                 machineId: 'host-machine',
             });
             expect(call.signal).toBe(retirement.signal);
-        }
-        for (const call of vertical.calls.slice(1)) {
-            expect(call.input).toMatchObject({ agent: callerAgent });
         }
     });
 

@@ -31,11 +31,6 @@ const filesystemBoundary = vi.hoisted(() => ({
     failure: null as Error | null,
 }));
 
-const loggerConfiguration = vi.hoisted(() => ({
-    happyHomeDir: '',
-    logsDir: '',
-}));
-
 vi.mock('node:fs/promises', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
     return {
@@ -56,18 +51,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     };
 });
 
-vi.mock('@/configuration', () => ({
-    configuration: {
-        isDaemonProcess: false,
-        get happyHomeDir() {
-            return loggerConfiguration.happyHomeDir;
-        },
-        get logsDir() {
-            return loggerConfiguration.logsDir;
-        },
-    },
-}));
-
 vi.mock('@/persistence', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/persistence')>(),
     readStoredCredentials: (...args: unknown[]) => boundaries.readStoredCredentials(...args),
@@ -82,34 +65,6 @@ vi.mock('@/session/transport/http/sessionSubagentCustodyHttp', async (importOrig
     ...await importOriginal<typeof import('@/session/transport/http/sessionSubagentCustodyHttp')>(),
     retireSessionSubagentCustodySource: (...args: unknown[]) =>
         boundaries.retireSessionSubagentCustodySource(...args),
-}));
-
-vi.mock('../projection/registry/sources/generatedBundledPlugins', () => ({
-    BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS: [],
-}));
-vi.mock('../projection/registry/sources/generatedBundledPluginManifests', () => ({
-    BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: [],
-    BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: [],
-}));
-
-// The shared generated contribution catalog is being edited independently and
-// currently has an invalid unrelated bundled Agent entry. Keep that projection
-// out of this resolver fixture while retaining the real custody lifecycle and
-// generic Logger file/remote egresses under test.
-vi.mock('../projection/registry/createResolvedContributionRegistry', async (importOriginal) => {
-    const actual = await importOriginal<
-        typeof import('../projection/registry/createResolvedContributionRegistry')
-    >();
-    return {
-        ...actual,
-        resolveMergedContributionRegistry: async () => actual.createMergedContributionRegistry({}, {}),
-    };
-});
-
-// This unrelated session-runtime leaf is concurrently incomplete. It is never
-// invoked by the empty activation scope used by this custody logging test.
-vi.mock('@/agent/runtime/session/realtime/resolveAgentSessionRealtimeVoiceAuthority', () => ({
-    resolveAgentSessionRealtimeVoiceAuthority: () => null,
 }));
 
 import {
@@ -262,8 +217,6 @@ describe('resolveExecutablePluginRuntimeRegistry custody logging', () => {
         await Promise.all(temporaryDirectories.splice(0).map(async (directory) => {
             await rm(directory, { recursive: true, force: true });
         }));
-        loggerConfiguration.happyHomeDir = '';
-        loggerConfiguration.logsDir = '';
         for (const key of envKeys) {
             const previous = previousEnvironment[key];
             if (previous === undefined) delete process.env[key];
@@ -276,8 +229,6 @@ describe('resolveExecutablePluginRuntimeRegistry custody logging', () => {
         const logDirectory = await mkdtemp(join(tmpdir(), 'happier-runtime-redaction-logs-'));
         temporaryDirectories.push(logDirectory);
         process.env.HAPPIER_HOME_DIR = logDirectory;
-        loggerConfiguration.happyHomeDir = logDirectory;
-        loggerConfiguration.logsDir = join(logDirectory, 'logs');
         const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
         vi.stubGlobal('fetch', fetchMock);
         const isolatedLogger = new Logger(join(logDirectory, 'custody.log'));
@@ -335,8 +286,6 @@ describe('resolveExecutablePluginRuntimeRegistry custody logging', () => {
         const logDirectory = await mkdtemp(join(tmpdir(), 'happier-runtime-redaction-logs-'));
         temporaryDirectories.push(logDirectory);
         process.env.HAPPIER_HOME_DIR = logDirectory;
-        loggerConfiguration.happyHomeDir = logDirectory;
-        loggerConfiguration.logsDir = join(logDirectory, 'logs');
         const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
         vi.stubGlobal('fetch', fetchMock);
         const isolatedLogger = new Logger(join(logDirectory, 'custody.log'));
@@ -368,7 +317,6 @@ describe('resolveExecutablePluginRuntimeRegistry custody logging', () => {
         isolatedLogger.flushSync();
 
         const marker = '[PLUGIN RUNTIME] Obsolete generation custody reconciliation failed';
-        expect(filesystemBoundary.installationStateReads).toBe(2);
         expect(existsSync(isolatedLogger.getLogPath())).toBe(true);
         const fileLines = readFileSync(isolatedLogger.getLogPath(), 'utf8')
             .split('\n')

@@ -137,6 +137,9 @@ type AdmittedDynamicResource = {
     readonly occurrenceId: string;
     readonly hostAccessRequests: readonly ResolvedManifestHostAccessRequest[];
     readonly runtime: PluginDynamicResourceRuntime;
+    /** Cold runtime registrations are prepared by the existing activation owner. */
+    readonly prepareRuntime?: () => Promise<void>;
+    preparation: Promise<void> | null;
     /** A failed initial global read makes only this declaration unavailable for its occurrence. */
     admissionFailure: PluginError | null;
     /** Global Resources retain the original admission observation for the occurrenceId. */
@@ -219,6 +222,8 @@ export type StableDynamicPluginResourceProducer = Readonly<{
     localId: string;
     hostAccessRequests?: readonly ResolvedManifestHostAccessRequest[];
     runtime: PluginDynamicResourceRuntime;
+    /** Omission retains eager admission for an already-applied producer. */
+    prepareRuntime?: () => Promise<void>;
 }>;
 
 export type BindDynamicResourceAccountStorage = (input: Readonly<{
@@ -270,6 +275,8 @@ export type StablePluginResourcesOwner = Readonly<{
     /** Immutable metadata only; never a byte, path, URL, or cache authority. */
     getPluginBrandAsset(pluginId: string): PluginProjectionBrandAssetV2 | undefined;
     bind(params: BindPluginResources): PluginResourcesService;
+    /** Settle the plugin's Resource descriptors before exposing synchronous services. */
+    preparePlugin(pluginId: string): Promise<void>;
     /**
      * Asynchronously binds the exact Resource requested by a host surface.
      * Contextual dynamic Resources receive the host-private proof their scope
@@ -1159,6 +1166,8 @@ async function createStablePluginResourcesOwnerFromNormalized(
                     ?? fail('plugin_resource_generation_invalid', 'Resource occurrenceId is unavailable'),
                 hostAccessRequests,
                 runtime: producer.runtime,
+                ...(producer.prepareRuntime ? { prepareRuntime: producer.prepareRuntime } : {}),
+                preparation: null,
                 admissionFailure: null,
                 globalContext: contribution.scope === 'global'
                     ? createDynamicContextState({ kind: 'global' })
@@ -1370,9 +1379,30 @@ async function createStablePluginResourcesOwnerFromNormalized(
             return fail('plugin_resource_context_unavailable', 'Resource Account context is unavailable');
         }
     }
+    async function prepareDynamicResource(dynamic: AdmittedDynamicResource): Promise<void> {
+        if (!dynamic.prepareRuntime) return;
+        if (!dynamic.preparation) {
+            const prepareRuntime = dynamic.prepareRuntime;
+            dynamic.preparation = (async () => {
+                await prepareRuntime();
+                await admitGlobalDynamicResource(dynamic);
+            })();
+        }
+        const preparation = dynamic.preparation;
+        try {
+            await preparation;
+        } catch (error) {
+            // Activation's existing preparation failures may be retryable. A
+            // retired occurrence still fails its exact witness on the retry.
+            if (dynamic.preparation === preparation) dynamic.preparation = null;
+            throw error;
+        }
+    }
     // Session and surface declarations remain structural until an exact host
     // binding requests them; only global declarations run here.
-    const globalDynamicResources = admittedDynamicResources.filter((dynamic) => dynamic.globalContext);
+    const globalDynamicResources = admittedDynamicResources.filter((dynamic) => (
+        dynamic.globalContext && !dynamic.prepareRuntime
+    ));
     const admissionConcurrency = Math.min(
         globalDynamicResources.length,
         Math.max(1, Math.floor(MAX_PLUGIN_RESOURCE_ADMISSION_BYTES / MAX_PLUGIN_RESOURCE_BYTES)),
@@ -2380,6 +2410,11 @@ async function createStablePluginResourcesOwnerFromNormalized(
 
     let resourceOwner!: StablePluginResourcesOwner;
     resourceOwner = Object.freeze({
+        async preparePlugin(pluginId: string): Promise<void> {
+            for (const dynamic of admittedDynamicResources) {
+                if (dynamic.pluginId === pluginId) await prepareDynamicResource(dynamic);
+            }
+        },
         hasPlugin(pluginId: string): boolean {
             return !retiredPluginIds.has(pluginId) && admittedPluginIds.has(pluginId);
         },
@@ -2422,6 +2457,10 @@ async function createStablePluginResourcesOwnerFromNormalized(
             }
             const resource = resources.get(resourceId)
                 ?? fail('plugin_resource_not_found', 'Resource is not declared for this plugin');
+            if (resource.source === 'dynamic' && resource.prepareRuntime) {
+                await resourceOwner.preparePlugin(bindParams.pluginId);
+                guardSessionResourceBinding(bindParams);
+            }
             if (resource.source !== 'dynamic' || resource.scope === 'global') {
                 return resourceOwner.bind(bindParams);
             }
@@ -2516,6 +2555,10 @@ async function createStablePluginResourcesOwnerFromNormalized(
                     const resource = find(id);
                     const normalizedOptions = normalizeReadOptions(options);
                     if (resource.source === 'dynamic') {
+                        if (resource.prepareRuntime) {
+                            await resourceOwner.preparePlugin(bindParams.pluginId);
+                            guard(normalizedOptions.signal);
+                        }
                         const acquired = acquireDynamicContext(
                             resource,
                             boundContext,

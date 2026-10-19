@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,20 +14,10 @@ import {
     tryAcquireAuthoritativePluginRuntimeRegistryLease,
 } from './runtimeLease';
 
-function createRuntimeRegistry(durableRevision?: number): ResolvedExecutablePluginRuntimeRegistry {
+async function createRuntimeRegistry(durableRevision?: number): Promise<ResolvedExecutablePluginRuntimeRegistry> {
     return {
-        contributes: {
-            agents: Object.freeze([]),
-                        actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            uiViewsV2: Object.freeze([]),
-            uiRenderersV2: Object.freeze([]),
-            uiTranslationsV2: Object.freeze([]),
-            activationTargets: Object.freeze([]),
-                        catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-                        pluginDiagnosticsByPluginId: Object.freeze({}),
-        },
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}), pluginIds: [] }),
+        contributes: createResolvedContributionRegistry({}),
         hookHandlersByHookId: new Map(),
         agentRuntimesByAgentId: new Map(),
         scmHostingProvidersById: new Map(),
@@ -52,7 +44,7 @@ describe('acquireAuthoritativePluginRuntimeRegistryLease', () => {
     });
 
     it('delegates to the controller runtime lease when an active registry exists', async () => {
-        const activeRegistry = createRuntimeRegistry();
+        const activeRegistry = (await createRuntimeRegistry());
         const release = vi.fn().mockResolvedValue(undefined);
         const tryAcquireRuntimeRegistry = vi.fn().mockReturnValue({
             registry: activeRegistry,
@@ -117,7 +109,7 @@ describe('acquireAuthoritativePluginRuntimeRegistryLease', () => {
     });
 
     it('gives direct ephemeral hook registries the same one-shot release contract', async () => {
-        const registry = createRuntimeRegistry(7);
+        const registry = (await createRuntimeRegistry(7));
         const disposeSpy = vi.spyOn(registry, 'dispose');
         const lease = createEphemeralPluginRuntimeRegistryLease(registry);
 
@@ -132,7 +124,7 @@ describe('acquireAuthoritativePluginRuntimeRegistryLease', () => {
     it('uses the singleton controller when the explicit happy home is the configured home', async () => {
         vi.resetModules();
 
-        const activeRegistry = createRuntimeRegistry();
+        const activeRegistry = (await createRuntimeRegistry());
         const release = vi.fn().mockResolvedValue(undefined);
         const tryAcquireRuntimeRegistry = vi.fn().mockReturnValue({
             registry: activeRegistry,

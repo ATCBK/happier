@@ -22,7 +22,7 @@ import { createStablePluginExecService } from '../../../invocation/services/exec
 import { resolvePluginPathWithinRoots } from '../../../invocation/services/filesystem';
 import { captureProcessTree, terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { isPidAlive } from '@/testkit/process/spawn';
-import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
+import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 
 const windowsSpawnBoundary = vi.hoisted(() => ({ wrapperPath: null as string | null }));
 // Windows command-shell execution is the OS boundary; grant authorization and SDK owners remain real.
@@ -32,7 +32,7 @@ vi.mock('node:child_process', async importOriginal => {
         ...actual,
         spawn: (command: string, args: readonly string[], options?: SpawnOptions) =>
             actual.spawn(command, windowsSpawnBoundary.wrapperPath && args[0]?.endsWith('agent_cli_windows_shim_runner.cjs')
-                ? [windowsSpawnBoundary.wrapperPath, ...args.slice(2)] : args, options),
+                ? [windowsSpawnBoundary.wrapperPath, ...args.slice(2)] : args, options ?? {}),
     };
 });
 
@@ -113,7 +113,7 @@ describe('Agent CLI system-tool binding (integration)', () => {
             allowedExecutables: [{ kind: 'systemTool', id: 'claude-cli' }],
             signal: new AbortController().signal, isOccurrenceCurrent: () => true, systemTools,
             resolveExecutable: async () => { throw new Error('The exact resolution grant was not consumed'); },
-            resolvePath: path => resolvePluginPathWithinRoots({ pluginData: directory, workspace: directory, projects: new Map() }, path),
+            resolvePath: async path => resolvePluginPathWithinRoots({ pluginData: directory, workspace: directory, projects: new Map() }, path),
         });
         windowsSpawnBoundary.wrapperPath = mode === 'wrapped' ? vendorPath : null;
         const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,

@@ -78,6 +78,7 @@ function exactHandleClaim(): RunnerManagedProviderCustodyClaimV1 {
         v: 1,
         deployment: {
             kind: 'managedLocal',
+            gatewayPlacement: { kind: 'sessionMachine' },
             implementationIdentity: {
                 pluginId: 'opencode',
                 localId: 'opencode',

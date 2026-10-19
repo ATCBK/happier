@@ -27,6 +27,35 @@ import {
 import type { PluginInvocationServicesSeed } from './types';
 
 describe('retired Settings fields are never pruned', () => {
+    it('keeps declarations available while Account storage is unavailable and rechecks storage when it recovers', async () => {
+        let available = false;
+        let reads = 0;
+        const host = createStablePluginSettingsHost({
+            declarations: [{ pluginId: 'acme.plugin', contribution: {
+                id: 'preferences', version: 1, title: 'Preferences', target: { kind: 'plugin' }, scope: 'account',
+                fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: false }],
+                presentation: { sections: [], subagentSections: [] },
+            } }],
+            recordStore: createAccountSettingsBackedSettingsRecordStore({
+                isAvailable: () => available,
+                async bindOperation() {
+                    return {
+                        async readRecord() { reads += 1; return { status: 'absent' as const }; },
+                        async writeRecord() { throw new Error('This read-only fixture must not write'); },
+                    };
+                },
+            }),
+            broker: createStablePluginEventsBroker(),
+        });
+        const service = host.bind(seed(() => true))!.forScope({ kind: 'account' });
+        expect(service.describe().map(field => field.id)).toEqual(['enabled']);
+        await expect(service.get('enabled')).rejects.toMatchObject({ code: 'plugin_settings_scope_unavailable' });
+        expect(reads).toBe(0);
+        available = true;
+        await expect(service.get('enabled')).resolves.toBe(false);
+        expect(reads).toBe(1);
+    });
+
     it('drops retired envelope and declared value fields on stored reads while preserving opaque field ids and strict set admission', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-settings-stored-'));
         const storage = createPluginStorageOwner({ pluginId: 'acme.plugin', paths: resolvePluginStorePaths({ happyHomeDir }) });

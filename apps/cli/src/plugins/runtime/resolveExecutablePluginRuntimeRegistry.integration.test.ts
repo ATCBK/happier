@@ -78,6 +78,7 @@ import { createNativeAgentSessionHostServiceOwners } from '@/agent/runtime/regis
 import type { HostSessionRuntimeFactoryParams } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { logger } from '@/ui/logger';
 import * as persistence from '@/persistence';
 import { createHostPluginNotificationChannels } from '@/notifications/activity/pluginNotificationChannels';
@@ -85,6 +86,7 @@ import { pluginReloadController } from './reload/singleton';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createRemoteManagedProviderSessionProjection } from '@/daemon/startup/remoteManagedProviderSession';
 import { openAccountConnectionProviderBrokerAccess } from '@/providers/broker/accountConnectionClient';
+import { projectProviderBrokerEndpointMetadata, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
 import {
     resetActiveAccountSettingsSnapshotForTests,
     setActiveAccountSettingsSnapshot,
@@ -411,6 +413,7 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
             input: Parameters<ManagedProviderOperationAuthority['activate']>[0],
         ) => Object.freeze({
             exactPurposeBindingSubjectId: 'managed-provider-operation:exact-fixture',
+            isCurrent: () => true,
             requestAuth: Object.freeze({
                 realm: 'managedProviderStart' as const,
                 capabilityPath: join(happyHomeDir, 'request-auth-capability.json'),
@@ -907,6 +910,15 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         admitConsumer: async () => true,
                         openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'relay',
                             retire: async () => undefined, close: async () => { carrierClosed = true; } }),
+                        // The carrier is the network boundary; serve the real
+                        // broker endpoint projection through that same fixture.
+                        fetchImpl: async (url, init) => {
+                            expect(String(url)).toBe(`http://127.0.0.1:43123${PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH}`);
+                            expect(init?.method).toBe('GET');
+                            const endpoint = projectProviderBrokerEndpointMetadata('http://127.0.0.1:45123/v1');
+                            if (!endpoint) throw new Error('Expected canonical broker endpoint metadata');
+                            return new Response(null, { status: endpoint.status, headers: endpoint.headers });
+                        },
                     });
                 },
             } satisfies Parameters<typeof createRemoteManagedProviderSessionProjection>[0];
@@ -1919,6 +1931,10 @@ describe('resolveExecutablePluginRuntimeRegistry (integration)', () => {
                         machineId: 'machine-1',
                         agentTargetKey: 'backend:session-agent',
                         session,
+                        currentSessionPresentation: createCurrentSessionPresentationHost({
+                            session,
+                            signal: new AbortController().signal,
+                        }).bindCurrentSession,
                         transcriptSession: session,
                         messageBuffer: new MessageBuffer(),
                         accountSettings: accountSettingsParse({

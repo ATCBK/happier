@@ -20,8 +20,8 @@ export type PluginContributionActivationDemand = Readonly<{
  * deletes registrations the consumer still reads synchronously.
  *
  * Everything else is deliberately eager: `backgroundServices` is a declared
- * machine-runtime service, and `resources`, `events`, `promptAssets` and
- * `composerReferences` are still read synchronously by their hosts.
+ * machine-runtime service, and Event subscriptions must be listening before
+ * the first event arrives.
  */
 const PRODUCT_DEMAND_READY_REGISTRATION_FAMILIES = new Set([
     'actions',
@@ -36,6 +36,11 @@ const PRODUCT_DEMAND_READY_REGISTRATION_FAMILIES = new Set([
     'agents',
     'providers',
     'voiceProviders',
+    // Resource binding and plugin invocation prepare the exact registered
+    // producer before exposing its synchronous descriptor/watch services.
+    'resources',
+    // Inventory is declarative; search/resolve demand the selected runtime.
+    'composerReferences',
     // Reached only when a composer stages that exact attachment, through
     // `createTargetComposerAttachmentRegistry`'s own demand boundary.
     'composerAttachments',
