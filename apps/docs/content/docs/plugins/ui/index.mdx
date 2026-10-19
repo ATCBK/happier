@@ -529,7 +529,17 @@ and one `trailing` element. Give it `onPress` when the row leads somewhere; leav
 it out when the row carries its own control. `variant="fact"` draws a quiet
 one-line statement instead of a named thing. `DiffStat` draws lines added and
 removed (`+53 −5`) in the host's version-control inks and leaves out a side that
-is zero.
+is zero; pass `locale` to format the counts in the language your surface renders.
+Where only text fits (a `List.Item` `detail` or a metadata value),
+`formatHappierDiffStat(added, removed, { locale })` returns the same two counts.
+
+`ReviewSeverity` draws a review finding's severity the way Happier's own review
+surfaces do: one colour role per severity (Blocker and High in the failure ink,
+Medium in the caution ink, Low and Nit in two steps of quiet ink), with your
+translated `label`. `presentation="badge"` draws it as a tinted chip among other
+facts and `presentation="dot"` as the mark alone. A `Banner` with
+`presentation="strip"` is the compact band across the top of a pane: its title
+leads when a description finishes the sentence.
 
 ```tsx
 import { DiffStat, WidgetGlanceRow } from '@happier-dev/plugin-ui';
