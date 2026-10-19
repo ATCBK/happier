@@ -218,10 +218,14 @@ function acquireCaptureAdmission(
   currentUiContext?: VoiceCurrentUiToolPort,
 ): LocalVoiceCaptureAdmission | null {
   if (captureAdmission?.controlSessionId === controlSessionId) {
-    captureAdmission.captureAttempt = resolveLocalVoiceCaptureAttempt(
-      controlSessionId,
-      captureAdmission.lease,
-    );
+    // A retained producer still owns its buffered utterance. Settings select
+    // the next producer only after the incumbent capture has stopped.
+    if (!localVoiceCaptureOwner.isCaptureActive(controlSessionId)) {
+      captureAdmission.captureAttempt = resolveLocalVoiceCaptureAttempt(
+        controlSessionId,
+        captureAdmission.lease,
+      );
+    }
     return captureAdmission;
   }
   if (captureAdmission) {

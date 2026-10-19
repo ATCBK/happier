@@ -52,7 +52,7 @@ describe('local voice engine TTS behavior', () => {
         speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
     }, 180_000);
 
-    it('supports barge-in while device TTS is speaking when enabled', async () => {
+    it.each(['device', 'local_neural'] as const)('supports manual barge-in with the retained device producer after selecting %s STT', async (nextProvider) => {
         const storage = await getStorage();
         storage.__setState({
             settings: {
@@ -80,6 +80,7 @@ describe('local voice engine TTS behavior', () => {
             },
         });
 
+        const settings = storage.getState().settings;
         const onDoneRef: { current: (() => void) | undefined } = { current: undefined };
         const onStoppedRef: { current: (() => void) | undefined } = { current: undefined };
         expoSpeechSpeak.mockImplementation((_text: string, opts: any) => {
@@ -92,6 +93,9 @@ describe('local voice engine TTS behavior', () => {
         });
 
         localVoicePendingEnqueue.mockImplementation(async request => {
+            // Restore the next producer only once Send has consumed and
+            // submitted the incumbent device controller's buffered utterance.
+            if (localVoicePendingEnqueue.mock.calls.length === 2) storage.__setState({ settings });
             await publishLocalVoiceSubmittedUserMessage(request);
             await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: `m${localVoicePendingEnqueue.mock.calls.length}`, text: 'Hi there' });
             return acknowledgeLocalVoicePendingEnqueue(request);
@@ -109,6 +113,12 @@ describe('local voice engine TTS behavior', () => {
         // a native recognition start. Manual barge-in retains the live producer.
         expect(speechRecStart).toHaveBeenCalledTimes(2);
 
+        emitSpeechRecEvent('result', { isFinal: false, results: [{ transcript: 'second turn', confidence: 0.9, segments: [] }] });
+        const config = readLocalDirectVoiceSettings(settings.voice);
+        storage.__setState({ settings: { ...settings, voice: { ...settings.voice, providers: {
+            ...settings.voice.providers,
+            local_direct: { schemaVersion: 1, config: { ...config, stt: { ...config.stt, provider: nextProvider } } },
+        } } } });
         await toggleLocalVoiceTurn('s1');
         await sendTurnPromise;
 
@@ -117,11 +127,11 @@ describe('local voice engine TTS behavior', () => {
         expect(speechRecStart).toHaveBeenCalledTimes(2);
         emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'second turn', confidence: 0.9, segments: [] }] });
         const secondTurn = toggleLocalVoiceTurn('s1');
+        await vi.waitFor(() => expect(localVoicePendingEnqueue.mock.calls[1]?.[0]).toMatchObject({ sessionId: 's1', body: {
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'second turn' } } },
+        } }));
         await waitForVoiceStatus(() => getLocalVoiceState().status, 'speaking');
         expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(2);
-        expect(localVoicePendingEnqueue.mock.calls[1]?.[0]).toMatchObject({ sessionId: 's1', body: {
-            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'second turn' } } },
-        } });
         onDoneRef.current?.();
         await secondTurn;
     });
