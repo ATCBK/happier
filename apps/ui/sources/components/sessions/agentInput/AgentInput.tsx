@@ -149,6 +149,7 @@ import { useOptionalSessionTranscriptSource, useSessionTranscriptSource } from '
 import { resolveArmedComposerContinuation } from './components/agentContinuationSubmitPresentation';
 import { AgentInputSubmitButton } from './components/AgentInputSubmitButton';
 import { useAgentInputActionMenuControls } from './controls/useAgentInputActionMenuControls';
+import { AGENT_INPUT_COMPACT_CONTROL_IDS } from './controls/agentInputControlRegistry';
 import { useAgentInputCoreControlHandlers } from './controls/useAgentInputCoreControlHandlers';
 import { useRenderedAgentInputControlRows } from './controls/useRenderedAgentInputControlRows';
 import type { AgentInputControlId } from './controls/agentInputControlTypes';
@@ -246,6 +247,7 @@ import {
     createStructuredInputMentionFromSuggestion,
     reconcileStructuredInputMentionsWithText,
     reconcileStructuredInputMentionsWithTextChange,
+    structuredInputMentionSurvivesText,
     type ComposerStructuredInputMention,
 } from './structuredInputMentions';
 import {
@@ -255,6 +257,7 @@ import {
     shouldReserveAgentInputExpansionToggleSpace,
 } from './inputExpansionToggleVisibility';
 import { AgentInputCommandMenu } from './commandMenu/AgentInputCommandMenu';
+import { AgentInputPopoverClearanceContext } from './selection/useAgentInputPopoverLayout';
 import { AgentInputFieldAccessories, resolveAgentInputFieldAccessoryGeometry } from './components/AgentInputFieldAccessories';
 import { AgentInputPromptPicker } from './commandMenu/AgentInputPromptPicker';
 import { usePromptPickerController } from './commandMenu/usePromptPickerController';
@@ -500,6 +503,12 @@ interface AgentInputProps {
      * WHAT it contains; it never picks how the bar is laid out (owner, 2026-10-11).
      */
     barControlIds?: readonly AgentInputControlId[];
+    /**
+     * `compact`: an ask box on a page about one thing (the machine page's "Ask an agent", lab `ra`
+     * A1). The composer contains only where it runs and which model answers, on one rail; every
+     * other choice keeps the new session's default. Default `full`.
+     */
+    controlPreset?: 'full' | 'compact';
     /**
      * `document`: the composer is one card in a document (a workflow step), not the floating
      * composer of a conversation. It draws the plain hairline card the read-only presentation
@@ -1225,6 +1234,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // Interactive local samples have conversation presentation without live Session runtime authority.
     const localSampleSource = transcriptSource?.kind === 'readOnly' && transcriptSource.actions !== null ? transcriptSource : null;
     const isConversation = Boolean(props.sessionId || localSampleSource);
+    const compactControls = props.controlPreset === 'compact';
     const attentionRequestSessionId = props.sessionId ?? localSampleSource?.sessionId;
     const submitAccessibilityLabel = props.submitAccessibilityLabel ?? (isConversation ? t('common.send') : undefined);
     const readOnly = props.onChangeText === undefined;
@@ -1538,8 +1548,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
 
     const inputRef = React.useRef<MultiTextInputHandle>(null);
+    // A host's explicit focus request puts the caret where the composer's document has it: after a host
+    // writes the text (the Discussion composer's `@`), the field opens at the end, not where it last was.
     const requestComposerFocus = React.useCallback(() => {
         inputRef.current?.focus();
+        inputRef.current?.setSelection(inputStateRef.current.selection);
     }, []);
     const flushComposerInput = React.useCallback(() => {
         inputRef.current?.flushPendingTextChange?.();
@@ -1910,12 +1923,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         accessory: fieldAccessory != null && !accessoriesInActionRow,
         belowToggle: shouldShowInputExpansionToggle,
     });
-    const trailingAccessory = props.trailingAccessory
-        ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet
-            : accessoriesInActionRow ? (
-                <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
-                    accessory={fieldAccessory} belowToggle={false} placement="actionRow" />
-            ) : null);
+    const actionRowAccessories = accessoriesInActionRow ? (
+        <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
+            accessory={fieldAccessory} belowToggle={false} placement="actionRow" />
+    ) : null;
+    // A host's accessory replaces the Voice planet, but a document's own tools (library, mic) stay in the row
+    // after it: the Discussion composer's addressing line sits before its dictation mic.
+    const trailingAccessory = props.trailingAccessory != null && actionRowAccessories
+        ? <>{props.trailingAccessory}{actionRowAccessories}</>
+        : props.trailingAccessory ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet : actionRowAccessories);
     const fieldInputPaddingRight = Math.max(
         fieldAccessoryGeometry.paddingRight ?? 0,
         shouldReserveInputExpansionToggleSpace ? INPUT_EXPANSION_TOGGLE_INPUT_PADDING_RIGHT : 0,
@@ -1947,11 +1963,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             text: props.value,
             selection: nextSelection,
         };
-        updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
-            previousText: current.text,
-            nextText: props.value,
-            mentions: currentMentions,
-        }));
+        // An authored controlled snapshot already has ranges for the new text.
+        // Otherwise retain the existing reconciliation for stale controlled
+        // ranges, including external text-only changes.
+        if (props.structuredInputMentions === undefined
+            || !props.structuredInputMentions.every((mention) => structuredInputMentionSurvivesText(props.value, mention))) {
+            updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
+                previousText: current.text,
+                nextText: props.value,
+                mentions: currentMentions,
+            }));
+        }
         setHasAutocompleteTextInteraction(false);
         inputStateRef.current = nextState;
         updateActiveWordState(nextState);
@@ -1961,7 +1983,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             setLiveTextStatus(nextStatus);
         }
         updateInputSelectionState(nextSelection);
-    }, [props.value, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
+    }, [props.value, props.structuredInputMentions, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         updateActiveWordState(inputStateRef.current);
@@ -1978,11 +2000,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const nextSelection = { start: props.value.length, end: props.value.length };
         const nextState = { text: props.value, selection: nextSelection };
         historyAppliedInputStateRef.current = { state: nextState };
-        updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
-            previousText: liveInputText,
-            nextText: props.value,
-            mentions: currentMentions,
-        }));
+        if (props.structuredInputMentions === undefined
+            || !props.structuredInputMentions.every((mention) => structuredInputMentionSurvivesText(props.value, mention))) {
+            updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
+                previousText: liveInputText,
+                nextText: props.value,
+                mentions: currentMentions,
+            }));
+        }
         inputStateRef.current = nextState;
         updateActiveWordState(nextState);
         const nextStatus = resolveLiveInputTextStatus(props.value);
@@ -1993,7 +2018,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         updateInputSelectionState(nextSelection);
         inputRef.current?.setTextAndSelection(props.value, nextSelection);
         historyAppliedInputStateRef.current = null;
-    }, [props.sessionId, props.value, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
+    }, [props.sessionId, props.value, props.structuredInputMentions, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         setHasAutocompleteTextInteraction(false);
@@ -2195,6 +2220,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Action menu popover state
     const composerAnchorRef = React.useRef<View>(null);
+    const composerCardRef = React.useRef<View>(null);
     const stageSpotlightRef = React.useRef<View>(null);
     const stageSpotlightProps = useSpotlightTarget(
         stageSpotlightRef,
@@ -2261,9 +2287,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         selection: inputSelection,
         enabled: isInputFocused && !props.disabled && activeWord !== null,
     });
+    // On a compact layout the menu takes the composer card's width and left edge instead of the caret's.
+    const compactCommandMenu = isMobileLayoutWidth(screenWidth);
     const commandMenuAnchor: CommandMenuAnchor = React.useMemo(
-        () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef),
-        [caretRect, composerAnchorRef],
+        () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef, compactCommandMenu ? composerCardRef : null),
+        [caretRect, composerAnchorRef, compactCommandMenu],
     );
 
     const permissionRequestsFades = useScrollEdgeFades({
@@ -3104,8 +3132,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     } = useRenderedAgentInputControlRows({
         readOnly,
         layout: effectiveActionBarLayout,
-        singleRow: isConversation,
+        singleRow: isConversation || compactControls,
         ...(props.barControlIds ? { barControlIds: props.barControlIds } : {}),
+        ...(compactControls ? { containedControlIds: AGENT_INPUT_COMPACT_CONTROL_IDS } : {}),
         chips: extraActionChips,
         overlayAnchorRef,
         onToggleExtraChipCollapsedPopover: (chipKey) => {
@@ -3174,7 +3203,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // One rail in an existing session; a new session adds the machine · folder · resume rail
     // beneath its setup rail at every width (0.2's rails).
-    const showSecondaryControlsRow = !isConversation && shouldShowSecondaryControlRow(
+    const showSecondaryControlsRow = !isConversation && !compactControls && shouldShowSecondaryControlRow(
         effectiveActionBarLayout,
         secondaryLeadingControlsForWrap.length > 0 || secondaryTrailingControlsForWrap.length > 0 || hasPath || hasResume,
     );
@@ -3386,11 +3415,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     return (
         <SessionModelSourceBrowseHandoffContext.Provider value={modelSourceBrowseHandoff}>
+        <AgentInputPopoverClearanceContext.Provider value={documentPanel ? undefined : stageSpotlightRef}>
         <SyncPerformanceReactProfiler id="sessions.agentInput">
             <View
                 testID="agent-input-composer"
                 ref={stageSpotlightRef}
-                collapsable={stageSpotlightProps.active ? false : undefined}
+                // Measured by the composer's pickers (their clearance) and by the stage spotlight.
+                collapsable={false}
                 onLayout={stageSpotlightProps.onLayout}
                 pointerEvents={Platform.OS === 'web' ? 'auto' : undefined}
                 style={[
@@ -3402,9 +3433,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             >
             <View style={[
                 styles.innerContainer,
+                // A compact composer is contained by its host's section: it takes the section's width, never the
+                // centred conversation column.
                 ...(typeof props.maxWidthCap === 'number'
                     ? [{ maxWidth: props.maxWidthCap }]
-                    : props.maxWidthCap === null
+                    : props.maxWidthCap === null || compactControls
                         ? []
                         : [{ maxWidth: layout.maxWidth }])
             ]} ref={overlayAnchorRef}>
@@ -3489,6 +3522,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onSelect={(_item, index) => commandMenuOnSelectIndex(index)}
                     onRequestClose={commandMenuOnClose}
                     maxHeight={240}
+                    {...(compactCommandMenu ? { matchAnchorWidth: true, maxWidth: screenWidth } : {})}
                     testID={AGENT_INPUT_COMMAND_MENU_TEST_ID}
                 />
                 {promptPicker.isOpen ? (
@@ -3521,7 +3555,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     activeStatusBadgeKey={props.activeStatusBadgeKey}
                     onActiveStatusBadgeKeyChange={props.onActiveStatusBadgeKeyChange}
                     onGitPress={props.onFileViewerPress}
-                    collapseWhenEmpty={documentPanel}
+                    // A compact composer has no Session to report on: an empty strip reserves no row above it.
+                    collapseWhenEmpty={documentPanel || compactControls}
                 />
 
                 {/* Box 2: Action Area (Input + Send) */}
@@ -3538,6 +3573,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onDrop={composerDropZoneHandlers.onDrop}
                 >
                 <GlassSurface
+                    ref={composerCardRef}
                     testID="agent-input-material-surface"
                     {...panelMaterialProps}
                     style={[
@@ -3592,6 +3628,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         paddingRight={fieldInputPaddingRight}
                                         onChangeText={handleComposerTextChange}
                                         placeholder={props.placeholder}
+                                        placeholderTextColor={theme.colors.composer.chipTint}
                                         accessibilityLabel={props.inputAccessibilityLabel}
                                         accessibilityHint={props.inputAccessibilityHint}
                                         onKeyPress={handleKeyPress}
@@ -3628,7 +3665,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 <View style={styles.actionButtonsContainer}>
                                 <View
                                     style={[
-                                        placeholderTextColor={theme.colors.composer.chipTint}
                                         screenWidth < 420 ? styles.actionButtonsColumnNarrow : styles.actionButtonsColumn,
                                         isMobileLayoutWidth(screenWidth) ? styles.actionButtonsColumnMobile : null,
                                     ]}
@@ -3800,6 +3836,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         paddingRight={fieldInputPaddingRight}
                                         onChangeText={handleComposerTextChange}
                                         placeholder={props.placeholder}
+                                        placeholderTextColor={theme.colors.composer.chipTint}
                                         accessibilityLabel={props.inputAccessibilityLabel}
                                         accessibilityHint={props.inputAccessibilityHint}
                                         onKeyPress={handleKeyPress}
@@ -3836,7 +3873,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 <View style={styles.actionButtonsContainer}>
                                     <View
                                         style={[
-                                        placeholderTextColor={theme.colors.composer.chipTint}
                                             screenWidth < 420 ? styles.actionButtonsColumnNarrow : styles.actionButtonsColumn,
                                             isMobileLayoutWidth(screenWidth) ? styles.actionButtonsColumnMobile : null,
                                         ]}
@@ -3987,6 +4023,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             </View>
             </View>
         </SyncPerformanceReactProfiler>
+        </AgentInputPopoverClearanceContext.Provider>
         </SessionModelSourceBrowseHandoffContext.Provider>
     );
 }));

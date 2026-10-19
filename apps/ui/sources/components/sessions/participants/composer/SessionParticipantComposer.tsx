@@ -131,6 +131,7 @@ const PARTICIPANT_COMPOSER_SUGGESTION_KINDS: readonly ComposerSuggestionKindId[]
 export type ParticipantComposerEngine = Readonly<{
     agentType: string;
     label: string;
+    modelLabel?: string;
     title: string;
     options: ReadonlyArray<AgentInputChipPickerOption>;
     selectedOptionId: string | null;
@@ -150,7 +151,12 @@ type SessionParticipantComposerProps = Readonly<{
     sessionId: string;
     /** Exact Home route scope when the parent already owns qualified navigation. */
     serverId?: string | null;
+    /** The parent Session's input grant, independent of transient launch readiness. */
     canSendMessages: boolean;
+    /** Host work in flight may lock editing without changing the Session's access. */
+    disabled?: boolean;
+    /** Keep authoring available while the host is waiting for a required selection or resource. */
+    isSendDisabled?: boolean;
     recipient: ParticipantRecipientV1 | null;
     executionRunRequestedAction?: PendingRequestedActionV1;
     extraActionChips?: ReadonlyArray<AgentInputExtraActionChip>;
@@ -161,6 +167,9 @@ type SessionParticipantComposerProps = Readonly<{
     initialLocalId?: string;
     /** Rowless first-send identity; a known Run naturally uses its Run id. */
     draftOccurrenceId?: string;
+    /** Rowless Run authoring fields on the real parent Session draft. */
+    launcherDraftKey?: string;
+    onDraftDocumentEdit?: () => void;
     /** Reports this mounted composer's exact presentation ref to its host. */
     onComposerRefAvailable?: (ref: Extract<ComposerRefV1, { kind: 'participantMessage' }> | null) => void;
     /**
@@ -223,8 +232,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
     const layoutPresentedRef = React.useRef(layoutPresented);
     layoutPresentedRef.current = layoutPresented;
     composerRefRef.current = composerRef;
-    const canSendMessagesRef = React.useRef(props.canSendMessages);
-    canSendMessagesRef.current = props.canSendMessages;
+    const availabilityRef = React.useRef({ canSendMessages: props.canSendMessages, disabled: props.disabled, isSendDisabled: props.isSendDisabled });
+    availabilityRef.current = { canSendMessages: props.canSendMessages, disabled: props.disabled, isSendDisabled: props.isSendDisabled };
     const mountedRef = React.useRef(true);
     // Every mounted participant draft has an identity before any upload or
     // network effect. A caller-provided recovery id wins; ordinary known-Run
@@ -241,19 +250,22 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
     ), [composerAccountLifetime, composerRef]);
     const runDraftAddress = React.useMemo(() => props.recipient?.kind === 'execution_run'
         ? { kind: 'run' as const, sessionId: props.sessionId, runId: props.recipient.runId }
-        : null, [props.recipient, props.sessionId]);
-    // A known exact Run uses the one synchronized V2 draft repository while
-    // retaining the public participant composer identity. Other participant
-    // surfaces keep their existing ephemeral lifetime.
+        : props.launcherDraftKey ? { kind: 'session' as const, sessionId: props.sessionId } : null,
+    [props.launcherDraftKey, props.recipient, props.sessionId]);
+    // Known Runs and rowless launchers use the same repository while retaining
+    // the public participant composer identity. Launcher fields are independent
+    // of the parent Session composer's text and routing.
     const participantComposerDocumentOwner = useRepositoryComposerDocumentOwner({
         scope: runDraftAddress ? composerAccountLifetime?.scope ?? null : null,
         ref: composerRef,
         address: runDraftAddress,
+        launcherDraftKey: props.launcherDraftKey,
+        onDocumentEdit: props.onDraftDocumentEdit,
         capabilities: { text: true, references: true, attachments: true, submit: true },
         isCurrent: isParticipantComposerCurrent,
         onDocumentChange: () => notifyComposerPresentationTargetChanged(composerRef),
     });
-    // The synchronized Run draft says out loud when it is not reaching the
+    // The synchronized draft says out loud when it is not reaching the
     // user's other devices; an ephemeral participant draft has nothing to say.
     const runDraftScope = runDraftAddress ? composerAccountLifetime?.scope ?? null : null;
     const subscribeRunDraft = React.useCallback((listener: () => void) => (
@@ -471,10 +483,10 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
 
     const readParticipantComposerSnapshot = React.useCallback((): ComposerSnapshotV1 => {
         const document = readParticipantDocument();
-        const canSendMessages = canSendMessagesRef.current;
+        const { canSendMessages, disabled, isSendDisabled } = availabilityRef.current;
         const inputLock = composerInputEffects.readComposerInputLock();
-        const editable = canSendMessages && inputLock?.mode !== 'editAndSubmit';
-        const submittable = canSendMessages && inputLock === null;
+        const editable = canSendMessages && !disabled && inputLock?.mode !== 'editAndSubmit';
+        const submittable = canSendMessages && !disabled && !isSendDisabled && inputLock === null;
         return {
             revision: participantComposerDocumentOwner.read().revision,
             ref: composerRef,
@@ -562,7 +574,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
 
     React.useEffect(() => {
         notifyComposerPresentationTargetChanged(composerRef);
-    }, [composerRef, participantComposerAttachmentEntriesById]);
+    }, [composerRef, participantComposerAttachmentEntriesById, props.canSendMessages, props.disabled, props.isSendDisabled]);
 
     const removeComposerAttachment = React.useCallback((instanceId: string) => {
         const snapshot = readComposerPresentationSnapshot(composerRef);
@@ -588,7 +600,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         // a Composer mutation, so a view-only participant or an `editAndSubmit`
         // lock keeps preview/picker access without an enabled remove control
         // the transaction owner would refuse.
-        ...(props.canSendMessages && composerInputEffects.composerInputLock?.mode !== 'editAndSubmit'
+        ...(props.canSendMessages && !props.disabled && composerInputEffects.composerInputLock?.mode !== 'editAndSubmit'
             ? { onRemove: removeComposerAttachment }
             : {}),
         entriesById: participantComposerAttachmentEntriesById ?? undefined,
@@ -601,6 +613,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         participantComposerPresentation.renderAttachmentSurface,
         participantComposerPresentation.resolveAttachmentInteraction,
         props.canSendMessages,
+        props.disabled,
         removeComposerAttachment,
     ]);
 
@@ -609,6 +622,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
             Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
             return;
         }
+        if (props.disabled || props.isSendDisabled) return;
 
         const currentDocument = readParticipantDocument();
         const liveComposerText = sendOptions?.inputTextOverride ?? currentDocument.text;
@@ -636,6 +650,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         };
         fireAndForget(submitComposerSnapshot({
             snapshot,
+            signal: participantComposerPresentation.scopeSignal,
             additionalSendableContent: submittedTransferDrafts.length > 0,
             route: {
                 kind: 'participantMessage',
@@ -697,6 +712,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                             setIsUploadingAttachments(true);
                             const { uploaded } = await uploadAttachmentDraftsToSession({
                                 sessionId: props.sessionId,
+                                signal: participantComposerPresentation.scopeSignal,
                                 sessionTarget: {
                                     serverId: composerAccountLifetime.scope.serverId,
                                     accountId: composerAccountLifetime.scope.accountId,
@@ -844,6 +860,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
     }, [
         props.browserContextState,
         props.canSendMessages,
+        props.disabled,
+        props.isSendDisabled,
         props.executionRunRequestedAction,
         props.recipient,
         props.sessionId,
@@ -853,6 +871,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         participantMachineTarget?.machineId,
         participantServerId,
         participantComposerDocumentOwner,
+        participantComposerPresentation.scopeSignal,
         readParticipantComposerSnapshot,
         transferDraftManager.applyDraftPatch,
         transferDraftManager.getDraftsSnapshot,
@@ -893,6 +912,7 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                 {...(props.engine ? {
                     agentType: props.engine.agentType,
                     agentLabel: props.engine.label,
+                    engineLabel: props.engine.modelLabel ?? props.engine.label,
                     agentPickerTitle: props.engine.title,
                     agentPickerOptions: props.engine.options,
                     agentPickerSelectedOptionId: props.engine.selectedOptionId,
@@ -926,8 +946,8 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
                     signal,
                     composerReferenceHost: participantComposerReferenceHost,
                 })}
-                isSendDisabled={!props.canSendMessages || composerInputEffects.composerInputLock !== null}
-                disabled={!props.canSendMessages || composerInputEffects.composerInputLock?.mode === 'editAndSubmit'}
+                isSendDisabled={!props.canSendMessages || props.disabled || props.isSendDisabled || composerInputEffects.composerInputLock !== null}
+                disabled={!props.canSendMessages || props.disabled || composerInputEffects.composerInputLock?.mode === 'editAndSubmit'}
                 extraActionChips={extraActionChips}
                 statusBadges={statusBadges}
                 attachmentRowItems={attachmentRowItems}

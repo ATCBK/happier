@@ -103,7 +103,9 @@ export type ScopedAuthoringComposerHandle = Readonly<{ focus: () => void }>;
  * owners are addressed with, and a capability the scope genuinely cannot serve
  * stays absent rather than being faked.
  */
-export const ScopedAuthoringComposer = React.forwardRef<
+// A host draft edit can rerender every row while leaving each sibling document,
+// custody and callbacks unchanged. Keep that work outside the live Composer.
+export const ScopedAuthoringComposer = React.memo(React.forwardRef<
     ScopedAuthoringComposerHandle,
     Readonly<{
         /**
@@ -489,6 +491,6 @@ export const ScopedAuthoringComposer = React.forwardRef<
             {pluginPresentation.afterComposer}
         </PluginContextualResourceStoreProvider>
     );
-});
+}));
 
 ScopedAuthoringComposer.displayName = 'ScopedAuthoringComposer';

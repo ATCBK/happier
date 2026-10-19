@@ -39,15 +39,19 @@ export type AttachChipRailRevealParams = Readonly<{
  * edge fade stale), and a chip that takes focus (a click, Tab, the arrow keys) scrolls the rail so that
  * chip and its neighbours are whole. The scroll is instant: a popover opened by the click measures its chip
  * after focus, so the rail must not still be moving.
+ *
+ * A pointer press focuses its chip on press, but a click needs the press and the release on the same chip:
+ * a rail that scrolls in between puts another chip under the pointer and the click is lost. So a pointer
+ * focus reveals on release, before the click is delivered, and not at all when the person dragged the rail.
+ * The person is looking at the chip they pressed, so only that chip is made whole, not its neighbours:
+ * a press on a whole chip leaves the rail where it rests.
  */
 export function attachChipRailReveal(params: AttachChipRailRevealParams): () => void {
     const { node } = params;
+    const doc = node.ownerDocument;
 
     const onScroll = () => params.onScroll();
-    const onFocusIn = (event: Event) => {
-        const target = event.target as Element | null;
-        const control = target?.closest?.(RAIL_CONTROLS) as HTMLElement | null | undefined;
-        if (!control || !node.contains(control)) return;
+    const reveal = (control: HTMLElement, withNeighbours: boolean) => {
         const controls = Array.from(node.querySelectorAll<HTMLElement>(RAIL_CONTROLS));
         const index = controls.indexOf(control);
         if (index < 0) return;
@@ -60,16 +64,45 @@ export function attachChipRailReveal(params: AttachChipRailRevealParams): () => 
         const delta = resolveChipRailRevealDelta({
             viewportWidth: node.clientWidth || rail.width,
             control: edge(control)!,
-            previous: edge(controls[index - 1]),
-            next: edge(controls[index + 1]),
+            previous: withNeighbours ? edge(controls[index - 1]) : null,
+            next: withNeighbours ? edge(controls[index + 1]) : null,
         });
         if (delta !== 0) node.scrollLeft += delta;
     };
 
+    let press: Readonly<{ scrollLeft: number; focused: HTMLElement | null }> | null = null;
+    const onPointerRelease = () => {
+        doc.removeEventListener('pointerup', onPointerRelease, true);
+        doc.removeEventListener('pointercancel', onPointerRelease, true);
+        const pressed = press;
+        press = null;
+        // The rail only moved under the press when the person dragged it: leave it where it was dropped.
+        if (pressed?.focused && pressed.scrollLeft === node.scrollLeft) reveal(pressed.focused, false);
+    };
+    const onPointerDown = () => {
+        press = { scrollLeft: node.scrollLeft, focused: null };
+        doc.addEventListener('pointerup', onPointerRelease, true);
+        doc.addEventListener('pointercancel', onPointerRelease, true);
+    };
+    const onFocusIn = (event: Event) => {
+        const target = event.target as Element | null;
+        const control = target?.closest?.(RAIL_CONTROLS) as HTMLElement | null | undefined;
+        if (!control || !node.contains(control)) return;
+        if (press) {
+            press = { ...press, focused: control };
+            return;
+        }
+        reveal(control, true);
+    };
+
     node.addEventListener('scroll', onScroll, { passive: true });
+    node.addEventListener('pointerdown', onPointerDown, true);
     node.addEventListener('focusin', onFocusIn);
     return () => {
         node.removeEventListener('scroll', onScroll);
+        node.removeEventListener('pointerdown', onPointerDown, true);
         node.removeEventListener('focusin', onFocusIn);
+        doc.removeEventListener('pointerup', onPointerRelease, true);
+        doc.removeEventListener('pointercancel', onPointerRelease, true);
     };
 }

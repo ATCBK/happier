@@ -61,7 +61,7 @@ function createHostedScaffold(host: Readonly<{ maxHeight?: string; overflowY: st
     return { hostElement, scaffoldElement };
 }
 
-async function renderScaffoldAndLayout(params: Readonly<{ height: number; target?: HTMLElement }>): Promise<() => void> {
+async function renderScaffoldAndLayout(params: Readonly<{ height: number; target?: HTMLElement }>): Promise<() => Promise<void>> {
     const { ComposerKeyboardScaffold } = await import('./ComposerKeyboardScaffold.web');
     const renderElement = () => (
         <ComposerKeyboardScaffold
@@ -78,11 +78,7 @@ async function renderScaffoldAndLayout(params: Readonly<{ height: number; target
     act(() => {
         scaffold.props.onLayout({ nativeEvent: { layout: { height: params.height }, target: params.target } });
     });
-    return () => {
-        act(() => {
-            screen.tree.update(renderElement());
-        });
-    };
+    return () => screen.update(renderElement());
 }
 
 describe('ComposerKeyboardScaffold web inside a content-sized host', () => {
@@ -109,7 +105,7 @@ describe('ComposerKeyboardScaffold web inside a content-sized host', () => {
         // The host's viewport-derived cap shrinks with the window.
         hostElement.style.maxHeight = '604px';
         viewport.height = 700;
-        rerender();
+        await rerender();
 
         expect(published.availablePanelHeight).toBe(236 + (604 - 300));
     });

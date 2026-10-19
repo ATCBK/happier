@@ -23,6 +23,10 @@ const scrolledElements = new Set<HTMLElement>();
 let windowWidth = 390;
 const testTheme = lightTheme;
 
+// Import the composed picker graph before a timed DOM interaction starts.
+const { AgentInputChipPickerPanel } = await import('./AgentInputChipPickerPanel');
+const { OptionPickerOverlay } = await import('@/components/sessions/pickers/OptionPickerOverlay');
+
 function rect(width: number, height: number): DOMRectReadOnly {
     return {
         bottom: height,
@@ -320,7 +324,6 @@ describe('AgentInputChipPickerPanel virtualized detail layout on web', () => {
         renderVirtualizedDetail?: boolean;
         width?: number;
     }>) {
-        const { AgentInputChipPickerPanel } = await import('./AgentInputChipPickerPanel');
         const rows = Array.from({ length: 500 }, (_value, index): Row => ({
             id: `row-${index}`,
         }));
@@ -425,8 +428,6 @@ describe('AgentInputChipPickerPanel virtualized detail layout on web', () => {
     });
 
     it('restores the full catalog after search selection and clear through the compact picker composition', async () => {
-        const { AgentInputChipPickerPanel } = await import('./AgentInputChipPickerPanel');
-        const { OptionPickerOverlay } = await import('@/components/sessions/pickers/OptionPickerOverlay');
         const modelOptions = Array.from({ length: 500 }, (_value, index) => {
             const position = String(index + 1).padStart(5, '0');
             return {

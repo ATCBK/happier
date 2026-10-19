@@ -226,7 +226,7 @@ export function AgentInputFolderChip(props: AgentInputFolderChipProps): React.Re
                     ) : (
                         <View aria-hidden={true} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                             <HappierSkeletonBlock
-                                color={theme.colors.surface.pressedOverlay}
+                                color={theme.colors.surface.skeleton}
                                 width={AGENT_INPUT_FOLDER_CHIP_RESOLVING_SIZE.width}
                                 height={AGENT_INPUT_FOLDER_CHIP_RESOLVING_SIZE.height}
                                 radius={AGENT_INPUT_FOLDER_CHIP_RESOLVING_SIZE.height / 2}

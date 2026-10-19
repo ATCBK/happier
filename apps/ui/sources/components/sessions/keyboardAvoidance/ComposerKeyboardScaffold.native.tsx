@@ -13,7 +13,7 @@ import { useComposerKeyboardLayout } from './useComposerKeyboardLayout.native';
 
 export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver('content');
+    const materialColor = useHappierMaterialColorResolver();
     const modal = useOptionalModal();
     const isInsideModalBoundary = useIsInsideModalBoundary();
     const modalKeyboardLiftSuppressed = modal?.isKeyboardLiftSuppressedByModal === true;

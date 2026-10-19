@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
 
 import { createAgentInputActionShortcutChip } from './createAgentInputActionShortcutChip';
+import { createWorkflowRunActionChip } from './createWorkflowRunActionChip';
+import { buildCollapsedExtraControlActions } from '../controls/buildCollapsedExtraControlActions';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -38,6 +40,36 @@ function expectSingleCollapsedAction(
 }
 
 describe('createAgentInputActionShortcutChip', () => {
+    it('keeps the Workflow descriptor cold and shares one demand/content owner for chip and overflow', () => {
+        const detailRead = vi.fn(() => null);
+        const demand = vi.fn();
+        const chip = createWorkflowRunActionChip({ label: 'Run…', title: 'Run…', testID: 'run-pattern',
+            onIntent: demand, renderContent: detailRead });
+        const opened = vi.fn();
+        const render = chip.render({ chipStyle: () => null, showLabel: true, iconColor: '#000', textStyle: {},
+            countTextStyle: {}, popoverAnchorRef: { current: null }, toggleCollapsedPopover: opened }) as React.ReactElement<{ onPress: () => void }>;
+        expect(render).toBeTruthy();
+        expect(chip.controlId).toBe('workflow');
+        // A phone shows the picker as the shared bottom sheet, not a card over the header (lab T4-Rp).
+        expect(chip.collapsedContentPopover?.phonePresentation).toBe('sheet');
+        expect(detailRead).not.toHaveBeenCalled();
+        expect(demand).not.toHaveBeenCalled();
+        render.props.onPress();
+        expect(demand).toHaveBeenCalledOnce();
+        expect(opened).toHaveBeenCalledWith(chip.key);
+        const actions = buildCollapsedExtraControlActions({ chips: [chip], tint: '#000', dismiss: () => {},
+            blurInput: () => {}, openCollapsedOptionsPopover: opened });
+        expect(detailRead).not.toHaveBeenCalled();
+        actions.workflow?.[0]?.onPress?.();
+        expect(demand).toHaveBeenCalledTimes(2);
+        expect(opened).toHaveBeenCalledTimes(2);
+        // Both chip and overflow use the composer's existing collapsed-content slot.
+        const content = chip.collapsedContentPopover?.renderContent;
+        if (typeof content !== 'function') throw new Error('Workflow detail must be demand-rendered');
+        content({ requestClose: () => {}, maxHeight: 320 });
+        expect(detailRead).toHaveBeenCalledOnce();
+    });
+
     it('renders a row-layout shortcut chip and invokes the press handler', () => {
         const onPress = vi.fn();
         const dismiss = vi.fn();

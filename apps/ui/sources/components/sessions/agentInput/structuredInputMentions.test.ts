@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { sanitizeSessionUserMessageSendMeta } from '@happier-dev/protocol';
+import { sanitizeSessionUserMessageSendMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
+import { type ComposerAttachmentDraftV1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
+import { buildComposerReferenceMentionPayloadV1 } from '@happier-dev/protocol/runtime/input/composerReferenceProviderV1';
 import {
-    type ComposerAttachmentDraftV1,
     MENTION_KIND_V1,
-    buildComposerReferenceMentionPayloadV1,
     buildMentionRefForKindV1,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/runtime/input/mentionRefV1';
 
 import {
     buildStructuredInputMetaOverrides,
@@ -43,6 +43,52 @@ const skillMention = {
 } satisfies ComposerStructuredInputMention;
 
 describe('structured input mentions', () => {
+    it('preserves file, skill and inert Session context references through ordinary composer edits', () => {
+        const text = '@file $review @Alex';
+        const mentions: ComposerStructuredInputMention[] = [
+            { kind: MENTION_KIND_V1.file, ref: 'file:src/index.ts', tokenText: '@file', start: 0, end: 5 },
+            { ...skillMention, start: 6, end: 13 },
+            { kind: MENTION_KIND_V1.session, ref: 'session:context-only', tokenText: '@Alex', start: 14, end: 19 },
+        ];
+        const nextText = `Read ${text}`;
+        const next = reconcileStructuredInputMentionsWithText({ previousText: text, nextText, mentions });
+        expect(next).toEqual(mentions.map((mention) => ({ ...mention, start: mention.start + 5, end: mention.end + 5 })));
+        expect(buildStructuredInputMetaOverrides({ text: nextText, mentions: next })).toMatchObject({
+            happierStructuredInputV1: { mentions: [
+                { kind: MENTION_KIND_V1.file, ref: 'file:src/index.ts', token: '@file' },
+                { kind: MENTION_KIND_V1.skill, ref: 'skill:vendor:codex:codex-native:review', token: '$review' },
+                { kind: MENTION_KIND_V1.session, ref: 'session:context-only', token: '@Alex' },
+            ] },
+        });
+    });
+
+    it('does not retain an address inside a replaced range just because its label survives', () => {
+        const mention = { kind: MENTION_KIND_V1.session, ref: 'session:selected', tokenText: '@Alex', start: 2, end: 7 };
+        expect(reconcileStructuredInputMentionsWithTextChange({
+            previousText: 'x @Alex y',
+            nextText: 'z @Alex w',
+            previousSelection: { start: 0, end: 9 },
+            mentions: [mention],
+        })).toEqual([]);
+    });
+
+    it('rejects a stale selection hint whose unchanged suffix does not match the edit', () => {
+        expect(reconcileStructuredInputMentionsWithTextChange({
+            previousText: 'x @Alex y',
+            nextText: 'z @Alex w',
+            previousSelection: { start: 0, end: 1 },
+            mentions: [{ kind: MENTION_KIND_V1.session, ref: 'session:selected', tokenText: '@Alex', start: 2, end: 7 }],
+        })).toEqual([]);
+    });
+
+    it('keeps the selected identity of the remaining equal label after a direct deletion', () => {
+        const second = { kind: MENTION_KIND_V1.session, ref: 'session:second', tokenText: '@Alex', start: 6, end: 11 };
+        expect(reconcileStructuredInputMentionsWithTextChange({
+            previousText: '@Alex @Alex', nextText: '@Alex', previousSelection: { start: 0, end: 6 },
+            mentions: [{ ...second, ref: 'session:first', start: 0, end: 5 }, second],
+        })).toEqual([{ ...second, start: 0, end: 5 }]);
+    });
+
     it('keeps an exact occurrence binding when an equal literal token remains elsewhere', () => {
         const mention = {
             ...vendorPluginMention,

@@ -57,24 +57,25 @@ export function ReviewCommentsDraftsModal(props: CustomModalInjectedProps & Read
     const [drafts, setDrafts] = React.useState(() => [...reviewCommentDrafts]);
 
     React.useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
         setDrafts([...reviewCommentDrafts]);
         if (!props.reviewScope || reviewCommentDrafts.length === 0) {
             return () => {
-                cancelled = true;
+                controller.abort();
             };
         }
 
         void resolveReviewCommentDraftAnchorsForPrompt({
             drafts: reviewCommentDrafts,
             reviewScope: props.reviewScope,
+            signal: controller.signal,
         }).then((resolvedDrafts) => {
-            if (!cancelled) {
+            if (!controller.signal.aborted) {
                 setDrafts(resolvedDrafts);
             }
-        });
+        }, () => { /* Cancelled resolution keeps the draft's last known anchor. */ });
         return () => {
-            cancelled = true;
+            controller.abort();
         };
     }, [props.reviewScope, reviewCommentDrafts]);
 

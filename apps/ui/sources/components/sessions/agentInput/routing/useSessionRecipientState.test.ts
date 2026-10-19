@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderHook } from '@/dev/testkit';
 
 import type { ParticipantRecipientV1 } from '@happier-dev/protocol';
+import { SessionDraftDocumentV1Schema } from '@happier-dev/protocol';
 
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -12,7 +13,7 @@ import {
     resetSessionDraftValueCachesForTests,
     writeSessionDraftValue,
 } from '@/dev/testkit/sessionDraftRepositoryTestkit';
-import { getSessionDraftSnapshot, writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { captureSessionDraftCurrentness, clearSessionDraftCurrentnessLocal, getSessionComposerDraftSnapshot, getSessionDraftSnapshot, readSessionMessagingFromDraft, writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 import { useSessionRecipientState } from './useSessionRecipientState';
 import { createScmDiffSummaryResultOperationsWithTransport as createScmDiffSummaryResultOperations } from '@/dev/testkit/harness/scmActionTransport';
@@ -78,6 +79,104 @@ const activeAccountLifetime: ServerAccountScopeLifetime = Object.freeze({
 });
 
 describe('useSessionRecipientState', () => {
+    it('restores a cross-Session selector independently of the native participant and captured Account', async () => {
+        const participant = { kind: 'execution_run', runId: 'native-run' } as const;
+        const sessionMessage = { kind: 'ask', target: { selector: 'workers', of: 'session-a', recursive: true } } as const;
+        writeExistingSessionDraft({ scope: getActiveScope(), sessionId: 'session-a', patch: {
+            text: 'Keep this question', sessionMessaging: sessionMessage,
+            routing: { recipient: { mode: 'manual', recipient: participant } },
+        }, materializationIntent: 'userEdit' });
+        const hook = await renderHook(() => useSessionRecipientState({ targets: [], autoRecipient: null,
+            accountLifetime: activeAccountLifetime, draftPersistence: { sessionId: 'session-a', surface: 'mainComposer' },
+        }), { flushOptions: { cycles: 2, turns: 2 } });
+        expect(hook.getCurrent().sessionMessage).toEqual(sessionMessage);
+        expect(hook.getCurrent().recipient).toEqual(participant);
+        await hook.unmount();
+        const remounted = await renderHook(() => useSessionRecipientState({ targets: [], autoRecipient: null,
+            accountLifetime: activeAccountLifetime, draftPersistence: { sessionId: 'session-a', surface: 'mainComposer' },
+        }), { flushOptions: { cycles: 2, turns: 2 } });
+        expect(remounted.getCurrent().sessionMessage).toEqual(sessionMessage);
+        await remounted.unmount();
+    });
+
+    it('changes and clears cross-Session intent without changing text or the native participant', async () => {
+        const participant = { kind: 'execution_run', runId: 'native-run' } as const;
+        writeExistingSessionDraft({ scope: getActiveScope(), sessionId: 'session-a', patch: {
+            text: 'Keep my draft', routing: { recipient: { mode: 'manual', recipient: participant } },
+        } });
+        const hook = await renderHook(() => useSessionRecipientState({ targets: [], autoRecipient: null,
+            accountLifetime: activeAccountLifetime, draftPersistence: { sessionId: 'session-a', surface: 'mainComposer' },
+        }));
+        const readDocument = () => SessionDraftDocumentV1Schema.parse(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.document);
+        const originalText = readDocument()?.composer.text;
+        await act(async () => {
+            hook.getCurrent().setSessionMessage({ kind: 'ask', target: { selector: 'manager' }, reply: 'return' });
+        });
+        expect(hook.getCurrent().sessionMessage).toEqual({ kind: 'ask', target: { selector: 'manager' }, reply: 'return' });
+        expect(SessionDraftDocumentV1Schema.safeParse(readDocument()).success).toBe(true);
+        await act(async () => { hook.getCurrent().setSessionMessage({ kind: 'post_update' }); });
+        expect(readSessionMessagingFromDraft(readDocument())).toEqual({ kind: 'post_update' });
+        await act(async () => { hook.getCurrent().clearPersistedSessionMessage(); });
+        expect(hook.getCurrent().sessionMessage).toBeNull();
+        expect(readDocument()?.extensions.happier?.sessionMessagingV1).toBeUndefined();
+        expect(readDocument()?.composer.text).toEqual(originalText);
+        expect(hook.getCurrent().recipient).toEqual(participant);
+        await hook.unmount();
+    });
+
+    it('keeps newer target edits when clearing a submitted draft and clears the exact current selection', async () => {
+        const scope = getActiveScope();
+        const address = { kind: 'session', sessionId: 'session-a' } as const;
+        writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: {
+            text: 'Submitted question', sessionMessaging: { kind: 'ask', target: { selector: 'workers' } },
+        } });
+        const submitted = captureSessionDraftCurrentness({ scope, address });
+        writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: {
+            sessionMessaging: { kind: 'send', target: { selector: 'manager' } },
+        } });
+        clearSessionDraftCurrentnessLocal({ scope, address, currentness: submitted });
+        const readDocument = () => getSessionDraftSnapshot(scope, address)?.document;
+        expect(getSessionComposerDraftSnapshot(scope, address)?.composer.text.value).toBe('');
+        expect(readSessionMessagingFromDraft(readDocument())).toEqual({ kind: 'send', target: { selector: 'manager' } });
+        const current = captureSessionDraftCurrentness({ scope, address });
+        clearSessionDraftCurrentnessLocal({ scope, address, currentness: current });
+        expect(readSessionMessagingFromDraft(readDocument())).toBeNull();
+    });
+
+    it('does not disclose or mutate the captured Home after it retires and restores the new Home selection', async () => {
+        const scopeA = getActiveScope();
+        const scopeB = { serverId: 'server-b', accountId: 'account-b' } as const;
+        writeExistingSessionDraft({ scope: scopeA, sessionId: 'session-a', patch: {
+            text: 'Home A draft', sessionMessaging: { kind: 'ask', target: { selector: 'workers' } },
+        } });
+        writeExistingSessionDraft({ scope: scopeB, sessionId: 'session-a', patch: {
+            text: 'Home B draft', sessionMessaging: { kind: 'send', target: { selector: 'following' } },
+        } });
+        const lifetimeB: ServerAccountScopeLifetime = {
+            scope: scopeB,
+            isCurrent: () => activeScopeState.value?.serverId === scopeB.serverId && activeScopeState.value.accountId === scopeB.accountId,
+            onRetire: () => Object.freeze({ dispose: () => undefined }),
+        };
+        const hook = await renderHook(({ lifetime }: { lifetime: ServerAccountScopeLifetime }) => useSessionRecipientState({
+            targets: [], autoRecipient: null, accountLifetime: lifetime,
+            draftPersistence: { sessionId: 'session-a', surface: 'mainComposer' },
+        }), { initialProps: { lifetime: activeAccountLifetime } });
+        const staleSetter = hook.getCurrent().setSessionMessage;
+        const staleClear = hook.getCurrent().clearPersistedSessionMessage;
+        activeScopeState.value = scopeB;
+        await hook.rerender({ lifetime: activeAccountLifetime });
+        expect(hook.getCurrent().sessionMessage).toBeNull();
+        await act(async () => {
+            staleSetter({ kind: 'post_update' });
+            staleClear();
+        });
+        expect(readSessionMessagingFromDraft(getSessionDraftSnapshot(scopeA, { kind: 'session', sessionId: 'session-a' })?.document))
+            .toEqual({ kind: 'ask', target: { selector: 'workers' } });
+        await hook.rerender({ lifetime: lifetimeB });
+        expect(hook.getCurrent().sessionMessage).toEqual({ kind: 'send', target: { selector: 'following' } });
+        expect(getSessionComposerDraftSnapshot(scopeB, { kind: 'session', sessionId: 'session-a' })?.composer.text.value).toBe('Home B draft');
+        await hook.unmount();
+    });
     beforeEach(() => {
         activeScopeState.value = { serverId: 'server-a', accountId: 'account-a' };
         mmkvStore.clear();
@@ -106,7 +205,7 @@ describe('useSessionRecipientState', () => {
             await flushHookEffects({ cycles: 2, turns: 2 });
         });
         expect(hook.getCurrent()).toMatchObject({ recipient: null, scmDiffSummaryDiscussion: null });
-        expect(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.document.composer.text.value).toBe('My question');
+        expect(getSessionComposerDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.composer.text.value).toBe('My question');
         await hook.unmount();
     });
 
@@ -145,17 +244,17 @@ describe('useSessionRecipientState', () => {
                         analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } } };
             } });
         expect(await ops.discuss({ ...targetInput, message: 'My question' })).toMatchObject({ success: false, errorCode: 'revision_conflict' });
-        let document = getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })!.document;
+        let document = SessionDraftDocumentV1Schema.parse(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.document);
         expect(document.composer.text.value).toBe('My question');
         expect(document.target.kind === 'session' && document.target.routing.recipient.value).toEqual(routing);
         admitted = true;
         expect(await ops.discuss({ ...targetInput, message: 'My question' })).toMatchObject({ success: false, errorCode: 'admission_unknown' });
-        document = getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })!.document;
+        document = SessionDraftDocumentV1Schema.parse(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.document);
         expect(document.target.kind === 'session' && document.target.routing.recipient.value).toEqual(routing);
         expect(document.composer.text.value).toBe('My question');
         identifyAcceptedRun = true;
         expect(await ops.discuss({ ...targetInput, message: 'My question' })).toMatchObject({ success: true, runId: 'accepted-run' });
-        document = getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })!.document;
+        document = SessionDraftDocumentV1Schema.parse(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.document);
         expect(document.target.kind === 'session' && document.target.routing.recipient.value).toEqual({ mode: 'manual', recipient: { kind: 'execution_run', runId: 'accepted-run' } });
         expect(document.composer.text.value).toBe('My question');
         expect(sent).toEqual(Array.from({ length: 3 }, () => ({ ...targetInput, message: 'My question' })));
@@ -163,7 +262,7 @@ describe('useSessionRecipientState', () => {
             patch: { routing: { recipient: routing } }, materializationIntent: 'userEdit' });
         changeRecipientWhileAdmitting = true;
         expect(await ops.discuss({ ...targetInput, message: 'My question' })).toMatchObject({ success: true });
-        document = getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })!.document;
+        document = SessionDraftDocumentV1Schema.parse(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })?.document);
         expect(document.target.kind === 'session' && document.target.routing.recipient.value).toEqual({ mode: 'manual', recipient: null });
         expect(document.composer.text.value).toBe('Newer draft');
         expect(await ops.discuss({ ...targetInput, message: 'My question' })).toMatchObject({ success: false, errorCode: 'discussion_unavailable' });
@@ -518,9 +617,12 @@ describe('useSessionRecipientState', () => {
         await act(async () => {
             hook.getCurrent().setManualRecipient(manual);
             hook.getCurrent().setExecutionRunRequestedAction({ v: 1, kind: 'send_now' });
+            hook.getCurrent().setSessionMessage({ kind: 'ask', target: { selector: 'manager' } });
             await flushHookEffects({ cycles: 2, turns: 2 });
         });
 
+        expect(hook.getCurrent().sessionMessage).toEqual({ kind: 'ask', target: { selector: 'manager' } });
+        expect(getSessionDraftSnapshot(getActiveScope(), { kind: 'session', sessionId: 'session-a' })).toBeNull();
         expect(readSessionDraftValue(activeScopeState.value, 'session-a', 'routing.recipient')).toBeUndefined();
         expect(readSessionDraftValue(activeScopeState.value, 'session-a', 'routing.executionRunRequestedAction')).toBeUndefined();
         await hook.unmount();

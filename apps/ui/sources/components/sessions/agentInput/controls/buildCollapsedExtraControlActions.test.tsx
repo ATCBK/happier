@@ -9,7 +9,7 @@ describe('buildCollapsedExtraControlActions', () => {
         const openCollapsedOptionsPopover = vi.fn();
         const chip: AgentInputExtraActionChip = {
             key: 'mcp',
-            controlId: 'mcp',
+            controlId: 'plugin:fixture/mcp',
             onIntent,
             collapsedContentPopover: {
                 title: 'MCP',
@@ -26,7 +26,7 @@ describe('buildCollapsedExtraControlActions', () => {
             openCollapsedOptionsPopover,
         });
 
-        actions.mcp?.[0]?.onPress?.();
+        actions['plugin:fixture/mcp']?.[0]?.onPress?.();
 
         expect(onIntent).toHaveBeenCalledTimes(1);
         expect(openCollapsedOptionsPopover).toHaveBeenCalledWith('mcp');

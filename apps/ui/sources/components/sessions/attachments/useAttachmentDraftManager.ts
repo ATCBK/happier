@@ -44,9 +44,10 @@ export function useAttachmentDraftManager(params: Readonly<{
     addWebFiles: (files: readonly File[]) => void;
     addPickedAttachments: (picked: readonly PickedAttachment[]) => void;
     removeDraft: (id: string) => void;
+    removeSubmittedDrafts: (submitted: readonly AttachmentDraft[]) => readonly AttachmentDraft[];
     clearDrafts: () => void;
     replaceDrafts: (drafts: readonly AttachmentDraft[]) => void;
-    applyDraftPatch: (id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>) => void;
+    applyDraftPatch: (id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentsUploadFileSource) => void;
 }> {
     const filePickerRef = React.useRef<AttachmentFilePickerHandle | null>(null);
     const [drafts, setDrafts] = React.useState<AttachmentDraft[]>(() => [...(params.initialDrafts ?? [])]);
@@ -85,7 +86,8 @@ export function useAttachmentDraftManager(params: Readonly<{
         };
     }, []);
 
-    const applyDraftPatch = React.useCallback((id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>) => {
+    const applyDraftPatch = React.useCallback((id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentsUploadFileSource) => {
+        if (expectedSource && !draftsRef.current.some((draft) => draft.id === id && draft.source === expectedSource)) return;
         commitDrafts((prev) => prev.map((d) => d.id === id ? ({ ...d, ...patch } as AttachmentDraft) : d));
     }, [commitDrafts]);
 
@@ -127,6 +129,16 @@ export function useAttachmentDraftManager(params: Readonly<{
 
     const removeDraft = React.useCallback((id: string) => {
         commitDrafts((prev) => prev.filter((d) => d.id !== id));
+    }, [commitDrafts]);
+
+    const removeSubmittedDrafts = React.useCallback((submitted: readonly AttachmentDraft[]) => {
+        // Source objects are immutable through manager patches; upload checkpoints
+        // retain their identity, while a replacement source must survive acceptance.
+        const sourcesById = new Map(submitted.map((draft) => [draft.id, draft.source]));
+        const current = draftsRef.current;
+        const remaining = current.filter((draft) => sourcesById.get(draft.id) !== draft.source);
+        if (remaining.length !== current.length) commitDrafts(() => remaining);
+        return draftsRef.current;
     }, [commitDrafts]);
 
     const clearDrafts = React.useCallback(() => {
@@ -210,6 +222,7 @@ export function useAttachmentDraftManager(params: Readonly<{
         addWebFiles,
         addPickedAttachments,
         removeDraft,
+        removeSubmittedDrafts,
         clearDrafts,
         replaceDrafts,
         applyDraftPatch,
@@ -223,6 +236,7 @@ export function useAttachmentDraftManager(params: Readonly<{
         getDraftRevisionSnapshot,
         getDraftsSnapshot,
         removeDraft,
+        removeSubmittedDrafts,
         replaceDrafts,
     ]);
 }

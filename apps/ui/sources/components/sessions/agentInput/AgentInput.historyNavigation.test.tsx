@@ -109,10 +109,6 @@ installAgentInputCommonModuleMocks({
   },
 });
 
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: (key: keyof typeof localSettingState.values) => localSettingState.values[key] ?? 1,
-}));
-
 vi.mock('@/utils/system/userInteractionDiagnostics', () => ({
   recordLargeTextInputDiagnostic: (...args: unknown[]) => mocks.recordLargeTextInputDiagnostic(...args),
 }));
@@ -158,13 +154,6 @@ vi.mock('@/sync/domains/models/modelOptions', () => ({
 
 vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
   describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-  getPermissionModeBadgeLabelForAgentType: () => 'Default',
-  getPermissionModeLabelForAgentType: () => 'Default',
-  getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-  getPermissionModeTitleForAgentType: () => 'Permissions',
 }));
 
 vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({

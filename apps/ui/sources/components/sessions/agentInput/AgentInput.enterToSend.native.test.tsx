@@ -181,41 +181,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     }),
 }));
 
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
-    DEFAULT_AGENT_ID: 'codex',
-    resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-    restrictPermissionModeOptions: (options: readonly unknown[]) => options,
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default', notes: [] }),
-}));
-
 vi.mock('@/components/ui/forms/Switch', () => ({
     Switch: (props: Record<string, unknown>) => React.createElement('Switch', props, null),
 }));
@@ -394,7 +359,10 @@ describe('AgentInput (enter to send on native)', () => {
         expect(commandMenuState.lastProps).toEqual(expect.objectContaining({
             open: true,
             query: '/r',
-            items: [expect.objectContaining({ label: '/run' })],
+            items: [
+                expect.objectContaining({ label: '/run' }),
+                expect.objectContaining({ id: 'prompt-picker', label: 'agentInput.promptPicker.menu' }),
+            ],
         }));
     });
 
@@ -466,7 +434,10 @@ describe('AgentInput (enter to send on native)', () => {
         expect(commandMenuState.lastProps).toEqual(expect.objectContaining({
             open: true,
             query: '/r',
-            items: [expect.objectContaining({ label: '/run' })],
+            items: [
+                expect.objectContaining({ label: '/run' }),
+                expect.objectContaining({ id: 'prompt-picker', label: 'agentInput.promptPicker.menu' }),
+            ],
         }));
     });
 

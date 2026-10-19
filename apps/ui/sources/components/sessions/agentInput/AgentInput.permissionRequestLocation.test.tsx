@@ -1,47 +1,24 @@
 import React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { createReducer } from '@happier-dev/session-core/reducer';
+import { createTestSessionTranscriptSource, createToolCallMessageFixture, renderWithSessionTranscriptSource } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 let lastPermissionPromptCardProps: any = null;
-let messagesVersion = 0;
-let transcriptIdsReadCount = 0;
-let messagesByIdReadCount = 0;
-let reducerStateReadCount = 0;
-let reducerStateRef: any = {
-    messageIds: new Map<string, string>(),
-};
-
 const toolMessageId = 't1';
 const sessionId = 'session-1';
 const permissionId = 'perm-1';
-const committedMessageIdsOldestFirstRef = [toolMessageId];
+const toolMessage = createToolCallMessageFixture({
+    id: toolMessageId,
+    tool: { id: `call:${toolMessageId}`, name: 'write_file', state: 'running', input: {},
+        createdAt: 1, startedAt: 1, completedAt: null, description: null },
+});
 
-const messagesByIdRef: Record<string, any> = {
-    [toolMessageId]: {
-        kind: 'tool-call',
-        id: toolMessageId,
-        localId: null,
-        createdAt: 1,
-        tool: {
-            id: `call:${toolMessageId}`,
-            name: 'write_file',
-            state: 'running',
-            input: {},
-            createdAt: 1,
-            startedAt: 1,
-            completedAt: null,
-            description: null,
-        },
-        children: [],
-    },
-};
-
-const permissionRequests = [{ id: permissionId, tool: 'write_file', arguments: {} }];
+const permissionRequests = [{ id: permissionId, kind: 'permission' as const, createdAt: 1, tool: 'write_file', arguments: {} }];
 
 vi.mock('expo-image', () => ({
     Image: () => null,
@@ -174,19 +151,6 @@ installAgentInputCommonModuleMocks({
                 sessionPermissionModeApplyTiming: 'immediate',
                 permissionPromptSurface: 'composer',
             }),
-            useSessionTranscriptIds: () => {
-                transcriptIdsReadCount += 1;
-                return { ids: committedMessageIdsOldestFirstRef as any, isLoaded: true };
-            },
-            useSessionMessagesById: () => {
-                messagesByIdReadCount += 1;
-                return messagesByIdRef;
-            },
-            useSessionMessagesVersion: (_sid: string, enabled?: boolean) => (enabled === false ? 0 : messagesVersion),
-            useSessionMessagesReducerState: () => {
-                reducerStateReadCount += 1;
-                return reducerStateRef;
-            },
         });
     },
 });
@@ -199,40 +163,6 @@ vi.mock('@/sync/domains/state/storageStore', () => ({
         localSettingsDefaults: {},
         sessionMessages: {},
     }),
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex'],
-    DEFAULT_AGENT_ID: 'codex',
-    resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default' }),
 }));
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({
@@ -283,133 +213,69 @@ vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
 describe('AgentInput (permission tool location)', () => {
     it('does not subscribe to transcript data when no composer permission cards are visible', async () => {
         const { AgentInput } = await import('./AgentInput');
+        const source = createTestSessionTranscriptSource({ sessionId, messages: [toolMessage] });
+        const idsRead = vi.spyOn(source, 'useMessageIdsOldestFirst');
+        const messagesRead = vi.spyOn(source, 'useMessagesById');
+        const reducerRead = vi.spyOn(source, 'useReducerState');
 
-        transcriptIdsReadCount = 0;
-        messagesByIdReadCount = 0;
-        reducerStateReadCount = 0;
-
-        const { tree } = await renderScreen(<AgentInput
-            value=""
-            placeholder="x"
-            onChangeText={() => {}}
-            onSend={() => {}}
-            sessionId={sessionId}
-            metadata={null as any}
-            autocompleteKinds={[]}
+        const screen = await renderWithSessionTranscriptSource(<AgentInput
+            value="" placeholder="x" onChangeText={() => {}} onSend={() => {}}
+            sessionId={sessionId} metadata={null} autocompleteKinds={[]}
             autocompleteSuggestions={async () => []}
-        />);
+        />, source);
 
-        expect(transcriptIdsReadCount).toBe(0);
-        expect(messagesByIdReadCount).toBe(0);
-        expect(reducerStateReadCount).toBe(0);
-
-        await act(async () => {
-            tree.unmount();
-        });
+        expect(idsRead).not.toHaveBeenCalled();
+        expect(messagesRead).not.toHaveBeenCalled();
+        expect(reducerRead).not.toHaveBeenCalled();
+        await screen.unmount();
     });
 
-    it('updates the PermissionPromptCard location when tool-call permission id appears (even if messagesById is mutated in-place)', async () => {
+    it('updates the PermissionPromptCard location when the transcript source publishes the tool permission id', async () => {
         const { AgentInput } = await import('./AgentInput');
-
         lastPermissionPromptCardProps = null;
-        messagesVersion = 0;
-
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<AgentInput
-                    value=""
-                    placeholder="x"
-                    onChangeText={() => {}}
-                    onSend={() => {}}
-                    sessionId={sessionId}
-                    metadata={null as any}
-                    autocompleteKinds={[]}
-                    autocompleteSuggestions={async () => []}
-                    permissionRequests={permissionRequests as any}
-                />)).tree;
+        const source = createTestSessionTranscriptSource({ sessionId, messages: [toolMessage] });
+        const screen = await renderWithSessionTranscriptSource(<AgentInput
+            value="" placeholder="x" onChangeText={() => {}} onSend={() => {}}
+            sessionId={sessionId} metadata={null} autocompleteKinds={[]}
+            autocompleteSuggestions={async () => []} permissionRequests={permissionRequests}
+        />, source);
 
         expect(lastPermissionPromptCardProps?.location).toBeNull();
 
-        // Mutate messagesById in-place to simulate store behavior (map identity is stable).
-        messagesByIdRef[toolMessageId] = {
-            ...messagesByIdRef[toolMessageId],
-            tool: {
-                ...messagesByIdRef[toolMessageId].tool,
-                permission: { id: permissionId, status: 'pending' },
-            },
-        };
-        messagesVersion += 1;
-
         await act(async () => {
-            tree!.update(
-                <AgentInput
-                    value=""
-                    placeholder="x"
-                    onChangeText={() => {}}
-                    onSend={() => {}}
-                    sessionId={sessionId}
-                    metadata={null as any}
-                    autocompleteKinds={[]}
-                    autocompleteSuggestions={async () => []}
-                    permissionRequests={permissionRequests as any}
-                />
-            );
+            source.update({ reducerState: null, metadata: null, agentState: null, messages: [{
+                ...toolMessage,
+                tool: { ...toolMessage.tool, permission: { id: permissionId, status: 'pending' } },
+            }] });
         });
 
         expect(lastPermissionPromptCardProps?.location).toEqual({
-            kind: 'top',
-            messageId: 'tool:call:t1',
-            seq: null,
+            kind: 'top', messageId: 'tool:call:t1', seq: null,
         });
+        await screen.unmount();
     });
 
     it('falls back to a stable server message route when the tool call has no provider tool id', async () => {
         const { AgentInput } = await import('./AgentInput');
-
         lastPermissionPromptCardProps = null;
-        messagesVersion = 0;
-        reducerStateRef = {
-            messageIds: new Map<string, string>([['server-msg-1', toolMessageId]]),
-        };
-
-        messagesByIdRef[toolMessageId] = {
-            ...messagesByIdRef[toolMessageId],
-            tool: {
-                ...messagesByIdRef[toolMessageId].tool,
-                id: undefined,
-                permission: { id: permissionId, status: 'pending' },
-            },
-        };
-
-        let tree: renderer.ReactTestRenderer;
-        tree = (await renderScreen(<AgentInput
-                    value=""
-                    placeholder="x"
-                    onChangeText={() => {}}
-                    onSend={() => {}}
-                    sessionId={sessionId}
-                    metadata={null as any}
-                    autocompleteKinds={[]}
-                    autocompleteSuggestions={async () => []}
-                    permissionRequests={permissionRequests as any}
-                />)).tree;
+        const reducerState = createReducer();
+        reducerState.messageIds.set('server-msg-1', toolMessageId);
+        const source = createTestSessionTranscriptSource({
+            sessionId, reducerState,
+            messages: [{
+                ...toolMessage,
+                tool: { ...toolMessage.tool, id: undefined, permission: { id: permissionId, status: 'pending' } },
+            }],
+        });
+        const screen = await renderWithSessionTranscriptSource(<AgentInput
+            value="" placeholder="x" onChangeText={() => {}} onSend={() => {}}
+            sessionId={sessionId} metadata={null} autocompleteKinds={[]}
+            autocompleteSuggestions={async () => []} permissionRequests={permissionRequests}
+        />, source);
 
         expect(lastPermissionPromptCardProps?.location).toEqual({
-            kind: 'top',
-            messageId: 'server:server-msg-1',
-            seq: null,
+            kind: 'top', messageId: 'server:server-msg-1', seq: null,
         });
-
-        await act(async () => {
-            tree!.unmount();
-        });
-
-        reducerStateRef = { messageIds: new Map<string, string>() };
-        messagesByIdRef[toolMessageId] = {
-            ...messagesByIdRef[toolMessageId],
-            tool: {
-                ...messagesByIdRef[toolMessageId].tool,
-                id: `call:${toolMessageId}`,
-            },
-        };
+        await screen.unmount();
     });
 });

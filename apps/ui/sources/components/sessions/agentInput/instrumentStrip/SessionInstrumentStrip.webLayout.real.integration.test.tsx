@@ -52,7 +52,11 @@ afterEach(async () => {
 const REASON = 'Connected services · Unavailable';
 
 /** The New Session strip: a blocked-launch badge plus the draft's own actions ("Start another", "Delete draft"). */
-async function measureStrip(width: number): Promise<WebLayoutMeasurement> {
+async function measureStrip(
+  width: number,
+  badge: { label: string; labelNumberOfLines?: number } = { label: REASON, labelNumberOfLines: 0 },
+  withActions = true,
+): Promise<WebLayoutMeasurement> {
   const { SessionInstrumentStrip } = await import('./SessionInstrumentStrip');
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -64,14 +68,15 @@ async function measureStrip(width: number): Promise<WebLayoutMeasurement> {
           statusBadges={[
             {
               key: 'blocked',
-              label: REASON,
-              labelNumberOfLines: 0,
+              ...badge,
               tone: 'warning',
               testID: 'badge',
             },
           ]}
           statusTrailingActions={
-            <View testID="actions" style={{ width: 190, height: 20 }} />
+            withActions ? (
+              <View testID="actions" style={{ width: 190, height: 20 }} />
+            ) : undefined
           }
         />
       </View>,
@@ -79,7 +84,7 @@ async function measureStrip(width: number): Promise<WebLayoutMeasurement> {
   });
   return measureWebLayout(host, {
     viewport: { width: Math.max(width, 400), height: 300 },
-    texts: [REASON],
+    texts: [badge.label],
     settle: (replay) => act(replay),
   });
 }
@@ -108,8 +113,18 @@ describe('the composer status row, as a browser lays it out', () => {
     // The badge stays one line at its natural width rather than squeezing into a multi-line capsule.
     expect(badge.height).toBeLessThanOrEqual(30);
     expect(actions.top).toBeGreaterThanOrEqual(badge.bottom);
-    // Both stay right-aligned with the composer's edge.
-    expect(frame.right - badge.right).toBeLessThanOrEqual(8);
-    expect(frame.right - actions.right).toBeLessThanOrEqual(8);
+    // Both stay right-aligned with the strip's content edge (its 20 px inset).
+    expect(frame.right - badge.right).toBeLessThanOrEqual(20.5);
+    expect(frame.right - actions.right).toBeLessThanOrEqual(20.5);
+  });
+
+  it('keeps a long sentence badge inside the strip on a phone, wrapping its words instead of running past the edge', async () => {
+    // The managed wake failure line: a sentence, passed with no explicit line count.
+    const layout = await measureStrip(
+      358,
+      { label: 'Codex couldn\u2019t start. Your message is still queued. Ask someone who manages this machine to start it.' },
+      false,
+    );
+    expect(layout.rect('badge').right).toBeLessThanOrEqual(layout.rect('frame').right + 0.5);
   });
 });

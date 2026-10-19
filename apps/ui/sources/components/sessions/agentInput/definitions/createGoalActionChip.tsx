@@ -38,8 +38,8 @@ export function createGoalActionChip(params: Readonly<{
     editableGoal: boolean;
     goalActionCapabilityProfile?: GoalActionCapabilities | null;
     currentObjective: string | null;
-    onSetGoal?: (request: SessionWorkStateGoalSetRequest) => Promise<SessionWorkStateOperationResult>;
-    onClearGoal?: () => Promise<SessionWorkStateOperationResult>;
+    onSetGoal?: (request: SessionWorkStateGoalSetRequest, signal?: AbortSignal) => Promise<SessionWorkStateOperationResult>;
+    onClearGoal?: (signal?: AbortSignal) => Promise<SessionWorkStateOperationResult>;
     /** The Goal control's continuation owner row (Keep going or the agent's own mode). */
     continuation?: SessionGoalContinuationContext | null;
 }>): AgentInputExtraActionChip {

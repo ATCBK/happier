@@ -1,14 +1,13 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen } from '@/dev/testkit';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const scrollEdgeFadesState = vi.hoisted(() => ({
     canScrollX: false,
-    showRight: false,
 }));
 
 function flattenStyle(style: any): Record<string, unknown> {
@@ -80,22 +79,6 @@ function mockCommonDeps() {
         hapticsError: () => { },
     }));
 
-    vi.doMock('@/hooks/server/useFeatureEnabled', () => ({
-        useFeatureEnabled: () => false,
-    }));
-
-    vi.doMock('@/hooks/ui/useKeyboardHeight', () => ({
-        useKeyboardHeight: () => 0,
-    }));
-
-    vi.doMock('@/hooks/ui/textInputCaretRect', () => ({
-        useTextInputCaretRect: () => null,
-    }));
-
-    vi.doMock('@/hooks/session/useUserMessageHistory', () => ({
-        useUserMessageHistory: () => ({ reset: () => { }, moveUp: () => { }, moveDown: () => { }, setText: () => { } }),
-    }));
-
     vi.doMock('@/components/ui/forms/MultiTextInput', () => ({
         MultiTextInput: (props: Record<string, unknown>) => React.createElement('MultiTextInput', props, null),
     }));
@@ -150,15 +133,6 @@ function mockCommonDeps() {
         PermissionFooter: () => null,
     }));
 
-    vi.doMock('@/components/tools/normalization/policy/permissionSummary', () => ({
-        formatPermissionRequestSummary: () => '',
-    }));
-
-    vi.doMock('@/components/sessions/sourceControl/status', () => ({
-        SourceControlStatusBadge: () => null,
-        useHasMeaningfulScmStatus: () => false,
-    }));
-
     vi.doMock('@/components/sessions/pickers/OptionPickerOverlay', () => ({
         OptionPickerOverlay: () => null,
     }));
@@ -168,83 +142,50 @@ function mockCommonDeps() {
     return createModalModuleMock().module;
 });
 
-    vi.doMock('@/agents/catalog/catalog', () => ({
-        getAgentIconSvgXml: () => null,
-        getAgentIconSource: () => null,
-        getAgentIconTintColor: () => undefined,
-        AGENT_IDS: ['codex'],
-        DEFAULT_AGENT_ID: 'codex',
-        resolveAgentIdFromFlavor: () => null,
-        getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-    getAgentBehavior: (agentId: string) => ({
-        sessionUsage: {
-            supportsExactContextUsageBadge: agentId !== 'codex' && agentId !== 'gemini',
-        },
-    }),
-    }));
-
-    vi.doMock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-        getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-        supportsFreeformModelSelectionForSession: () => false,
-    }));
-
-    vi.doMock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-        describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-    }));
-
-    vi.doMock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-        describeEffectivePermissionMode: () => ({ effectiveMode: 'default' }),
-    }));
-
-    vi.doMock('./ResumeChip', () => ({
-        ResumeChip: (props: Record<string, unknown>) => React.createElement('ResumeChip', props, null),
-        formatResumeChipLabel: () => '',
-        RESUME_CHIP_ICON_NAME: 'play',
-        RESUME_CHIP_ICON_SIZE: 12,
-    }));
-
-    vi.doMock('./PathAndResumeRow', () => ({
-        PathAndResumeRow: () => null,
-    }));
-
 }
 
-function mockSettings() {
-    // A full stub, not an `importOriginal` partial: the real storage graph cycles back to
-    // `storage` through modules the AgentInput import has already started loading, and that
-    // cross-chain cycle never settles while the partial factory awaits the original.
-    vi.doMock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-    useSetting: (key: string) => {
-                if (key === 'profiles') return [];
-                if (key === 'agentInputEnterToSend') return true;
-                if (key === 'agentInputActionBarLayout') return 'scroll';
-                if (key === 'agentInputChipDensity') return 'labels';
-                if (key === 'sessionPermissionModeApplyTiming') return 'immediate';
-                return null;
-            },
-});
-});
+let restoreSettings: (() => void) | undefined;
+let resetHomeBoundary: (() => Promise<void>) | undefined;
+
+async function seedSettings() {
+    const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } =
+        await import('@/dev/testkit/harness/homeGovernanceHarness');
+    const home = createHomeGovernanceHarness();
+    installHomeGovernanceBoundaries(home);
+    resetHomeBoundary = () => home.reset();
+    const { getStorage } = await import('@/sync/domains/state/storageStore');
+    const previousSettings = getStorage().getState().settings;
+    getStorage().setState({ settings: {
+        ...previousSettings,
+        agentInputEnterToSend: true,
+        agentInputActionBarLayout: 'scroll',
+        agentInputChipDensity: 'labels',
+        sessionPermissionModeApplyTiming: 'immediate',
+    } });
+    restoreSettings = () => getStorage().setState({ settings: previousSettings });
 }
 
-function mockScrollEdgeFades(params: { canScrollX: boolean; showRight: boolean }) {
-    scrollEdgeFadesState.canScrollX = params.canScrollX;
-    scrollEdgeFadesState.showRight = params.showRight;
-    vi.doMock('@/components/ui/scroll/useScrollEdgeFades', () => ({
-        useScrollEdgeFades: () => ({
-            canScrollX: scrollEdgeFadesState.canScrollX,
-            canScrollY: false,
-            visibility: { left: false, right: scrollEdgeFadesState.showRight, top: false, bottom: false },
-            onViewportLayout: () => {},
-            onContentSizeChange: () => {},
-            onScroll: () => {},
-        }),
-    }));
+afterEach(async () => {
+    restoreSettings?.();
+    restoreSettings = undefined;
+    await resetHomeBoundary?.();
+    resetHomeBoundary = undefined;
+});
+
+function seedScrollMeasurements(canScrollX: boolean) {
+    scrollEdgeFadesState.canScrollX = canScrollX;
+}
+
+async function renderScreen(element: React.ReactElement) {
+    const screen = await renderTestScreen(element);
+    // Native layout/content-size events drive the real scroll-edge owner.
+    await act(async () => {
+        for (const scroll of getActionBarScrollViews(screen.tree)) {
+            scroll.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 200, height: 32 } } });
+            scroll.props.onContentSizeChange(scrollEdgeFadesState.canScrollX ? 400 : 200, 32);
+        }
+    });
+    return screen;
 }
 
 describe('AgentInput (action bar scroll layout)', () => {
@@ -252,8 +193,8 @@ describe('AgentInput (action bar scroll layout)', () => {
         vi.clearAllMocks();
         await mockWebPlatform();
         mockCommonDeps();
-        mockSettings();
-        mockScrollEdgeFades({ canScrollX: false, showRight: false });
+        await seedSettings();
+        seedScrollMeasurements(false);
 
         const { AgentInput } = await import('./AgentInput');
 
@@ -291,8 +232,8 @@ describe('AgentInput (action bar scroll layout)', () => {
         vi.clearAllMocks();
         await mockWebPlatform();
         mockCommonDeps();
-        mockSettings();
-        mockScrollEdgeFades({ canScrollX: true, showRight: true });
+        await seedSettings();
+        seedScrollMeasurements(true);
 
         const { AgentInput } = await import('./AgentInput');
 
@@ -329,8 +270,8 @@ describe('AgentInput (action bar scroll layout)', () => {
         vi.clearAllMocks();
         await mockWebPlatform();
         mockCommonDeps();
-        mockSettings();
-        mockScrollEdgeFades({ canScrollX: true, showRight: true });
+        await seedSettings();
+        seedScrollMeasurements(true);
 
         const { AgentInput } = await import('./AgentInput');
 
@@ -390,8 +331,8 @@ describe('AgentInput (action bar scroll layout)', () => {
         vi.clearAllMocks();
         await mockWebPlatform();
         mockCommonDeps();
-        mockSettings();
-        mockScrollEdgeFades({ canScrollX: true, showRight: true });
+        await seedSettings();
+        seedScrollMeasurements(true);
 
         const { AgentInput } = await import('./AgentInput');
 

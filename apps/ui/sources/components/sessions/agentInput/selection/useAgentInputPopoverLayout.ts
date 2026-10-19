@@ -21,6 +21,12 @@ const DEFAULT_POPOVER_GAP = 8;
  */
 const AGENT_INPUT_CARET_MENU_ROOMIER_SIDE_WINS = Number.POSITIVE_INFINITY;
 
+/**
+ * The composer a caret-anchored menu belongs to. That menu opens beyond the composer's edge, never
+ * over the text being written. Chip pickers ignore it: they hang directly above their chip.
+ */
+export const AgentInputPopoverClearanceContext = React.createContext<React.RefObject<any> | undefined>(undefined);
+
 export type AgentInputPopoverLayout = Readonly<{
     maxHeightCap?: number;
     keyboardBottomInset: number;
@@ -33,6 +39,7 @@ export type AgentInputPopoverLayout = Readonly<{
     gap: number;
     edgePadding: Readonly<{ horizontal: number; vertical: number; top?: number }>;
     portal: PopoverPortalOptions;
+    clearanceRef?: React.RefObject<any>;
 }>;
 
 export function useAgentInputPopoverLayout(input: Readonly<{
@@ -41,12 +48,13 @@ export function useAgentInputPopoverLayout(input: Readonly<{
     portalTopBottomLayout?: 'anchored' | 'boundary';
     /**
      * `chip` (default): a composer picker opens directly above its chip and may overlap the composer
-     * (the 0.2 composition, owner 2026-10-18). `caret`: the slash/@ menu keeps the roomier side.
+     * (the 0.2 composition, owner 2026-10-18). `caret`: the slash/@ menu clears the whole composer.
      */
     anchor?: 'chip' | 'caret';
 }>): AgentInputPopoverLayout {
     const keyboardHeight = useKeyboardHeight();
     const composerKeyboardLayout = useComposerKeyboardLayout();
+    const clearanceRef = React.useContext(AgentInputPopoverClearanceContext);
     const retainedNativeKeyboardHeightRef = React.useRef(0);
     const { height: windowHeight, width: windowWidth } = useWindowDimensions();
     const normalizedKeyboardHeight = Number.isFinite(keyboardHeight)
@@ -145,5 +153,6 @@ export function useAgentInputPopoverLayout(input: Readonly<{
         gap: DEFAULT_POPOVER_GAP,
         edgePadding,
         portal,
+        ...(caretAnchored ? { clearanceRef } : {}),
     };
 }

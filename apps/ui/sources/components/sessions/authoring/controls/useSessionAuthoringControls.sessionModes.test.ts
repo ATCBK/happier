@@ -21,6 +21,32 @@ function modeInput(extra: Partial<SessionAuthoringControlsInput> = {}): SessionA
 }
 
 describe('useSessionAuthoringControls session modes', () => {
+    it('uses the Session model title when a composer option only retains the raw id', async () => {
+        const hook = await renderHook(() => useSessionAuthoringControls(modeInput({
+            agentId: 'claude',
+            modelMode: 'claude-haiku-4-5',
+            modelOptionsOverride: [{ value: 'claude-haiku-4-5', label: 'claude-haiku-4-5', description: '' }],
+        })));
+        expect(hook.getCurrent().selectedModelLabel).toBe('Haiku 4.5');
+        await hook.unmount();
+    });
+
+    it('uses the observed pinned-model title and preserves an explicit composer title', async () => {
+        const modelId = 'claude-haiku-4-5-20251001';
+        const hook = await renderHook((label: string) => useSessionAuthoringControls(modeInput({
+            agentId: 'claude', modelMode: modelId,
+            metadata: { path: '/tmp', host: 'test-host', flavor: 'claude', sessionModelsV1: {
+                v: 1, agentId: 'claude', updatedAt: 1, currentModelId: modelId,
+                availableModels: [{ id: modelId, name: 'Haiku 4.5' }],
+            } },
+            modelOptionsOverride: [{ value: modelId, label, description: '' }],
+        })), { initialProps: modelId });
+        expect(hook.getCurrent().selectedModelLabel).toBe('Haiku 4.5');
+        await hook.rerender('Work model');
+        expect(hook.getCurrent().selectedModelLabel).toBe('Work model');
+        await hook.unmount();
+    });
+
     it('renders unresolved retained Agent targets without claiming an applied model', async () => {
         for (const agentId of ['custom-acp', '', 'bad:target']) {
             const hook = await renderHook(() => useSessionAuthoringControls(modeInput({

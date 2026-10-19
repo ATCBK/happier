@@ -74,7 +74,7 @@ describe('AgentInputStatusBadge', () => {
         const { theme } = useUnistyles();
         const fills = [];
         for (const glass of [false, true]) {
-            const badge = <AgentInputStatusBadge label="Connected services · Unavailable" tone="warning" />;
+            const badge = <AgentInputStatusBadge key="connected-services" label="Connected services · Unavailable" tone="warning" />;
             const screen = await renderScreen(glass
                 ? <HappierMaterialRoleProvider role="content" translucentColor="transparent">{badge}</HappierMaterialRoleProvider>
                 : badge);

@@ -148,11 +148,15 @@ describe('AgentInputSelectionPopover', () => {
         windowWidthState.value = 1440;
         const { resolveHappierPopoverPlacement } = await import('@happier-dev/plugin-ui/presentation');
         const { AgentInputSelectionPopover } = await import('./AgentInputSelectionPopover');
+        const { AgentInputPopoverClearanceContext } = await import('./useAgentInputPopoverLayout');
         const anchorRef = { current: { nodeType: 'View' } } as any;
+        const composerRef = { current: { nodeType: 'View' } } as any;
         await renderScreen(
-            <AgentInputSelectionPopover open anchorRef={anchorRef} onRequestClose={() => {}} maxHeightCap={560}>
-                {() => <React.Fragment />}
-            </AgentInputSelectionPopover>,
+            <AgentInputPopoverClearanceContext.Provider value={composerRef}>
+                <AgentInputSelectionPopover open anchorRef={anchorRef} onRequestClose={() => {}} maxHeightCap={560}>
+                    {() => <React.Fragment />}
+                </AgentInputSelectionPopover>
+            </AgentInputPopoverClearanceContext.Provider>,
         );
         // The chip itself is the vertical anchor: the picker may overlap the composer's text.
         expect(capturedPopoverProps.current?.clearanceRef).toBeUndefined();

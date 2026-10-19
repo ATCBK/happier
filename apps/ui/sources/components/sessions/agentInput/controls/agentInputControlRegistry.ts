@@ -43,6 +43,12 @@ export const AGENT_INPUT_CONTROL_REGISTRY = [
     { id: 'automation', line: 'secondary' },
 ] as const satisfies ReadonlyArray<AgentInputControlDescriptor>;
 
+/**
+ * The compact composer (an "Ask an agent" box on a page about one machine, lab `ra` A1): where it runs
+ * and which model answers, on one rail. Everything else keeps its default for the new session.
+ */
+export const AGENT_INPUT_COMPACT_CONTROL_IDS = ['engine', 'machine'] as const satisfies readonly AgentInputHostControlId[];
+
 export function findAgentInputControlDescriptor(id: AgentInputHostControlId): AgentInputControlDescriptor | null {
     return AGENT_INPUT_CONTROL_REGISTRY.find((control) => control.id === id) ?? null;
 }

@@ -50,7 +50,10 @@ import type { ParticipantComposerPreparedSubmission } from './SessionParticipant
 const agentInputSpy = vi.fn();
 const modalAlertSpy = vi.fn();
 type SubmitMessage = typeof syncInstance.submitMessage;
-const syncSubmitMessageSpy = vi.fn<SubmitMessage>(async () => undefined);
+const acceptedSubmission: Awaited<ReturnType<SubmitMessage>> = {
+    type: 'success', persistence: 'pending', wake: { attempted: false, state: 'not_needed' },
+};
+const syncSubmitMessageSpy = vi.fn<SubmitMessage>(async () => acceptedSubmission);
 const sessionExecutionRunSendSpy = vi.fn<
     (sessionId: string, request: { runId: string; message: string; delivery?: 'prompt' | 'steer_if_supported' | 'interrupt' }) => Promise<{ ok: boolean; error?: string }>
 >(async () => ({ ok: true }));
@@ -538,7 +541,7 @@ describe('SessionParticipantComposer', () => {
         const { SessionParticipantComposer } = await import('./SessionParticipantComposer');
         syncSubmitMessageSpy.mockImplementation(async (...args) => {
             args[4]?.onOutboundHandoff?.({ persistence: 'pending', localId: 'first-input-1' });
-            return undefined;
+            return acceptedSubmission;
         });
 
         await renderScreen(<SessionParticipantComposer
@@ -788,6 +791,7 @@ describe('SessionParticipantComposer', () => {
             .mockRejectedValueOnce(new Error('admission outcome unknown'))
             .mockImplementationOnce(async (_sessionId, _text, _displayText, _meta, options) => {
                 options?.onOutboundHandoff?.({ persistence: 'pending', localId: 'first-input-1' });
+                return acceptedSubmission;
             });
         const { SessionParticipantComposer } = await import('./SessionParticipantComposer');
 
@@ -1529,7 +1533,7 @@ describe('SessionParticipantComposer', () => {
 
     it('preserves a participant reference whose exact token remains in newer text after acceptance', async () => {
         const submission = createDeferred<void>();
-        syncSubmitMessageSpy.mockImplementationOnce(() => submission.promise);
+        syncSubmitMessageSpy.mockImplementationOnce(async () => { await submission.promise; return acceptedSubmission; });
         const { SessionParticipantComposer } = await import('./SessionParticipantComposer');
 
         await renderScreen(<SessionParticipantComposer
@@ -1643,7 +1647,7 @@ describe('SessionParticipantComposer', () => {
 
     it('clears text-bound newer participant references atomically with unchanged accepted text', async () => {
         const submission = createDeferred<void>();
-        syncSubmitMessageSpy.mockImplementationOnce(() => submission.promise);
+        syncSubmitMessageSpy.mockImplementationOnce(async () => { await submission.promise; return acceptedSubmission; });
         const { SessionParticipantComposer } = await import('./SessionParticipantComposer');
 
         await renderScreen(<SessionParticipantComposer
@@ -1704,7 +1708,7 @@ describe('SessionParticipantComposer', () => {
 
     it('clears unchanged participant text and references when an attachment changes after submission', async () => {
         const submission = createDeferred<void>();
-        syncSubmitMessageSpy.mockImplementationOnce(() => submission.promise);
+        syncSubmitMessageSpy.mockImplementationOnce(async () => { await submission.promise; return acceptedSubmission; });
         const { SessionParticipantComposer } = await import('./SessionParticipantComposer');
 
         await renderScreen(<SessionParticipantComposer

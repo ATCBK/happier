@@ -124,15 +124,12 @@ installAgentInputCommonModuleMocks({
         });
     },
     storageStore: async () => {
-        const state = { sessionMessages: {}, artifacts: {}, localSettings: { uiFontScale: 1, uiContentWidthMode: null, uiItemDensity: 'cozy' } };
-        const store = Object.assign(
-            (selector: any) => selector(state),
-            {
-                getState: () => state,
-                getInitialState: () => state,
-                subscribe: () => () => {},
-            },
-        );
+        const { createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { localSettingsDefaults } = await import('@/sync/domains/settings/localSettings');
+        const store = createStorageStoreMock({
+            sessionMessages: {},
+            localSettings: { ...localSettingsDefaults, uiFontScale: 1 },
+        });
         return { getStorage: () => store };
     },
 });
@@ -165,42 +162,6 @@ const featureEnabledState: Record<string, boolean> = { voice: true };
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => featureEnabledState[featureId] === true,
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
-    DEFAULT_AGENT_ID: 'codex',
-    isBundledAgentId: (value: unknown) => typeof value === 'string' && ['codex', 'claude', 'opencode', 'gemini'].includes(value),
-    resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-    restrictPermissionModeOptions: (options: readonly unknown[]) => options,
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default' }),
 }));
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({
@@ -1176,7 +1137,7 @@ describe('AgentInput (send button accessibility)', () => {
         const send = screen.findByTestId('new-session-composer-send');
         expect(send).toBeTruthy();
         if (!send) throw new Error('new-session-composer-send not found');
-        expect(send.props.accessibilityRole).toBe('button');
+        expect(send.props.role).toBe('button');
         expect(send.props.accessibilityLabel).toBe('newSession.title');
         await screen.unmount();
     });
@@ -1197,7 +1158,7 @@ describe('AgentInput (send button accessibility)', () => {
         const send = screen.findByTestId('new-session-composer-send');
         expect(send).toBeTruthy();
         if (!send) throw new Error('new-session-composer-send not found');
-        expect(send.props.accessibilityRole).toBe('button');
+        expect(send.props.role).toBe('button');
         expect(send.props.accessibilityLabel).toBe('automations.create.createButtonTitle');
         await screen.unmount();
     });
@@ -1297,7 +1258,7 @@ describe('AgentInput (send button accessibility)', () => {
         const send = screen.findByTestId('new-session-composer-send');
         expect(send).toBeTruthy();
         if (!send) throw new Error('new-session-composer-send not found');
-        expect(send.props.accessibilityRole).toBe('button');
+        expect(send.props.role).toBe('button');
         expect(send.props.accessibilityLabel).toBe('newSession.title');
         await screen.unmount();
     });
@@ -1318,7 +1279,7 @@ describe('AgentInput (send button accessibility)', () => {
         const send = screen.findByTestId('session-composer-send');
         expect(send).toBeTruthy();
         if (!send) throw new Error('session-composer-send not found');
-        expect(send.props.accessibilityRole).toBe('button');
+        expect(send.props.role).toBe('button');
         expect(send.props.accessibilityLabel).toBe('common.send');
         await screen.unmount();
     });

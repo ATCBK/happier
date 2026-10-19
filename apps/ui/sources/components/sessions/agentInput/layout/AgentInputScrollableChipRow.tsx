@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { Platform, ScrollView, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, View } from 'react-native';
 
+import { HAPPIER_FOCUS_RING_V1 } from '@happier-dev/plugin-ui/presentation';
+
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
 import { resolveHorizontalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
@@ -12,6 +14,13 @@ import { attachChipRailReveal } from './attachChipRailReveal';
 import { resolveChipRailCutEdges, type ChipRailCutEdges } from './resolveChipRailCutEdges';
 
 const ACTION_BAR_SCROLL_END_GUTTER_WIDTH = 24;
+/**
+ * The rail scrolls, so it clips: it reaches out by the focus ring's extent and pads its chips back
+ * in place, so a focused chip's ring is drawn whole (web, where keyboard focus paints the ring).
+ */
+const FOCUS_RING_EXTENT = HAPPIER_FOCUS_RING_V1.widthPx + HAPPIER_FOCUS_RING_V1.gapPx;
+const WEB_RING_ROOM_STYLE = { margin: -FOCUS_RING_EXTENT, padding: FOCUS_RING_EXTENT } as const;
+const WEB_CONTAINER_UNCLIPPED_STYLE = { overflow: 'visible' } as const;
 
 const ScrollViewWithWheel = ScrollView as unknown as React.ComponentType<
     React.ComponentPropsWithRef<typeof ScrollView> & {
@@ -203,10 +212,10 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
     const showFadeRight = fades.visibility.right;
     const canScroll = fades.canScrollX || showFadeLeft || showFadeRight;
     const webEdgeMask = React.useMemo(
-        () => resolveHorizontalScrollEdgeMaskStyle(
+        () => [WEB_RING_ROOM_STYLE, resolveHorizontalScrollEdgeMaskStyle(
             { top: false, bottom: false, left: showFadeLeft, right: showFadeRight },
             { fadeSize: 24, ...(cutEdges.start ? { startClip: cutEdges.start } : {}), ...(cutEdges.end ? { endClip: cutEdges.end } : {}) },
-        ),
+        )],
         [cutEdges, showFadeLeft, showFadeRight],
     );
 
@@ -233,7 +242,7 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
     }, [getScrollNode]);
 
     return (
-        <View style={props.containerStyle}>
+        <View style={Platform.OS === 'web' ? [props.containerStyle, WEB_CONTAINER_UNCLIPPED_STYLE] : props.containerStyle}>
             <ScrollViewWithWheel
                 ref={scrollRef}
                 // Web: the chips fade out at a scrollable edge through a mask on the rail itself. The

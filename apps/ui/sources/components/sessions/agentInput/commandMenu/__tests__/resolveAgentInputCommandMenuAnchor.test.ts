@@ -26,5 +26,13 @@ describe('resolveAgentInputCommandMenuAnchor', () => {
 
         expect(anchor).toEqual({ kind: 'view', ref: fallbackRef });
     });
+
+    it('anchors a compact layout to the composer card even while a caret rect is known', () => {
+        const fallbackRef = React.createRef<View>();
+        const cardRef = React.createRef<View>();
+        const caretRect: CaretRect = { left: 100, top: 200, height: 18 };
+
+        expect(resolveAgentInputCommandMenuAnchor(caretRect, fallbackRef, cardRef)).toEqual({ kind: 'view', ref: cardRef });
+    });
 });
 

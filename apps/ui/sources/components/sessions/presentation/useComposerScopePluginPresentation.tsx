@@ -65,11 +65,17 @@ import type { FocusReturnRef } from '@/keyboard/focusReturn';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
     createPluginUiProjectedActionResolver,
-    normalizePluginUiProjection,
+    EMPTY_PLUGIN_UI_PROJECTION,
+    readPluginUiProjectionSnapshot,
     type PluginUiComposerAttachmentProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import {
+    CurrentUiContextBridge,
+    useCurrentUiContextMountPublisher,
+    useOptionalCurrentUiContextReader,
+} from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { useRetainedPluginSurfaceFocusNode } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import {
     resolvePluginLocalizedText,
     type PluginLocalizedTextResolver,
@@ -110,7 +116,7 @@ type OrderedComposerContribution = Readonly<{
  * then the qualified contribution id so map insertion order cannot leak into
  * the control rail or before/after region slots.
  */
-function compareOrderedComposerContributions(
+export function compareOrderedComposerContributions(
     left: OrderedComposerContribution,
     right: OrderedComposerContribution,
 ): number {
@@ -144,6 +150,8 @@ export type ComposerScopePluginPresentation = Readonly<{
 
 export type ComposerScopePluginPresentationParams = Readonly<{
     composer: ComposerRefV1;
+    /** Account compositions borrow one Administration-selected plugin supply at a time. */
+    contributorPluginId?: string;
     /** Existing exact surface target: app before creation, Session afterward. */
     physicalTarget: PluginSurfaceTarget;
     /** Existing Resource context; New Session must remain global. */
@@ -227,6 +235,10 @@ export function useComposerScopePluginPresentation(
 ): ComposerScopePluginPresentation {
     const clientExecutableRegistrationRevision = usePluginUiClientExecutableRegistrationRevision();
     const currentUiContextReader = useOptionalCurrentUiContextReader();
+    const currentUiContextPublisher = useCurrentUiContextMountPublisher();
+    const retainedDialogFocus = useRetainedPluginSurfaceFocusNode(null);
+    const retainedDialogFocusRef = React.useRef(retainedDialogFocus);
+    React.useLayoutEffect(() => { retainedDialogFocusRef.current = retainedDialogFocus; }, [retainedDialogFocus]);
     const destinationNavigation = usePluginSurfaceDestinationNavigationBinding();
     const openDestinationSurface = destinationNavigation?.openSurface;
     const isScopeCurrentRef = React.useRef(params.isScopeCurrent);
@@ -253,7 +265,8 @@ export function useComposerScopePluginPresentation(
     ), [canonicalComposer, physicalTargetSessionId, params.serverId]);
     const readCurrentComposerSnapshot = React.useCallback((): ComposerSnapshotV1 | null => {
         if (canonicalComposer.kind !== 'session') {
-            return readComposerPresentationSnapshot(canonicalComposer);
+            return readComposerPresentationSnapshot(canonicalComposer,
+                canonicalComposer.kind === 'discussion' ? params.accountLifetime?.scope ?? null : undefined);
         }
         if (
             !exactSessionAddress
@@ -262,11 +275,12 @@ export function useComposerScopePluginPresentation(
             return null;
         }
         return readSessionComposerPresentationTargetAtAddress(exactSessionAddress)?.readSnapshot?.() ?? null;
-    }, [canonicalComposer, exactSessionAddress]);
+    }, [canonicalComposer, exactSessionAddress, params.accountLifetime]);
     const physicalTargetKey = physicalTargetSessionId !== null ? `session:${physicalTargetSessionId}` : 'app';
     const resourceContextKey = React.useMemo(() => JSON.stringify(params.resourceContext), [params.resourceContext]);
     const scopeAbort = React.useMemo(() => new AbortController(), [
         params.accountLifetime,
+        params.contributorPluginId,
         params.machineId,
         physicalTargetKey,
         params.projectionInputs?.pluginProjectionById,
@@ -299,7 +313,7 @@ export function useComposerScopePluginPresentation(
         let snapshot!: PluginContributedActionCurrentSnapshot;
         snapshot = {
             pluginProjectionById: inputs.pluginProjectionById,
-            pluginUiProjection: normalizePluginUiProjection(projection),
+            pluginUiProjection: readPluginUiProjectionSnapshot(projection),
             resolveContributedAction: createPluginUiProjectedActionResolver(
                 projection.actionsById,
             ),
@@ -353,9 +367,7 @@ export function useComposerScopePluginPresentation(
         () => actionSnapshotRef.current,
         [],
     );
-    const pluginProjection = React.useMemo(() => normalizePluginUiProjection(
-        actionSnapshot ? params.projectionInputs?.pluginProjectionV2 ?? null : null,
-    ), [actionSnapshot, params.projectionInputs?.pluginProjectionV2]);
+    const pluginProjection = actionSnapshot?.pluginUiProjection ?? EMPTY_PLUGIN_UI_PROJECTION;
     // One resolver for every declared Composer string this scope displays:
     // control labels, choice options, dialog titles, and the attachment type
     // label frozen at admission. It is referentially stable because it takes
@@ -378,22 +390,25 @@ export function useComposerScopePluginPresentation(
     const composerControls = React.useMemo(() => {
         if (!actionSnapshot) return [];
         return Object.values(pluginProjection.composerControlsById)
+            .filter(control => !params.contributorPluginId || control.identity.pluginId === params.contributorPluginId)
             .filter((control) => (
                 params.attachmentsEnabled || control.definition.interaction.kind !== 'attachmentPicker'
             ))
             .sort(compareOrderedComposerContributions);
-    }, [actionSnapshot, params.attachmentsEnabled, pluginProjection.composerControlsById]);
+    }, [actionSnapshot, params.attachmentsEnabled, params.contributorPluginId, pluginProjection.composerControlsById]);
     const composerRegions = React.useMemo(() => {
         if (!actionSnapshot) return [];
         return Object.values(pluginProjection.composerRegionsById)
+            .filter(region => !params.contributorPluginId || region.identity.pluginId === params.contributorPluginId)
             .filter((region) => (
                 region.definition.scopes === undefined
                 || region.definition.scopes.includes(params.composer.kind)
             ))
             .sort(compareOrderedComposerContributions);
-    }, [actionSnapshot, params.composer.kind, pluginProjection.composerRegionsById]);
+    }, [actionSnapshot, params.composer.kind, params.contributorPluginId, pluginProjection.composerRegionsById]);
     const composerSurfaceCatalog = params.projectionInputs?.composerSurfaceCatalog ?? [];
     const transactionApplier = React.useMemo(() => createComposerPresentationTransactionApplier({
+        ...(params.composer.kind === 'discussion' ? { scope: params.accountLifetime?.scope ?? null } : {}),
         composerAttachmentsById: pluginProjection.composerAttachmentsById,
         localize: localizePluginText,
         ...(params.composer.kind === 'session'
@@ -401,6 +416,7 @@ export function useComposerScopePluginPresentation(
             : {}),
     }), [
         exactSessionAddress,
+        params.accountLifetime,
         localizePluginText,
         params.composer.kind,
         pluginProjection.composerAttachmentsById,
@@ -461,6 +477,7 @@ export function useComposerScopePluginPresentation(
         const { fallback, ...mountRequest } = request;
         return (
             <ComposerPluginSurface
+                scope={params.accountLifetime?.scope}
                 key={request.instanceKey}
                 request={mountRequest}
                 {...(fallback === undefined ? {} : { fallback })}
@@ -489,6 +506,7 @@ export function useComposerScopePluginPresentation(
     }, [
         composerSurfaceCatalog,
         openDestinationSurface,
+        params.accountLifetime,
         params.projectionInputs?.pluginProjectionV2,
         physicalTargetKey,
         surfaceLifetime,
@@ -600,7 +618,15 @@ export function useComposerScopePluginPresentation(
                 ...(input.layout === undefined ? {} : { layout: input.layout }),
                 ...(input.surfaceKey === undefined ? {} : { surfaceKey: input.surfaceKey }),
                 ...(input.accessibilityLabel === undefined ? {} : { accessibilityLabel: input.accessibilityLabel }),
-                children: input.content,
+                // ModalProvider lives outside CurrentUiContextProvider and the
+                // Composer's focus owner. Carry their existing capabilities
+                // into the reparented picker instead of installing a second
+                // current-context owner or leaving its Host API unsupported.
+                children: React.cloneElement(retainedDialogFocusRef.current, undefined,
+                    <CurrentUiContextBridge publisher={currentUiContextPublisher} reader={currentUiContextReader}>
+                        {input.content}
+                    </CurrentUiContextBridge>,
+                ),
             },
             closeOnBackdrop: true,
             focusReturnRef: input.focusReturnRef,
@@ -612,7 +638,7 @@ export function useComposerScopePluginPresentation(
             return;
         }
         if (retiredBeforeShow) Modal.hide(modalId);
-    }, [surfaceLifetime]);
+    }, [currentUiContextPublisher, currentUiContextReader, surfaceLifetime]);
     const renderAttachmentPreviewSurface = React.useCallback((
         input: ComposerAttachmentPresentationRequest,
     ): React.ReactNode => {

@@ -23,6 +23,7 @@ import {
 } from '@/components/plugins/surfaces/pluginSurfaceMountBinding';
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 export type ComposerPluginSurfaceMountRequest = Readonly<{
     contribution: PluginContributionIdentityV1;
@@ -71,6 +72,7 @@ export function readComposerPluginSurfaceMountBinding(input: Readonly<{
 }
 
 export type ComposerPluginSurfaceProps = Readonly<{
+    scope?: ServerAccountScope | null;
     request: ComposerPluginSurfaceMountRequest;
     /** The scope's factual parent target; it is never synthesized from its ref. */
     physicalTarget: PluginSurfaceTarget;
@@ -111,10 +113,18 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
     // handler identity as its controller lifetime boundary. Retain the exact
     // prior binding only while every fact the host consumes is equivalent;
     // absent, changed, or mismatched candidates still fail closed immediately.
+    // The catalog includes the renderer's Artifact/runtime graph. Parent
+    // layout renders reconstruct the small request, while this decoded row
+    // stays immutable until the daemon supplies a new catalog reference.
+    const requestedCatalogEntry = requestedMount?.catalogEntry;
+    const catalogKey = React.useMemo(() => {
+        if (!requestedCatalogEntry) return null;
+        const { projectionGeneration: _catalogProjectionGeneration, ...catalogEntry } = requestedCatalogEntry;
+        return stableJsonStringify(catalogEntry);
+    }, [requestedCatalogEntry]);
     const mountKey = stableJsonStringify(requestedMount === null ? null : (() => {
         const { projectionGeneration: _mountProjectionGeneration, ...mount } = requestedMount.mount;
-        const { projectionGeneration: _catalogProjectionGeneration, ...catalogEntry } = requestedMount.catalogEntry;
-        return { mount, catalogEntry };
+        return mount;
     })());
     const mount = React.useMemo(
         () => requestedMount,
@@ -126,7 +136,7 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
         // currentness facts; including them would retire live observations on
         // every equivalent parent render.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        [mountKey],
+        [catalogKey, mountKey],
     );
     const publisherRef = React.useRef<PluginSurfaceComposerSubscriptionPublisher | null>(null);
     const publishComposerSnapshot = React.useCallback((event: Readonly<{
@@ -147,6 +157,7 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
     const handlers = React.useMemo(() => {
         if (!mount) return null;
         return createComposerPresentationHostHandlers({
+            scope: props.scope,
             owner: {
                 identity: mount.mount.contribution,
                 occurrenceId: mount.mount.occurrenceId,
@@ -161,6 +172,7 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
         composerMediaExecutionTarget,
         mount,
         props.parentLifetime,
+        props.scope,
         props.transactionApplier,
         publishComposerSnapshot,
         publisherCapable,

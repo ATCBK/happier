@@ -1,12 +1,17 @@
 import { buildNewSessionAuthoringDraftFromPersistedDraft, buildNewSessionAuthoringDraftFromTempData, buildNewSessionTempDataFromAuthoringDraft, buildPersistedNewSessionDraftFromAuthoringDraft, buildSessionSpawnNewInputV2FromAuthoringDraft } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StoredPluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { seedNewSessionDraftV1 } from '@/components/sessions/new/newSessionDraftSeed';
 import { buildNewSessionDraftLocalState } from '@/sync/ops/sessionDrafts/newSessionDraftLocalState';
 import type { ManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 
 import { canonicalSessionDraftAddressV2, SessionInitialTriggerV1Schema, type ComposerAttachmentDraftV1, type SessionDraftDocumentV2 } from '@happier-dev/protocol';
+import { array } from 'zod/mini';
+import { NewSessionDraftDocumentV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
 import { getSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
+import { parseSerializedSessionDraftScope } from '@/sync/ops/sessionDrafts/sessionDraftSerializedScope';
+import { requireComposerDraftDocument } from '@/dev/testkit';
 import type {
     NewSessionComposerAttachmentSeedV1,
     NewSessionDraft,
@@ -77,8 +82,65 @@ function cataloguedNewSessionAuthoring(
 }
 
 describe('newSessionDraftRepositoryAdapter', () => {
+    it('keeps missing-draft configuration passive and still creates and edits readable authored drafts', () => {
+        const draftId = '00000000-0000-4000-8000-000000000956';
+        const address = { kind: 'newSession' as const, draftId };
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: authoringDraft() });
+        expect(getSessionDraftSnapshot(scope, address)).toBeNull();
+        writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({ input: 'Authored content' }) });
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: authoringDraft({ selectedPath: '/edited' }) });
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({ input: 'Authored content', selectedPath: '/edited' });
+    });
+    it.each(['invalid composer', 'unsupported version'])('does not autosave fallback authoring over retained unreadable custody (%s)', (malformation) => {
+        const draftId = '00000000-0000-4000-8000-000000000955';
+        const address = { kind: 'newSession' as const, draftId };
+        writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({ input: 'Retained intent', selectedPath: '/retained' }), materializationIntent: 'seeded' });
+        const document = getSessionDraftSnapshot(scope, address)?.document;
+        if (!document) throw new Error('Expected a genuine retained draft');
+        const storage = getSessionDraftPersistenceStorage();
+        const key = serverAccountScopedStorageKey('session-drafts-repository-v1', scope);
+        const serialized = parseSerializedSessionDraftScope(storage.getString(key)!);
+        if (!serialized) throw new Error('Expected retained draft envelope');
+        const replica = serialized.replicas[canonicalSessionDraftAddressV2(address)];
+        if (!replica || typeof replica !== 'object' || Array.isArray(replica)) throw new Error('Expected retained replica');
+        const retainedDocument = malformation === 'invalid composer' ? { ...document, composer: null } : { ...document, v: 99 };
+        const retainedRaw = JSON.stringify({ ...serialized, replicas: { ...serialized.replicas,
+            [canonicalSessionDraftAddressV2(address)]: { ...replica, localRawDocument: retainedDocument },
+        } });
+        storage.set(key, retainedRaw);
+        resetSessionDraftRepositoryForTests();
+        expect(readNewSessionDraftProjectionFromRepository({ scope, draftId })).toBeNull();
+
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: authoringDraft({ input: '', selectedPath: '/resolved-default' }), preserveLiveSessionName: true });
+
+        expect(getSessionDraftSnapshot(scope, address)?.document).toEqual(retainedDocument);
+        expect(storage.getString(key)).toBe(retainedRaw);
+    });
+    it('validates each repository snapshot once and refreshes document, local and Account changes', () => {
+        const draftId = 'snapshot-validation';
+        writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({ input: 'First' }), materializationIntent: 'seeded' });
+        const parses = vi.spyOn(StoredPluginUiNewSessionSeedOriginV1Schema, 'safeParse');
+        try {
+            const first = readNewSessionDraftProjectionFromRepository({ scope, draftId });
+            expect(first?.draft.input).toBe('First');
+            expect(parses).toHaveBeenCalledTimes(1);
+            const repeated = Array.from({ length: 5 }, () => readNewSessionDraftProjectionFromRepository({ scope, draftId }));
+            expect(parses).toHaveBeenCalledTimes(1);
+            for (const projection of repeated) expect(projection).toBe(first);
+            writeNewSessionDraft({ scope, draftId, patch: { text: 'Updated' }, materializationIntent: 'userEdit' });
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe('Updated');
+            writeSessionDraftLocalSupplement({ scope, address: { kind: 'newSession', draftId },
+                patch: { launchUserAttemptId: 'new-attempt' } });
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.launchUserAttemptId).toBe('new-attempt');
+            const otherScope = { ...scope, accountId: 'account-other' };
+            writeNewSessionDraftToRepository({ scope: otherScope, draftId, draft: authoringDraft({ input: 'Other Account' }), materializationIntent: 'seeded' });
+            expect(readNewSessionDraftFromRepository({ scope: otherScope, draftId })?.input).toBe('Other Account');
+            expect(readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe('Updated');
+        } finally { parses.mockRestore(); }
+    });
+
     it('reopens editor-authored credentials, folder, profile and model through the real authoring adapter', async () => {
-        const draftId = 'editor-credential-round-trip';
+        const draftId = '00000000-0000-4000-8000-000000001001';
         const targetKey = 'agent:happier.agent.claude/claude';
         const connectedServices = { v: 2 as const, bindingsByServiceId: {
             'happier.agent.claude/claude-subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
@@ -111,7 +173,7 @@ describe('newSessionDraftRepositoryAdapter', () => {
         expect(buildNewSessionAuthoringDraftFromTempData(seed).connectedServices).toEqual(retainedConnectedServices);
     });
     it('restores retained authoring fields and attachments with unknown nested metadata', () => {
-        const draftId = 'retained-fields';
+        const draftId = '00000000-0000-4000-8000-000000001002';
         writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({
             executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } },
             composerAttachments: [attachment],
@@ -119,15 +181,20 @@ describe('newSessionDraftRepositoryAdapter', () => {
         const storage = getSessionDraftPersistenceStorage();
         const key = serverAccountScopedStorageKey('session-drafts-repository-v1', scope);
         const persisted = JSON.parse(storage.getString(key)!) as { replicas: Record<string, { localRawDocument: SessionDraftDocumentV2 }> };
-        const document = persisted.replicas[canonicalSessionDraftAddressV2({ kind: 'newSession', draftId })]!.localRawDocument;
+        const document = requireComposerDraftDocument(persisted.replicas[canonicalSessionDraftAddressV2({ kind: 'newSession', draftId })]!.localRawDocument);
         if (document.target.kind !== 'newSession') throw new Error('Expected retained draft');
         const fields = document.target.authoring;
         const execution = Reflect.get(fields, 'executionTarget') as { value: Record<string, unknown> };
         execution.value.retired = true;
-        const retainedAttachments = document.composer.attachments.value as Array<Record<string, unknown>>;
-        retainedAttachments[0]!.retired = true;
+        const retainedAttachment = document.composer.attachments.value[0];
+        if (!retainedAttachment || typeof retainedAttachment !== 'object' || Array.isArray(retainedAttachment)) {
+            throw new Error('Expected retained attachment');
+        }
+        Reflect.set(retainedAttachment, 'retired', true);
         // An invalid optional sibling keeps raw custody; the adapter must still salvage the valid selections.
-        Reflect.set(Reflect.get(fields, 'directory'), 'value', '');
+        const directory = Reflect.get(fields, 'directory');
+        if (!directory) throw new Error('Expected retained directory field');
+        Reflect.set(directory, 'value', '');
         storage.set(key, JSON.stringify(persisted));
         resetSessionDraftRepositoryForTests();
         expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
@@ -136,18 +203,21 @@ describe('newSessionDraftRepositoryAdapter', () => {
         });
     });
     it('persists flushes and reopens two distinct definitions of the same Custom ACP Agent', async () => {
-        for (const definitionId of ['review-a', 'review-b']) {
+        const definitions = [
+            { definitionId: 'review-a', draftId: '00000000-0000-4000-8000-000000001003' },
+            { definitionId: 'review-b', draftId: '00000000-0000-4000-8000-000000001004' },
+        ];
+        for (const { definitionId, draftId } of definitions) {
             const target = { kind: 'agent' as const,
                 identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId };
-            const draftId = `configured-${definitionId}`;
             writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({ agentTarget: target,
                 backendTarget: { kind: 'backend', backendId: definitionId, configuredBackendId: definitionId },
                 executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } } }) });
             await flushSessionDraft({ scope, address: { kind: 'newSession', draftId } });
         }
         resetSessionDraftRepositoryForTests();
-        for (const definitionId of ['review-a', 'review-b']) {
-            const reopened = readNewSessionDraftFromRepository({ scope, draftId: `configured-${definitionId}` });
+        for (const { definitionId, draftId } of definitions) {
+            const reopened = readNewSessionDraftFromRepository({ scope, draftId });
             expect(reopened?.agentTarget).toEqual({ kind: 'agent',
                 identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId });
             if (!reopened) throw new Error('Expected retained configured choice');
@@ -159,7 +229,7 @@ describe('newSessionDraftRepositoryAdapter', () => {
         }
     });
     it('materializes the ordinary local draft on the first Instructions edit without an Artifact', () => {
-        const draftId = 'first-instructions-edit';
+        const draftId = '00000000-0000-4000-8000-000000001005';
         const instructionsDraft = { title: 'Remit', markdown: 'Keep the remit.' };
         expect(readNewSessionDraftFromRepository({ scope, draftId })).toBeNull();
         writeNewSessionInstructionsToRepository({ scope, draftId, instructionsDraft });
@@ -168,12 +238,43 @@ describe('newSessionDraftRepositoryAdapter', () => {
         expect(readNewSessionDraftFromRepository({ scope, draftId })).not.toHaveProperty('promptStack');
     });
 
+    it.each(['name', 'instructions'] as const)('keeps canonical local defaults and existing fields through a %s edit', (edit) => {
+        const draftId = edit === 'name' ? '00000000-0000-4000-8000-000000001006' : '00000000-0000-4000-8000-000000001007';
+        const address = { kind: 'newSession' as const, draftId };
+        const instructionsDraft = { title: 'Current remit', markdown: 'Keep the current remit.' };
+        const editDraft = () => edit === 'name'
+            ? writeNewSessionNameToRepository({ scope, draftId, sessionName: 'Edited title' })
+            : writeNewSessionInstructionsToRepository({ scope, draftId, instructionsDraft });
+        writeNewSessionDraft({ scope, draftId, materializationIntent: 'seeded', patch: { text: 'Keep the current prompt' } });
+        expect(getSessionDraftSnapshot(scope, address)?.localSupplement.newSessionLocalState).toBeUndefined();
+
+        editDraft();
+        expect(getSessionDraftSnapshot(scope, address)?.localSupplement.newSessionLocalState).toMatchObject({
+            entryIntent: 'session', selectedSecretId: null,
+            ...(edit === 'instructions' ? { instructionsDraft } : {}),
+        });
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject(
+            edit === 'name' ? { sessionName: 'Edited title' } : { instructionsDraft },
+        );
+
+        writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({
+            input: 'Keep the current prompt', sessionName: 'Retained title', instructionsDraft,
+            selectedSecretId: 'retained-secret', memoryEnabled: false,
+        }), materializationIntent: 'seeded' });
+        editDraft();
+        resetSessionDraftRepositoryForTests();
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+            input: 'Keep the current prompt', selectedSecretId: 'retained-secret', memoryEnabled: false,
+            sessionName: edit === 'name' ? 'Edited title' : 'Retained title', instructionsDraft,
+        });
+    });
+
     it('reopens lazy Instructions authoring and carries selected qualified Session context into the ordinary spawn recipe', () => {
         const promptStack = [{ id: 'session.instructions',
             ref: { kind: 'doc', serverId: 'instructions-home', artifactId: 'instructions-doc' },
             enabled: true, required: true, placement: 'system_append' }] as const;
         const instructionsDraft = { title: 'Build caretaker', markdown: '' };
-        const draftId = 'instructions-authoring';
+        const draftId = '00000000-0000-4000-8000-000000001008';
         const draft = { ...authoringDraft({ input: '', sessionName: 'Build caretaker',
             initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true },
             executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } },
@@ -204,7 +305,7 @@ describe('newSessionDraftRepositoryAdapter', () => {
         })).not.toHaveProperty('promptStack');
     });
     it('recovers the exact managed Home, profile routing id and reviewed receipt locally through reload and authoring edits', () => {
-        const draftId = 'managed-selection-draft';
+        const draftId = '00000000-0000-4000-8000-000000001009';
         const receipt = {
             launch: { provider: { pluginId: 'happier.machine.lima', localId: 'lima' }, schemaVersion: 1,
                 name: 'Reviewed guest', choices: { cores: 2 } },
@@ -280,20 +381,54 @@ describe('newSessionDraftRepositoryAdapter', () => {
         });
     });
 
+    it('migrates retained local Bot authoring on edit and never resurrects it over canonical clears', () => {
+        const draftId = 'local-bot-upgrade';
+        const address = { kind: 'newSession' as const, draftId };
+        const legacy = { ...buildNewSessionDraftLocalState(authoringDraft()), sessionName: 'Retained caretaker',
+            initialSessionFacts: { bot: { kind: 'bot' }, createdAsBot: true } as const,
+            promptStack: [] as const, memoryEnabled: false };
+        writeNewSessionDraft({ scope, draftId, materializationIntent: 'seeded', patch: { text: 'Keep this work' } });
+        writeSessionDraftLocalSupplement({ scope, address, patch: { newSessionLocalState: legacy } });
+        const recovered = readNewSessionDraftFromRepository({ scope, draftId });
+        expect(recovered).toMatchObject({ sessionName: legacy.sessionName, initialSessionFacts: legacy.initialSessionFacts });
+        if (!recovered) throw new Error('Expected retained local authoring');
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId, draft: recovered });
+        const supplement = getSessionDraftSnapshot(scope, address)?.localSupplement.newSessionLocalState;
+        for (const field of ['sessionName', 'initialSessionFacts', 'promptStack', 'memoryEnabled']) {
+            expect(supplement).not.toHaveProperty(field);
+        }
+        writeSessionDraftLocalSupplement({ scope, address, patch: { newSessionLocalState: null } });
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+            sessionName: legacy.sessionName, initialSessionFacts: legacy.initialSessionFacts, memoryEnabled: false, promptStack: [],
+        });
+        writeNewSessionDraft({ scope, draftId, materializationIntent: 'seeded', patch: { authoring: {
+            sessionName: null, initialSessionFacts: null, memoryEnabled: null, promptStack: null,
+        } } });
+        writeSessionDraftLocalSupplement({ scope, address, patch: { newSessionLocalState: legacy } });
+        const cleared = readNewSessionDraftFromRepository({ scope, draftId });
+        for (const field of ['sessionName', 'initialSessionFacts', 'promptStack', 'memoryEnabled']) {
+            expect(cleared).not.toHaveProperty(field);
+        }
+    });
+
     it('carries a reopened Bot name and initial identity through the ordinary spawn boundary', () => {
         const initialSessionFacts = { bot: { kind: 'bot' }, createdAsBot: true } as const;
-        const draftId = 'bot-creation';
+        const promptStack = [{ id: 'session.instructions', ref: { kind: 'doc', serverId: scope.serverId, artifactId: 'guide-doc' },
+            enabled: true, required: true, placement: 'system_append' }] as const;
+        const draftId = '00000000-0000-4000-8000-000000001010';
         writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({
-            sessionName: '  Look after builds  ', initialSessionFacts, memoryEnabled: false,
+            sessionName: '  Look after builds  ', initialSessionFacts, memoryEnabled: false, promptStack,
             executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } },
         }) });
-        const storedFacts = { ...initialSessionFacts, future: true, bot: { ...initialSessionFacts.bot, future: true } };
-        writeSessionDraftLocalSupplement({ scope, address: { kind: 'newSession', draftId }, patch: {
-            newSessionLocalState: {
-                ...buildNewSessionDraftLocalState(authoringDraft()),
-                sessionName: '  Look after builds  ', initialSessionFacts: storedFacts, memoryEnabled: false,
-            },
-        } });
+        const address = { kind: 'newSession' as const, draftId };
+        const { document } = getSessionDraftSnapshot(scope, address)!;
+        const synchronized = NewSessionDraftDocumentV2Schema.parse(document);
+        expect(synchronized.target.authoring).toMatchObject({
+            sessionName: { value: '  Look after builds  ' }, initialSessionFacts: { value: initialSessionFacts },
+            memoryEnabled: { value: false }, promptStack: { value: promptStack },
+        });
+        // Another browser receives the synchronized document without the originating device's supplement.
+        writeSessionDraftLocalSupplement({ scope, address, patch: { newSessionLocalState: null } });
         resetSessionDraftRepositoryForTests();
         const reopened = readNewSessionDraftFromRepository({ scope, draftId });
         if (!reopened) throw new Error('Expected retained Bot draft');
@@ -302,7 +437,7 @@ describe('newSessionDraftRepositoryAdapter', () => {
         const spawn = buildSessionSpawnNewInputV2FromAuthoringDraft({
             draft: authored, creationKey: 'manual:bot-test', permissionMode: 'default', configurationUpdatedAtMs: 10,
         });
-        expect(spawn).toMatchObject({ title: 'Look after builds', identity: initialSessionFacts, memoryEnabled: false });
+        expect(spawn).toMatchObject({ title: 'Look after builds', identity: initialSessionFacts, memoryEnabled: false, promptStack });
         expect(spawn).not.toHaveProperty('initialInput');
         const automatic = buildSessionSpawnNewInputV2FromAuthoringDraft({
             draft: { ...authored, sessionName: '   ' }, creationKey: 'manual:bot-test', permissionMode: 'default', configurationUpdatedAtMs: 10,
@@ -316,7 +451,7 @@ describe('newSessionDraftRepositoryAdapter', () => {
         expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({ sessionName: '', initialSessionFacts });
     });
     it('reopens stored authoring origin without extras and preserves it when launch target changes', () => {
-        const draftId = 'qualified-authoring-origin';
+        const draftId = '00000000-0000-4000-8000-000000001011';
         const authoringOrigin = {
             kind: 'project',
             accountId: scope.accountId,
@@ -358,7 +493,7 @@ describe('newSessionDraftRepositoryAdapter', () => {
 
     it('persists initial triggers in the canonical authoring document and clears them without changing composer text', () => {
         const draftId = 'birth-triggers';
-        const initialTriggers = SessionInitialTriggerV1Schema.array().parse([{
+        const initialTriggers = array(SessionInitialTriggerV1Schema).parse([{
             trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'firstMatch' } },
             target: { kind: 'workflow', ref: 'builtin:review-and-converge' },
             executionTarget: { kind: 'session' }, inputs: { maxRounds: 3 },
@@ -392,22 +527,40 @@ describe('newSessionDraftRepositoryAdapter', () => {
         });
     });
 
-    it('keeps the Zen source in the local draft through seed, reload and ordinary authoring edits', () => {
+    it('retires legacy Zen routing without losing a retained draft or its authoring edits', async () => {
         const zenTaskSource = { kind: 'zen_task', taskId: 'task-1', scope, title: 'Fix the task' } as const;
         const draftId = seedNewSessionDraftV1({
             scope,
-            createDraftId: () => 'zen-task-draft',
-            seed: { prompt: { text: 'Work on this task', mode: 'replace' }, ...{ zenTaskSource } },
+            createDraftId: () => '00000000-0000-4000-8000-000000001012',
+            seed: { prompt: { text: 'Work on this task', mode: 'replace' } },
         });
-        expect(draftId).toBe('zen-task-draft');
+        await flushSessionDraft({ scope, address: { kind: 'newSession', draftId: draftId! } });
+        // An older writer could persist this retired field; seed that actual
+        // storage boundary rather than sending it through the current author API.
+        const storage = getSessionDraftPersistenceStorage();
+        const key = serverAccountScopedStorageKey('session-drafts-repository-v1', scope);
+        const serialized = parseSerializedSessionDraftScope(storage.getString(key)!);
+        if (!serialized) throw new Error('Expected retained draft envelope');
+        const addressKey = canonicalSessionDraftAddressV2({ kind: 'newSession', draftId: draftId! });
+        const replica = serialized.replicas[addressKey];
+        if (!replica || typeof replica !== 'object' || Array.isArray(replica)) throw new Error('Expected retained replica');
+        const retainedSnapshot = getSessionDraftSnapshot(scope, { kind: 'newSession', draftId: draftId! });
+        storage.set(key, JSON.stringify({ ...serialized, replicas: { ...serialized.replicas,
+            [addressKey]: { ...replica, localSupplement: { ...retainedSnapshot?.localSupplement,
+                newSessionLocalState: { ...retainedSnapshot?.localSupplement.newSessionLocalState, zenTaskSource },
+            } },
+        } }));
+        resetSessionDraftRepositoryForTests();
+        expect(draftId).toBe('00000000-0000-4000-8000-000000001012');
         const reloaded = readNewSessionDraftFromRepository({ scope, draftId: draftId! });
-        expect(reloaded).toMatchObject({ zenTaskSource, input: 'Work on this task' });
+        expect(reloaded).toMatchObject({ input: 'Work on this task' });
+        expect(reloaded).not.toHaveProperty('zenTaskSource');
         writeNewSessionAuthoringDraftToRepository({
             scope, draftId: draftId!, draft: { ...reloaded!, selectedPath: '/changed' },
         });
-        expect(readNewSessionDraftFromRepository({ scope, draftId: draftId! })).toMatchObject({ zenTaskSource });
+        expect(readNewSessionDraftFromRepository({ scope, draftId: draftId! })).toMatchObject({ input: 'Work on this task', selectedPath: '/changed' });
         const snapshot = getSessionDraftSnapshot(scope, { kind: 'newSession', draftId: draftId! });
-        expect(snapshot?.localSupplement.newSessionLocalState).toMatchObject({ zenTaskSource });
+        expect(snapshot?.localSupplement.newSessionLocalState).not.toHaveProperty('zenTaskSource');
         expect(JSON.stringify(snapshot?.document)).not.toContain('zen_task');
         expect(readNewSessionDraftFromRepository({ scope: { ...scope, accountId: 'other' }, draftId: draftId! })).toBeNull();
     });
@@ -848,5 +1001,42 @@ describe('newSessionDraftRepositoryAdapter', () => {
         clearNewSessionComposerAttachmentSeedsFromRepository({ scope, draftId, seeds: [seed] });
         expect(readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds)
             .toEqual([otherSeed]);
+    });
+
+    it.each([false, true])('preserves pending screen attachment custody across ordinary Machine authoring edits (delayed=%s)', async (preserveLiveSessionName) => {
+        const { seedAndOpenNewSession } = await import('@/components/sessions/new/newSessionSeedComposer');
+        const draftId = 'pending-screen-machine-edit';
+        expect(seedAndOpenNewSession({
+            scope, createDraftId: () => draftId, isCurrent: () => true, navigateToNewSession: () => {},
+            seed: { currentUiContext: { navigation: { area: 'sessions', screen: 'tab.sessions' }, commands: [] } },
+        }).kind).toBe('opened');
+        const pending = readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds;
+        expect(pending).toHaveLength(1);
+
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId,
+            draft: authoringDraft({ selectedMachineId: 'other-machine' }), preserveLiveSessionName });
+
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+            selectedMachineId: 'other-machine', composerAttachmentSeeds: pending,
+        });
+        expect(getSessionDraftSnapshot(scope, { kind: 'newSession', draftId })?.document)
+            .toMatchObject({ composer: { attachments: { value: [] } } });
+    });
+
+    it.each([false, true])('does not resurrect settled attachment requests from stale authoring snapshots (delayed=%s)', async (preserveLiveSessionName) => {
+        const { seedAndOpenNewSession } = await import('@/components/sessions/new/newSessionSeedComposer');
+        const draftId = 'settled-screen-stale-authoring';
+        expect(seedAndOpenNewSession({
+            scope, createDraftId: () => draftId, isCurrent: () => true, navigateToNewSession: () => {},
+            seed: { currentUiContext: { navigation: { area: 'sessions', screen: 'tab.sessions' }, commands: [] } },
+        }).kind).toBe('opened');
+        const stale = readNewSessionDraftFromRepository({ scope, draftId });
+        if (!stale?.composerAttachmentSeeds) throw new Error('Expected pending screen custody');
+        clearNewSessionComposerAttachmentSeedsFromRepository({ scope, draftId, seeds: stale.composerAttachmentSeeds });
+
+        writeNewSessionAuthoringDraftToRepository({ scope, draftId,
+            draft: { ...stale, selectedMachineId: 'other-machine' }, preserveLiveSessionName });
+
+        expect(readNewSessionDraftFromRepository({ scope, draftId })?.composerAttachmentSeeds).toBeUndefined();
     });
 });

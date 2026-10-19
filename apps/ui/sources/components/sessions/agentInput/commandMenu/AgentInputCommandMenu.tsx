@@ -56,6 +56,7 @@ function OpenAgentInputCommandMenu(props: CommandMenuProps) {
             placement={props.placement ?? popoverLayout.placement}
             gap={props.gap ?? popoverLayout.gap}
             boundaryRef={resolveBoundaryRef(props)}
+            clearanceRef={props.clearanceRef ?? popoverLayout.clearanceRef}
             keyboardBottomInset={props.keyboardBottomInset ?? popoverLayout.keyboardBottomInset}
             edgePadding={props.edgePadding ?? popoverLayout.edgePadding}
             backdrop={resolveBackdrop(props)}

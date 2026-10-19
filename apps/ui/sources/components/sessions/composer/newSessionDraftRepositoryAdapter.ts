@@ -19,6 +19,7 @@ import type {
 import {
     flushSessionDraft,
     getSessionDraftSnapshot,
+    getSessionComposerDraftSnapshot,
     writeNewSessionDraft,
     writeSessionDraftLocalSupplement,
     type SessionDraftConflict,
@@ -27,19 +28,17 @@ import {
 import { buildNewSessionDraftLocalState } from '@/sync/ops/sessionDrafts/newSessionDraftLocalState';
 import { sanitizeNewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { ZenTaskSourceSchema } from '@/sync/domains/todos/todoStoredContent';
 import { StoredPluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
-import { SessionIdentityAdditionsV1StoredSchema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
-import { SessionPromptStackV1StoredSchema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import { ManagedMachineAcquisitionDraftReadSchema, ManagedMachineSelectionDraftReadSchema } from '@/sync/domains/state/newSessionManagedMachineDraft';
+import { getSessionDraftAuthoringFieldValues } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
 
 function strictJson(value: unknown): StrictJsonValue {
     return StrictJsonValueSchema.parse(value);
 }
 
 export type NewSessionDraftRepositoryProjection = Readonly<{
-    draft: NewSessionDraft;
+    draft: Readonly<NewSessionDraft>;
     /** Canonical repository document revision, never a wall-clock surrogate. */
     revision: number;
     /**
@@ -49,6 +48,11 @@ export type NewSessionDraftRepositoryProjection = Readonly<{
      */
     conflict: SessionDraftConflict | null;
 }>;
+
+// The repository replaces snapshots when document, local custody, conflict or
+// status changes. Reuse this boundary's validated projection across readers;
+// a list publication must not re-parse every unchanged retained draft.
+const draftProjectionSnapshots = new WeakMap<NonNullable<ReturnType<typeof getSessionComposerDraftSnapshot>>, NewSessionDraftRepositoryProjection>();
 
 /** Repository field id for the synchronized initial-access authoring value. */
 export const NEW_SESSION_DRAFT_ACCESS_CONFLICT_FIELD_ID = 'target.authoring.access';
@@ -67,15 +71,15 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
     scope: ServerAccountScope;
     draftId: string;
 }>): NewSessionDraftRepositoryProjection | null {
-    const snapshot = getSessionDraftSnapshot(input.scope, { kind: 'newSession', draftId: input.draftId });
-    if (!snapshot || snapshot.document.target.kind !== 'newSession') return null;
-    const fields = Object.fromEntries(Object.entries(snapshot.document.target.authoring).map(([fieldId, field]) => (
-        [fieldId, field.value]
-    )));
+    const snapshot = getSessionComposerDraftSnapshot(input.scope, { kind: 'newSession', draftId: input.draftId });
+    if (!snapshot || snapshot.targetKind !== 'newSession') return null;
+    const cached = draftProjectionSnapshots.get(snapshot);
+    if (cached) return cached;
+    const fields = getSessionDraftAuthoringFieldValues(getSessionDraftSnapshot(input.scope, { kind: 'newSession', draftId: input.draftId })?.document);
     const authoring = readSyncedSessionAuthoringFields(fields);
     const predecessorAuthoring = projectPredecessorSessionDraftAuthoringFields(fields, snapshot.updatedAt);
-    const attachments = Array.isArray(snapshot.document.composer.attachments.value)
-        ? snapshot.document.composer.attachments.value.flatMap((value) => {
+    const attachments = Array.isArray(snapshot.composer.attachments.value)
+        ? snapshot.composer.attachments.value.flatMap((value) => {
             const parsed = createStoredReadSchema(ComposerAttachmentDraftV1Schema).safeParse(value);
             return parsed.success ? [parsed.data] : [];
         })
@@ -96,10 +100,15 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
             : predecessorAuthoring.modelSelection;
     const backendTarget = resolveDraftBackendTarget({ agentTarget }) ?? undefined;
     const localState = snapshot.localSupplement.newSessionLocalState;
-    const initialSessionFacts = SessionIdentityAdditionsV1StoredSchema.safeParse(localState?.initialSessionFacts);
-    const promptStack = SessionPromptStackV1StoredSchema.safeParse(localState?.promptStack);
+    // Retained 0.3 Bot drafts wrote these sole-copy values locally. A canonical
+    // field, including an explicit clear or invalid value, always supersedes it.
+    // The next authoring write migrates them and removes the local copies.
+    const retainedAuthoring = readSyncedSessionAuthoringFields(localState);
+    const sessionName = Object.prototype.hasOwnProperty.call(fields, 'sessionName') ? authoring.sessionName : retainedAuthoring.sessionName;
+    const initialSessionFacts = Object.prototype.hasOwnProperty.call(fields, 'initialSessionFacts') ? authoring.initialSessionFacts : retainedAuthoring.initialSessionFacts;
+    const memoryEnabled = Object.prototype.hasOwnProperty.call(fields, 'memoryEnabled') ? authoring.memoryEnabled : retainedAuthoring.memoryEnabled;
+    const promptStack = Object.prototype.hasOwnProperty.call(fields, 'promptStack') ? authoring.promptStack : retainedAuthoring.promptStack;
     const instructionsDraft = readSessionInstructionsAuthoringDraft(localState?.instructionsDraft);
-    const zenTaskSource = createStoredReadSchema(ZenTaskSourceSchema).safeParse(localState?.zenTaskSource);
     const authoringOrigin = StoredPluginUiNewSessionSeedOriginV1Schema.safeParse(localState?.authoringOrigin);
     const managedMachineSelection = nullable(ManagedMachineSelectionDraftReadSchema).safeParse(localState?.managedMachineSelection);
     const managedMachineAcquisition = nullable(ManagedMachineAcquisitionDraftReadSchema).safeParse(localState?.managedMachineAcquisition);
@@ -110,15 +119,14 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
         ? localState.targetServerId
         : null;
     const draft: NewSessionDraft = {
-        ...(typeof localState?.sessionName === 'string' ? { sessionName: localState.sessionName } : {}),
-        ...(initialSessionFacts.success ? { initialSessionFacts: initialSessionFacts.data } : {}),
-        ...(typeof localState?.memoryEnabled === 'boolean' ? { memoryEnabled: localState.memoryEnabled } : {}),
-        ...(promptStack.success ? { promptStack: promptStack.data } : {}),
+        ...(typeof sessionName === 'string' ? { sessionName } : {}),
+        ...(initialSessionFacts ? { initialSessionFacts } : {}),
+        ...(typeof memoryEnabled === 'boolean' ? { memoryEnabled } : {}),
+        ...(promptStack ? { promptStack } : {}),
         ...(instructionsDraft === undefined ? {} : { instructionsDraft }),
-        input: typeof snapshot.document.composer.text.value === 'string'
-            ? snapshot.document.composer.text.value
+        input: typeof snapshot.composer.text.value === 'string'
+            ? snapshot.composer.text.value
             : '',
-        ...(zenTaskSource.success ? { zenTaskSource: zenTaskSource.data } : {}),
         ...(authoringOrigin.success ? { authoringOrigin: authoringOrigin.data } : {}),
         ...(attachments.length > 0 ? { composerAttachments: attachments } : {}),
         ...(Array.isArray(localState?.composerAttachmentSeeds) && localState.composerAttachmentSeeds.length > 0
@@ -186,13 +194,15 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
             : {}),
         updatedAt: snapshot.updatedAt,
     };
-    return { draft, revision: snapshot.revision, conflict: snapshot.conflict };
+    const projection = { draft, revision: snapshot.revision, conflict: snapshot.conflict };
+    draftProjectionSnapshots.set(snapshot, projection);
+    return projection;
 }
 
 export function readNewSessionDraftFromRepository(input: Readonly<{
     scope: ServerAccountScope;
     draftId: string;
-}>): NewSessionDraft | null {
+}>): Readonly<NewSessionDraft> | null {
     return readNewSessionDraftProjectionFromRepository(input)?.draft ?? null;
 }
 
@@ -242,13 +252,20 @@ export function writeNewSessionAuthoringDraftToRepository(input: Readonly<{
     /** A delayed render snapshot must not replace an immediately committed title edit. */
     preserveLiveSessionName?: boolean;
 }>): void {
-    const live = input.preserveLiveSessionName ? getSessionDraftSnapshot(input.scope, { kind: 'newSession', draftId: input.draftId })
-        ?.localSupplement.newSessionLocalState : undefined;
-    const draft = live ? { ...input.draft,
-        ...(typeof live.sessionName === 'string' ? { sessionName: live.sessionName } : {}),
-        ...(live.instructionsDraft !== undefined ? { instructionsDraft: live.instructionsDraft } : {}),
-        ...(live.promptStack !== undefined ? { promptStack: live.promptStack } : {}),
-    } : input.draft;
+    const live = readNewSessionDraftFromRepository(input);
+    // Unreadable retained custody is not a missing draft for resolved-default autosave.
+    if (!live && getSessionDraftSnapshot(input.scope, { kind: 'newSession', draftId: input.draftId })) return;
+    const draft = {
+        ...input.draft,
+        // Pending attachment custody belongs to Composer. Authoring snapshots
+        // neither drop waiting requests nor resurrect requests already settled.
+        composerAttachmentSeeds: live?.composerAttachmentSeeds,
+        ...(input.preserveLiveSessionName && live ? {
+            sessionName: live.sessionName,
+            instructionsDraft: live.instructionsDraft,
+            promptStack: live.promptStack,
+        } : {}),
+    };
     writeNewSessionDraft({
         scope: input.scope,
         draftId: input.draftId,
@@ -266,20 +283,15 @@ export function writeNewSessionAuthoringDraftToRepository(input: Readonly<{
     );
 }
 
-/** Title edits share the draft's local custody without rewriting stale authoring or Composer input. */
+/** Title edits use the current authoring snapshot without rewriting Composer input. */
 export function writeNewSessionNameToRepository(input: Readonly<{
     scope: ServerAccountScope;
     draftId: string;
     sessionName: string;
 }>): void {
-    const address = { kind: 'newSession' as const, draftId: input.draftId };
-    const snapshot = getSessionDraftSnapshot(input.scope, address);
-    if (!snapshot) return;
-    writeSessionDraftLocalSupplement({
-        scope: input.scope,
-        address,
-        patch: { newSessionLocalState: { ...snapshot.localSupplement.newSessionLocalState, sessionName: input.sessionName } },
-    });
+    const draft = readNewSessionDraftFromRepository(input);
+    if (!draft) return;
+    writeNewSessionAuthoringDraftToRepository({ ...input, draft: { ...draft, sessionName: input.sessionName } });
 }
 
 /** Lazy authoring shares the existing local draft; no Artifact write happens here. */
@@ -296,13 +308,12 @@ export function writeNewSessionInstructionsToRepository(input: Readonly<{
         writeNewSessionDraft({ scope: input.scope, draftId: input.draftId,
             patch: {}, materializationIntent: 'seeded' });
     }
-    const snapshot = getSessionDraftSnapshot(input.scope, address);
-    if (!snapshot) return;
-    writeSessionDraftLocalSupplement({ scope: input.scope, address,
-        patch: { newSessionLocalState: { ...snapshot.localSupplement.newSessionLocalState,
+    const draft = readNewSessionDraftFromRepository(input);
+    if (!draft) return;
+    writeNewSessionAuthoringDraftToRepository({ ...input, draft: { ...draft,
             instructionsDraft: input.instructionsDraft,
             ...(input.promptStack !== undefined ? { promptStack: input.promptStack } : {}),
-        } } });
+        } });
 }
 
 /**

@@ -24,6 +24,8 @@ export function useRenderedAgentInputControlRows(params: Readonly<{
     singleRow?: boolean;
     /** Collapsed layout: the controls the host keeps on its bar (see `resolveRenderedAgentInputControls`). */
     barControlIds?: readonly AgentInputControlId[];
+    /** A compact composer: the only controls it contains (see `resolveRenderedAgentInputControls`). */
+    containedControlIds?: readonly AgentInputControlId[];
     chips: ReadonlyArray<AgentInputExtraActionChip> | undefined;
     overlayAnchorRef: React.RefObject<View | null>;
     onToggleExtraChipCollapsedPopover: (chipKey: string) => void;
@@ -190,6 +192,7 @@ export function useRenderedAgentInputControlRows(params: Readonly<{
             extraControlNodesById: extraControlNodesById.extraControlNodesById,
             extraChips: extraControlNodesById.extraChips,
             ...(params.barControlIds ? { barControlIds: params.barControlIds } : {}),
+            ...(params.containedControlIds ? { containedControlIds: params.containedControlIds } : {}),
         });
 
         return {
@@ -209,6 +212,7 @@ export function useRenderedAgentInputControlRows(params: Readonly<{
         params.singleRow,
         params.actionBarIsCollapsed,
         params.barControlIds,
+        params.containedControlIds,
         params.actionButtonPressedStyle,
         params.actionButtonStyle,
         params.actionMenuAnchorRef,

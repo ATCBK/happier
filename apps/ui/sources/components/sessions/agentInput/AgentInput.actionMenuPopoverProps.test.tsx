@@ -1,10 +1,8 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { createReducer } from "@happier-dev/session-core/reducer";
-import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 import { renderScreen } from '@/dev/testkit';
-import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,28 +11,13 @@ vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Text', props, props.children),
-}));
-
 vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 800, headerMaxWidth: 800 },
     useLayoutMaxWidth: () => 800,
     useLayoutMaxWidthStyle: () => ({ maxWidth: 800 }),
 }));
 
-const storageSettings: Settings = {
-    ...settingsDefaults,
-    profiles: [],
-    agentInputEnterToSend: true,
-    agentInputActionBarLayout: 'collapsed',
-    agentInputChipDensity: 'labels',
-    sessionPermissionModeApplyTiming: 'immediate',
-};
-
-installAgentInputCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             View: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -56,82 +39,22 @@ installAgentInputCommonModuleMocks({
                 get: () => ({ width: 800, height: 600, scale: 1, fontScale: 1 }),
             },
         });
-    },
-    icons: async () => ({
+});
+vi.mock('@expo/vector-icons', () => ({
         Ionicons: (props: Record<string, unknown>) => React.createElement('Ionicons', props, null),
         Octicons: (props: Record<string, unknown>) => React.createElement('Octicons', props, null),
-    }),
-    text: async () => {
+}));
+vi.mock('@/text', async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
-    },
-    modal: async () => {
+});
+vi.mock('@/modal', async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock().module;
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock, createStorageStoreMock, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
-        const storage = createStorageStoreMock({
-            settings: storageSettings,
-            sessionMessages: {},
-        });
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage,
-                useSetting: createUseSettingMock({ values: storageSettings }),
-                useSettings: () => storageSettings,
-                useSessionMessages: () => ({ messages: [], isLoaded: true }),
-                useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
-                useSessionMessagesById: () => ({}),
-                useSessionMessagesVersion: () => 0,
-                useSessionMessagesReducerState: () => createReducer(),
-            },
-        });
-    },
 });
-
-vi.mock('@/sync/domains/state/storageStore', async () => {
-    const { createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const store = createStorageStoreMock({ sessionMessages: {} } as any);
-    return {
-        getStorage: () => store,
-    };
-});
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
-    DEFAULT_AGENT_ID: 'codex',
-    resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default' }),
-}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
+vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({
     MultiTextInput: (props: Record<string, unknown>) => React.createElement('MultiTextInput', props, null),
@@ -161,14 +84,6 @@ vi.mock('@/components/ui/feedback/Shaker', () => ({
 
 vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: () => null,
-}));
-
-vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: () => [[], 0, () => {}, () => {}],
-}));
-
-vi.mock('@/components/autocomplete/applySuggestion', () => ({
-    applySuggestion: (text: string) => ({ text, cursorPosition: text.length }),
 }));
 
 type CapturedPopoverProps = Record<string, unknown> & {
@@ -214,9 +129,6 @@ function getCapturedActionMenuActions(): Array<{ id?: string; onPress?: () => vo
         : [];
 }
 
-function getCapturedPopoverProps(): CapturedPopoverProps | null {
-    return captured.last;
-}
 vi.mock('@/components/ui/popover', () => ({
     MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS: {
         web: true,
@@ -255,22 +167,8 @@ vi.mock('@/components/ui/scroll/ScrollEdgeIndicators', () => ({
     ScrollEdgeIndicators: () => null,
 }));
 
-vi.mock('@/components/sessions/sourceControl/status', () => ({
-    SourceControlStatusBadge: () => null,
-    useHasMeaningfulScmStatus: () => false,
-}));
-
 vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
     useKeyboardHeight: () => 0,
-}));
-
-vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
-    computeAcpPlanModeControl: () => null,
-    computeAcpSessionModePickerControl: () => null,
-}));
-
-vi.mock('@/sync/domains/sessionControl/configOptionsControl', () => ({
-    computeAcpConfigOptionControls: () => null,
 }));
 
 vi.mock('./components/PermissionModePicker', () => ({
@@ -302,23 +200,31 @@ vi.mock('./components/AgentInputSelectionListPopover', () => ({
     },
 }));
 
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const initialStorageState = getStorage().getState();
+beforeEach(() => {
+    getStorage().setState({ settings: {
+        ...initialStorageState.settings,
+        agentInputEnterToSend: true,
+        agentInputActionBarLayout: 'collapsed',
+        agentInputChipDensity: 'labels',
+        sessionPermissionModeApplyTiming: 'immediate',
+    } });
+});
+afterEach(async () => {
+    getStorage().setState(initialStorageState, true);
+    await home.reset();
+});
+
+await import('./AgentInput');
+
 describe('AgentInput (action menu popover props)', () => {
     it('anchors autocomplete suggestions to the composer input container', async () => {
-        vi.resetModules();
         captured.last = null;
-        vi.doMock('@/components/autocomplete/useActiveSuggestions', () => ({
-            useActiveSuggestions: () => [[{
-                // `kind` is the registry lookup the row mapper resolves its section
-                // header and icon from; every suggestion carries one.
-                kind: 'slashCommand',
-                key: 'slash-command',
-                text: '/mcp',
-                label: '/mcp',
-                description: 'MCP',
-            }], 0, () => {}, () => {}],
-        }));
-
         const { AgentInput } = await import('./AgentInput');
+        const { CommandMenu } = await import('@/components/ui/commandMenu');
 
         const screen = await renderScreen(<AgentInput
                     value="/m"
@@ -326,42 +232,46 @@ describe('AgentInput (action menu popover props)', () => {
                     onChangeText={() => {}}
                     onSend={() => {}}
                     autocompleteKinds={['slashCommand']}
-                    autocompleteSuggestions={async () => []}
+                    autocompleteSuggestions={async () => [{
+                        kind: 'slashCommand', key: 'slash-command', text: '/mcp', label: '/mcp', description: 'MCP',
+                    }]}
                 />);
 
-        const autocompletePopoverProps = getCapturedPopoverProps();
-        expect(autocompletePopoverProps?.open).toBe(true);
-
         const composerInput = screen.findByType('MultiTextInput');
+        await act(async () => { composerInput.props.onFocus?.(); });
+        const autocompletePopoverProps = screen.findByType(CommandMenu).props;
+        expect(autocompletePopoverProps.open).toBe(true);
+        expect(autocompletePopoverProps.anchor.kind).toBe('view');
         let composerInputContainer = composerInput?.parent ?? null;
         while (composerInputContainer && String(composerInputContainer.type) !== 'View') {
             composerInputContainer = composerInputContainer.parent;
         }
-        expect(composerInputContainer?.props.ref).toBe(autocompletePopoverProps?.anchorRef);
+        expect(composerInputContainer?.props.ref).toBe(autocompletePopoverProps.anchor.ref);
     });
 
-    it('ignores autocomplete suggestions whose component is missing instead of crashing', async () => {
-        vi.resetModules();
-        vi.doMock('@/components/autocomplete/useActiveSuggestions', () => ({
-            useActiveSuggestions: () => [[{ kind: 'slashCommand', key: 'broken', text: '/broken', component: undefined }], 0, () => {}, () => {}],
-        }));
-
+    it('renders incomplete slash suggestions using their text fallback without crashing', async () => {
         const { AgentInput } = await import('./AgentInput');
+        const { CommandMenu } = await import('@/components/ui/commandMenu');
 
-        await expect(renderScreen(
+        const screen = await renderScreen(
             <AgentInput
                 value="/bro"
                 placeholder="Type"
                 onChangeText={() => {}}
                 onSend={() => {}}
                 autocompleteKinds={['slashCommand']}
-                autocompleteSuggestions={async () => []}
+                autocompleteSuggestions={async () => [{ kind: 'slashCommand', key: 'broken', text: '/broken', component: undefined }]}
             />,
-        )).resolves.toEqual(expect.objectContaining({ tree: expect.anything() }));
+        );
+        await act(async () => { screen.findByType('MultiTextInput').props.onFocus?.(); });
+        const menu = screen.findByType(CommandMenu).props;
+        expect(menu.open).toBe(true);
+        expect(menu.items.find((item: { id: string }) => item.id === 'slashCommand:broken')).toMatchObject({
+            label: '/broken', renderRow: undefined,
+        });
     });
 
     it('anchors the permission popover to the permission chip and uses the shared popover sizing', async () => {
-        vi.resetModules();
         capturedPermissionPicker.last = null;
         const { AgentInput } = await import('./AgentInput');
 
@@ -392,7 +302,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('closes the permission popover after selecting a mode', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedPermissionPicker.last = null;
         const { AgentInput } = await import('./AgentInput');
@@ -428,7 +337,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it("routes the migrated delivery factory through the SelectionList popover and per-option onSelect dispatches the mutation", async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedChipPickerPopover.last = null;
@@ -456,6 +364,7 @@ describe('AgentInput (action menu popover props)', () => {
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
                     extraActionChips={[deliveryChip]}
+                    barControlIds={['engine', 'permission', 'actionMenu']}
                     onMachineClick={() => {}}
                     machineName="Builder"
                 />);
@@ -467,7 +376,7 @@ describe('AgentInput (action menu popover props)', () => {
         await screen.pressByTestIdAsync('agent-input-action-menu-button');
 
         const deliveryAction = getCapturedActionMenuActions().find(
-            (action: { id?: string }) => action.id === 'delivery',
+            (action: { id?: string }) => action.id === deliveryChip.key,
         );
         expect(deliveryAction).toBeTruthy();
         act(() => deliveryAction?.onPress?.());
@@ -481,20 +390,19 @@ describe('AgentInput (action menu popover props)', () => {
         expect(capturedChipPickerPopover.last).toBeNull();
         expect(selectionListProps).toBeTruthy();
         expect(selectionListProps?.anchorRef).toBe(settingsButton.props.ref);
-        expect(selectionListProps?.selectedOptionId).toBe('interrupt');
+        expect(selectionListProps?.selectedOptionId).toBe('send_now');
 
         const section = selectionListProps?.rootStep?.sections?.[0];
         expect(section?.kind).toBe('static');
-        const steerOption = section?.options?.find((option) => option.id === 'steer_if_supported');
+        const steerOption = section?.options?.find((option) => option.id === 'steer_if_active');
         expect(typeof steerOption?.onSelect).toBe('function');
 
         act(() => steerOption?.onSelect?.());
 
-        expect(onRequestedActionChange).toHaveBeenCalledWith('steer_if_supported');
+        expect(onRequestedActionChange).toHaveBeenCalledWith({ v: 1, kind: 'steer_if_active' });
     });
 
     it("routes the migrated recipient factory through the SelectionList popover and per-option onSelect dispatches the mutation", async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedChipPickerPopover.last = null;
@@ -527,6 +435,7 @@ describe('AgentInput (action menu popover props)', () => {
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
                     extraActionChips={[recipientChip]}
+                    barControlIds={['engine', 'permission', 'actionMenu']}
                     onMachineClick={() => {}}
                     machineName="Builder"
                 />);
@@ -539,7 +448,7 @@ describe('AgentInput (action menu popover props)', () => {
         await screen.pressByTestIdAsync('agent-input-action-menu-button');
 
         const recipientAction = getCapturedActionMenuActions().find(
-            (action: { id?: string }) => action.id === 'recipient',
+            (action: { id?: string }) => action.id === recipientChip.key,
         );
         expect(recipientAction).toBeTruthy();
         act(() => recipientAction?.onPress?.());
@@ -568,7 +477,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('routes the migrated storage factory through the SelectionList popover and per-option onSelect dispatches the mutation', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedChipPickerPopover.last = null;
@@ -593,6 +501,7 @@ describe('AgentInput (action menu popover props)', () => {
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
                     extraActionChips={[storageChip]}
+                    barControlIds={['engine', 'permission', 'actionMenu']}
                     onMachineClick={() => {}}
                     machineName="Builder"
                 />);
@@ -607,7 +516,7 @@ describe('AgentInput (action menu popover props)', () => {
         await screen.pressByTestIdAsync('agent-input-action-menu-button');
 
         const actionMenuActions = getCapturedActionMenuActions();
-        const storageAction = actionMenuActions.find((action: { id?: string }) => action.id === 'storage');
+        const storageAction = actionMenuActions.find((action: { id?: string }) => action.id === storageChip.key);
         expect(storageAction).toBeTruthy();
 
         act(() => {
@@ -639,7 +548,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('routes collapsed content actions through the shared content popover anchored to the action menu button', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
@@ -654,6 +562,7 @@ describe('AgentInput (action menu popover props)', () => {
                     autocompleteSuggestions={async () => []}
                     agentType={"codex" as any}
                     onAgentClick={() => {}}
+                    barControlIds={['engine', 'permission', 'actionMenu']}
                     extraActionChips={[{
                         key: 'new-session-mcp',
                         controlId: 'capabilities',
@@ -680,7 +589,7 @@ describe('AgentInput (action menu popover props)', () => {
         await screen.pressByTestIdAsync('agent-input-action-menu-button');
 
         const actionMenuActions = getCapturedActionMenuActions();
-        const mcpAction = actionMenuActions.find((action: { id?: string }) => action.id === 'mcp');
+        const mcpAction = actionMenuActions.find((action: { id?: string }) => action.id === 'new-session-mcp');
         expect(mcpAction).toBeTruthy();
 
         act(() => {
@@ -702,7 +611,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('toggles a visible extra-chip content popover closed when the chip is pressed twice', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
@@ -759,7 +667,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('routes collapsed machine actions through the shared content popover when a machine popover is configured', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
@@ -814,7 +721,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('routes collapsed resume actions through the shared content popover anchored to the action menu button', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
@@ -868,7 +774,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('routes the target-server chip through the shared content popover rather than a route-only action', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedSelectionListPopover.last = null;
@@ -906,7 +811,6 @@ describe('AgentInput (action menu popover props)', () => {
     });
 
     it('routes a list-presentation checkout/worktree chip through the SelectionList popover anchored to the chip', async () => {
-        vi.resetModules();
         captured.last = null;
         capturedActionMenuContent.last = null;
         capturedChipPickerPopover.last = null;

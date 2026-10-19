@@ -17,7 +17,7 @@ import { supportsDirectTranscriptStorageForNewSession } from '@/components/sessi
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useDaemonScopedMachineCapabilitiesCache } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 import { CAPABILITIES_REQUEST_NEW_SESSION } from '@/capabilities/requests';
-import { useAiLaunchProfilesForLegacyUi } from '@/sync/store/useAiLaunchProfiles';
+import { useAiLaunchProfilesWithReadState } from '@/sync/store/useAiLaunchProfiles';
 import { useAllMachines, useSetting, useSettings } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { resolvePluginLocalizedText } from '@/sync/domains/plugins/ui/i18n';
@@ -204,7 +204,7 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
         projectionInputs,
     ]);
 
-    const launchProfiles = useAiLaunchProfilesForLegacyUi();
+    const { profiles: launchProfiles, loading: profilesLoading } = useAiLaunchProfilesWithReadState();
     const profiles = React.useMemo(() => {
         if (!useProfiles) return [];
         return launchProfiles.map((profile) => ({
@@ -261,10 +261,12 @@ export function useSessionAuthoringControlFacts(params: Readonly<{
         agentPickerContext: { machineId, serverId, directory },
         contextualDefaultAgentTarget,
         profiles,
+        profilesEnabled: useProfiles,
+        profilesLoading,
         machineName,
         targetIsWindows,
         windowsTerminalAvailable,
         connectedServices,
         ...(mcp === undefined ? {} : { mcp }),
-    }), [agentTargets, connectedServices, contextualDefaultAgentTarget, directory, machineId, machineName, mcp, profiles, serverId, targetIsWindows, windowsTerminalAvailable]);
+    }), [agentTargets, connectedServices, contextualDefaultAgentTarget, directory, machineId, machineName, mcp, profiles, profilesLoading, serverId, targetIsWindows, useProfiles, windowsTerminalAvailable]);
 }

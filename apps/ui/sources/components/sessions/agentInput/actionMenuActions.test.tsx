@@ -221,8 +221,8 @@ describe('buildAgentInputActionMenuActions', () => {
         });
 
         expect(actions.map((action) => action.id)).toEqual([
-            'agent',
             'attachments',
+            'agent',
             'machine',
             'path',
         ]);
@@ -240,7 +240,7 @@ describe('buildAgentInputActionMenuActions', () => {
             onAgentClick: () => {},
             extraControlActions: {
                 attachments: { id: 'attachments', label: 'Attach', icon: null, onPress: () => {} },
-                mcp: { id: 'mcp', label: 'MCP', icon: null, onPress: () => {} },
+                'plugin:fixture/mcp': { id: 'mcp', label: 'MCP', icon: null, onPress: () => {} },
             },
             onMachineClick: () => {},
             machineName: 'Builder',
@@ -251,7 +251,7 @@ describe('buildAgentInputActionMenuActions', () => {
             blurInput: () => {},
         });
 
-        expect(actions.map((action) => action.id)).toEqual(['mcp', 'attachments']);
+        expect(actions.map((action) => action.id)).toEqual(['attachments', 'mcp']);
     });
 
     it('places files ahead of machine and path in the collapsed control menu order', () => {
@@ -275,8 +275,8 @@ describe('buildAgentInputActionMenuActions', () => {
         });
 
         expect(actions.map((action) => action.id)).toEqual([
-            'agent',
             'files',
+            'agent',
             'machine',
             'path',
         ]);
@@ -309,8 +309,8 @@ describe('buildAgentInputActionMenuActions', () => {
         });
 
         expect(actions.map((action) => action.id)).toEqual([
-            'agent',
             'linked-files',
+            'agent',
             'machine',
             'path',
         ]);
@@ -461,7 +461,7 @@ describe('buildAgentInputActionMenuActions', () => {
         ]);
     });
 
-    it('places mcp ahead of machine and path in the collapsed control menu order', () => {
+    it('places a plugin MCP action after host controls in the collapsed control menu order', () => {
         const actions = buildAgentInputActionMenuActions({
             actionBarIsCollapsed: true,
             hasAnyActions: true,
@@ -472,7 +472,7 @@ describe('buildAgentInputActionMenuActions', () => {
             agentLabel: 'Codex',
             onAgentClick: () => {},
             extraControlActions: {
-                mcp: {
+                'plugin:fixture/mcp': {
                     id: 'new-session-mcp',
                     label: 'newSession.mcpChipLabel',
                     icon: null,
@@ -489,13 +489,13 @@ describe('buildAgentInputActionMenuActions', () => {
 
         expect(actions.map((action) => action.id)).toEqual([
             'agent',
-            'new-session-mcp',
             'machine',
             'path',
+            'new-session-mcp',
         ]);
     });
 
-    it('places automation ahead of machine and path in the collapsed control menu order', () => {
+    it('places automation after machine and path in the collapsed location-control order', () => {
         const actions = buildAgentInputActionMenuActions({
             actionBarIsCollapsed: true,
             hasAnyActions: true,
@@ -523,9 +523,9 @@ describe('buildAgentInputActionMenuActions', () => {
 
         expect(actions.map((action) => action.id)).toEqual([
             'agent',
-            'new-session-automate',
             'machine',
             'path',
+            'new-session-automate',
         ]);
     });
 

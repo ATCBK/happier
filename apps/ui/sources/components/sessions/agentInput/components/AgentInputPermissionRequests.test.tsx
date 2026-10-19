@@ -65,9 +65,11 @@ vi.mock('@/components/tools/shell/userActions/UserActionPromptCard', () => ({
     },
 }));
 
+// Load the component graph before timed cases; a cold import is not a render deadline.
+const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
+
 describe('AgentInputPermissionRequests', () => {
     it('renders a single outer chrome wrapper and uses inline cards with dividers', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
 
         const screen = await renderScreen(React.createElement(AgentInputPermissionRequests, {
@@ -96,7 +98,6 @@ describe('AgentInputPermissionRequests', () => {
     });
 
     it('renders approval requests and ignores explicit user action requests inside the composer chrome', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
         capturedApprovalPromptCardProps.length = 0;
         capturedUserActionPromptCardProps.length = 0;
@@ -151,7 +152,6 @@ describe('AgentInputPermissionRequests', () => {
     });
 
     it('passes resolved tool locations to approval prompt cards', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
         capturedApprovalPromptCardProps.length = 0;
 
         await renderScreen(React.createElement(AgentInputPermissionRequests, {
@@ -200,7 +200,6 @@ describe('AgentInputPermissionRequests', () => {
     });
 
     it('does not render when approvals are disabled due to inactive session', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
 
         const screen = await renderScreen(React.createElement(AgentInputPermissionRequests, {
@@ -224,7 +223,6 @@ describe('AgentInputPermissionRequests', () => {
     });
 
     it('does not render permission requests when the session is inactive even if canApprovePermissions is incorrectly true', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
         capturedPermissionPromptCardProps.length = 0;
 
         const screen = await renderScreen(React.createElement(AgentInputPermissionRequests, {
@@ -247,8 +245,7 @@ describe('AgentInputPermissionRequests', () => {
         expect(capturedPermissionPromptCardProps).toHaveLength(0);
     });
 
-    it('does not render live user-action requests when permission approvals are inactive', async () => {
-        const { AgentInputPermissionRequests } = await import('./AgentInputPermissionRequests');
+    it('renders artifact approvals while hiding process-bound requests on inactive sessions', async () => {
         const UntypedAgentInputPermissionRequests = AgentInputPermissionRequests as React.ComponentType<any>;
         capturedPermissionPromptCardProps.length = 0;
         capturedApprovalPromptCardProps.length = 0;
@@ -304,9 +301,9 @@ describe('AgentInputPermissionRequests', () => {
             fadeVisibility: { top: false, bottom: false },
         }));
 
-        expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeNull();
+        expect(screen.findByTestId('agentInput.permissionRequests.chrome')).toBeTruthy();
         expect(capturedPermissionPromptCardProps).toHaveLength(0);
-        expect(capturedApprovalPromptCardProps).toHaveLength(0);
+        expect(capturedApprovalPromptCardProps).toHaveLength(1);
         expect(capturedUserActionPromptCardProps).toHaveLength(0);
     });
 });

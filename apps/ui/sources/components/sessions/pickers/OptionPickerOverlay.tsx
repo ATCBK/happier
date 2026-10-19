@@ -786,13 +786,14 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                 )
             ) : null
     );
-    // A grid reserves its status line below the scroll area. Notices can wrap without moving the cards'
-    // starting position or clipping the message.
+    // A grid shows its status line below the scroll area only while it has something to say. Notices can
+    // wrap without moving the cards' starting position or clipping the message; with none, the rows
+    // fill the pane down to its edge instead of stopping above an empty reserved band.
     const hasFooterStatus = (props.multiColumn && notes.length > 0) || Boolean(props.footerContent);
-    const notesNode = props.multiColumn || props.footerContent ? (
+    const notesNode = hasFooterStatus ? (
         <View
             testID="model-picker-overlay-notes"
-            style={[styles.notesFooter, hasFooterStatus ? styles.notesFooterFilled : null]}
+            style={styles.notesFooter}
             accessibilityLiveRegion="polite"
         >
             <View style={styles.notesFooterBody}>
@@ -905,8 +906,7 @@ const styles = StyleSheet.create((theme) => ({
     effectiveBlock: { gap: 0 },
     /**
      * The status footer closes the pane the way the search header opens it: a divider, then the line
-     * on the header's own text edge. The divider is only drawn once there is something to say; its
-     * space is reserved either way so a notice arriving never moves the list.
+     * on the header's own text edge. It exists only while there is something to say.
      */
     notesFooter: {
         flexShrink: 0,
@@ -914,9 +914,8 @@ const styles = StyleSheet.create((theme) => ({
         paddingBottom: theme.space.s8,
         paddingLeft: theme.space.s6,
         borderTopWidth: 1,
-        borderTopColor: 'transparent',
+        borderTopColor: theme.colors.border.default,
     },
-    notesFooterFilled: { borderTopColor: theme.colors.border.default },
     notesFooterBody: { minHeight: Typography.variant('meta').lineHeight },
     noteText: { fontSize: 11, color: theme.colors.text.tertiary },
     optionCardIconSlot: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },

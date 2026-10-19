@@ -18,6 +18,11 @@ vi.mock('@/sync/domains/state/storage', () => ({
     useSettings: () => ({}),
     useSetting: () => null,
 }));
+// The Account's profile read is the network boundary: a cold open waits on it.
+vi.mock('@/sync/api/account/apiProfileCatalog', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/sync/api/account/apiProfileCatalog')>()),
+    readProfileCatalogProjection: () => new Promise(() => {}),
+}));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return { ...createTextModuleMock({ translate: (key) => key }), getPreferredLanguage: () => 'en' };
@@ -53,5 +58,22 @@ describe('useSessionAuthoringControlFacts', () => {
 
         expect(hook.getCurrent().windowsTerminalAvailable).toBe(true);
         await hook.unmount();
+    });
+
+    it('reports the Account profile read as loading while it has not answered, never as an empty answer', async () => {
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        const { useSessionAuthoringControlFacts } = await import('./useSessionAuthoringControlFacts');
+        const read = () => useSessionAuthoringControlFacts({ machineId: 'machine-1', serverId: 'server-1', directory: 'C:\\repo' });
+
+        const noAccount = await renderHook(read);
+        expect(noAccount.getCurrent().profilesLoading).toBe(false);
+        await noAccount.unmount();
+
+        getStorage().setState({ settingsScope: { serverId: 'server-1', accountId: 'account-1' } });
+        const coldOpen = await renderHook(read);
+        expect(coldOpen.getCurrent().profiles).toEqual([]);
+        expect(coldOpen.getCurrent().profilesLoading).toBe(true);
+        await coldOpen.unmount();
+        getStorage().setState({ settingsScope: null });
     });
 });

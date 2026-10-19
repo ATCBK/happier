@@ -27,21 +27,10 @@ vi.mock('@/components/instrument', () => ({
             'data-emphasis-color': props.emphasisColor,
         }),
 }));
-const THEME = vi.hoisted(() => ({
-    colors: {
-        text: { primary: '#111', secondary: '#888', tertiary: '#aaa' },
-        surface: { pressedOverlay: '#eee' },
-        border: { default: '#ccc' },
-        versionControl: {
-            added: { foreground: '#0a0' },
-            removed: { foreground: '#a00' },
-        },
-    },
-}));
-vi.mock('react-native-unistyles', () => ({
-    useUnistyles: () => ({ theme: THEME }),
-    StyleSheet: { create: (factory: (theme: typeof THEME) => unknown) => factory(THEME) },
-}));
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
 vi.mock('@/text', () => ({ t: (key: string, params?: Record<string, unknown>) => `${key}:${JSON.stringify(params ?? {})}` }));
 
 import { GitDeltaInstrument } from './GitDeltaInstrument';

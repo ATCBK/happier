@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { installAgentInputCommonModuleMocks } from '../agentInputTestHelpers';
 
 import type { AgentInputAttachmentsRowItem } from '../agentInputContracts';
@@ -53,9 +54,8 @@ describe('AgentInputAttachmentsRow web', () => {
             document?: unknown;
             IntersectionObserver?: unknown;
         };
-        const previousWindow = runtime.window;
-        const previousDocument = runtime.document;
         const previousIntersectionObserver = runtime.IntersectionObserver;
+        const browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
         const observers: Array<Readonly<{ intersect: () => void }>> = [];
         const renderCounters = Array.from({ length: 64 }, () => vi.fn());
 
@@ -73,8 +73,6 @@ describe('AgentInputAttachmentsRow web', () => {
 
         try {
             Object.assign(globalThis, {
-                window: {},
-                document: {},
                 IntersectionObserver: ControlledIntersectionObserver,
             });
             const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
@@ -119,12 +117,11 @@ describe('AgentInputAttachmentsRow web', () => {
             await screen.unmount();
         } finally {
             Object.assign(globalThis, {
-                ...(previousWindow === undefined ? { window: undefined } : { window: previousWindow }),
-                ...(previousDocument === undefined ? { document: undefined } : { document: previousDocument }),
                 ...(previousIntersectionObserver === undefined
                     ? { IntersectionObserver: undefined }
                     : { IntersectionObserver: previousIntersectionObserver }),
             });
+            browser.restore();
         }
     });
 });

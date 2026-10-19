@@ -332,7 +332,7 @@ beforeEach(async () => {
     const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'composer-account' };
     const features = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: 'composer-home' } }, features: {
         voice: { enabled: true, happierVoice: { enabled: false } },
-        machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: true } } },
+        machines: { enabled: true, liveStream: { enabled: true, directPeer: { enabled: false }, serverRouted: { enabled: true } } },
     } });
     features.capabilities.machines.liveStream.serverRouted = { disabledReason: null,
         caps: MachineLiveStreamRelayCapsV1Schema.parse({ maxBitrateBps: 64000, maxFramesPerSecond: 50,
@@ -635,7 +635,7 @@ describe('AgentInput voice accessory slots', () => {
 
         // And it rides the column's own row rhythm, so two stacked 32pt controls
         // measure exactly the two 32pt chip rows beside them.
-        const column = bar.children.find((child) => typeof child !== 'string'
+        const column = bar.children.find((child): child is ReactTestInstance => typeof child !== 'string'
             && child !== cluster && child.findAllByProps({ testID: SECOND_CHIP_ROW_TEST_ID }).length > 0);
         expect(column).toBeDefined();
         expect(clusterStyle.gap)
@@ -827,10 +827,12 @@ describe('AgentInput mounts the Voice composer', () => {
         const send = screen.findByTestId(SEND_TEST_ID);
         expect(send!.props.accessibilityLabel).toBe(t('common.send'));
 
+        const composerRef = screen.root.findByType(SessionAuthoringComposer).props.composerRef;
+        if (!composerRef) throw new Error('Session composer reference missing');
         await screen.pressByTestIdAsync(DICTATION_TEST_ID);
         expect(voiceDictationController.getSnapshot(), JSON.stringify({ snapshots: recording.snapshots, prepares: recording.prepares,
             audioModes: recording.audioModes, starts: recording.starts })).toMatchObject({
-            sessionId: composerRefV1Key(screen.root.findByType(SessionAuthoringComposer).props.composerRef),
+            sessionId: composerRefV1Key(composerRef),
             status: 'listening',
         });
         expect(recording.starts).toBe(1);

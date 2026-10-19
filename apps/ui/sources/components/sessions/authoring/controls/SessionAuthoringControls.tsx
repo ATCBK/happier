@@ -25,6 +25,9 @@ import type { Metadata } from '@happier-dev/session-core/state';
 import { t } from '@/text';
 
 import {
+    findSessionAuthoringAgentTargetOption,
+    formatSessionAuthoringToolList,
+    parseSessionAuthoringToolList,
     resolveSessionAuthoringAgentId,
     resolveSessionAuthoringFieldControl,
     resolveSessionAuthoringFieldTitle,
@@ -32,6 +35,7 @@ import {
     type SessionAuthoringControlFacts,
     type SessionAuthoringFieldControlModel,
     type SessionAuthoringFieldId,
+    type SessionAuthoringFieldUnavailableReason,
     type SessionAuthoringFieldOption,
 } from './sessionAuthoringFieldControls';
 import { SessionAuthoringConnectedServicesField } from './SessionAuthoringConnectedServicesField';
@@ -287,7 +291,7 @@ function SessionAuthoringFieldControl(props: Readonly<{
             // that the field exists and that this target cannot offer it.
             return (
                 <Text testID={`${testID}-unavailable`} style={styles.unavailableText}>
-                    {t('common.unavailable')}
+                    {sessionAuthoringUnavailableText(control.field, control.reason)}
                 </Text>
             );
 
@@ -327,6 +331,18 @@ function SessionAuthoringFieldControl(props: Readonly<{
                     accessibilityLabel={control.title}
                     editable={props.disabled !== true}
                     onChangeText={(next) => apply(next)}
+                />
+            );
+
+        case 'toolList':
+            return (
+                <SessionAuthoringToolListInput
+                    testID={`${testID}-input`}
+                    title={control.title}
+                    value={control.value}
+                    placeholder={control.placeholder}
+                    disabled={props.disabled === true}
+                    onChange={(tools) => onChangeField('allowedTools', tools)}
                 />
             );
 
@@ -411,6 +427,11 @@ export type SessionAuthoringControlsProps = Readonly<{
         value: WorkflowSessionAuthoringSelection[SessionAuthoringFieldId],
     ) => void;
     facts?: SessionAuthoringControlFacts;
+    /**
+     * `fields` presentation: what a host states on a field's own row, end-aligned on its title line
+     * (a step's "Workflow defaults" and reset), so the row names the field once.
+     */
+    fieldMeta?: Readonly<Partial<Record<SessionAuthoringFieldId, React.ReactNode>>>;
     /** Renders the current values without allowing a change. */
     disabled?: boolean;
     testIDPrefix?: string;
@@ -453,6 +474,44 @@ function useResolvedSessionAuthoringControls(
         acpConfigOptionOverridesOverride: values.sessionConfigOptionOverrides ?? null,
     });
     return { agentId, controls };
+}
+
+/**
+ * The allowed-tools list as typed text. It keeps what the person typed (a
+ * trailing comma, a half-written name) and reports the parsed list, so the
+ * value and the text never fight while typing.
+ */
+function SessionAuthoringToolListInput(props: Readonly<{
+    testID: string;
+    title: string;
+    value: readonly string[];
+    placeholder: string;
+    disabled: boolean;
+    onChange: (tools: string[] | undefined) => void;
+}>): React.ReactElement {
+    const [text, setText] = React.useState(() => formatSessionAuthoringToolList(props.value));
+    const valueKey = props.value.join('\n');
+    React.useEffect(() => {
+        setText((current) => (parseSessionAuthoringToolList(current) ?? []).join('\n') === valueKey
+            ? current
+            : formatSessionAuthoringToolList(props.value));
+    }, [valueKey]);
+    return (
+        <TextInput
+            testID={props.testID}
+            style={styles.textInput}
+            value={text}
+            placeholder={props.placeholder}
+            accessibilityLabel={props.title}
+            editable={!props.disabled}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={(next) => {
+                setText(next);
+                props.onChange(parseSessionAuthoringToolList(next));
+            }}
+        />
+    );
 }
 
 /** What an option chip says for its current selection: the one reading every presentation shares. */
@@ -581,7 +640,8 @@ export function SessionAuthoringControls(props: SessionAuthoringControlsProps): 
                     />;
                     return presentation === 'chips' ? <React.Fragment key={field}>{rendered}</React.Fragment>
                         : <Item key={field} testID={`${testIDPrefix}-${engineField}-row`}
-                            title={t('workflows.page.sections.agentTitle')} mode="info" accessoryLayout="stacked" rightElement={rendered} />;
+                            title={t('workflows.page.sections.agentTitle')} mode="info" accessoryLayout="stacked" rightElement={rendered}
+                            titleMeta={props.fieldMeta?.[engineField]} />;
                 }
                 const control = resolveSessionAuthoringFieldControl({
                     field,
@@ -612,16 +672,31 @@ export function SessionAuthoringControls(props: SessionAuthoringControlsProps): 
                     <Item
                         key={field}
                         testID={`${testIDPrefix}-${field}-row`}
-                        title={resolveSessionAuthoringFieldTitle(field) ?? field}
+                        title={resolveSessionAuthoringFieldTitle(field, findSessionAuthoringAgentTargetOption(facts.agentTargets, props.values.agentTarget)) ?? field}
                         {...(control.kind === 'options' && control.preserved !== undefined
                             ? { subtitle: control.preserved.repair, subtitleTestID: `${testIDPrefix}-${field}-repair` }
                             : {})}
                         mode="info"
                         accessoryLayout="stacked"
                         rightElement={rendered}
+                        titleMeta={props.fieldMeta?.[field]}
                     />
                 );
             })}
         </View>
     );
+}
+
+/**
+ * Why a field cannot be chosen here, and what to do about it, where the reader can act. A field with
+ * no remedy of its own stays plainly unavailable.
+ */
+function sessionAuthoringUnavailableText(field: SessionAuthoringFieldId, reason: SessionAuthoringFieldUnavailableReason): string {
+    if (reason === 'loading') return t('common.loading');
+    if (field === 'profileId') {
+        return reason === 'feature_disabled'
+            ? t('newSession.profileUnavailableTurnedOff')
+            : t('newSession.profileUnavailableNoneYet');
+    }
+    return t('common.unavailable');
 }
