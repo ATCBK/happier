@@ -1053,6 +1053,8 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
             undoConflict: '此修改之后文档已变更，无法撤销。打开历史记录选择一个版本。',
             openDocument: '打开文档',
             someone: '某人',
+            askRedo: '请求重做',
+            redoRequest: '在你提出建议后文档已更改。能否基于当前版本重新提出建议？',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "zh-Hans">;
 
@@ -2192,6 +2194,7 @@ const detailPageTranslations = { 'zh-Hans': {
             contextDescription: '发起此请求的会话和代理。',
             sessionOnHome: ({ home }) => `${home} 上的会话`,
             sessionElsewhere: '不在此设备上的会话',
+            requesterYou: '你',
             origin: {
                 voice: '通过语音请求',
                 agent: '由代理请求',
@@ -14240,7 +14243,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHans"> = { zhHans: { ...workflowRunRoleTranslations.zhHans, ...workflowRunCompositionTranslations.zhHans, runPattern: '运行…', runPatternTitle: '运行模式', anotherRound: '再来一轮', participantTitle: '选择参与者', participantSearch: '查找会话或模型', participantSession: '各自按自身设置回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 会话`, participantDone: '完成', choicesFailed: '无法加载选项', shortcutStarts: '开始', neededNamed: ({ name }) => `输入 · 需要${name}`, addToStart: ({ name }) => `添加${name}后即可开始`, workflow: '工作流', inputs: '输入', start: '开始', starting: '正在开始…', stillStarting: '仍在开始…', needed: ({ count }) => `输入 · 还需 ${count} 项`, required: '开始前必填', preview: '将执行的内容', unsaved: '包含未保存的更改', remove: '返回普通会话', search: '查找工作流', builtin: '内置', library: '你的库', noInputs: '无需输入', asksFor: ({ names }) => `需要：${names}`, optional: '可选 — 留空', defaultValue: ({ value }) => `默认值：${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHans"> = { zhHans: { ...workflowRunRoleTranslations.zhHans, ...workflowRunCompositionTranslations.zhHans, runPattern: '运行…', runPatternTitle: '运行模式', anotherRound: '再来一轮', participantTitle: '选择参与者', participantSearch: '查找会话或模型', participantSession: '各自按自身设置回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 会话`, participantDone: '完成', choicesFailed: '无法加载选项', shortcutStarts: '开始', neededNamed: ({ name }) => `输入 · 需要${name}`, addToStart: ({ name }) => `添加${name}后即可开始`, workflow: '工作流', inputs: '输入', start: '开始', starting: '正在开始…', stillStarting: '仍在开始…', needed: ({ count }) => `输入 · 还需 ${count} 项`, required: '开始前必填', preview: '将执行的内容', unsaved: '包含未保存的更改', remove: '返回普通会话', search: '查找模式', builtin: '内置', library: '你的库', noInputs: '无需输入', asksFor: ({ names }) => `需要：${names}`, optional: '可选 — 留空', defaultValue: ({ value }) => `默认值：${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -15100,6 +15103,9 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `${time} 与 ${machine} 失去联系`,
         didNotFinish: '此步骤未完成',
         causeNotRecorded: '未记录失败原因',
+        agentTimedOut: '未能及时连接到智能体',
+        agentUnreachable: '无法连接到智能体',
+        agentConnectionLost: '与智能体的连接已断开',
         keptBody: '已完成的步骤会保留，已完成的工作不会重复。',
         choicesOnReconnect: ({ machine }: { machine: string }) => `${machine} 重新连接后会显示恢复选项。`,
         noChoices: '此步骤无法从这里继续。',

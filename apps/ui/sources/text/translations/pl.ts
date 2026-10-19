@@ -1859,6 +1859,8 @@ const plValues = {
     staleFailure: "Ta prośba nie jest już aktualna, więc nie została wykonana. Sprawdź najnowszą prośbę w skrzynce odbiorczej.",
     transientFailure: "Serwer był zajęty, więc nic nie zostało zmienione. Spróbuj ponownie.",
     failureGeneric: 'Zatwierdzona akcja nie powiodła się',
+    failureNoReason: 'Nie zapisano przyczyny.',
+    pluginChangeDaemonUnavailable: 'Happier nie połączył się z maszyną, aby zmienić jej wtyczki, więc nic się nie zmieniło.',
     failureNotRun: 'Żądanie nie zostało wykonane',
     failureFileWrite: 'Nie udało się zapisać pliku',
     failureFileRead: 'Nie udało się odczytać pliku',

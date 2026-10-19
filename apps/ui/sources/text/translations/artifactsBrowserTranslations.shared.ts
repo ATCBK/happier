@@ -178,6 +178,8 @@ export type ArtifactsBrowserTranslations = Readonly<{
         undoConflict: string;
         openDocument: string;
         someone: string;
+        askRedo: string;
+        redoRequest: string;
     }>;
 }>;
 
@@ -362,5 +364,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             undoConflict: 'The document changed after this edit, so Undo can’t restore it. Open its history to pick a version.',
             openDocument: 'Open document',
             someone: 'Someone',
+            askRedo: 'Ask to redo',
+            redoRequest: 'The document changed after your suggestion. Could you suggest it again on the current version?',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "en">;

@@ -1053,6 +1053,8 @@ const artifactsBrowserTranslations = { ja: {
             undoConflict: 'この編集の後にドキュメントが変更されたため、元に戻せません。履歴を開いてバージョンを選んでください。',
             openDocument: 'ドキュメントを開く',
             someone: '誰か',
+            askRedo: 'やり直しを依頼',
+            redoRequest: '提案のあとでドキュメントが変更されました。現在のバージョンでもう一度提案してもらえますか？',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "ja">;
 
@@ -2197,6 +2199,7 @@ const detailPageTranslations = { ja: {
             contextDescription: 'このリクエストを出したセッションとエージェントです。',
             sessionOnHome: ({ home }) => `${home} 上のセッション`,
             sessionElsewhere: 'このデバイスにないセッション',
+            requesterYou: 'あなた',
             origin: {
                 voice: '音声で依頼',
                 agent: 'エージェントが依頼',
@@ -14244,7 +14247,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ja"> = { ja: { ...workflowRunRoleTranslations.ja, ...workflowRunCompositionTranslations.ja, runPattern: '実行…', runPatternTitle: 'パターンを実行', anotherRound: 'もう1ラウンド', participantTitle: '参加者を選択', participantSearch: 'セッションまたはモデルを検索', participantSession: 'それぞれ自身の設定で回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} の新しい ${agent} セッション`, participantDone: '完了', choicesFailed: '選択肢を読み込めませんでした', shortcutStarts: '開始', neededNamed: ({ name }) => `入力 · ${name}が必要`, addToStart: ({ name }) => `開始するには${name}を追加してください`, workflow: 'ワークフロー', inputs: '入力', start: '開始', starting: '開始中…', stillStarting: '引き続き開始中…', needed: ({ count }) => `入力 · あと${count}項目`, required: '開始に必要', preview: '実行する内容', unsaved: '未保存の変更を含む', remove: '通常のセッションに戻る', search: 'ワークフローを検索', builtin: '組み込み', library: 'あなたのライブラリ', noInputs: '入力は不要', asksFor: ({ names }) => `必要な入力：${names}`, optional: '任意 — 空欄', defaultValue: ({ value }) => `既定値：${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ja"> = { ja: { ...workflowRunRoleTranslations.ja, ...workflowRunCompositionTranslations.ja, runPattern: '実行…', runPatternTitle: 'パターンを実行', anotherRound: 'もう1ラウンド', participantTitle: '参加者を選択', participantSearch: 'セッションまたはモデルを検索', participantSession: 'それぞれ自身の設定で回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} の新しい ${agent} セッション`, participantDone: '完了', choicesFailed: '選択肢を読み込めませんでした', shortcutStarts: '開始', neededNamed: ({ name }) => `入力 · ${name}が必要`, addToStart: ({ name }) => `開始するには${name}を追加してください`, workflow: 'ワークフロー', inputs: '入力', start: '開始', starting: '開始中…', stillStarting: '引き続き開始中…', needed: ({ count }) => `入力 · あと${count}項目`, required: '開始に必要', preview: '実行する内容', unsaved: '未保存の変更を含む', remove: '通常のセッションに戻る', search: 'パターンを検索', builtin: '組み込み', library: 'あなたのライブラリ', noInputs: '入力は不要', asksFor: ({ names }) => `必要な入力：${names}`, optional: '任意 — 空欄', defaultValue: ({ value }) => `既定値：${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -15104,6 +15107,9 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `${time} に ${machine} との接続が切れました`,
         didNotFinish: 'このステップは完了しませんでした',
         causeNotRecorded: '失敗の原因は記録されていません',
+        agentTimedOut: '時間内にエージェントに接続できませんでした',
+        agentUnreachable: 'エージェントに接続できませんでした',
+        agentConnectionLost: 'エージェントとの接続が切れました',
         keptBody: '完了したステップはそのまま残り、終わった作業は繰り返されません。',
         choicesOnReconnect: ({ machine }: { machine: string }) => `${machine} が再接続すると、復旧の選択肢が表示されます。`,
         noChoices: 'このステップはここからは続行できません。',

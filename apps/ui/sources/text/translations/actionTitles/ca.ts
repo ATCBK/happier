@@ -578,7 +578,7 @@ export const ca = {
     connectedServices_accounts_revoke: "Revoca el compte connectat",
     connectedServices_accounts_default_set: "Defineix el compte connectat predeterminat",
     connectedServices_accounts_purposeDefault_set: "Tria l'inici de sessió predeterminat de l'agent",
-    connectedServices_purposes_default_set: "Tria el compte connectat predeterminat del recurs",
+    connectedServices_purposes_default_set: "Tria el compte connectat predeterminat",
     connectedServices_pools_create: "Crea un pool de serveis connectats",
     connectedServices_pools_patch: "Edita un pool de serveis connectats",
     connectedServices_pools_delete: "Suprimeix un pool de serveis connectats",

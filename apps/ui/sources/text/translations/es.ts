@@ -2032,6 +2032,8 @@ const esValues = {
     staleFailure: "Esta solicitud ya no está vigente, por lo que no se ejecutó. Revisa la solicitud más reciente en la bandeja de entrada.",
     transientFailure: "El servidor estaba ocupado, así que no se cambió nada. Inténtalo de nuevo.",
     failureGeneric: 'La acción aprobada falló',
+    failureNoReason: 'No se registró ningún motivo.',
+    pluginChangeDaemonUnavailable: 'Happier no pudo conectar con la máquina para cambiar sus plugins, así que no se cambió nada.',
     failureNotRun: 'Solicitud no ejecutada',
     failureFileWrite: 'No se pudo escribir el archivo',
     failureFileRead: 'No se pudo leer el archivo',

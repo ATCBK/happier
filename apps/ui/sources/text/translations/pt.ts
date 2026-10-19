@@ -2068,6 +2068,8 @@ const ptValues = {
     staleFailure: "Este pedido já não está atualizado, por isso não foi executado. Revê o pedido mais recente na caixa de entrada.",
     transientFailure: "O servidor estava ocupado, então nada foi alterado. Tente novamente.",
     failureGeneric: 'A ação aprovada falhou',
+    failureNoReason: 'Nenhum motivo foi registrado.',
+    pluginChangeDaemonUnavailable: 'O Happier não conseguiu alcançar a máquina para alterar seus plugins, então nada foi alterado.',
     failureNotRun: 'Pedido não executado',
     failureFileWrite: 'Não foi possível escrever o ficheiro',
     failureFileRead: 'Não foi possível ler o ficheiro',

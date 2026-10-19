@@ -1053,6 +1053,8 @@ const artifactsBrowserTranslations = { it: {
             undoConflict: 'Il documento è cambiato dopo questa modifica, quindi non si può annullare. Apri la cronologia per scegliere una versione.',
             openDocument: 'Apri documento',
             someone: 'Qualcuno',
+            askRedo: 'Chiedi di rifarlo',
+            redoRequest: 'Il documento è cambiato dopo il tuo suggerimento. Puoi riproporlo sulla versione attuale?',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "it">;
 
@@ -2197,6 +2199,7 @@ const detailPageTranslations = { it: {
             contextDescription: 'La sessione e l’agente che l’hanno chiesto.',
             sessionOnHome: ({ home }) => `Una sessione su ${home}`,
             sessionElsewhere: 'Una sessione che non è su questo dispositivo',
+            requesterYou: 'Tu',
             origin: {
                 voice: 'Richiesto a voce',
                 agent: 'Richiesto da un agente',
@@ -14257,7 +14260,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "it"> = { it: { ...workflowRunRoleTranslations.it, ...workflowRunCompositionTranslations.it, runPattern: 'Esegui…', runPatternTitle: 'Esegui uno schema', anotherRound: 'Un altro giro', participantTitle: 'Scegli chi partecipa', participantSearch: 'Cerca una sessione o un modello', participantSession: 'Ognuna risponde con la sua configurazione', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nuova sessione ${agent} su ${machine}`, participantDone: 'Fatto', choicesFailed: 'Impossibile caricare le opzioni', shortcutStarts: 'avvia', neededNamed: ({ name }) => `Input · manca ${name}`, addToStart: ({ name }) => `Aggiungi ${name} per avviare`, workflow: 'Workflow', inputs: 'Input', start: 'Avvia', starting: 'Avvio…', stillStarting: 'Avvio ancora in corso…', needed: ({ count }) => `Input · ne mancano ${count}`, required: 'Necessario per avviare', preview: 'Cosa farà', unsaved: 'Include modifiche non salvate', remove: 'Torna a una sessione normale', search: 'Trova un workflow', builtin: 'Integrati', library: 'La tua libreria', noInputs: 'Nessun input necessario', asksFor: ({ names }) => `Richiede ${names}`, optional: 'Facoltativo — lasciato vuoto', defaultValue: ({ value }) => `Predefinito: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "it"> = { it: { ...workflowRunRoleTranslations.it, ...workflowRunCompositionTranslations.it, runPattern: 'Esegui…', runPatternTitle: 'Esegui uno schema', anotherRound: 'Un altro giro', participantTitle: 'Scegli chi partecipa', participantSearch: 'Cerca una sessione o un modello', participantSession: 'Ognuna risponde con la sua configurazione', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nuova sessione ${agent} su ${machine}`, participantDone: 'Fatto', choicesFailed: 'Impossibile caricare le opzioni', shortcutStarts: 'avvia', neededNamed: ({ name }) => `Input · manca ${name}`, addToStart: ({ name }) => `Aggiungi ${name} per avviare`, workflow: 'Workflow', inputs: 'Input', start: 'Avvia', starting: 'Avvio…', stillStarting: 'Avvio ancora in corso…', needed: ({ count }) => `Input · ne mancano ${count}`, required: 'Necessario per avviare', preview: 'Cosa farà', unsaved: 'Include modifiche non salvate', remove: 'Torna a una sessione normale', search: 'Trova uno schema', builtin: 'Integrati', library: 'La tua libreria', noInputs: 'Nessun input necessario', asksFor: ({ names }) => `Richiede ${names}`, optional: 'Facoltativo — lasciato vuoto', defaultValue: ({ value }) => `Predefinito: ${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -15117,6 +15120,9 @@ const it = translated(workflowValueReferenceTranslations.it, {
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `Contatto perso con ${machine} alle ${time}`,
         didNotFinish: 'Questo passaggio non è terminato',
         causeNotRecorded: 'La causa dell’errore non è stata registrata',
+        agentTimedOut: 'Impossibile raggiungere l’Agente in tempo',
+        agentUnreachable: 'Impossibile raggiungere l’Agente',
+        agentConnectionLost: 'Connessione all’Agente persa',
         keptBody: 'I passaggi completati restano. Nulla di già finito viene ripetuto.',
         choicesOnReconnect: ({ machine }: { machine: string }) => `Le opzioni di ripristino compariranno quando ${machine} si ricollegherà.`,
         noChoices: 'Questo passaggio non può essere continuato da qui.',

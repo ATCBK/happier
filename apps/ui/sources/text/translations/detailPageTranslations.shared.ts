@@ -10,6 +10,7 @@ export type DetailPageTranslations = Readonly<{
         contextDescription: string;
         sessionOnHome: (params: Readonly<{ home: string }>) => string;
         sessionElsewhere: string;
+        requesterYou: string;
         origin: Readonly<Record<'voice' | 'agent' | 'mcp' | 'cli' | 'ui' | 'api' | 'plugin' | 'system', string>>;
         proposalsDescription: string;
         requester: Readonly<{
@@ -75,6 +76,7 @@ export const detailPageTranslationsEnglish = { en: {
             contextDescription: 'The session and agent that asked for this.',
             sessionOnHome: ({ home }) => `A session on ${home}`,
             sessionElsewhere: 'A session that isn’t on this device',
+            requesterYou: 'You',
             origin: {
                 voice: 'Asked by voice',
                 agent: 'Asked by an agent',

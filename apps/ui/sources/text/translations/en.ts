@@ -1616,6 +1616,8 @@ const enApprovals = {
   staleFailure: "This request is no longer current, so it wasn't executed. Review the latest request in Inbox.",
   transientFailure: "The server was busy, so nothing was changed. Try again.",
   failureGeneric: 'The approved action failed',
+  failureNoReason: 'No reason was recorded.',
+  pluginChangeDaemonUnavailable: 'Happier couldn’t reach the Machine to change its plugins, so nothing changed.',
   failureNotRun: 'Request not run',
   failureFileWrite: "Couldn't write the file",
   failureFileRead: "Couldn't read the file",

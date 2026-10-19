@@ -578,7 +578,7 @@ export const de = {
     connectedServices_accounts_revoke: "Verbundenes Konto widerrufen",
     connectedServices_accounts_default_set: "Standard für verbundenes Konto festlegen",
     connectedServices_accounts_purposeDefault_set: "Standard für Agent-Anmeldung auswählen",
-    connectedServices_purposes_default_set: "Standardkonto für Ressource auswählen",
+    connectedServices_purposes_default_set: "Standardkonto auswählen",
     connectedServices_pools_create: "Pool für verbundenen Dienst erstellen",
     connectedServices_pools_patch: "Pool für verbundenen Dienst bearbeiten",
     connectedServices_pools_delete: "Pool für verbundenen Dienst löschen",

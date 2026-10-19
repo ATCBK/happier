@@ -578,7 +578,7 @@ export const ru = {
     connectedServices_accounts_revoke: "Отозвать подключённый аккаунт",
     connectedServices_accounts_default_set: "Задать подключённый аккаунт по умолчанию",
     connectedServices_accounts_purposeDefault_set: "Выбрать способ входа агента по умолчанию",
-    connectedServices_purposes_default_set: "Выбрать подключённый аккаунт ресурса по умолчанию",
+    connectedServices_purposes_default_set: "Выбрать подключённый аккаунт по умолчанию",
     connectedServices_pools_create: "Создать пул подключённого сервиса",
     connectedServices_pools_patch: "Изменить пул подключённого сервиса",
     connectedServices_pools_delete: "Удалить пул подключённого сервиса",

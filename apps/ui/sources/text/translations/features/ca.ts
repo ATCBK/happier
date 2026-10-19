@@ -1053,6 +1053,8 @@ const artifactsBrowserTranslations = { ca: {
             undoConflict: 'El document ha canviat després d’aquesta edició, així que no es pot desfer. Obre’n l’historial per triar una versió.',
             openDocument: 'Obre el document',
             someone: 'Algú',
+            askRedo: 'Demana que ho refaci',
+            redoRequest: 'El document ha canviat després del teu suggeriment. Pots tornar-lo a suggerir sobre la versió actual?',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "ca">;
 
@@ -2197,6 +2199,7 @@ const detailPageTranslations = { ca: {
             contextDescription: 'La sessió i l’agent que ho han demanat.',
             sessionOnHome: ({ home }) => `Una sessió a ${home}`,
             sessionElsewhere: 'Una sessió que no és en aquest dispositiu',
+            requesterYou: 'Tu',
             origin: {
                 voice: 'Demanat per veu',
                 agent: 'Demanat per un agent',
@@ -14280,7 +14283,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ca"> = { ca: { ...workflowRunRoleTranslations.ca, ...workflowRunCompositionTranslations.ca, runPattern: 'Executa…', runPatternTitle: 'Executa un patró', anotherRound: 'Una altra ronda', participantTitle: 'Tria qui hi participa', participantSearch: 'Cerca una sessió o un model', participantSession: 'Cada una respon amb la seva configuració', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nova sessió de ${agent} a ${machine}`, participantDone: 'Fet', choicesFailed: 'No s’han pogut carregar les opcions', shortcutStarts: 'inicia', neededNamed: ({ name }) => `Entrades · falta ${name}`, addToStart: ({ name }) => `Afegeix ${name} per iniciar`, workflow: 'Flux de treball', inputs: 'Entrades', start: 'Inicia', starting: 'S’està iniciant…', stillStarting: 'Encara s’està iniciant…', needed: ({ count }) => `Entrades · en falten ${count}`, required: 'Necessari per iniciar', preview: 'Què farà', unsaved: 'Inclou canvis sense desar', remove: 'Torna a una sessió normal', search: 'Cerca un flux', builtin: 'Integrats', library: 'La teva biblioteca', noInputs: 'No calen entrades', asksFor: ({ names }) => `Demana ${names}`, optional: 'Opcional — es deixa buit', defaultValue: ({ value }) => `Per defecte: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ca"> = { ca: { ...workflowRunRoleTranslations.ca, ...workflowRunCompositionTranslations.ca, runPattern: 'Executa…', runPatternTitle: 'Executa un patró', anotherRound: 'Una altra ronda', participantTitle: 'Tria qui hi participa', participantSearch: 'Cerca una sessió o un model', participantSession: 'Cada una respon amb la seva configuració', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nova sessió de ${agent} a ${machine}`, participantDone: 'Fet', choicesFailed: 'No s’han pogut carregar les opcions', shortcutStarts: 'inicia', neededNamed: ({ name }) => `Entrades · falta ${name}`, addToStart: ({ name }) => `Afegeix ${name} per iniciar`, workflow: 'Flux de treball', inputs: 'Entrades', start: 'Inicia', starting: 'S’està iniciant…', stillStarting: 'Encara s’està iniciant…', needed: ({ count }) => `Entrades · en falten ${count}`, required: 'Necessari per iniciar', preview: 'Què farà', unsaved: 'Inclou canvis sense desar', remove: 'Torna a una sessió normal', search: 'Cerca un patró', builtin: 'Integrats', library: 'La teva biblioteca', noInputs: 'No calen entrades', asksFor: ({ names }) => `Demana ${names}`, optional: 'Opcional — es deixa buit', defaultValue: ({ value }) => `Per defecte: ${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -15140,6 +15143,9 @@ const ca = translated(workflowValueReferenceTranslations.ca, {
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `S’ha perdut el contacte amb ${machine} a les ${time}`,
         didNotFinish: 'Aquest pas no ha acabat',
         causeNotRecorded: 'No s’ha registrat la causa de l’error',
+        agentTimedOut: 'No s’ha pogut contactar amb l’Agent a temps',
+        agentUnreachable: 'No s’ha pogut contactar amb l’Agent',
+        agentConnectionLost: 'S’ha perdut la connexió amb l’Agent',
         keptBody: 'Els passos acabats es conserven. No es repeteix res del que ja ha acabat.',
         choicesOnReconnect: ({ machine }: { machine: string }) => `Les opcions de recuperació apareixeran quan ${machine} es torni a connectar.`,
         noChoices: 'Aquest pas no es pot continuar des d’aquí.',

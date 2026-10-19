@@ -2015,6 +2015,8 @@ const jaValues = {
     staleFailure: "この依頼は最新ではないため、実行されませんでした。受信トレイで最新の依頼を確認してください。",
     transientFailure: "サーバーがビジー状態だったため、何も変更されていません。もう一度お試しください。",
     failureGeneric: '承認した操作に失敗しました',
+    failureNoReason: '理由は記録されていません。',
+    pluginChangeDaemonUnavailable: 'Happier がマシンに接続できずプラグインを変更できなかったため、何も変更されていません。',
     failureNotRun: 'リクエストは実行されませんでした',
     failureFileWrite: 'ファイルを書き込めませんでした',
     failureFileRead: 'ファイルを読み取れませんでした',

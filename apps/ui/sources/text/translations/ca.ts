@@ -1866,6 +1866,8 @@ const caValues = {
         staleFailure: "Aquesta sol·licitud ja no és vigent, així que no s'ha executat. Revisa la sol·licitud més recent a la safata d'entrada.",
         transientFailure: "El servidor estava ocupat, així que no s'ha canviat res. Torna-ho a provar.",
         failureGeneric: "L'acció aprovada ha fallat",
+        failureNoReason: "No s'ha registrat cap motiu.",
+        pluginChangeDaemonUnavailable: "Happier no ha pogut connectar amb la màquina per canviar-ne els connectors, així que no s'ha canviat res.",
         failureNotRun: 'Sol·licitud no executada',
         failureFileWrite: "No s'ha pogut escriure el fitxer",
         failureFileRead: "No s'ha pogut llegir el fitxer",

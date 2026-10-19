@@ -1867,6 +1867,8 @@ const frValues = {
     staleFailure: "Cette demande n'est plus à jour, donc elle n'a pas été exécutée. Consulte la dernière demande dans la boîte de réception.",
     transientFailure: "Le serveur était occupé, donc rien n'a été modifié. Réessayez.",
     failureGeneric: "L'action approuvée a échoué",
+    failureNoReason: "Aucun motif n'a été enregistré.",
+    pluginChangeDaemonUnavailable: "Happier n'a pas pu joindre la machine pour modifier ses plugins, donc rien n'a changé.",
     failureNotRun: 'Demande non exécutée',
     failureFileWrite: "Impossible d'écrire le fichier",
     failureFileRead: 'Impossible de lire le fichier',

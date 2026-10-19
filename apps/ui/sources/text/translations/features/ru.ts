@@ -1053,6 +1053,8 @@ const artifactsBrowserTranslations = { ru: {
             undoConflict: 'Документ изменился после этой правки, поэтому отменить нельзя. Откройте историю, чтобы выбрать версию.',
             openDocument: 'Открыть документ',
             someone: 'Кто-то',
+            askRedo: 'Попросить переделать',
+            redoRequest: 'Документ изменился после вашего предложения. Можете предложить правку заново для текущей версии?',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "ru">;
 
@@ -2219,6 +2221,7 @@ const detailPageTranslations = { ru: {
             contextDescription: 'Сессия и агент, от которых пришёл запрос.',
             sessionOnHome: ({ home }) => `Сессия на ${home}`,
             sessionElsewhere: 'Сессия, которой нет на этом устройстве',
+            requesterYou: 'Вы',
             origin: {
                 voice: 'Запрошено голосом',
                 agent: 'Запрошено агентом',
@@ -14288,7 +14291,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ru"> = { ru: { ...workflowRunRoleTranslations.ru, ...workflowRunCompositionTranslations.ru, runPattern: 'Запустить…', runPatternTitle: 'Запустить шаблон', anotherRound: 'Ещё раунд', participantTitle: 'Выберите участников', participantSearch: 'Найти сессию или модель', participantSession: 'Каждая отвечает со своими настройками', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Новая сессия ${agent} на ${machine}`, participantDone: 'Готово', choicesFailed: 'Не удалось загрузить варианты', shortcutStarts: 'запускает', neededNamed: ({ name }) => `Входные данные · нужно: ${name}`, addToStart: ({ name }) => `Добавьте ${name}, чтобы запустить`, workflow: 'Рабочий процесс', inputs: 'Входные данные', start: 'Запустить', starting: 'Запуск…', stillStarting: 'Запуск ещё продолжается…', needed: ({ count }) => `Входные данные · не хватает ${count}`, required: 'Нужно для запуска', preview: 'Что будет сделано', unsaved: 'Включает несохранённые изменения', remove: 'Вернуться к обычной сессии', search: 'Найти рабочий процесс', builtin: 'Встроенные', library: 'Ваша библиотека', noInputs: 'Входные данные не нужны', asksFor: ({ names }) => `Запрашивает: ${names}`, optional: 'Необязательно — оставлено пустым', defaultValue: ({ value }) => `По умолчанию: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ru"> = { ru: { ...workflowRunRoleTranslations.ru, ...workflowRunCompositionTranslations.ru, runPattern: 'Запустить…', runPatternTitle: 'Запустить шаблон', anotherRound: 'Ещё раунд', participantTitle: 'Выберите участников', participantSearch: 'Найти сессию или модель', participantSession: 'Каждая отвечает со своими настройками', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Новая сессия ${agent} на ${machine}`, participantDone: 'Готово', choicesFailed: 'Не удалось загрузить варианты', shortcutStarts: 'запускает', neededNamed: ({ name }) => `Входные данные · нужно: ${name}`, addToStart: ({ name }) => `Добавьте ${name}, чтобы запустить`, workflow: 'Рабочий процесс', inputs: 'Входные данные', start: 'Запустить', starting: 'Запуск…', stillStarting: 'Запуск ещё продолжается…', needed: ({ count }) => `Входные данные · не хватает ${count}`, required: 'Нужно для запуска', preview: 'Что будет сделано', unsaved: 'Включает несохранённые изменения', remove: 'Вернуться к обычной сессии', search: 'Найти шаблон', builtin: 'Встроенные', library: 'Ваша библиотека', noInputs: 'Входные данные не нужны', asksFor: ({ names }) => `Запрашивает: ${names}`, optional: 'Необязательно — оставлено пустым', defaultValue: ({ value }) => `По умолчанию: ${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -15149,6 +15152,9 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `Связь с ${machine} потеряна в ${time}`,
         didNotFinish: 'Этот шаг не завершился',
         causeNotRecorded: 'Причина сбоя не записана',
+        agentTimedOut: 'Не удалось вовремя связаться с агентом',
+        agentUnreachable: 'Не удалось связаться с агентом',
+        agentConnectionLost: 'Соединение с агентом прервано',
         keptBody: 'Завершённые шаги сохраняются. Ничего завершённого не повторяется.',
         choicesOnReconnect: ({ machine }: { machine: string }) => `Варианты восстановления появятся, когда ${machine} снова подключится.`,
         noChoices: 'Этот шаг нельзя продолжить отсюда.',

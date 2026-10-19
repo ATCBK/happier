@@ -1845,6 +1845,8 @@ const itValues = {
     staleFailure: "Questa richiesta non è più attuale, quindi non è stata eseguita. Controlla la richiesta più recente nella posta in arrivo.",
     transientFailure: "Il server era occupato, quindi non è stato modificato nulla. Riprova.",
     failureGeneric: "L'azione approvata non è riuscita",
+    failureNoReason: 'Non è stato registrato alcun motivo.',
+    pluginChangeDaemonUnavailable: 'Happier non ha potuto raggiungere la macchina per modificarne i plugin, quindi non è cambiato nulla.',
     failureNotRun: 'Richiesta non eseguita',
     failureFileWrite: 'Impossibile scrivere il file',
     failureFileRead: 'Impossibile leggere il file',

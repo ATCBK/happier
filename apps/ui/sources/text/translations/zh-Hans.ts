@@ -1846,6 +1846,8 @@ const zhHansValues = {
     staleFailure: "此请求已不是最新状态，因此未执行。请在收件箱中查看最新请求。",
     transientFailure: "服务器正忙，因此未做任何更改。请重试。",
     failureGeneric: '已批准的操作失败了',
+    failureNoReason: '未记录原因。',
+    pluginChangeDaemonUnavailable: 'Happier 无法连接到这台机器来更改其插件，因此没有任何更改。',
     failureNotRun: '请求未执行',
     failureFileWrite: '无法写入文件',
     failureFileRead: '无法读取文件',

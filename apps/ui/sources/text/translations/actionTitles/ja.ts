@@ -578,7 +578,7 @@ export const ja = {
     connectedServices_accounts_revoke: "接続済みアカウントの認可を取り消す",
     connectedServices_accounts_default_set: "接続済みアカウントの既定を設定",
     connectedServices_accounts_purposeDefault_set: "エージェントの既定のサインインを選択",
-    connectedServices_purposes_default_set: "リソースの既定の接続アカウントを選択",
+    connectedServices_purposes_default_set: "既定の接続アカウントを選択",
     connectedServices_pools_create: "接続サービスプールを作成",
     connectedServices_pools_patch: "接続サービスプールを編集",
     connectedServices_pools_delete: "接続サービスプールを削除",

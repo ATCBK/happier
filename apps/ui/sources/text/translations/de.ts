@@ -1652,6 +1652,8 @@ export const de: TranslationStructure = {
         staleFailure: "Diese Anfrage ist nicht mehr aktuell und wurde daher nicht ausgeführt. Prüfe die neueste Anfrage im Posteingang.",
         transientFailure: "Der Server war ausgelastet, daher wurde nichts geändert. Versuche es erneut.",
         failureGeneric: 'Die freigegebene Aktion ist fehlgeschlagen',
+        failureNoReason: 'Es wurde kein Grund aufgezeichnet.',
+        pluginChangeDaemonUnavailable: 'Happier konnte den Rechner nicht erreichen, um seine Plugins zu ändern, daher wurde nichts geändert.',
         failureNotRun: 'Anfrage nicht ausgeführt',
         failureFileWrite: 'Datei konnte nicht geschrieben werden',
         failureFileRead: 'Datei konnte nicht gelesen werden',
