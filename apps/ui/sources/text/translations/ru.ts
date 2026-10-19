@@ -6096,7 +6096,7 @@ export const ru: TranslationStructure = {
 	    },
 	    runnerRestartBackgroundWork: {
 	        title: 'Фоновые агенты работают',
-	        body: ({ count }: { count: number }) => `Работает фоновых агентов: ${count}. Перезапуск остановит их.`,
+	        body: ({ count }: { count: number }) => `Фоновых агентов в работе: ${count}. Перезапуск остановит их.`,
 	        confirmAction: 'Остановить и перезапустить',
 	    },
 	    staleRunner: {

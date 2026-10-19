@@ -5906,7 +5906,7 @@ export const it: TranslationStructure = {
 	    },
 	    runnerRestartBackgroundWork: {
 	        title: 'Agenti in background in esecuzione',
-	        body: ({ count }: { count: number }) => `${count} agente/i in background in esecuzione. Il riavvio li interromperà.`,
+	        body: ({ count }: { count: number }) => count === 1 ? `1 agente in background in esecuzione. Il riavvio lo interromperà.` : `${count} agenti in background in esecuzione. Il riavvio li interromperà.`,
 	        confirmAction: 'Interrompi e riavvia',
 	    },
 	    staleRunner: {

@@ -5212,7 +5212,7 @@ export const fr: TranslationStructure = {
         },
         runnerRestartBackgroundWork: {
             title: 'Des agents en arrière-plan sont en cours',
-            body: ({ count }: { count: number }) => `${count} agent(s) en arrière-plan sont en cours. Le redémarrage les arrêtera.`,
+            body: ({ count }: { count: number }) => count === 1 ? `1 agent en arrière-plan est en cours. Le redémarrage l’arrêtera.` : `${count} agents en arrière-plan sont en cours. Le redémarrage les arrêtera.`,
             confirmAction: 'Arrêter et redémarrer',
         },
         staleRunner: {
