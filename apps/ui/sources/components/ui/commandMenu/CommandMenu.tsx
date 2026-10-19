@@ -79,6 +79,7 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
                         label={item.label}
                         description={item.description}
                         icon={item.icon}
+                        disabled={item.disabled}
                         testID={testID ? `${testID}:row:${item.id}` : undefined}
                     />
                 ),
