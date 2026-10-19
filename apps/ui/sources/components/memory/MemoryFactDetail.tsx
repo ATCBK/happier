@@ -41,7 +41,7 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
     /** The fact sits in the archive: it is history already and agents never load it. */
     archived: boolean;
     onOpenSession?: (
-      ref: Readonly<{ serverId: string; sessionId: string }>,
+      ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>,
     ) => void;
     onOpenDiscussion?: (ref: DiscussionMessageRefV1) => void;
     /** Present when this reader may change the fact: its edit form opens in the list. */
@@ -105,7 +105,7 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
           })
         : formatMemoryDate(fact.expiresAtMs);
   const openSource = source?.kind === 'session' && onOpenSession
-    ? () => onOpenSession(source.session)
+    ? () => onOpenSession({ ...source.session, ...(source.messageId ? { messageId: source.messageId } : {}) })
     : source?.kind === 'discussion' && onOpenDiscussion
       ? () => onOpenDiscussion(source)
       : undefined;

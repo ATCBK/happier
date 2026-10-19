@@ -25,6 +25,8 @@ export function useNavigateToSession() {
      */
     return React.useCallback(async (sessionId: string, opts?: Readonly<{
         serverId?: string;
+        /** Exact committed server message, resolved by the existing message-detail route. */
+        messageId?: string;
         query?: Readonly<Record<string, string | number | boolean | null | undefined>>;
     }>) => {
         const explicitServerId = String(opts?.serverId ?? '').trim();
@@ -54,6 +56,7 @@ export function useNavigateToSession() {
         router.navigate(buildScopedSessionRouteHref({
             sessionId: normalizedSessionId,
             serverId: targetServerId || null,
+            ...(opts?.messageId ? { suffix: `/message/${encodeURIComponent(`server:${opts.messageId}`)}` } : {}),
             ...(opts?.query ? { query: opts.query } : {}),
         }), {
             dangerouslySingular(name, params) {

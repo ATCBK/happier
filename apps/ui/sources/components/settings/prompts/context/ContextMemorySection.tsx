@@ -68,8 +68,8 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
     // Search takes the section's body while it is open (the same panel Work › Memory opens).
     const [searching, setSearching] = React.useState(false);
     const navigateToSession = useNavigateToSession();
-    const openSession = React.useCallback((session: Readonly<{ serverId: string; sessionId: string }>) => {
-        fireAndForget(navigateToSession(session.sessionId, { serverId: session.serverId }), { tag: 'ContextMemorySection.openSession' });
+    const openSession = React.useCallback((session: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
+        fireAndForget(navigateToSession(session.sessionId, { serverId: session.serverId, messageId: session.messageId }), { tag: 'ContextMemorySection.openSession' });
     }, [navigateToSession]);
     const [budgetOpen, setBudgetOpen] = React.useState(false);
     const maxChars = entry?.maxChars;

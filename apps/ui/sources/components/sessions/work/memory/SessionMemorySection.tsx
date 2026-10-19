@@ -99,8 +99,8 @@ const SessionMemoryBody = React.memo(function SessionMemoryBody(props: Readonly<
     const displayedSource = React.useMemo(() => resolving
         ? { ...source, status: 'loading' as const, view: null, target: null, stale: false } : source, [resolving, source]);
     const navigateToSession = useNavigateToSession();
-    const openSession = React.useCallback((ref: Readonly<{ serverId: string; sessionId: string }>) => {
-        fireAndForget(navigateToSession(ref.sessionId, { serverId: ref.serverId }), { tag: 'SessionMemorySection.source' });
+    const openSession = React.useCallback((ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => {
+        fireAndForget(navigateToSession(ref.sessionId, { serverId: ref.serverId, messageId: ref.messageId }), { tag: 'SessionMemorySection.source' });
     }, [navigateToSession]);
     // The choice being saved: the switch shows it at once, so a slow Home never leaves it looking stuck.
     const [pendingChoice, setPendingChoice] = React.useState<boolean | null>(null);

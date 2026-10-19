@@ -8,18 +8,21 @@ import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAcc
 import { readSessionNameIfNamed } from '@/utils/sessions/sessionUtils';
 
 type MemoryFactSource =
-  | Readonly<{ kind: 'session'; session: Readonly<{ serverId: string; sessionId: string }> }>
+  | Readonly<{ kind: 'session'; session: Readonly<{ serverId: string; sessionId: string }>; messageId?: string }>
   | DiscussionMessageRefV1;
+
+/** Decisions own exact provenance; only legacy notes fall back to a Session-only source. */
+export function readMemoryFactSource(fact: MemoryFactV1): MemoryFactSource | null {
+  return fact.decision?.sourceMessageRef ?? (fact.sourceSessionRef ? { kind: 'session', session: fact.sourceSessionRef } : null);
+}
 
 /** Detail-only source projection. A Memory grant never supplies authority to read its source. */
 export function useMemoryFactSource(fact: MemoryFactV1): Readonly<{
   source: MemoryFactSource | null;
   title: string | null;
 }> {
-  const sourceKey = JSON.stringify(fact.decision?.sourceMessageRef
-    ?? (fact.sourceSessionRef ? { kind: 'session', session: fact.sourceSessionRef } : null));
-  const source = React.useMemo<MemoryFactSource | null>(() => fact.decision?.sourceMessageRef
-    ?? (fact.sourceSessionRef ? { kind: 'session', session: fact.sourceSessionRef } : null), [sourceKey]);
+  const sourceKey = JSON.stringify(readMemoryFactSource(fact));
+  const source = React.useMemo(() => readMemoryFactSource(fact), [sourceKey]);
   const homeId = source?.kind === 'session' ? source.session.serverId : source?.discussion.serverId;
   const serverId = homeId ? resolveServerProfileScopeIdForIdentifier(homeId) : '';
   const serverIds = React.useMemo(() => serverId ? [serverId] : [], [serverId]);

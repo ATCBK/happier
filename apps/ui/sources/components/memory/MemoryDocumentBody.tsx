@@ -49,6 +49,7 @@ import { memoryDocumentHref } from './memoryDocumentRoutes';
 import type { MemoryDocumentSource } from './useMemoryDocument';
 import type { MemoryDocumentSummary } from '@/sync/domains/memory/fetchDaemonMemoryStatus';
 import { useMemoryDocumentSummary } from './useMemoryDocumentSummary';
+import { readMemoryFactSource } from './useMemoryFactSource';
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
 /** A fact this fresh reads "Just now" rather than today's date. */
@@ -162,7 +163,7 @@ export type MemoryDocumentBodyProps = Readonly<{
    */
   renderEmpty?: (line: Readonly<{ testID: string; text: string }>) => React.ReactNode;
   /** Opens the Session a fact came from, through the host's Session navigation owner. */
-  onOpenSession?: (ref: Readonly<{ serverId: string; sessionId: string }>) => void;
+  onOpenSession?: (ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>) => void;
   /** The document's own pages open a fact's detail (reason, source, approval, history) from its row. */
   onOpenFact?: (fact: MemoryFactV1) => void;
   /** The fact whose detail is open beside the list. */
@@ -1085,7 +1086,7 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
     onEdit: (fact: MemoryFactV1) => void;
     onForget: (fact: MemoryFactV1) => void;
     onOpenSession?: (
-      ref: Readonly<{ serverId: string; sessionId: string }>,
+      ref: Readonly<{ serverId: string; sessionId: string; messageId?: string }>,
     ) => void;
     onOpenFact?: (fact: MemoryFactV1) => void;
     selected?: boolean;
@@ -1099,8 +1100,9 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   const endHighlight = React.useCallback(() => setHighlighting(false), []);
   const decision = fact.decision;
   // A decision links the Session message it was decided in; a note links the Session it came from.
-  const decisionSession = decision?.sourceMessageRef.kind === 'session' ? decision.sourceMessageRef.session : null;
-  const source = fact.sourceSessionRef ?? decisionSession;
+  const factSource = readMemoryFactSource(fact);
+  const source = factSource?.kind === 'session'
+    ? { ...factSource.session, ...(factSource.messageId ? { messageId: factSource.messageId } : {}) } : null;
   // Row-local: only this fact's source Session title, and only when that Session is loaded here.
   const sourceName = useSessionSelector(
     source?.sessionId ?? '',

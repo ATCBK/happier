@@ -245,8 +245,28 @@ it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admit
     const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
     await settled(() => expect(hook.getCurrent().status).toBe('ready'));
     expect(hook.getCurrent().view).toMatchObject({ access: 'owner', shared: audience === 'unknown' ? null : audience !== 'private' });
+    expect(hook.getCurrent().view).toMatchObject({ audience: audience === 'unknown' ? null : {
+        shared: audience !== 'private', team: null, publicLink: audience === 'public',
+        grants: audience === 'grant' ? [expect.objectContaining({ principal: { kind: 'account', accountId: 'teammate' } })] : [],
+    } });
     expect(hook.getCurrent().target === null).toBe(audience === 'unknown');
     await hook.unmount();
+});
+
+it('does not claim the Project Team holds an individually shared Memory grant', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify signatures.')], topics: [] });
+    homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'bob', 'view');
+    if (!connection) throw new Error('Expected Account fixture');
+    const project = { name: 'Payments', teamName: 'Unrelated Team',
+        searchScope: { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } }, href: () => '/projects/payments/memory' };
+    const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+        <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} project={project} />
+    </InjectedAuthProvider>);
+    await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+    const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+    const audience = screen.findAllByType(PageHeader).flatMap(node => node.props.meta ?? [])
+        .find(entry => entry.testID === 'memory-document.audience');
+    expect(audience?.text).toBe('memoryContext.memory.accessShared');
 });
 
 it('refreshes the admitted Memory audience after a grant-only Account change', async () => {
@@ -365,11 +385,13 @@ it('keeps last-known counts for the same document while a later status read has 
     await screen.unmount();
 });
 
-it('opens a qualified fact source before its Session is loaded on this client', async () => {
+it.each([false, true])('opens a qualified fact source before its Session is loaded on this client (decision: %s)', async decision => {
     if (!connection) throw new Error('Expected the Memory Home connection fixture');
     const source = { serverId, sessionId: 'unloaded-source-session' };
     const ref = await seedDocument({ v: 1, index: [
-        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source },
+        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source,
+          ...(decision ? { decision: { reason: 'Exact committed source', approvedBy: null,
+            sourceMessageRef: { kind: 'session' as const, session: source, messageId: 'committed-source' } } } : {}) },
         fact('manual', 'Keep release notes concise.'),
     ], topics: [] });
     expect(storage.getState().sessions[source.sessionId]).toBeUndefined();
@@ -382,7 +404,7 @@ it('opens a qualified fact source before its Session is loaded on this client', 
     await screen.pressByTestIdAsync('memory-document.fact.from-session.source');
     // The real navigation owner must carry the fact's Home, not require a loaded Session/title.
     expect(navigation.navigate).toHaveBeenCalledWith(
-        `/session/${source.sessionId}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
+        `/session/${source.sessionId}${decision ? '/message/server%3Acommitted-source' : ''}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
     );
     await screen.unmount();
 });
@@ -1213,8 +1235,8 @@ describe('MemoryDocumentBody', () => {
         const attached = (account?.read() ?? project?.read().promptStack ?? []).find(entry => entry.id === scope + '.memory');
         expect(attached).toBeTruthy();
         if (!attached || attached.ref.kind !== 'doc') throw new Error('Missing scope memory attachment');
-        expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached' });
         const attachedRef: PromptDocArtifactRefV1 = { ...attached.ref, kind: attached.ref.kind };
+        expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached', factId: storedBody(attachedRef).index[0]!.id });
         expect(await readMemory(attachedRef)).toMatchObject({ body: { index: [{ text: 'Use the shared build script.', sourceSessionRef: null }] } });
         expect(storedBody(attachedRef).index).toMatchObject([{ text: 'Use the shared build script.' }]);
         if (project) expect(project.read()).toMatchObject({ pinned: true, hidden: true });
@@ -1236,7 +1258,7 @@ describe('MemoryDocumentBody', () => {
         const rows = homes.artifacts(serverId).list();
         expect(rows).toHaveLength(1);
         const ref = { kind: 'doc' as const, serverId, artifactId: rows[0]!.id };
-        expect(created).toHaveBeenCalledWith({ ref, attachment: 'conflict' });
+        expect(created).toHaveBeenCalledWith({ ref, attachment: 'conflict', factId: storedBody(ref).index[0]!.id });
         expect(await readMemory(ref)).toMatchObject({ body: { index: [{ text: 'A durable unattached fact.' }] } });
         expect(storedBody(ref).index).toMatchObject([{ text: 'A durable unattached fact.' }]);
     });

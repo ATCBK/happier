@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -81,6 +81,26 @@ it('loads the exact decision Session title without loading its transcript or a M
     const screen = await renderScreen(<MemoryFactDetail testID="fact" fact={decision()} documentRef={null} serverId={serverId} viewerAccountId="alice" archived={false} />);
     await waitForHomeGovernance(() => expect(sourceTitle(screen)).toBe('Scoped source title'));
     expect(homes.requests.some(request => request.path.includes('/messages') || request.path.startsWith('/v1/machines'))).toBe(false);
+});
+
+it('opens distinct committed decision messages in the same Session while retaining legacy Session-only links', async () => {
+    homes.answer(serverId, '/v2/sessions/source-session', { status: 403, body: { error: 'forbidden' } });
+    const opened = vi.fn();
+    for (const messageId of ['committed-first', 'committed-second']) {
+        const fact = decision();
+        if (!fact.decision || fact.decision.sourceMessageRef.kind !== 'session') throw new Error('Expected Session source');
+        fact.decision.sourceMessageRef.messageId = messageId;
+        const screen = await renderScreen(<MemoryFactDetail testID="fact" fact={fact} documentRef={null} serverId={serverId}
+            viewerAccountId="alice" archived={false} onOpenSession={opened} />);
+        await screen.pressByTestIdAsync('fact.source');
+        expect(opened).toHaveBeenLastCalledWith({ serverId, sessionId: 'source-session', messageId });
+        await screen.unmount();
+    }
+    const fact = { ...decision(), decision: undefined, sourceSessionRef: { serverId, sessionId: 'source-session' } };
+    const screen = await renderScreen(<MemoryFactDetail testID="fact" fact={fact} documentRef={null} serverId={serverId}
+        viewerAccountId="alice" archived={false} onOpenSession={opened} />);
+    await screen.pressByTestIdAsync('fact.source');
+    expect(opened).toHaveBeenLastCalledWith({ serverId, sessionId: 'source-session' });
 });
 
 it('does not use a different legacy Session as the decision source when the real source is denied', async () => {
