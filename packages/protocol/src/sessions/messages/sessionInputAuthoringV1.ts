@@ -35,10 +35,11 @@ export function requireSessionInputContent(
   const text = typeof raw === 'string' ? raw : '';
   const structuredInput = value.structuredInput;
   const structuredAttachments = structuredInput !== null && typeof structuredInput === 'object'
-    ? (structuredInput as { composerAttachments?: unknown }).composerAttachments
-    : undefined;
+    ? structuredInput as { composerAttachments?: unknown; sessionAttachments?: unknown }
+    : null;
   const attachmentCount = (Array.isArray(value.attachments) ? value.attachments.length : 0)
-    + (Array.isArray(structuredAttachments) ? structuredAttachments.length : 0);
+    + (Array.isArray(structuredAttachments?.composerAttachments) ? structuredAttachments.composerAttachments.length : 0)
+    + (Array.isArray(structuredAttachments?.sessionAttachments) ? structuredAttachments.sessionAttachments.length : 0);
   if (hasSessionInputContentV1({ text, attachmentCount })) return;
   context.addIssue({
     code: 'custom',

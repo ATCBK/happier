@@ -1,15 +1,18 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
-import { SessionIdSchema, TurnIdSchema } from '../idsV1.js';
+import { SessionIdSchema } from '../idsV1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import {
   SessionInputAdmissionRejectionCodeV1Schema,
   SessionInputAdmissionResultV1Schema,
   SessionInputRequestEqualityEvidenceV1Schema,
+  SessionInputSourceSessionV1Schema,
+  SessionInputReturnedAnswerV1Schema,
 } from './sessionInputAdmission.js';
 import { SessionStoredMessageContentSchema } from './sessionStoredMessageContent.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
+import { SessionMessageReplyAdmissionV1Schema } from './sessionMessageReplyV1.js';
 
 export const SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 =
   'session-pending-admission-settlement-v1' as const;
@@ -17,15 +20,16 @@ export const SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 =
 const BoundedSettlementIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(191)));
 
 export const SessionInputSettlementValidationV1Schema = lazyZodSchema(() => z.strictObject({
-  sourceSession: z.optional(z.strictObject({
-    sourceSessionId: asProtocolZod(SessionIdSchema),
-    sourceTurnId: TurnIdSchema,
-    via: z.enum(['action', 'mcp']),
+  sourceSession: z.optional(SessionInputSourceSessionV1Schema),
+  returnedAnswer: z.optional(SessionInputReturnedAnswerV1Schema),
+  autonomousCheckIn: z.optional(z.strictObject({
+    afterTurns: z.nullable(z.number().check(z.int(), z.positive())),
   })),
   automation: z.optional(z.strictObject({
     automationId: BoundedSettlementIdSchema,
     runId: BoundedSettlementIdSchema,
   })),
+  reply: z.optional(SessionMessageReplyAdmissionV1Schema),
 }));
 export type SessionInputSettlementValidationV1 = z.infer<
   typeof SessionInputSettlementValidationV1Schema

@@ -1,4 +1,5 @@
 import { trimIdent } from '../strings/trimIdent.js';
+import { readLeadingCodingPromptPlanV1 } from './promptPlanV1.js';
 import {
   isCodingPromptResponseOptionsEnabled,
   resolveCodingPromptSessionTitleUpdatesModeV1,
@@ -122,3 +123,56 @@ export function buildHappierBaseSystemPromptV1(args?: Readonly<HappierSessionTit
 }
 
 export const HAPPIER_BASE_SYSTEM_PROMPT_V1 = buildHappierBaseSystemPromptV1();
+
+const HAPPIER_BASE_SYSTEM_PROMPT_DISPLAY_BLOCKS_V1 = (() => {
+  // The moving 0.2 predecessor (f18aba940c) emits this earlier title policy.
+  const predecessorInitial = HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1
+    .replace('Unless the user supplied an explicit title or name, at', 'At')
+    .replace('\n\nPreserve any explicit title or name supplied by the user instead of replacing it automatically.', '');
+  const blocks = [
+    buildHappierSessionTitleGuidanceV1({ createdAsBot: true }),
+    buildHappierSessionTitleGuidanceV1(),
+    buildHappierSessionTitleGuidanceV1({ settings: { codingPromptBehaviorV1: { sessionTitleUpdates: 'initial' } } }),
+    HAPPIER_BASE_SYSTEM_PROMPT_BOT_FIRST_MESSAGE_V1,
+    HAPPIER_BASE_SYSTEM_PROMPT_BOT_TITLE_V1,
+    HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_ONGOING_V1,
+    HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1,
+    `${predecessorInitial}\n\nCall the title tool again if the task changes significantly.`,
+    predecessorInitial,
+    HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
+    HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
+    HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
+  ];
+  // Candidate indexes can already contain whitespace-normalized fallback text.
+  return blocks.flatMap(block => [block, block.replaceAll('mcp__happier__change_title', 'change_title')])
+    .flatMap(block => [block.trim(), block.replace(/\s+/g, ' ').trim()])
+    .sort((left, right) => right.length - left.length);
+})();
+
+/** Presentation only: remove complete host-authored prefix blocks, never headings alone. */
+function stripHappierBaseSystemPromptV1(text: string, contributedBlocks: readonly string[]): string {
+  let remaining = text;
+  while (true) {
+    const prefix = remaining.trimStart();
+    const matches = (value: string) => value.length > 0 && prefix.startsWith(value)
+      && (prefix.length === value.length || /^\s/.test(prefix.slice(value.length)));
+    const block = contributedBlocks.find(matches) ?? HAPPIER_BASE_SYSTEM_PROMPT_DISPLAY_BLOCKS_V1.find(matches);
+    if (!block) return remaining;
+    remaining = prefix.slice(block.length).trimStart();
+  }
+}
+
+/** Presentation inverse of host prompt prefixes, never provenance or authority. */
+export function readSessionInputPromptUserTextV1(text: string, contributedBlocks: readonly string[] = []): string {
+  let remaining = text;
+  while (true) {
+    const withoutPlan = readLeadingCodingPromptPlanV1(remaining,
+      content => content.length > 0 && stripHappierBaseSystemPromptV1(content, contributedBlocks) === '');
+    if (withoutPlan !== null) { remaining = withoutPlan; continue; }
+    const withoutBase = stripHappierBaseSystemPromptV1(remaining, contributedBlocks);
+    if (withoutBase !== remaining) { remaining = withoutBase; continue; }
+    // Per-send context and plugin resources cannot be reconstructed here.
+    // Their tags and lengths prove no authorship, so keep them inspectable.
+    return withoutBase;
+  }
+}

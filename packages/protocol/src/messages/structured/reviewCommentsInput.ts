@@ -91,6 +91,19 @@ export function buildReviewCommentsV1MetaPayload(params: Readonly<{
   })) };
 }
 
+/** Retain incumbent attachment metadata when review context claims the primary slot. */
+export function buildReviewCommentsV1MessageMeta(params: Readonly<{
+  payload: ReviewCommentsV1; metaOverrides?: Record<string, unknown> | null;
+}>): Record<string, unknown> {
+  const metaOverrides = { ...params.metaOverrides };
+  const envelope = metaOverrides.happier;
+  if (metaOverrides.happierAttachments === undefined && envelope && typeof envelope === 'object'
+    && !Array.isArray(envelope) && 'kind' in envelope && envelope.kind === 'attachments.v1' && 'payload' in envelope) {
+    metaOverrides.happierAttachments = envelope;
+  }
+  return { ...metaOverrides, happier: { kind: 'review_comments.v1', payload: params.payload } };
+}
+
 /** One renderer for ordinary composer input and host Actions using saved review evidence. */
 export function buildReviewCommentsOutboundMessage(params: Readonly<{
   sessionId: string; drafts: readonly ReviewCommentDraftMessageV1[]; additionalMessage: string;
@@ -99,16 +112,10 @@ export function buildReviewCommentsOutboundMessage(params: Readonly<{
   const drafts = filterReviewCommentDraftsIncludedInPrompt(params.drafts);
   const displayTextBase = buildReviewCommentsDisplayText({ drafts });
   const displayTextSuffix = String(params.displayTextSuffix ?? '').trim();
-  const metaOverrides = { ...params.metaOverrides };
-  const envelope = metaOverrides.happier;
-  if (metaOverrides.happierAttachments === undefined && envelope && typeof envelope === 'object'
-    && !Array.isArray(envelope) && 'kind' in envelope && envelope.kind === 'attachments.v1' && 'payload' in envelope) {
-    metaOverrides.happierAttachments = envelope;
-  }
   return {
     text: buildReviewCommentsPromptText({ drafts, additionalMessage: params.additionalMessage }),
     displayText: displayTextSuffix.length > 0 ? `${displayTextBase}\n\n${displayTextSuffix}` : displayTextBase,
-    metaOverrides: { ...metaOverrides, happier: { kind: 'review_comments.v1',
-      payload: buildReviewCommentsV1MetaPayload({ sessionId: params.sessionId, drafts }) } },
+    metaOverrides: buildReviewCommentsV1MessageMeta({ metaOverrides: params.metaOverrides,
+      payload: buildReviewCommentsV1MetaPayload({ sessionId: params.sessionId, drafts }) }),
   };
 }

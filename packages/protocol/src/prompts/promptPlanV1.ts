@@ -71,6 +71,31 @@ export function renderPromptPlanV1(plan: PromptPlanV1): string {
   return renderPromptBlocksV1(plan.blocks);
 }
 
+/** Render a host plan for delivery into a native Agent's user input. */
+export function renderSessionInputPromptPlanV1(plan: PromptPlanV1): string {
+  const text = renderPromptPlanV1(plan);
+  if (!text) return text;
+  // Native Agents can echo the entire prepared plan into a user record. Keep
+  // its display boundary with this producer, including dynamic plugin assets.
+  // Preparation normalizes to NFC; measure after that normalization as well.
+  const normalized = text.normalize('NFC');
+  return `<happier_coding_prompt length="${normalized.length}">\n${normalized}\n</happier_coding_prompt>`;
+}
+
+/** A frame delimits bytes; only the injecting owner's reproduced content may be hidden. */
+export function readLeadingCodingPromptPlanV1(text: string, isInjectedContent: (content: string) => boolean = () => false): string | null {
+  const header = text.match(/^\s*<happier_coding_prompt length="(\d+)">\n/);
+  if (!header) return null;
+  const length = Number(header[1]);
+  if (!Number.isSafeInteger(length) || length < 0) return null;
+  const end = header[0].length + length;
+  const closing = '\n</happier_coding_prompt>';
+  if (end > text.length || !text.startsWith(closing, end)) return null;
+  if (!isInjectedContent(text.slice(header[0].length, end))) return null;
+  const remaining = text.slice(end + closing.length);
+  return remaining === '' || /^\s/.test(remaining) ? remaining.trimStart() : null;
+}
+
 export function buildPromptPlanDiagnosticsV1(plan: PromptPlanV1): Readonly<{
   modality: PromptModalityV1;
   blockIds: string[];

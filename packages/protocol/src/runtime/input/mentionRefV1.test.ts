@@ -550,7 +550,18 @@ describe('HappierStructuredInputV1 envelope carries mentions additively', () => 
 
     expect(readAdmittedHappierStructuredInputV1FromMeta({
       happierStructuredInputV1: admitted,
-    })).toEqual({ status: 'admitted', structuredInput: admitted });
+    })).toEqual({
+      status: 'admitted',
+      structuredInput: {
+        v: 1,
+        imageInputs: [{
+          id: 'image-1',
+          kind: 'localImage',
+          path: '.happier/uploads/messages/message-1/image.png',
+          mimeType: 'image/png',
+        }],
+      },
+    });
     expect(readAdmittedHappierStructuredInputV1FromMeta({
       happierStructuredInputV1: {
         ...admitted,

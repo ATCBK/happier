@@ -6,7 +6,9 @@ import { BrowserContextMessageMetaV1Schema, BrowserContextMessagePayloadV1Schema
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { readNonBlankOpaqueIdentifier } from '../../strings/opaqueIdentifier.js';
 import { ExecutionRunCompletionV1Schema } from '../../execution/runs/completionInputV1.js';
-import { SessionDiscussionSelectionSourceV1Schema } from '../../sessions/discussions/content.js';
+import { DiscussionSelectionSourceV1Schema } from '../../discussions/references.js';
+import { ReviewCommentsV1Schema, type ReviewCommentsV1 } from '../../messages/structured/reviewCommentsV1.js';
+import { SessionAttachmentHandleV1Schema, type SessionAttachmentHandleV1 } from '../../transfers/sessions/sessionAttachmentHandleV1.js';
 import { MAX_INTERACTION_TRANSIENT_JSON_BYTES_V1 } from '../../plugins/interactions/transientV1.js';
 import { resolveSkillCatalogOriginV1 } from '../catalog/skills.js';
 import {
@@ -387,7 +389,7 @@ const HappierStructuredInputV1ObjectSchema = lazyZodSchema(() => z.looseObject({
   browserContext: z.optional(BrowserContextMessagePayloadV1Schema),
   composerAttachments: z.optional(z.array(ComposerAttachmentInputV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))),
   executionRunCompletion: z.optional(ExecutionRunCompletionV1Schema),
-  sessionDiscussionSelectionSourceV1: z.optional(z.omit(SessionDiscussionSelectionSourceV1Schema, { draftCorrelationId: true })),
+  discussionSelectionSourceV1: z.optional(z.omit(DiscussionSelectionSourceV1Schema, { draftCorrelationId: true })),
 }));
 
 export const HappierStructuredInputV1Schema = lazyZodSchema(() => HappierStructuredInputV1ObjectSchema.check(z.superRefine(rejectOversizedComposerAttachmentEnvelope)));
@@ -396,9 +398,10 @@ export type HappierStructuredInputV1 = z.infer<typeof HappierStructuredInputV1Sc
 
 /**
  * The raw Message-ingress envelope. It is the canonical envelope in every
- * respect except that a Composer attachment may still carry the transfer-owned
- * staged-media claim that the daemon's SessionMedia finalizer has not yet
- * replaced with a durable reference. Persisted structured input stays
+ * respect except that it carries authored review context for projection into
+ * the incumbent review-comment metadata, and a Composer attachment may still
+ * carry the transfer-owned staged-media claim that the daemon's SessionMedia
+ * finalizer has not yet replaced with a durable reference. Persisted input stays
  * finalized-only: admission parses ingress with this schema, runs the
  * finalizer, and writes `HappierStructuredInputV1Schema`. The instance cap and
  * the aggregate encoded attachment budget are the same refinement, so ingress
@@ -406,10 +409,14 @@ export type HappierStructuredInputV1 = z.infer<typeof HappierStructuredInputV1Sc
  */
 export const RawIngressStructuredInputV1Schema = lazyZodSchema(() => z.extend(z.omit(HappierStructuredInputV1ObjectSchema, { composerAttachments: true }), {
     composerAttachments: z.optional(z.array(ComposerAttachmentDraftV1Schema).check(z.maxLength(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))),
+    reviewComments: z.optional(ReviewCommentsV1Schema),
+    sessionAttachments: z.optional(z.array(SessionAttachmentHandleV1Schema)),
   }).check(z.superRefine(rejectOversizedComposerAttachmentEnvelope)));
 export type RawIngressStructuredInputV1 = Readonly<
   Omit<HappierStructuredInputV1, 'composerAttachments'> & Readonly<{
     composerAttachments?: readonly ComposerAttachmentDraftV1[];
+    reviewComments?: ReviewCommentsV1;
+    sessionAttachments?: readonly SessionAttachmentHandleV1[];
   }>
 >;
 
@@ -562,6 +569,13 @@ export function hasRawComposerAttachmentSelectionV1(value: unknown): boolean {
   }
   const attachments = envelope.composerAttachments;
   return !Array.isArray(attachments) || attachments.length > 0;
+}
+
+/** Issued upload selections are authored input until the target store resolves them. */
+export function hasRawSessionAttachmentSelectionV1(value: unknown): boolean {
+  const envelope = asRecord(asRecord(value)?.[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]);
+  if (!envelope || !Object.prototype.hasOwnProperty.call(envelope, 'sessionAttachments')) return false;
+  return !Array.isArray(envelope.sessionAttachments) || envelope.sessionAttachments.length > 0;
 }
 
 const STRUCTURED_INPUT_SEMANTIC_ARRAY_FIELDS_V1 = new Set([

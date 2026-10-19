@@ -88,6 +88,7 @@ export function isRecoveredHistoryTranscriptObservationProvenance(
   value: unknown,
   purpose: 'input' | 'stored' = 'input',
 ): value is SessionTranscriptObservationProvenanceV1 & { source: 'history' } {
+  if (value === undefined || value === null) return false;
   const provenance = (purpose === 'stored'
     ? createStoredReadSchema(SessionTranscriptObservationProvenanceV1Schema)
     : SessionTranscriptObservationProvenanceV1Schema).safeParse(value);

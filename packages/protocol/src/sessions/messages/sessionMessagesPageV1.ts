@@ -8,6 +8,7 @@ import { SessionMessageDeliveryResolutionV1Schema } from './sessionMessageDelive
 import { SessionMessageRoleSchema, type SessionMessageRole } from './sessionMessageRole.js';
 import { SessionStoredMessageContentSchema } from './sessionStoredMessageContent.js';
 import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfaceItemReferenceInputV1Schema } from './transcriptObservationV1.js';
+import { FollowDeliveryProjectionV1Schema } from '../follow/sessionFollowDeliveryProjectionV1.js';
 import {
   ExternalShareableActorV1Schema,
   ExternalShareableTranscriptSnapshotV1Schema,
@@ -26,6 +27,7 @@ export const SessionMessageV1Schema = lazyZodSchema(() => z.object({
   transcriptObservationProvenance: z.optional(SessionTranscriptObservationProvenanceV1Schema),
   surfaceItemReference: z.optional(z.nullable(SessionTranscriptSurfaceItemReferenceInputV1Schema)),
   deliveryResolution: z.optional(SessionMessageDeliveryResolutionV1Schema),
+  followDeliveryProjection: z.optional(FollowDeliveryProjectionV1Schema),
   messageActionReference: z.optional(MessageActionReferenceV1Schema),
   accountActor: z.optional(z.nullable(SessionMessageAccountActorV1Schema)),
   inputAdmissionReceipt: z.optional(SessionInputAdmissionReceiptV1Schema),
@@ -39,12 +41,12 @@ export type SessionMessagesPageV1 = z.infer<typeof SessionMessagesPageV1Schema>;
 // An external publication row may be an opaque cursor witness. Invalid content
 // and coarse actors are omitted; Account identity never crosses this projection.
 export const SessionExternalShareableMessagesPageV1Schema = lazyZodSchema(() => z.extend(SessionMessagesPageV1Schema, {
-  messages: z.array(z.extend(z.omit(SessionMessageV1Schema, { content: true, accountActor: true, inputAdmissionReceipt: true }), {
-    content: z.pipe(z.unknown(), z.transform((input) => {
+  messages: z.array(z.extend(z.omit(SessionMessageV1Schema, { content: true, accountActor: true, inputAdmissionReceipt: true, followDeliveryProjection: true }), {
+    content: z.pipe(z.optional(z.unknown()), z.transform((input) => {
       const parsed = SessionStoredMessageContentSchema.safeParse(input);
       return parsed.success ? parsed.data : undefined;
     })),
-    externalShareableActor: z.pipe(z.unknown(), z.transform((input) => {
+    externalShareableActor: z.pipe(z.optional(z.unknown()), z.transform((input) => {
       const parsed = ExternalShareableActorV1Schema.safeParse(input);
       return parsed.success ? parsed.data : undefined;
     })),

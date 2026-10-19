@@ -42,7 +42,7 @@ function codePointLength(value: string): number {
   return Array.from(value).length;
 }
 
-function boundedText(maxCodePoints: number, message: string): z.ZodMiniString {
+function boundedText(maxCodePoints: number, message: string): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (value !== value.trim()) {
       context.addIssue({

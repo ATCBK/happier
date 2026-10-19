@@ -14,6 +14,9 @@ import {
 import { DEFAULT_OPENABLE_CONTENT_MAX_BYTES_V1 } from '../../plugins/openableContent.js';
 import { readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
+import { ComposerRefV1Schema } from '../../plugins/ui/composerRef.js';
+import { ComposerInstanceIdProtocolSchema } from './composerInstanceId.js';
+import { PendingLocalIdSchema } from '../../sessions/pending/pendingLocalId.js';
 
 /** Type-only public projection; content schemas keep their plain JSON runtime values. */
 type DeepReadonly<T> = T extends readonly (infer TItem)[]
@@ -81,6 +84,30 @@ export const ComposerContentHandleV1Schema = lazyZodSchema(() => z.strictObject(
   }
 })));
 export type ComposerContentHandleV1 = DeepReadonly<z.infer<typeof ComposerContentHandleV1Schema>>;
+
+/** Host-owned exact attachment custody at the current Composer location. */
+export const ComposerContentClaimantV1Schema = lazyZodSchema(() => z.strictObject({
+  composer: asProtocolZod(ComposerRefV1Schema),
+  attachmentInstanceId: asProtocolZod(ComposerInstanceIdProtocolSchema),
+}));
+export type ComposerContentClaimantV1 = DeepReadonly<z.infer<typeof ComposerContentClaimantV1Schema>>;
+
+/** Submission captures reuse the existing claim operation; older strict handlers refuse this arm. */
+export const ComposerContentClaimRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  handle: ComposerContentHandleV1Schema,
+  claimant: ComposerContentClaimantV1Schema,
+  submission: z.optional(z.strictObject({
+    destinationComposerRef: asProtocolZod(ComposerRefV1Schema),
+    messageLocalId: PendingLocalIdSchema,
+  })),
+}));
+export type ComposerContentClaimRequestV1 = DeepReadonly<z.infer<typeof ComposerContentClaimRequestV1Schema>>;
+
+export const ComposerContentClaimResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('success', [
+  z.strictObject({ success: z.literal(true), newlyAcquired: z.boolean(), handle: z.optional(ComposerContentHandleV1Schema) }),
+  z.strictObject({ success: z.literal(false), error: z.string(), claimedElsewhere: z.optional(z.boolean()) }),
+]));
+export type ComposerContentClaimResponseV1 = DeepReadonly<z.infer<typeof ComposerContentClaimResponseV1Schema>>;
 
 /** Draft-only content: the target daemon still owns the staged media. */
 export const ComposerStagedMediaContentV1Schema = lazyZodSchema(() => z.strictObject({

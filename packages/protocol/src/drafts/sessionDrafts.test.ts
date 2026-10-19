@@ -16,6 +16,7 @@ import {
   SessionDraftMutateRequestV1Schema,
   SessionDraftPrivatePayloadV1Schema,
   SessionDraftRecipientValueV1Schema,
+  SessionDraftSessionMessagingValueV1Schema,
   canonicalSessionDraftAddressV1,
   isMeaningfulSessionDraftRecipientValueV1,
 } from './sessionDrafts.js';
@@ -361,6 +362,34 @@ describe('session draft protocol', () => {
     expect(sessionDocument.target.kind === 'session'
       && sessionDocument.target.routing.recipient.value).toEqual(futureRawValue);
     expect(SessionDraftRecipientValueV1Schema.safeParse(futureRawValue).success).toBe(false);
+  });
+
+  it('validates known cross-Session intent strictly while the draft preserves extension custody', () => {
+    const intent = SessionDraftSessionMessagingValueV1Schema.parse({
+      kind: 'ask', target: { selector: 'workers', of: 'session-1', recursive: true }, reply: 'return',
+    });
+    const document = SessionDraftDocumentV1Schema.parse({
+      ...newSessionDocument(),
+      extensions: { happier: { sessionMessagingV1: { mutationId, value: intent } } },
+    });
+    expect(document.extensions.happier?.sessionMessagingV1?.value).toEqual(intent);
+    expect(SessionDraftSessionMessagingValueV1Schema.safeParse({
+      kind: 'ask', target: { selector: 'workers', accountId: 'another-account' },
+    }).success).toBe(false);
+    expect(SessionDraftSessionMessagingValueV1Schema.safeParse({
+      kind: 'post_update', target: { selector: 'workers' },
+    }).success).toBe(false);
+    expect(SessionDraftSessionMessagingValueV1Schema.safeParse({
+      kind: 'send', target: { selector: 'manager' }, reply: 'return',
+    }).success).toBe(false);
+    for (const timeoutSeconds of [1, 10_000]) {
+      expect(SessionDraftSessionMessagingValueV1Schema.safeParse({
+        kind: 'ask', target: { selector: 'manager' }, timeoutSeconds,
+      }).success).toBe(true);
+    }
+    expect(SessionDraftSessionMessagingValueV1Schema.safeParse({
+      kind: 'ask', target: { selector: 'manager' }, timeoutSeconds: 1.5,
+    }).success).toBe(false);
   });
 
   it('normalizes extension values into detached immutable strict JSON', () => {
