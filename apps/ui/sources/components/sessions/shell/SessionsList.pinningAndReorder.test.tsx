@@ -14,7 +14,9 @@ vi.mock('@/components/appShell/search/UniversalSearchRuntimeContext', () => ({
     }),
 }));
 
-let capturedRootFlatListProps: any | null = null;
+const legendListState = vi.hoisted(() => ({
+    current: null as null | import('@/dev/testkit/mocks/legendList').CapturingLegendListMockState,
+}));
 const routerPushSpy = vi.fn();
 const modalAlertSpy = vi.hoisted(() => vi.fn());
 let hideInactiveSessions = false;
@@ -45,11 +47,6 @@ installSessionShellCommonModuleMocks({
         return createReactNativeWebMock({
             Platform: { OS: 'web', select: (value: any) => value.web ?? value.default },
             TurboModuleRegistry: { get: () => ({}) },
-            FlatList: (props: any) => {
-                const element = flatListMock.module.FlatList(props);
-                capturedRootFlatListProps = flatListMock.state.props;
-                return element;
-            },
         });
     },
     router: async () => {
@@ -112,9 +109,14 @@ installSessionShellCommonModuleMocks({
     },
 });
 
+vi.mock('@legendapp/list/react-native', async () => {
+    const legendListModule = await import('@/dev/testkit/mocks/legendList');
+    const mock = legendListModule.createCapturingLegendListMock({ renderItems: true });
+    legendListState.current = mock.state;
+    return { LegendList: mock.module.LegendList };
+});
+
 // Configure shell boundaries before loading testkit consumers that import native modules.
-const { createCapturingFlatListMock } = await import('@/dev/testkit/mocks/virtualizedList');
-const flatListMock = createCapturingFlatListMock({ renderItems: true });
 const { createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
 const sessionA = createSessionListRenderableSessionFixture({
     id: 'sess_a',
@@ -451,7 +453,7 @@ describe('SessionsList pinning + per-group ordering', () => {
         modalAlertSpy.mockClear();
         routerPushSpy.mockReset();
         mockAllowedServerIds = ['srv_server_a'];
-        capturedRootFlatListProps = null;
+        legendListState.current?.reset();
         hideInactiveSessions = false;
         readMachineTargetForSessionMock.mockReset();
         mockMachinesState.current = [];
@@ -507,50 +509,18 @@ describe('SessionsList pinning + per-group ordering', () => {
         const screen = await renderSessionsList();
 
         expect(screen.root).toBeTruthy();
-        expect(capturedRootFlatListProps).toBeTruthy();
-        expect(typeof capturedRootFlatListProps?.onWheel).toBe('function');
+        expect(legendListState.current?.props).toBeTruthy();
+        expect(typeof legendListState.current?.props?.onWheel).toBe('function');
 
         const stopPropagation = vi.fn();
-        capturedRootFlatListProps?.onWheel?.({ stopPropagation });
+        legendListState.current?.props?.onWheel?.({ stopPropagation });
         expect(stopPropagation).toHaveBeenCalledTimes(1);
     });
 
     it('uses coarser web scroll events for session-list scrolling', async () => {
         await renderSessionsList();
 
-        expect(capturedRootFlatListProps?.scrollEventThrottle).toBe(32);
-    });
-
-    it('disables web FlatList virtualization for first-page-sized lists', async () => {
-        await renderSessionsList();
-
-        expect(capturedRootFlatListProps?.disableVirtualization).toBe(true);
-    });
-
-    it('disables web FlatList virtualization for medium lists', async () => {
-        const header = expectPresent(
-            mockVisibleSessionListViewData.find((item) => item.type === 'header'),
-            'expected header item',
-        );
-        mockVisibleSessionListViewData = [
-            header,
-            ...Array.from({ length: 100 }, (_, index) => ({
-                type: 'session',
-                session: {
-                    ...sessionA,
-                    id: `sess_medium_${index}`,
-                    updatedAt: sessionA.updatedAt + index,
-                },
-                groupKey,
-                groupKind: 'date',
-                serverId: 'srv_server_a',
-                serverName: 'Server A',
-            })),
-        ];
-
-        await renderSessionsList();
-
-        expect(capturedRootFlatListProps?.disableVirtualization).toBe(true);
+        expect(legendListState.current?.props?.scrollEventThrottle).toBe(32);
     });
 
     it('uses the canonical virtualized list for large web lists', async () => {
@@ -576,67 +546,8 @@ describe('SessionsList pinning + per-group ordering', () => {
 
         await renderSessionsList();
 
-        expect(capturedRootFlatListProps).toBeTruthy();
-        expect(capturedRootFlatListProps?.disableVirtualization).toBeUndefined();
-        expect(capturedRootFlatListProps?.scrollEventThrottle).toBe(32);
-    });
-
-    it('renders the full priority prefix before inactive history on large web lists', async () => {
-        const makeHeader = (title: string, headerKind: string, groupKeyValue: string) => ({
-            type: 'header',
-            title,
-            headerKind,
-            groupKey: groupKeyValue,
-            serverId: 'srv_server_a',
-            serverName: 'Server A',
-        });
-        const makeSession = (
-            id: string,
-            groupKeyValue: string,
-            groupKindValue: string,
-            section: 'active' | 'inactive',
-            index: number,
-        ) => ({
-            type: 'session',
-            session: {
-                ...sessionA,
-                id,
-                active: section === 'active',
-                updatedAt: sessionA.updatedAt + index,
-            },
-            groupKey: groupKeyValue,
-            groupKind: groupKindValue,
-            section,
-            serverId: 'srv_server_a',
-            serverName: 'Server A',
-        });
-        const attentionRows = Array.from({ length: 6 }, (_, index) =>
-            makeSession(`sess_attention_${index}`, 'attention-promotion-v1', 'attention', 'active', index));
-        const workingRows = Array.from({ length: 10 }, (_, index) =>
-            makeSession(`sess_working_${index}`, 'working-placement-v1', 'working', 'active', 100 + index));
-        const pinnedRows = Array.from({ length: 205 }, (_, index) =>
-            makeSession(`sess_pinned_${index}`, 'pinned-v1', 'pinned', 'inactive', 200 + index));
-        const activeRows = Array.from({ length: 15 }, (_, index) =>
-            makeSession(`sess_active_${index}`, 'active', 'active', 'inactive', 500 + index));
-        const inactiveRows = Array.from({ length: 40 }, (_, index) =>
-            makeSession(`sess_inactive_${index}`, 'inactive', 'date', 'inactive', 700 + index));
-        mockVisibleSessionListViewData = [
-            makeHeader('Needs attention', 'attention', 'attention-promotion-v1'),
-            ...attentionRows,
-            makeHeader('Working', 'working', 'working-placement-v1'),
-            ...workingRows,
-            makeHeader('Pinned', 'pinned', 'pinned-v1'),
-            ...pinnedRows,
-            makeHeader('Active', 'active', 'active'),
-            ...activeRows,
-            makeHeader('Inactive', 'inactive', 'inactive'),
-            ...inactiveRows,
-        ];
-
-        await renderSessionsList();
-
-        expect(capturedRootFlatListProps).toBeTruthy();
-        expect(capturedRootFlatListProps?.disableVirtualization).toBeUndefined();
+        expect(legendListState.current?.props).toBeTruthy();
+        expect(legendListState.current?.props?.scrollEventThrottle).toBe(32);
     });
 
     it('passes session tags from organization projection into session items when enabled', async () => {
