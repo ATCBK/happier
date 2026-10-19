@@ -152,7 +152,7 @@ export async function verifyAutomationConversationTargetV1(params: Readonly<{
         return AutomationConversationTargetVerifyResultV1Schema.parse({
             kind: "verified",
         });
-    });
+    }, { transactionClass: "automation-conversation-target-verify" });
 }
 
 /**
@@ -213,5 +213,5 @@ export async function listAutomationConversationTargetsV1(params: Readonly<{
             })),
             nextCursor: rows.length > limit ? page[page.length - 1]?.id ?? null : null,
         });
-    });
+    }, { transactionClass: "automation-conversation-target-list" });
 }

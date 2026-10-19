@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 
 import {
     AutomationRunExecutionInputV1Schema,
@@ -20,9 +19,11 @@ import {
     openAutomationTriggerDefinitionStoredEnvelopeV1,
     sealAutomationTriggerDefinitionStoredEnvelopeV1,
     createAccountScopedCryptoMaterialSnapshotV1,
-    type WorkflowTriggerSetV1,
 } from "@happier-dev/protocol";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createAutomationsDomain } from "../../../../ui/sources/sync/store/domains/automations";
+import { createWorkflowRunsDomain } from "../../../../ui/sources/sync/store/domains/workflowRuns";
+import type { StoreGet, StoreSet } from "../../../../ui/sources/sync/store/domains/_shared";
 
 
 import { db } from "@/storage/db";
@@ -658,22 +659,16 @@ describe("automationCrudService (integration)", () => {
                 workflow: { t: "plain", v: { workspace: { directory: "/repo" }, executionTarget: { kind: "session" } } }, triggerEvidence: null }),
             assignments: [{ machineId }], triggers: [triggerInput(intervalTrigger(60_000))],
         } });
-        // Load the UI package at runtime to preserve its own TS alias/compilation boundary.
+        type TriggerState = ReturnType<typeof createAutomationsDomain> & ReturnType<typeof createWorkflowRunsDomain>
+            & { profileScope: { serverId: string; accountId: string } };
+        // Zustand belongs to UI; resolve its real external module there, with the store's domain types retained below.
         const uiRequire = createRequire(new URL("../../../../ui/package.json", import.meta.url));
-        // These native/environment boundaries use the UI package's canonical stubs.
-        const expoStubPath = fileURLToPath(new URL("../../../../ui/sources/dev/expoConstantsStub.ts", import.meta.url));
-        const nativeStubPath = fileURLToPath(new URL("../../../../ui/sources/dev/reactNativeStub.ts", import.meta.url));
-        vi.doMock(uiRequire.resolve("expo-constants"), () => import(expoStubPath));
-        vi.doMock(uiRequire.resolve("react-native"), () => import(nativeStubPath));
-        const uiDomainPath = fileURLToPath(new URL("../../../../ui/sources/sync/store/domains/automations.ts", import.meta.url));
-        const { createAutomationsDomain } = await import(uiDomainPath);
         const { createStore } = await import(uiRequire.resolve("zustand/vanilla"));
-        type TriggerState = {
-            workflowTriggerSetsById: Readonly<Record<string, WorkflowTriggerSetV1>>;
-            applyWorkflowTriggerSetPage: (input: { queryKey: string; sets: readonly WorkflowTriggerSetV1[] }) => void;
-            upsertWorkflowTriggerSet: (input: { queryKey?: string; set: WorkflowTriggerSetV1 }) => void;
-        };
-        const store: { getState: () => TriggerState } = createStore((set: unknown, get: unknown) => createAutomationsDomain({ set, get }));
+        const store: { getState(): TriggerState } = createStore((set: StoreSet<TriggerState>, get: StoreGet<TriggerState>) => ({
+            profileScope: { serverId: "automation-crud-home", accountId: account.id },
+            ...createWorkflowRunsDomain({ set, get }),
+            ...createAutomationsDomain({ set, get }),
+        }));
         await withAuthenticatedTestApp(registerAutomationV3Routes, async (app) => {
             const headers = { "x-test-user-id": account.id };
             const read = async () => {

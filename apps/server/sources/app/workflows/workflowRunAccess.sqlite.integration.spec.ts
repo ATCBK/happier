@@ -3,6 +3,7 @@ import * as privacyKit from "privacy-kit";
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, type WorkflowDefinitionV1 } from "@happier-dev/protocol/workflows";
+import { WorkflowRunSummaryV1Schema } from "@happier-dev/protocol/workflows/workflowProgressV1";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { admitWorkflowRun, getWorkflowRun, listWorkflowRuns, pauseWorkflowRun, resolveAutomationWorkflowAcceptedSnapshot, summarizeWorkflowRuns } from "./workflowRunService";
@@ -19,7 +20,9 @@ import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContex
 
 describe("Workflow Run live Team access (real SQLite)", () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: "happier-run-access-", initEncrypt: true }); }, 180_000);
+    beforeAll(async () => {
+        harness = await createLightSqliteHarness({ tempDirPrefix: "happier-run-access-", initEncrypt: true });
+    }, 180_000);
     afterAll(async () => { if (harness) await harness.close(); });
 
     async function fixture() {
@@ -93,16 +96,40 @@ describe("Workflow Run live Team access (real SQLite)", () => {
         await db.artifactAccountGrant.create({ data: { artifactId: f.artifact.id, accountId: f.viewer.id,
             accessLevel: "edit", createdByAccountId: f.owner.id } });
         await expect(getWorkflowRun({ accountId: f.viewer.id, runId: f.runId })).rejects.toMatchObject({ code: "run_not_found" });
+        for (const filter of [{}, { sourceArtifactId: f.artifact.id }, { runIds: [f.runId] }]) {
+            expect((await listWorkflowRuns({ accountId: f.viewer.id, ...filter, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        }
     });
 
-    it("Team Runs appear in workflow-scoped history while the caller's own collection stays personal", async () => {
+    it("every Run list filter discovers the same accessible Team Runs and immediately honors revocation", async () => {
         const f = await fixture();
-        const personal = await listWorkflowRuns({ accountId: f.viewer.id, pageByteLimit: 1_000_000 });
-        expect(personal.runs).toEqual([]);
-        const shared = await listWorkflowRuns({ accountId: f.viewer.id, sourceArtifactId: f.artifact.id, pageByteLimit: 1_000_000 });
-        expect(shared.runs.map(run => run.id)).toEqual([f.runId]);
+        const automation = await db.automation.create({ data: { accountId: f.owner.id, name: "Team trigger",
+            targetType: null, templateCiphertext: "{}" } });
+        await db.automationRun.update({ where: { id: f.runId }, data: { automationId: automation.id, originKind: "automation",
+            causeKind: "manual", causeOccurredAt: new Date() } });
+        const filters = [{}, { sourceArtifactId: f.artifact.id }, { runId: f.runId }, { runIds: [f.runId] },
+            { automationId: automation.id }, { origin: "automation" as const }];
+        for (const filter of filters) {
+            const page = await listWorkflowRuns({ accountId: f.viewer.id, ...filter, pageByteLimit: 1_000_000 });
+            expect(page.runs.map(run => run.id), JSON.stringify(filter)).toEqual([f.runId]);
+            expect(WorkflowRunSummaryV1Schema.parse(page.runs[0]).ownerAccountId).toBe(f.owner.id);
+        }
+        await withAuthenticatedTestApp(app => registerWorkflowRunStorageRoutes(app), async app => {
+            for (const request of filters) {
+                const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+                    headers: { "x-test-user-id": f.viewer.id }, payload: { operation: "list", request, pageByteLimit: 1_000_000 } });
+                expect(response.statusCode).toBe(200);
+                expect(response.json()).toMatchObject({ runs: [{ id: f.runId, ownerAccountId: f.owner.id }],
+                    keyCensusByRunId: { [f.runId]: { ownerAccountId: f.owner.id, access: "view" } } });
+            }
+        });
+        await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
+        expect((await listWorkflowRuns({ accountId: f.viewer.id, runId: f.runId, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "active" } });
         await db.artifactTeamGrant.deleteMany({ where: { artifactId: f.artifact.id, teamId: f.team.id } });
-        expect((await listWorkflowRuns({ accountId: f.viewer.id, sourceArtifactId: f.artifact.id, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        for (const filter of filters) {
+            expect((await listWorkflowRuns({ accountId: f.viewer.id, ...filter, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        }
         expect((await getWorkflowRun({ accountId: f.owner.id, runId: f.runId })).run.ownerAccountId).toBe(f.owner.id);
     });
 

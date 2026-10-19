@@ -68,6 +68,7 @@ import {
 } from "@/app/automations/automationReplyHandoffService";
 import type { AutomationListItem, AutomationPatchInput, AutomationRunItem } from "@/app/automations/automationTypes";
 import { requirePresentUser } from "../../utils/requirePresentUser";
+import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/crypto/canonicalDigest';
 import {
     DEFAULT_AUTOMATION_WORKER_PUBLISHER_DEPENDENCIES,
     resolveExactAutomationWorkerPublisher,
@@ -533,7 +534,12 @@ export function registerAutomationV3Routes(
     });
 
     app.post("/v3/automations/:id/run-now", {
-        preHandler: [app.authenticate, requirePresentUser],
+        preHandler: [app.authenticate, async (request, reply) => {
+            if (request.externalActionExecutionAuthorized === true
+                && request.externalActionRootActionId === 'workflow.trigger.run_now'
+                && request.externalActionEffectActionId === 'workflow.trigger.run_now') return;
+            return requirePresentUser(request, reply);
+        }],
         schema: {
             params: z.object({ id: z.string() }),
             headers: AutomationRunNowHeadersSchema,
@@ -541,11 +547,17 @@ export function registerAutomationV3Routes(
     }, async (request, reply) => {
         try {
             const headers = AutomationRunNowHeadersSchema.parse(request.headers);
+            const root = request.externalActionExecutionAuthorizationBinding;
+            const key = root && 'credentialId' in root
+                ? computeCanonicalDomainSeparatedDigest('happier-api-token-automation-manual-v1', [
+                    root.credentialId, root.idempotencyKey === undefined ? 'request' : 'key',
+                    root.idempotencyKey ?? root.requestId,
+                ]) : headers['idempotency-key'];
             const run = await runAutomationNow({
                 accountId: request.userId,
                 automationId: request.params.id,
-                ...(headers["idempotency-key"]
-                    ? { idempotencyKey: headers["idempotency-key"] }
+                ...(key
+                    ? { idempotencyKey: key }
                     : {}),
             });
             if (!run) return reply.code(404).send({ error: "automation_not_found" });
@@ -628,8 +640,9 @@ export function registerAutomationV3Routes(
         try {
             const results = await inTx(tx => admitExecutionRunLifecycleAutomationRunsTx({ tx, accountId: request.userId,
                 machineId: body.machineId, occurrence: body.occurrence }), {
-                    // Execution-source lifecycle evidence and watcher definitions must share admission currentness.
-                    isolationLevel: "Serializable",
+                    // Trigger revision/budget CAS and occurrence uniqueness own admission.
+                    isolationLevel: "ReadCommitted",
+                    transactionClass: "automation-execution-run-lifecycle-admit",
                 });
             return { ok: true, consumed: results.every(result => result.result.kind !== "ineligible") };
         } catch (error) {

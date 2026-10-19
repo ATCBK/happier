@@ -424,6 +424,8 @@ async function insertPreparedAutomationRunTx(params: Readonly<{
         data: {
             ...(runId !== null ? { id: runId } : {}),
             automationId: request.automationId,
+            automationScopeCaptured: true,
+            automationScopeSessionId: automation.scopeSessionId,
             accountId: params.accountId,
             ...(workflowDefinitionEnvelope !== null ? { originKind: "automation" } : {}),
             state: "queued",

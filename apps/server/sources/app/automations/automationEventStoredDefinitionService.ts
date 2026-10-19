@@ -574,5 +574,5 @@ export async function readAutomationEventStoredDefinitionsV1(params: Readonly<{
                 })
                 : null,
         });
-    });
+    }, { transactionClass: "automation-event-definition-read" });
 }

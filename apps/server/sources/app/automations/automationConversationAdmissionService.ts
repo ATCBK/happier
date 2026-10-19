@@ -649,7 +649,7 @@ export async function admitEncryptedAutomationConversationV1(params: Readonly<{
                 scopedTrigger: hostEvidence.scopedTrigger,
             },
         });
-    }));
+    }, { transactionClass: "automation-conversation-admit-encrypted" }));
 }
 
 /**
@@ -750,5 +750,5 @@ export async function admitAutomationConversationV1(params: Readonly<{
                 scopedTrigger: input.hostEvidence,
             },
         });
-    }));
+    }, { transactionClass: "automation-conversation-admit" }));
 }

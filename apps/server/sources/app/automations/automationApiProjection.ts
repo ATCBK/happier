@@ -20,13 +20,13 @@ import {
 } from "./automationStoredContentRead";
 import type {
     AutomationListItem,
-    AutomationRunDetailItem,
     AutomationRunEventRow,
     AutomationRunItem,
     AutomationRunV3ListItem,
     AutomationTargetType,
     AutomationTriggerItem,
 } from "./automationTypes";
+import { projectAutomationRunState } from "./automationTypes";
 import { decodeAutomationSessionLifecycleConfiguration } from "./automationSessionLifecycleConfigurationCodec";
 import { decodeAutomationRunLifecycleConfiguration } from "./automationRunLifecycleConfigurationCodec";
 import { assertWorkflowStoredEnvelopeOuterForMode, WorkflowStoredContentError } from "@/app/workflows/runs/storedContent";
@@ -237,19 +237,25 @@ export function toAutomationDefinitionDetailApiDto(
     });
 }
 
+type AutomationRunApiListInput = Omit<AutomationRunV3ListItem, 'state'> & Readonly<{ state: string }>;
+type AutomationRunApiDetailInput = Omit<AutomationRunItem, 'state'> & Readonly<{
+    state: string;
+    events?: readonly AutomationRunEventRow[];
+}>;
+
 /** Sole public projection of immutable Run cause. */
-export function toAutomationRunCauseApiDto(item: AutomationRunV3ListItem | AutomationRunItem) {
+export function toAutomationRunCauseApiDto(item: Omit<AutomationRunV3ListItem, 'state'>) {
     return decodeAutomationRunCause(item);
 }
 
-export function toAutomationRunV3ListApiDto(item: AutomationRunV3ListItem | AutomationRunItem) {
+export function toAutomationRunV3ListApiDto(item: AutomationRunApiListInput) {
     const triggerRetired = item.triggerId === null
         ? false
         : required(item.triggerRetired, "triggerRetired currentness projection");
     return AutomationV3RunListItemSchema.parse({
         id: item.id, automationId: item.automationId, revision: item.revision,
         triggerId: item.triggerId, triggerRetired,
-        state: item.state, cause: toAutomationRunCauseApiDto(item), dueAt: item.dueAt.getTime(),
+        state: projectAutomationRunState(item.state), cause: toAutomationRunCauseApiDto(item), dueAt: item.dueAt.getTime(),
         claimedAt: item.claimedAt?.getTime() ?? null, startedAt: item.startedAt?.getTime() ?? null,
         finishedAt: item.finishedAt?.getTime() ?? null, claimedByMachineId: item.claimedByMachineId,
         leaseExpiresAt: item.leaseExpiresAt?.getTime() ?? null, attempt: item.attempt,
@@ -313,7 +319,7 @@ function storedFailureDetail(raw: string | null, mode: "plain" | "e2ee"): string
  * moving or already settled.
  */
 function isAutomationReplyHandoffRecoverable(
-    item: AutomationRunItem | AutomationRunDetailItem,
+    item: AutomationRunApiDetailInput,
     mode: "plain" | "e2ee",
 ): boolean | null {
     if (item.replyHandoffState !== "blocked") return null;
@@ -324,7 +330,7 @@ function isAutomationReplyHandoffRecoverable(
 }
 
 export function toAutomationRunV3DetailApiDto(
-    item: AutomationRunItem | AutomationRunDetailItem,
+    item: AutomationRunApiDetailInput,
     mode: "plain" | "e2ee",
 ) {
     const listItem = toAutomationRunV3ListApiDto(item);
@@ -334,7 +340,7 @@ export function toAutomationRunV3DetailApiDto(
         executionNativeRunId: item.executionNativeRunId,
         executionNativeCallId: item.executionNativeCallId,
         executionNativeSidechainId: item.executionNativeSidechainId,
-        events: projectRunEvents("events" in item ? item.events : undefined),
+        events: projectRunEvents(item.events),
     };
     if (item.workflowCustodyState != null) {
         if (item.resultEnvelope !== null) {

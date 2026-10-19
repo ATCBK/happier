@@ -10,6 +10,7 @@ import type {
     AutomationRunWithAutomation,
 } from "./automationTypes";
 import { decodeAutomationRunCause } from "./automationRunCauseCodec";
+import { projectAutomationRunState } from "./automationTypes";
 
 export function emitAutomationUpsert(params: {
     accountId: string;
@@ -170,12 +171,8 @@ export function emitAutomationRunUpdatedToMachineOnly(params: {
     workflowControl?: "cancel_requested" | "review_resolved";
     managedWakeTargetV1?: ManagedWakeTargetV1;
 }): void {
-    const projectedState: AutomationRunState = params.run.state === "pause_requested"
-        || params.run.state === "paused"
-        || params.run.state === "interrupted"
-        || params.run.state === "waiting_for_review"
-        ? "running"
-        : params.run.state;
+    const projectedState = projectAutomationRunState(params.run.state);
+    if (projectedState === null) throw new Error("Automation Run state is unavailable");
     eventRouter.emitUpdate({
         userId: params.accountId,
         payload: {

@@ -131,7 +131,7 @@ export async function runAutomationScheduleWorkerPass(params: Readonly<{
                     expectedNextRunAt,
                     now: params.now,
                 });
-            }));
+            }, { transactionClass: "automation-schedule-admit" }));
             // A rejoined open occurrence intentionally leaves the cursor parked.
             // It is durable progress only after its canonical terminal transition.
             progressed ||= admitted?.kind === "admitted";

@@ -66,9 +66,8 @@ describe("Automation Session lifecycle status projection", () => {
             },
         ]);
         const automationRuns = [
-            // A Workflow run can share the physical AutomationRun table and
-            // trigger identity, but the retained Automation status projection
-            // must never reinterpret its Workflow-only parent state.
+            // Workflow control states retain their physical identity while
+            // the public Automation status uses its canonical active state.
             {
                 id: "workflow-run-interrupted",
                 state: "interrupted",
@@ -180,7 +179,7 @@ describe("Automation Session lifecycle status projection", () => {
             "trigger-unavailable": { state: "sourceUnavailable", runId: null },
             "trigger-finished-without-run": { state: "finished", runId: null },
             "trigger-triggered": { state: "triggered", runId: "run-triggered" },
-            "trigger-running": { state: "running", runId: "run-running" },
+            "trigger-running": { state: "running", runId: "workflow-run-interrupted" },
             "trigger-finished": { state: "finished", runId: "run-finished" },
         });
         expect(sessionTurnFindMany).toHaveBeenCalledTimes(1);
@@ -188,12 +187,6 @@ describe("Automation Session lifecycle status projection", () => {
         expect(automationRunFindMany).toHaveBeenCalledTimes(1);
         expect(automationRunFindMany).toHaveBeenCalledWith(expect.objectContaining({
             where: expect.objectContaining({
-                state: {
-                    in: [
-                        "queued", "claimed", "running", "succeeded", "failed", "cancelled",
-                        "expired", "dispatch_failed", "skipped", "missed", "outcome_uncertain",
-                    ],
-                },
                 OR: expect.arrayContaining([{
                     triggerId: "trigger-finished-without-run",
                     causeSourceSessionId: "source-session",

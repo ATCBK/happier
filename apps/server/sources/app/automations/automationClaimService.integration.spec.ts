@@ -436,7 +436,7 @@ describe("automationClaimService (integration)", () => {
         }))).toMatchObject({ run: { id: run.id, attempt: 2, workflowAcceptedSnapshotEnvelope: currentEnvelope } });
     });
 
-    it("claims a direct Workflow Run without an Automation relation", async () => {
+    it("claims and reclaims a direct Workflow Run without an Automation relation", async () => {
         const machineId = "machine-direct-workflow-claim";
         const { accountId } = await createAccountWithMachine(machineId, "plain");
         const runId = randomUUID();
@@ -508,6 +508,30 @@ describe("automationClaimService (integration)", () => {
                 workflowAcceptedSnapshotEnvelope: acceptedSnapshotEnvelope,
                 attempt: 1,
                 revision: 1,
+            },
+            automation: null,
+        });
+
+        // A daemon/storage interruption keeps the same direct Run available
+        // to the existing lease owner, even with no Automation assignment row.
+        await db.automationRun.update({
+            where: { id: runId },
+            data: { leaseExpiresAt: new Date(Date.now() - 1_000) },
+        });
+        const reclaimed = toAutomationV3WorkerClaimResponse(await claimAutomationRun({
+            accountId,
+            machineId,
+            leaseDurationMs: 30_000,
+            recipeFeaturePolicy: { workflowsEnabled: true },
+        }));
+        expect(reclaimed).toMatchObject({
+            run: {
+                id: runId,
+                automationId: null,
+                origin: { kind: "direct" },
+                workflowAcceptedSnapshotEnvelope: acceptedSnapshotEnvelope,
+                attempt: 2,
+                revision: 2,
             },
             automation: null,
         });

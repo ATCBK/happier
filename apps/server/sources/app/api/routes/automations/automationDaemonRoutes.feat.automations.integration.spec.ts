@@ -12,6 +12,8 @@ import {
 } from "@happier-dev/protocol";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import tweetnacl from "tweetnacl";
+import { AutomationV3WorkerFailRequestSchema } from "@happier-dev/protocol/automations/automationApiV3";
+import { sealAutomationRunFailureDetailStoredEnvelopeV1 } from "@happier-dev/protocol/automations/automationRunFailureDetailStoredContent";
 
 import { db } from "@/storage/db";
 import {
@@ -570,6 +572,70 @@ describe("automation daemon routes (integration)", () => {
         );
     });
 
+
+    it("settles a signed pre-admission refusal despite unrelated Account publications", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const machineId = "machine-refused-workflow";
+        const installationId = "installation-refused-workflow";
+        const keyPair = tweetnacl.sign.keyPair();
+        await createTrustedMachineInstallation({ accountId: account.id, machineId, installationId, keyPair });
+        const triggerId = "trigger-refused-workflow";
+        const automation = await db.automation.create({ data: {
+            accountId: account.id, name: "Refused workflow", targetType: "new_session",
+            templateCiphertext: buildStrictV3Recipe(1),
+            triggers: { create: scheduleTriggerCreate(triggerId) },
+            assignments: { create: { machineId, enabled: true, priority: 0 } },
+        } });
+        const scheduledFor = new Date(Date.now() - 60_000);
+        const run = await db.automationRun.create({ data: {
+            accountId: account.id, automationId: automation.id,
+            ...scheduleRunCause({ triggerId, scheduledFor }),
+            state: "claimed", claimedByMachineId: machineId, attempt: 1,
+            claimedAt: scheduledFor, scheduledAt: scheduledFor, dueAt: scheduledFor,
+            leaseExpiresAt: new Date(Date.now() + 60_000),
+            executionInputEnvelope: buildStrictV3RunRecipe(1, machineId),
+            workflowCustodyState: "pending",
+        } });
+        const accountCurrentness = deriveAutomationAccountCurrentnessWitness(
+            await db.account.findUniqueOrThrow({ where: { id: account.id }, select: automationAccountCurrentnessSelect }),
+        );
+        if (!accountCurrentness) throw new Error("Expected current Account witness");
+        const errorDetailEnvelope = JSON.stringify(sealAutomationRunFailureDetailStoredEnvelopeV1({
+            mode: "plain", correspondence: { automationId: automation.id, runId: run.id },
+            detail: "Workflow trigger admission refused: invalid_input",
+        }));
+        const body = AutomationV3WorkerFailRequestSchema.parse({ machineId, attempt: 1,
+            accountCurrentness, errorCode: "invalid_input", errorDetailEnvelope });
+        const path = `/v3/automations/runs/${run.id}/fail`;
+        // An ordinary publication can race the worker's witness read and HTTP
+        // send. It changes sequence, not encryption identity or claim authority.
+        await db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+        await withAuthenticatedTestApp(automationRoutes, async (app) => {
+            for (const refusedBody of [
+                { ...body, attempt: 2 },
+                { ...body, accountCurrentness: { ...accountCurrentness, mode: "e2ee", contentKeyFingerprint: "other-key" } },
+            ]) {
+                const response = await app.inject({ method: "POST", url: path,
+                    headers: { "x-test-user-id": account.id,
+                        [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: createSignedPluginInstallationPublisherHeader({
+                            keyPair, machineId, installationId, path, body: refusedBody,
+                        }) }, payload: refusedBody });
+                expect(response.statusCode, response.body).toBe(404);
+                expect(await db.automationRun.findUniqueOrThrow({ where: { id: run.id } }))
+                    .toMatchObject({ state: "claimed", workflowCustodyState: "pending", errorCode: null });
+            }
+            const response = await app.inject({ method: "POST", url: path,
+                headers: { "x-test-user-id": account.id,
+                    [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: createSignedPluginInstallationPublisherHeader({
+                        keyPair, machineId, installationId, path, body,
+                    }) }, payload: body });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json()).toMatchObject({ run: { id: run.id, state: "failed", errorCode: "invalid_input" } });
+        });
+        expect(await db.automationRun.findUniqueOrThrow({ where: { id: run.id } }))
+            .toMatchObject({ state: "failed", workflowCustodyState: "settled", errorCode: "invalid_input",
+                errorMessage: errorDetailEnvelope, finishedAt: expect.any(Date), attempt: 1 });
+    });
 
     it("rejects generic V3 start, succeed, and fail mutations for Workflow-custody Runs", async () => {
         const account = await db.account.create({

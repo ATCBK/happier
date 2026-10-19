@@ -91,5 +91,5 @@ export async function updateAutomationSettings(params: Readonly<{
             }
         });
         return settings;
-    });
+    }, { transactionClass: "automation-settings-update" });
 }

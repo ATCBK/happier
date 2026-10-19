@@ -13,7 +13,7 @@ import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encry
 import { acquireAccountEncryptionTransitionFenceInTx, deriveAccountEncryptionMigrationKeyFingerprints } from "@/app/encryption/accountEncryptionTransition";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
-import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT } from "@/app/session/encryption/sessionDataKeyRecipientProjection";
+import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT, type RecipientReadinessRow } from "@/app/session/encryption/sessionDataKeyRecipientProjection";
 import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
 
@@ -28,10 +28,11 @@ export interface WorkflowRunAccess {
     encryptionMode: "plain" | "e2ee" | null;
     visibleTeamId: string | null;
 }
-const runFactsSelect = {
-    accountId: true, sourceArtifactId: true, visibleTeamId: true, workflowAcceptedSnapshotEnvelope: true,
+const runAccessFactsSelect = {
+    accountId: true, sourceArtifactId: true, visibleTeamId: true,
     workflowCustodyState: true, account: { select: { encryptionMode: true } },
 } as const;
+const runFactsSelect = { ...runAccessFactsSelect, workflowAcceptedSnapshotEnvelope: true } as const;
 async function readRunFactsInTx(tx: Tx, runId: string) {
     return tx.automationRun.findUnique({ where: { id: runId }, select: runFactsSelect });
 }
@@ -55,21 +56,33 @@ async function readGrantedTeamIdsInTx(tx: Tx, sourceArtifactId: string, candidat
 
 /** Collection adapters consume these same source grants and live memberships. */
 export async function resolveWorkflowRunVisibilityScopesInTx(tx: Tx, input: Readonly<{
-    actorAccountId: string; sourceArtifactIds: readonly string[];
+    actorAccountId: string; sourceArtifactIds?: readonly string[];
 }>): Promise<ReadonlyArray<Readonly<{ sourceArtifactId: string; visibleTeamIds: readonly string[] }>>> {
     const memberships = await tx.teamMembership.findMany({ where: { accountId: input.actorAccountId }, select: { teamId: true } });
     const liveTeamIds: string[] = [];
     for (const membership of memberships) {
         if (await isLiveTeamMemberInTx(tx, membership.teamId, input.actorAccountId)) liveTeamIds.push(membership.teamId);
     }
+    // Discover from live grants even when the caller filters by Run, trigger,
+    // lifecycle or no source at all. A source filter narrows this same audience.
+    const grants = await tx.artifactTeamGrant.findMany({ where: {
+        teamId: { in: liveTeamIds },
+        ...(input.sourceArtifactIds === undefined ? {} : { artifactId: { in: [...input.sourceArtifactIds] } }),
+    }, select: { artifactId: true, teamId: true } });
+    const teamsBySource = new Map<string, string[]>();
+    for (const grant of grants) {
+        const teams = teamsBySource.get(grant.artifactId) ?? [];
+        teams.push(grant.teamId);
+        teamsBySource.set(grant.artifactId, teams);
+    }
     const scopes: Array<{ sourceArtifactId: string; visibleTeamIds: string[] }> = [];
-    for (const sourceArtifactId of input.sourceArtifactIds) {
+    for (const [sourceArtifactId, visibleTeamIds] of teamsBySource) {
         const access = await resolveArtifactAccessInTx(tx, { actorAccountId: input.actorAccountId, artifactId: sourceArtifactId });
-        if (access) scopes.push({ sourceArtifactId, visibleTeamIds: await readGrantedTeamIdsInTx(tx, sourceArtifactId, liveTeamIds) });
+        if (access) scopes.push({ sourceArtifactId, visibleTeamIds });
     }
     return scopes;
 }
-async function accessFromFactsInTx(tx: Tx, row: RunFacts, actorAccountId: string): Promise<WorkflowRunAccess | null> {
+async function accessFromFactsInTx(tx: Tx, row: Omit<RunFacts, "workflowAcceptedSnapshotEnvelope">, actorAccountId: string): Promise<WorkflowRunAccess | null> {
     if (row.workflowCustodyState === null) return null;
     const mode = resolveEffectiveAccountEncryptionModeFromAccountRow(row.account);
     const common = { ownerAccountId: row.accountId, encryptionMode: mode.status === "ready" ? mode.mode : null, visibleTeamId: row.visibleTeamId };
@@ -130,22 +143,21 @@ export async function resolveWorkflowRunRecipientAccountIdsInTx(tx: Tx, runId: s
     return row && row.workflowCustodyState !== null ? audienceFromFactsInTx(tx, row) : [];
 }
 
-async function projectKeysInTx(tx: Tx, input: Readonly<{ actorAccountId: string; runId: string }>, row: RunFacts, access: WorkflowRunAccess): Promise<WorkflowRunRecipientCensusResponseV1> {
-    // A read projects a witness; only mutations acquire the Account writer fence.
-    const account = await tx.account.findUnique({ where: { id: access.ownerAccountId }, select: {
-        seq: true, encryptionMode: true, publicKey: true, contentPublicKey: true, contentPublicKeySig: true,
-    } });
+type RunKeyOwnerAccount = Omit<RecipientReadinessRow, "id"> & Readonly<{ seq: number }>;
+type RunKeyEnvelope = Readonly<{
+    recipientAccountId: string; recipientContentPublicKeyFingerprint: string; encryptedDataKey: Uint8Array;
+}>;
+
+/** Single and collection reads share the exact currentness, recipient and envelope decision. */
+function projectKeys(input: Readonly<{ actorAccountId: string; runId: string }>, access: WorkflowRunAccess,
+    account: RunKeyOwnerAccount | null | undefined, accounts: readonly RecipientReadinessRow[],
+    envelopes: readonly RunKeyEnvelope[]): WorkflowRunRecipientCensusResponseV1 {
     if (!account) throw new WorkflowRunAccessError("content_unavailable");
     const currentness = deriveAccountEncryptionCurrentnessFromRow(account);
     if (currentness.status !== "ready") throw new WorkflowRunAccessError("content_unavailable");
     const ownerAccountCurrentness = projectAutomationAccountCurrentnessWitnessV1({ mode: currentness.currentness.encryptionMode,
         version: account.seq, contentKeyFingerprint: deriveAccountEncryptionMigrationKeyFingerprints(account).contentKeyFingerprint });
     if (!ownerAccountCurrentness) throw new WorkflowRunAccessError("content_unavailable");
-    const audience = await audienceFromFactsInTx(tx, row);
-    const [accounts, envelopes] = await Promise.all([
-        tx.account.findMany({ where: { id: { in: audience } }, select: RECIPIENT_READINESS_SELECT, orderBy: { id: "asc" } }),
-        tx.workflowRunDataKeyEnvelope.findMany({ where: { runId: input.runId } }),
-    ]);
     const byAccount = new Map(envelopes.map(envelope => [envelope.recipientAccountId, envelope]));
     const plain = ownerAccountCurrentness.mode === "plain";
     const recipients = accounts.map(account => {
@@ -167,12 +179,52 @@ async function projectKeysInTx(tx: Tx, input: Readonly<{ actorAccountId: string;
         recipients };
 }
 
+async function projectKeysInTx(tx: Tx, input: Readonly<{ actorAccountId: string; runId: string }>, row: RunFacts, access: WorkflowRunAccess): Promise<WorkflowRunRecipientCensusResponseV1> {
+    // A read projects a witness; only mutations acquire the Account writer fence.
+    const audience = await audienceFromFactsInTx(tx, row);
+    const [accounts, envelopes] = await Promise.all([
+        tx.account.findMany({ where: { id: { in: audience } }, select: { ...RECIPIENT_READINESS_SELECT, seq: true }, orderBy: { id: "asc" } }),
+        tx.workflowRunDataKeyEnvelope.findMany({ where: { runId: input.runId } }),
+    ]);
+    return projectKeys(input, access, accounts.find(account => account.id === access.ownerAccountId), accounts, envelopes);
+}
+
+/** Read one page's keys together, retaining each Run's canonical live audience admission. */
+export async function readWorkflowRunKeyProjectionsInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; runIds: readonly string[];
+}>): Promise<Map<string, WorkflowRunRecipientCensusResponseV1>> {
+    const runIds = [...new Set(input.runIds)];
+    if (runIds.length === 0) return new Map();
+    const rows = await tx.automationRun.findMany({ where: { id: { in: runIds } }, select: { id: true, ...runAccessFactsSelect } });
+    if (rows.length !== runIds.length) throw new WorkflowRunAccessError("run_not_found");
+    const admitted = await Promise.all(rows.map(async row => {
+        const access = await accessFromFactsInTx(tx, row, input.actorAccountId);
+        if (!access) throw new WorkflowRunAccessError("run_not_found");
+        return { row, access, audience: new Set(await audienceFromFactsInTx(tx, row)) };
+    }));
+    const recipientIds = [...new Set(admitted.flatMap(item => [...item.audience]))];
+    const [accounts, envelopes] = await Promise.all([
+        tx.account.findMany({ where: { id: { in: recipientIds } }, select: { ...RECIPIENT_READINESS_SELECT, seq: true }, orderBy: { id: "asc" } }),
+        tx.workflowRunDataKeyEnvelope.findMany({ where: { runId: { in: runIds } } }),
+    ]);
+    const accountsById = new Map(accounts.map(account => [account.id, account]));
+    const envelopesByRunId = new Map<string, typeof envelopes>();
+    for (const envelope of envelopes) {
+        const values = envelopesByRunId.get(envelope.runId) ?? [];
+        values.push(envelope);
+        envelopesByRunId.set(envelope.runId, values);
+    }
+    return new Map(admitted.map(({ row, access, audience }) => [row.id, projectKeys(
+        { actorAccountId: input.actorAccountId, runId: row.id }, access, accountsById.get(access.ownerAccountId),
+        accounts.filter(account => audience.has(account.id)), envelopesByRunId.get(row.id) ?? [],
+    )]));
+}
+
 /** Authorized reads retain missing/stale keys as a truthful locked projection. */
 export async function readWorkflowRunKeyProjectionInTx(tx: Tx, input: Readonly<{ actorAccountId: string; runId: string }>): Promise<WorkflowRunRecipientCensusResponseV1> {
-    const row = await readRunFactsInTx(tx, input.runId);
-    const access = row ? await accessFromFactsInTx(tx, row, input.actorAccountId) : null;
-    if (!row || !access) throw new WorkflowRunAccessError("run_not_found");
-    return projectKeysInTx(tx, input, row, access);
+    const projection = (await readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: input.actorAccountId, runIds: [input.runId] })).get(input.runId);
+    if (!projection) throw new WorkflowRunAccessError("run_not_found");
+    return projection;
 }
 
 /** Before first sealing, the starter can census the chosen saved-source audience. */

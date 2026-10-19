@@ -574,7 +574,7 @@ export async function claimNextAutomationReplyHandoff(params: Readonly<{
                 materializationId: candidate.replyHandoffTargetMaterializationId,
             },
         };
-    });
+    }, { transactionClass: "automation-reply-handoff-claim" });
 }
 
 /** Returns the next durable wake, including recovery of an expired handoff lease. */
@@ -587,7 +587,7 @@ export async function findNextAutomationReplyHandoffDueAt(_params: Readonly<{
             where: openReplyHandoffWhere(),
         });
         return next?.replyHandoffDueAt ?? null;
-    });
+    }, { transactionClass: "automation-reply-handoff-next-due" });
 }
 
 /**
@@ -653,7 +653,7 @@ export async function retryBlockedAutomationReplyHandoff(params: Readonly<{
         if (!run) return null;
         await publishAutomationRunMutationTx(tx, run);
         return run;
-    });
+    }, { transactionClass: "automation-reply-handoff-retry" });
 }
 
 /**
@@ -725,7 +725,7 @@ export async function authorizeAutomationReplyHandoffRedelivery(params: Readonly
         if (!run) return null;
         await publishAutomationRunMutationTx(tx, run);
         return run;
-    });
+    }, { transactionClass: "automation-reply-handoff-redelivery-authorize" });
 }
 
 function isTerminalSettlement(
@@ -951,5 +951,5 @@ export async function settleAutomationReplyHandoff(params: Readonly<{
         if (!run) return { applied: false };
         await publishAutomationRunMutationTx(tx, run);
         return { applied: true };
-    });
+    }, { transactionClass: "automation-reply-handoff-settle" });
 }

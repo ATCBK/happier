@@ -507,6 +507,14 @@ describe("Automation API projections", () => {
         }, "plain")).toThrow("Automation stored content is invalid");
     });
 
+    it.each(['waiting_for_review', 'pause_requested', 'paused', 'interrupted'] as const)(
+        "projects a Workflow %s Run through the retained Automation receipt and detail vocabulary", state => {
+            const run = { ...manualRun(), state, workflowCustodyState: 'pending' as const, resultEnvelope: null };
+            expect(toAutomationRunV3ListApiDto(run)).toMatchObject({ id: run.id, state: 'running' });
+            expect(toAutomationRunV3DetailApiDto(run, 'plain')).toMatchObject({ id: run.id, state: 'running' });
+        },
+    );
+
     it("publishes the existing-Session association on the bounded list and withholds it for a retained template", () => {
         const serialized = serializeAutomationStoredDefinitionExecutionRecipeV1({
             v: 1,

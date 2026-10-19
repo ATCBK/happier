@@ -289,22 +289,8 @@ describe("Automation Account-encryption transition fence (integration)", () => {
                 candidateRead = true;
             },
         });
-        const finalizerTransactionEntered = deferred();
-        const beginFinalizer = deferred();
         let finalizerSettled = false;
-        const finalizer = inTx(async (tx) => {
-            finalizerTransactionEntered.resolve();
-            await beginFinalizer.promise;
-            return await finalizeDeletedAutomationsWithoutRetainedRunsTx({
-                tx,
-                accountId: account.id,
-                limit: 1,
-            });
-        }).finally(() => {
-            finalizerSettled = true;
-        });
-
-        await finalizerTransactionEntered.promise;
+        let finalizerTransactionEntered = false;
         const transitionFenceAcquired = deferred();
         const releaseTransition = deferred();
         const transition = inTx(async (tx) => {
@@ -321,11 +307,26 @@ describe("Automation Account-encryption transition fence (integration)", () => {
             });
         });
 
-        await transitionFenceAcquired.promise;
-
+        let finalizer: Promise<number> | undefined;
         try {
-            beginFinalizer.resolve();
+            await transitionFenceAcquired.promise;
+            // SQLite reserves its sole writer before entering an interactive
+            // transaction callback. Acquire the transition first; pausing an
+            // earlier finalizer callback would prevent this fence from entering.
+            // PostgreSQL coverage separately distinguishes a missing row fence.
+            finalizer = inTx((tx) => {
+                finalizerTransactionEntered = true;
+                return finalizeDeletedAutomationsWithoutRetainedRunsTx({
+                    tx,
+                    accountId: account.id,
+                    limit: 1,
+                });
+            }).finally(() => {
+                finalizerSettled = true;
+            });
+            void finalizer.catch(() => undefined);
             await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(finalizerTransactionEntered).toBe(false);
             expect(candidateRead).toBe(false);
             expect(finalizerSettled).toBe(false);
 
@@ -334,10 +335,9 @@ describe("Automation Account-encryption transition fence (integration)", () => {
             await expect(finalizer).resolves.toBe(1);
         } finally {
             candidateProbe.restore();
-            beginFinalizer.resolve();
             releaseTransition.resolve();
             await transition.catch(() => undefined);
-            await finalizer.catch(() => undefined);
+            await finalizer?.catch(() => undefined);
         }
 
         await expect(db.account.findUniqueOrThrow({

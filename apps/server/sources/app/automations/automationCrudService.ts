@@ -116,7 +116,7 @@ import {
     isAutomationCurrentPatchInput,
     isAutomationCurrentUpsertInput,
     isAutomationLegacyTargetType,
-    isAutomationRunState,
+    projectAutomationRunState,
 } from "./automationTypes";
 import type {
     AutomationAssignmentInput,
@@ -4060,7 +4060,7 @@ export async function clearAutomationRunHistory(params: {
             }));
         }
         return { status: "cleared", clearedRuns };
-    });
+    }, { transactionClass: "automation-history-clear" });
 }
 
 function emitAssignmentUpdates(params: {
@@ -4568,7 +4568,7 @@ export async function getAutomation(params: {
 }): Promise<AutomationListItem | null> {
     return await inTx(async (tx) => {
         return await loadAutomationTx(tx, params);
-    });
+    }, { transactionClass: "automation-definition-get" });
 }
 
 /** Validates the scope and assignment of the one existing trigger-set owner. */
@@ -4832,8 +4832,11 @@ export async function createAutomation(params: {
         durablePushEvent?.trigger.kind === "pluginEvent" ? durablePushEvent.trigger : null,
     );
     const create = async () => await inTx((tx) => createAutomationInTx(tx, { ...params, serverIdentityId }), {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // Ordered audience locks, mode fences and source Run CAS serialize
+        // registration. A Serializable snapshot taken before those locks
+        // instead conflicts with unrelated Account cursor publications.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-definition-create",
     });
     try {
         return await create();
@@ -4847,8 +4850,8 @@ export async function createAutomation(params: {
             accountId: params.accountId,
             input: currentInput,
         }), {
-            // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-            isolationLevel: "Serializable",
+            isolationLevel: "ReadCommitted",
+            transactionClass: "automation-definition-create-rejoin",
         });
         if (!rejoined) {
             const identityIsBound = await db.automation.findUnique({
@@ -5285,8 +5288,9 @@ export async function updateAutomation(params: {
 
         return updated;
     }, {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // Ordered publication locks, mode fences and row CAS protect authoring.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-definition-update",
     });
 }
 
@@ -5669,8 +5673,9 @@ export async function reconcileAutomationDefinition(params: Readonly<{
         });
         return result;
     }, {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // The locked publication audience and complete revision census protect this save.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-definition-reconcile",
     });
 }
 
@@ -5754,8 +5759,9 @@ export async function createAutomationTrigger(params: Readonly<{
         });
         return updated;
     }, {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // Publication locks serialize the parent revision and source Run catch-up.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-trigger-create",
     });
     try {
         return await create();
@@ -5768,8 +5774,9 @@ export async function createAutomationTrigger(params: Readonly<{
                 automationId: params.automationId,
                 request,
             }), {
-                // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-                isolationLevel: "Serializable",
+                // The same publication and mode locks protect semantic rejoin.
+                isolationLevel: "ReadCommitted",
+                transactionClass: "automation-trigger-create-rejoin",
             },
         );
         if (!rejoined) {
@@ -6005,8 +6012,9 @@ export async function updateAutomationTrigger(params: Readonly<{
         });
         return updated;
     }, {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // Publication locks and trigger/parent revision CAS protect this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-trigger-update",
     });
 }
 
@@ -6081,8 +6089,9 @@ export async function deleteAutomationTrigger(params: Readonly<{
         });
         return updated;
     }, {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // Publication locks and trigger/parent revision CAS protect this mutation.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-trigger-delete",
     });
 }
 
@@ -6092,8 +6101,9 @@ export async function deleteAutomation(params: {
 
 }): Promise<Readonly<{ removedRevision: number }> | false> {
     return await inTx(async (tx) => deleteAutomationTx(tx, params), {
-        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
-        isolationLevel: "Serializable",
+        // Publication locks and canonical cancellation CAS protect deletion.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-definition-delete",
     });
 }
 
@@ -6278,7 +6288,7 @@ export async function runAutomationNow(params: {
             throw new AutomationValidationError(`Cannot admit manual Automation Run: ${admitted.reason}`);
         }
         return admitted.run as AutomationRunItem;
-    }));
+    }, { transactionClass: "automation-run-now" }));
 }
 
 type AutomationRunListParams = Readonly<{
@@ -6338,11 +6348,11 @@ export async function listAutomationRuns(params: AutomationRunListParams): Promi
     const rawResultRows = hasNext ? rows.slice(0, normalizedLimit) : rows;
     const resultRows: AutomationRunV3ListItem[] = [];
     for (const run of rawResultRows) {
-        const state = run.state;
+        const state = projectAutomationRunState(run.state);
         if (!isAutomationCauseRow(run)) {
             throw new Error("Stored Automation history Run has invalid origin correspondence");
         }
-        if (!isAutomationRunState(state)) continue;
+        if (state === null) continue;
         resultRows.push({ ...run, state });
     }
     const nextCursor = hasNext ? rawResultRows[rawResultRows.length - 1]?.id ?? null : null;

@@ -24,6 +24,13 @@ export function isAutomationRunState(state: string): state is AutomationRunState
     return AutomationRunStateV3Schema.safeParse(state).success;
 }
 
+/** Workflow control states share the physical Run but retain Automation's active-state vocabulary. */
+export function projectAutomationRunState(state: string): AutomationRunState | null {
+    const projected = state === 'pause_requested' || state === 'paused'
+        || state === 'interrupted' || state === 'waiting_for_review' ? 'running' : state;
+    return isAutomationRunState(projected) ? projected : null;
+}
+
 /** States whose lifecycle is complete and therefore cannot hold Run capacity. */
 export const AUTOMATION_RUN_TERMINAL_STATES = AUTOMATION_RUN_TERMINAL_STATES_V3;
 

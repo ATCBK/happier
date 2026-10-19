@@ -67,8 +67,8 @@ async function hasExpectedAutomationAccountCurrentnessTx(params: Readonly<{
 
 
 /**
- * Content-identity currentness for a decision taken *after* an external effect
- * already happened. `Account.seq` advances for every Account-scoped write,
+ * Content-identity currentness for reporting an outcome or refusing work.
+ * `Account.seq` advances for every Account-scoped write,
  * including the canonical Session creation a strict new-Session settlement
  * reports, the cancellation that produced the terminality being reported, and
  * any unrelated Account mutation, so a post-effect report's witness is
@@ -76,8 +76,8 @@ async function hasExpectedAutomationAccountCurrentnessTx(params: Readonly<{
  * content-key identity instead — through the one Protocol comparison owner:
  * they open no content under a new mode, and their write is still gated by the
  * exact machine/attempt/revision/lease Run CAS that authorized the effect. An
- * encryption-mode or content-key transition still refuses them. Pre-effect and
- * redispatch-permission decisions keep the exact witness.
+ * encryption-mode or content-key transition still refuses them. Admission and
+ * redispatch-permission decisions that release work keep the exact witness.
  */
 async function hasCompatibleAutomationAccountEncryptionTx(params: Readonly<{
     tx: Tx;
@@ -400,7 +400,7 @@ export async function retainAutomationRunProducedSession(params: {
             accountId: params.accountId,
             runId: params.runId,
         });
-    });
+    }, { transactionClass: "automation-run-produced-session-retain" });
 }
 
 /**
@@ -758,7 +758,7 @@ async function settleSucceededAutomationRun(params: {
                 producedSessionId: producedSessionId ?? null,
             },
         });
-    });
+    }, { transactionClass: "automation-run-succeed" });
 }
 
 async function startAutomationRunInternal(params: {
@@ -940,7 +940,7 @@ async function startAutomationRunInternal(params: {
         });
 
         return { run: run as AutomationRunItem, accountCurrentness };
-    });
+    }, { transactionClass: "automation-run-start" });
 }
 
 export async function startAutomationRun(params: {
@@ -1266,7 +1266,7 @@ export async function settleAutomationExecutionDispatch(params: Readonly<{
             });
         });
         return run as AutomationRunItem;
-    });
+    }, { transactionClass: "automation-execution-dispatch-settle" });
 }
 
 /** Lease recovery may classify a committed dispatch as ambiguous, never retry it. */
@@ -1602,23 +1602,15 @@ async function failAutomationRunInternal(params: {
             });
             return run as AutomationRunItem;
         }
-        // A `running` failure reports a post-start outcome: the start's target
-        // effect and any unrelated Account write may have advanced
-        // `Account.seq` past S, so it compares encryption identity under the
-        // same exact Run CAS as the success settlement. A `claimed` failure is
-        // a pre-effect decision — nothing has started — and keeps the exact
-        // claim witness.
-        if (!await (previousRun.state === "running"
-            ? hasCompatibleAutomationAccountEncryptionTx({
-                tx,
-                accountId: params.accountId,
-                expected: params.accountCurrentness,
-            })
-            : hasExpectedAutomationAccountCurrentnessTx({
-                tx,
-                accountId: params.accountId,
-                expected: params.accountCurrentness,
-            }))) {
+        // Failure never releases target work. Both a post-start outcome and a
+        // pre-start refusal must survive unrelated Account publications;
+        // encryption identity protects the detail, while the exact Run claim
+        // and CAS below retain settlement authority.
+        if (!await hasCompatibleAutomationAccountEncryptionTx({
+            tx,
+            accountId: params.accountId,
+            expected: params.accountCurrentness,
+        })) {
             return null;
         }
 
@@ -1688,7 +1680,7 @@ async function failAutomationRunInternal(params: {
             now,
             machineId: params.machineId,
         });
-    });
+    }, { transactionClass: "automation-run-fail" });
 }
 
 export async function failAutomationRun(params: {
@@ -1697,11 +1689,9 @@ export async function failAutomationRun(params: {
     machineId: string;
     attempt: number;
     /**
-     * S: the post-start witness echoed unchanged from the successful start.
-     * A `running` failure compares Account encryption identity against it —
-     * not the exact sequence, which the reported effect itself may have
-     * advanced; a `claimed` (pre-start) failure keeps the exact claim
-     * witness. Either way the exact Run CAS owns whose report is accepted.
+     * C before start or S after start. Failure compares Account encryption
+     * identity, not the change-feed sequence: it releases no target work.
+     * The exact Run CAS owns whose report is accepted.
      */
     accountCurrentness: AutomationAccountCurrentnessWitnessV1;
     producedSessionId?: string | null;
@@ -1954,7 +1944,8 @@ export async function cancelAutomationRun(params: {
         });
         return result.run;
     }, {
-        // Cancellation retires Session pending input and participates in Workflow lifecycle watcher admission.
-        isolationLevel: "Serializable",
+        // Publication locks and Run/pending-input CAS protect cancellation and watcher admission.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-run-cancel",
     });
 }

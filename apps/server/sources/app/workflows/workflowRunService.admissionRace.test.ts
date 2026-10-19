@@ -11,10 +11,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const transactions = await vi.hoisted(async () => {
-    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
+    const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import("@/app/api/testkit/dbMocks");
     return createDbTransactionMock(() => {
         mocks.transactionAttempts += 1;
-        return { ...mocks.tx };
+        return { ...inTxPostgresControlStatementMock, ...mocks.tx };
     });
 });
 
@@ -101,7 +101,7 @@ beforeEach(async () => {
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("selects exact-machine terminal custody and nonterminal cancellation recovery only", async () => {
+it("selects exact-machine terminal custody, cancellation and interrupted uncertainty recovery", async () => {
     await expect(listWorkflowRunsForRecovery({
         accountId: "account-1",
         machineId: "machine-1",
@@ -139,6 +139,11 @@ it("selects exact-machine terminal custody and nonterminal cancellation recovery
                 ] },
                 workflowCustodyState: "pending",
                 workflowInvocations: { some: { lifecycle: "cancel_requested" } },
+            },
+            {
+                state: "interrupted",
+                workflowCustodyState: "pending",
+                workflowInvocations: { some: { lifecycle: "outcome_uncertain" } },
             },
         ],
     });
