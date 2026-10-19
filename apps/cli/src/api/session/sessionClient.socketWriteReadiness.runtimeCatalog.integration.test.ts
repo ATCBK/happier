@@ -17,6 +17,7 @@ import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSess
 import { createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTranscriptHomeStub, type ApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createInitialHostRuntimeActivityMutation } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import { createNativeAgentSessionWorkStateService } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionWorkState';
+import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import type { Session } from '@/api/types';
 import { ApiSessionClient, type ApiSessionClientOptions } from './sessionClient';
 import { createSessionScopedSocketConnection } from './sockets';
@@ -387,18 +388,35 @@ describe('ApiSessionClient socket write readiness', () => {
         agent: { id: 'codex' }, signal: base.signal });
       if (!runtime.sessions) throw new Error('Expected the native Session factory');
       const reopenedState = workState('reopened-native');
+      const nativeContext = { signal: base.signal, workState: reopenedState, services: { exec, sessions: {}, logger: {
+        debug() {}, info() {}, warn() {}, error() {},
+      } }, agent: { id: 'codex' }, session: { id: session.id, services: {} }, ui: { title: { set: async () => undefined } },
+      } as unknown as AgentSessionRuntimeContext;
       const opened = await runtime.sessions.open({ kind: 'resume', providerSessionId: 'fresh-thread', sessionId: session.id,
         cwd: directory, launchEnvironment: { values: { CODEX_HOME: directory } },
         configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
           permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} },
-      }, { signal: base.signal, workState: reopenedState, services: { exec, sessions: {}, logger: {
-        debug() {}, info() {}, warn() {}, error() {},
-      } }, session: { id: session.id, services: {} }, ui: { title: { set: async () => undefined } },
-      } as unknown as AgentSessionRuntimeContext);
+      }, nativeContext);
+      const operations = createNativeAgentSessionOperations(opened, session.id, undefined, 'fresh-thread',
+        undefined, undefined, undefined, { context: nativeContext, cwd: directory, connectedAccounts: [],
+          capabilities: { open: ['resume'], delivery: ['newTurn'], cancel: false,
+            goals: { source: 'goals', active: { get: true, clear: true,
+              set: { fields: ['objective', 'status', 'tokenBudget'], writableStatuses: ['active', 'paused', 'complete'] } } } },
+          goals: runtime.sessions.goals, cancellation: { declared: false }, configuration: { declared: false },
+          manualCompaction: { declared: false } });
       try {
         expect(requests.some(request => request.method === 'thread/goal/get')).toBe(true);
         expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())).toEqual(retained);
         expect(originals()).toHaveLength(1);
+        // A person can Get immediately after Resume, before a transcript
+        // subscriber or prompt demands the native identity event stream.
+        const controls = operations as typeof operations & { refreshGoal(): Promise<unknown> };
+        await expect(controls.refreshGoal()).resolves.toMatchObject({ status: 'applied' });
+        expect(operations.readSessionIdentity()).toEqual({ sessionId: 'fresh-thread' });
+        const runtimeEvents: unknown[] = [];
+        const unsubscribe = operations.subscribeRuntimeEvents(event => { runtimeEvents.push(event); });
+        expect(runtimeEvents).toContainEqual(expect.objectContaining({ kind: 'provider-session-id', providerSessionId: 'fresh-thread' }));
+        unsubscribe();
         const goalContext = { ...base, session: { ...base.session, activity: 'active' as const },
           goalSource: reopenedState.publisher('goals') } as AgentSessionGoalControlContext;
         if (!runtime.sessions.goals) throw new Error('Expected native Goal controls');
@@ -426,7 +444,7 @@ describe('ApiSessionClient socket write readiness', () => {
         }
         expect(JSON.stringify(originals())).not.toContain('Retained B');
         expect(JSON.stringify(originals())).not.toContain('Changed C');
-      } finally { await opened.dispose(); }
+      } finally { await operations.resetOrDisposeRuntime('runtime_recovery'); }
     }, { beforeThreadResumeResponse: ({ socket: nativeSocket, params }) => {
       initialClearSent = true;
       // CONT5: initial source absence precedes native Goal hydration. The

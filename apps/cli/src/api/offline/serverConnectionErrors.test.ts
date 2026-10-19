@@ -1,5 +1,5 @@
 /**
- * Unit tests for serverConnectionErrors utility.
+ * Contract tests for serverConnectionErrors.
  *
  * ## Test Coverage Strategy
  * These tests exercise the real code paths with minimal mocking:
@@ -28,13 +28,6 @@ vi.mock('axios', () => ({
     },
     isAxiosError: (e: unknown) => {
         return e !== null && typeof e === 'object' && 'isAxiosError' in e && (e as any).isAxiosError === true;
-    }
-}));
-
-// Mock logger to prevent console noise in tests
-vi.mock('@/ui/logger', () => ({
-    logger: {
-        debug: vi.fn()
     }
 }));
 
@@ -573,7 +566,7 @@ describe('printOfflineWarning', () => {
     });
 
     it('should print offline warning with unified format', () => {
-        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
         printOfflineWarning();
 
@@ -589,7 +582,7 @@ describe('printOfflineWarning', () => {
     });
 
     it('should deduplicate repeated calls', () => {
-        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
         printOfflineWarning('Claude');
         const callCountAfterFirst = consoleSpy.mock.calls.length;
@@ -605,7 +598,7 @@ describe('printOfflineWarning', () => {
 
     it('does not throw when console output hits EPIPE', () => {
         const epipeError = Object.assign(new Error('broken pipe'), { code: 'EPIPE' });
-        const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {
+        const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {
             throw epipeError;
         });
 
