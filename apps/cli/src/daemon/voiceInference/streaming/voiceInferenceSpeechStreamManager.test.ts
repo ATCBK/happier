@@ -20,10 +20,13 @@ import {
   VoiceSpeechDiagnosticsSettingsV1Schema,
   DaemonVoiceInferenceSttStreamChunkResponseSchema,
   DaemonVoiceInferenceSttStreamFinishResponseSchema,
+  DaemonVoiceInferenceSttStreamStartResponseSchema,
+  DaemonVoiceInferenceSttStreamCancelResponseSchema,
 } from '@happier-dev/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { bindProcessLogger, Logger, logger } from '@/ui/logger';
 import { resolveVoiceInferencePaths } from '../voiceInferencePaths';
 import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '../voiceInferenceWorker';
 import type { VoiceInferenceRuntime, VoiceInferenceRuntimeTranscribeInput, VoiceInferenceStreamingTranscriptionSession as RuntimeStreamSession } from '../voiceInferenceRuntimeTypes';
@@ -45,7 +48,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
   const managers: ReturnType<typeof createVoiceInferenceSpeechStreamManager>[] = [];
   let worker: VoiceInferenceWorkerHandle;
   let nativeRuntime: VoiceInferenceRuntime;
-  let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+  let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_WEB_LATENCY_TRACE']);
 
   beforeEach(async () => {
     const home = await mkdtemp(join(tmpdir(), 'happier-stt-stream-home-'));
@@ -66,7 +69,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       synthesizeTts: async () => { throw new Error('unused native synthesis'); },
       transcribeAudio: async () => { throw new Error('unused native recognition'); },
     };
-    worker = await startVoiceInferenceWorker({ runtimeLoader: async () => nativeRuntime, perModelConcurrency: 2 });
+    worker = await startVoiceInferenceWorker({ runtimeLoader: async () => nativeRuntime });
   });
 
   it('rejects Agent realtime and wrong-attempt carrier authority before creating an STT session', async () => {
@@ -145,18 +148,69 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       errorCode: 'invalid_stream_state',
     });
     pendingRuntimeStart.resolve(runtimeSession);
-    await expect(firstStart).resolves.toMatchObject({ ok: true });
+    expect(DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await firstStart)).toMatchObject({ ok: true });
     await expect(manager.start(request)).resolves.toMatchObject({
       ok: false,
       errorCode: 'invalid_stream_state',
     });
-    await expect(manager.start({
+    expect(DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await manager.start({
       ...request,
       requestId: 'distinct-concurrent-attempt',
-    })).resolves.toMatchObject({ ok: true });
+    }))).toMatchObject({ ok: true });
     expect(createStreamingTranscriptionSession).toHaveBeenCalledTimes(2);
 
     await manager.dispose();
+  });
+
+  it('retires a native start lost with its transport before publishing a late stream', async () => {
+    const gate = deferred<RuntimeStreamSession>();
+    const cancel = vi.fn(async () => {});
+    const close = vi.fn(async () => {});
+    let startSignal: AbortSignal | null | undefined;
+    const create = vi.fn(async (input: Parameters<NonNullable<VoiceInferenceRuntime['createStreamingTranscriptionSession']>>[0]) => {
+      startSignal = input.signal;
+      return await gate.promise;
+    });
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: create };
+    const manager = createVoiceInferenceSpeechStreamManager({
+      streamRoot: await createTempStreamRoot(), voiceInferenceWorker: worker,
+    });
+    managers.push(manager);
+    const requestId = 'lost-start';
+    const starting = manager.start({
+      requestId, packId, language: 'en', streamingMode: 'runtime',
+      format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
+    });
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    try {
+      expect(DaemonVoiceInferenceSttStreamCancelResponseSchema.parse(await manager.cancelForTransportLoss({
+        voiceMediaApplicationAuthority: {
+          v: 1, applicationKind: 'speech_transcription', applicationAttemptId: requestId,
+          applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1('other-attempt'),
+        },
+      }))).toMatchObject({ ok: false, errorCode: 'invalid_stream_state' });
+      expect(startSignal?.aborted).toBe(false);
+      const result = DaemonVoiceInferenceSttStreamCancelResponseSchema.parse(await manager.cancelForTransportLoss({
+        voiceMediaApplicationAuthority: {
+          v: 1, applicationKind: 'speech_transcription', applicationAttemptId: requestId,
+          applicationAuthorityDigest: createSpeechTranscriptionApplicationAuthorityDigestV1(requestId),
+        },
+      }));
+      expect(result).toMatchObject({ ok: true });
+      expect(startSignal?.aborted).toBe(true);
+    } finally {
+      gate.resolve({
+        appendPcm16: async () => ({ events: [] }),
+        finish: async () => ({ text: '', language: null, events: [] }), cancel, close,
+      });
+    }
+    expect(DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await starting)).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await manager.start({
+      requestId: 'fresh-start', packId, language: 'en', streamingMode: 'runtime',
+      format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
+    }))).toMatchObject({ ok: true });
   });
 
   afterEach(async () => {
@@ -165,7 +219,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     envScope.restore();
-    envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_WEB_LATENCY_TRACE']);
     reloadConfiguration();
     await Promise.all(tempDirs.splice(0).map(async (dir) => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -305,8 +359,99 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     await expect(second).resolves.toMatchObject({ ok: true, ackSeq: 1 });
   });
 
-  it('installs a START-bound relay key and authenticates encrypted PCM before backend invocation', async () => {
-    const appendPcm16 = vi.fn<RuntimeStreamSession['appendPcm16']>(async () => ({ events: [] }));
+  it('keeps reordered compatibility chunks within stream credit and settles them on cancellation', async () => {
+    const received: number[] = [];
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: async () => ({
+      appendPcm16: async ({ seq }) => { received.push(seq); return { events: [] }; },
+      finish: async () => ({ text: '', language: null, events: [] }),
+      cancel: async () => {}, close: async () => {},
+    }) };
+    const manager = createVoiceInferenceSpeechStreamManager({
+      streamRoot: await createTempStreamRoot(), voiceInferenceWorker: worker,
+      maxAdmittedFrames: 2, maxAdmittedBytes: 4,
+    });
+    managers.push(manager);
+    const started = await manager.start({ requestId: 'compatibility-credit', packId, language: 'en',
+      streamingMode: 'runtime', format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT });
+    if (!started.ok) throw new Error('Stream did not start');
+    const append = (seq: number, pcm16Base64 = 'AAA=') => manager.appendCompatibilityChunk({
+      streamId: started.streamId, generation: started.generation, seq, pcm16Base64,
+    });
+    const waiting = append(1);
+    const duplicate = append(1);
+    await expect(append(1, 'AQA=')).resolves.toMatchObject({ ok: false, errorCode: 'invalid_stream_state' });
+    const head = append(0);
+    await expect(Promise.all([head, waiting, duplicate])).resolves.toMatchObject([
+      { ok: true }, { ok: true }, { ok: true },
+    ]);
+    expect(received).toEqual([0, 1]);
+    const gap = append(3);
+    const tail = append(4);
+    await expect(append(5)).resolves.toMatchObject({ ok: false, errorCode: 'invalid_stream_state' });
+    await manager.cancel({ streamId: started.streamId, generation: started.generation });
+    await expect(Promise.all([gap, tail])).resolves.toMatchObject([
+      { ok: false, error: 'daemon_voice_inference_stream_not_open' },
+      { ok: false, error: 'daemon_voice_inference_stream_not_open' },
+    ]);
+
+    const fresh = await manager.start({ requestId: 'compatibility-cancel', packId, language: 'en',
+      streamingMode: 'runtime', format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT });
+    if (!fresh.ok) throw new Error('Stream did not start');
+    const stranded = manager.appendCompatibilityChunk({ streamId: fresh.streamId, generation: fresh.generation,
+      seq: 1, pcm16Base64: 'AAA=' });
+    await manager.cancel({ streamId: fresh.streamId, generation: fresh.generation });
+    await expect(stranded).resolves.toMatchObject({ ok: false, error: 'daemon_voice_inference_stream_not_open' });
+    expect(received).toEqual([0, 1]);
+  });
+
+  it.each(['pcm', 'compatibility'] as const)('keeps native %s recognition live beyond the file-upload byte limit', async (ingress) => {
+    const received: number[][] = [];
+    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: async () => ({
+      appendPcm16: async ({ seq, pcm16Bytes }) => {
+        received.push([...pcm16Bytes]);
+        return { events: seq === 3
+          ? [{ type: 'endpoint', seq, transcript: 'speech after silence', reason: 'vad' }]
+          : [] };
+      },
+      finish: async () => ({ text: 'speech after silence', language: 'en', events: [] }),
+      cancel: async () => {}, close: async () => {},
+    }) };
+    const streamRoot = await createTempStreamRoot();
+    const manager = createVoiceInferenceSpeechStreamManager({
+      streamRoot, voiceInferenceWorker: worker,
+      resolveMaxUploadBytes: () => 4,
+    });
+    managers.push(manager);
+    const started = await manager.start({ requestId: `long-${ingress}`, packId, language: 'en',
+      streamingMode: 'runtime', format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT });
+    if (!started.ok) throw new Error('Stream did not start');
+    const frames = [Buffer.from([0, 0]), Buffer.from([0, 0]), Buffer.from([0, 0]), Buffer.from([1, 0])];
+    for (const [seq, pcm] of frames.entries()) {
+      const address = { streamId: started.streamId, generation: started.generation, seq };
+      const response = await (ingress === 'pcm'
+        ? manager.appendPcm16Bytes({ ...address, pcm16Bytes: pcm })
+        : manager.appendCompatibilityChunk({ ...address, pcm16Base64: pcm.toString('base64') }));
+      expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(response)).toMatchObject({
+        ok: true, ackSeq: seq,
+        events: seq === 3 ? [{ type: 'endpoint', transcript: 'speech after silence' }] : [],
+      });
+    }
+    expect(received).toEqual(frames.map(pcm => [...pcm]));
+    await expect(manager.status(started)).resolves.toMatchObject({ ok: true, state: 'open', ackSeq: 3 });
+    expect(await readdir(streamRoot)).toEqual([]);
+    expect(DaemonVoiceInferenceSttStreamFinishResponseSchema.parse(await manager.finish({
+      streamId: started.streamId, generation: started.generation, finalSeq: 3,
+    }))).toMatchObject({ ok: true, ackSeq: 3, finalText: 'speech after silence' });
+  });
+
+  it.each([false, true])('authenticates START-bound PCM and its terminal native failure=%s response', async nativeFailure => {
+    process.env.HAPPIER_WEB_LATENCY_TRACE = '1';
+    const trace = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+    const appendPcm16 = vi.fn<RuntimeStreamSession['appendPcm16']>(async () => {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      if (nativeFailure) throw Object.assign(new Error('native append cancelled'), { code: 'cancelled' });
+      return { events: [] };
+    });
     const runtimeSession: RuntimeStreamSession = {
       appendPcm16,
       finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
@@ -433,8 +578,23 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
       carrierSequence: 1,
       payloadBytes: sealFrame('data', 1, new Uint8Array([0, 0, 1, 0])),
     });
-    expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(JSON.parse(new TextDecoder().decode(openResponse('data', 1, dataResponse))))).toMatchObject({ ok: true, ackSeq: 0 });
+    const parsedResponse = DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(JSON.parse(new TextDecoder().decode(openResponse('data', 1, dataResponse))));
     expect(appendPcm16).toHaveBeenCalledOnce();
+    expect(trace.mock.calls).toContainEqual([
+      '[VoiceInference] Relay application frame settled',
+      expect.objectContaining({ tunnelId: binding.tunnelId, substreamId, sequence: 1,
+        phase: 'data', ok: !nativeFailure, elapsedMs: expect.any(Number) }),
+    ]);
+    const dataTrace = trace.mock.calls.find(([message, fields]) => message === '[VoiceInference] Relay application frame settled'
+      && fields && typeof fields === 'object' && 'sequence' in fields && fields.sequence === 1)?.[1];
+    expect(dataTrace && typeof dataTrace === 'object' && 'elapsedMs' in dataTrace ? dataTrace.elapsedMs : undefined)
+      .toBeGreaterThanOrEqual(20);
+    if (nativeFailure) {
+      expect(parsedResponse).toMatchObject({ ok: false, errorCode: 'cancelled', diagnostic: { operation: 'appendPcm16', code: 'cancelled' } });
+      expect(runtimeSession.close).toHaveBeenCalledOnce();
+      return;
+    }
+    expect(parsedResponse).toMatchObject({ ok: true, ackSeq: 0 });
 
     const finishResponse = await manager.appendPeerApplicationFrame({
       binding,
@@ -616,7 +776,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     expect(await readdir(streamRoot)).toEqual([]);
   });
 
-  it('preserves the upload bridge compatibility path for non-runtime streaming starts', async () => {
+  it.each(['pcm', 'compatibility'] as const)('preserves the file-upload limit for %s upload bridge starts', async (ingress) => {
     let observedInput: VoiceInferenceRuntimeTranscribeInput | null = null;
     const workerTranscribe = vi.spyOn(worker, 'transcribeAudio');
     const transcribeAudio = vi.fn<VoiceInferenceRuntime['transcribeAudio']>(async (input) => {
@@ -634,6 +794,7 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     const manager = createVoiceInferenceSpeechStreamManager({
       streamRoot: await createTempStreamRoot(),
       voiceInferenceWorker: worker,
+      resolveMaxUploadBytes: () => 4,
     });
     managers.push(manager);
 
@@ -646,20 +807,25 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     });
     expect(started).toMatchObject({ ok: true, streamId: expect.any(String), generation: 0 });
     if (!started.ok) throw new Error('expected stream start to succeed');
-    await expect(manager.appendPcm16Bytes({
-      streamId: started.streamId,
-      generation: started.generation,
-      seq: 0,
-      pcm16Bytes: new Uint8Array([0, 0, 1, 0]),
-    })).resolves.toMatchObject({ ok: true, ackSeq: 0, events: [] });
+    const append = (seq: number, pcm: Buffer) => {
+      const address = { streamId: started.streamId, generation: started.generation, seq };
+      return ingress === 'pcm'
+        ? manager.appendPcm16Bytes({ ...address, pcm16Bytes: pcm })
+        : manager.appendCompatibilityChunk({ ...address, pcm16Base64: pcm.toString('base64') });
+    };
+    await expect(append(0, Buffer.from([0, 0]))).resolves.toMatchObject({ ok: true, ackSeq: 0 });
+    await expect(append(1, Buffer.from([1, 0]))).resolves.toMatchObject({ ok: true, ackSeq: 1 });
+    await expect(append(2, Buffer.from([2, 0]))).resolves.toMatchObject({
+      ok: false, errorCode: 'invalid_stream_state', error: 'daemon_voice_inference_stream_invalid_pcm',
+    });
 
     await expect(manager.finish({
       streamId: started.streamId,
       generation: started.generation,
-      finalSeq: 0,
+      finalSeq: 1,
     })).resolves.toMatchObject({
       ok: true,
-      ackSeq: 0,
+      ackSeq: 1,
       finalText: 'compatibility transcript',
       language: 'en',
       modelPackId: packId,
@@ -705,51 +871,76 @@ describe('createVoiceInferenceSpeechStreamManager', () => {
     expect(createStreamingTranscriptionSession).not.toHaveBeenCalled();
   });
 
-  it('returns a typed error and closes the stream when the runtime append fails', async () => {
-    const runtimeSession: RuntimeStreamSession = {
-      appendPcm16: vi.fn(async () => {
-        throw Object.assign(new Error('runtime append timed out'), { code: 'runtime_timeout' });
-      }),
-      finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
-      cancel: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-    };
-    const cancelStt = vi.spyOn(worker, 'cancelStt');
-    nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
-    const manager = createVoiceInferenceSpeechStreamManager({
-      streamRoot: await createTempStreamRoot(),
-      voiceInferenceWorker: worker,
-    });
-    managers.push(manager);
+  it.each([
+    { cause: Object.assign(new Error('private audio /secret/model.wav token=secret'), { code: 'runtime_timeout' }),
+      errorCode: 'request_timeout', exceptionClass: 'Error', code: 'runtime_timeout' },
+    { cause: Object.assign(new TypeError('private audio /secret/model.wav token=secret'), { code: 'ERR_NATIVE_FAILURE' }),
+      errorCode: 'internal_error', exceptionClass: 'TypeError', code: 'ERR_NATIVE_FAILURE' },
+    { cause: Object.assign(new Error('private audio /secret/model.wav token=secret'), { name: 'private audio', code: 'token=secret /secret/model.wav' }),
+      errorCode: 'internal_error', exceptionClass: 'Error', code: null },
+    { cause: 'private audio /secret/model.wav token=secret',
+      errorCode: 'internal_error', exceptionClass: 'Unknown', code: null },
+  ])('preserves sanitized native append diagnostics and closes the stream ($exceptionClass/$code)', async ({ cause, errorCode, exceptionClass, code }) => {
+    const logPath = join(await createTempStreamRoot(), 'append-failure.log');
+    const fileLogger = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false, allowDangerousRemoteLogging: false });
+    const restoreLogger = bindProcessLogger(fileLogger);
+    try {
+      const runtimeSession: RuntimeStreamSession = {
+        appendPcm16: vi.fn(async () => {
+          throw cause;
+        }),
+        finish: vi.fn(async () => ({ text: '', language: null, events: [] })),
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      };
+      const cancelStt = vi.spyOn(worker, 'cancelStt');
+      nativeRuntime = { ...nativeRuntime, createStreamingTranscriptionSession: vi.fn(async () => runtimeSession) };
+      const manager = createVoiceInferenceSpeechStreamManager({
+        streamRoot: await createTempStreamRoot(),
+        voiceInferenceWorker: worker,
+      });
+      managers.push(manager);
 
-    const started = await manager.start({
-      requestId: 'runtime-request-crash',
-      packId: packId,
-      language: 'en',
-      streamingMode: 'runtime',
-      format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
-    });
-    expect(started).toMatchObject({ ok: true, streamId: expect.any(String), generation: 0 });
-    if (!started.ok) throw new Error('expected stream start to succeed');
+      const started = await manager.start({
+        requestId: 'runtime-request-crash',
+        packId: packId,
+        language: 'en',
+        streamingMode: 'runtime',
+        format: DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT,
+      });
+      expect(started).toMatchObject({ ok: true, streamId: expect.any(String), generation: 0 });
+      if (!started.ok) throw new Error('expected stream start to succeed');
 
-    await expect(manager.appendPcm16Bytes({
-      streamId: started.streamId,
-      generation: started.generation,
-      seq: 0,
-      pcm16Bytes: new Uint8Array([0, 0]),
-    })).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'request_timeout',
-    });
-    await expect(manager.status({
-      streamId: started.streamId,
-      generation: started.generation,
-    })).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'stream_not_found',
-    });
-    expect(runtimeSession.cancel).toHaveBeenCalledOnce();
-    expect(runtimeSession.close).toHaveBeenCalledOnce();
-    expect(cancelStt).toHaveBeenCalledWith('runtime-request-crash');
+      const response = await manager.appendPcm16Bytes({
+        streamId: started.streamId,
+        generation: started.generation,
+        seq: 0,
+        pcm16Bytes: new Uint8Array([0, 0]),
+      });
+      const diagnostic = { operation: 'appendPcm16', streamId: started.streamId, exceptionClass, code };
+      expect(response).toEqual({
+        ok: false,
+        errorCode,
+        error: `voice_inference_${errorCode}`,
+        diagnostic,
+      });
+      expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(response)).toEqual(response);
+      fileLogger.flushSync();
+      const log = await readFile(logPath, 'utf8');
+      expect(log).toContain(JSON.stringify(diagnostic));
+      expect(log).not.toMatch(/private audio|secret|model\.wav|pcm16Bytes/);
+      await expect(manager.status({
+        streamId: started.streamId,
+        generation: started.generation,
+      })).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'stream_not_found',
+      });
+      expect(runtimeSession.cancel).toHaveBeenCalledOnce();
+      expect(runtimeSession.close).toHaveBeenCalledOnce();
+      expect(cancelStt).toHaveBeenCalledWith('runtime-request-crash');
+    } finally {
+      restoreLogger();
+    }
   });
 });

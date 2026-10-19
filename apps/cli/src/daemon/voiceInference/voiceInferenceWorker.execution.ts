@@ -52,6 +52,8 @@ export type VoiceInferenceWorkerExecutionHandle = Readonly<{
     language: string | null;
     normalization: DaemonVoiceInferenceNormalizationDecision;
     signal?: AbortSignal | null;
+    /** Completed-input capture runs before the worker removes the upload. */
+    onTranscribed?: () => Promise<void>;
   }>) => Promise<Readonly<{
     requestId: string;
     text: string;
@@ -326,7 +328,7 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
     cancelTts: async (requestId) => {
       rememberCancelledRequest(ttsCancellationState, requestId);
     },
-    transcribeAudio: async ({ requestId, filePath, inputMimeType, packId, language, normalization: normalizationDecision, signal }) => {
+    transcribeAudio: async ({ requestId, filePath, inputMimeType, packId, language, normalization: normalizationDecision, signal, onTranscribed }) => {
       if (params.lifecycle.isStopped()) {
         throw createVoiceInferenceError('internal_error', 'voice_inference_worker_stopped');
       }
@@ -348,7 +350,7 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
         if (abortController.signal.aborted) {
           throw createVoiceInferenceError('cancelled');
         }
-        return await params.lifecycle.runExclusive(normalizedPackId, async () => {
+        const transcribed = await params.lifecycle.runExclusive(normalizedPackId, async () => {
           if (abortController.signal.aborted) {
             throw createVoiceInferenceError('cancelled');
           }
@@ -389,6 +391,20 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
             };
           });
         }, { signal: abortController.signal });
+        if (abortController.signal.aborted) {
+          throw createVoiceInferenceError('cancelled');
+        }
+        // Capture keeps the upload alive without holding the inference lease.
+        // Its owner reports storage health; diagnostics cannot fail recognition.
+        try {
+          await onTranscribed?.();
+        } catch {
+          // Best-effort diagnostic capture; input cleanup remains below.
+        }
+        if (abortController.signal.aborted) {
+          throw createVoiceInferenceError('cancelled');
+        }
+        return transcribed;
       } catch (error) {
         if (abortController.signal.aborted) {
           throw createVoiceInferenceError('cancelled');
@@ -451,12 +467,12 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
         unregisterRequest();
       };
 
-      const lease = params.lifecycle.runExclusive(normalizedPackId, async () => {
+      const lease = params.lifecycle.runWithModelLease(normalizedPackId, async (runOperation) => {
         try {
           if (abortController.signal.aborted) {
             throw createVoiceInferenceError('cancelled');
           }
-          await runWithRuntimeErrorHandling(async () => {
+          await runOperation(() => runWithRuntimeErrorHandling(async () => {
             const { runtime, packDir, manifest, runtimeDescriptor, supportArtifacts } = await params.lifecycle.warmRuntimeForPack(normalizedPackId, abortController.signal);
             if (abortController.signal.aborted) {
               throw createVoiceInferenceError('cancelled');
@@ -489,10 +505,10 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
                 if (!session) {
                   throw createVoiceInferenceError('runtime_unavailable', 'voice_inference_streaming_stt_unavailable');
                 }
-                const appended = await runWithRuntimeErrorHandling(async () => await session.appendPcm16({
+                const appended = await runOperation(() => runWithRuntimeErrorHandling(async () => await session.appendPcm16({
                   ...appendInput,
                   signal: abortController.signal,
-                }));
+                })));
                 if (abortController.signal.aborted) {
                   throw createVoiceInferenceError('cancelled');
                 }
@@ -507,10 +523,10 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
                   throw createVoiceInferenceError('runtime_unavailable', 'voice_inference_streaming_stt_unavailable');
                 }
                 try {
-                  const finished = await runWithRuntimeErrorHandling(async () => await session.finish({
+                  const finished = await runOperation(() => runWithRuntimeErrorHandling(async () => await session.finish({
                     ...finishInput,
                     signal: abortController.signal,
-                  }));
+                  })));
                   if (abortController.signal.aborted) {
                     throw createVoiceInferenceError('cancelled');
                   }
@@ -527,7 +543,7 @@ export function createVoiceInferenceWorkerExecution(params: VoiceInferenceExecut
                 await closeRuntimeSession();
               },
             });
-          });
+          }));
           await closed.promise;
         } catch (error) {
           ready.reject(error);

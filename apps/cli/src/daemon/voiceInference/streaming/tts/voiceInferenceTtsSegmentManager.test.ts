@@ -115,10 +115,13 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
     });
     expect(started).toMatchObject({ ok: true, segmentCount: 3 });
     if (!started.ok) throw new Error('start failed');
-    await vi.waitFor(() => expect(synths.map((synth) => synth.text)).toEqual(['First sentence.', 'Second sentence.']));
+    // Parallel worker admission reads the model before reaching the native boundary,
+    // so native arrival order does not identify a segment's text position.
+    await vi.waitFor(() => expect(synths.map((synth) => synth.text).sort()).toEqual(['First sentence.', 'Second sentence.']));
+    const firstSynthesis = synths.find((synth) => synth.text === 'First sentence.')!;
 
     const firstNext = manager.next({ streamId: started.streamId, generation: started.generation });
-    synths[0]?.resolve(Buffer.from('first-audio'));
+    firstSynthesis.resolve(Buffer.from('first-audio'));
 
     await expect(firstNext).resolves.toMatchObject({
       ok: true,
@@ -140,7 +143,7 @@ describe('createVoiceInferenceTtsSegmentManager', () => {
       segmentId: `${started.streamId}:0`,
       segmentIndex: 0,
     })).resolves.toMatchObject({ ok: true, ackedSegmentIndex: 0, complete: false });
-    expect(synths.map((synth) => synth.text)).toEqual([
+    expect(synths.map((synth) => synth.text).sort()).toEqual([
       'First sentence.',
       'Second sentence.',
       'Third sentence.',

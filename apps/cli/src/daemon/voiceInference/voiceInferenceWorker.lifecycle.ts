@@ -13,7 +13,7 @@ import {
   verifyInstalledModelPackWithHost,
 } from '@happier-dev/voice-modelpacks';
 
-import { createInferenceConcurrencyCoordinator } from '@/daemon/inference/inferenceConcurrencyCoordinator';
+import { createInferenceConcurrencyCoordinator, type InferenceOperationRunner } from '@/daemon/inference/inferenceConcurrencyCoordinator';
 import {
   createInferenceDiagnostics,
   createUnavailableInferenceDiagnostics,
@@ -90,6 +90,7 @@ export type VoiceInferenceWorkerLifecycleContext = Readonly<{
   getDiagnostics: () => InferenceDiagnostics;
   setDiagnostics: (diagnostics: InferenceDiagnostics) => void;
   runExclusive: <T>(packId: string, work: () => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>) => Promise<T>;
+  runWithModelLease: <T>(packId: string, work: (runOperation: InferenceOperationRunner) => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>) => Promise<T>;
   runLifecycleExclusive: <T>(packId: string, work: () => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>) => Promise<T>;
   warmRuntimeForPack: (packId: string, signal?: AbortSignal | null) => Promise<WarmRuntimeHandle>;
 }>;
@@ -626,26 +627,26 @@ export function createVoiceInferenceWorkerLifecycle(params?: VoiceInferenceWorke
     });
   }) ?? null;
 
+  async function withModelUse<T>(packId: string, work: () => Promise<T>): Promise<T> {
+    // Both queued compute and open streams retain the model against LRU eviction.
+    inUseCountByPackId.set(packId, (inUseCountByPackId.get(packId) ?? 0) + 1);
+    try {
+      return await work();
+    } finally {
+      const next = (inUseCountByPackId.get(packId) ?? 1) - 1;
+      if (next > 0) inUseCountByPackId.set(packId, next);
+      else inUseCountByPackId.delete(packId);
+    }
+  }
+
   return {
     isStopped: () => stopped,
     getDiagnostics: () => diagnostics,
     setDiagnostics: (next) => {
       diagnostics = next;
     },
-    runExclusive: async <T>(packId: string, work: () => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>): Promise<T> => {
-      // Track the in-use lease so the memory-budget LRU never evicts a model mid-inference.
-      inUseCountByPackId.set(packId, (inUseCountByPackId.get(packId) ?? 0) + 1);
-      try {
-        return await concurrencyCoordinator.runExclusive(packId, work, options);
-      } finally {
-        const next = (inUseCountByPackId.get(packId) ?? 1) - 1;
-        if (next > 0) {
-          inUseCountByPackId.set(packId, next);
-        } else {
-          inUseCountByPackId.delete(packId);
-        }
-      }
-    },
+    runExclusive: async <T>(packId: string, work: () => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>): Promise<T> => await withModelUse(packId, () => concurrencyCoordinator.runExclusive(packId, work, options)),
+    runWithModelLease: async <T>(packId: string, work: (runOperation: InferenceOperationRunner) => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>): Promise<T> => await withModelUse(packId, () => concurrencyCoordinator.runWithModelLease(packId, work, options)),
     runLifecycleExclusive: async <T>(packId: string, work: () => Promise<T>, options?: Readonly<{ signal?: AbortSignal | null }>): Promise<T> => await concurrencyCoordinator.runLifecycleExclusive(packId, work, options),
     warmRuntimeForPack,
     stop: async () => {
@@ -810,9 +811,12 @@ export function createVoiceInferenceWorkerLifecycle(params?: VoiceInferenceWorke
       const runtimePackId = getModelPackCatalogEntry(normalizedPackId)
         ? assertVoiceInferencePackIdFilesystemSafe(normalizedPackId)
         : normalizedPackId;
-      await concurrencyCoordinator.runLifecycleExclusive(runtimePackId, async () => {
+      // Warming is model use, not removal: an already-open stream must not hold a
+      // receiver's preflight behind its entire lifetime. The warmup owner coalesces
+      // loading; the shared lease retains the model and serializes native compute.
+      await withModelUse(runtimePackId, () => concurrencyCoordinator.runExclusive(runtimePackId, async () => {
         await warmRuntimeForPack(runtimePackId, warmSignal);
-      }, { signal: warmSignal });
+      }, { signal: warmSignal }));
     },
   };
 }

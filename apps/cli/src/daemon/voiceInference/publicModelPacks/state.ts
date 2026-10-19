@@ -1,6 +1,6 @@
 import { chmod, lstat, mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { VoiceModelPackArtifactBindingV1Schema } from '@happier-dev/protocol/voice/modelPacks/artifactBindingV1';
@@ -72,12 +72,12 @@ function assertNonNegativeSafeInteger(value: unknown): number {
   return value;
 }
 
-const CleanupOnlyInstalledSchema = z.object({
+const CleanupOnlyInstalledSchema = z.strictObject({
   identity: VoiceModelPackIdentityV1Schema,
   directoryKey: z.unknown(),
-}).strict();
+});
 
-const InstalledVoiceModelPackMetadataObjectSchema = z.object({
+const InstalledVoiceModelPackMetadataObjectSchema = z.strictObject({
   schemaVersion: z.unknown(),
   identity: VoiceModelPackIdentityV1Schema,
   directoryKey: z.unknown(),
@@ -86,22 +86,22 @@ const InstalledVoiceModelPackMetadataObjectSchema = z.object({
   packVersion: z.unknown(),
   manifestDigest: z.unknown(),
   verifiedAtMs: z.unknown(),
-  lastUsedAt: z.unknown().optional(),
-}).strict();
+  lastUsedAt: z.optional(z.unknown()),
+});
 const metadataFields = Object.entries(InstalledVoiceModelPackMetadataObjectSchema.shape);
 
-const InstalledVoiceModelPackMetadataV1Schema = z.preprocess((value, context) => {
+const InstalledVoiceModelPackMetadataV1Schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value, context) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   if (metadataFields.some(([key, schema]) => {
     const own = Object.hasOwn(value, key);
-    return (!own && !(schema instanceof z.ZodOptional))
+    return (!own && !(schema instanceof z.ZodMiniOptional))
       || (own && !Object.prototype.propertyIsEnumerable.call(value, key));
   })) {
-    context.addIssue({ code: 'custom', message: 'Installed metadata requires its own known fields' });
+    context.issues.push({ code: 'custom', message: 'Installed metadata requires its own known fields', input: context.value });
   }
   // Preserve the original own-field admission, including absent optional usage.
   return { ...value };
-}, InstalledVoiceModelPackMetadataObjectSchema.transform((raw): InstalledVoiceModelPackMetadataV1 => {
+}), z.pipe(InstalledVoiceModelPackMetadataObjectSchema, z.transform((raw): InstalledVoiceModelPackMetadataV1 => {
   const directoryKey = assertBoundedId(raw.directoryKey);
   if (deriveVoiceModelPackDirectoryKeyV1(raw.identity) !== directoryKey) {
     throw new Error('voice_model_pack_directory_key_mismatch');
@@ -118,9 +118,9 @@ const InstalledVoiceModelPackMetadataV1Schema = z.preprocess((value, context) =>
     verifiedAtMs: assertNonNegativeSafeInteger(raw.verifiedAtMs),
     ...(Object.hasOwn(raw, 'lastUsedAt') ? { lastUsedAt: assertNonNegativeSafeInteger(raw.lastUsedAt) } : {}),
   });
-}));
+})));
 
-const AcceptedLicenseSchema = z.object({
+const AcceptedLicenseSchema = z.strictObject({
   accountId: z.unknown(),
   executionHost: z.literal('daemon'),
   hostId: z.unknown(),
@@ -132,18 +132,18 @@ const AcceptedLicenseSchema = z.object({
   licenseTextDigest: z.unknown(),
   artifactBinding: VoiceModelPackArtifactBindingV1Schema,
   acceptedAtMs: z.unknown(),
-}).strict();
+});
 
-const StateEnvelopeSchema = z.object({
+const StateEnvelopeSchema = z.strictObject({
   schemaVersion: z.unknown(),
   accountId: z.unknown(),
   machineId: z.unknown(),
   // Records are admitted by their owners below, including cleanup-only legacy records.
   installed: z.unknown(),
   licenseAcceptances: z.unknown(),
-  unboundInstalled: z.unknown().optional(),
-  unboundLicenseAcceptances: z.unknown().optional(),
-}).strict();
+  unboundInstalled: z.optional(z.unknown()),
+  unboundLicenseAcceptances: z.optional(z.unknown()),
+});
 
 const StoredInstalledVoiceModelPackMetadataV1Schema = createStoredReadSchema(InstalledVoiceModelPackMetadataV1Schema);
 const StoredCleanupOnlyInstalledSchema = createStoredReadSchema(CleanupOnlyInstalledSchema);
@@ -191,7 +191,7 @@ export function parseInstalledVoiceModelPackMetadataV1(value: unknown): Installe
   try {
     return InstalledVoiceModelPackMetadataV1Schema.parse(value);
   } catch (error) {
-    if (error instanceof z.ZodError) throw new Error('voice_model_pack_state_invalid');
+    if (error instanceof z.core.$ZodError) throw new Error('voice_model_pack_state_invalid');
     throw error;
   }
 }

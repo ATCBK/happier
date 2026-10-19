@@ -16,11 +16,8 @@ import {
   createSavedSecretMaterializerFromSnapshotV1,
   type SavedSecretResolutionV1,
 } from '@/settings/secrets/savedSecretCatalog';
-import {
-  SavedSecretOperationAdmissionError,
-  savedSecretOperationAdmissionStatus,
-  refreshSavedSecretCatalogForOperation,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
+import { savedSecretOperationAdmissionStatus, refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
 
 export type VoiceCredentialResolutionSource = 'account' | 'machine_override';
 

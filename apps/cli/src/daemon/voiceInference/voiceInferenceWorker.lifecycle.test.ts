@@ -287,8 +287,12 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
     try {
       for (const dispose of disposeRuntimes.splice(0).reverse()) await dispose();
     } finally {
-      await Promise.all([...retainedRuntimeHomes].map((dir) => rm(dir, { recursive: true, force: true })));
-      retainedRuntimeHomes.clear();
+      try {
+        await pluginReloadController.shutdown();
+      } finally {
+        await Promise.all([...retainedRuntimeHomes].map((dir) => rm(dir, { recursive: true, force: true })));
+        retainedRuntimeHomes.clear();
+      }
     }
   });
 
@@ -1243,7 +1247,7 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
 
     const installPromise = lifecycle.installModel({ packId: manifest.packId });
     // Attach rejection observation before Stop aborts the actual HTTP download.
-    const rejectedInstall = expect(installPromise).rejects.toMatchObject({ name: 'AbortError' });
+    const rejectedInstall = expect(installPromise).rejects.toMatchObject({ name: 'ModelPackInstallError', message: 'aborted' });
     await installStarted.promise;
 
     const stopPromise = lifecycle.stop();
