@@ -1,4 +1,5 @@
 import type { ActionExecuteResult } from '@happier-dev/protocol';
+import { SessionGoalControlFailureV1Schema, type SessionGoalControlFailureV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 
 export type NormalizedCliActionExecuteResult =
   | Readonly<{
@@ -11,6 +12,7 @@ export type NormalizedCliActionExecuteResult =
     errorMessage?: string;
     candidates?: readonly string[];
     details?: unknown;
+    goalControlFailure?: SessionGoalControlFailureV1;
   }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -29,11 +31,13 @@ function normalizeErrorMessage(value: unknown): string | null {
 
 export function normalizeActionExecuteResult(result: ActionExecuteResult): NormalizedCliActionExecuteResult {
   if (!result.ok) {
+    const goalControlFailure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
     return {
       ok: false,
       errorCode: result.errorCode,
       ...(result.error ? { errorMessage: result.error } : {}),
       ...(result.details !== undefined ? { details: result.details } : {}),
+      ...(goalControlFailure.success ? { goalControlFailure: goalControlFailure.data } : {}),
     };
   }
 
@@ -47,12 +51,14 @@ export function normalizeActionExecuteResult(result: ActionExecuteResult): Norma
       ?? undefined;
     const candidates = Array.isArray(dataObj.candidates) ? (dataObj.candidates.map((v) => String(v)) as string[]) : undefined;
     const details = dataObj.details;
+    const goalControlFailure = SessionGoalControlFailureV1Schema.safeParse(dataObj.goalControlFailure);
     return {
       ok: false,
       errorCode,
       ...(errorMessage ? { errorMessage } : {}),
       ...(candidates && candidates.length > 0 ? { candidates } : {}),
       ...(details !== undefined ? { details } : {}),
+      ...(goalControlFailure.success ? { goalControlFailure: goalControlFailure.data } : {}),
     };
   }
 

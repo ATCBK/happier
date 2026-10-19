@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { definitionList, fail, renderHelpPage, sectionTitle } from '@happier-dev/cli-common/output';
-import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
-import { actionSpecToActionDefinitionV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { actionSpecToActionDefinitionV1, readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { ExternalActionRequestIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { getActionSpec, resolveActionExecutionPlacementForInput, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ActionDefinitionV1, ActionExecuteFailure, ActionExecuteResult, SignedRootActionId } from '@happier-dev/protocol';
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { FilesystemUploadInputSchema, FilesystemDownloadInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { createCredentialedFilesystemTransferClient } from '@/machines/transfer/createCredentialedFilesystemTransferClient';
 import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
@@ -81,6 +81,7 @@ type ActionCommandError = Error & Readonly<{
   code?: unknown;
   candidates?: unknown;
   details?: unknown;
+  goalControlFailure?: unknown;
 }>;
 const DEFAULT_DEPS: ActionsDeps = {
   readCredentialsFn: readStoredCredentials,
@@ -122,7 +123,9 @@ function showHelp(): void {
         { label: ACTION_CLI_JSON_OUTPUT_FLAG, description: 'Stable JSON envelope' },
       ] },
     ],
-    notes: ['Use a query and --limit for a concise catalog search.', 'Contributed IDs use <pluginId>/actions/<localId>.', 'Authentication may come from happier auth login or HAPPIER_TOKEN.'],
+    notes: ['Use a query and --limit for a concise catalog search.', 'Contributed IDs use <pluginId>/actions/<localId>.', 'Authentication may come from happier auth login or HAPPIER_TOKEN.',
+      'account.apiTokens.create and account.apiTokens.update require present-user approval; API tokens cannot invoke them.',
+      'Token creation returns its secret once to the waiting caller. Use auth api-tokens create --encryption for trusted-device encryption preparation.'],
   }));
 }
 
@@ -223,28 +226,6 @@ function compileDiscoveredActionFields(definition: ActionDefinitionV1): InvokeCo
   });
 }
 
-export function readDiscoveredActionDefinition(
-  result: ActionExecuteResult,
-  expectedActionId?: string,
-): ActionDefinitionV1 {
-  const payload = unwrapOuterActionResult(result);
-  const raw = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? (payload as Readonly<Record<string, unknown>>).actionSpec
-    : undefined;
-  const parsed = ActionDefinitionV1Schema.safeParse(raw);
-  if (!parsed.success) {
-    throw Object.assign(new Error('Action discovery returned an invalid definition.'), {
-      code: 'invalid_action_definition',
-    });
-  }
-  if (expectedActionId !== undefined && parsed.data.id !== expectedActionId) {
-    throw Object.assign(new Error('Action discovery returned a definition for a different Action.'), {
-      code: 'invalid_action_definition',
-    });
-  }
-  return parsed.data;
-}
-
 /** Best-effort discovery for shell completion; invocation retains typed errors. */
 export async function resolveActionDefinitionForCliCompletion(
   actionId: string,
@@ -266,15 +247,14 @@ export async function resolveActionDefinitionForCliCompletion(
     const executor = await deps.createExecutorFn(fixedServer
       ? { ...executorOptions, ...fixedServer }
       : executorOptions);
-    return readDiscoveredActionDefinition(
-      await executor.execute(
+    return await readCompleteActionSpecV1({ actionId,
+      read: async input => unwrapOuterActionResult(await executor.execute(
         'action.spec.get',
-        { id: actionId },
+        input,
         { ...actionContext(), ...(fixedServer ? { serverId: fixedServer.serverId } : {}),
           ...(serverIdentityId ? { serverIdentityId } : {}) },
-      ),
-      actionId,
-    );
+      )),
+    });
   } catch {
     return null;
   }
@@ -320,6 +300,7 @@ function throwActionFailure(result: ActionExecuteFailure): never {
     actionFailure: true,
     code: result.errorCode,
     ...(result.details !== undefined ? { details: result.details } : {}),
+    ...(result.goalControlFailure ? { goalControlFailure: result.goalControlFailure } : {}),
   });
 }
 
@@ -457,10 +438,11 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
   let invocation: Readonly<{ actionId: SignedRootActionId; input: unknown; requestId: string }>;
   let contributedExecutionPlacement: ActionDefinitionV1['executionPlacement'];
   if (contributed) {
+    const discoveryContext = { ...context, actionRequestId: requestId };
     const discovery = await executor.execute(
       'action.spec.get',
-      { id: requested },
-      { ...context, actionRequestId: requestId },
+      { id: requested, includeOutputSchema: true },
+      discoveryContext,
     );
     let compiled: InvokeCompiledFields;
     let input: unknown;
@@ -473,7 +455,11 @@ async function execute(args: string[], deps: ActionsDeps, signal?: AbortSignal):
       compiled = Object.freeze({ kind: 'definition', fields: Object.freeze([]) });
       input = resolveInvokeActionInput(args, compiled);
     } else {
-      const definition = readDiscoveredActionDefinition(discovery, requested);
+      const definition = await readCompleteActionSpecV1({ actionId: requested, ...(signal ? { signal } : {}),
+        read: async input => unwrapOuterActionResult(input.schemaPath === undefined
+          ? discovery
+          : await executor.execute('action.spec.get', input, discoveryContext)),
+      });
       contributedExecutionPlacement = definition.executionPlacement;
       compiled = compileDiscoveredActionFields(definition);
       if (hasInvokeOption(args, ...ACTION_CLI_HELP_FLAGS)) {
@@ -599,11 +585,13 @@ export async function handleActionsCommand(
     const mapped = candidate?.actionFailure === true || candidate?.expectedFailure === true
       ? { code: String(candidate.code ?? 'action_failed'), unexpected: false, message: candidate.message }
       : mapUnknownErrorToControlError(error);
+    const goalControlFailure = SessionGoalControlFailureV1Schema.safeParse(candidate?.goalControlFailure);
     const structured = {
       code: mapped.code,
       ...(mapped.message ? { message: mapped.message } : {}),
       ...(Array.isArray(candidate?.candidates) ? { candidates: candidate.candidates } : {}),
       ...(candidate?.actionFailure === true && candidate.details !== undefined ? { details: candidate.details } : {}),
+      ...(candidate?.actionFailure === true && goalControlFailure.success ? { goalControlFailure: goalControlFailure.data } : {}),
     };
     if (wantsJson(args)) await printJsonEnvelope({ ok: false, kind: `actions_${args[0] ?? 'help'}`, error: structured }, { exitCode: mapped.unexpected ? 2 : 1 });
     else {

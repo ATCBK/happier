@@ -29,7 +29,7 @@ describe('first-class CLI session command help', () => {
     ['ls', 'session_list'],
     ['send', 'session_send'],
     ['history', 'session_history'],
-    ['wait', 'session_wait'],
+    ['wait', 'wait'],
     ['stop', 'session_stop'],
     ['delegate', 'session_delegate_start'],
   ] as const)('keeps --json help parseable for %s', async (command, expectedKind) => {

@@ -15,6 +15,7 @@ import {
   synchronizePluginCommandContributions,
 } from './commandRegistry';
 import { listRootHelpCommands } from './commandSurfaceManifest';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 
 const runtimeLeaseMock = vi.hoisted(() => ({
   acquire: vi.fn(),
@@ -108,6 +109,7 @@ function registry(
   actions: readonly ResolvedActionContribution[] = [],
 ): ResolvedContributionRegistry {
   return {
+    ...createResolvedContributionRegistry({}),
     uiViewsV2: [],
     uiRenderersV2: [],
     uiTranslationsV2: [],

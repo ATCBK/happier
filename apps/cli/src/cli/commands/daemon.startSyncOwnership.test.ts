@@ -294,6 +294,7 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
             'HAPPIER_PUBLIC_SERVER_URL',
             'HAPPIER_DAEMON_SERVICE_PLATFORM',
             'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
+            'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
             'HAPPIER_DAEMON_SERVICE_TARGET_MODE',
         ]);
 
@@ -325,6 +326,7 @@ describe('handleDaemonCliCommand: daemon start-sync', () => {
                     HAPPIER_PUBLIC_SERVER_URL: undefined,
                     HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
                     HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: userHomeDir,
+                    HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
                     // As the installed default-following unit sets it for its daemon.
                     HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following',
                 });

@@ -10,7 +10,9 @@ import {
   type ProviderSettingsV1,
 } from '@happier-dev/protocol';
 import { readRetainedProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { DaemonProviderConnectionViewV1Schema, DaemonProviderConnectionsDescribeRequestV1Schema, DaemonProviderConnectionsDescribeResponseV1Schema } from '@happier-dev/protocol/rpc';
+import { DaemonProviderConnectionViewV1Schema, DaemonProviderConnectionMutationRequestV1Schema, DaemonProviderConnectionsDescribeRequestV1Schema, DaemonProviderConnectionsDescribeResponseV1Schema } from '@happier-dev/protocol/rpc';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 import type { ResolvedProviderContribution } from '@/plugins/projection/registry/types';
 import type { ProviderContributionRegistryView } from '@/providers/registry';
@@ -29,6 +31,11 @@ import { createProviderConnectionRpcAdapter } from '@/providers/connections/rpcA
 import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 
 const contributionKey = 'acme.gateway/gateway';
+
+function accountActionHost(persistence: Parameters<typeof createInMemoryAccountProviderActions>[0]) {
+  const execute = createInMemoryAccountProviderActions(persistence);
+  return (request: Parameters<typeof execute>[0]) => execute(request);
+}
 const existingSavedSecret = SavedSecretSchema.parse({
   id: 'secret-existing',
   name: 'Existing',
@@ -184,10 +191,11 @@ describe('happier providers command domain', () => {
     await executeProvidersCommand(['add', contributionKey, '--name', 'Daemon connection'], remote.deps);
     const rpc = createProviderConnectionRpcAdapter(remote.connectionService);
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
-        account: createInMemoryAccountProviderActions(remote.persistence),
+        account: accountActionHost(remote.persistence),
         // Machine RPC is the boundary; the remote connection owner stays real.
         rpc: async ({ method, request }) => {
           if (method !== 'daemon.providers.connections.describe') throw new Error('Unexpected machine operation');
@@ -213,11 +221,12 @@ describe('happier providers command domain', () => {
       'providers.connections.create_contribution': ['cli'],
     } });
     const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, actionsSettings, context, undefined, undefined, input),
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
-        account: createInMemoryAccountProviderActions(account.persistence),
+        account: accountActionHost(account.persistence),
         // Offline machine transport must not prevent Account-only authoring.
         rpc: async () => { throw new Error('Local daemon is offline'); },
       }),
@@ -276,7 +285,8 @@ describe('happier providers command domain', () => {
         approvalsUpdate: async ({ request }) => { approvalRecords.push(request); return { ok: true as const }; },
       } satisfies Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsWaitForDecision' | 'approvalsUpdate'>;
       const executor = createActionExecutor({
-        isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
+        ...createUnavailableActionTransportDeps(),
+        isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({}), context),
         hostActionApprovalLifetime: { actionId, signal },
         // Captured credentials are a genuine host boundary; the Action owner validates their stored origin.
         isApprovalExecutionOriginCurrent: async ({ origin }) => decision !== 'retired' && origin.serverId === 'home'
@@ -291,9 +301,9 @@ describe('happier providers command domain', () => {
             if (!('action' in request.input) || (request.input.action !== 'createContribution' && request.input.action !== 'bindSecret')) {
               throw new Error('Unexpected machine effect');
             }
-            return rpc.mutateConnection(request.input, options?.preparedSavedSecret);
+            return rpc.mutateConnection(DaemonProviderConnectionMutationRequestV1Schema.parse(request.input), options?.preparedSavedSecret);
           },
-          setDefault: async () => ({ status: 'updated' }),
+          setDefault: async () => ({ status: 'applied' }),
           account: (request) => createInMemoryAccountProviderActions(h.persistence)(request, options?.preparedSavedSecret),
         }),
       });
@@ -321,7 +331,7 @@ describe('happier providers command domain', () => {
       throw new Error('Expected the approved command to return its connection');
     }
     expect((h.getRaw().secrets as readonly unknown[])).toContainEqual(prepared.record);
-    const connectionId = approved.data.connectionId;
+    const connectionId = ProviderConnectionIdSchema.parse(approved.data.connectionId);
     const bindings = settings(h.getRaw()).secretBindingsByConnectionId[connectionId];
     expect(workflow === 'machine-secret' ? bindings?.byMachineId?.['machine-a'] : bindings?.account)
       .toEqual({ apiKey: prepared.id });
@@ -343,13 +353,14 @@ describe('happier providers command domain', () => {
     await executeProvidersCommand(['add', contributionKey], h.deps);
     const before = structuredClone(h.getRaw());
     const executor = createActionExecutor({
-      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
+      ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({}), context),
       providerActionExecute: createProviderActionExecuteV1({
         assertCurrent() {},
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
         rpc: async ({ request }) => createProviderConnectionRpcAdapter(h.connectionService)
           .describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input)),
-        account: createInMemoryAccountProviderActions({
+        account: accountActionHost({
           loadSnapshot: async () => ({ accountSettings: AccountSettingsSchema.parse(h.getRaw()),
             rawAccountSettings: h.getRaw(), providerSettings: settings(h.getRaw()), registry: h.registry }),
           updateProviderSettings: async () => { throw new Error('Approval must precede persistence'); },
@@ -370,7 +381,8 @@ describe('happier providers command domain', () => {
     await executeProvidersCommand(['add', contributionKey], h.deps);
     const before = structuredClone(h.getRaw());
     const executor = createActionExecutor({
-      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, {}, context),
+      ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({}), context),
       approvalsCreate: async () => ({ artifactId: 'approval-reference' }),
       approvalsWaitForDecision: async () => { throw new Error('Reference-only CLI must not retain a blocking invocation'); },
       approvalsUpdate: async () => ({ ok: true }),
@@ -379,7 +391,7 @@ describe('happier providers command domain', () => {
         setDefault: async () => { throw new Error('Unexpected default mutation'); },
         rpc: async ({ request }) => createProviderConnectionRpcAdapter(h.connectionService)
           .describeConnections(DaemonProviderConnectionsDescribeRequestV1Schema.parse(request.input)),
-        account: createInMemoryAccountProviderActions(h.persistence),
+        account: accountActionHost(h.persistence),
       }),
     });
     const deps = routeProviderCliActions(h.deps, (actionId, input) => executor.execute(actionId, input,

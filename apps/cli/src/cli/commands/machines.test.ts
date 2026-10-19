@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
-import { configuration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { AccountApiTokenBearerV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
@@ -47,7 +48,7 @@ async function runMachinesList(rest: readonly string[]): Promise<void> {
 
 let app = Fastify();
 let restoreHttp = () => {};
-let originalServerUrl = '';
+let envScope = createEnvKeyScope(['HAPPIER_SERVER_URL']);
 const requests: Array<{ path: string; input: unknown; authorization: string | undefined }> = [];
 
 beforeEach(async () => {
@@ -67,8 +68,9 @@ beforeEach(async () => {
     return ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'machines.list', requestId: envelope.requestId,
       execution: { ok: true, result: { items: [{ id: 'machine-1', active: true, revokedAt: null, replacedByMachineId: null }] } } });
   });
-  originalServerUrl = configuration.apiServerUrl;
-  configuration.apiServerUrl = await app.listen({ host: '127.0.0.1', port: 0 });
+  envScope = createEnvKeyScope(['HAPPIER_SERVER_URL']);
+  envScope.patch({ HAPPIER_SERVER_URL: await app.listen({ host: '127.0.0.1', port: 0 }) });
+  reloadConfiguration();
   restoreHttp = installAxiosFastifyAdapter({ app, origin: configuration.apiServerUrl });
   credentialBoundary.readStoredCredentials.mockReset();
 });
@@ -77,7 +79,8 @@ afterEach(async () => {
   transportFault.close = false;
   restoreHttp();
   await app.close();
-  configuration.apiServerUrl = originalServerUrl;
+  envScope.restore();
+  reloadConfiguration();
   vi.restoreAllMocks();
   process.exitCode = undefined;
 });

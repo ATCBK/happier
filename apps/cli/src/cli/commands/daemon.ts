@@ -544,7 +544,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
           mode,
           dryRun,
           reason: 'daemon_restart_session_runners_command',
-        });
+        }, { signal: context.signal });
         if (jsonRequested) {
           await printDaemonJson({ kind: 'single', result });
         } else {
@@ -555,7 +555,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
           mode,
           dryRun,
           reason: 'daemon_restart_session_runners_command',
-        });
+        }, { signal: context.signal });
         if (jsonRequested) {
           await printDaemonJson({ kind: 'bulk', result });
         } else {
@@ -670,6 +670,7 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
       restartResult = await restartDaemonAndWait({
         stopSessions,
         takeover: takeoverRequested,
+        signal: context.signal,
         ...(restartSessionRunners
           ? {
             restartSessionRunners: true,

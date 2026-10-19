@@ -98,7 +98,7 @@ const credentials = {
 };
 
 type ParityCase = Readonly<{
-  command: 'spawn' | 'list' | 'send' | 'history' | 'wait' | 'stop' | 'delegate';
+  command: 'spawn' | 'list' | 'send' | 'history' | 'stop' | 'delegate';
   nestedPath: readonly string[];
   args: readonly string[];
 }>;
@@ -268,7 +268,6 @@ describe('first-class session command parity', () => {
     { command: 'list', nestedPath: ['list'], args: ['--json'] },
     { command: 'send', nestedPath: ['send'], args: [sessionId, 'Hello', '--local-id', 'local-1', '--json'] },
     { command: 'history', nestedPath: ['history'], args: [sessionId, '--json'] },
-    { command: 'wait', nestedPath: ['wait'], args: [sessionId, '--json'] },
     { command: 'stop', nestedPath: ['stop'], args: [sessionId, '--json'] },
     {
       command: 'delegate',
@@ -279,7 +278,7 @@ describe('first-class session command parity', () => {
     const nested = await runNested(parityCase);
     const firstClass = await runFirstClass(parityCase);
 
-    expect(normalizeActionCallsForParity(nested.actionCalls)).toEqual(normalizeActionCallsForParity(firstClass.actionCalls));
+    expect(normalizeActionCallsForParity(nested.actionCalls), JSON.stringify({ nested, firstClass })).toEqual(normalizeActionCallsForParity(firstClass.actionCalls));
     expect(nested.stdout).toBe(firstClass.stdout);
     expect(nested.stderr).toBe(firstClass.stderr);
     expect(nested.exitCode).toBe(firstClass.exitCode);

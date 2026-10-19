@@ -4,6 +4,8 @@ import { handleAutomationCommand } from './automation';
 import { createActionExecutor, createWorkflowActionExecutor, createWorkflowDefinitionActions, createWorkflowTriggerActions } from '@happier-dev/protocol/actions';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema, isApprovalRequiredByActionsSettings, isActionEnabledByActionsSettings } from '@happier-dev/protocol';
+import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 // Configuration is the process/environment Home boundary; the Action owner stays real.
 vi.mock('@/configuration', () => ({ configuration: { activeServerId: 'manual-home', apiServerUrl: 'https://manual-home.example' } }));
@@ -11,12 +13,14 @@ vi.mock('@/configuration', () => ({ configuration: { activeServerId: 'manual-hom
 function runExecutor(runNow: NonNullable<Parameters<typeof createWorkflowTriggerActions>[0]['automations']['runNow']>, ports: Partial<ActionExecutorDeps> = {}) {
   const unavailable = async (): Promise<never> => { throw new Error('Unexpected persistence operation'); };
   const definitions = createWorkflowDefinitionActions({ artifactStore: { read: unavailable, list: unavailable,
-    create: unavailable, update: unavailable, delete: unavailable }, encodeListCursor: (row) => row.artifactId });
+    create: unavailable, update: unavailable, delete: unavailable }, encodeListCursor: (row) => row.artifactId,
+    assertDefinitionWriteAllowed: unavailable });
   const triggers = createWorkflowTriggerActions({ automations: { list: unavailable, get: unavailable, create: unavailable,
     reconcile: unavailable, delete: unavailable, runNow }, newId: () => 'unused', openContext: unavailable,
     sealContext: unavailable, resolveWorkflow: unavailable });
   const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'workflow.trigger.run_now': ['cli'] } });
-  return createActionExecutor({ isActionApprovalRequired: (id, ctx) => isApprovalRequiredByActionsSettings(id, settings, ctx),
+  return createActionExecutor({ ...createUnavailableActionTransportDeps(),
+    isActionApprovalRequired: (id, ctx) => isApprovalRequiredByActionsSettings(id, settings, ctx),
     ...ports, workflowAction: createWorkflowActionExecutor({ definitions, triggers,
     isWorkflowFeatureEnabled: () => true, runs: { execute: unavailable } }) });
 }
@@ -117,6 +121,7 @@ describe('handleAutomationCommand', () => {
   });
 
   it('runs through Action admission and preserves the complete receipt and occurrence key', async () => {
+    const release = publishServerHttpRuntimeOrigin('http://127.0.0.1:48188', 'iroh');
     const receipt = { run: { id: '11111111-1111-4111-8111-111111111111', automationId: 'automation-1', revision: 1,
       triggerId: null, triggerRetired: false, state: 'queued' as const, cause: { kind: 'manual' as const, invokedAt: 1 },
       dueAt: 1, claimedAt: null, startedAt: null, finishedAt: null, claimedByMachineId: null, leaseExpiresAt: null,
@@ -128,7 +133,10 @@ describe('handleAutomationCommand', () => {
     const deps = {
       readCredentialsFn: async () => ({ token: 'token-1' } as never),
       listAutomationDefinitionsFn: vi.fn(),
-      createExecutorFn: () => executor,
+      createExecutorFn: (input: Parameters<typeof import('@/session/actions/createCliActionExecutorFromCredentials').createCliActionExecutorFromCredentials>[0]) => {
+        expect(input.serverApiUrl).toBe('http://127.0.0.1:48188');
+        return executor;
+      },
     };
     const output = captureStdout();
     try {
@@ -136,7 +144,9 @@ describe('handleAutomationCommand', () => {
         ['run', 'automation-1', '--idempotency-key', 'ci-build-42', '--json'],
         deps,
       );
-      expect(runNow).toHaveBeenCalledWith('automation-1', { idempotencyKey: 'ci-build-42' });
+      expect(runNow).toHaveBeenCalledWith('automation-1', { idempotencyKey: 'ci-build-42' },
+        expect.objectContaining({ surface: 'cli', authority: 'present_user', serverId: 'manual-home',
+          actionCaller: { kind: 'host' } }));
       expect(JSON.parse(output.text())).toMatchObject({
         ok: true,
         kind: 'automation_run',
@@ -144,6 +154,7 @@ describe('handleAutomationCommand', () => {
       });
     } finally {
       output.restore();
+      release();
     }
   });
 

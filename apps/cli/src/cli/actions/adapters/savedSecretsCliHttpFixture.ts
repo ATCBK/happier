@@ -9,7 +9,7 @@ import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/librar
 import { ProfileRowsListResponseV1Schema, ProfileReferenceGuardReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { setActiveAccountSettingsSnapshot, clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -115,6 +115,7 @@ export async function createSavedSecretsCliHttpFixture() {
     inHome: <T>(run: () => T) => runWithServerHttpBaseUrl(origin, run),
     opened: (input: Readonly<Record<string, unknown>>) => {
       const resource = resources.get(String(input.resourceId)); if (!resource) throw new Error('Missing fixture resource');
+      if (resource.encryptionMode !== 'plain') throw new Error('Fixture requires plain Account content');
       return openSavedSecretResourceStoredContentV1({ resourceId: resource.resourceId, mode: resource.encryptionMode,
         storedContent: resource.storedContent });
     },

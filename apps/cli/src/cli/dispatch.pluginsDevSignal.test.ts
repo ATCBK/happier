@@ -1,17 +1,21 @@
 import http from 'node:http';
+import { ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { configuration } from '@/configuration';
+import * as daemonStart from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 import {
   withConfiguredDaemonTestHome,
   writeDaemonStateFixture,
 } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { PLUGIN_DEVELOPMENT_CONTROL_PATH } from '@/plugins/daemon/controlRoutes';
 import type { DaemonPluginDevelopmentControlResult } from '@/plugins/daemon/developmentRoots';
+import { captureStdout } from '@/testkit/logger/captureOutput';
 
 import { dispatchCli } from './dispatch';
+import { handleDaemonCliCommand } from './commands/daemon';
 
 // Only the daemon's HTTP peer is simulated. Dispatch, command admission,
 // persisted daemon discovery and the development command remain real.
@@ -69,6 +73,118 @@ async function withDevelopmentDaemon(
 
 describe('dispatchCli command cancellation', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(['SIGINT', 'SIGTERM', 'parent'] as const)('ends a pending self-restart bulk refresh on %s without resending it', async interrupt => {
+    const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+    await withConfiguredDaemonTestHome({ prefix: 'happier-dispatch-self-restart-', env: {
+      HAPPIER_DAEMON_RESTART_STABILITY_TIMEOUT_MS: '1',
+      HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service',
+    } }, async ({ homeDir }) => {
+      let started!: () => void;
+      const requestStarted = new Promise<void>(resolve => { started = resolve; });
+      let release: (() => void) | undefined;
+      let requests = 0;
+      const server = http.createServer((request, response) => {
+        request.resume();
+        if (request.url === '/ping') { response.end(JSON.stringify({ ok: true })); return; }
+        if (request.url !== '/session-runners/restart-all') { response.writeHead(404).end(); return; }
+        requests += 1;
+        release = () => response.end(JSON.stringify({ ok: true, mode: 'force_current_cli',
+          requestedCount: 0, restartedCount: 0, skippedCount: 0, failedCount: 0, results: [] }));
+        started();
+      });
+      await new Promise<void>(ready => server.listen(0, '127.0.0.1', ready));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing HTTP listener');
+      const state = { pid: process.pid, httpPort: address.port, controlToken: 'test-control',
+        startedAt: 1, startedWithCliVersion: configuration.currentCliVersion };
+      // Start from an empty fixture Home; only physical spawn is simulated.
+      // Dispatch, stop/readiness, persisted discovery and bulk HTTP stay real.
+      vi.spyOn(daemonStart, 'spawnDetachedDaemonStartSync').mockImplementation(async () => {
+        await writeDaemonStateFixture(homeDir, configuration.activeServerId, { ...state, startedAt: 2 });
+        return new ChildProcess();
+      });
+      const output = captureStdout();
+      vi.spyOn(process, 'exit').mockImplementation(code => { throw new Error(`fixture-exit:${code}`); });
+      const parent = new AbortController();
+      const command = dispatchCli({
+        args: ['daemon', 'restart', '--restart-session-runners', '--json'],
+        rawArgv: ['happier', 'daemon', 'restart', '--restart-session-runners', '--json'], terminalRuntime: null,
+        ...(interrupt === 'parent' ? { signal: parent.signal } : {}),
+      }).then(() => 'resolved', error => error instanceof Error ? error.message : String(error));
+      try {
+        await Promise.race([requestStarted, command.then(result => { throw new Error(`Command ended before bulk observation: ${result}; ${output.text()}`); })]);
+        if (interrupt === 'parent') {
+          expect(process.listenerCount('SIGINT')).toBe(before.SIGINT);
+          expect(process.listenerCount('SIGTERM')).toBe(before.SIGTERM);
+          parent.abort(new Error('parent retired'));
+        } else process.emit(interrupt);
+        const outcome = await Promise.race([command, new Promise<null>(resolve => setTimeout(() => resolve(null), 150))]);
+        release?.(); await command;
+        expect(outcome, 'Cancellation must retire observation while the daemon response is pending').toBe('fixture-exit:1');
+        expect(JSON.parse(output.text())).toMatchObject({ ok: false, failedPhase: 'session-runners' });
+        expect(requests).toBe(1);
+      } finally {
+        release?.(); await command;
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        output.restore();
+      }
+    });
+    expect(process.listenerCount('SIGINT')).toBe(before.SIGINT);
+    expect(process.listenerCount('SIGTERM')).toBe(before.SIGTERM);
+  });
+
+  it.each(['SIGINT', 'SIGTERM', 'parent'] as const)('ends a pending runner refresh on %s without restarting it again', async interrupt => {
+    const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+    await withConfiguredDaemonTestHome({ prefix: 'happier-dispatch-runner-refresh-' }, async ({ homeDir }) => {
+      let started!: () => void;
+      const requestStarted = new Promise<void>(resolve => { started = resolve; });
+      let release!: () => void;
+      let requests = 0;
+      const server = http.createServer((request, response) => {
+        request.resume();
+        if (request.url !== '/session-runners/restart') { response.writeHead(404).end(); return; }
+        requests += 1;
+        release = () => response.end(JSON.stringify({ ok: true, status: 'restarted', sessionId: 'session' }));
+        started();
+      });
+      await new Promise<void>(ready => server.listen(0, '127.0.0.1', ready));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing HTTP listener');
+      await writeDaemonStateFixture(homeDir, configuration.activeServerId, {
+        pid: process.pid, httpPort: address.port, controlToken: 'test-control',
+      });
+      const output = captureStdout();
+      vi.spyOn(process, 'exit').mockImplementation(code => { throw new Error(`fixture-exit:${code}`); });
+      const parent = new AbortController();
+      const execute = interrupt === 'parent' ? handleDaemonCliCommand : dispatchCli;
+      const command = execute({
+        args: ['daemon', 'restart-session-runners', '--session-id', 'session', '--force-current-cli', '--json'],
+        rawArgv: ['happier', 'daemon', 'restart-session-runners'], terminalRuntime: null,
+        ...(interrupt === 'parent' ? { signal: parent.signal } : {}),
+      }).then(() => 'resolved', error => error instanceof Error ? error.message : String(error));
+      try {
+        await requestStarted;
+        if (interrupt === 'parent') parent.abort(new Error('parent retired'));
+        else process.emit(interrupt);
+        const outcome = await Promise.race([
+          command, new Promise<null>(resolve => setTimeout(() => resolve(null), 150)),
+        ]);
+        release(); await command;
+        expect(outcome).toBe('fixture-exit:1');
+        expect(output.text()).toContain(interrupt === 'parent' ? 'parent retired' : `Command interrupted by ${interrupt}`);
+        expect(requests).toBe(1);
+      } finally {
+        release?.(); await command;
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        output.restore();
+      }
+    });
+    expect(process.listenerCount('SIGINT')).toBe(before.SIGINT);
+    expect(process.listenerCount('SIGTERM')).toBe(before.SIGTERM);
+  });
 
   it.each(['SIGINT', 'SIGTERM'] as const)('stops the real development command on %s and releases its listeners', async (interrupt) => {
     const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };

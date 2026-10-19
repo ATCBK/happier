@@ -1,4 +1,5 @@
 import type { ActionId } from '@happier-dev/protocol';
+import type { SessionGoalControlFailureV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 
 import type { CompiledActionCliCommand } from './compiledCommands';
 
@@ -25,6 +26,7 @@ export type ActionCliFailure = Readonly<{
   errorMessage?: string;
   candidates?: readonly string[];
   details?: unknown;
+  goalControlFailure?: SessionGoalControlFailureV1;
 }>;
 
 /**
@@ -77,6 +79,11 @@ export type ActionCliPresentation = Readonly<{
 const PRESENTATION_LOADERS: Partial<Record<ActionId, () => Promise<ActionCliPresentation>>> = {
   'plugins.install': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
   'plugins.uninstall': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
+  'plugins.enable': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
+  'plugins.disable': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
+  'plugins.rollback': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
+  'plugins.trust.forget': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
+  'plugins.update_policy.set': async () => (await import('./pluginDevLoopPresentation')).PLUGIN_DEV_LOOP_CLI_PRESENTATION,
   'localServices.inventory.list': async () => (await import('./localServicesPresentation')).LOCAL_SERVICES_PRESENTATION,
   'localServices.inventory.refresh': async () => (await import('./localServicesPresentation')).LOCAL_SERVICES_PRESENTATION,
   'localServices.launcher.snapshot': async () => (await import('./localServicesPresentation')).LOCAL_SERVICES_PRESENTATION,
@@ -165,33 +172,36 @@ const PRESENTATION_LOADERS: Partial<Record<ActionId, () => Promise<ActionCliPres
   'execution.run.stream.cancel': async () => (
     await import('@/cli/commands/session/run/executionRunPresentation')
   ).EXECUTION_RUN_STREAM_CANCEL_PRESENTATION,
-  'session.discussion.list': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_LIST_PRESENTATION,
-  'session.discussion.get': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_DETAILS_PRESENTATION,
-  'session.discussion.read': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_READ_PRESENTATION,
-  'session.discussion.create': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_CREATE_PRESENTATION,
-  'session.discussion.post': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_POST_PRESENTATION,
-  'session.discussion.rename': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_RENAME_PRESENTATION,
-  'session.discussion.archive': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_ARCHIVE_PRESENTATION,
-  'session.discussion.restore': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_RESTORE_PRESENTATION,
-  'session.discussion.read_state.set': async () => (
-    await import('@/cli/commands/session/discussionPresentation')
-  ).SESSION_DISCUSSION_READ_STATE_PRESENTATION,
+  'discussion.list': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_LIST_PRESENTATION,
+  'discussion.get': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_DETAILS_PRESENTATION,
+  'discussion.read': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_READ_PRESENTATION,
+  'discussion.create': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_CREATE_PRESENTATION,
+  'discussion.post': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_POST_PRESENTATION,
+  'discussion.reply': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_POST_PRESENTATION,
+  'discussion.rename': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_RENAME_PRESENTATION,
+  'discussion.archive': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_ARCHIVE_PRESENTATION,
+  'discussion.restore': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_RESTORE_PRESENTATION,
+  'discussion.read_state.set': async () => (
+    await import('@/cli/commands/discussions/discussionPresentation')
+  ).DISCUSSION_READ_STATE_PRESENTATION,
 };
 
 export function listActionCliPresentationActionIds(): readonly ActionId[] {

@@ -125,8 +125,8 @@ function prepareCustomCallCatalog() {
 
 function retireAndReenterToolsAccount() {
   const captured = getActiveAccountSettingsSnapshot();
-  expect(captured?.mcpServerCatalog.status).toBe('ready');
-  if (!captured) throw new Error('Expected the real admitted Account capture');
+  if (!captured?.mcpServerCatalog) throw new Error('Expected the real admitted Account capture');
+  expect(captured.mcpServerCatalog.status).toBe('ready');
   setActiveAccountSettingsSnapshot({ ...captured, scopeKey: 'retired-tools-account' });
   setActiveAccountSettingsSnapshot({ ...captured });
 }
@@ -189,8 +189,8 @@ describe('happier tools --json', () => {
       });
       await started;
       const captured = getActiveAccountSettingsSnapshot();
-      expect(captured?.mcpServerCatalog.status).toBe('ready');
-      if (!captured) throw new Error('Expected the real admitted Account capture');
+      if (!captured?.mcpServerCatalog) throw new Error('Expected the real admitted Account capture');
+      expect(captured.mcpServerCatalog.status).toBe('ready');
       setActiveAccountSettingsSnapshot({ ...captured, scopeKey: 'retired-tools-account' });
       setActiveAccountSettingsSnapshot({ ...captured });
       release();

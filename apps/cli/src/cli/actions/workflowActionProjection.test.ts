@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { searchSerializedActionSpecsForSurface } from '@happier-dev/protocol';
+import { listActionSpecsForSurface, searchSerializedActionSpecsForSurface } from '@happier-dev/protocol';
 
 import { findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
 import { composeActionCliInput, parseActionCliCommandInput } from './parseCommandInput';
@@ -55,6 +55,7 @@ describe('workflow Action projections', () => {
       '--run-id', 'workflow_run_1',
       '--expected-revision', '3',
       '--invocation-json', '{"recordId":"workflow_invocation_1"}',
+      '--causal-invocation-ids', 'workflow_invocation_1',
       '--conversation', 'same_conversation',
       '--retry-input-json', '{"kind":"original"}',
     ]);
@@ -72,13 +73,14 @@ describe('workflow Action projections', () => {
         runId: 'workflow_run_1',
         expectedRevision: 3,
         invocation: { recordId: 'workflow_invocation_1' },
+        causalInvocationIds: ['workflow_invocation_1'],
         conversation: 'same_conversation',
         input: { kind: 'original' },
       },
     });
   });
 
-  it('derives only the four direct MCP workflow tools from Action bindings without a workflow tool registry', () => {
+  it('derives the direct MCP workflow tools from Action bindings without a workflow tool registry', () => {
     const tools = listBuiltInHappierTools({
       surface: 'mcp',
       registry: createResolvedContributionRegistry({ agents: [] }),
@@ -89,14 +91,22 @@ describe('workflow Action projections', () => {
       .sort();
 
     expect(workflowActionIds).toEqual([
+      'workflow.authoring.conversation.bind',
+      'workflow.authoring.draft.discard',
+      'workflow.authoring.draft.edit',
+      'workflow.authoring.draft.get',
+      'workflow.authoring.draft.redo',
+      'workflow.authoring.draft.save',
+      'workflow.authoring.draft.undo',
       'workflow.run.cancel',
       'workflow.run.get',
+      'workflow.run.review.draft.set',
       'workflow.run.start',
       'workflow.run.wait',
     ]);
   });
 
-  it('keeps all seventeen workflow Actions discoverable to agents', () => {
+  it('keeps every agent-exposed workflow Action discoverable', () => {
     const discoveredWorkflowIds = searchSerializedActionSpecsForSurface({
       surface: 'agent',
       query: 'workflow',
@@ -105,6 +115,9 @@ describe('workflow Action projections', () => {
     })
       .map((spec) => String(spec.id))
       .filter((actionId) => actionId.startsWith('workflow.'));
-    expect(new Set(discoveredWorkflowIds)).toEqual(new Set(WORKFLOW_ACTION_IDS));
+    const exposedWorkflowIds = listActionSpecsForSurface('agent')
+      .map((spec) => String(spec.id))
+      .filter((actionId) => actionId.startsWith('workflow.'));
+    expect(new Set(discoveredWorkflowIds)).toEqual(new Set(exposedWorkflowIds));
   });
 });

@@ -2,9 +2,9 @@ import { evaluateInputPredicate as evaluateActionInputPredicate, readInputPath a
 import { readActionCliDerivedDefault } from '@happier-dev/protocol/actions/actionCliProjection';
 import type { ActionCliBindContext, ActionCliBindInput } from '@happier-dev/protocol';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-import { actionCliCommandInputArgv, type ActionCliField, type CompiledActionCliCommand } from './compiledCommands';
+import type { ActionCliField, CompiledActionCliCommand } from './compiledCommands';
 
 export type ActionCliParseFailure = Readonly<{
   ok: false;
@@ -28,7 +28,7 @@ export type ComposedActionCliInput = Readonly<{
   callerInput: Readonly<Record<string, unknown>>;
 }> | ActionCliParseFailure;
 
-function describeSchemaIssues(error: z.ZodError): string {
+function describeSchemaIssues(error: z.core.$ZodError): string {
   return error.issues
     .slice(0, 4)
     .map((issue) => {
@@ -44,13 +44,29 @@ function describeSchemaIssues(error: z.ZodError): string {
  * pipe into that object: its fields are the object's, and the normalization
  * still runs once on the merged input through the canonical schema itself.
  */
-function readObjectShape(schema: z.ZodTypeAny): Record<string, z.ZodTypeAny> | null {
+function readObjectShape(schema: z.ZodMiniType): Record<string, z.ZodMiniType> | null {
   const shape: unknown = (schema as { shape?: unknown }).shape;
   if (shape !== null && typeof shape === 'object' && !Array.isArray(shape)) {
-    return shape as Record<string, z.ZodTypeAny>;
+    return shape as Record<string, z.ZodMiniType>;
   }
   const def = (schema as { _zod?: { def?: { type?: unknown; out?: unknown } } })._zod?.def;
-  return def?.type === 'pipe' && def.out ? readObjectShape(def.out as z.ZodTypeAny) : null;
+  return def?.type === 'pipe' && def.out ? readObjectShape(def.out as z.ZodMiniType) : null;
+}
+
+/** Keep each real union arm closed rather than pooling their allowed fields. */
+function readPartialObjectShapes(schema: z.ZodMiniType): readonly Record<string, z.ZodMiniType>[] | null {
+  const shape = readObjectShape(schema);
+  if (shape) return [shape];
+  const def = (schema as { _zod?: { def?: { type?: unknown; options?: unknown; out?: unknown } } })._zod?.def;
+  if (def?.type === 'pipe' && def.out) return readPartialObjectShapes(def.out as z.ZodMiniType);
+  if (def?.type !== 'union' || !Array.isArray(def.options)) return null;
+  const shapes: Record<string, z.ZodMiniType>[] = [];
+  for (const option of def.options) {
+    const nested = readPartialObjectShapes(option as z.ZodMiniType);
+    if (!nested) return null;
+    shapes.push(...nested);
+  }
+  return shapes.length > 0 ? shapes : null;
 }
 
 /**
@@ -72,14 +88,14 @@ function readObjectShape(schema: z.ZodTypeAny): Record<string, z.ZodTypeAny> | n
  * which the canonical schema can no longer see the conflict at all.
  */
 function parsePartialInputFields(
-  shape: Readonly<Record<string, z.ZodTypeAny>>,
+  shape: Readonly<Record<string, z.ZodMiniType>>,
   supplied: Readonly<Record<string, unknown>>,
-  schema?: z.ZodTypeAny,
+  schema?: z.ZodMiniType,
 ): Readonly<Record<string, unknown>> | ActionCliParseFailure {
   const parsed: Record<string, unknown> = {};
   const issues: string[] = [];
   for (const [field, value] of Object.entries(supplied)) {
-    const fieldSchema = shape[field];
+    const fieldSchema = Object.hasOwn(shape, field) ? shape[field] : undefined;
     if (!fieldSchema) {
       issues.push(`${field}: unrecognized field`);
       continue;
@@ -97,7 +113,7 @@ function parsePartialInputFields(
   const checks = schema ? readObjectLevelChecks(schema) : [];
   if (checks.length > 0) {
     const partialShape = Object.fromEntries(Object.entries(shape).map(([field, fieldSchema]) => (
-      [field, fieldSchema.optional()]
+      [field, z.optional(fieldSchema)]
     )));
     const refined = z.object(partialShape).check(...checks).safeParse(parsed);
     if (!refined.success) return failure(describeSchemaIssues(refined.error));
@@ -116,7 +132,7 @@ function parsePartialInputFields(
  * fields this source supplied. A rule that needs a field this source did not
  * supply sees it absent, as the rule's own optional-field handling expects.
  */
-function readObjectLevelChecks(schema: z.ZodTypeAny): readonly z.core.$ZodCheck<Record<string, unknown>>[] {
+function readObjectLevelChecks(schema: z.ZodMiniType): readonly z.core.$ZodCheck<Record<string, unknown>>[] {
   const checks: unknown = (schema as { _zod?: { def?: { checks?: unknown } } })._zod?.def?.checks;
   return Array.isArray(checks) ? checks as z.core.$ZodCheck<Record<string, unknown>>[] : [];
 }
@@ -129,9 +145,9 @@ function readObjectLevelChecks(schema: z.ZodTypeAny): readonly z.core.$ZodCheck<
  */
 export function composeActionCliInput(params: Readonly<{
   parsed: ActionCliParseSuccess;
-  canonicalSchema: z.ZodTypeAny;
-  wholeInputSchema?: z.ZodTypeAny;
-  callerSchema: z.ZodTypeAny;
+  canonicalSchema: z.ZodMiniType;
+  wholeInputSchema?: z.ZodMiniType;
+  callerSchema: z.ZodMiniType;
   bindInput?: ActionCliBindInput | null;
   context: ActionCliBindContext;
 }>): ComposedActionCliInput {
@@ -147,12 +163,12 @@ export function composeActionCliInput(params: Readonly<{
   // the flags complete, so it is validated field by field and completeness plus
   // the cross-field rules are decided once, at the end, by the canonical schema.
   const baseSchema = params.wholeInputSchema ?? params.canonicalSchema;
-  const baseShape = params.parsed.canonicalBase !== null && hasCallerOverlay
-    ? readObjectShape(baseSchema)
+  const baseShapes = params.parsed.canonicalBase !== null && hasCallerOverlay
+    ? readPartialObjectShapes(baseSchema)
     : null;
   let baseRecord: Readonly<Record<string, unknown>> = Object.freeze({});
   if (params.parsed.canonicalBase !== null) {
-    if (baseShape === null) {
+    if (baseShapes === null) {
       const whole = baseSchema.safeParse(params.parsed.canonicalBase);
       if (!whole.success) return failure(describeSchemaIssues(whole.error));
       if (!whole.data || typeof whole.data !== 'object' || Array.isArray(whole.data)) {
@@ -163,7 +179,8 @@ export function composeActionCliInput(params: Readonly<{
       // The canonical schema's own cross-field rules are decided once, on the
       // merged input below; only the friendly overlay can lose a conflicting
       // field to its binder, so only the overlay's rules run on a partial source.
-      const partialBase = parsePartialInputFields(baseShape, params.parsed.canonicalBase);
+      const candidates = baseShapes.map((shape) => parsePartialInputFields(shape, params.parsed.canonicalBase!));
+      const partialBase = candidates.find((candidate) => !isParseFailure(candidate)) ?? candidates[0]!;
       if (isParseFailure(partialBase)) return partialBase;
       baseRecord = partialBase;
     }
@@ -197,7 +214,7 @@ export function composeActionCliInput(params: Readonly<{
     }
     boundOverlay = candidate as Readonly<Record<string, unknown>>;
   } catch (error) {
-    if (error instanceof z.ZodError) return failure(describeSchemaIssues(error));
+    if (error instanceof z.core.$ZodError) return failure(describeSchemaIssues(error));
     throw error;
   }
 
@@ -231,11 +248,19 @@ export function composeActionCliInput(params: Readonly<{
     );
   }
 
-  const canonical = params.canonicalSchema.safeParse({
+  const merged = {
     ...binderDefaults,
     ...baseRecord,
     ...contributed,
-  });
+  };
+  if (baseShapes && baseShapes.length > 1) {
+    // A partial arm cannot lend fields to a different completed internal arm.
+    // Re-admit the completed public union before the broader internal schema.
+    // Single-object commands retain their authenticated preparation boundary.
+    const publicInput = baseSchema.safeParse(merged);
+    if (!publicInput.success) return failure(describeSchemaIssues(publicInput.error));
+  }
+  const canonical = params.canonicalSchema.safeParse(merged);
   if (!canonical.success) return failure(describeSchemaIssues(canonical.error));
   if (!canonical.data || typeof canonical.data !== 'object' || Array.isArray(canonical.data)) {
     return failure('Canonical Action input must be an object.');
@@ -256,7 +281,7 @@ export function composeActionCliInput(params: Readonly<{
  * field before it reads credentials or resolves its own workflow-owned fields.
  */
 export function validateActionCliCallerFields(
-  callerSchema: z.ZodTypeAny,
+  callerSchema: z.ZodMiniType,
   supplied: Readonly<Record<string, unknown>>,
 ): ActionCliParseFailure | null {
   const shape = readObjectShape(callerSchema);
@@ -540,6 +565,12 @@ function validateFieldHints(
 
 function isParseFailure(value: unknown): value is ActionCliParseFailure {
   return Boolean(value) && typeof value === 'object' && (value as ActionCliParseFailure).ok === false;
+}
+
+export function actionCliCommandInputArgv(command: CompiledActionCliCommand, argv: readonly string[]): readonly string[] {
+  const before = command.path.length - 1;
+  const count = command.positionalsBeforeLastSegment.length;
+  return [...argv.slice(before, before + count), ...argv.slice(command.path.length + count)];
 }
 
 /**

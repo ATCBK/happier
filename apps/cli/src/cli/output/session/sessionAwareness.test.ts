@@ -32,12 +32,12 @@ describe('projectCliSessionAwarenessV1', () => {
   it('retains public workflow origin and reporting relationships when private content cannot be opened', () => {
     const awareness = project({ id: 'locked-step', encryptionMode: 'e2ee',
       metadata: 'unavailable', origin: { kind: 'run_step', runId: 'workflow-run' },
-      reportsTo: { sessionId: 'lead' },
-      reports: { total: 2, working: 1, needsYou: 0, stalled: 1 },
+      manager: { sessionId: 'lead' },
+      managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 1 },
     });
     expect(awareness.origin).toEqual({ kind: 'run_step', runId: 'workflow-run' });
-    expect(awareness.reportsTo).toEqual({ sessionId: 'lead' });
-    expect(awareness.reports).toEqual({ total: 2, working: 1, needsYou: 0, stalled: 1 });
+    expect(awareness.manager).toEqual({ sessionId: 'lead' });
+    expect(awareness.managedSessions).toEqual({ total: 2, working: 1, needsYou: 0, stalled: 1 });
     expect(awareness).not.toHaveProperty('lineage');
     expect(SessionAwarenessProjectionV1Schema.safeParse(awareness).success).toBe(true);
   });

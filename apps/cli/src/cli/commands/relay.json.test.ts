@@ -9,6 +9,8 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
 import { commandRegistry } from '@/cli/commandRegistry';
+// Prepare the real lazy command owner during collection, before output capture.
+import './relay';
 
 function createFakeSsh(scenario: Readonly<{
     outputs?: readonly Readonly<{ status?: number; stdout?: string; stderr?: string }>[];
@@ -39,7 +41,10 @@ appendFileSync(logPath, JSON.stringify(argv) + '\\n');
 
 const state = JSON.parse(readFileSync(statePath, 'utf8'));
 const outputs = Array.isArray(state.outputs) ? state.outputs : [];
-const next = outputs.length > 0 ? outputs.shift() : { status: 0, stdout: '', stderr: '' };
+const isVersionInventory = argv.some((part) => String(part).includes('current=%s') && String(part).includes('previous=%s'));
+const next = isVersionInventory
+  ? { status: 0, stdout: 'current=\\nprevious=\\n', stderr: '' }
+  : outputs.length > 0 ? outputs.shift() : { status: 0, stdout: '', stderr: '' };
 state.outputs = outputs;
 writeFileSync(statePath, JSON.stringify(state), 'utf8');
 
@@ -176,7 +181,7 @@ describe('happier relay --json', () => {
             });
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(typeof parsed.data?.serverId).toBe('string');
             expect(parsed.data?.serverUrl).toBe('https://api.example.test');
             expect(parsed.data?.comparableKey).toBe('https://api.example.test');
@@ -203,7 +208,7 @@ describe('happier relay --json', () => {
             });
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.data?.used).toBe(true);
             expect(process.exitCode).toBe(0);
 
@@ -477,7 +482,7 @@ describe('happier relay --json', () => {
             });
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.kind).toBe('relay_host_install');
             expect(parsed.data?.mode).toBe('user');
             expect(parsed.data?.relayUrl).toBe('http://127.0.0.1:3005');
@@ -556,7 +561,7 @@ describe('happier relay --json', () => {
             });
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.kind).toBe('relay_host_install');
             expect(readFileSync(knownHostsPath, 'utf8')).toContain(trustedHostKey);
             const invocations = fakeSsh.readInvocations().map((invocation) => invocation.join(' '));
@@ -611,7 +616,7 @@ describe('happier relay --json', () => {
             });
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.kind).toBe('relay_host_install');
 
             const invocations = fakeSsh.readInvocations().map((invocation) => invocation.join(' '));
@@ -966,7 +971,7 @@ describe('happier relay --json', () => {
             });
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.kind).toBe('relay_host_install');
             expect(parsed.data?.relayUrl).toBe('http://127.0.0.1:3005');
             expect(process.exitCode).toBe(0);
@@ -1098,7 +1103,7 @@ describe('happier relay --json', () => {
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
             const scpInvocations = fakeSsh.readInvocations().filter((invocation) => invocation[0] === 'scp');
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.kind).toBe('relay_host_install');
             expect(parsed.data?.relayUrl).toBe('http://127.0.0.1:3005');
             expect(scpInvocations).toHaveLength(2);
@@ -1160,7 +1165,7 @@ describe('happier relay --json', () => {
 
             const parsed = JSON.parse(output.logs.join('\n').trim());
             const scpInvocations = fakeSsh.readInvocations().filter((invocation) => invocation[0] === 'scp');
-            expect(parsed.ok).toBe(true);
+            expect(parsed.ok, JSON.stringify(parsed.error)).toBe(true);
             expect(parsed.kind).toBe('relay_host_install');
             expect(scpInvocations).toHaveLength(2);
             expect(scpInvocations.some((invocation) => invocation.some((part) => part.includes(`happier-server-${basename(serverPayloadRoot)}-`)))).toBe(true);

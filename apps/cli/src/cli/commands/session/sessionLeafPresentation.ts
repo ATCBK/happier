@@ -45,6 +45,7 @@ export const SESSION_STATUS_PRESENTATION: ActionCliPresentation = {
       session: parsed.session,
       ...(parsed.agentState ? { agentState: parsed.agentState } : {}),
       ...(parsed.awareness ? { awareness: parsed.awareness } : {}),
+      ...(parsed.readiness ? { readiness: parsed.readiness } : {}),
     };
     if (context.json) {
       await printJsonEnvelope({ ok: true, kind: 'session_status', data });

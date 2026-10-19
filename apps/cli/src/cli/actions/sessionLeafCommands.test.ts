@@ -1,10 +1,17 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { getServerProfile } from '@/server/serverProfiles';
 
 import { loadActionCliPresentation } from './commandPresentation';
 import { findCompiledActionCliCommand, listCompiledActionCliCommands } from './compiledCommands';
 import { runCompiledActionCliCommand } from './executeCommand';
 
 type Execution = Readonly<{ actionId: string; input: unknown }>;
+
+beforeAll(async () => {
+  await seedTestServerProfile({ id: 'cloud', homeId: 'srv_action_cloud_fixture', serverUrl: 'https://cloud.example.test' });
+  await seedTestServerProfile({ id: 'home-b', homeId: 'srv_selected_home_identity', serverUrl: 'https://selected-home.example.test' });
+});
 
 function commandFor(path: readonly string[]) {
   const command = findCompiledActionCliCommand(path, listCompiledActionCliCommands());
@@ -48,13 +55,7 @@ function harness() {
   const deps = {
     readCredentialsFn: vi.fn(async () => ({ token: 'hap_v1_test' } as never)),
     readCredentialsForServerIdFn: vi.fn(async () => ({ token: 'selected-home-token' } as never)),
-    getServerProfileFn: vi.fn(async (serverId: string) => ({
-      id: serverId,
-      serverUrl: 'https://selected-home.example.test',
-      localServerUrl: null,
-      homeConnectionDescriptorAuthority: 'exact',
-      homeConnectionDescriptor: { homeServerIdentityId: 'selected-home-identity' },
-    } as never)),
+    getServerProfileFn: getServerProfile,
     createServerFeaturesSnapshotStoreFn: vi.fn(() => ({ refresh: vi.fn(async () => ({})) } as never)),
     createExecutorFn,
   };
@@ -228,7 +229,7 @@ describe('migrated one-shot Session leaves', () => {
     expect(createExecutorFn).toHaveBeenCalledWith(expect.objectContaining({
       serverId: 'home-b',
       serverApiUrl: 'https://selected-home.example.test',
-      serverIdentityId: 'selected-home-identity',
+      serverIdentityId: 'srv_selected_home_identity',
     }));
     expect(executions).toEqual([{
       actionId: 'session.read_state.set',

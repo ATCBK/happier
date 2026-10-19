@@ -7,6 +7,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isProviderActionMachineRequiredV1, parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readStoredCredentials } from '@/persistence';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
@@ -52,7 +53,7 @@ export async function resolveProviderCliDependencies(requestOptions: Readonly<{ 
   const providersFeature = await resolveCliFeatureDecisionForServer({
     featureId: 'providers',
     env: process.env,
-    serverUrl: configuration.serverUrl,
+    serverUrl: resolveServerHttpBaseUrl(),
   });
   if (providersFeature.decision.state !== 'enabled') {
     throw new ProviderCliError('provider_feature_disabled', 'Providers are disabled by server policy');

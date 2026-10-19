@@ -13,6 +13,7 @@ import {
 } from '@/cli/commands/session/shared/normalizeActionExecuteResult';
 import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/tryHandleApprovalRequestCreated';
 import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import {
   readStoredCredentials,
   readStoredCredentialsForServerId,
@@ -28,7 +29,7 @@ import { projectRequesterSessionCredentialDisclosure } from '@happier-dev/protoc
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptConfirmYesNo } from '@/terminal/prompts/promptConfirmYesNo';
 
-import { actionCliCommandInputArgv, type CompiledActionCliCommand } from './compiledCommands';
+import type { CompiledActionCliCommand } from './compiledCommands';
 import { renderActionCliCommandHelp } from './commandHelp';
 import {
   actionCliEnvelopeKind,
@@ -41,6 +42,7 @@ import {
   ACTION_CLI_JSON_OUTPUT_FLAG,
   ACTION_CLI_MACHINE_ID_FLAG,
   ACTION_CLI_WHOLE_INPUT_FLAG,
+  actionCliCommandInputArgv,
   composeActionCliInput,
   describeActionCliCommandFlags,
   parseActionCliInput,
@@ -206,6 +208,7 @@ async function reportFailure(params: Readonly<{
           ...(params.failure.candidates ? { candidates: params.failure.candidates } : {}),
           ...(params.failure.errorMessage ? { message: params.failure.errorMessage } : {}),
           ...(params.failure.details !== undefined ? { details: params.failure.details } : {}),
+          ...(params.failure.goalControlFailure ? { goalControlFailure: params.failure.goalControlFailure } : {}),
         },
       },
       { exitCode: params.unexpected ? 2 : 1 },
@@ -373,7 +376,7 @@ export async function runCompiledActionCliCommand(params: Readonly<{
   let result: ActionExecuteResult;
   try {
     const serverFeaturesStore = deps.createServerFeaturesSnapshotStoreFn({
-      serverUrl: fixedServer?.serverApiUrl ?? configuration.apiServerUrl,
+      serverUrl: fixedServer?.serverApiUrl ?? resolveServerHttpBaseUrl(),
       token: credentials.token,
     });
     let serverFeaturesSnapshotPromise: ReturnType<ServerFeaturesSnapshotStore['refresh']> | null = null;
@@ -455,6 +458,10 @@ export async function runCompiledActionCliCommand(params: Readonly<{
       ...(requestSignal ? { signal: requestSignal } : {}),
       ...(fixedServer ? { serverId: fixedServer.serverId } : {}),
       ...(serverIdentityId ? { serverIdentityId } : {}),
+      // An Account Action's explicit execution Machine is exact routing, not
+      // the credentialed factory's automatic administration preference.
+      ...(machineId !== null && resolveActionExecutionPlacementForInput(command.spec, input) === 'account'
+        ? { externalActionTarget: { kind: 'machine' as const, machineId } } : {}),
       ...(command.binding.observation === 'changes' ? {
         onWaitSnapshot: async (snapshot: unknown) => writeJsonStdout({
           kind, target: input.target, condition: input.condition, snapshot,
@@ -515,6 +522,7 @@ export async function runCompiledActionCliCommand(params: Readonly<{
       ...(normalized.errorMessage ? { errorMessage: normalized.errorMessage } : {}),
       ...(normalized.candidates ? { candidates: normalized.candidates } : {}),
       ...(normalized.details !== undefined ? { details: normalized.details } : {}),
+      ...(normalized.goalControlFailure ? { goalControlFailure: normalized.goalControlFailure } : {}),
     };
     await reportFailure({
       json,

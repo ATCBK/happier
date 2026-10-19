@@ -243,7 +243,7 @@ function printHumanToolList(params: Readonly<{
   }
 }
 
-export async function handleToolsCommand(args: string[], overrides?: Partial<ToolsCommandDeps>): Promise<void> {
+export async function handleToolsCommand(args: string[], overrides?: Partial<ToolsCommandDeps>, signal?: AbortSignal): Promise<void> {
   const deps = resolveToolsCommandDeps(overrides);
   const json = wantsJson(args);
   const kind = resolveCommandKind(args);
@@ -337,6 +337,7 @@ export async function handleToolsCommand(args: string[], overrides?: Partial<Too
           surface,
           ...(toolCallId ? { toolCallId } : {}),
           readCredentials: deps.readCredentials,
+          ...(signal ? { signal } : {}),
         });
       } else {
         const context = await resolveCustomToolsRuntimeContext(args, deps, { requireSessionId: true });
@@ -408,7 +409,7 @@ export async function handleToolsCliCommand(context: CommandContext): Promise<vo
   const kind = resolveCommandKind(args);
 
   try {
-    await handleToolsCommand(args);
+    await handleToolsCommand(args, undefined, context.signal);
   } catch (error) {
     if (json) {
       const mapped = mapUnknownErrorToControlError(error);

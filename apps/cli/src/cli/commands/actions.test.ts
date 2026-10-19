@@ -1,17 +1,30 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 const credentialBoundary = vi.hoisted(() => ({ readStoredCredentials: vi.fn() }));
 vi.mock('@/persistence', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: credentialBoundary.readStoredCredentials,
 }));
-import { handleActionsCommand } from './actions';
+import { handleActionsCommand, resolveActionDefinitionForCliCompletion } from './actions';
 import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { API_TOKEN_FULL_GRANT_V1, createBlockingApprovalCoordinator, type ApprovalRequest } from '@happier-dev/protocol';
+import type { StoredCredentials } from '@/persistence';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createCommittedContributedActionDefinitionLister, createCommittedContributedActionInvoker } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { compileActionCliCommands } from '@/cli/actions/compiledCommands';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
 
 afterEach(() => { vi.restoreAllMocks(); process.exitCode = undefined; });
 
-function credentials(provenance: 'api_token' | 'stored_session'): any {
-  return { token: 'token', credentialProvenance: provenance };
+function credentials(provenance: 'api_token' | 'stored_session'): StoredCredentials {
+  return { token: 'token', encryption: null, credentialProvenance: provenance };
 }
 
 function contributedActionDefinition() {
@@ -62,6 +75,173 @@ function contributedActionDefinition() {
 }
 
 describe('actions root command', () => {
+  it.each(['invoke', 'friendly'] as const)('preserves native Goal failure evidence in the %s JSON envelope', async surface => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
+      output += String(chunk);
+      const callback = args.find(argument => typeof argument === 'function');
+      if (typeof callback === 'function') callback();
+      return true;
+    });
+    const goalControlFailure = SessionGoalControlFailureV1Schema.parse({ phase: 'native_effect' });
+    // Session RPC is the system boundary; Action dispatch and both CLI adapters stay real.
+    const executor = createActionExecutor({
+      sessionGoalGet: async () => ({ ok: false, errorCode: 'codex_goal_thread_unavailable',
+        error: 'codex_goal_thread_unavailable', goalControlFailure }),
+      isActionApprovalRequired: () => false,
+    });
+    const deps = {
+      readCredentialsFn: async () => credentials('stored_session'),
+      createExecutorFn: () => ({ ...executor,
+        resolveSessionTarget: async (sessionId: string) => ({ ok: true as const, sessionId }) }),
+    };
+    if (surface === 'invoke') {
+      await handleActionsCommand(['invoke', 'session.goal.get', '--input-json',
+        JSON.stringify({ sessionId: 'goal-session' }), '--json'], deps);
+    } else {
+      // Goal currently exposes generic invoke only; exercise the shared friendly
+      // adapter with its real compiler and canonical Goal schema, without adding a command.
+      const [command] = compileActionCliCommands([{ spec: getActionSpec('session.goal.get'),
+        binding: { path: ['session', 'goal', 'get'], positionals: ['sessionId'], visibility: 'canonical' } }]);
+      if (!command) throw new Error('Missing friendly Goal command');
+      await runCompiledActionCliCommand({ command, argv: ['session', 'goal', 'get', 'goal-session', '--json'], deps });
+    }
+    expect(JSON.parse(output)).toEqual({ v: 1, ok: false,
+      kind: surface === 'invoke' ? 'actions_invoke' : 'session_goal_get',
+      error: { code: 'codex_goal_thread_unavailable', message: 'codex_goal_thread_unavailable', goalControlFailure } });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    { facet: { phase: 'provider_completion' }, expected: { phase: 'provider_completion' } },
+    { facet: { phase: 'native_effect', nativeError: 'private native content' }, expected: undefined },
+    { facet: { phase: 'unknown_native_phase' }, expected: undefined },
+  ])('projects only closed Goal evidence from a nested friendly failure: $facet', async ({ facet, expected }) => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
+      output += String(chunk);
+      const callback = args.find(argument => typeof argument === 'function');
+      if (typeof callback === 'function') callback();
+      return true;
+    });
+    const executor = createActionExecutor({
+      // The supported `code` failure spelling reaches the nested CLI normalizer
+      // through a real Action success; native response data is a boundary.
+      sessionGoalGet: async () => ({ ok: false, code: 'native_goal_refused', goalControlFailure: facet }),
+      isActionApprovalRequired: () => false,
+    });
+    const [command] = compileActionCliCommands([{ spec: getActionSpec('session.goal.get'),
+      binding: { path: ['session', 'goal', 'get'], positionals: ['sessionId'], visibility: 'canonical' } }]);
+    if (!command) throw new Error('Missing friendly Goal command');
+    await runCompiledActionCliCommand({ command, argv: ['session', 'goal', 'get', 'goal-session', '--json'], deps: {
+      readCredentialsFn: async () => credentials('stored_session'),
+      createExecutorFn: () => ({ ...executor,
+        resolveSessionTarget: async (sessionId: string) => ({ ok: true as const, sessionId }) }),
+    } });
+    expect(JSON.parse(output)).toEqual({ v: 1, ok: false, kind: 'session_goal_get',
+      error: { code: 'native_goal_refused', ...(expected ? { goalControlFailure: expected } : {}) } });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each(['account.apiTokens.list', 'account.apiTokens.revoke', 'account.apiTokens.revokeAll'] as const)(
+    'admits %s through the generic command and the canonical approval owner', async actionId => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
+      output += String(chunk);
+      const callback = args.find(argument => typeof argument === 'function');
+      if (typeof callback === 'function') callback();
+      return true;
+    });
+    const coordinator = createBlockingApprovalCoordinator();
+    const cancellation = new AbortController();
+    let request: ApprovalRequest | null = null;
+    const list = vi.fn(async () => ({ tokens: [] }));
+    const revoke = vi.fn(async () => ({ revoked: true }));
+    const revokeAll = vi.fn(async () => ({ revokedCount: 1 }));
+    const { executor } = createCliActionExecutorHarness({ token: 'synthetic-account', sessionId: '', mode: 'plain', ctx: null }, {
+      // Native Account HTTP and Artifact persistence are the system boundaries.
+      accountApiTokensListAction: list, accountApiTokensRevokeAction: revoke, accountApiTokensRevokeAllAction: revokeAll,
+      isActionApprovalRequired: id => id === 'account.apiTokens.revoke' || id === 'account.apiTokens.revokeAll',
+      isApprovalExecutionOriginCurrent: async () => true,
+      approvalsCreate: async ({ request: value }) => { request = value; return { artifactId: 'cli-lifecycle-approval' }; },
+      approvalsGet: async () => request,
+      approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true }; },
+      approvalsWaitForDecision: async args => ({ ...await coordinator.waitForDecision(args), request: request! }),
+      approvalsResolveBlockingDecision: args => coordinator.resolveBlockingDecision(args),
+    });
+    const invoke = handleActionsCommand(['invoke', actionId, '--input-json', JSON.stringify(
+      actionId === 'account.apiTokens.revoke' ? { tokenId: 'dd03e74b-4aae-4a0a-81ee-1c23ddc4525d' } : {}), '--json'], {
+      readCredentialsFn: async () => credentials('stored_session'),
+      createExecutorFn: () => ({ execute: (...[id, input, context]: Parameters<typeof executor.execute>) => executor.execute(id, input, {
+        ...context, authority: 'present_user', runtimeAccountId: 'account-1', serverId: 'home-1', defaultSessionMachineId: 'token-machine',
+      }), resolveSessionTarget: async () => { throw new Error('Unexpected Session lookup'); } }),
+    }, cancellation.signal);
+    try {
+      if (actionId !== 'account.apiTokens.list') {
+        await vi.waitFor(() => expect(request).not.toBeNull());
+        expect(revoke).not.toHaveBeenCalled(); expect(revokeAll).not.toHaveBeenCalled();
+        expect(await executor.execute('approval.request.decide', { artifactId: 'cli-lifecycle-approval', decision: 'approve' }, {
+          surface: 'ui', authority: 'present_user', serverId: 'home-1', actionCaller: { kind: 'host' },
+        })).toMatchObject({ ok: true });
+      }
+      await invoke;
+      expect(JSON.parse(output)).toMatchObject({ ok: true });
+      expect((actionId === 'account.apiTokens.list' ? list : actionId === 'account.apiTokens.revoke' ? revoke : revokeAll))
+        .toHaveBeenCalledOnce();
+    } finally { cancellation.abort(); coordinator.dispose(); await invoke; }
+  });
+  it('invokes API-token creation through real parsing, approval, and live caller custody', async () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
+      output += String(chunk);
+      const callback = args.find(argument => typeof argument === 'function');
+      if (typeof callback === 'function') callback();
+      return true;
+    });
+    const tokenId = 'dd03e74b-4aae-4a0a-81ee-1c23ddc4525d';
+    const result = { token: `hap_v1_${tokenId}_${'S'.repeat(43)}`, apiToken: {
+      tokenId, label: 'CLI trigger', displayPrefix: 'hap_v1_dd03e74b', createdAt: '2026-10-16T00:00:00.000Z',
+      expiresAt: null, lastUsedAt: null, hasEncryptionAccess: false, hasUnattendedTeamAccess: false,
+      grant: API_TOKEN_FULL_GRANT_V1, parentTokenId: null, activeChildCount: 0, embedConfig: null,
+    } };
+    const coordinator = createBlockingApprovalCoordinator();
+    const cancellation = new AbortController();
+    let request: ApprovalRequest | null = null;
+    const effect = vi.fn(async () => result);
+    const { executor } = createCliActionExecutorHarness({ token: 'synthetic-account', sessionId: '', mode: 'plain', ctx: null }, {
+      // Account HTTP/Artifact persistence and device credential provenance are boundaries.
+      accountApiTokensCreateAction: effect,
+      isActionApprovalRequired: id => id === 'account.apiTokens.create',
+      isApprovalExecutionOriginCurrent: async () => true,
+      approvalsCreate: async ({ request: value }) => { request = value; return { artifactId: 'cli-token-approval' }; },
+      approvalsGet: async () => request,
+      approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true }; },
+      approvalsWaitForDecision: async args => ({ ...await coordinator.waitForDecision(args), request: request! }),
+      approvalsResolveBlockingDecision: args => coordinator.resolveBlockingDecision(args),
+    });
+    const invoke = handleActionsCommand(['invoke', 'account.apiTokens.create', '--input-json', JSON.stringify({ tokenId, label: 'CLI trigger' }), '--json'], {
+      readCredentialsFn: async () => credentials('stored_session'),
+      createExecutorFn: () => ({
+        execute: (...[id, input, context]: Parameters<typeof executor.execute>) => executor.execute(id, input, {
+          ...context, authority: 'present_user', runtimeAccountId: 'account-1', serverId: 'home-1', defaultSessionMachineId: 'token-machine',
+        }),
+        // This server lookup boundary must remain unreachable for an Account Action.
+        resolveSessionTarget: async () => { throw new Error('Unexpected Session lookup'); },
+      }),
+    }, cancellation.signal);
+    try {
+      await vi.waitFor(() => expect(coordinator.getLiveWaiterCount('cli-token-approval')).toBe(1));
+      expect(effect).not.toHaveBeenCalled();
+      const decided = await executor.execute('approval.request.decide', { artifactId: 'cli-token-approval', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'home-1', actionCaller: { kind: 'host' },
+      });
+      expect(decided).toMatchObject({ ok: true });
+      await invoke;
+      expect(JSON.parse(output)).toMatchObject({ ok: true, data: result });
+      expect(effect).toHaveBeenCalledOnce();
+      expect(JSON.stringify(request)).not.toContain(result.token);
+    } finally { cancellation.abort(); coordinator.dispose(); await invoke; }
+  });
   it('refuses a filesystem byte transfer without local custody before reading credentials', async () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
@@ -77,7 +257,7 @@ describe('actions root command', () => {
     expect(JSON.parse(output)).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } });
     expect(readCredentialsFn).not.toHaveBeenCalled();
   });
-  it('dispatches mixed-corpus memory search through the real Action executor', async () => {
+  it.each(['global', 'project'] as const)('dispatches %s mixed-corpus memory search through the real Action executor', async (type) => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
       output += String(chunk);
@@ -88,10 +268,14 @@ describe('actions root command', () => {
     const result = { v: 1 as const, ok: true as const, hits: [], documents: { state: 'unavailable' as const } };
     // The daemon RPC is the system boundary; CLI parsing and Action admission remain real.
     const daemonMemorySearch = vi.fn(async () => result);
-    const query = { v: 1, query: 'decision', scope: { type: 'global' }, mode: 'deep', corpora: ['sessions', 'documents'] };
+    const scope = type === 'project' ? { type, projectRef: { serverId: 'home', projectKey: 'payments' } } : { type };
+    const query = { v: 1, query: 'decision', scope, mode: 'deep', corpora: ['sessions', 'documents'] };
     await handleActionsCommand(['invoke', 'memory.search', '--input-json', JSON.stringify({ machineId: 'machine_1', query }), '--json'], {
       readCredentialsFn: async () => credentials('stored_session'),
-      createExecutorFn: () => createCliActionExecutorHarness({ token: 'token', sessionId: '' }, { daemonMemorySearch }).executor,
+      createExecutorFn: () => ({
+        ...createCliActionExecutorHarness({ token: 'token', sessionId: '', mode: 'plain', ctx: null }, { daemonMemorySearch }).executor,
+        resolveSessionTarget: async () => { throw new Error('Unexpected Session lookup'); },
+      }),
     });
     expect(process.exitCode).toBe(0);
     expect(JSON.parse(output)).toMatchObject({ ok: true, data: result });
@@ -196,7 +380,7 @@ describe('actions root command', () => {
     })]);
     expect(execute.mock.calls[1]).toEqual([
       'action.spec.get',
-      { id: 'example.plugin/actions/do-work' },
+      { id: 'example.plugin/actions/do-work', includeOutputSchema: true },
       expect.objectContaining({ surface: 'cli' }),
     ]);
     expect(execute.mock.calls[2]).toEqual(['action.invoke', {
@@ -399,22 +583,11 @@ describe('actions root command', () => {
     const createExecutorFn = vi.fn(() => ({ execute }));
     const readCredentialsFn = vi.fn();
     const readCredentialsForServerIdFn = vi.fn(async () => credentials('stored_session'));
-    const getServerProfileFn = vi.fn(async () => ({
-      id: 'profile-a',
-      name: 'Home A',
-      serverUrl: 'https://public-a.example',
+    const profile = await seedTestServerProfile({
+      id: 'profile-a', homeId: 'srv_home_stable_a', serverUrl: 'https://public-a.example',
       localServerUrl: 'http://127.0.0.1:5353',
-      webappUrl: 'https://public-a.example',
-      createdAt: 1,
-      updatedAt: 1,
-      lastUsedAt: 1,
-      homeConnectionDescriptorAuthority: 'exact' as const,
-      homeConnectionDescriptor: {
-        v: 1 as const,
-        homeServerIdentityId: 'home-stable-a',
-        urls: { public: 'https://public-a.example', local: 'http://127.0.0.1:5353' },
-      },
-    }));
+    });
+    const getServerProfileFn = vi.fn(async () => profile);
 
     await handleActionsCommand(
       ['invoke', 'example.plugin/actions/do-work', '--note', 'hi', '--server-id', 'profile-a'],
@@ -431,7 +604,7 @@ describe('actions root command', () => {
     expect(createExecutorFn).toHaveBeenCalledWith(expect.objectContaining({
       credentials: expect.objectContaining({ token: 'token' }),
       serverId: 'profile-a',
-      serverIdentityId: 'home-stable-a',
+      serverIdentityId: 'srv_home_stable_a',
       serverApiUrl: 'http://127.0.0.1:5353',
       externalActionClient: true,
     }));
@@ -485,7 +658,7 @@ describe('actions root command', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const execute = vi.fn(async () => ({ ok: true as const, result: { active: true } }));
     const resolveSessionTarget = vi.fn(async () => ({ ok: true as const, sessionId: 'session_exact' }));
-    await handleActionsCommand(['invoke', 'session.status.get', '--session-id', 'prefix'], {
+    await handleActionsCommand(['invoke', 'session.status.get', '--input-json', JSON.stringify({ sessionId: 'prefix' })], {
       readCredentialsFn: async () => credentials('stored_session'),
       createExecutorFn: (() => ({ execute, resolveSessionTarget })) as any,
     });
@@ -504,7 +677,7 @@ describe('actions root command', () => {
       output += String(chunk); args.find((value) => typeof value === 'function')?.(); return true;
     }) as any);
     const execute = vi.fn();
-    await handleActionsCommand(['invoke', 'session.status.get', '--session-id', 'ambiguous', '--json'], {
+    await handleActionsCommand(['invoke', 'session.status.get', '--input-json', JSON.stringify({ sessionId: 'ambiguous' }), '--json'], {
       readCredentialsFn: async () => credentials('stored_session'),
       createExecutorFn: (() => ({
         execute,
@@ -576,6 +749,46 @@ describe('actions root command', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it('restores sectioned contributed schemas before completion and CLI input validation', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const pluginId = 'example.plugin';
+    const actionId = `${pluginId}/actions/do-work`;
+    const inputSchema = { type: 'object', additionalProperties: false, required: ['note'],
+      properties: { note: { type: 'string', allOf: [{ $ref: '#/definitions/Note' }] } },
+      definitions: { Note: { type: 'string', pattern: '^review:' } } };
+    const outputSchema = { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean' } } };
+    // Authored plugin bytes/native effects are synthetic; committed source,
+    // activation, catalog, schema discovery and input validation stay real.
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController, plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { actions: [{
+        id: 'do-work', title: 'Do work', dangerLevel: 'safe', scopes: ['global'], surfaces: ['cli'],
+        execution: { target: 'daemon' }, inputSchema, resultSchema: outputSchema,
+        inputHints: { fields: [{ path: 'note', title: 'Note', widget: 'text', required: true }] },
+      }] } }),
+      files: { 'daemon.mjs': 'const inputs = []; export function readInputs() { return inputs; } export function activate(api) { api.actions.register("do-work", async input => { inputs.push(input); return { ok: true }; }); }' },
+    }] });
+    onTestFinished(() => fixture.dispose());
+    const readInputs = fixture.modulesByPluginId.get(pluginId)?.readInputs;
+    if (typeof readInputs !== 'function') throw new Error('Authored Action fixture has no native input reader');
+    const executor = createCliActionExecutor({ token: 'token', sessionId: 'cli-global', mode: 'plain', ctx: null,
+      pluginActionExecutionOwner: 'current_process',
+      listContributedActionDefinitions: createCommittedContributedActionDefinitionLister(),
+      invokeContributedAction: createCommittedContributedActionInvoker(),
+    });
+    const deps = { readCredentialsFn: async () => credentials('stored_session'),
+      createExecutorFn: () => ({ execute: executor.execute,
+        resolveSessionTarget: async () => { throw new Error('Unexpected Session lookup'); } }) };
+    await expect(resolveActionDefinitionForCliCompletion(actionId, [], deps))
+      .resolves.toMatchObject({ inputSchema, outputSchema });
+    await handleActionsCommand(['invoke', actionId, '--note', 'review:done'], deps);
+    expect(process.exitCode).toBeUndefined();
+    expect(readInputs()).toEqual([{ note: 'review:done' }]);
+    await handleActionsCommand(['invoke', actionId, '--note', 'invalid'], deps);
+    expect(process.exitCode).toBe(1);
+    expect(readInputs()).toEqual([{ note: 'review:done' }]);
+  });
+
   it('discovers a contributed Action and compiles its canonical fields before invocation', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const execute = vi.fn(async (actionId: string, _input: unknown) => actionId === 'action.spec.get'
@@ -590,7 +803,7 @@ describe('actions root command', () => {
     );
     expect(execute.mock.calls[0]).toEqual([
       'action.spec.get',
-      { id: 'example.plugin/actions/do-work' },
+      { id: 'example.plugin/actions/do-work', includeOutputSchema: true },
       expect.objectContaining({ surface: 'cli' }),
     ]);
     const [actionId, input] = execute.mock.calls[1]!;
@@ -614,7 +827,7 @@ describe('actions root command', () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(
       'action.spec.get',
-      { id: 'example.plugin/actions/do-work' },
+      { id: 'example.plugin/actions/do-work', includeOutputSchema: true },
       expect.objectContaining({ surface: 'cli' }),
     );
     expect(process.exitCode).toBe(1);

@@ -10,7 +10,10 @@ import { DaemonProviderConnectionMutationResponseV1Schema, DaemonProviderModelSe
 import type { ProviderSavedModelsRpcResult } from '@/providers/probe/rpc';
 import { ProviderCliError, type ProviderCliDependencies, type ProviderCliModelRow } from './types';
 
-export function unwrapProviderSavedModelsRpcResult(result: ProviderSavedModelsRpcResult): readonly ProviderCliModelRow[] {
+export function unwrapProviderSavedModelsRpcResult<TResult extends
+  | Pick<Extract<ProviderSavedModelsRpcResult, { status: 'success' }>, 'status' | 'models'>
+  | Extract<ProviderSavedModelsRpcResult, { status: 'error' }>,
+>(result: TResult): readonly ProviderCliModelRow[] {
   if (result.status === 'error') {
     throw new ProviderCliError(result.error.code, `Provider catalog failed: ${result.error.code}`, result.error);
   }

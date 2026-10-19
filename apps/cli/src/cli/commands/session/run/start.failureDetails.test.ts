@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
+import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -22,6 +23,18 @@ describe('session run start failure details through API Token transport', () => 
     // target resolution, SDK transport and CLI result normalization stay real.
     server = createServer(async (request, response) => {
       requests.push(`${request.method} ${request.url}`);
+      if (request.method === 'GET' && request.url === '/v1/machines') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify([ExternalActionMachineBootstrapV1Schema.parse({
+          id: 'machine-a', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
+        })]));
+        return;
+      }
+      if (request.method !== 'POST' || request.url !== '/v1/actions/execution.run.start') {
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end('{}');
+        return;
+      }
       let body = '';
       for await (const chunk of request) body += String(chunk);
       const { requestId } = JSON.parse(body) as { requestId?: string };
@@ -75,7 +88,7 @@ describe('session run start failure details through API Token transport', () => 
       process.exitCode = undefined;
       await handleSessionCommand(argv, deps);
       expect.soft(process.exitCode).toBe(1);
-      expect(requests).toEqual([
+      expect(requests.filter((request) => request === 'POST /v1/actions/execution.run.start')).toEqual([
         'POST /v1/actions/execution.run.start',
         'POST /v1/actions/execution.run.start',
       ]);

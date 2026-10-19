@@ -23,7 +23,7 @@ import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { createSessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionTerminalMetadataSchema } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
 import type { SessionProviderCliAttachPrepareRequestV1 } from '@happier-dev/protocol';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isHostProviderCliAttachSurface, attachObservedNativeClient } from '@/session/attach/providerCliAttach';
 import { resolveInheritedHerdrRuntime } from '@/terminal/runtime/inheritedHerdrRuntime';
 import { buildAttachSessionMetadata } from '@/session/attach/evaluateCliSessionAttachEligibility';
