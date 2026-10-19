@@ -43,6 +43,7 @@ describe('foreground Agent CLI launch admission', () => {
         resolvedPath: profileClaudePath,
         command: profileClaudePath,
         args: [],
+        providerExitOwnership: 'direct',
       });
     } finally {
       if (previousClaudePath === undefined) delete process.env.HAPPIER_CLAUDE_PATH;

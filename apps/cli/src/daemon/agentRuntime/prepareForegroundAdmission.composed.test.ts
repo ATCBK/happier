@@ -33,6 +33,9 @@ describe('foreground admission composed real Provider authorization seam', () =>
       expect(admitted).toMatchObject({ ok: true });
       if (!admitted.ok) throw new Error(admitted.error.code);
       fixture.publishProfileRecord(record, 2);
+      // Observe the Home's changed row through the real catalog reader; the
+      // HTTP fixture does not publish the Account change carrier itself.
+      expect(await refreshActiveProfileCatalog({ credentials })).toMatchObject({ status: 'ready', source: 'destination' });
       expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(settingsVersion);
       await expect(admitted.prepared.claim({ canonicalSessionId: 'canonical-session-stale-profile-row', httpPort: 40123,
         foregroundSatisfiedProfileSecretRequirementNames: [],
@@ -95,7 +98,7 @@ describe('foreground admission composed real Provider authorization seam', () =>
   it('revalidates Provider authorization before Profile decryption and returns no environment on staleness', async () => {
     await withForegroundProviderFixture({ settings: { version: 1, corruptProfileSecret: true } }, async (fixture) => {
       const admitted = await fixture.prepare();
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       await fixture.publishSettings({
         version: 2, corruptProfileSecret: true, providerSecretValue: 'provider-plaintext-rotated', providerSecretUpdatedAt: 2,
@@ -148,7 +151,7 @@ describe('foreground admission composed real Provider authorization seam', () =>
   it('binds Profile scope/version through final claim and redacts successful plaintext for admission lifetime', async () => {
     await withForegroundProviderFixture({}, async (fixture) => {
       const admitted = await fixture.prepare({ selection: undefined });
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       await fixture.publishSettings({ version: 2 });
       await expect(admitted.prepared.claim({
@@ -159,12 +162,13 @@ describe('foreground admission composed real Provider authorization seam', () =>
     });
     await withForegroundProviderFixture({}, async (fixture) => {
       const admitted = await fixture.prepare();
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       const claimed = await admitted.prepared.claim({
         canonicalSessionId: 'canonical-session-plaintext', httpPort: 40123,
         foregroundSatisfiedProfileSecretRequirementNames: [],
       });
+      expect(claimed.ok, !claimed.ok ? JSON.stringify(claimed.error) : undefined).toBe(true);
       expect(claimed).toMatchObject({
         ok: true,
         environment: { PROFILE_SECRET: 'profile-plaintext', HAPPIER_CODEX_PROVIDER_API_KEY: 'provider-plaintext' },
@@ -186,12 +190,13 @@ describe('foreground admission composed real Provider authorization seam', () =>
   it('marks the exact Profile-only launch context as having no active Provider binding', async () => {
     await withForegroundProviderFixture({}, async (fixture) => {
       const admitted = await fixture.prepare({ selection: undefined });
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       const claimed = await admitted.prepared.claim({
         canonicalSessionId: 'canonical-session-profile-only', httpPort: 40123,
         foregroundSatisfiedProfileSecretRequirementNames: [],
       });
+      expect(claimed.ok, !claimed.ok ? JSON.stringify(claimed.error) : undefined).toBe(true);
       expect(claimed).toMatchObject({
         ok: true, invocationContext: { cwd: fixture.directory, environment: {}, providerBindingActive: false },
       });
@@ -207,7 +212,7 @@ describe('foreground admission composed real Provider authorization seam', () =>
           'openai-codex': { source: 'connected', selection: 'profile', profileId: 'must-be-suppressed' },
         } },
       });
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       const claimed = await admitted.prepared.claim({
         canonicalSessionId: 'canonical-session-provider-isolated', httpPort: 40123,
@@ -226,7 +231,7 @@ describe('foreground admission composed real Provider authorization seam', () =>
   it('relinquishes config-file cleanup to retained runner custody before ordinary generation cleanup', async () => {
     await withForegroundProviderFixture({ configFileAgent: true }, async (fixture) => {
       const admitted = await fixture.prepare();
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       const claimed = await admitted.prepared.claim({
         canonicalSessionId: 'canonical-session-retained', httpPort: 40123,
@@ -252,7 +257,7 @@ describe('foreground admission composed real Provider authorization seam', () =>
   it('publishes exact retained-Agent source custody with managed-dependency retention', async () => {
     await withForegroundProviderFixture({ configFileAgent: true }, async (fixture) => {
       const admitted = await fixture.prepare({ selection: undefined });
-      expect(admitted.ok).toBe(true);
+      expect(admitted.ok, !admitted.ok ? JSON.stringify(admitted.error) : undefined).toBe(true);
       if (!admitted.ok) throw new Error(admitted.error.code);
       const claimed = await admitted.prepared.claim({
         canonicalSessionId: 'canonical-session-managed-retention', httpPort: 40123,

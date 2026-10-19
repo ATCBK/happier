@@ -2,14 +2,19 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
-import { createCustomAcpAdmissionRuntimeFixture } from './customAcpAdmission.testkit';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { configuration } from '@/configuration';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { prepareExecuteSpawnSessionRequest } from './prepareExecuteSpawnSessionRequest';
 
 // Canonical SDK unit fixture: activation uses the actual source contribution.
 // It proves admission and projection, not packaged module-byte integrity.
-let runtime: Awaited<ReturnType<typeof createCustomAcpAdmissionRuntimeFixture>>;
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
 beforeAll(async () => {
-  runtime = await createCustomAcpAdmissionRuntimeFixture();
+  // Fresh daemon admission starts with manifest declarations, before executable activation.
+  runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: configuration.happyHomeDir,
+    controller: pluginReloadController,
+    runtimeOptions: { pluginIds: [CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId] } });
 });
 afterAll(async () => { await runtime?.dispose(); });
 

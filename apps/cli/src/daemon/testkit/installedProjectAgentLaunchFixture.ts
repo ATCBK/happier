@@ -19,6 +19,7 @@ import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
 
 /** Installed Project/Account/Trust and native IO composition for cold launch seam tests. */
 export async function createInstalledProjectAgentLaunchFixture(options: Readonly<{
@@ -51,7 +52,6 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
   let trustWrites = 0;
   const accountReads: unknown[] = [];
   vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
-    accountReads.push(options?.headers?.Authorization);
     if (String(url).endsWith('/v1/machines/machine/admission/verify')) {
       if (!body || typeof body !== 'object' || !('context' in body) || !('purpose' in body) || !('proof' in body)) throw new Error('Missing requester admission proof');
       // Home HTTP is the boundary; custody uses the real signer and proof verifier.
@@ -62,7 +62,11 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
             purpose: RequesterSessionCurrentnessPurposeV1Schema.parse(body.purpose) } } });
       return { status: valid && f.isHomeCurrent() ? 200 : 403, data: valid && f.isHomeCurrent() ? { v: 1, ok: true } : { error: 'access_denied' } };
     }
+    accountReads.push(options?.headers?.Authorization);
     if (String(url).endsWith('/project-trust/read')) {
+      if (String(options?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] ?? '').startsWith('execution.run.')) {
+        return { status: 403, data: { error: 'forbidden' } };
+      }
       const project = ProjectTrustReadRequestV1Schema.parse(body).project;
       return { status: 200, data: trust?.t === 'plain' && trust.v.project.projectId === project.projectId
         ? { status: 'present', revision: 1, content: trust } : { status: 'absent' } };
@@ -73,6 +77,12 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
       return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
     }
     if (String(url).endsWith('/project-rows/list')) {
+      // Account topology is read with the admitted requester's bearer. A signed
+      // execution root alone does not authorize this Account-private endpoint.
+      if (options?.headers?.Authorization !== `Bearer ${f.bootstrap.credentials.token}`
+        && (!accountActionCredentials || options?.headers?.Authorization !== `Bearer ${accountActionCredentials.token}`)) {
+        return { status: 403, data: { error: 'forbidden' } };
+      }
       const key = { kind: 'workspace-ref', serverId: 'session-home', id: 'workspace' };
       return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1,
         content: { t: 'plain', v: { key, value: { id: 'workspace', serverId: 'session-home', machineId: 'machine',
@@ -110,7 +120,7 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
         getAccountSettings: () => accountActionSettings?.settings ?? null }),
     } : undefined);
   onTestFinished(() => machine.shutdown());
-  const signal = new AbortController().signal;
+  const signal: AbortSignal = new AbortController().signal;
   const runtime = await machine.resolveProjectFiniteRuntime({ signal, requesterSessionBootstrap: f.bootstrap });
   if (!runtime) throw new Error('Missing installed requester Project runtime');
   const reviewed = await prepareProjectAgentLaunch({ cwd, machineId: 'machine', serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test',

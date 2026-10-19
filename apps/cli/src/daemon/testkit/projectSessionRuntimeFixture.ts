@@ -59,7 +59,8 @@ export async function createProjectSessionRuntimeFixture(options: Readonly<{
   });
   let currentBootstrap: Awaited<ReturnType<typeof prepareRequesterSessionBootstrap>> = null;
   const createBootstrap = async () => {
-    const prepared = await prepareRequesterSessionBootstrap({ credentials: { token: 'requester-token', encryption: null },
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: {
+      token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester' })).toString('base64url')}.signature`, encryption: null },
       attribution: { serverId: 'session-home', accountId: 'requester', machineId: 'machine', installationId: installation.installationId },
       boundary: { serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test', happyHomeDir: directory },
       ...(options.boundSessionId ? { boundSessionId: options.boundSessionId } : {}),

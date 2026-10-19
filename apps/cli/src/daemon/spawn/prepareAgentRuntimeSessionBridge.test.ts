@@ -54,7 +54,7 @@ describe('prepareRunnerAgentSessionBootstrapForLease', () => {
         expect(createBootstrapAuthorizationMock).not.toHaveBeenCalled();
     });
 
-    it('leaves the existing host-owned configured ACP backend outside plugin runtime admission', async () => {
+    it('refuses a configured definition without its admitted Agent contribution', async () => {
         const activateContributionsOnDemand = vi.fn(async () => []);
 
         await expect(prepareRunnerAgentSessionBootstrapForLease({
@@ -62,6 +62,7 @@ describe('prepareRunnerAgentSessionBootstrapForLease', () => {
                 kind: 'backend',
                 sourceKind: 'configured',
                 backendId: 'acp-catalog',
+                configuredBackendId: 'acp-catalog',
             },
             lease: {
                 registry: {

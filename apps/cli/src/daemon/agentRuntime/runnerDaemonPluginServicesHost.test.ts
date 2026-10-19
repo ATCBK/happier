@@ -229,7 +229,8 @@ describe('runner daemon PluginServices host', () => {
             error: { ...projected, cause: { code, stage: 'unrecognized_stage' } } }).success).toBe(false);
         expect(AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: false,
             error: projectRunnerDaemonPluginServicesFailure(typed) })).toEqual({ ok: false,
-            error: { code, message: 'Runner PluginServices operation is unavailable' } });
+            error: { code, message: `Runner PluginServices operation failed (dispatch: ${code})`,
+                cause: { code, stage: 'dispatch' } } });
         // Filesystem/loader failures use uppercase machine codes. Keep the
         // underlying code in the diagnostic, without exposing their path text.
         const missingFile = Object.assign(new Error(privateText), { code: 'ENOENT', path: privateText });
@@ -241,6 +242,25 @@ describe('runner daemon PluginServices host', () => {
         } });
         expect(missingFileError.details).toEqual({ cause: { code: 'ENOENT', stage: 'registry_acquisition' } });
         expect(JSON.stringify(missingFileRefusal)).not.toContain(privateText);
+    });
+
+    it('retains bounded dispatch failure codes and exception types without exposing private exception text', () => {
+        const privateText = 'Bearer private-r99-secret /private/r99/path';
+        for (const [error, causeCode] of [
+            [Object.assign(new Error(privateText), { code: 'EACCES' }), 'EACCES'],
+            [new TypeError(privateText), 'TypeError'],
+            [Object.assign(new Error(privateText), { name: 'privateSecretR99' }), 'runner_plugin_services_unavailable'],
+            [Object.assign(new Error(privateText), { code: privateText, name: privateText }), 'runner_plugin_services_unavailable'],
+        ] as const) {
+            const response = AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: false,
+                error: projectRunnerDaemonPluginServicesFailure(error) });
+            expect(response).toEqual({ ok: false, error: {
+                code: 'runner_plugin_services_unavailable',
+                message: `Runner PluginServices operation failed (dispatch: ${causeCode})`,
+                cause: { code: causeCode, stage: 'dispatch' },
+            } });
+            expect(JSON.stringify(response)).not.toContain(privateText);
+        }
     });
 
     it('refreshes private shared access after daemon replacement without rematerializing or replaying an Agent request', async () => {
@@ -356,6 +376,7 @@ describe('runner daemon PluginServices host', () => {
         const host = createRunnerDaemonPluginServicesHost({
             async createInvocation({ signal }) {
                 const sources = await createConfiguredPluginExternalSessionsAdapter({
+                    resolveCatalogEntry: async () => null,
                     agents: [{ id: 'codex', identity: { pluginId: 'fixture.plugin', localId: 'codex' },
                         richDefinition: { provenance: 'first_party', definition } }],
                     account: { connectedServicesV2: [] }, basis, readCurrentBasis: () => basis,
@@ -2875,9 +2896,14 @@ describe('runner daemon PluginServices host', () => {
                     },
                     accountId: 'account-a',
                 },
-                signal: cancellation.signal,
+                signal: expect.any(AbortSignal),
             }),
         );
+        const materializedSignal = materialize.mock.calls.at(-1)?.[2]?.signal;
+        expect(materializedSignal?.aborted).toBe(false);
+        cancellation.abort();
+        expect(materializedSignal?.aborted).toBe(true);
+        await host.dispose();
     });
 
     it('prepares and routes one exact current managed Provider projection without broadening Agent services', async () => {

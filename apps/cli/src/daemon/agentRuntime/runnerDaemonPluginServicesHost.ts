@@ -42,12 +42,15 @@ import type {
     RunnerDaemonPluginServiceSubscriptionEventV1,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonPluginServicesProtocol';
 import {
+    RunnerDaemonManagedProviderBootstrapV1Schema,
     decodeRunnerDaemonPluginServiceWireValueV1,
     encodeRunnerDaemonPluginServiceWireValueV1,
     type RunnerDaemonPluginServiceWireInput,
 } from '@/agent/runtime/session/process/agentRuntimeDaemonPluginServicesProtocol';
 import {
     authorizePluginExecLaunchForHost,
+    authorizeResolvedProjectExecLaunchForHost,
+    type HostAgentNativeLaunchPreparation,
     type HostAuthorizedPluginExecLaunch,
 } from '@/plugins/runtime/invocation/services/exec';
 import type {
@@ -84,19 +87,23 @@ export function projectRunnerDaemonPluginServicesFailure(
         && /^[a-z][a-z0-9_]{0,127}$/u.test(candidateCode)
         ? candidateCode
         : 'runner_plugin_services_unavailable';
-    if (!preparationStage) {
-        return { code, message: 'Runner PluginServices operation is unavailable' };
-    }
     const retainedCause = RunnerDaemonPluginServicesPreparationCauseV1Schema.safeParse(
         isPluginError(error) && isRecord(error.details) ? error.details.cause : undefined,
     );
     const causeCode = RunnerDaemonPluginServicesPreparationCauseV1Schema.shape.code.safeParse(candidateCode);
-    const cause = retainedCause.success
+    const exceptionName = !preparationStage
+        ? error instanceof TypeError ? 'TypeError'
+            : error instanceof RangeError ? 'RangeError'
+                : error instanceof SyntaxError ? 'SyntaxError'
+                    : undefined
+        : undefined;
+    const cause: RunnerDaemonPluginServicesPreparationCauseV1 = retainedCause.success
         ? retainedCause.data
-        : { code: causeCode.success ? causeCode.data : code, stage: preparationStage };
+        : { code: causeCode.success ? causeCode.data : exceptionName ?? code,
+            stage: preparationStage ?? 'dispatch' };
     return {
         code,
-        message: `Runner PluginServices preparation failed (${cause.stage}: ${cause.code})`,
+        message: `Runner PluginServices ${preparationStage ? 'preparation' : 'operation'} failed (${cause.stage}: ${cause.code})`,
         cause,
     };
 }
@@ -119,6 +126,7 @@ type Invocation = {
     readonly runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
     readonly retainedAgent: AgentSessionRunnerBindingV1;
     readonly services: PluginServices;
+    readonly prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
     readonly managedProvider: ManagedProviderInvocation | null;
     managedProviderStart: Promise<void> | null;
     managedProviderMaterialization: Readonly<{
@@ -221,6 +229,37 @@ type StorageTransactionState = {
 
 function fail(code: string, message: string): never {
     throw new PluginError({ code, message });
+}
+
+function assertManagedProviderRetention(
+    retained: RunnerDaemonManagedProviderRetentionV1,
+    bootstrap: RunnerDaemonManagedProviderBootstrapV1,
+): void {
+    const expected: RunnerDaemonManagedProviderRetentionV1 = {
+        v: 1,
+        scope: bootstrap.scope,
+        ...(bootstrap.custody ? { custody: bootstrap.custody } : {}),
+        providerPluginHardRevocationRevisionAtAdmission: bootstrap.providerPluginHardRevocationRevisionAtAdmission,
+    };
+    if (isDeepStrictEqual(retained, expected)) return;
+    // Closed field labels only: no authority values or caller-owned strings.
+    const scopeFields = [
+        ['v', 'scope_version'], ['sessionId', 'scope_session_id'],
+        ['runtimeBindingBasis', 'scope_runtime_binding_basis'], ['pluginId', 'scope_plugin_id'],
+        ['providerLocalId', 'scope_provider_local_id'], ['occurrenceId', 'scope_occurrence_id'],
+        ['sourceCustody', 'scope_source_custody'], ['manifestAuthority', 'scope_manifest_authority'],
+        ['operationClaimId', 'scope_operation_claim_id'],
+    ] as const;
+    const field = retained.v !== expected.v ? 'version'
+        : retained.custody !== expected.custody ? 'custody'
+            : retained.providerPluginHardRevocationRevisionAtAdmission !== expected.providerPluginHardRevocationRevisionAtAdmission
+                ? 'hard_revocation_revision'
+                : scopeFields.find(([key]) => !isDeepStrictEqual(retained.scope[key], expected.scope[key]))?.[1] ?? 'scope';
+    throw new PluginError({
+        code: 'plugin_services_managed_provider_retention_mismatch',
+        message: 'Runner requested different managed Provider authority',
+        details: { cause: { code: `managed_provider_retention_${field}`, stage: 'dispatch' } },
+    });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -402,12 +441,14 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
         runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
         retainedAgent: AgentSessionRunnerBindingV1;
         invocationId: string;
+        executionRunCwd?: string;
         witness: AgentInvocationTurnAdmissionWitness | undefined;
         managedProviderRetention?:
             RunnerDaemonManagedProviderRetentionV1;
         signal: AbortSignal;
     }>): Promise<Readonly<{
         services: PluginServices;
+        prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
         managedProvider?: ManagedProviderInvocation | null;
         resourceDescriptors: Readonly<Record<
             string,
@@ -835,6 +876,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     runner,
                     retainedAgent,
                     invocationId: operation.invocationId,
+                    ...(operation.executionRunCwd ? { executionRunCwd: operation.executionRunCwd } : {}),
                     witness: operation.witness,
                     ...(operation.managedProviderRetention
                         ? {
@@ -860,8 +902,22 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     'Runner PluginServices host is disposed',
                 );
             }
-            const managedProvider =
-                created.managedProvider ?? null;
+            // The runner decodes this strict schema, whose validator-neutral
+            // identities use normalized object prototypes. Retain that same
+            // authority here rather than comparing decoded values with the
+            // producer's native in-memory representation.
+            let managedProvider: ManagedProviderInvocation | null;
+            try {
+                managedProvider = created.managedProvider ? {
+                    ...created.managedProvider,
+                    bootstrap: RunnerDaemonManagedProviderBootstrapV1Schema.parse(created.managedProvider.bootstrap),
+                } : null;
+            } catch (error) {
+                controller.abort();
+                try { await created.dispose(); }
+                finally { completePendingCreation(); }
+                throw error;
+            }
             if (
                 managedProvider
                 && !await managedProvider.isCurrent()
@@ -895,6 +951,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                 runner,
                 retainedAgent,
                 services: created.services,
+                ...(created.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: created.prepareAgentNativeLaunch } : {}),
                 managedProvider,
                 managedProviderStart: null,
                 managedProviderMaterialization: null,
@@ -1119,22 +1176,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
             case 'plugin_services.managed_provider.start_v1': {
                 const managedProvider =
                     await requireManagedProvider();
-                const expected = Object.freeze({
-                    v: 1 as const,
-                    scope: managedProvider.bootstrap.scope,
-                    ...(managedProvider.bootstrap.custody ? { custody: managedProvider.bootstrap.custody } : {}),
-                    providerPluginHardRevocationRevisionAtAdmission:
-                        managedProvider.bootstrap
-                            .providerPluginHardRevocationRevisionAtAdmission,
-                });
-                if (
-                    !isDeepStrictEqual(operation.retained, expected)
-                ) {
-                    return fail(
-                        'plugin_services_managed_provider_retention_mismatch',
-                        'Runner requested a different managed Provider start authority',
-                    );
-                }
+                assertManagedProviderRetention(operation.retained, managedProvider.bootstrap);
                 invocation.managedProviderStart ??=
                     Promise.resolve(managedProvider.start());
                 await invocation.managedProviderStart;
@@ -1149,22 +1191,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
             case 'plugin_services.managed_provider.materialize_agent_binding_v1': {
                 const managedProvider =
                     await requireManagedProvider();
-                const expected = Object.freeze({
-                    v: 1 as const,
-                    scope: managedProvider.bootstrap.scope,
-                    ...(managedProvider.bootstrap.custody ? { custody: managedProvider.bootstrap.custody } : {}),
-                    providerPluginHardRevocationRevisionAtAdmission:
-                        managedProvider.bootstrap
-                            .providerPluginHardRevocationRevisionAtAdmission,
-                });
-                if (
-                    !isDeepStrictEqual(operation.retained, expected)
-                ) {
-                    return fail(
-                        'plugin_services_managed_provider_retention_mismatch',
-                        'Runner requested a different managed Provider materialization authority',
-                    );
-                }
+                assertManagedProviderRetention(operation.retained, managedProvider.bootstrap);
                 if (!invocation.managedProviderStart) {
                     return fail(
                         'plugin_services_managed_provider_start_required',
@@ -1217,15 +1244,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
             }
             case 'plugin_services.managed_provider.read_shared_gateway_access_v1': {
                 const managedProvider = await requireManagedProvider();
-                const expected = {
-                    v: 1 as const,
-                    scope: managedProvider.bootstrap.scope,
-                    ...(managedProvider.bootstrap.custody ? { custody: managedProvider.bootstrap.custody } : {}),
-                    providerPluginHardRevocationRevisionAtAdmission: managedProvider.bootstrap.providerPluginHardRevocationRevisionAtAdmission,
-                };
-                if (!isDeepStrictEqual(operation.retained, expected)) {
-                    return fail('plugin_services_managed_provider_retention_mismatch', 'Shared Provider access requires exact retained authority');
-                }
+                assertManagedProviderRetention(operation.retained, managedProvider.bootstrap);
                 if (managedProvider.bootstrap.custody !== 'daemonShared' || !managedProvider.readSharedGatewayAccess) {
                     return fail('plugin_services_managed_provider_authority_unavailable', 'Shared Provider access is unavailable');
                 }
@@ -2547,7 +2566,31 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     result: resolved,
                 });
             }
-            case 'plugin_exec.launch.authorize_v1': {
+            case 'plugin_exec.launch.authorize_v1':
+            case 'plugin_exec.resolved_agent_launch.authorize_v1': {
+                const nativeLaunch = operation.kind === 'plugin_exec.resolved_agent_launch.authorize_v1'
+                    || operation.agentNativeLaunch === true;
+                if (nativeLaunch && !invocation.prepareAgentNativeLaunch) {
+                    return fail('plugin_exec_native_launch_unavailable', 'Native Agent launch preparation is unavailable');
+                }
+                const preparationSignal = signal
+                    ? AbortSignal.any([invocation.controller.signal, signal]) : invocation.controller.signal;
+                const prepareAgentNativeLaunch: HostAgentNativeLaunchPreparation | undefined = nativeLaunch
+                    ? async (nativeSignal, nativeCwd, nativeEnvironment) => {
+                        const prepared = await invocation.prepareAgentNativeLaunch?.(nativeSignal, nativeCwd, nativeEnvironment);
+                        requireInvocation(sessionId, runner, retainedAgent, operation);
+                        if (nativeSignal.aborted) return fail('plugin_exec_aborted', 'Process operation was aborted');
+                        return prepared;
+                    } : undefined;
+                let launch: HostAuthorizedPluginExecLaunch;
+                if (operation.kind === 'plugin_exec.resolved_agent_launch.authorize_v1') {
+                    const { stdin, ...resolved } = operation.launch;
+                    launch = await authorizeResolvedProjectExecLaunchForHost({
+                        launch: { ...resolved, ...(stdin === undefined ? {} : { stdin: new Uint8Array(Buffer.from(stdin, 'base64')) }) },
+                        prepareAgentNativeLaunch, signal: preparationSignal,
+                        assertCurrent() { requireInvocation(sessionId, runner, retainedAgent, operation); },
+                    });
+                } else {
                 let executable = operation.request.executable;
                 if (operation.systemToolResolutionId) {
                     const resolved =
@@ -2571,8 +2614,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     stdin,
                     ...request
                 } = operation.request;
-                const launch =
-                    await authorizePluginExecLaunchForHost(
+                launch = await authorizePluginExecLaunchForHost(
                         services.exec,
                         {
                             ...request,
@@ -2588,8 +2630,9 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                                 }
                                 : {}),
                         },
-                        operationOptions,
+                        { ...operationOptions, ...(prepareAgentNativeLaunch ? { prepareAgentNativeLaunch } : {}) },
                     );
+                }
                 const authorizationId = randomUUID();
                 invocation.execAuthorizations.set(
                     authorizationId,
@@ -2630,6 +2673,8 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                                     true,
                             }
                             : {}),
+                        ...(launch.processOwnerTag ? { processOwnerTag: launch.processOwnerTag } : {}),
+                        ...(launch.waitForGracefulRootExitBeforeTreeStop ? { waitForGracefulRootExitBeforeTreeStop: true } : {}),
                     },
                 });
             }

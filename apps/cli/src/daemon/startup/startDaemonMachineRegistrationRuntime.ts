@@ -34,7 +34,6 @@ function createMachineRegistrationRetryWakeSource(
     supervisor = createManagedEndpointSupervisor({
       ...DEFAULT_MANAGED_CONNECTION_POLICY,
       probeReadiness: createLoopbackReadinessProbe({
-        serverUrl: configuration.apiServerUrl,
         token: params.token,
       }),
     });

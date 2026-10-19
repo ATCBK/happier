@@ -742,6 +742,39 @@ describe('computeDaemonSpawnRequestKey', () => {
 });
 
 describe('createSpawnRequestCoalescer', () => {
+  it('serializes a fresh admission behind retired same-key work and coalesces its current duplicates', async () => {
+    const coalescer = createSpawnRequestCoalescer({ recentSuccessTtlMs: 0 });
+    const key = computeAuthorizedExistingSessionKey('same');
+    const retiredWork = createDeferred<SpawnSessionResult>();
+    const currentWork = createDeferred<SpawnSessionResult>();
+    let firstAdmissionCurrent = true;
+    const first = coalescer.run(key, () => retiredWork.promise, () => firstAdmissionCurrent);
+    firstAdmissionCurrent = false;
+    const successorWork = vi.fn(() => currentWork.promise);
+    const successor = coalescer.run(key, successorWork, () => true);
+    const duplicateWork = vi.fn(() => currentWork.promise);
+    const duplicate = coalescer.run(key, duplicateWork, () => true);
+    expect(successorWork).not.toHaveBeenCalled();
+    retiredWork.resolve({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE, errorMessage: 'Retired admission' });
+    await first;
+    await vi.waitFor(() => expect(successorWork).toHaveBeenCalledOnce());
+    expect(duplicateWork).not.toHaveBeenCalled();
+    expect(coalescer.readInFlightRequests()).toHaveLength(1);
+    // Retirement of the old same-key operation must not clear its successor's
+    // exact authorization while that successor is still physically pending.
+    const conflictingKey = computeDaemonSpawnRequestKey({ directory: '/changed', existingSessionId: 'sess_1',
+      executionAuthorization: { provenance: 'user_request', requestId: 'same' } });
+    const conflictingWork = vi.fn(() => currentWork.promise);
+    await expect(coalescer.run(conflictingKey, conflictingWork)).resolves.toMatchObject({
+      type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+    });
+    expect(conflictingWork).not.toHaveBeenCalled();
+    currentWork.resolve({ type: 'success', sessionId: 'successor' });
+    await expect(successor).resolves.toMatchObject({ type: 'success', sessionId: 'successor' });
+    await expect(duplicate).resolves.toMatchObject({ type: 'success', sessionId: 'successor' });
+    expect(coalescer.readInFlightRequests()).toHaveLength(0);
+  });
+
   it('coalesces concurrent calls for the same key and caches recent new-session success', async () => {
     let now = 10_000;
     const nowMs = () => now;

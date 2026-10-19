@@ -37,6 +37,7 @@ import {
   clearTrackedRunnerAgentDaemonServiceAdmission,
 } from './clearTrackedRunnerAgentDaemonServiceAdmission';
 import { resolveTrackedSessionRunnerIdentity } from '../sessions/sessionReportCorrelation';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '../connectedServices/materialization/materializer';
 
 function clearPromotedAuthorityIfExact(input: Readonly<{
   tracked: TrackedSession;
@@ -53,6 +54,7 @@ function clearPromotedAuthorityIfExact(input: Readonly<{
   }
   delete input.tracked.agentRuntimeDaemonServiceAuthorityFilePath;
   delete input.tracked.agentRuntimeDaemonServiceCapabilityHash;
+  delete input.tracked.materializedStateObservationBinding;
   clearTrackedRunnerAgentDaemonServiceAdmission(input.tracked);
 }
 
@@ -73,6 +75,7 @@ function resolveRetainedAgentCurrentnessProof(
 
 export async function promoteForegroundDaemonServiceAuthority(input: Readonly<{
   requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
+  materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
   happyHomeDir: string;
   publicReleaseRing: Parameters<
     typeof readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker
@@ -309,6 +312,8 @@ export async function promoteForegroundDaemonServiceAuthority(input: Readonly<{
         processCommandHash: runner.processCommandHash,
         processStartTimeMs: runner.processStartTimeMs,
         sourceCustody: input.retainedAgent.sourceCustody,
+        ...(input.materializedStateObservationBinding
+          ? { materializedStateObservationBinding: input.materializedStateObservationBinding } : {}),
         ...(requester ? { requesterWorkAttributionV1: requester.bootstrap.attribution } : {}),
       });
       if (!sourceCustodyPersisted) return false;
@@ -345,6 +350,11 @@ export async function promoteForegroundDaemonServiceAuthority(input: Readonly<{
   tracked.agentRuntimeDaemonServiceCapabilityHash =
     input.capabilityDigest;
   tracked.runnerAgentSourceCustodyV1 = input.retainedAgent.sourceCustody;
+  if (input.materializedStateObservationBinding) {
+    tracked.materializedStateObservationBinding = input.materializedStateObservationBinding;
+  } else {
+    delete tracked.materializedStateObservationBinding;
+  }
   tracked.runnerManagedDependencyRetentionV1 =
     runnerManagedDependencyRetentionV1;
   tracked.runnerAgentInvocationContext = Object.freeze({

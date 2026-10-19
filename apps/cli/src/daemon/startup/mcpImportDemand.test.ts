@@ -55,7 +55,7 @@ describe('daemon MCP import demand', () => {
       contribution: { id: 'action', qualifiedId: 'fixture.caller/actions/action' },
       occurrenceId: 'fixture-occurrence', correlationId: 'fixture-request', surface: 'agent',
       signal: new AbortController().signal, isOccurrenceCurrent: () => true,
-    }, [{ serverRefs: [ref], discoverySourceRefs: [], operations: ['connect', 'listTools'] }]);
+    }, [{ serverRefs: [ref], discoverySourceRefs: [], operations: ['listTools'] }]);
     const client = await service.connect(ref, { elicitation: { mode: 'reject' } });
     expect([...evaluated]).toEqual([]);
     await expect(client.listResources()).resolves.toEqual({ items: [{ uri: 'file:///guide', name: 'guide' }] });

@@ -1,20 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { describe, expect, it } from 'vitest';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseConnectedAccountRequestAuthCapabilityDocument } from '@happier-dev/agents/request-auth';
 import type { AgentConnectedAccountLaunchContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
-
-let createConnectedAccountRequestAuthSubjectRegistry: typeof import('@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry').createConnectedAccountRequestAuthSubjectRegistry;
-let createConnectedAccountRequestAuthService: typeof import('@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthService').createConnectedAccountRequestAuthService;
-let resolvePurposeTeamCredentialBindingIntentsFromHome: typeof import('@/session/services/spawnConnectedServicesDefaults').resolvePurposeTeamCredentialBindingIntentsFromHome;
-let withRealForegroundAdmissionFixture: typeof import('./foregroundAdmission.testkit').withRealForegroundAdmissionFixture;
-let createExternalConnectedAccountForegroundFixture: typeof import('./prepareForegroundAdmission.connectedServices.testkit').createExternalConnectedAccountForegroundFixture;
+import type { TrackedSession } from '../types';
+import { createConnectedAccountRequestAuthSubjectRegistry } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
+import { createConnectedAccountRequestAuthService } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthService';
+import { resolvePurposeTeamCredentialBindingIntentsFromHome } from '@/session/services/spawnConnectedServicesDefaults';
+import { withRealForegroundAdmissionFixture } from './foregroundAdmission.testkit';
+import { createExternalConnectedAccountForegroundFixture } from './prepareForegroundAdmission.connectedServices.testkit';
 
 const nativeHomeLaunch: AgentConnectedAccountLaunchContributionV1 = {
   stateSharingDescriptor: {
     providerSupportStatus: 'supported',
     config: { supported: true, modes: ['copied'], entries: [{ path: 'config.toml', mode: 'force_copied' }] },
-    state: { supported: true, modes: ['isolated'], entries: [], symlinkUnavailableDegradePolicy: 'degrade_to_isolated' },
+    state: { supported: true, modes: ['shared', 'isolated'], entries: [{ path: 'projects', mode: 'linked', createIfMissing: 'directory' }], symlinkUnavailableDegradePolicy: 'degrade_to_isolated' },
     authIsolation: { mode: 'materialized_home', secretEntries: ['auth.json'] },
     nativeHome: { environmentKey: 'ACME_NATIVE_HOME', defaultRelativePath: '.acme-native-home' },
   },
@@ -26,17 +26,6 @@ const claimInput = {
 } as const;
 
 describe('foreground Connected Account custody through real authored Agent activation', () => {
-  beforeEach(async () => {
-    // Disposal permanently closes a real daemon controller. Each case owns a
-    // fresh module graph, including both its runtime and Account producers.
-    vi.resetModules();
-    ({ createConnectedAccountRequestAuthSubjectRegistry } = await import('@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry'));
-    ({ createConnectedAccountRequestAuthService } = await import('@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthService'));
-    ({ resolvePurposeTeamCredentialBindingIntentsFromHome } = await import('@/session/services/spawnConnectedServicesDefaults'));
-    ({ withRealForegroundAdmissionFixture } = await import('./foregroundAdmission.testkit'));
-    ({ createExternalConnectedAccountForegroundFixture } = await import('./prepareForegroundAdmission.connectedServices.testkit'));
-  });
-
   it.each([
     { label: 'a novel service', service: { pluginId: 'acme.connected-account', localId: 'credential' } },
     { label: 'a legacy-mapped service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
@@ -97,6 +86,35 @@ describe('foreground Connected Account custody through real authored Agent activ
     });
   });
 
+  it.each([true, false])('projects qualified credential environment values and unsets through foreground claim (materialize=%s)', async materialize => {
+    const account = createExternalConnectedAccountForegroundFixture({
+      service: { pluginId: 'acme.connected-account', localId: 'credential' },
+      materializationKinds: ['environment'],
+      launch: {
+        ...(materialize ? { environmentUses: [{ purpose: 'primary', environmentKey: 'ACME_TOKEN' }] } : {}),
+        environmentUnsetUses: [{ purpose: 'primary', environmentKey: 'ACME_NATIVE_TOKEN' }],
+      },
+      materializeAccount: async ({ request }) => {
+        if (request.kind !== 'environment') throw new Error('Unexpected Account materialization kind');
+        return { kind: 'environment', env: { ACME_TOKEN: 'selected-account-credential' } };
+      },
+    });
+    await withRealForegroundAdmissionFixture({ plugins: account.plugins, runtimeOptions: { connectedAccounts: account.owner } }, async (fixture) => {
+      const admitted = await fixture.prepare(account.requestFor(fixture.runtime.registry), account.dependencies);
+      expect(admitted.ok).toBe(true);
+      if (!admitted.ok) throw new Error(admitted.error.code);
+      const claimed = await admitted.prepared.claim(claimInput);
+      expect(claimed.ok).toBe(true);
+      if (!claimed.ok) throw new Error(claimed.error.code);
+      expect(claimed.environment.ACME_TOKEN).toBe(materialize ? 'selected-account-credential' : undefined);
+      expect(claimed.sensitiveEnvironmentVariableNames.includes('ACME_TOKEN')).toBe(materialize);
+      expect(claimed.unsetEnvironmentVariableNames).toContain('ACME_NATIVE_TOKEN');
+      expect(claimed.environment).not.toHaveProperty('env');
+      expect(claimed.environment).not.toHaveProperty('unsetEnvKeys');
+      await admitted.prepared.cleanup();
+    });
+  });
+
   it('admits a durable Team default and hands its exact Home slot binding to Session creation', async () => {
     const service = { pluginId: 'acme.connected-account', localId: 'credential' } as const;
     const account = createExternalConnectedAccountForegroundFixture({
@@ -143,7 +161,7 @@ describe('foreground Connected Account custody through real authored Agent activ
   });
 
   it('materializes exact-account opaque credentials into an isolated native home without changing the persistent home', async () => {
-    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' } as const;
+    const service = { pluginId: 'acme.connected-account', localId: 'credential' } as const;
     const persistentAuth = new Uint8Array([11, 22, 33, 44]);
     const selectedAuth = new Uint8Array([0, 255, 17, 99]);
     let replaceDuringMaterialization = false;
@@ -175,6 +193,46 @@ describe('foreground Connected Account custody through real authored Agent activ
       if (!claimed.ok) throw new Error(claimed.error.code);
       const targetRoot = claimed.environment.ACME_NATIVE_HOME;
       expect(targetRoot).toBeTruthy();
+      expect(claimed.materializedStateObservationBinding).toEqual({
+        agentId: account.requestFor(fixture.runtime.registry).agentId,
+        pluginId: admitted.prepared.authorization.descriptor.pluginId,
+        sourceCustody: admitted.prepared.authorization.descriptor.sourceCustody,
+        nativeHomeRoot: await realpath(targetRoot!),
+        entries: [{ entryPath: 'projects', sourceEntryRoot: await realpath(join(sourceRoot, 'projects')), materializedEntryPath: join(await realpath(targetRoot!), 'projects') }],
+      });
+      const { writeSessionMarker, readSessionMarkerForPid, clearSessionMarkerAgentRuntimeDaemonServicePromotionIfOwned } = await import('../sessionRegistry');
+      const { configuration } = await import('@/configuration');
+      const { promoteForegroundDaemonServiceAuthority } = await import('./promoteForegroundDaemonServiceAuthority');
+      const { buildTrackedSessionFromMarker } = await import('../sessions/trackedSessionFromMarker');
+      const tracked: TrackedSession = { startedBy: 'terminal', pid: fixture.foregroundPid,
+        happySessionId: claimInput.canonicalSessionId,
+        processStartTimeMs: claimed.authority.runner.processStartTimeMs,
+        processCommandHash: claimed.authority.runner.processCommandHash };
+      await writeSessionMarker({ pid: tracked.pid, happySessionId: claimInput.canonicalSessionId, startedBy: 'terminal',
+        processStartTimeMs: tracked.processStartTimeMs, processCommandHash: tracked.processCommandHash });
+      expect(await promoteForegroundDaemonServiceAuthority({
+        happyHomeDir: fixture.home, publicReleaseRing: configuration.publicReleaseRing,
+        trackedSessions: new Map([[tracked.pid, tracked]]), canonicalSessionId: claimInput.canonicalSessionId,
+        foregroundPid: tracked.pid, authorityFilePath: admitted.prepared.authorization.authorityFilePath,
+        retainedAgent: claimed.authority.retainedAgent, runner: claimed.authority.runner,
+        runnerManagedDependencyRetentionV1: claimed.authority.runnerManagedDependencyRetentionV1,
+        capabilityDigest: claimed.authority.capabilityDigest, invocationContext: claimed.invocationContext,
+        materializedStateObservationBinding: claimed.materializedStateObservationBinding,
+      })).toBe(true);
+      expect(tracked.materializedStateObservationBinding).toBe(claimed.materializedStateObservationBinding);
+      const promotedMarker = await readSessionMarkerForPid(tracked.pid);
+      expect(promotedMarker?.materializedStateObservationBinding).toEqual(claimed.materializedStateObservationBinding);
+      expect(buildTrackedSessionFromMarker({ marker: promotedMarker!, startedByFallback: 'reattached' }).materializedStateObservationBinding)
+        .toEqual(claimed.materializedStateObservationBinding);
+      // The existing partial-promotion retirement path can omit source custody
+      // when retained-dependency publication did not finish.
+      expect(await clearSessionMarkerAgentRuntimeDaemonServicePromotionIfOwned({
+        pid: tracked.pid, sessionId: claimInput.canonicalSessionId,
+        processStartTimeMs: claimed.authority.runner.processStartTimeMs,
+        processCommandHash: claimed.authority.runner.processCommandHash,
+        authorityFilePath: admitted.prepared.authorization.authorityFilePath,
+      })).toBe(true);
+      expect(await readSessionMarkerForPid(tracked.pid)).not.toHaveProperty('materializedStateObservationBinding');
       await expect(readFile(join(targetRoot!, 'auth.json'))).resolves.toEqual(Buffer.from(selectedAuth));
       await expect(readFile(join(targetRoot!, 'config.toml'), 'utf8')).resolves.toBe('profile-source\n');
       await expect(readFile(join(sourceRoot, 'auth.json'))).resolves.toEqual(Buffer.from(persistentAuth));

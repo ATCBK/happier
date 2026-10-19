@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setTimeout } from 'node:timers';
 
 import { probeSessionRunnerPresence as readRunnerPresence } from '../sessions/isSessionRunnerActive';
 
@@ -9,7 +10,7 @@ import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import type { TrackedSession } from '../types';
 import { serializeWindowsCommandLine } from '../platform/windows/windowsCommandLine';
 import { configuration } from '@/configuration';
-import { createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
+import { captureSessionLaunchControlMetadata, createSessionMetadata } from '@/agent/runtime/createSessionMetadata';
 import { createOnHappySessionWebhook } from '../sessions/onHappySessionWebhook';
 import { waitForSessionWebhook } from './waitForSessionWebhook';
 import type { SpawnSessionResult } from '@/session/shared/spawnSessionContract';
@@ -213,7 +214,7 @@ describe('pending fresh runner admission before its webhook', () => {
     const metadata = createSessionMetadata({
       flavor: 'test-agent', machineId: 'machine-fresh-startup', startedBy: 'daemon',
       hostProcessStartTimeMs: identity.processStartTimeMs,
-      launchControlMetadata: {},
+      launchControlMetadata: captureSessionLaunchControlMetadata({ processEnvironment: {} }),
     }).metadata;
     const tracked: TrackedSession = {
       pid: process.pid, startedBy: 'daemon', happySessionId: `PID-${process.pid}`,
@@ -474,5 +475,31 @@ describe('pending ordinary wrapper runner admission', () => {
     expect(awaiters.has(wrapperPid)).toBe(true);
     expect(waiter).not.toHaveBeenCalled();
     expect(tracked.spawnStartupCanonicalSessionId).toBeUndefined();
+  });
+});
+
+
+describe('provider conversation spawn admission', () => {
+  it.each(['reported', 'command'] as const)('blocks a live sibling entry using %s identity, ignores another target and admits a positively absent runner', async (identitySource) => {
+    const backendTarget = { kind: 'backend', sourceKind: 'built_in', backendId: 'claude' } as const;
+    const tracked: TrackedSession = { pid: 91234, startedBy: 'terminal', happySessionId: 'replacement',
+      ...(identitySource === 'reported' ? { vendorResumeId: 'conversation' } : { processCommand: 'happier claude --resume conversation' }),
+      spawnOptions: { directory: '/repo', backendTarget } };
+    const probe = async (present: boolean, resumeId = 'conversation', backendId = 'claude') => {
+      const input = {
+        existingSessionId: 'old-entry', pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        providerConversation: { resumeId, backendTarget: { kind: 'backend' as const, sourceKind: 'built_in' as const, backendId } },
+        probeSessionRunnerPresence: async (sessionId: string) => await readRunnerPresence({
+          sessionId, trackedSessions: [tracked], readProcessRunState: async () => present ? 'servable' : 'dead',
+          readSessionRunnerLockStatus: async () => ({ ok: false, reason: 'not_found' }),
+        }),
+        waitForExitTimeoutMs: 0, waitForExitPollIntervalMs: 50, logDebug: () => {}, logWarn: () => {},
+      };
+      return await resolveExistingSessionSpawnPreGate(input);
+    };
+    expect((await probe(true)).shortCircuitResult).toMatchObject({ type: 'error', errorCode: 'INVALID_REQUEST' });
+    expect((await probe(false)).shortCircuitResult).toBeNull();
+    expect((await probe(true, 'another-conversation')).shortCircuitResult).toBeNull();
+    expect((await probe(true, 'conversation', 'codex')).shortCircuitResult).toBeNull();
   });
 });

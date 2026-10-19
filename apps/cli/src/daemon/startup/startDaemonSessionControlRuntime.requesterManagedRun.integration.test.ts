@@ -22,7 +22,8 @@ it('uses an actually issued same-Account reader with distinct credentials and ne
     const opened = await fixture.dispatch({ kind: 'provider_managed.binding.open', requestId: 'issued-open', ...fixture.proof });
     expect(opened, JSON.stringify({ opened, sourceDiagnostics: fixture.sourceDiagnostics })).toMatchObject({ ok: true, result: { kind: 'provider_managed.binding' } });
     if (!opened.ok || opened.result.kind !== 'provider_managed.binding') throw new Error('Expected genuine issued consumer');
-    const send = () => fetch(`${opened.result.endpointUrl}/responses`, { method: 'POST', headers: opened.result.headers,
+    const binding = opened.result;
+    const send = () => fetch(`${binding.endpointUrl}/responses`, { method: 'POST', headers: binding.headers,
       body: JSON.stringify({ model: 'example', input: 'hello' }) });
     expect((await send()).ok).toBe(true);
     const rootSnapshot = getActiveAccountSettingsSnapshot();

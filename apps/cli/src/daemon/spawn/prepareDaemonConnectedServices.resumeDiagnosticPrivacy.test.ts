@@ -15,6 +15,7 @@ import { prepareDaemonConnectedServices } from './prepareDaemonConnectedServices
 const hoisted = vi.hoisted(() => ({
   getActiveAccountSettingsSnapshot: vi.fn(() => null),
   loggerDebug: vi.fn(),
+  loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
   resolveConnectedServiceAuthForSpawn: vi.fn(),
   shouldResolveConnectedServiceAuthForSpawn: vi.fn(() => true),
@@ -27,6 +28,7 @@ vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', () => ({
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: hoisted.loggerDebug,
+    info: hoisted.loggerInfo,
     warn: hoisted.loggerWarn,
   },
 }));
@@ -88,7 +90,7 @@ describe('prepareDaemonConnectedServices resume diagnostics', () => {
       connectedServiceRefreshCoordinator: null,
       processEnv: {},
       connectedServicesMaterializationBaseDir: '/tmp/connected-services',
-      pluginContributions: {} as never,
+      pluginRuntimeRegistry: { contributes: {} as never },
     });
 
     expect(result).toMatchObject({
@@ -152,7 +154,7 @@ describe('prepareDaemonConnectedServices resume diagnostics', () => {
       connectedServiceRefreshCoordinator: null,
       processEnv: {},
       connectedServicesMaterializationBaseDir: '/tmp/connected-services',
-      pluginContributions: {} as never,
+      pluginRuntimeRegistry: { contributes: {} as never },
     });
 
     expect(result).toMatchObject({ ok: false, result: { type: 'error' } });
@@ -195,7 +197,7 @@ describe('prepareDaemonConnectedServices resume diagnostics', () => {
       connectedServiceRefreshCoordinator: null,
       processEnv: {},
       connectedServicesMaterializationBaseDir: '/tmp/connected-services',
-      pluginContributions: {} as never,
+      pluginRuntimeRegistry: { contributes: {} as never },
     });
 
     expect(result).toMatchObject({
@@ -242,7 +244,7 @@ describe('prepareDaemonConnectedServices resume diagnostics', () => {
       connectedServiceRefreshCoordinator: null,
       processEnv: {},
       connectedServicesMaterializationBaseDir: '/tmp/connected-services',
-      pluginContributions: {} as never,
+      pluginRuntimeRegistry: { contributes: {} as never },
       repairMissingMaterializationIdentity: async () => ({
         identity: {
           v: 1,

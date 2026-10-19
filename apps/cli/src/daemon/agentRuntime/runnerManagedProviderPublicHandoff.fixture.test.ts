@@ -1,9 +1,9 @@
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
     ManagedProviderRuntime,
     ManagedProviderRuntimeContext } from '@happier-dev/plugin-sdk/providers';
@@ -16,6 +16,7 @@ import type {
 
 import { readCurrentCommittedPluginGenerations } from '@/plugins/store/registry/generationStore';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
+import { writeManagedJavaScriptRuntimeFixture } from '@/testkit/process/managedJavaScriptRuntimeFixture';
 
 import {
     commitPackedPublicHandoffFixture,
@@ -35,9 +36,13 @@ describe('external Agent and managed Provider archive generations', () => {
     const roots: string[] = [];
 
     afterEach(async () => {
-        await Promise.all(roots.splice(0).map(async (root) => {
-            await rm(root, { recursive: true, force: true });
-        }));
+        try {
+            await Promise.all(roots.splice(0).map(async (root) => {
+                await rm(root, { recursive: true, force: true });
+            }));
+        } finally {
+            vi.unstubAllEnvs();
+        }
     });
 
     it('writes external author fixtures against the declared public Plugin SDK root', async () => {
@@ -77,6 +82,11 @@ describe('external Agent and managed Provider archive generations', () => {
         const agentHRoot = join(root, 'agent-h');
         const providerQRoot = join(root, 'provider-q');
         await mkdir(happyHomeDir);
+        // Author tooling requires its managed wrapper, not the host Node path.
+        // Keep the executable real without testing a shared runtime download.
+        const runtime = await writeManagedJavaScriptRuntimeFixture(happyHomeDir);
+        vi.stubEnv('HAPPIER_HOME_DIR', happyHomeDir);
+        vi.stubEnv('HAPPIER_JS_RUNTIME_PATH', runtime);
         const service = createPublicHandoffArchiveChangeService(happyHomeDir);
 
         await writePublicHandoffAgentPluginFixture({
@@ -88,6 +98,23 @@ describe('external Agent and managed Provider archive generations', () => {
             pluginRoot: providerRoot,
             version: '1.0.0',
             generation: 'P',
+        });
+        // This contract covers independent public archives and immutable
+        // generations, not concurrent cold publication of their shared host SDK.
+        // Keep its real source/currentness owner, before the parallel packs.
+        // The repository JavaScript publisher is an untyped tooling boundary.
+        const publisher: unknown = await import(new URL('../../../scripts/buildSharedDeps.mjs', import.meta.url).href);
+        if (typeof publisher !== 'object' || publisher === null
+            || !('syncSharedDepsForSourceDev' in publisher)
+            || typeof publisher.syncSharedDepsForSourceDev !== 'function') {
+            throw new Error('The source shared-dependency publisher is unavailable');
+        }
+        const { syncSharedDepsForSourceDev } = publisher;
+        await syncSharedDepsForSourceDev({
+            repoRoot: fileURLToPath(new URL('../../../../../', import.meta.url)),
+            workspaceNames: ['plugin-sdk'],
+            publishBundledPluginArtifacts: false,
+            prepareBundledPluginCompilerInputs: false,
         });
         const [agentGArchive, providerPArchive] = await Promise.all([
             packPublicHandoffFixture({

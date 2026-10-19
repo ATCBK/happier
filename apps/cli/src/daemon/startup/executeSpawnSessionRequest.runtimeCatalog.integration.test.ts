@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import {
   ConnectedServiceBindingsV2IngressSchema,
   DEFAULT_PROVIDER_SETTINGS_V1,
   ProviderConnectionIdSchema,
+  ProviderRuntimeBindingBasisV1Schema,
   createProviderBindingSecurityFingerprintV1,
   createProviderErrorV1,
   deriveSessionCreationTagV1,
@@ -21,6 +22,7 @@ import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServic
 import { consumeProviderBindingLaunchHandoffFromEnvironments } from '@/plugins/runtime/providerBindings/handoff';
 import type { ProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
 import type { TrackedSession } from '../types';
+import { createConnectedAccountPurposeBindingOwner } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
   'HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON';
@@ -372,7 +374,7 @@ function createManagedProviderRuntimeBindingBasis(input: Readonly<{
   pluginId: string;
   providerLocalId: string;
 }>): ProviderRuntimeBindingBasisV1 {
-  return {
+  return ProviderRuntimeBindingBasisV1Schema.parse({
     v: 1,
     deployment: {
       kind: 'managedLocal',
@@ -419,7 +421,19 @@ function createManagedProviderRuntimeBindingBasis(input: Readonly<{
       applyPolicy: 'restart_session',
       supportsFreeformModelIds: true,
     },
-  };
+  });
+}
+
+function createSpawnPurposeBindingOwner() {
+  const unexpected = async (): Promise<never> => { throw new Error('Unexpected Account transport in spawn fixture'); };
+  return createConnectedAccountPurposeBindingOwner({
+    store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected, subscribe: () => ({ dispose() {} }) },
+    selectTarget: unexpected,
+    resolveTarget: unexpected,
+    materializeAccount: unexpected,
+    projectTargetAccounts: unexpected,
+    assertTargetAccountMaterializable: unexpected,
+  });
 }
 
 async function configureProviderBoundExistingSessionSpawn(input: Readonly<{
@@ -1504,13 +1518,7 @@ describe('executeSpawnSessionRequest', () => {
     const result = await executeSpawnSessionRequest({
       ...createParams(),
       resolveProvidersFeatureEnabled: async () => true,
-      activateSessionPurposeBindings: () => ({
-        subjectId: 'agent-session:session-1',
-        isCurrent: () => true,
-        resolvePurposeBinding: () => null,
-        listPurposeBindings: () => [],
-        dispose: vi.fn(),
-      }),
+      activateSessionPurposeBindings: createSpawnPurposeBindingOwner().activateSessionPurposeBindings,
       options: {
         ...createParams().options,
         resume: undefined,
@@ -1872,15 +1880,9 @@ describe('executeSpawnSessionRequest', () => {
       ...createParams(),
       connectedAccountRequestAuthHttpPort: 18_765,
       resolveProvidersFeatureEnabled: async () => true,
-      activateSessionPurposeBindings: vi.fn(() => {
+      activateSessionPurposeBindings: vi.fn((input: Parameters<ReturnType<typeof createSpawnPurposeBindingOwner>['activateSessionPurposeBindings']>[0]) => {
         events.push('lease');
-        return {
-          subjectId: 'agent-session:managed-session-1',
-          isCurrent: () => true,
-          resolvePurposeBinding: () => managedPurposeBinding,
-          listPurposeBindings: () => [managedPurposeBinding],
-          dispose: vi.fn(),
-        };
+        return createSpawnPurposeBindingOwner().activateSessionPurposeBindings(input);
       }),
       options: {
         ...createParams().options,
@@ -3140,19 +3142,13 @@ describe('executeSpawnSessionRequest', () => {
       }),
       retire: vi.fn(async () => undefined),
     };
-    const sessionPurposeBindingSubject = {
-      subjectId: 'agent-session:session-1',
-      isCurrent: () => true,
-      resolvePurposeBinding: (purpose: typeof agentPurpose) => (
-        purpose.consumer.pluginId === agentPurpose.consumer.pluginId
-        && purpose.consumer.localId === agentPurpose.consumer.localId
-        && purpose.purpose === agentPurpose.purpose
-          ? agentPurposeBinding
-          : null
-      ),
-      listPurposeBindings: () => [agentPurposeBinding],
-      dispose: vi.fn(),
-    };
+    const purposeLease = createSpawnPurposeBindingOwner().activateSessionPurposeBindings({
+      sessionId: 'session-1',
+      purposes: [agentPurpose],
+      bindings: [agentPurposeBinding],
+      ...(directMaterialOrigins ? { directMaterialOrigins } : {}),
+    });
+    const sessionPurposeBindingSubject = { ...purposeLease, dispose: vi.fn(purposeLease.dispose) };
     const activateSessionPurposeBindings = vi.fn(() => {
       events.push('lease');
       return sessionPurposeBindingSubject;

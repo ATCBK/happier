@@ -6,6 +6,9 @@ import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-de
 import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
+import { evaluateSessionEligibility } from '../guard/sessionEligibility';
+import type { TrackedSession } from '../types';
+import { projectCurrentAgentSessionView } from '@happier-dev/agents';
 
 vi.mock('@/ui/logger', () => ({
     logger: {
@@ -85,6 +88,30 @@ async function prepareConfiguredAcpResume(params: Readonly<{
 }
 
 describe('prepareExecuteSpawnSessionRequest Account-configured ACP resume admission', () => {
+    it.each([true, false])('automatic stop consumes the same configured load-session decision (%s)', async supportsLoadSession => {
+        const agent = [...runtime.registry.contributes.agentDefinitionsById.values()]
+            .find(value => value.identity?.pluginId === 'happier.agent.custom-acp');
+        if (!agent) throw new Error('Admitted configured Agent unavailable');
+        const catalog = readyCatalog(supportsLoadSession);
+        const tracked: TrackedSession = { pid: 42, happySessionId: 'configured-session', startedBy: 'daemon' };
+        const metadata = projectCurrentAgentSessionView({ machineId: 'machine-1', path: '/tmp/configured-acp-resume' }, {
+            agentId: agent.id,
+            runtimeDescriptor: RuntimeDescriptorV1Schema.parse({ v: 1, agentId: agent.id, agent: { definitionId: CONFIGURED_BACKEND_ID } }),
+            nativeResumeIdentity: { v: 1, vendorResumeId: PROVIDER_SESSION_ID },
+            configuredBackend: { v: 1, updatedAt: 1, backendId: CONFIGURED_BACKEND_ID, title: 'Review Bot' },
+        });
+        const eligibility = await evaluateSessionEligibility({ tracked,
+            inventory: { coverage: 'complete', items: (['session', 'input', 'agents', 'attention'] as const).map(category => ({
+                category, ownerRef: tracked, attribution: { kind: 'unknown' }, state: 'settled', settledAt: 1,
+            })) }, draft: { status: 'absent' },
+            resume: { sessionId: tracked.happySessionId!, rawSession: { machineId: 'machine-1', path: '/tmp/configured-acp-resume' }, metadata },
+            readAcpCatalogSnapshot: async () => catalog,
+        });
+        expect(eligibility.eligible).toBe(supportsLoadSession);
+        const admission = await prepareConfiguredAcpResume({ acpCatalogSnapshot: catalog });
+        expect('type' in admission).toBe(!supportsLoadSession);
+        if (!supportsLoadSession) expect(eligibility).toMatchObject({ reasons: [{ kind: 'not_resumable' }] });
+    });
     it('carries the current Machine soft ceiling into a native resume launch without a Session fetch', async () => {
         const policy = MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { sessionMemoryCeiling: { bytes: 1048576 } } });
         const result = await prepareConfiguredAcpResume({ accountSettings: {}, acpCatalogSnapshot: readyCatalog(true),

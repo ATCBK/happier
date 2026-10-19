@@ -10,6 +10,7 @@ import { hashProcessCommand } from '../sessionRegistry';
 import { spawnWindowsHostedSessionAndWaitForWebhook } from './spawnWindowsHostedSessionAndWaitForWebhook';
 import { createOnHappySessionWebhook } from '../sessions/onHappySessionWebhook';
 import { configuration } from '@/configuration';
+import type { TrackedSession } from '../types';
 
 const mocks = vi.hoisted(() => {
   const visibleConsoleCancel = vi.fn(async () => ({
@@ -193,8 +194,11 @@ describe('spawnWindowsHostedSessionAndWaitForWebhook', () => {
       const input = createParams({ happyHomeDir: blockedHome });
       mocks.reportVisibleSession = null;
       const pending = spawnWindowsHostedSessionAndWaitForWebhook(input);
+      let trackedSession: TrackedSession | undefined;
       try {
         await vi.waitFor(() => expect(input.pidToAwaiter.has(7777)).toBe(true));
+        trackedSession = input.pidToTrackedSession.get(7777);
+        if (!trackedSession) throw new Error('Expected visible-console tracked Session');
         const report = createOnHappySessionWebhook({
           pidToTrackedSession: input.pidToTrackedSession, pidToAwaiter: input.pidToAwaiter,
           readProcessIdentityByPidFn: async () => null, findHappyProcessByPidFn: async () => null,
@@ -208,6 +212,7 @@ describe('spawnWindowsHostedSessionAndWaitForWebhook', () => {
       } finally {
         input.pidToSpawnResultResolver.get(7777)?.({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK, errorMessage: 'Fixture cleanup' });
         await Promise.allSettled([pending]);
+        await trackedSession?.reportMarkerCustody?.pending;
         for (const timeout of input.pidToSpawnWebhookTimeout.values()) clearTimeout(timeout);
         Object.defineProperty(configuration, 'happyHomeDir', { value: previousHome });
       }

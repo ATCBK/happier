@@ -34,6 +34,10 @@ import { resolveConcreteBackendTargetRefV2 } from '@/session/backendTargets/reso
 import { dispatchDaemonSpawnHookEvent } from '@/plugins/runtime/hooks/execution/dispatchDaemonSpawnHookEvent';
 import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from './spawnExplicitEnvKeysMarker';
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialization/materializer';
+import {
+  resolveQualifiedRequestAuthPurposeBindingsFromSnapshot,
+  type AgentSpawnQualifiedPurposeBindingSnapshot,
+} from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { buildMissingAgentCliCommandErrorMessage } from '@/packagedRuntime/managedTools/requireAgentCliCommand';
 import { detectNativeAgentCliAuthStatus } from '@/capabilities/cliAuth/detectNativeAgentCliAuthStatus';
 import {
@@ -47,7 +51,7 @@ import {
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { resolveSpawnHookInstallablesRegistry } from './spawnHookInstallablesRegistry';
 import { HAPPIER_SESSION_CREATE_ORIGIN_ENV_KEY, pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
-import { HAPPIER_SESSION_CREATE_REPORTS_TO_ENV_KEY } from '@/session/shared/sessionCreateReportsTo';
+import { HAPPIER_SESSION_CREATE_MANAGER_ENV_KEY } from '@/session/shared/sessionCreateManager';
 import { HAPPIER_SESSION_CREATE_ROLES_ENV_KEY } from '@/session/shared/sessionCreateRoles';
 import { resolveExistingSessionHandoffState } from '@/session/handoff/agentBundle/import';
 import { requiresAgentSessionCli } from '@/agent/catalog/runtimeEntry';
@@ -181,6 +185,7 @@ export async function resolveSpawnChildEnvironment(params: {
     cleanupOnExit: (() => void | Promise<void>) | null;
     diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
     targetMaterializedRoot?: string | null;
+    qualifiedPurposeBindingSnapshot?: AgentSpawnQualifiedPurposeBindingSnapshot | null;
   } | null;
   providerEnvironmentOverlay?: SessionEnvOverlayV1;
   materializeProviderBindingAfterHooks?: () => Promise<LateProviderBindingMaterialization>;
@@ -223,6 +228,7 @@ async function resolveSpawnChildEnvironmentImpl(params: {
     cleanupOnExit: (() => void | Promise<void>) | null;
     diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];
     targetMaterializedRoot?: string | null;
+    qualifiedPurposeBindingSnapshot?: AgentSpawnQualifiedPurposeBindingSnapshot | null;
   } | null;
   providerEnvironmentOverlay?: SessionEnvOverlayV1;
   materializeProviderBindingAfterHooks?: () => Promise<LateProviderBindingMaterialization>;
@@ -756,9 +762,16 @@ async function resolveSpawnChildEnvironmentImpl(params: {
       };
     }
     agentCliLaunchSpec = validation.launchSpec;
-    // A successfully authorized and materialized Provider binding owns its
-    // credential transport; its adapter can deliberately clear native login.
-    const auth = !agentCliLaunchSpec || (params.providerBindingContext && lateProviderMaterialization?.ok === true)
+    const agentIdentity = params.pluginRuntimeRegistry?.contributes.agentDefinitionsById.get(resolvedAgentId)?.identity;
+    const hasConnectedAccountRequestAuth = agentIdentity && resolveQualifiedRequestAuthPurposeBindingsFromSnapshot(
+      params.connectedServiceAuth?.qualifiedPurposeBindingSnapshot ?? null,
+    ).some(({ purpose }) => purpose.consumer.pluginId === agentIdentity.pluginId
+      && purpose.consumer.localId === agentIdentity.localId);
+    // The admitted Provider route owns credential transport. External bindings
+    // materialize above; managed bindings materialize after Session admission.
+    // Qualified Connected Account request-auth also owns its transport; none
+    // of these routes require the Agent's unrelated native sign-in.
+    const auth = !agentCliLaunchSpec || params.providerBindingContext || hasConnectedAccountRequestAuth
       ? null
       : await detectNativeAgentCliAuthStatus({
         agentId: resolvedAgentId,
@@ -831,8 +844,8 @@ async function resolveSpawnChildEnvironmentImpl(params: {
   if (!params.options.existingSessionId && params.options.initialSessionRolesV1 !== undefined) {
     extraEnvForChild[HAPPIER_SESSION_CREATE_ROLES_ENV_KEY] = JSON.stringify(params.options.initialSessionRolesV1);
   }
-  if (!params.options.existingSessionId && params.options.reportsTo !== undefined) {
-    extraEnvForChild[HAPPIER_SESSION_CREATE_REPORTS_TO_ENV_KEY] = JSON.stringify(params.options.reportsTo);
+  if (!params.options.existingSessionId && params.options.manager !== undefined) {
+    extraEnvForChild[HAPPIER_SESSION_CREATE_MANAGER_ENV_KEY] = JSON.stringify(params.options.manager);
   }
   if (Object.keys(createOrigin).length > 0) {
     extraEnvForChild[HAPPIER_SESSION_CREATE_ORIGIN_ENV_KEY] = JSON.stringify(createOrigin);

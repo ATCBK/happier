@@ -10,7 +10,8 @@ import type { TrackedSession } from '@/daemon/types';
 import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { createPluginReloadController, type PluginReloadController } from '@/plugins/runtime/reload/controller';
-import { resolveRequesterSessionBootstrapFromCustody } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+import { createRequesterSessionRuntimeContextResolver, releaseUnretainedRequesterSessionRuntimeContext,
+  resolveRequesterSessionBootstrapFromCustody } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
 import { createInstalledProjectAgentLaunchFixture } from './installedProjectAgentLaunchFixture';
 
@@ -53,8 +54,23 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     spawnOptions: { directory: cwd, backendTarget: { kind: 'backend', backendId: retainedAgent.agentId } } };
   const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
   const connectedServiceRuntimeRegistry = new ConnectedServiceRuntimeRegistry();
-  let requester: Awaited<ReturnType<typeof createRequesterSessionRuntimeContext>> = null;
+  let createRequesterRuntime: ((bootstrap: typeof f.bootstrap) => ReturnType<typeof createRequesterSessionRuntimeContext>) | null = null;
   let requesterRecoveryStage = 'not_requested';
+  const resolveRequesterRuntime = createRequesterSessionRuntimeContextResolver({
+    trackedSessions: pidToTrackedSession,
+    // Startup precedes construction of the real requester runtime factory.
+    getCreateRuntime: () => createRequesterRuntime,
+    recoverBootstrap: async ({ sessionId: id, attribution }) => {
+      if (id !== sessionId) return null;
+      requesterRecoveryStage = 'bootstrap';
+      const bootstrap = await resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: f.directory, serverId: 'session-home',
+        serverHttpBaseUrl: 'https://session-home.test', sessionId: id, legacyOwnerCredentials: f.bootstrap.credentials,
+        ...(attribution ? { expectedAttribution: attribution } : {}), machineAdmissionBoundary: {
+          machineId: 'machine', daemonToken: 'custodian-token', isHomeCurrent: f.isHomeCurrent, readInstallation: () => f.installation } });
+      if (!bootstrap) requesterRecoveryStage = 'bootstrap_refused';
+      return bootstrap;
+    },
+  });
   const daemon = await startDaemonSessionControlRuntime({ machineId: 'machine', serverId: 'session-home', serverBaseUrl: 'https://session-home.test',
     externalActionAccountId: 'custodian', credentials: { token: 'custodian-token', encryption: null }, api: {} as never,
     pluginRuntimeController: plugin.controller, connectedServiceRuntimeRegistry,
@@ -64,39 +80,30 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
     pidToTrackedSession, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
     getApiMachineForSessions: () => machine, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
-    resolveRequesterSessionRuntimeContext: async (id, attribution) => {
-      if (id !== sessionId) return null;
-      // Startup precedes this fixture's initial runtime construction. A later
-      // retired runtime must use real cold recovery, never a replacement stub.
-      if (!requester) return null;
-      if (await requester.isCurrent()) return requester;
-      requesterRecoveryStage = 'bootstrap';
-      const bootstrap = await resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: f.directory, serverId: 'session-home',
-        serverHttpBaseUrl: 'https://session-home.test', sessionId: id, legacyOwnerCredentials: { token: 'requester-token', encryption: null },
-        ...(attribution ? { expectedAttribution: attribution } : {}), machineAdmissionBoundary: {
-          machineId: 'machine', daemonToken: 'custodian-token', isHomeCurrent: f.isHomeCurrent, readInstallation: () => f.installation } });
-      if (!bootstrap) { requesterRecoveryStage = 'bootstrap_refused'; return null; }
-      requesterRecoveryStage = 'runtime';
-      requester = await createRequesterRuntime(bootstrap);
-      requesterRecoveryStage = requester ? 'ready' : 'runtime_refused';
-      if (requester) tracked.requesterSessionRuntimeContext = requester;
-      return requester;
+    resolveRequesterSessionRuntimeContext: resolveRequesterRuntime,
+    releaseRequesterSessionRuntimeContext: async context => {
+      await releaseUnretainedRequesterSessionRuntimeContext(context,
+        [...pidToTrackedSession.values()].map(session => session.requesterSessionRuntimeContext));
     },
     connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {}, onHappySessionWebhook: async () => {},
     requestShutdown() {}, processEnv: { NODE_ENV: 'test' } });
   onTestFinished(() => daemon.stopControlServer());
-  const createRequesterRuntime = (bootstrap: typeof f.bootstrap) => createRequesterSessionRuntimeContext({ bootstrap,
-    activeServerDir: f.directory, connectedServicesMaterializationBaseDir: join(f.directory, 'requester-connected-services'),
-    resolveQualifiedConnectedAccountV4Support: requesterOptions?.resolveQualifiedConnectedAccountV4Support ?? (() => 'indeterminate'),
-    coordinatorInput: { machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'project-runtime', happyHomeDir: f.directory,
-      logger: { debug() {}, info() {}, warn() {} }, processEnv: { NODE_ENV: 'test',
-        HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
-      pidToTrackedSession, connectedServiceRuntimeRegistry,
-      connectedServiceAuthGroupPreTurnSwitchCoordinator: daemon.connectedServiceAuthGroupPreTurnSwitchCoordinator } });
-  requester = await createRequesterRuntime(f.bootstrap);
+  createRequesterRuntime = async bootstrap => {
+    requesterRecoveryStage = 'runtime';
+    const context = await createRequesterSessionRuntimeContext({ bootstrap,
+      activeServerDir: f.directory, connectedServicesMaterializationBaseDir: join(f.directory, 'requester-connected-services'),
+      resolveQualifiedConnectedAccountV4Support: requesterOptions?.resolveQualifiedConnectedAccountV4Support ?? (() => 'indeterminate'),
+      coordinatorInput: { machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'project-runtime', happyHomeDir: f.directory,
+        logger: { debug() {}, info() {}, warn() {} }, processEnv: { NODE_ENV: 'test',
+          HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
+        pidToTrackedSession, connectedServiceRuntimeRegistry,
+        connectedServiceAuthGroupPreTurnSwitchCoordinator: daemon.connectedServiceAuthGroupPreTurnSwitchCoordinator } });
+    if (context) onTestFinished(() => context.dispose());
+    requesterRecoveryStage = context ? 'ready' : 'runtime_refused';
+    return context;
+  };
+  const requester = await resolveRequesterRuntime(sessionId, f.bootstrap.attribution);
   if (!requester) throw new Error('Missing requester runtime');
-  onTestFinished(() => requester?.dispose());
-  tracked.requesterSessionRuntimeContext = requester;
   const services = readControl()?.agentRuntimeDaemonServices;
   if (!services) throw new Error('Missing production private dispatcher');
   let sequence = 0;
@@ -109,11 +116,9 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   return { ...fixture, signal, cwd, dispatch, operationBase, sessionId, retainedAgent, requester, runner, tracked, plugin, pidToTrackedSession,
     readRequesterRecoveryStage: () => requesterRecoveryStage,
     async replaceRequesterRuntime() {
-      const replacement = await createRequesterRuntime(await f.createBootstrap());
+      await tracked.requesterSessionRuntimeContext?.dispose();
+      const replacement = await resolveRequesterRuntime(sessionId, tracked.requesterWorkAttributionV1);
       if (!replacement) throw new Error('Missing replacement requester runtime');
-      const previous = requester;
-      requester = replacement;
-      await previous?.dispose();
       return replacement;
     },
   };

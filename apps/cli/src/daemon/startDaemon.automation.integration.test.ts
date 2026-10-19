@@ -344,6 +344,7 @@ vi.mock('./controlServer', () => ({
 
 vi.mock('./sessions/reattachFromMarkers', () => ({
   reattachTrackedSessionsFromMarkers: vi.fn(async () => ({
+    inventoryReliable: true,
     orphanedDeadDaemonSessions: [],
     connectedServiceRestartIntents: [],
   })),
@@ -1649,6 +1650,7 @@ describe('startDaemon automation wiring (integration)', () => {
     try {
       const reattachModule = await import('./sessions/reattachFromMarkers');
       vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockResolvedValueOnce({
+        inventoryReliable: true,
         orphanedDeadDaemonSessions: [
           {
             sessionId: 'sess-orphaned-6480',

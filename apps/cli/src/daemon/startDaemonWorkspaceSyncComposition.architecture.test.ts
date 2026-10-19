@@ -12,8 +12,8 @@ describe('daemon workspace-sync production composition', () => {
     expect(source).toContain('createWorkspaceSyncRuntime: async');
     expect(source).toContain('await createProductionDaemonWorkspaceSyncRuntime({');
     expect(source).toMatch(/createProductionDaemonWorkspaceSyncRuntime\(\{[\s\S]*openMachineCarrierTunnel/u);
-    expect(/drainBackgroundServerWork:\s*async\s*\(\)\s*=>\s*\{\s*await\s+stopWorkspaceSyncRuntime\(\)/u.test(source)).toBe(true);
-    expect(source).toContain('createDaemonWorkspaceSyncRuntimeCustody<ProductionDaemonWorkspaceSyncRuntime>()');
+    expect(source).toMatch(/drainBackgroundServerWork:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?await\s+stopWorkspaceSyncRuntime\(\)/u);
+    expect(source).toContain('createDaemonWorkspaceSyncRuntimeCustody<ProductionDaemonWorkspaceSyncRuntime');
     expect(source).toContain('workspaceSyncRuntimeCustody.acquire(registeredMachineId');
   });
 });

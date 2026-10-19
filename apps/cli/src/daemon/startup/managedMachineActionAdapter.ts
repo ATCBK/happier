@@ -13,18 +13,15 @@ import { createCliWorkflowTriggerActions } from '@/session/actions/workflowTrigg
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { isOriginalLocalManagedSetupContext } from '@/api/externalActionExecutionAuthorization';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { logger } from '@/ui/logger';
 
-import { prepareExternalActionRequesterAccountAuthorization, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
+import { prepareInstalledWorkflowActionAuthorization, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import type { StoredCredentials } from '@/persistence';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { resolveCurrentCliHomeTarget } from '@/server/homeTarget';
 import type { ManagedProviderOperationAuthority } from '../connectedServices/purposeBindings/managedProviderOperationAuthority';
-import { readAccountIdFromToken, decodeJwtPayload } from '@/cloud/decodeJwtPayload';
-import { fetchAccountProfile } from '@/api/accountProfile';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RecordedApprovalExecutionObservationArgs } from '@/session/actions/createCliActionExecutorHarness';
 import type { PrepareExternalActionRequesterAccountContext } from '../externalActions/executeExternalAction';
 
@@ -154,25 +151,11 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
             if (!installation || !origin || origin.machineId !== params.machineId) {
                 throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
             }
-            const [profile, encryption] = await runWithServerHttpBaseUrl(params.serverBaseUrl, () => Promise.all([
-                fetchAccountProfile({ token: params.credentials.token, signal }),
-                fetchAccountEncryptionCurrentness({ token: params.credentials.token, serverBaseUrl: params.serverBaseUrl, signal }),
-            ]));
-            const payload = decodeJwtPayload(params.credentials.token);
-            const extras = payload?.extras;
-            const hint = payload?.tokenEpoch ?? (extras && typeof extras === 'object' && 'tokenEpoch' in extras ? extras.tokenEpoch : undefined) ?? 0;
-            if (typeof hint !== 'number' || !Number.isSafeInteger(hint) || hint < 0) {
-                throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
-            }
-            const material = params.credentials.encryption?.type === 'legacy'
-                ? { type: 'dataKey' as const, machineKey: deriveAccountMachineKeyFromRecoverySecret(params.credentials.encryption.secret) }
-                : params.credentials.encryption;
             const target = { kind: 'machine' as const, machineId: params.machineId };
-            const authorization = await prepareExternalActionRequesterAccountAuthorization({ actionId, input, requestId, target,
-                machineId: params.machineId, accountId: profile.id, accountEncryptionMode: encryption.mode, tokenEpochHint: hint,
-                token: params.credentials.token, serverId: params.serverId, serverIdentityId: origin.serverIdentityId,
+            const authorization = await prepareInstalledWorkflowActionAuthorization({ actionId, input, context: { ...context, ...(signal ? { signal } : {}) }, target,
+                machineId: params.machineId, credentials: params.credentials, serverId: params.serverId, serverIdentityId: origin.serverIdentityId,
                 serverHttpBaseUrl: params.serverBaseUrl, installationId: installation.installationId, privateKey: installation.privateKey,
-                workflowActionOrigin: { runId, requestId }, ...(material ? { material } : {}), signal });
+            });
             if (!authorization) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
             context = { ...context, externalActionExecutionAuthorization: authorization, externalActionTarget: target };
         }
@@ -326,7 +309,13 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
                 actionRequestId: requestId, execute: operation => {
                     completion = (async () => {
                         const lifetime = new AbortController();
-                        const cancel = () => lifetime.abort(operation.signal.aborted ? operation.signal.reason : request.signal?.reason);
+                        const cancel = () => {
+                            if (lifetime.signal.aborted) return;
+                            try { logger.warnLocalFile('[managed-policy.operation-abort]', { managedId: request.machine.id,
+                                operationId: operation.operationAcceptance?.operationId,
+                                reasonCode: operation.signal.aborted ? 'operation_cancelled' : 'policy_scheduler_aborted' }); } catch { /* Diagnostic only. */ }
+                            lifetime.abort(operation.signal.aborted ? operation.signal.reason : request.signal?.reason);
+                        };
                         operation.signal.addEventListener('abort', cancel, { once: true });
                         request.signal?.addEventListener('abort', cancel, { once: true });
                         if (operation.signal.aborted || request.signal?.aborted) cancel();

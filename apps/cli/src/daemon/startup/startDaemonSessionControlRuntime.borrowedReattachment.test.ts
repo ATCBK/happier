@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
 
 import { configuration, reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { createDeferred } from '@/testkit/async/deferred';
 import { readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
 import { buildTrackedSessionFromMarker } from '../sessions/trackedSessionFromMarker';
 import {
     readTerminalHostAttachmentInfo,
     removeTerminalHostAttachmentInfo,
     writeTerminalHostAttachmentInfo,
+    writeTerminalAttachmentInfo,
 } from '@/terminal/attachment/terminalAttachmentInfo';
 import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRuntime';
 import { createSessionHooksService } from '@/plugins/runtime/hooks/session/service';
@@ -29,10 +31,14 @@ const boundary = vi.hoisted(() => ({
     sessionId: 'session-reattached-borrowed',
 }));
 const hookRemoval = vi.hoisted(() => ({ target: '', completion: null as Promise<void> | null }));
+const terminalRemoval = vi.hoisted(() => ({ target: '', beforeUnlink: null as (() => Promise<void>) | null }));
 // Join the real asynchronous filesystem removal, not the retirement decision.
 vi.mock('node:fs/promises', async (importOriginal) => {
     const original = await importOriginal<typeof import('node:fs/promises')>();
-    return { ...original, rm: (...args: Parameters<typeof original.rm>) => {
+    return { ...original, unlink: async (...args: Parameters<typeof original.unlink>) => {
+        if (args[0] === terminalRemoval.target) await terminalRemoval.beforeUnlink?.();
+        await original.unlink(...args);
+    }, rm: (...args: Parameters<typeof original.rm>) => {
         const completion = original.rm(...args);
         if (args[0] === hookRemoval.target) hookRemoval.completion = completion;
         return completion;
@@ -82,6 +88,8 @@ afterEach(() => {
     envScope.restore();
     hookRemoval.target = '';
     hookRemoval.completion = null;
+    terminalRemoval.target = '';
+    terminalRemoval.beforeUnlink = null;
     reloadConfiguration();
     vi.restoreAllMocks();
 });
@@ -278,9 +286,29 @@ describe('startup borrowed-terminal reattachment', () => {
                 ...terminal, controlServiceabilityV1: { ...terminal.controlServiceabilityV1, attachmentId: replacement.attachmentId, observedAt: 2 },
             } };
             const metadataBeforeExit = boundary.metadata;
+            await writeTerminalAttachmentInfo({ happyHomeDir: fixtureHome, sessionId, terminal });
+            const removalStarted = createDeferred<void>();
+            const allowRemoval = createDeferred<void>();
+            terminalRemoval.target = join(fixtureHome, 'terminal', 'sessions', `${encodeURIComponent(sessionId)}.json`);
+            terminalRemoval.beforeUnlink = async () => { removalStarted.resolve(); await allowRemoval.promise; };
             // Exercise exit retirement, not no-turn Home finalization (this
             // fixture has no Machine terminal-authority transport).
-            await runtime.onChildExited(pid, { reason: 'process-exited', code: 1, signal: null });
+            let exitSettled = false;
+            const exited = runtime.onChildExited(pid, { reason: 'process-exited', code: 1, signal: null });
+            void exited.then(() => { exitSettled = true; }, () => { exitSettled = true; });
+            let exitSettledWhileRemovalBlocked = false;
+            try {
+                await removalStarted.promise;
+                exitSettledWhileRemovalBlocked = exitSettled;
+            } finally {
+                allowRemoval.resolve();
+                await exited;
+            }
+            // Join the real filesystem boundary even on RED so fixture
+            // teardown cannot obscure an early-return assertion with ENOTEMPTY.
+            await expect.poll(async () => (await readdir(dirname(terminalRemoval.target)))
+                .some(name => name.startsWith(`${encodeURIComponent(sessionId)}.json`))).toBe(false);
+            expect(exitSettledWhileRemovalBlocked).toBe(false);
             if (replacement) expect(boundary.metadata).toEqual(metadataBeforeExit);
             else expect(boundary.metadata).toMatchObject({ terminal: { controlServiceabilityV1: {
                 attachmentId: attachment.attachmentId, retired: true, state: 'unknown', reason: 'attachment_retired',

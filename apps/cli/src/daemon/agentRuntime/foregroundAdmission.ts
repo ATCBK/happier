@@ -30,6 +30,7 @@ import { normalizeAgentCliSessionCommandOptions } from '@/plugins/projection/reg
 import { runnerPinnedBundledCustodyCanSupersedeBootstrap } from '@/plugins/runtime/retainedPluginSourceAttestation';
 import type { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import type { ConnectedServiceRuntimeTargetInput } from '@/daemon/connectedServices/runtimeRegistry/target';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '../connectedServices/materialization/materializer';
 
 type Cleanup = () => void | Promise<void>;
 
@@ -59,6 +60,7 @@ export type PreparedForegroundAgentRuntimeAdmission = Readonly<{
         unsetEnvironmentVariableNames: readonly string[];
         sensitiveEnvironmentVariableNames: readonly string[];
         invocationContext: RunnerAgentInvocationContext;
+        materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
         connectedServiceRuntimeTarget?: Pick<ConnectedServiceRuntimeTargetInput,
           | 'materializationKey'
           | 'connectedServicesBindingsRaw'
@@ -153,6 +155,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
   getHttpPort?(): number;
   promoteDaemonServiceAuthority?(input: Readonly<{
     requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
+    materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
     canonicalSessionId: string;
     foregroundPid: number;
     authorityFilePath: string;
@@ -537,6 +540,12 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
             // account/HostAccess authority per operation and must never retain
             // raw launch-time secret bytes as reusable service authority.
             environment: Object.freeze({}),
+            ...(claimed.invocationContext.profileId
+              ? { profileId: claimed.invocationContext.profileId }
+              : {}),
+            ...(claimed.invocationContext.secretReferenceOverlay
+              ? { secretReferenceOverlay: claimed.invocationContext.secretReferenceOverlay }
+              : {}),
             ...(claimed.invocationContext.agentCliLaunch
               ? { agentCliLaunch: claimed.invocationContext.agentCliLaunch }
               : {}),
@@ -573,6 +582,8 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
             await dependencies.promoteDaemonServiceAuthority({
               ...(admission.requesterSessionRuntimeContext
                 ? { requesterSessionRuntimeContext: admission.requesterSessionRuntimeContext } : {}),
+              ...(claimed.materializedStateObservationBinding
+                ? { materializedStateObservationBinding: claimed.materializedStateObservationBinding } : {}),
               canonicalSessionId: claimRequest.canonicalSessionId,
               foregroundPid: claimRequest.foregroundPid,
               authorityFilePath:

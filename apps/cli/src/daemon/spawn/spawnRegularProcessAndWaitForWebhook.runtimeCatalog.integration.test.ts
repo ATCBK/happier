@@ -979,7 +979,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
       getApiMachineForSessions: () => null,
       promoteSessionMarkerFn,
       removeSessionMarkerFn: vi.fn(async () => undefined),
-    } as never);
+    });
     const { createOnHappySessionWebhook } =
       await import('../sessions/onHappySessionWebhook');
     const writeSessionMarkerFn = vi.fn(async () => undefined);
@@ -1095,7 +1095,7 @@ describe('spawnRegularProcessAndWaitForWebhook', () => {
         readProcessRunState: async (pid) => pid === runnerPid ? 'servable' : 'dead',
         readProcessIdentityByPid: async (pid) => ({ pid, processStartTimeMs: 2_000, command: 'runner command' }),
       },
-    } as never);
+    });
     const { createOnHappySessionWebhook } =
       await import('../sessions/onHappySessionWebhook');
     const onWebhook = createOnHappySessionWebhook({

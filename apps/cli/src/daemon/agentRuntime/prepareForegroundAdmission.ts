@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { rm } from 'node:fs/promises';
+import { realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   resolveConnectedAccountRequestAuthCapabilityPath,
@@ -17,7 +17,7 @@ import type { ProviderErrorV1, QualifiedConnectedAccountRef, ArtifactSharingReso
 
 import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams';
 import { configuration } from '@/configuration';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
 import { readStoredCredentials } from '@/persistence';
@@ -31,10 +31,8 @@ import {
   getActiveAccountSettingsSnapshot,
   subscribeActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import {
-  refreshSavedSecretCatalogForOperation,
-  SavedSecretOperationAdmissionError,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 import { loadAccountLaunchProfileArtifacts, ProfileCatalogUnavailableError, readProfilesFromAccountSettings, readProfileSettingsFromAccountSnapshot } from '@/settings/profiles/readProfilesFromAccountSettings';
 import { resolveCanonicalSpawnProfile } from '@/settings/profiles/validateSpawnProfile';
 import {
@@ -102,7 +100,7 @@ import type { resolveConnectedServiceAuthForSpawn } from '@/daemon/connectedServ
 import type { DaemonSpawnHooks } from '@/daemon/spawnHooks';
 import { ensurePrivateConnectedServiceMaterializedRoot } from '@/daemon/connectedServices/materialize/privateMaterializedRoot';
 import { normalizeMaterializationKeyForPath } from '@/daemon/connectedServices/materialize/normalizeMaterializationKeyForPath';
-import { createBestEffortCleanupDirectory } from '@/daemon/connectedServices/materialization/materializer';
+import { createBestEffortCleanupDirectory, type ConnectedServiceMaterializedStateObservationBinding } from '@/daemon/connectedServices/materialization/materializer';
 import { isLegacyServiceKeyedCompatibilityCatalogAgent } from '@/agent/catalog/registry';
 import {
   HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY,
@@ -113,6 +111,7 @@ import {
   resolveConnectedServiceNativeHomeRoot,
 } from '@/daemon/connectedServices/stateSharing/applyConnectedServiceStateSharingDescriptor';
 import { resolveNativeAgentSessionStateSharingPolicy } from '@/agent/runtime/registry/engineRegistry/stateSharingPolicy';
+import { preflightProjectAgentLaunch } from '@/workspaces/projectSetup/projectAgentLaunch';
 import { resolveConnectedServiceMaterializedRootDir } from '@/daemon/connectedServices/materialize/resolveConnectedServiceMaterializedRootDir';
 import { materializeConnectedServiceNativeHomeCredentials } from '@/daemon/connectedServices/stateSharing/materializeConnectedServiceNativeHomeCredentials';
 import { materializeQualifiedConnectedAccountLaunchUses } from '@/daemon/connectedServices/materialize/materializeQualifiedConnectedAccountLaunchUses';
@@ -391,7 +390,7 @@ async function prepareForegroundProviderLaunch(input: Readonly<{
     await resolveCliFeatureDecisionForServer({
       featureId: 'providers',
       env: process.env,
-      serverUrl: requester?.serverHttpBaseUrl ?? configuration.serverUrl,
+      serverUrl: requester?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
     })
   ).decision.state === 'enabled';
   return await prepareDirectProviderLaunch({
@@ -663,6 +662,31 @@ export async function prepareForegroundAgentRuntimeAdmission(
   };
 
   try {
+    // Refuse an unavailable Project namespace before Provider materialization
+    // or Agent activation. Native setup consumes the actual child tuple later.
+    const projectCredentials = requester ? requester.credentials : await readStoredCredentials();
+    if (projectCredentials) {
+      const project = await preflightProjectAgentLaunch({
+        cwd: request.directory,
+        machineId: request.machineId,
+        serverId: requester?.attribution.serverId ?? configuration.activeServerId,
+        serverHttpBaseUrl: requester?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
+        account: {
+          credentials: projectCredentials,
+          assertCurrentAuthority: assertSessionAccountCurrent,
+          ...(requester ? { sessionCustody: {
+            serverId: requester.attribution.serverId,
+            accountId: requester.attribution.accountId,
+            serverHttpBaseUrl: requester.serverHttpBaseUrl,
+            isCurrent: isSessionAccountCurrent,
+          } } : {}),
+        },
+      });
+      await assertSessionAccountCurrent();
+      if (project.kind === 'refused') {
+        return { ok: false, error: { code: 'project_agent_launch_refused', reason: project.code } };
+      }
+    }
     // The Provider decision runs before any runner bootstrap material is
     // written. Cleanup removes those files, but it cannot un-activate an Agent
     // runtime contribution, so every Provider refusal this owner can already
@@ -781,14 +805,19 @@ export async function prepareForegroundAgentRuntimeAdmission(
         ? activeProviderLaunch.connectedServices
         : request.connectedServices ?? null;
     let materializedConnectedServices = effectiveConnectedServices;
+    let materializedStateObservationBinding: ConnectedServiceMaterializedStateObservationBinding | undefined;
+    const connectedServiceCatalogEntry = lease.registry.acquireAgentCatalogEntry
+      ? await lease.registry.acquireAgentCatalogEntry(request.agentId)
+      : lease.registry.contributes.catalogEntriesById[request.agentId] ?? null;
     const legacyConnectedServiceCatalogAgent =
       isLegacyServiceKeyedCompatibilityCatalogAgent(
-        lease.registry.contributes.catalogEntriesById[request.agentId],
+        connectedServiceCatalogEntry,
       );
     const externalPurposeDeclarations = !legacyConnectedServiceCatalogAgent
       ? resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
           agentId: request.agentId,
           contributions: lease.registry.contributes,
+          catalogEntry: connectedServiceCatalogEntry,
         })
       : null;
     let sessionTeamCredentialBindings: SessionTeamCredentialBindingIntentListV1 | null = null;
@@ -798,6 +827,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
           agentId: request.agentId,
           bindings: effectiveConnectedServices,
           contributions: lease.registry.contributes,
+          catalogEntry: connectedServiceCatalogEntry,
         })
       : null;
     if (!legacyConnectedServiceCatalogAgent && effectiveConnectedServices) {
@@ -884,6 +914,9 @@ export async function prepareForegroundAgentRuntimeAdmission(
         ...(externalPurposeDeclarations.environmentUses
           ? { environmentUses: externalPurposeDeclarations.environmentUses }
           : {}),
+        ...(externalPurposeDeclarations.environmentUnsetUses
+          ? { environmentUnsetUses: externalPurposeDeclarations.environmentUnsetUses }
+          : {}),
       });
     }
     if (
@@ -929,10 +962,12 @@ export async function prepareForegroundAgentRuntimeAdmission(
               agentId: request.agentId,
               bindings,
               contributions: lease.registry.contributes,
+              catalogEntry: connectedServiceCatalogEntry,
             }),
         });
       const daemonSpawnHooks =
         await dependencies.resolveDaemonSpawnHooks!(request.agentId);
+      materializedStateObservationBinding = connectedServiceAuth?.materializedStateObservationBinding;
       materializedConnectedServices = connectedServiceAuth?.connectedServicesBindings
         ?? effectiveConnectedServices;
       const childEnvironment = await resolveSpawnChildEnvironment({
@@ -1068,10 +1103,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
     );
     const readExactProfileSnapshot = () =>
       readExactForegroundProfileSnapshot(request, launchProfileArtifacts, readAccountSettingsSnapshot);
-    const stateSharingCatalogEntry = lease.registry.acquireAgentCatalogEntry
-      ? await lease.registry.acquireAgentCatalogEntry(request.agentId)
-      : lease.registry.contributes.catalogEntriesById[request.agentId] ?? null;
-    const stateSharingDescriptor = await stateSharingCatalogEntry
+    const stateSharingDescriptor = await connectedServiceCatalogEntry
       ?.getConnectedServiceStateSharingDescriptor?.();
 
     transferred = true;
@@ -1109,7 +1141,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
           registration.isCurrent() && connectedAccountLaunchCurrent
           && (!requester || readAccountSettingsSnapshot() !== null)
         ),
-        ...(stateSharingCatalogEntry?.resolveSessionRuntimePreferences
+        ...(connectedServiceCatalogEntry?.resolveSessionRuntimePreferences
           ? {
               resolveSessionRuntimePreferences: async (input) => {
                 if (
@@ -1120,7 +1152,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
                 ) {
                   return {};
                 }
-                const result = await stateSharingCatalogEntry.resolveSessionRuntimePreferences!(input);
+                const result = await connectedServiceCatalogEntry.resolveSessionRuntimePreferences!(input);
                 return registration.isCurrent() && connectedAccountLaunchCurrent && await isSessionAccountCurrent()
                   ? result
                   : {};
@@ -1357,6 +1389,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
               && (
                 (sessionPurposeBindingSnapshot.environmentUses?.length ?? 0) > 0
                 || (sessionPurposeBindingSnapshot.fileEnvironmentUses?.length ?? 0) > 0
+                || (sessionPurposeBindingSnapshot.environmentUnsetUses?.length ?? 0) > 0
               )
             ) {
               if (!connectedAccountsOwner) {
@@ -1395,9 +1428,9 @@ export async function prepareForegroundAgentRuntimeAdmission(
                     });
                   },
                 });
-              if (Object.keys(launchEnvironment).length > 0) {
+              if (Object.keys(launchEnvironment.env).length > 0) {
                 const redaction = registerSensitiveDiagnosticValues(
-                  Object.values(launchEnvironment),
+                  Object.values(launchEnvironment.env),
                 );
                 connectedServiceLaunchScope.register({
                   onFailure: () => redaction.close(),
@@ -1405,16 +1438,20 @@ export async function prepareForegroundAgentRuntimeAdmission(
                 });
                 connectedServiceEnvironment = Object.freeze({
                   ...connectedServiceEnvironment,
-                  ...launchEnvironment,
+                  ...launchEnvironment.env,
                 });
                 sensitiveEnvironmentVariableNames = Object.freeze([
                   ...new Set([
                     ...sensitiveEnvironmentVariableNames,
-                    ...Object.keys(launchEnvironment),
+                    ...Object.keys(launchEnvironment.env),
                   ]),
                 ]);
                 ownsConnectedServiceLaunchScope = true;
               }
+              connectedServiceUnsetEnvironmentVariableNames = Object.freeze([
+                ...connectedServiceUnsetEnvironmentVariableNames,
+                ...launchEnvironment.unsetEnvKeys,
+              ]);
             }
             const existingMaterializedRoot =
               connectedServiceEnvironment[
@@ -1481,8 +1518,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
                   ];
                 }
                 Object.freeze(nativeSourceEnvironment);
-                stateSharingEnvironment = (
-                  await applyConnectedServiceStateSharingDescriptor({
+                const appliedStateSharing = await applyConnectedServiceStateSharingDescriptor({
                     descriptor: stateSharingDescriptor,
                     nativeSourceContext: {
                       sourceRoot: resolveConnectedServiceNativeHomeRoot({
@@ -1501,8 +1537,20 @@ export async function prepareForegroundAgentRuntimeAdmission(
                     effectiveStateMode: policy.stateMode,
                     cwd: request.directory,
                     providerLabel: request.agentId,
-                  })
-                ).envOverrides;
+                  });
+                stateSharingEnvironment = appliedStateSharing.envOverrides;
+                if (appliedStateSharing.linkedStateEntries.length > 0) {
+                  const nativeHomeRoot = await realpath(targetRoot);
+                  materializedStateObservationBinding = Object.freeze({
+                    agentId: request.agentId,
+                    pluginId: bridge.authorization.descriptor.pluginId,
+                    sourceCustody: bridge.authorization.descriptor.sourceCustody,
+                    nativeHomeRoot,
+                    entries: Object.freeze(appliedStateSharing.linkedStateEntries.map(entry => Object.freeze({
+                      ...entry, materializedEntryPath: join(nativeHomeRoot, entry.entryPath),
+                    }))),
+                  });
+                }
               }
               connectedServiceEnvironment = Object.freeze({
                 ...connectedServiceEnvironment,
@@ -1781,6 +1829,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
               unsetEnvironmentVariableNames:
                 mergedEnvironment.unsetEnvironmentVariableNames,
               sensitiveEnvironmentVariableNames,
+              ...(materializedStateObservationBinding ? { materializedStateObservationBinding } : {}),
               ...(materializedConnectedServices && sessionPurposeBindingLease
                 ? {
                     connectedServiceRuntimeTarget: {
@@ -1796,6 +1845,8 @@ export async function prepareForegroundAgentRuntimeAdmission(
               invocationContext: Object.freeze({
                 cwd: request.directory,
                 environment: Object.freeze({}),
+                ...(request.profileId ? { profileId: request.profileId } : {}),
+                ...(request.secretReferenceOverlay ? { secretReferenceOverlay: request.secretReferenceOverlay } : {}),
                 ...(finalSpawnEnvironment.agentCliLaunchSpec
                   ? {
                       agentCliLaunch: bindAgentCliLaunchSpec({

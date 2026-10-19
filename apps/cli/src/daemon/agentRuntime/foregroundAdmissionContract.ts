@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AgentIdV1Schema } from '@happier-dev/protocol/agents/agentIdV1';
 import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
@@ -19,8 +19,9 @@ import type {
 import { SessionTeamCredentialBindingIntentsV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
 import { AgentRuntimeDaemonSessionDescriptorV1Schema } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { ConnectedServicesBindingsIngressSchema } from '@/daemon/connectedServices/parseConnectedServicesBindings';
+import { ProjectSetupReviewV1Schema } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
 
-const BoundedIdSchema = z.string().trim().min(1).max(256);
+const BoundedIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
 export const FOREGROUND_AGENT_RUNTIME_ADMISSION_PATH =
   '/agent-runtime/foreground/admit';
@@ -33,50 +34,50 @@ export const FOREGROUND_AGENT_RUNTIME_RELEASE_PATH =
 export const FOREGROUND_AGENT_RUNTIME_SESSION_OPTIONS_PATH =
   '/agent-runtime/foreground/session-options';
 
-const AgentCliSessionCommandParsedArgsV1Schema = z.object({
-  startingMode: z.string().optional(),
-  directory: z.string().optional(),
-  resume: z.string().optional(),
+const AgentCliSessionCommandParsedArgsV1Schema = z.strictObject({
+  startingMode: z.optional(z.string()),
+  directory: z.optional(z.string()),
+  resume: z.optional(z.string()),
   agentArgs: z.array(z.string()),
-}).strict();
+});
 
-export const AgentCliSessionCommandBuildInputV1Schema: z.ZodType<AgentCliSessionCommandBuildInputV1> = z.object({
+export const AgentCliSessionCommandBuildInputV1Schema: z.ZodMiniType<AgentCliSessionCommandBuildInputV1> = z.strictObject({
   isExplicitCliSubcommand: z.boolean(),
   parsed: AgentCliSessionCommandParsedArgsV1Schema,
   settings: z.record(z.string(), StrictJsonValueSchema),
-  pluginSettings: z.object({
-    account: z.record(z.string(), StrictJsonValueSchema).optional(),
-    daemon: z.record(z.string(), StrictJsonValueSchema).optional(),
-  }).strict(),
+  pluginSettings: z.strictObject({
+    account: z.optional(z.record(z.string(), StrictJsonValueSchema)),
+    daemon: z.optional(z.record(z.string(), StrictJsonValueSchema)),
+  }),
   environment: z.record(z.string(), z.string()),
   startOrigin: z.enum(['terminal', 'daemon']),
-}).strict();
+});
 
-export const AgentCliSessionCommandOptionsV1Schema: z.ZodType<AgentCliSessionCommandOptionsV1> = z.record(
+export const AgentCliSessionCommandOptionsV1Schema: z.ZodMiniType<AgentCliSessionCommandOptionsV1> = z.record(
   z.string(),
   StrictJsonValueSchema,
 );
 
-export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.object({
+export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.strictObject({
   v: z.literal(1),
   attemptId: BoundedIdSchema,
   sessionId: BoundedIdSchema,
-  existingSessionId: BoundedIdSchema.optional(),
-  foregroundPid: z.number().int().positive(),
-  directory: z.string().min(1).max(32_768),
+  existingSessionId: z.optional(BoundedIdSchema),
+  foregroundPid: z.number().check(z.int(), z.positive()),
+  directory: z.string().check(z.minLength(1), z.maxLength(32_768)),
   agentId: AgentIdV1Schema,
   backendTarget: BackendTargetRefV2Schema,
   /** Launch intent only; executable authority is still the admitted contribution. */
   agentTarget: z.optional(AgentExecutionTargetV1Schema),
   runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
-  profileId: BoundedIdSchema.optional(),
+  profileId: z.optional(BoundedIdSchema),
   profileRecordRevision: z.optional(ProfileRowRevisionV1Schema),
-  accountSettingsScopeKey: z.string().min(1).max(1_024).optional(),
-  accountSettingsVersion: z.number().int().nonnegative().optional(),
+  accountSettingsScopeKey: z.optional(z.string().check(z.minLength(1), z.maxLength(1_024))),
+  accountSettingsVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
   selection: z.optional(SessionModelSelectionV1Schema),
   previousBinding: z.optional(z.nullable(SessionProviderBindingMetadataV1Schema)),
   connectedServices: ConnectedServicesBindingsIngressSchema,
-  vendorResumeId: BoundedIdSchema.optional(),
+  vendorResumeId: z.optional(BoundedIdSchema),
   /**
    * Optional one-shot, value-free Saved Secret reference override for this
    * launch. It carries references and revisions only; the daemon materializer
@@ -90,7 +91,7 @@ export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.object({
    * it would reject rather than silently launch with different credentials.
    */
   secretReferenceOverlay: z.optional(SecretReferenceOverlayV1Schema),
-}).strict().superRefine((value, ctx) => {
+}).check(z.superRefine((value, ctx) => {
   if (
     value.profileId !== undefined
     && (
@@ -99,7 +100,7 @@ export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.object({
     )
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['profileId'],
       message:
         'Foreground Profile admission requires an exact account settings scope and version',
@@ -109,17 +110,17 @@ export const ForegroundAgentRuntimeAdmissionRequestV1Schema = z.object({
     // The overlay overrides Profile-declared secret requirement bindings, so
     // without a selected Profile there is nothing declared to override.
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['secretReferenceOverlay'],
       message:
         'A Saved Secret reference overlay requires an exact selected profileId',
     });
   }
   if (value.profileRecordRevision !== undefined && value.profileId === undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profileRecordRevision'],
+    ctx.addIssue({ code: "custom", path: ['profileRecordRevision'],
       message: 'A Profile revision requires an exact selected profileId' });
   }
-});
+}));
 
 export type ForegroundAgentRuntimeAdmissionRequestV1 =
   z.infer<typeof ForegroundAgentRuntimeAdmissionRequestV1Schema>;
@@ -128,114 +129,124 @@ export type ForegroundAgentRuntimeAdmissionOwnerRequestV1 =
   ForegroundAgentRuntimeAdmissionRequestV1
   & Readonly<{ machineId: string }>;
 
+/** Project admission is independent of Provider authentication and contains no launch material. */
+export const ForegroundProjectAgentLaunchRefusalV1Schema = z.strictObject({
+  code: z.literal('project_agent_launch_refused'),
+  reason: z.string().check(z.regex(/^[a-z][a-z0-9_]*$/iu)),
+  setupReview: z.optional(ProjectSetupReviewV1Schema),
+});
+
+export type ForegroundProjectAgentLaunchRefusalV1 =
+  z.infer<typeof ForegroundProjectAgentLaunchRefusalV1Schema>;
+
 export const ForegroundAgentRuntimeAdmissionResponseV1Schema =
   z.discriminatedUnion('ok', [
-    z.object({
+    z.strictObject({
       ok: z.literal(true),
-      capability: z.object({
+      capability: z.strictObject({
         attemptId: BoundedIdSchema,
-        admissionFilePath: z.string().min(1).max(32_768),
-        bootstrapFilePath: z.string().min(1).max(32_768),
-        authorityFilePath: z.string().min(1).max(32_768),
+        admissionFilePath: z.string().check(z.minLength(1), z.maxLength(32_768)),
+        bootstrapFilePath: z.string().check(z.minLength(1), z.maxLength(32_768)),
+        authorityFilePath: z.string().check(z.minLength(1), z.maxLength(32_768)),
         descriptor: AgentRuntimeDaemonSessionDescriptorV1Schema,
-      }).strict(),
+      }),
       /**
        * What the foreground process must submit when it creates the Session:
        * the Team slot bindings that make the admitted durable Team purpose
        * targets usable by this Session at the Home.
        */
-      sessionCreation: z.object({
+      sessionCreation: z.optional(z.strictObject({
         teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema,
-      }).strict().optional(),
-      launchPolicy: z.object({
-        reservedEnvironmentVariableNames: z.array(BoundedIdSchema).max(256),
+      })),
+      launchPolicy: z.strictObject({
+        reservedEnvironmentVariableNames: z.array(BoundedIdSchema).check(z.maxLength(256)),
         profileSecretRequirementNamesMissingBinding:
-          z.array(BoundedIdSchema).max(256),
-        nativeHomeSourceEnvironmentKey: BoundedIdSchema.optional(),
-      }).strict(),
-    }).strict(),
-    z.object({
+          z.array(BoundedIdSchema).check(z.maxLength(256)),
+        nativeHomeSourceEnvironmentKey: z.optional(BoundedIdSchema),
+      }),
+    }),
+    z.strictObject({
       ok: z.literal(false),
-      error: ProviderErrorV1Schema,
-    }).strict(),
+      error: z.union([ProviderErrorV1Schema, ForegroundProjectAgentLaunchRefusalV1Schema]),
+    }),
   ]);
 
 export type ForegroundAgentRuntimeAdmissionResponseV1 =
   z.infer<typeof ForegroundAgentRuntimeAdmissionResponseV1Schema>;
 
-export const ForegroundAgentRuntimeClaimRequestV1Schema = z.object({
+export const ForegroundAgentRuntimeClaimRequestV1Schema = z.strictObject({
   v: z.literal(1),
   attemptId: BoundedIdSchema,
   provisionalSessionId: BoundedIdSchema,
   canonicalSessionId: BoundedIdSchema,
-  foregroundPid: z.number().int().positive(),
+  foregroundPid: z.number().check(z.int(), z.positive()),
   pluginId: BoundedIdSchema,
   agentId: AgentIdV1Schema,
-  occurrenceId: z.string().trim().min(1).max(512),
+  occurrenceId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
   sourceCustody: PluginSourceCustodyV1Schema,
-  capability: z.string().min(1).max(4_096),
+  capability: z.string().check(z.minLength(1), z.maxLength(4_096)),
   foregroundSatisfiedProfileSecretRequirementNames:
-    z.array(BoundedIdSchema).max(256),
+    z.array(BoundedIdSchema).check(z.maxLength(256)),
   nativeHomeSourceEnvironmentValue:
-    z.string().max(32_768).nullable().optional(),
-}).strict();
+    z.optional(z.nullable(z.string().check(z.maxLength(32_768)))),
+});
 
 export type ForegroundAgentRuntimeClaimRequestV1 =
   z.infer<typeof ForegroundAgentRuntimeClaimRequestV1Schema>;
 
 export const ForegroundAgentRuntimeClaimResponseV1Schema =
   z.discriminatedUnion('ok', [
-    z.object({
+    z.strictObject({
       ok: z.literal(true),
       environment: z.record(z.string(), z.string()),
-      unsetEnvironmentVariableNames: z.array(BoundedIdSchema).max(256),
-      sensitiveEnvironmentVariableNames: z.array(BoundedIdSchema).max(256),
-    }).strict(),
-    z.object({
+      unsetEnvironmentVariableNames: z.array(BoundedIdSchema).check(z.maxLength(256)),
+      sensitiveEnvironmentVariableNames: z.array(BoundedIdSchema).check(z.maxLength(256)),
+    }),
+    z.strictObject({
       ok: z.literal(false),
       error: ProviderErrorV1Schema,
-      profileSecretRecovery: z.object({
-        requirementNames: z.array(BoundedIdSchema).max(256),
-      }).strict().optional(),
-    }).strict(),
+      profileSecretRecovery: z.optional(z.strictObject({
+        requirementNames: z.array(BoundedIdSchema).check(z.maxLength(256)),
+      })),
+    }),
   ]);
 
 export type ForegroundAgentRuntimeClaimResponseV1 =
   z.infer<typeof ForegroundAgentRuntimeClaimResponseV1Schema>;
 
-export const ForegroundAgentRuntimeReleaseRequestV1Schema = z.object({
+export const ForegroundAgentRuntimeReleaseRequestV1Schema = z.strictObject({
   v: z.literal(1),
   attemptId: BoundedIdSchema,
   sessionId: BoundedIdSchema,
-}).strict();
+});
 
 export type ForegroundAgentRuntimeReleaseRequestV1 =
   z.infer<typeof ForegroundAgentRuntimeReleaseRequestV1Schema>;
 
-export const ForegroundAgentRuntimeReleaseResponseV1Schema = z.object({
+export const ForegroundAgentRuntimeReleaseResponseV1Schema = z.strictObject({
   ok: z.literal(true),
-}).strict();
+});
 
-export const ForegroundAgentRuntimeSessionOptionsRequestV1Schema = z.object({
+export const ForegroundAgentRuntimeSessionOptionsRequestV1Schema = z.strictObject({
   v: z.literal(1),
   attemptId: BoundedIdSchema,
   sessionId: BoundedIdSchema,
-  foregroundPid: z.number().int().positive(),
+  foregroundPid: z.number().check(z.int(), z.positive()),
   input: AgentCliSessionCommandBuildInputV1Schema,
-}).strict();
+});
 
 export type ForegroundAgentRuntimeSessionOptionsRequestV1 =
   z.infer<typeof ForegroundAgentRuntimeSessionOptionsRequestV1Schema>;
 
 export const ForegroundAgentRuntimeSessionOptionsResponseV1Schema = z.discriminatedUnion('ok', [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     options: AgentCliSessionCommandOptionsV1Schema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     ok: z.literal(false),
     error: ProviderErrorV1Schema,
-  }).strict(),
+  }),
 ]);
 
 export type ForegroundAgentRuntimeSessionOptionsResponseV1 =

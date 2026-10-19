@@ -9,12 +9,13 @@ import {
   retireUpstreamAuthorityBeforeProcessStop,
 } from '../sessions/cleanupPidSessionResources';
 import { removeSessionMarkerIfOwned } from '../sessionRegistry';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '../connectedServices/materialization/materializer';
 
 type SpawnResourceCleanup = () => void | Promise<void>;
 type SessionAttachCleanup = () => Promise<void>;
 
 export type SpawnLifecycleCallbacks = Readonly<{
-  onTrackedSessionRegistered?: () => void;
+  onTrackedSessionRegistered?: (trackedSession: TrackedSession) => void;
   persistAcceptedSpawnMarker: (
     trackedSession: TrackedSession,
     options?: Readonly<{
@@ -53,6 +54,7 @@ export function createSpawnLifecycleCallbacks<
   sessionDirectory?: string;
   materializationKey: string;
   connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1;
+  materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
   hasConnectedServiceAuth: () => boolean;
   activateConnectedAccountSessionBindingOnCanonicalSession?: (
     sessionId: string,
@@ -84,6 +86,7 @@ export function createSpawnLifecycleCallbacks<
   getSpawnResourceCleanupOnExit: () => SpawnResourceCleanup | null;
   onSpawnResourceCleanupArmed: () => void;
   onTrackedSessionRegistered?: () => void;
+  projectSetupOperation?: TrackedSession['projectSetupOperation'];
   spawnResourceCleanupByPid: Map<number, SpawnResourceCleanup>;
   getSessionAttachCleanup: () => SessionAttachCleanup | null;
   setSessionAttachCleanup: (cleanup: SessionAttachCleanup | null) => void;
@@ -195,7 +198,13 @@ export function createSpawnLifecycleCallbacks<
   };
 
   return {
-    onTrackedSessionRegistered: params.onTrackedSessionRegistered,
+    onTrackedSessionRegistered: (trackedSession) => {
+      if (params.projectSetupOperation) trackedSession.projectSetupOperation = params.projectSetupOperation;
+      if (params.materializedStateObservationBinding) {
+        trackedSession.materializedStateObservationBinding = params.materializedStateObservationBinding;
+      }
+      params.onTrackedSessionRegistered?.();
+    },
     persistAcceptedSpawnMarker: async (trackedSession, options) => {
       if (params.activateConnectedAccountSessionBindingOnCanonicalSession) {
         let activationSessionId: string | null = null;

@@ -1,24 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { once } from 'node:events';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { configuration } from '@/configuration';
 import type { TrackedSession } from '@/daemon/types';
-import type { PreparedForegroundAgentRuntimeAdmission } from './foregroundAdmission';
+import { createForegroundAgentRuntimeAdmissionOwner as createForegroundAdmission,
+  type PreparedForegroundAgentRuntimeAdmission } from './foregroundAdmission';
+import { withRealForegroundAdmissionFixture } from './foregroundAdmission.testkit';
+import { createCodexForegroundConnectedAccountFixture } from './prepareForegroundAdmission.codexConnectedServices.testkit';
+import { promoteForegroundDaemonServiceAuthority as promoteForegroundAuthority } from './promoteForegroundDaemonServiceAuthority';
+import { readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker as readForegroundAuthority } from './sessionBridgeAuthorization';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
+import { createBuiltInQualifiedNativeRefreshHarness as createQualifiedNativeRefreshHarness } from '../connectedServices/refresh/ConnectedServiceRefreshCoordinator.qualifiedRefresh.testkit';
 import { createSessionConnectedServiceRuntimeAuthRefreshHandler } from '../connectedServices/sessionRuntimeAuthRefresh';
+import { resolveConnectedServiceAuthForSpawn } from '../connectedServices/resolveConnectedServiceAuthForSpawn';
+import { writeSessionMarker } from '../sessionRegistry';
 
 import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { spawnTestProcess, waitForProcessExit } from '@/testkit/process/spawn';
-let withRealForegroundAdmissionFixture: typeof import('./foregroundAdmission.testkit').withRealForegroundAdmissionFixture;
-let createCodexForegroundConnectedAccountFixture: typeof import('./prepareForegroundAdmission.codexConnectedServices.testkit').createCodexForegroundConnectedAccountFixture;
-let createQualifiedNativeRefreshHarness: typeof import('../connectedServices/refresh/ConnectedServiceRefreshCoordinator.qualifiedRefresh.testkit').createBuiltInQualifiedNativeRefreshHarness;
-let createForegroundAdmission: typeof import('./foregroundAdmission').createForegroundAgentRuntimeAdmissionOwner;
-let promoteForegroundAuthority: typeof import('./promoteForegroundDaemonServiceAuthority').promoteForegroundDaemonServiceAuthority;
-let writeSessionMarker: typeof import('../sessionRegistry').writeSessionMarker;
-let resolveConnectedServiceAuthForSpawn: typeof import('../connectedServices/resolveConnectedServiceAuthForSpawn').resolveConnectedServiceAuthForSpawn;
-let configuration: typeof import('@/configuration').configuration;
-let readForegroundAuthority: typeof import('./sessionBridgeAuthorization').readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker;
 
 const claimInput = {
   canonicalSessionId: 'canonical-session-codex', httpPort: 40123,
@@ -26,23 +26,9 @@ const claimInput = {
 } as const;
 
 describe('foreground Codex Connected Account lifecycle through real materialization', () => {
-  beforeEach(async () => {
-    // Each fixture shuts down the process-global daemon controller it owns.
-    // Load a fresh singleton for the next actual foreground lifecycle.
-    vi.resetModules();
-    ({ withRealForegroundAdmissionFixture } = await import('./foregroundAdmission.testkit'));
-    ({ createCodexForegroundConnectedAccountFixture } = await import('./prepareForegroundAdmission.codexConnectedServices.testkit'));
-    ({ createBuiltInQualifiedNativeRefreshHarness: createQualifiedNativeRefreshHarness } = await import('../connectedServices/refresh/ConnectedServiceRefreshCoordinator.qualifiedRefresh.testkit'));
-    ({ createForegroundAgentRuntimeAdmissionOwner: createForegroundAdmission } = await import('./foregroundAdmission'));
-    ({ promoteForegroundDaemonServiceAuthority: promoteForegroundAuthority } = await import('./promoteForegroundDaemonServiceAuthority'));
-    ({ writeSessionMarker } = await import('../sessionRegistry'));
-    ({ resolveConnectedServiceAuthForSpawn } = await import('../connectedServices/resolveConnectedServiceAuthForSpawn'));
-    ({ configuration } = await import('@/configuration'));
-    ({ readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker: readForegroundAuthority } = await import('./sessionBridgeAuthorization'));
-  });
   afterEach(() => vi.restoreAllMocks());
 
-  it('registers promoted foreground Sessions for exact native refresh and retires their targets with admission', async () => {
+  it('refreshes promoted foreground Sessions and retires exact authority without deleting their shared Account home', async () => {
     const registry = new ConnectedServiceRuntimeRegistry();
     let account!: Awaited<ReturnType<typeof createQualifiedNativeRefreshHarness>>;
     await withRealForegroundAdmissionFixture({
@@ -70,7 +56,7 @@ describe('foreground Codex Connected Account lifecycle through real materializat
             ...input, credentials: account.credentials, api: account.api,
             qualifiedConnectedAccountApi: account.qualifiedApi,
             credentialRefreshService: account.coordinator,
-            activeServerDir: configuration.activeServerDir, baseDir: join(account.happyHomeDir, 'materialized'),
+            activeServerDir: join(account.happyHomeDir, 'active'), baseDir: join(account.happyHomeDir, 'materialized'),
             activateQualifiedPurposeBindings: (snapshot) => account.purposeRuntime.activatePurposeBindings({
               subject: { kind: 'operation', operationId: `foreground-materialize:${input.materializationKey}`,
                 consumer: { pluginId: 'happier.agent.codex', localId: 'codex' },
@@ -117,7 +103,7 @@ describe('foreground Codex Connected Account lifecycle through real materializat
           expect(admitted.ok, admitted.ok ? undefined : `${admitted.error.code}; ${String(connectedServicePreparationError)}`).toBe(true);
           if (!admitted.ok) throw new Error(admitted.error.code);
           const descriptor = admitted.capability.descriptor;
-          const capability = z.object({ capability: z.string() }).passthrough().parse(
+          const capability = z.looseObject({ capability: z.string() }).parse(
             JSON.parse(await readFile(admitted.capability.admissionFilePath, 'utf8')),
           ).capability;
           const claimed = await admission.claimEnvironment({ v: 1, attemptId,
@@ -139,7 +125,7 @@ describe('foreground Codex Connected Account lifecycle through real materializat
           materializationKey: provisionalSessionId,
           exactPurposeBindingSubjectId: `agent-session:${claimInput.canonicalSessionId}`,
         });
-        secondForeground = spawnTestProcess(process.execPath, [join(fixture.directory, 'foreground', 'dist', 'index.mjs')]);
+        secondForeground = spawnTestProcess(process.execPath, [fixture.foregroundEntrypoint]);
         await once(secondForeground, 'spawn');
         if (!secondForeground.pid) throw new Error('Second real foreground process unavailable');
         const secondSessionId = 'canonical-session-codex-other';
@@ -148,6 +134,7 @@ describe('foreground Codex Connected Account lifecycle through real materializat
         if (!secondNativeHome) throw new Error('Second promoted native home unavailable');
         const nativeHome = claimed.environment.CODEX_HOME;
         if (!nativeHome) throw new Error('Promoted native home unavailable');
+        expect(secondNativeHome).toBe(nativeHome);
         const tracked = trackedSessions.get(fixture.foregroundPid);
         expect(tracked?.agentRuntimeDaemonServiceAuthorityFilePath).toBeTruthy();
         const purpose = { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' };
@@ -212,11 +199,21 @@ describe('foreground Codex Connected Account lifecycle through real materializat
         expect(JSON.parse(await readFile(join(secondNativeHome, 'auth.json'), 'utf8'))).toMatchObject({ access_token: 'access-fresh' });
         await admission.releaseSession(secondSessionId);
         expect(registry.getBySessionId(secondSessionId)).toBeNull();
-        await expect(stat(secondNativeHome)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(account.purposeRuntime.owner.getBinding(secondExactPurpose)).resolves.toBeNull();
+        await expect(account.purposeRuntime.owner.materialize({ ...secondExactPurpose,
+          request: { kind: 'files', fileIds: ['auth.json'] },
+        })).rejects.toMatchObject({ code: 'plugin_host_access_resource_not_selected' });
+        await expect(stat(secondNativeHome)).resolves.toBeTruthy();
         expect(registry.getBySessionId(claimInput.canonicalSessionId)).not.toBeNull();
+        await expect(account.purposeRuntime.owner.getBinding(exactPurpose)).resolves.toMatchObject({ account: account.account });
         await admission.releaseSession(claimInput.canonicalSessionId);
         expect(registry.getBySessionId(claimInput.canonicalSessionId)).toBeNull();
-        await expect(stat(nativeHome)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(account.purposeRuntime.owner.getBinding(exactPurpose)).resolves.toBeNull();
+        await expect(account.purposeRuntime.owner.materialize({ ...exactPurpose,
+          request: { kind: 'files', fileIds: ['auth.json'] },
+        })).rejects.toMatchObject({ code: 'plugin_host_access_resource_not_selected' });
+        await expect(stat(nativeHome)).resolves.toBeTruthy();
+        expect(JSON.parse(await readFile(join(nativeHome, 'auth.json'), 'utf8'))).toMatchObject({ access_token: 'access-fresh' });
       } finally {
         try { await admission.dispose(); }
         finally {
@@ -229,7 +226,7 @@ describe('foreground Codex Connected Account lifecycle through real materializat
     });
   });
 
-  it('binds the native Account purpose to the exact claimed Session and reuses the materializer-owned native home until cleanup', async () => {
+  it('binds the native Account purpose to the exact claimed Session and retains its Account home after Session cleanup', async () => {
     const account = await createCodexForegroundConnectedAccountFixture();
     try {
       await withRealForegroundAdmissionFixture({ runtimeOptions: account.runtimeOptions }, async (fixture) => {
@@ -270,31 +267,71 @@ describe('foreground Codex Connected Account lifecycle through real materializat
         expect(materialized.requestAuthPurposeBindings).toEqual([]);
         await admitted.prepared.cleanup();
         await expect(account.owner.getBinding(exactSessionBinding)).resolves.toBeNull();
-        await expect(stat(nativeHome)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(account.owner.materialize({ ...exactSessionBinding,
+          request: { kind: 'files', fileIds: ['auth.json'] },
+        })).rejects.toMatchObject({ code: 'plugin_host_access_resource_not_selected' });
+        await expect(readFile(join(nativeHome, 'auth.json'), 'utf8')).resolves.toBe(nativeAuth);
       });
     } finally {
       await account.cleanup();
     }
   });
 
-  it('removes prepared native-home material when the real foreground process exits before claim', async () => {
+  it('retires a failed foreground claim and its bootstrap files without deleting the Account home', async () => {
     const account = await createCodexForegroundConnectedAccountFixture();
     try {
       await withRealForegroundAdmissionFixture({ runtimeOptions: account.runtimeOptions }, async (fixture) => {
-        const admitted = await fixture.prepare({ connectedServices: account.connectedServices }, await account.dependenciesFor(fixture.runtime.registry, fixture.directory));
-        expect(admitted.ok, admitted.ok ? undefined : `${admitted.error.code}; materializations=${account.materializations.length}`).toBe(true);
-        if (!admitted.ok) throw new Error(admitted.error.code);
-        const nativeHome = account.materializations[0]?.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY];
-        if (!nativeHome) throw new Error('Prepared Codex native home is unavailable');
-        await expect(stat(nativeHome)).resolves.toBeTruthy();
-        process.kill(fixture.foregroundPid);
-        expect(await waitForProcessExit(fixture.foregroundPid)).toBe(true);
-        await expect(admitted.prepared.claim(claimInput)).resolves.toMatchObject({
-          ok: false, error: { code: 'provider_agent_runtime_unsupported' },
+        const dependencies = await account.dependenciesFor(fixture.runtime.registry, fixture.directory);
+        const admission = createForegroundAdmission({
+          prepare: request => fixture.prepare({ connectedServices: account.connectedServices,
+            sessionId: request.sessionId, attemptId: request.attemptId, foregroundPid: request.foregroundPid,
+          }, dependencies),
+          getHttpPort: () => claimInput.httpPort,
         });
-        await expect(stat(nativeHome)).rejects.toMatchObject({ code: 'ENOENT' });
-        await admitted.prepared.cleanup();
-        await expect(stat(nativeHome)).rejects.toMatchObject({ code: 'ENOENT' });
+        try {
+          const request = fixture.request({ connectedServices: account.connectedServices });
+          const admitted = await admission.admit(request);
+          expect(admitted.ok, admitted.ok ? undefined : `${admitted.error.code}; materializations=${account.materializations.length}`).toBe(true);
+          if (!admitted.ok) throw new Error(admitted.error.code);
+          const nativeHome = account.materializations[0]?.env[HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY];
+          if (!nativeHome) throw new Error('Prepared Codex native home is unavailable');
+          await expect(stat(nativeHome)).resolves.toBeTruthy();
+          await expect(stat(admitted.capability.admissionFilePath)).resolves.toBeTruthy();
+          await expect(stat(admitted.capability.bootstrapFilePath)).resolves.toBeTruthy();
+          const capability = z.looseObject({ capability: z.string() }).parse(
+            JSON.parse(await readFile(admitted.capability.admissionFilePath, 'utf8')),
+          ).capability;
+          const descriptor = admitted.capability.descriptor;
+          const claimRequest = { v: 1, attemptId: request.attemptId,
+            provisionalSessionId: request.sessionId, canonicalSessionId: claimInput.canonicalSessionId,
+            foregroundPid: request.foregroundPid, pluginId: descriptor.pluginId, agentId: descriptor.agentId,
+            occurrenceId: descriptor.occurrenceId, sourceCustody: descriptor.sourceCustody, capability,
+            ...(admitted.launchPolicy.nativeHomeSourceEnvironmentKey
+              ? { nativeHomeSourceEnvironmentValue: process.env[admitted.launchPolicy.nativeHomeSourceEnvironmentKey] ?? null }
+              : {}),
+            foregroundSatisfiedProfileSecretRequirementNames: [],
+          } satisfies Parameters<typeof admission.claimEnvironment>[0];
+          const expectClaimRefused = async () => {
+            const claimed = await admission.claimEnvironment(claimRequest).catch((error: unknown) => {
+              // The existing liveness owner may have retired this exact attempt
+              // already; accept only its specific unavailable refusal.
+              if (error instanceof Error && error.message === 'Foreground Agent runtime admission is unavailable') return null;
+              throw error;
+            });
+            if (claimed !== null) expect(claimed).toMatchObject({
+              ok: false, error: { code: 'provider_agent_runtime_unsupported' },
+            });
+          };
+          process.kill(fixture.foregroundPid);
+          expect(await waitForProcessExit(fixture.foregroundPid)).toBe(true);
+          await expectClaimRefused();
+          await expect(stat(admitted.capability.admissionFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
+          await expect(stat(admitted.capability.bootstrapFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
+          await expectClaimRefused();
+          await expect(stat(nativeHome)).resolves.toBeTruthy();
+        } finally {
+          await admission.dispose();
+        }
       });
     } finally {
       await account.cleanup();

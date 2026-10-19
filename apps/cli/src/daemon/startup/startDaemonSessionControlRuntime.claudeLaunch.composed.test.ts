@@ -9,6 +9,8 @@ import { prepareRunnerDaemonPluginServices } from '@/agent/runtime/session/proce
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { authorizeResolvedAgentNativeExecLaunchForHost, issueAgentNativeLaunchQualifierForHost } from '@/plugins/runtime/invocation/services/exec';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { readProcessIdentityByPid } from '../processIdentity';
+import { hashProcessCommand } from '@happier-dev/cli-common/processInstance';
 
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null }));
 // The private HTTP listener is the transport boundary. Its production dispatcher,
@@ -76,4 +78,22 @@ it('authorizes a fresh-folder Claude launch while the same requester has slow Cl
     releaseCredentials();
     await materialized;
   }
+}, 120_000);
+
+
+it('refuses a second entry for a tracked Claude conversation through the production spawn dispatcher', async () => {
+  const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, 'claude');
+  h.tracked.vendorResumeId = 'live-conversation';
+  const identity = await readProcessIdentityByPid(process.pid);
+  if (!identity || identity.processStartTimeMs === undefined || !('command' in identity)) throw new Error('Missing real runner process identity');
+  h.tracked.processStartTimeMs = identity.processStartTimeMs;
+  h.tracked.processCommandHash = hashProcessCommand(identity.command);
+  const control = boundary.control;
+  if (!control) throw new Error('Missing production spawn dispatcher');
+  const result = await control.spawnSession({
+    directory: h.cwd, resume: 'live-conversation',
+    backendTarget: { kind: 'backend', sourceKind: 'built_in', backendId: 'claude' },
+  });
+  expect(result).toMatchObject({ type: 'error', errorCode: 'INVALID_REQUEST' });
+  expect(h.nativeEffects()).toBe(0);
 }, 120_000);

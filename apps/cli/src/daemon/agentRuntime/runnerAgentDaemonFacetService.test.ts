@@ -6,7 +6,6 @@ import {
 import {
   createExternalSessionHostOperationOwner,
   type ExternalSessionHostOperationSet,
-  type ExternalSessionHostOperationPort,
 } from '@/session/external/hostOperationOwner';
 import type {
   HostExternalTranscriptFollowEvent,
@@ -90,10 +89,12 @@ async function setup(options: SetupOptions = {}) {
       const retire = vi.fn(port.retire);
       boundPortRetirements.push(retire);
       return Object.freeze({
+        isCurrent: port.isCurrent,
+        waitForRebind: port.waitForRebind,
         executeFollow: port.executeFollow,
         executeProviderSessionFollow: port.executeProviderSessionFollow,
         retire,
-      }) satisfies ExternalSessionHostOperationPort;
+      }) satisfies ReturnType<ServiceInput['externalSessionHostOperationOwner']['bind']>;
     },
   );
   let followListener:
@@ -174,6 +175,7 @@ async function setup(options: SetupOptions = {}) {
   return {
     service,
     operations,
+    replaceHostOperations: async () => await privateOwner.install(operations),
     executeFollow,
     disposeFollow,
     setFollowListener,
@@ -194,6 +196,82 @@ async function setup(options: SetupOptions = {}) {
 }
 
 describe('runner Agent daemon-owned facet service', () => {
+  it('rebinds an unchanged retained Agent after the host-operation generation is replaced', async () => {
+    const fixture = await setup();
+    await expect(fixture.service.dispatch({
+      ...direct,
+      operation: {
+        kind: 'external_session.follow.open',
+        requestId: 'generation-one-open',
+        followId: 'generation-one-follow',
+        target: { kind: 'externalSession', ref, source },
+      },
+    })).resolves.toMatchObject({
+      kind: 'external_session.follow.open',
+      followId: 'generation-one-follow',
+    });
+    expect(fixture.bindPrivateExternalSession).toHaveBeenCalledTimes(1);
+
+    const replacement = await fixture.replaceHostOperations();
+
+    await expect(fixture.service.dispatch({
+      ...direct,
+      operation: {
+        kind: 'external_session.follow.open',
+        requestId: 'generation-two-open',
+        followId: 'generation-two-follow',
+        target: { kind: 'externalSession', ref, source },
+      },
+    })).resolves.toMatchObject({
+      kind: 'external_session.follow.open',
+      followId: 'generation-two-follow',
+    });
+    expect(fixture.bindPrivateExternalSession).toHaveBeenCalledTimes(2);
+    expect(fixture.boundPortRetirements[0]).toHaveBeenCalledTimes(1);
+
+    await fixture.service.dispose();
+    await replacement.dispose();
+  });
+
+  it('awaits host-operation replacement and resumes one in-flight follow acquisition once', async () => {
+    const fixture = await setup();
+    fixture.executeFollow.mockResolvedValueOnce({
+      status: 'unavailable',
+      code: 'plugin_generation_retired',
+    });
+
+    let settled = false;
+    const opening = fixture.service.dispatch({
+      ...direct,
+      operation: {
+        kind: 'external_session.follow.open',
+        requestId: 'generation-handoff-open',
+        followId: 'generation-handoff-follow',
+        target: { kind: 'externalSession', ref, source },
+      },
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(fixture.executeFollow).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    const replacement = await fixture.replaceHostOperations();
+
+    await expect(opening).resolves.toMatchObject({
+      kind: 'external_session.follow.open',
+      followId: 'generation-handoff-follow',
+      result: { status: 'following' },
+    });
+    expect(fixture.executeFollow).toHaveBeenCalledTimes(2);
+    expect(fixture.bindPrivateExternalSession).toHaveBeenCalledTimes(2);
+    expect(fixture.boundPortRetirements[0]).toHaveBeenCalledOnce();
+
+    await fixture.service.dispose();
+    await replacement.dispose();
+  });
+
   it('reuses one exact private binding for concurrent cold follows and retires it when G stops being current', async () => {
     const contributionEntered = createDeferred();
     const releaseContribution = createDeferred();

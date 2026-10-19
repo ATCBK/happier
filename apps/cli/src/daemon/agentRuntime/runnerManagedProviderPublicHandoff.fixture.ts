@@ -319,12 +319,14 @@ export async function commitPackedPublicHandoffFixture(input: Readonly<{
         pendingChangeId: requested.pendingChangeId,
         decision: 'installAndTrust',
     });
-    if (committed.kind !== 'committed' || !committed.appliedGeneration) {
+    if (committed.kind !== 'committed' || !committed.desiredGeneration) {
         throw new Error(`Expected archive commit for ${input.packed.pluginId}, received ${committed.kind}`);
     }
     return Object.freeze({
         ...input.packed,
-        immutableGenerationId: committed.appliedGeneration,
+        // The archive/store fixture owns durable generation identity. Serving
+        // adoption is a separate fact proved by callers with a real lifecycle.
+        immutableGenerationId: committed.desiredGeneration,
     });
 }
 

@@ -1,6 +1,6 @@
 import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { basename, dirname, join } from 'node:path';
+import { afterEach, expect, it, onTestFailed, vi } from 'vitest';
 
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { writeExecutableShim } from '@/testkit/fs/executableShim';
@@ -9,6 +9,7 @@ import { routeSpawnModeAndWaitForWebhook } from './routeSpawnModeAndWaitForWebho
 import { createSpawnLifecycleCallbacks } from './createSpawnLifecycleCallbacks';
 import { persistAcceptedSpawnMarker } from './persistAcceptedSpawnMarker';
 import { createOnHappySessionWebhook } from '../sessions/onHappySessionWebhook';
+import { createOnChildExited } from '../sessions/onChildExited';
 import { listSessionMarkers } from '../sessionRegistry';
 import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 import type { TrackedSession } from '../types';
@@ -18,11 +19,18 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { buildSpawnSessionOptionsFromRespawnDescriptorV1 } from '../processSupervision/sessionRunnerRespawnDescriptor';
 import { readCliNodeWorkspaceRuntimeIdentityFromRuntimeRoot } from '@happier-dev/cli-common/componentArtifacts/copyCliNodeRuntimePayload';
+import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
+import { partitionProviderSessionArgs } from '@/cli/providerSessionArgPartition';
+import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
+import { resolveCodexCliSessionExtraOptions } from '../../../../../packages/plugins/codex/src/agent/cli/command';
 
 const envScope = createSpawnHappyCliEnvScope();
 afterEach(() => { envScope.restore(); vi.unstubAllEnvs(); reloadConfiguration(); vi.unstubAllGlobals(); });
 
-it('requires managed runtime bootstrap before admitting a pinned runner through native launch, marker custody and canonical readiness', async () => {
+it.each(['opencode', 'codex'] as const)('requires managed runtime bootstrap before admitting a %s runner through native launch, marker custody and canonical readiness', async agentId => {
+    let phase = 'prepare pinned runner and native support fixture';
+    let acceptedMarkerFailure: unknown;
+    onTestFailed(() => console.error('Native runner admission fixture failed', { phase, acceptedMarkerFailure }));
     await withTempDir('happier-route-native-admission-', async root => {
         const stagingRoot = join(root, '.runner-snapshots', '.staging');
         const stagingEntrypoint = join(stagingRoot, 'package-dist', 'index.mjs');
@@ -47,6 +55,11 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
         mkdirSync(directory);
         const readyPath = join(root, 'native-ready.json');
         const originalExecPath = process.execPath;
+        const custodyExecutable = resolveProcessCustodySupportExecutable();
+        if (!custodyExecutable) throw new Error('Expected the test setup native custody runtime');
+        const custodyDir = join(root, 'tools', 'unpacked');
+        mkdirSync(custodyDir, { recursive: true });
+        copyFileSync(custodyExecutable, join(custodyDir, basename(custodyExecutable)));
         envScope.patch({
             HAPPIER_HOME_DIR: homeDir,
             HAPPIER_MANAGED_NODE_BIN: undefined,
@@ -62,12 +75,13 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
             HAPPIER_CLI_SUBPROCESS_STACK_RUNTIME_STATE_PATH: runtimeStatePath,
         });
         vi.stubEnv('ROUTE_FIXTURE_READY', readyPath);
-        vi.stubEnv('PATH', '');
         reloadConfiguration();
+        phase = 'admit the Agent plugin runtime';
         const runtime = await createAdmittedPluginRuntimeFixture({
             happyHomeDir: homeDir, controller: pluginReloadController,
-            runtimeOptions: { pluginIds: ['happier.agent.opencode'] },
+            runtimeOptions: { pluginIds: [`happier.agent.${agentId}`] },
         });
+        vi.stubEnv('PATH', '');
         const pidToTrackedSession = new Map<number, TrackedSession>();
         const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
         const pidToSpawnResultResolver = new Map<number, (result: SpawnSessionResult) => void>();
@@ -81,14 +95,26 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
             getSpawnResourceCleanupOnExit: () => null, onSpawnResourceCleanupArmed: () => {},
             spawnResourceCleanupByPid, getSessionAttachCleanup: () => null, setSessionAttachCleanup: () => {},
             sessionAttachCleanupByPid,
-            persistAcceptedSpawnMarker: (trackedSession, options) => persistAcceptedSpawnMarker({
-                trackedSession, deviceLocalSecretStorage, ...options,
-            }),
+            persistAcceptedSpawnMarker: async (trackedSession, options) => {
+                try {
+                    await persistAcceptedSpawnMarker({ trackedSession, deviceLocalSecretStorage, ...options });
+                } catch (error) {
+                    acceptedMarkerFailure = error;
+                    throw error;
+                }
+            },
         });
-        const backendTarget = { kind: 'backend' as const, sourceKind: 'built_in' as const, backendId: 'opencode' };
+        const backendTarget = { kind: 'backend' as const, sourceKind: 'built_in' as const, backendId: agentId };
         const spawnOptions = { directory, backendTarget };
+        const onChildExited = createOnChildExited({
+            pidToTrackedSession, spawnResourceCleanupByPid, sessionAttachCleanupByPid,
+            getApiMachineForSessions: () => null,
+        });
+        const childExitObservations: Promise<void>[] = [];
         const params = {
-            terminalPresentation: { kind: 'runner' as const, startingMode: 'remote' as const },
+            terminalPresentation: agentId === 'codex'
+                ? { kind: 'provider_attach' as const, startingMode: 'remote' as const }
+                : { kind: 'runner' as const, startingMode: 'remote' as const },
             terminalRequest: { requested: 'plain' as const },
             directory, options: spawnOptions, trackedSpawnOptions: spawnOptions,
             normalizedExistingSessionId: '', effectiveResume: '',
@@ -97,7 +123,12 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
             pidToTrackedSession, pidToAwaiter, pidToSpawnResultResolver, pidToSpawnWebhookTimeout,
             // Plain launch readiness comes from the canonical webhook owner, never a fixture Session resolver.
             resolveCanonicalTrackedSessionId: () => { throw new Error('Plain routing must not consult the terminal-host Session resolver'); },
-            onChildExited: () => {}, spawnLifecycleCallbacks: lifecycle, cleanupSpawnResources: () => {},
+            onChildExited: (...args: Parameters<typeof onChildExited>) => {
+                const observation = onChildExited(...args);
+                childExitObservations.push(observation);
+                return observation;
+            },
+            spawnLifecycleCallbacks: lifecycle, cleanupSpawnResources: () => {},
             onUntrackedHostedChild: () => { throw new Error('Plain routing unexpectedly created a hosted child'); },
             logDebug: () => {}, warn: () => {},
         };
@@ -106,6 +137,7 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
         Object.defineProperty(process, 'execPath', { configurable: true, value: join(root, 'happier') });
         let launching: Promise<SpawnSessionResult> | undefined;
         try {
+            phase = 'reject managed JavaScript runtime bootstrap while offline';
             await expect(routeSpawnModeAndWaitForWebhook(params)).rejects.toMatchObject({
                 message: 'Managed JavaScript runtime is unavailable: bootstrap failed', cause: offline,
             });
@@ -124,6 +156,7 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
                     ? `@echo off\r\n"${nodePath}" %*\r\n`
                     : `#!/bin/sh\nexec "${nodePath}" "$@"\n`,
             });
+            phase = 'launch the native runner with the managed JavaScript runtime';
             launching = routeSpawnModeAndWaitForWebhook(params);
             let launchFailure: unknown;
             void launching.catch(error => { launchFailure = error; });
@@ -136,18 +169,35 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
                     throw new Error('Invalid native runner receipt');
                 }
                 native = { pid: parsed.pid, args: parsed.args };
-                expect(pidToTrackedSession.has(native.pid)).toBe(true);
+                expect(pidToTrackedSession.size).toBe(1);
             });
             if (!native) throw new Error('Missing native runner receipt');
-            const tracked = pidToTrackedSession.get(native.pid)!;
+            const tracked = [...pidToTrackedSession.values()][0]!;
+            phase = 'persist accepted runner marker custody';
             await tracked.acceptedSpawnMarkerGate;
-            expect(native.args).toEqual(['opencode', '--happy-starting-mode', 'remote', '--started-by', 'daemon']);
+            expect(native.args).toEqual([agentId, '--happy-starting-mode', 'remote', '--started-by', 'daemon']);
+            // Exercise the runner's actual argument parser and Session binding,
+            // not a separately reconstructed Workflow/daemon starting mode.
+            const parsed = partitionProviderSessionArgs({ args: native.args, providerSubcommand: agentId });
+            const codexOptions = agentId === 'codex'
+                ? resolveCodexCliSessionExtraOptions({
+                    startingMode: parsed.startingMode, directory: parsed.directory, agentArgs: parsed.providerArgs,
+                }) : null;
+            if (codexOptions && !codexOptions.ok) throw new Error(codexOptions.errorMessage);
+            const binding = buildPluginSessionBindingInput({
+                credentials: { token: 'fixture-token', encryption: null }, directory,
+                startedBy: parsed.startedBy, startingMode: parsed.startingMode,
+                backendTarget,
+                ...(codexOptions?.ok ? codexOptions.options : {}),
+            });
+            expect(binding.bootstrap.source).toBe('daemon');
+            expect(binding.runtimePreferences.startingMode).toBe('remote');
             const acceptedMarkers = await listSessionMarkers();
             expect(acceptedMarkers).toEqual(expect.arrayContaining([expect.objectContaining({
-                pid: native.pid, happySessionId: `PID-${native.pid}`, cwd: directory,
+                pid: tracked.pid, happySessionId: `PID-${tracked.pid}`, cwd: directory,
                 processStartTimeMs: tracked.processStartTimeMs,
             })]));
-            const marker = acceptedMarkers.find(candidate => candidate.pid === native!.pid);
+            const marker = acceptedMarkers.find(candidate => candidate.pid === tracked.pid);
             if (!marker?.respawn) throw new Error('Missing accepted runner recovery custody');
             expect(buildSpawnSessionOptionsFromRespawnDescriptorV1(marker.respawn, { deviceLocalSecretStorage }))
                 .toMatchObject({ directory, backendTarget });
@@ -155,6 +205,7 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
                 pidToTrackedSession, pidToAwaiter, spawnResourceCleanupByPid, sessionAttachCleanupByPid,
                 deviceLocalSecretStorage,
             });
+            phase = 'admit the canonical Session webhook';
             await onWebhook('session-native-admission', {
                 path: directory, host: 'native-fixture', homeDir: root, happyHomeDir: homeDir,
                 happyLibDir: closure.snapshotRoot, happyToolsDir: join(closure.snapshotRoot, 'tools'),
@@ -164,6 +215,7 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
             expect(tracked.happySessionId).toBe('session-native-admission');
             // A plain receiver has no Agent-runtime authority gate: its real webhook owner
             // publishes the marker asynchronously and exposes that write's settlement.
+            phase = 'persist canonical Session marker custody';
             await tracked.reportMarkerCustody?.pending;
             expect(await listSessionMarkers()).toEqual(expect.arrayContaining([expect.objectContaining({
                 pid: native.pid, happySessionId: 'session-native-admission',
@@ -173,13 +225,15 @@ it('requires managed runtime bootstrap before admitting a pinned runner through 
         } finally {
             for (const tracked of pidToTrackedSession.values()) {
                 const child = tracked.childProcess;
-                if (child && child.exitCode === null) {
+                if (child && child.exitCode === null && child.signalCode === null) {
                     const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
                     child.kill('SIGTERM');
                     await exited;
                 }
             }
             for (const timeout of pidToSpawnWebhookTimeout.values()) clearTimeout(timeout);
+            // Exit retirement still owns files beneath this temporary home.
+            await Promise.all(childExitObservations);
             await runtime.dispose();
             Object.defineProperty(process, 'execPath', { configurable: true, value: originalExecPath });
         }

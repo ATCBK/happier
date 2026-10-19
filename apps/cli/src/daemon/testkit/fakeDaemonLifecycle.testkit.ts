@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,7 +11,6 @@ import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir'
 import {
   spawnDetachedInlineNodeTestProcess,
   spawnDetachedTestProcess,
-  waitForProcessExit,
 } from '@/testkit/process/spawn'
 
 const baselineServers = {
@@ -142,6 +143,16 @@ export async function withConfiguredDaemonTestHome<T>(
   }
 }
 
+async function killOwnedTestProcess(child: ChildProcess): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return true
+  // A census can report a zombie before libuv has reaped this owned child.
+  // Stop assertions need the ChildProcess exit, not merely non-running state.
+  const exited = once(child, 'exit')
+  child.kill('SIGKILL')
+  await exited
+  return true
+}
+
 export function spawnSleepyDetachedProcess(args: string[] = []): { pid: number; kill: () => Promise<boolean> } {
   const child = spawnDetachedTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)', ...args])
   const pid = child.pid
@@ -152,14 +163,7 @@ export function spawnSleepyDetachedProcess(args: string[] = []): { pid: number; 
 
   return {
     pid,
-    async kill() {
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch {
-        // ignore
-      }
-      return await waitForProcessExit(pid, { timeoutMs: 2_000 })
-    },
+    kill: () => killOwnedTestProcess(child),
   }
 }
 
@@ -205,13 +209,6 @@ export function spawnStoppableHttpDaemon(
 
   return {
     pid,
-    async kill() {
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch {
-        // ignore
-      }
-      return await waitForProcessExit(pid, { timeoutMs: 2_000 })
-    },
+    kill: () => killOwnedTestProcess(child),
   }
 }

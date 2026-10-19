@@ -98,7 +98,8 @@ export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
         logInfo: (message) => logger.info(message),
         logWarn: (message) => logger.warn(message),
         connectedServiceAuth: input.connectedServiceAuth,
-        ...(input.options.requesterSessionBootstrap ? { allowNativeAccountCredentials: false } : {}),
+        ...(input.options.requesterSessionBootstrap
+            ? { allowNativeAccountCredentials: input.options.requesterSessionBootstrap.allowNativeAccountCredentials === true } : {}),
         ...(providerBindingLaunchInput
             ? {
                 providerBindingContext: {
@@ -230,7 +231,7 @@ export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
         pendingFirstInput: _pendingFirstInput,
         initialGoal: _initialGoal,
         initialAccess: _initialAccess,
-        reportsTo: _reportsTo,
+        manager: _manager,
         initialSessionRolesV1: _initialSessionRolesV1,
         freshSessionCreation: _freshSessionCreation,
         managedDirectorySeed: _managedDirectorySeed,
@@ -238,6 +239,8 @@ export async function prepareDaemonSpawnChildEnvironment(input: Readonly<{
         persistedTakeoverAdmission: _persistedTakeoverAdmission,
         verifyRequesterMachineAdmissionCurrent: _verifyRequesterMachineAdmissionCurrent,
         beforeSessionRunnerLaunch: _beforeSessionRunnerLaunch,
+        resumeActionContext: _resumeActionContext,
+        projectSetupOperation: _projectSetupOperation,
         requesterSessionCredentialFile: _requesterSessionCredentialFile,
         requesterSessionBootstrap: _requesterSessionBootstrap,
         requesterSessionRuntimeContext: _requesterSessionRuntimeContext,

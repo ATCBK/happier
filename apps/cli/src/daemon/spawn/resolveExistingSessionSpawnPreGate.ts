@@ -1,4 +1,8 @@
 import { isPidPlaceholderSessionId } from '../sessionRegistry';
+import { extractResumeIdFromCommand } from '../sessions/extractResumeIdFromCommand';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import type { BackendTargetRefV2 } from '@happier-dev/protocol';
+import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import {
   SPAWN_SESSION_ERROR_CODES,
   type SpawnSessionResult,
@@ -124,6 +128,7 @@ function sleep(delayMs: number): Promise<void> {
 
 export async function resolveExistingSessionSpawnPreGate(params: Readonly<{
   existingSessionId: string | undefined;
+  providerConversation?: Readonly<{ backendTarget: BackendTargetRefV2; resumeId: string }>;
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   probeSessionRunnerPresence: (sessionId: string) => Promise<SessionRunnerPresenceProbe>;
   waitForExitTimeoutMs: number;
@@ -134,6 +139,28 @@ export async function resolveExistingSessionSpawnPreGate(params: Readonly<{
   onAlreadyRunning?: (sessionId: string) => Promise<ExistingSessionAlreadyRunningDecision | void>;
 }>): Promise<ResolveExistingSessionSpawnPreGateResult> {
   const normalizedExistingSessionId = typeof params.existingSessionId === 'string' ? params.existingSessionId.trim() : '';
+  const conversation = params.providerConversation;
+  if (conversation?.resumeId) {
+    const targetKey = buildBackendTargetKeyV2(conversation.backendTarget);
+    for (const tracked of params.pidToTrackedSession.values()) {
+      const siblingId = tracked.happySessionId ?? tracked.spawnOptions?.existingSessionId;
+      if (!siblingId || siblingId === normalizedExistingSessionId) continue;
+      // Terminal registration can precede the provider-id metadata report.
+      const trackedResumeId = tracked.vendorResumeId ?? tracked.spawnOptions?.resume
+        ?? extractResumeIdFromCommand(tracked.processCommand ?? '');
+      if (trackedResumeId !== conversation.resumeId) continue;
+      const target = tracked.spawnOptions?.agentTarget ?? tracked.spawnOptions?.backendTarget
+        ?? resolveBackendTargetFromSessionMetadata(tracked.happySessionMetadataFromLocalWebhook);
+      if (!target || buildBackendTargetKeyV2(target) !== targetKey) continue;
+      const presence = await params.probeSessionRunnerPresence(siblingId);
+      if (presence.state === 'runner_absent') continue;
+      params.logWarn('[DAEMON RUN] Refusing a second entry for an existing provider conversation', { presence: presence.state });
+      return { shortCircuitResult: {
+        type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+        errorMessage: 'This conversation already has another session runner. Open its existing session, or stop that runner before resuming.',
+      } };
+    }
+  }
   if (!normalizedExistingSessionId) {
     return { shortCircuitResult: null };
   }

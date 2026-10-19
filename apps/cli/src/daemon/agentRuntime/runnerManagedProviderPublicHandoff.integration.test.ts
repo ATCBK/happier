@@ -395,6 +395,8 @@ function createPendingProcess(
         readBufferedStderr: () => new Uint8Array(),
         requestTermination: async () => await dispose(),
         dispose,
+        waitForSettlement: async () => { await wait; return { status: 'ended' as const }; },
+        onOutcomeUncertain: () => () => {},
     });
 }
 
@@ -795,7 +797,7 @@ describe('representative public Provider-to-SVC09 handoff', () => {
         const resolution = resolveProviderConnectionForMachine({
             connectionId,
             machineId,
-            accountSettings: { providerSettingsV1: initialSettings },
+            providerSettings: initialSettings,
             registry: providerRegistry,
             dnsEvidenceByEndpointUrl: new Map(),
         });

@@ -1,11 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 import { SessionInitialAccessServerError } from '@/api/session/sessionCreationInitialAccess';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
-import { SessionInitialTriggerAdmissionV1Schema, snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol';
+import { deriveSessionCreationTagV1, SessionCreationCorrespondenceV1Schema, SessionInitialTriggerAdmissionV1Schema, snapshotSessionRolesAtSpawnV1, readSessionWorkspaceWritesV1 } from '@happier-dev/protocol';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
-// Network boundary only: the Session row read, the Account currentness read and
-// the archive mutation are HTTP calls. Attach-context building stays real.
+// The Session row, Account currentness/settings reads and archive mutation are
+// HTTP boundaries. Settings bootstrap and attach-context building stay real.
 const network = vi.hoisted(() => ({
   fetchSessionByIdCompat: vi.fn(),
   fetchAccountEncryptionCurrentness: vi.fn(),
@@ -54,7 +58,7 @@ const directTeamOptions: SpawnSessionOptions = {
   },
   teamCredentialBindings: [teamSlotBinding],
   primaryTeamId: 'team-1',
-  reportsTo: { sessionId: 'lead-1' },
+  manager: { sessionId: 'lead-1' },
   capabilitySelection: {
     mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['docs'], forceExcludeServerIds: [] },
     skills: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native-review'] },
@@ -75,18 +79,71 @@ function plainSessionRow(id: string, metadata: Record<string, unknown>) {
 }
 
 describe('commitDaemonLaunchSession', () => {
+  it('requires server birth admission for Discussion participants before a native runner is started', () => {
+    const discussionParticipant = { discussionId: 'discussion', participantSlotId: 'slot' };
+    const discussionParticipantLaunch = { executionTarget: { serverId: 'home', machineId: 'machine-1' },
+      directory: { kind: 'path' as const, path: '/repo' },
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+    expect(daemonLaunchRequiresCommittedSession({ directory: '/repo', originKind: 'discussion',
+      discussionParticipant, discussionParticipantLaunch })).toBe(true);
+    const sessionCreationTag = deriveSessionCreationTagV1({ callerCreationNamespace: 'discussion', creationKey: 'slot' });
+    const sessionCreationCorrespondence = SessionCreationCorrespondenceV1Schema.parse({ v: 1, sessionCreationTag,
+      recipe: { execution: { machineId: 'machine-1', directory: { kind: 'path', path: '/repo' } },
+        organization: { folderId: null, tagIds: [] },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+        discussionParticipant: { discussionId: 'discussion', participantSlotId: 'slot' }, modelSelection: null, profileId: null,
+        requestedPermissionMode: null, agentModeId: null, configuration: null, connectedServices: null,
+        capabilitySelection: null, transcriptStorage: null, terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null },
+    });
+    const correspondenceOnly = { directory: '/repo', sessionCreationTag, sessionCreationCorrespondence };
+    expect(() => daemonLaunchRequiresCommittedSession(correspondenceOnly)).toThrow();
+    expect(daemonLaunchRequiresCommittedSession({ ...correspondenceOnly, originKind: 'discussion',
+      discussionParticipant, discussionParticipantLaunch })).toBe(true);
+    expect(daemonLaunchRequiresCommittedSession({ ...correspondenceOnly, existingSessionId: 'session-existing' })).toBe(false);
+  });
+  it('commits an authored workspace ceiling before native admission and retains it on attach', async () => {
+    const options = { directory: '/repo', workspaceWrites: 'deny' as const };
+    expect(daemonLaunchRequiresCommittedSession(options)).toBe(true);
+    const getOrCreateSession = vi.fn(async (input: { metadata: Record<string, unknown> }) => ({
+      id: 'session-workspace-policy', metadata: input.metadata,
+      sessionCreationOutcome: { disposition: 'created' as const, organizationPlacement: { folderId: null, tagIds: [] } },
+    }));
+    network.fetchSessionByIdCompat.mockImplementation(async () =>
+      plainSessionRow('session-workspace-policy', getOrCreateSession.mock.calls[0]![0].metadata));
+    const committed = await commitDaemonLaunchSession({ api: { getOrCreateSession } as never, credentials, options, directory: '/repo' });
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) return;
+    expect(readSessionWorkspaceWritesV1(getOrCreateSession.mock.calls[0]![0].metadata)).toBe('deny');
+    expect(committed.session.attachPayload).toMatchObject({ snapshot: { metadata: { workspaceWrites: 'deny' } } });
+  });
   it('commits selection-bearing launches before child startup so selections travel through metadata', () => {
     const capabilitySelection = {
       skills: { v: 1 as const, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
     };
     expect(daemonLaunchRequiresCommittedSession({ directory: '/workspace', capabilitySelection })).toBe(true);
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     network.fetchSessionByIdCompat.mockReset();
     network.fetchAccountEncryptionCurrentness.mockReset().mockResolvedValue({
       mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
     });
     network.setSessionArchivedStateById.mockReset().mockResolvedValue({ archivedAt: 1 });
+    const settingsResponse = AccountSettingsV2GetResponseSchema.parse({
+      content: { t: 'plain', v: {} }, version: 1,
+    });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v2/account/settings') return { status: 200, data: settingsResponse };
+      throw new Error(`Unexpected launch fixture Home read: ${path}`);
+    });
+    resetActiveAccountSettingsSnapshotForTests();
+    // Await the real Account settings producer before committing a launch.
+    // Fast bootstrap must not leave an unowned HTTP refresh after the test.
+    await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force' });
+  });
+  afterEach(() => {
+    resetActiveAccountSettingsSnapshotForTests();
+    vi.restoreAllMocks();
   });
 
   it('commits launches needing host creation proof or directly delivered Team material', () => {
@@ -205,7 +262,7 @@ describe('commitDaemonLaunchSession', () => {
       creationAuthorizationToken: 'signed-proof',
       teamCredentialBindings: [teamSlotBinding],
       primaryTeamId: 'team-1',
-      reportsTo: { sessionId: 'lead-1' },
+      manager: { sessionId: 'lead-1' },
     });
     // Intents an attaching runner never takes from its own process are
     // seeded by the creator.
@@ -228,7 +285,7 @@ describe('commitDaemonLaunchSession', () => {
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('teamCredentialBindings');
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('creationAuthorization');
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('primaryTeamId');
-    expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('reportsTo');
+    expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('manager');
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('initialSessionRolesV1');
     expect(withoutFreshSessionCreationFields(committed.session.options)).not.toHaveProperty('initialTitle');
   });

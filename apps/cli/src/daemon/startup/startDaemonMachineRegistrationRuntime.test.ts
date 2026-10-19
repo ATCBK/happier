@@ -103,7 +103,6 @@ describe('startDaemonMachineRegistrationRuntime', () => {
     wakeSource?.invalidate();
 
     expect(createLoopbackReadinessProbeMock).toHaveBeenCalledWith({
-      serverUrl: 'https://api.example.test',
       token: 'token-1',
     });
     expect(createManagedEndpointSupervisorMock).toHaveBeenCalledWith(expect.objectContaining({

@@ -57,10 +57,11 @@ describe('connected-account spawn admission', () => {
       catalogAgentId: 'codex',
       credentials,
       api,
+      qualifiedConnectedAccountApi: { listAccounts: apiAccess, readGroup: apiAccess },
       connectedServiceRefreshCoordinator: null,
       processEnv: {},
       connectedServicesMaterializationBaseDir: '/synthetic/materialization',
-      pluginContributions: { agentDefinitionsById: new Map() },
+      pluginRuntimeRegistry: { contributes: { agentDefinitionsById: new Map() } },
       repairMissingMaterializationIdentity: repair,
     });
     expect(apiAccess).not.toHaveBeenCalled();
@@ -77,6 +78,13 @@ describe('connected-account spawn admission', () => {
         errorMessage: 'connected_service_bindings_invalid',
       },
     });
+  });
+
+  it('refuses an unsupported Connected Account at qualified-purpose admission before credential access', async () => {
+    expect(await prepare({ v: 2, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'unsupported-profile' },
+    } })).toMatchObject({ ok: false, result: { type: 'error', errorCode: 'SPAWN_VALIDATION_FAILED',
+      errorDetail: { kind: 'launch_error', code: 'connected_service_qualified_purpose_authority_unavailable' } } });
   });
 
   it.each([

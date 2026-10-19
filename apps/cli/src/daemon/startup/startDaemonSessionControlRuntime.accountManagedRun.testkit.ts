@@ -66,7 +66,7 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({ callSessionRpc: async (in
   status: 'current', executionRunId: input.request.executionRunId, occurrenceId: input.request.expectedOccurrenceId,
   parentSessionId: 'parent-session', intent: 'review', runtimeState: 'idle', teamCredentialProviderModel: null,
 }) }));
-vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }));
+vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, infoFile: () => {}, warn: () => {}, error: () => {} } }));
 
 /** A genuine installed Agent/Provider and live daemon service dispatcher for
  * consumer delivery tests. No source projection, runtime owner or token is
@@ -136,7 +136,12 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
       externalActionAccountId: 'account', credentials, api: {} as never,
       resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
       ...(input.issuedRequester ? { resolveRequesterSessionRuntimeContext: async (sessionId: string) =>
-        requester?.bootstrap.getBoundSessionId() === sessionId ? requester : null } : {}),
+        requester?.bootstrap.getBoundSessionId() === sessionId ? requester : null,
+        // This fixture lends its shared requester; cleanup above owns its disposal.
+        releaseRequesterSessionRuntimeContext: async () => {} } : {
+        resolveRequesterSessionRuntimeContext: undefined,
+        releaseRequesterSessionRuntimeContext: undefined,
+      }),
       connectedServiceRuntimeRegistry,
       openAccountConnectionManagedConsumerSource: async input => {
         sourceDiagnostics.stage = 'reading_owned_snapshot';

@@ -31,6 +31,7 @@ import {
 } from '../connectedServices/materialization/identity';
 import type { ConnectedServiceRefreshCoordinator } from '../connectedServices/refresh/ConnectedServiceRefreshCoordinator';
 import {
+    ConnectedServiceQualifiedPurposeAuthorityError,
     ConnectedServiceSpawnResumeUnreachableError,
     resolveConnectedServiceAuthForSpawn,
 } from '../connectedServices/resolveConnectedServiceAuthForSpawn';
@@ -49,6 +50,7 @@ import {
 import { shouldResolveConnectedServiceAuthForSpawn } from '../connectedServices/shouldResolveConnectedServiceAuthForSpawn';
 import type { ConnectedAccountPurposeBindingOwner } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { ConnectedServicesBindingsIngressSchema } from '../connectedServices/parseConnectedServicesBindings';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 
 type SpawnCredentials = NonNullable<Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['credentials']>;
 type SpawnApi = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['api'];
@@ -135,7 +137,10 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
     predictiveSwitchGuard?: SpawnPredictiveSwitchGuard;
     processEnv: NodeJS.ProcessEnv;
     connectedServicesMaterializationBaseDir: string;
-    pluginContributions: AgentSpawnPurposeContributions;
+    pluginRuntimeRegistry: Readonly<{
+        contributes: AgentSpawnPurposeContributions;
+        acquireAgentCatalogEntry?: ResolvedExecutablePluginRuntimeRegistry['acquireAgentCatalogEntry'];
+    }>;
     activatePurposeBindings?: ConnectedAccountPurposeBindingOwner['activatePurposeBindings'];
     serverContract?:
         SessionSyncPendingInputServerContractResult | null;
@@ -165,6 +170,13 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
         ...(admittedBindings.data ? { connectedServices: admittedBindings.data } : {}),
     };
     const shouldResolveAuth = shouldResolveConnectedServiceAuthForSpawn(admittedOptions);
+    const catalogStartedAt = performance.now();
+    const catalogEntry = admittedBindings.data && input.catalogAgentId
+        ? await input.pluginRuntimeRegistry.acquireAgentCatalogEntry?.(input.catalogAgentId)
+        : undefined;
+    logger.info('[DAEMON RUN] Connected-services preparation phase', {
+        phase: 'catalog_entry', durationMs: Math.round(performance.now() - catalogStartedAt),
+    });
     let materializationIdentity =
         readConnectedServiceMaterializationIdentityFromSpawnOptions(input.options)
         ?? readConnectedServiceMaterializationIdentityFromEnvironment(input.options.environmentVariables);
@@ -229,7 +241,8 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
                 sessionDirectory: options.directory,
                 credentials: input.credentials,
                 connectedAccountsOwner: input.connectedAccountsOwner,
-                ...(input.options.requesterSessionBootstrap ? { allowNativeAccountState: false } : {}),
+                ...(input.options.requesterSessionBootstrap
+                  ? { allowNativeAccountState: input.options.requesterSessionBootstrap.allowNativeAccountCredentials === true } : {}),
                 ...(input.isAccountRuntimeCurrent ? { isAccountRuntimeCurrent: input.isAccountRuntimeCurrent } : {}),
                 ...(input.qualifiedConnectedAccountApi ? { qualifiedConnectedAccountApi: input.qualifiedConnectedAccountApi } : {}),
                 api: input.api,
@@ -251,7 +264,8 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
                     resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
                         agentId: input.catalogAgentId!,
                         bindings,
-                        contributions: input.pluginContributions,
+                        contributions: input.pluginRuntimeRegistry.contributes,
+                        catalogEntry,
                     }),
                 ...(input.activatePurposeBindings
                     ? {
@@ -285,6 +299,21 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
                     : {}),
             });
         } catch (error) {
+            if (error instanceof ConnectedServiceQualifiedPurposeAuthorityError) {
+                return {
+                    ok: false,
+                    result: {
+                        type: 'error',
+                        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                        errorMessage: error.code,
+                        errorDetail: {
+                            kind: 'launch_error',
+                            code: error.code,
+                            message: `Selected Connected Account is not authorized for this Agent (${error.reason})`,
+                        },
+                    },
+                };
+            }
             if (error instanceof ConnectedServiceAuthGroupQuotaProbeIncompleteError) {
                 logger.warn('[DAEMON RUN] Connected-services quota preflight incomplete; failing closed before spawn', {
                     agentId: input.catalogAgentId,
@@ -384,7 +413,8 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
         logger.warn('[DAEMON RUN] Ignoring connected-services spawn request for configured backend target');
     }
 
-    if (!auth && input.options.requesterSessionBootstrap && input.catalogAgentId) {
+    if (!auth && input.options.requesterSessionBootstrap
+        && !input.options.requesterSessionBootstrap.allowNativeAccountCredentials && input.catalogAgentId) {
         // Provider and API-key launches still need a real isolated Agent home.
         // This is the same native-home materializer, with no Connected Account
         // authority or credential selection manufactured for an empty home.
@@ -413,7 +443,8 @@ export async function prepareDaemonConnectedServices(input: Readonly<{
         ? resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
             agentId: input.catalogAgentId,
             bindings: effectiveBindingsV1,
-            contributions: input.pluginContributions,
+            contributions: input.pluginRuntimeRegistry.contributes,
+            catalogEntry,
         })
         : null;
     return {
