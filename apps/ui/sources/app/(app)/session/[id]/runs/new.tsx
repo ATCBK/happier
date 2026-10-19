@@ -104,13 +104,12 @@ export function SessionNewRunScreen() {
             <ConstrainedScreenContent
                 style={{
                     flex: 1,
-                    paddingHorizontal: theme.space.s16,
                     paddingVertical: theme.space.s16,
                     gap: theme.space.s16,
                 }}
             >
                 {unavailable ? (
-                    <Text style={{ color: theme.colors.text.primary }}>{t('errors.sessionDeleted')}</Text>
+                    <Text style={{ color: theme.colors.text.primary, paddingHorizontal: theme.space.s16 }}>{t('errors.sessionDeleted')}</Text>
                 ) : !hydrateReady ? (
                     <ActivitySpinner size="small" color={theme.colors.text.secondary} />
                 ) : (

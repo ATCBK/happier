@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { resolveHref } from 'expo-router/build/link/href';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,7 +36,7 @@ describe('legacy automation picker route', () => {
         // The old destination forced New Session into an Automation entry and
         // manufactured a fresh inline draft that reached the retained one-shot
         // writer directly, bypassing the trigger editor and its save owner.
-        expect(redirect.props.href).toEqual({ pathname: '/workflows/new' });
+        expect(resolveHref(redirect.props.href)).toBe('/workflows/new');
     });
 
     it('carries no prompt, setting or manufactured draft in the URL', async () => {
@@ -45,6 +46,6 @@ describe('legacy automation picker route', () => {
         const screen = await renderScreen(React.createElement(module.default));
 
         const redirect = screen.findByType('Redirect' as any);
-        expect(redirect.props.href).toEqual({ pathname: '/workflows/new' });
+        expect(resolveHref(redirect.props.href)).toBe('/workflows/new');
     });
 });

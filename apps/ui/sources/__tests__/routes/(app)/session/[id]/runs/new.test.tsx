@@ -492,8 +492,8 @@ describe('Session New Run Screen', () => {
         const published = publishInteractiveExecutionRunDraftNavigationIntent({
             address: { serverId: 'server-a', sessionId: 'session-1' },
             source: {
-                kind: 'session_discussion',
-                sessionId: 'session-1',
+                kind: 'discussion',
+                serverId: 'server-a',
                 discussionId: 'discussion-a',
                 messageIds: ['message-a'],
                 draftCorrelationId: 'correlation-a',
@@ -516,8 +516,8 @@ describe('Session New Run Screen', () => {
             serverId: 'server-a',
             initialText: 'private selected text',
             launchOrigin: {
-                kind: 'session_discussion',
-                sessionId: 'session-1',
+                kind: 'discussion',
+                serverId: 'server-a',
                 discussionId: 'discussion-a',
                 messageIds: ['message-a'],
                 draftCorrelationId: 'correlation-a',
@@ -573,7 +573,7 @@ describe('Session New Run Screen', () => {
             sessionId: 'session-1',
             intent: 'plan',
         }));
-        expect(stackScreenSpy.mock.calls.at(-1)?.[0]?.options?.headerTitle).toBe('plan');
+        expect(stackScreenSpy.mock.calls.at(-1)?.[0]?.options?.title).toBe('plan');
         expect(startRunSpy).not.toHaveBeenCalled();
     });
 });

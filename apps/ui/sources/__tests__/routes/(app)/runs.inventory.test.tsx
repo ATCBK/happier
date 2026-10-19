@@ -23,7 +23,7 @@ it('shows the active Home machine when the concurrent inventory has no row for t
     }, source: 'qr', descriptorAuthority: 'current_connection_observation' });
     await setActiveServerId(home.id);
     const machine = createMachineFixture({ activeAt: Date.now(), metadata: {
-        host: 'ubuntu-03', happyCliVersion: 'test', happyHomeDir: '/tmp/happier', homeDir: '/tmp',
+        host: 'ubuntu-03', platform: 'linux', happyCliVersion: 'test', happyHomeDir: '/tmp/happier', homeDir: '/tmp',
     } });
     storage.setState({ isDataReady: true, machines: { [machine.id]: machine }, machineListByServerId: {},
         machineListStatusByServerId: {}, profile: { ...initial.profile, id: 'runs-account' } });

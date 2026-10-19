@@ -7,5 +7,5 @@ import { Redirect } from 'expo-router';
  * a persisted New Session draft is still adopted by its own owner.
  */
 export default function AutomationPickerRoute() {
-    return <Redirect href={{ pathname: '/workflows/new' }} />;
+    return <Redirect href={{ pathname: '/workflows/[id]', params: { id: 'new' } }} />;
 }

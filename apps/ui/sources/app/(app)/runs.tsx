@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -21,6 +22,7 @@ import { machineExecutionRunsList } from '@/sync/ops/machineExecutionRuns';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { machineStopSession } from '@/sync/ops/machines';
+import { isExecutionRunMutationCancelled } from '@/sync/ops/sessionExecutionRuns';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -103,7 +105,7 @@ function RunStopButton(props: Readonly<{
     </Pressable>
     {execution.approval.approvalPending && execution.approval.approvalId ? (
       <ActionApprovalPendingNotice message={t('approvals.status.open')}
-        onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}`)} />
+        onOpenApproval={() => router.push(buildApprovalHref(execution.approval.approvalId!, props.serverId))} />
     ) : null}
   </>);
 }
@@ -135,6 +137,7 @@ export default function RunsScreen() {
   const [showFinished, setShowFinished] = React.useState(requestedRunId !== null);
   const [stoppingRunAddressKey, setStoppingRunAddressKey] = React.useState<string | null>(null);
   const [state, setState] = React.useState<MachineRunsState>({ status: 'idle' });
+  const loadControllerRef = React.useRef<AbortController | null>(null);
   const headerTint = theme.colors.chrome.header.foreground ?? theme.colors.text.primary;
 
   React.useEffect(() => {
@@ -154,9 +157,13 @@ export default function RunsScreen() {
   }, [inventory, requestedMachineId, requestedServerId]);
 
   const load = React.useCallback(async (intent?: 'retry') => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
     setState({ status: 'loading' });
 
     const runsByMachineAddressKey: Record<string, readonly DaemonExecutionRunEntry[]> = {};
+    const retirements = [...machineScopeBindings.values()].map(binding => binding.onRetire(() => controller.abort()));
 
     try {
       await Promise.all(
@@ -171,22 +178,26 @@ export default function RunsScreen() {
             if (!isMachineVisibleForLaunchSelection(machine) || machine.availability?.kind === 'locked') return;
             if (intent !== 'retry' && !isMachineReachable(binding.scope, machine)) return;
 
-            const res = await machineExecutionRunsList(machineId, { serverId, accountId: binding.scope.accountId });
-            if (res.ok && binding.isCurrent()) {
+            const res = await machineExecutionRunsList(machineId, { serverId, accountId: binding.scope.accountId,
+              signal: controller.signal });
+            if (res.ok && !controller.signal.aborted && binding.isCurrent()) {
               runsByMachineAddressKey[executionRunMachineAddressKey(serverId, machineId)] = res.runs;
             }
           });
         }),
       );
 
-      setState({ status: 'loaded', runsByMachineAddressKey });
+      if (!controller.signal.aborted) setState({ status: 'loaded', runsByMachineAddressKey });
     } catch (error) {
-      setState({ status: 'error', error: error instanceof Error ? error.message : t('runs.failedToLoad') });
+      if (!controller.signal.aborted) setState({ status: 'error', error: error instanceof Error ? error.message : t('runs.failedToLoad') });
+    } finally {
+      for (const retirement of retirements) retirement.dispose();
     }
   }, [inventory, machineScopeBindings, serverEntries]);
 
   React.useEffect(() => {
     void load();
+    return () => loadControllerRef.current?.abort();
   }, [load]);
 
   const headerRight = React.useCallback(() => {
@@ -302,8 +313,11 @@ export default function RunsScreen() {
                           let issued = false;
                           let refreshRuns = false;
                           const stopSessionProcess = async () => {
-                            if (!execution.isCurrent()) return;
-                            const stopResult = await machineStopSession(machineId, sessionId, { serverId });
+                                    if (!execution.isCurrent() || !execution.binding) return;
+                                    const stopResult = await machineStopSession(machineId, sessionId, {
+                                        serverId, scope: execution.binding.scope, signal: execution.getSignal(),
+                                    });
+                                    if (!execution.isCurrent() || isExecutionRunMutationCancelled(stopResult)) return;
                             if (stopResult.ok) return;
 
                             const shownDaemonUnavailable = tryShowDaemonUnavailableAlertForRpcFailure({
@@ -338,12 +352,14 @@ export default function RunsScreen() {
                             const res = await execution.execute('execution.run.stop', { sessionId, runId: run.runId },
                               { onTransportIssued: () => { issued = true; } });
                             refreshRuns = res.ok || issued;
-                            if (!res.ok) {
+                                    if (!res.ok && !isExecutionRunMutationCancelled(res)) {
                               await showStopFailure(res.error || t('runs.stop.failedToStopRun'));
                             }
                           } catch (error) {
                             refreshRuns = issued;
-                            await showStopFailure(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
+                                    if (!isExecutionRunMutationCancelled(error)) {
+                                        await showStopFailure(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
+                                    }
                           } finally {
                             setStoppingRunAddressKey(null);
                             if (refreshRuns && execution.isCurrent()) await load();
