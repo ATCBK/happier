@@ -97,7 +97,7 @@ export function SessionFollowScreen() {
             // The page scrolls; Unfollow · Done stay in thumb reach under it (lab P2-Ap).
             frame={(parts) => <View style={styles.page}>
                 <ItemList style={{ paddingTop: 0 }}>
-                    <PageHeader leading={parts.mark} title={parts.title} description={parts.subtitle} />
+                    <PageHeader title={parts.title} description={parts.subtitle} />
                     {parts.body}
                 </ItemList>
                 {parts.footer ? <PagePinnedBar testID="session-follow-footer">

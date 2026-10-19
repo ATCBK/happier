@@ -121,7 +121,6 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
     const onceRow = props.notifyOnce && state.projection && !props.archived
         ? <NotifyOnceRow once={state.projection.follow?.once ?? null} disabled={disabled} {...props.notifyOnce} />
         : null;
-    const onPage = useListPresentation() === 'page';
     const policyEditor = policyModel
         ? <FollowPolicyEditorBinding testID="session-follow-policy" model={policyModel} disabled={disabled} onEditPolicy={props.onEditPolicy} />
         : null;
@@ -147,12 +146,7 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
             <Item testID="session-follow-archived" title={t('session.follow.archived')} mode="info" titleLines={0} showChevron={false} />
         </ItemGroup> : null}
         {following && policyModel ? <>
-            {/* On a page the scope sits outside the bare section, so the public sections take the column's own
-                inset once. A popover has no column edge: there the public sections draw their own inset, level
-                with the Voice sheet and the footer, and a bare section around them would inset them twice. */}
-            <CoreCollectionScope>
-                {onPage ? <ItemGroup surface="none">{policyEditor}</ItemGroup> : policyEditor}
-            </CoreCollectionScope>
+            <FollowPolicySection>{policyEditor}</FollowPolicySection>
             <ItemGroup>
                 <Item
                     title={t('session.follow.voice.title')}
@@ -196,6 +190,7 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
             <Item
                 testID="session-follow-quiet-hours"
                 density="compact"
+                showDivider={false}
                 icon={<Icon name={props.quietHours ? 'moon' : 'bell'} />}
                 title={props.quietHours === 'on' ? t('session.follow.editor.quietHoursOn')
                     : props.quietHours ? t('session.follow.editor.quietHours', { range: props.quietHours })
@@ -206,6 +201,7 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
             {alsoCount > 0 && also && props.onOpenPeople ? <Item
                 testID="session-follow-people"
                 density="compact"
+                showDivider={false}
                 icon={<Icon name="users" />}
                 title={t('session.follow.editor.alsoFollow', {
                     facts: joinHappierFacts(
@@ -252,6 +248,18 @@ export function AccountSessionFollowEditor(props: AccountSessionFollowEditorProp
         footer,
     };
     return <>{props.frame ? props.frame(parts) : <>{parts.body}{parts.footer}</>}</>;
+}
+
+/**
+ * The shared level editor where the body mounts. On a page the scope sits outside the bare section, so the public
+ * sections take the column's own inset once. A popover has no column edge: there the public sections draw their
+ * own inset, level with the Voice sheet and the footer, and a bare section around them would inset them twice.
+ */
+function FollowPolicySection(props: Readonly<{ children: React.ReactNode }>) {
+    const onPage = useListPresentation() === 'page';
+    return <CoreCollectionScope>
+        {onPage ? <ItemGroup surface="none">{props.children}</ItemGroup> : props.children}
+    </CoreCollectionScope>;
 }
 
 type OnceChoice = 'off' | 'turn' | 'attention';
