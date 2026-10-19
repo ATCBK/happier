@@ -36,7 +36,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('r
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, installationId: randomUUID(),
             metadata: encodePlainMachineStoredContent({ host: 'host', platform: 'linux', happyCliVersion: 'test',
                 homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER)),
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] }, sessionFollow: { contextV1: true } },
             operationProtocolCapabilitiesRevision: 1 } });
         const [session, source] = await Promise.all([0, 1].map(seq => db.session.create({ data: {

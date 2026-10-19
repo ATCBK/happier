@@ -12,12 +12,6 @@ import { writeAccountSettingsInTx } from "./writeAccountSettingsInTx";
 
 const emitUpdate = vi.hoisted(() => vi.fn());
 
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildUpdateAccountUpdate: vi.fn(() => ({ body: { t: "update-account" } })),
-    buildAccountSettingsChangedUpdate: vi.fn(() => ({ body: { t: "account-settings-changed" } })),
-}));
-
 vi.mock("@/app/events/connectionEventRouter", () => ({
     eventRouter: { emitUpdate },
 }));
@@ -144,7 +138,12 @@ describe("writeAccountSettingsInTx (SQLite integration)", () => {
             cursor: 13,
             hint: { settingsVersion: 7 },
         });
-        expect(eventRouter.emitUpdate).toHaveBeenCalledTimes(3);
+        expect(eventRouter.emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            userId: account.id,
+            payload: expect.objectContaining({ body: expect.objectContaining({
+                t: 'account-settings-changed', settingsVersion: 7,
+            }) }),
+        }));
     });
 
     it("leaves Settings, history, changes, and publication unchanged when the composing transaction fails", async () => {

@@ -3557,6 +3557,42 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(rpcMetricsMocks.recordRpcUnregistration).toHaveBeenCalledWith("sess_1:execution.run.stream.start");
     });
 
+    it.each(['usage.sources.discover', 'daemon.connectedServices.pools.selection.get'])(
+        'discovers and forwards daemon read %s independently of UI reverse registrations', async (rpcMethod) => {
+            machineFindFirstMock.mockResolvedValue({ revokedAt: null, replacedByMachineId: null,
+                installationId: 'installation-1', kind: 'persistent' });
+            const method = `machine-1:${rpcMethod}`;
+            const { io, addToRoom, createRoomAwareSocket } = createRoomAwareIo();
+            // Socket.IO is the process boundary; server admission/discovery/forwarding stay real.
+            const effect = vi.fn<RpcTargetEmitWithAck>(async () => 'daemon-read-result');
+            const daemon = createRoomAwareSocket({ id: 'read-daemon', data: {
+                clientType: 'machine-scoped', machineId: 'machine-1', verifiedMachineInstallationId: 'installation-1',
+            }, timeout: () => ({ emitWithAck: effect }) });
+            addToRoom(daemon.id, daemon);
+            addToRoom(getMachineSocketRoom('user-1', 'machine-1'), daemon);
+            registerSocketRpcHandlers({ userId: 'user-1', socket: daemon as unknown as Socket, io });
+            await triggerSocketHandler(daemon, SOCKET_RPC_EVENTS.REGISTER, { method });
+
+            const reader = createRoomAwareSocket({ id: 'read-client', data: { clientType: 'user-scoped' } });
+            registerSocketRpcHandlers({ userId: 'user-1', socket: reader as unknown as Socket, io });
+            const read = async () => {
+                const ack = vi.fn();
+                await triggerSocketHandler(reader, SOCKET_RPC_EVENTS.CALL, { method, params: 'read-request' }, ack);
+                expect(ack).toHaveBeenCalledWith({ ok: true, result: 'daemon-read-result' });
+            };
+            await read();
+
+            const reverseMethod = `machine-1:${currentUiContextReadClientRpcMethod()}`;
+            machineFindFirstMock.mockClear();
+            await triggerSocketHandler(reader, SOCKET_RPC_EVENTS.REGISTER, { method: reverseMethod });
+            expect(machineFindFirstMock).not.toHaveBeenCalled();
+            expect(daemon.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTERED, { method: reverseMethod });
+            await triggerSocketHandler(reader, SOCKET_RPC_EVENTS.UNREGISTER, { method: reverseMethod });
+            await read();
+            expect(effect).toHaveBeenCalledTimes(2);
+        },
+    );
+
     it("registers a mounted command inventory without per-method Machine availability reads and refuses revoked callers", async () => {
         const { io, addToRoom, createRoomAwareSocket } = createRoomAwareIo();
         const effect = vi.fn<RpcTargetEmitWithAck>(async () => "encrypted-page-result");
