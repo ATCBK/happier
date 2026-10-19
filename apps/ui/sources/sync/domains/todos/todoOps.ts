@@ -3,18 +3,15 @@ import { applyTodoSessionLinkV1, TodoSessionLinkErrorV1 as TodoSessionLinkError 
 import { resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import { applyInternalTaskReorder, InternalTaskReorderError } from '@happier-dev/protocol/todos/todoActionOperationsV1';
 import { storage } from '@/sync/domains/state/storage';
-import {
-    kvGet,
-    kvList,
-    kvMutate,
-} from '@/sync/api/account/apiKv';
-import type { ServerFetch } from '@/sync/http/client';
+import { kvList } from '@/sync/api/account/apiKv';
+import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
+import { createAccountKvJsonTransport, openUiAccountKvJsonRow } from '@/sync/ops/account/accountKvJsonTransport';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { AsyncLock } from '@/utils/system/lock';
 import {
-    decodeTodoStoredContent,
-    encodeTodoStoredContent,
+    parseTodoStoredContent,
+    toTodoStoredContentUnavailableError,
     TodoStoredContentUnavailableError,
     TODO_INDEX_KEY,
     TODO_PREFIX,
@@ -23,7 +20,6 @@ import {
 } from './todoStoredContent';
 import {
     resolveAccountStorageContext,
-    isRawAccountStorageEncryption,
     type AccountStorageContext,
 } from '@/sync/encryption/accountStorageContext';
 
@@ -74,38 +70,6 @@ export async function resolveTodoAccountStorageContext(
     }
 }
 
-async function createTodoDataEncoder(
-    context: TodoAccountStorageContext,
-): Promise<(key: string, data: unknown) => Promise<string>> {
-    const encryption = isRawAccountStorageEncryption(context.encryption)
-        ? context.encryption
-        : null;
-    return async (key, data) =>
-        await encodeTodoStoredContent({
-            key,
-            mode: context.mode,
-            value: data,
-            encryption,
-        });
-}
-
-async function decryptTodoItem(
-    key: string,
-    encoded: string,
-    context: TodoAccountStorageContext,
-): Promise<TodoItem> {
-    const content = await decodeTodoStoredContent({
-        key,
-        encoded,
-        expectedMode: context.mode,
-        encryption: context.encryption,
-    });
-    if (content.kind !== 'item') {
-        throw new Error('Todo item codec returned an index');
-    }
-    return content.value;
-}
-
 //
 // Fetch Functions
 //
@@ -115,9 +79,14 @@ async function decryptTodoItem(
  */
 export async function fetchTodos(
     credentials: AuthCredentials,
-    opts: Readonly<{ retry?: 'default' | 'none'; request?: ServerFetch }> = {},
+    opts: Readonly<{ retry?: 'default' | 'none'; request?: ServerFetch; shouldContinue?: () => boolean }> = {},
 ): Promise<TodoState> {
-    const context = await resolveTodoAccountStorageContext(credentials, { request: opts.request });
+    const requireCurrent = () => {
+        if (opts.shouldContinue?.() === false) throw new TodoStoredContentUnavailableError(TODO_INDEX_KEY, 'account_currentness_unavailable');
+    };
+    requireCurrent();
+    const request = opts.request ?? createServerFetchForActiveServer();
+    const context = await resolveTodoAccountStorageContext(credentials, { request });
     const state: TodoState = {
         todos: {},
         undoneOrder: [],
@@ -134,17 +103,18 @@ export async function fetchTodos(
             limit: pageSize,
             ...(afterKey === undefined ? {} : { afterKey }),
             ...(opts.retry ? { retry: opts.retry } : {}),
-            ...(opts.request ? { request: opts.request } : {}),
+            request,
         });
         for (const item of response.items) {
-            state.versions[item.key] = item.version;
-
-            const content = await decodeTodoStoredContent({
-                key: item.key,
-                encoded: item.value,
-                expectedMode: context.mode,
-                encryption: context.encryption,
-            });
+            let opened;
+            try {
+                opened = await openUiAccountKvJsonRow({ credentials, context, row: item, request, requireCurrent });
+            } catch (error) {
+                throw toTodoStoredContentUnavailableError(item.key, error);
+            }
+            state.versions[item.key] = opened.version;
+            if (opened.tombstone) continue;
+            const content = parseTodoStoredContent(item.key, opened.value, true);
             if (content.kind === 'index') {
                 state.undoneOrder = content.value.undoneOrder;
                 state.doneOrder = content.value.completedOrder;
@@ -227,27 +197,11 @@ export async function applyTodoSessionLinkIntent(credentials: AuthCredentials, i
     try {
         await todoLock.inLock(async () => {
             requireCurrent();
-            const context = await resolveTodoAccountStorageContext(credentials, { request });
-            requireCurrent();
             const key = getTodoKey(intent.source.taskId);
-            const encode = await createTodoDataEncoder(context);
             await applyTodoSessionLinkV1({ scope: intent.source.scope, taskId: intent.source.taskId,
-                session: { ...intent.session.scope, sessionId: intent.session.sessionId }, ...(intent.linked === undefined ? {} : { linked: intent.linked }) }, {
-                read: async () => {
-                    const row = await kvGet(credentials, key, { request, retry: 'none' });
-                    return { value: row ? await decryptTodoItem(key, row.value, context) : null, version: row?.version ?? -1 };
-                },
-                compareAndSet: async (item, version) => {
-                    const value = await encode(key, item);
-                    requireCurrent();
-                    const result = await kvMutate(credentials, [{ key, value, version }], { request, retry: 'none' });
-                    requireCurrent();
-                    if (result.success) return { success: true, version: result.results[0]!.version };
-                    const conflict = result.errors.find(error => error.key === key);
-                    if (!conflict) throw new TodoSessionLinkError('task_link_failed');
-                    return { success: false, value: conflict.value === null ? null : await decryptTodoItem(key, conflict.value, context), version: conflict.version };
-                },
-            }, { requireCurrent, title: intent.source.title,
+                session: { ...intent.session.scope, sessionId: intent.session.sessionId }, ...(intent.linked === undefined ? {} : { linked: intent.linked }) },
+                createAccountKvJsonTransport({ credentials, key, request, shouldContinue: () => { requireCurrent(); return true; } }),
+                { requireCurrent, title: intent.source.title,
                 publish: (item, version) => {
                     requireCurrent();
                     const current = storage.getState().todoState;

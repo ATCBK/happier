@@ -5350,6 +5350,11 @@
       "types": "./dist/machines/peer/mediation/stream/payloadV1.d.ts",
       "default": "./dist/machines/peer/mediation/stream/payloadV1.js"
     },
+    "./crypto/accountKvCipher": {
+      "happier-source": "./src/crypto/accountKvCipher.ts",
+      "types": "./dist/crypto/accountKvCipher.d.ts",
+      "default": "./dist/crypto/accountKvCipher.js"
+    },
     "./crypto/accountScopedCipher": {
       "happier-source": "./src/crypto/accountScopedCipher.ts",
       "types": "./dist/crypto/accountScopedCipher.d.ts",

@@ -6,6 +6,8 @@ import {
 import tweetnacl from 'tweetnacl';
 
 import { encodeBase64 } from '@/encryption/base64';
+import { Encryption } from '@/sync/encryption/encryption';
+import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
 
 const LEGACY_SECRET_BYTES = new Uint8Array(32).fill(7);
 const LEGACY_SECRET = encodeBase64(LEGACY_SECRET_BYTES, 'base64url');
@@ -99,6 +101,24 @@ describe('applyTodoSocketUpdates plaintext account storage', () => {
                 'todo.index': 1,
             },
         });
+    });
+
+    it('re-seals legacy socket rows before applying the new storage revisions', async () => {
+        const encryption = await Encryption.create(LEGACY_SECRET_BYTES);
+        const paired = await Encryption.createFromContentKeyPair({ machineKey: encryption.getContentPrivateKey(), publicKey: encryption.contentDataKey });
+        fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'e2ee', version: 1,
+            signingKeyFingerprint: 'signing-current', contentKeyFingerprint: LEGACY_ACCOUNT_MIGRATION_KEY_FINGERPRINT, updatedAt: 0 });
+        await applyTodoSocketUpdates({ changes: legacyAccountKvVectors.map(row => ({ key: row.key, value: row.encoded, version: 6 })),
+            credentials: { token: 'token', secret: LEGACY_SECRET }, encryption, invalidateTodosSync: vi.fn(),
+            request: async (_path, init) => {
+                const row = JSON.parse(String(init?.body)).mutations[0];
+                expect(row.version).toBe(6);
+                await expect(paired.decryptRaw(row.value)).resolves.toEqual(legacyAccountKvVectors.find(fixture => fixture.key === row.key)!.value);
+                return new Response(JSON.stringify({ success: true, results: [{ key: row.key, version: 7 }] }));
+            },
+        });
+        expect(applyTodos).toHaveBeenCalledWith(expect.objectContaining({ undoneOrder: ['fx51-legacy'],
+            versions: { 'todo.fx51-legacy': 7, 'todo.index': 7 } }));
     });
 
     it('preserves the current Todo state when encrypted socket data cannot be opened', async () => {

@@ -7,6 +7,8 @@ import {
 import tweetnacl from 'tweetnacl';
 
 import { encodeBase64 } from '@/encryption/base64';
+import { Encryption } from '@/sync/encryption/encryption';
+import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
 
 const LEGACY_SECRET_BYTES = new Uint8Array(32).fill(7);
 const LEGACY_SECRET = encodeBase64(LEGACY_SECRET_BYTES, 'base64url');
@@ -205,7 +207,7 @@ describe('todoOps plaintext account storage', () => {
         expect(mocks.applyTodos).not.toHaveBeenCalled();
     });
 
-    it('retains the predecessor raw-ciphertext read path when encryption material exists', async () => {
+    it('opens and lazily re-seals real predecessor item/index shapes before Todo projection', async () => {
         mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({
             mode: 'e2ee',
             version: 1,
@@ -213,29 +215,17 @@ describe('todoOps plaintext account storage', () => {
             contentKeyFingerprint: LEGACY_ACCOUNT_MIGRATION_KEY_FINGERPRINT,
             updatedAt: 0,
         });
-        mocks.accountEncryption = {
-            encryptRaw: vi.fn(),
-            decryptRaw: vi.fn(async (encoded: string) => {
-                if (encoded === 'raw-index') {
-                    return {
-                        undoneOrder: ['item-1'],
-                        completedOrder: [],
-                    };
-                }
-                return {
-                    id: 'item-1',
-                    title: 'Historical todo',
-                    done: false,
-                    createdAt: 1,
-                    updatedAt: 1,
-                };
-            }),
-        };
+        const encryption = await Encryption.create(LEGACY_SECRET_BYTES);
+        mocks.accountEncryption = encryption;
         mocks.kvList.mockResolvedValue({
-            items: [
-                { key: 'todo.item-1', value: 'raw-item', version: 2 },
-                { key: 'todo.index', value: 'raw-index', version: 3 },
-            ],
+            items: legacyAccountKvVectors.map(row => ({ key: row.key, value: row.encoded, version: 6 })),
+        });
+        const paired = await Encryption.createFromContentKeyPair({ publicKey: encryption.contentDataKey, machineKey: encryption.getContentPrivateKey() });
+        mocks.kvMutate.mockImplementation(async (_credentials, rows: { key: string; value: string; version: number }[]) => {
+            const row = rows[0]!;
+            expect(row.version).toBe(6);
+            await expect(paired.decryptRaw(row.value)).resolves.toEqual(legacyAccountKvVectors.find(fixture => fixture.key === row.key)!.value);
+            return { success: true, results: [{ key: row.key, version: 7 }] };
         });
 
         await expect(fetchTodos({
@@ -243,9 +233,10 @@ describe('todoOps plaintext account storage', () => {
             secret: LEGACY_SECRET,
         })).resolves.toMatchObject({
             todos: {
-                'item-1': { title: 'Historical todo' },
+                'fx51-legacy': { title: 'QA FX51 synthetic legacy task' },
             },
-            undoneOrder: ['item-1'],
+            undoneOrder: ['fx51-legacy'],
+            versions: { 'todo.fx51-legacy': 7, 'todo.index': 7 },
         });
     });
 

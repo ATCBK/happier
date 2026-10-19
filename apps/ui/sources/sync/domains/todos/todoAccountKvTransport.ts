@@ -3,8 +3,10 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { kvGet, kvList, kvMutate } from '@/sync/api/account/apiKv';
 import type { ServerFetch } from '@/sync/http/client';
 import { resolveTodoAccountStorageContext } from './todoOps';
-import { decodeTodoStoredContent, encodeTodoStoredContent } from './todoStoredContent';
+import { encodeTodoStoredContent } from './todoStoredContent';
 import { isRawAccountStorageEncryption } from '@/sync/encryption/accountStorageContext';
+import { openUiAccountKvJsonRow } from '@/sync/ops/account/accountKvJsonTransport';
+import { parseTodoStoredContent } from './todoStoredContent';
 
 /** Reuses Todo's released envelope and authoritative Account-mode admission. */
 export function createTodoAccountKvTransport(args: Readonly<{
@@ -16,7 +18,9 @@ export function createTodoAccountKvTransport(args: Readonly<{
       const admitted = await context();
       const row = await kvGet(args.credentials, key, { request: args.request, retry: 'none' });
       args.requireCurrent();
-      return { value: row ? (await decodeTodoStoredContent({ key, encoded: row.value, expectedMode: admitted.mode, encryption: admitted.encryption })).value : null, version: row?.version ?? -1 };
+      if (!row) return { value: null, version: -1 };
+      const opened = await openUiAccountKvJsonRow({ credentials: args.credentials, row, context: admitted, request: args.request, requireCurrent: args.requireCurrent });
+      return { ...opened, value: opened.tombstone ? null : parseTodoStoredContent(key, opened.value, true).value };
     },
     list: async prefix => {
       const admitted = await context();
@@ -29,7 +33,8 @@ export function createTodoAccountKvTransport(args: Readonly<{
         for (const row of page.items) {
           if (!row.key.startsWith(prefix) || seen.has(row.key)) throw new Error('task_content_invalid');
           seen.add(row.key);
-          rows.push({ key: row.key, version: row.version, value: (await decodeTodoStoredContent({ key: row.key, encoded: row.value, expectedMode: admitted.mode, encryption: admitted.encryption })).value });
+          const opened = await openUiAccountKvJsonRow({ credentials: args.credentials, row, context: admitted, request: args.request, requireCurrent: args.requireCurrent });
+          if (!opened.tombstone) rows.push({ key: row.key, version: opened.version, value: parseTodoStoredContent(row.key, opened.value, true).value });
         }
         if (page.items.length < 1000) return rows;
         afterKey = page.items[page.items.length - 1]!.key;
@@ -45,9 +50,10 @@ export function createTodoAccountKvTransport(args: Readonly<{
       const result = await kvMutate(args.credentials, encoded, { request: args.request, retry: 'none' });
       if (result.success) return result;
       args.requireCurrent();
-      return { success: false, errors: await Promise.all(result.errors.map(async row => ({ key: row.key, version: row.version,
-        value: row.value === null ? null : (await decodeTodoStoredContent({ key: row.key, encoded: row.value, expectedMode: admitted.mode, encryption: admitted.encryption })).value,
-      }))) };
+      return { success: false, errors: await Promise.all(result.errors.map(async row => {
+        const opened = await openUiAccountKvJsonRow({ credentials: args.credentials, row, context: admitted, request: args.request, requireCurrent: args.requireCurrent });
+        return { key: row.key, version: opened.version, value: opened.tombstone ? null : parseTodoStoredContent(row.key, opened.value, true).value };
+      })) };
     },
   };
 }

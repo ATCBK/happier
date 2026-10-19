@@ -51,6 +51,16 @@ export function isTodoStoredContentUnavailableError(
         && (error as { code?: unknown }).code === 'todo_stored_content_unavailable';
 }
 
+export function toTodoStoredContentUnavailableError(key: string, error: unknown): TodoStoredContentUnavailableError {
+    if (isTodoStoredContentUnavailableError(error)) return error;
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    return new TodoStoredContentUnavailableError(key,
+        error instanceof AccountStoredJsonContentModeMismatchError || code === 'account_stored_json_mode_mismatch'
+            ? 'account_mode_mismatch'
+            : error instanceof AccountStoredJsonContentEncryptionMaterialUnavailableError || code === 'account_stored_json_encryption_material_unavailable'
+                ? 'encryption_material_unavailable' : 'content_unreadable', error);
+}
+
 export type DecodedTodoStoredContent =
     | Readonly<{ kind: 'index'; value: TodoIndex }>
     | Readonly<{ kind: 'item'; todoId: string; value: TodoItem }>;
@@ -71,7 +81,7 @@ function resolveTodoKey(key: string):
     return { kind: 'item', todoId };
 }
 
-function parseTodoStoredContent(
+export function parseTodoStoredContent(
     key: string,
     value: unknown,
     storedRead = false,
@@ -118,18 +128,7 @@ export async function decodeTodoStoredContent(params: Readonly<{
             expectedMode: params.expectedMode,
         });
     } catch (error) {
-        if (isTodoStoredContentUnavailableError(error)) {
-            throw error;
-        }
-        throw new TodoStoredContentUnavailableError(
-            params.key,
-            error instanceof AccountStoredJsonContentModeMismatchError
-                ? 'account_mode_mismatch'
-                : error instanceof AccountStoredJsonContentEncryptionMaterialUnavailableError
-                ? 'encryption_material_unavailable'
-                : 'content_unreadable',
-            error,
-        );
+        throw toTodoStoredContentUnavailableError(params.key, error);
     }
 
     return parseTodoStoredContent(params.key, value, true);
