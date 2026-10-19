@@ -313,6 +313,18 @@ const issueDogfoodPlugin = definePlugin({
         'inspectComposerContent',
         'releaseComposerContent',
       ],
+    }, {
+      id: 'discussion-surface',
+      kind: 'reactNative',
+      artifact: ISSUE_SURFACE_ARTIFACT_ID,
+      requiredHostMethods: [
+        'readDiscussionComposer',
+        'watchComposer',
+        'applyComposer',
+        'focusComposer',
+        'acquireComposerInputLock',
+        'disposeHostResource',
+      ],
     }],
   },
   resources: {
@@ -373,6 +385,17 @@ const issueDogfoodPlugin = definePlugin({
       }),
     },
     controls: {
+      'discussion-helper': defineComposerControl({
+        label: 'Discussion helper',
+        icon: 'preview',
+        scopes: ['discussion'],
+        interaction: {
+          kind: 'surface',
+          renderer: 'discussion-surface',
+          presentation: 'popover',
+          layout: 'content',
+        },
+      }),
       'issue-control': defineComposerControl({
         label: 'Issue',
         icon: 'error',

@@ -1,13 +1,16 @@
-import { Fragment, createElement, useState } from 'react';
+import { Fragment, createElement, useEffect, useRef, useState } from 'react';
 import {
+  Button,
   Card,
   Icon,
   List,
   Status,
   Text,
+  TextField,
   defineUiSurface,
   useComposer,
   useComposerView,
+  usePluginHostApi,
 } from '@happier-dev/plugin-ui';
 
 import {
@@ -17,6 +20,7 @@ import {
   createIssueAttachmentAuthorValue,
   inspectAndReleaseIssueMediaFromCurrentComposer,
 } from './issueComposer.mjs';
+import { applyDiscussionParticipantReference, createDiscussionParticipantQuestion } from './discussionComposer.mjs';
 
 export { attachIssueWithoutControl };
 
@@ -108,6 +112,62 @@ function ComposerIssueCompact() {
   );
 }
 
+/** The real mounted handle owns the draft, observation and lock; this fixture owns only its controls. */
+function DiscussionComposerSurface() {
+  const hostApi = usePluginHostApi();
+  const handle = useComposer().current();
+  const view = useComposerView(handle);
+  const [participant, setParticipant] = useState('');
+  const [status, setStatus] = useState('');
+  const lock = useRef(/** @type {import('@happier-dev/plugin-sdk').Disposable | null} */ (null));
+  useEffect(() => () => {
+    void lock.current?.dispose();
+    lock.current = null;
+  }, [handle]);
+  const snapshot = view.result?.status === 'ready' ? view.result.snapshot : null;
+  const ready = handle?.ref.kind === 'discussion' && snapshot !== null;
+  /** @param {() => Promise<void>} operation */
+  const run = async (operation) => {
+    try { await operation(); }
+    catch (error) {
+      const code = asRecord(error)?.code;
+      setStatus(typeof code === 'string' ? `Composer unavailable: ${code}` : 'Composer unavailable');
+    }
+  };
+  return createElement(Fragment, null,
+    createElement(Text, { value: ready ? `Draft revision ${snapshot.revision}: ${snapshot.text || '(empty)'}`
+      : 'Open this control from an available Discussion composer.', testID: 'discussion-helper-snapshot' }),
+    createElement(TextField, { label: 'Invited participant Session ID', value: participant, onChange: setParticipant,
+      autoCapitalize: 'none', autoCorrect: false, testID: 'discussion-helper-participant' }),
+    createElement(Button, { title: 'Apply participant mention', testID: 'discussion-helper-apply',
+      disabled: !ready || !snapshot.state.editable || !snapshot.capabilities.references || participant.trim().length === 0,
+      onPress: () => run(async () => {
+        if (handle?.ref.kind !== 'discussion') return;
+        const question = createDiscussionParticipantQuestion(participant.trim());
+        const result = await applyDiscussionParticipantReference(hostApi, handle.ref, { ...question.draft, reference: question.reference });
+        setStatus(result.status === 'applied' ? 'Participant mention applied. Close this control and use Send.' : `Composer: ${result.status}`);
+      }),
+    }),
+    createElement(Button, { title: 'Focus composer', variant: 'plain', testID: 'discussion-helper-focus', disabled: !ready,
+      onPress: () => run(async () => { if (handle) setStatus(`Composer: ${(await handle.focus()).status}`); }),
+    }),
+    createElement(Button, { title: lock.current ? 'Unlock input' : 'Lock input', variant: 'plain', testID: 'discussion-helper-lock', disabled: !ready,
+      onPress: () => run(async () => {
+        if (!handle) return;
+        if (lock.current) {
+          await lock.current.dispose();
+          lock.current = null;
+          setStatus('Input unlocked');
+        } else {
+          lock.current = await handle.acquireInputLock({ mode: 'editAndSubmit', reason: 'External Discussion fixture' });
+          setStatus('Input locked');
+        }
+      }),
+    }),
+    status ? createElement(Status, { tone: 'neutral', label: status, testID: 'discussion-helper-status' }) : null,
+  );
+}
+
 /**
  * @param {import('@happier-dev/plugin-sdk/ui').RenderContext} context
  */
@@ -117,6 +177,8 @@ function ComposerIssueSurface({ launchInput }) {
     /** @type {string | undefined} */ (undefined),
   );
   const role = readSurfaceRole(launchInput);
+
+  if (role === 'controlInteraction') return createElement(DiscussionComposerSurface);
 
   if (role === 'controlCompact') {
     return createElement(ComposerIssueCompact);
@@ -241,4 +303,6 @@ function ComposerIssueSurface({ launchInput }) {
   });
 }
 
-export const renderComposerIssueSurface = defineUiSurface(ComposerIssueSurface);
+export const renderSurface = defineUiSurface(ComposerIssueSurface);
+// Existing fixture consumers use this spelling; both names select the one canonical entry.
+export { renderSurface as renderComposerIssueSurface };
