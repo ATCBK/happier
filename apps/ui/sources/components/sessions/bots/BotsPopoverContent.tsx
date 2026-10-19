@@ -58,6 +58,7 @@ import {
 } from './useAskHappierOffer';
 import { classifyBotActivity, compareBotRosterOrder } from './botActivity';
 import { BOTS_GLYPH } from './botsGlyph';
+import { BotRosterReadiness } from './BotRosterReadiness';
 import { openNewBotDraft } from './newBotDraft';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -450,8 +451,13 @@ export function BotsPopoverContent(
         keyboardShouldPersistTaps="always"
         testID="bots-roster.list"
       >
-        {rows.map((row, index) =>
-          row.session ? (
+        {rows.map((row, index) => {
+          const isLast = index === rows.length - 1;
+          // A quiet top-level Bot carries its readiness under its row (lab K3-R); busy ones say what they do.
+          const readinessServerId = !items[index]!.reportsDepth
+            && classifyBotActivity(row.sessionStatus?.awareness) === 'quiet'
+            ? items[index]!.serverId ?? null : null;
+          return row.session ? (
             <React.Fragment key={row.sessionKey ?? items[index]!.sessionId}>
             <SessionItem
               rowViewModel={row}
@@ -459,7 +465,7 @@ export function BotsPopoverContent(
               serverId={items[index]!.serverId ?? undefined}
               compact
               embedded
-              embeddedIsLast={index === rows.length - 1}
+              embeddedIsLast={isLast || readinessServerId !== null}
               showTalkAction
               quietWhenOffline
               actionMenuSurface="botsRoster"
@@ -470,12 +476,15 @@ export function BotsPopoverContent(
               onSetReportsCollapsed={setCollapsed}
               onOpened={close}
             />
+            {readinessServerId ? (
+              <BotRosterReadiness serverId={readinessServerId} sessionId={row.session.id} separator={!isLast} />
+            ) : null}
             {(row.session.managedSessions?.total ?? 0) > 0 && collapsed[buildSessionListIndexNodeId(items[index]!)] === false
               ? <BotRosterReports lead={row.session} item={items[index]!} />
               : null}
             </React.Fragment>
-          ) : null,
-        )}
+          ) : null;
+        })}
         {loading ? (
           <EmptyState
             layout="line"

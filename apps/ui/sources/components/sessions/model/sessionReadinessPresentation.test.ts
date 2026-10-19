@@ -4,7 +4,7 @@ import {
   type SessionReadinessFactsV1,
 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 import { t } from '@/text';
-import { presentSessionReadiness } from './sessionReadinessPresentation';
+import { presentSessionReadiness, presentSessionReadinessChecklist } from './sessionReadinessPresentation';
 
 const yes = true;
 const invocation: SessionReadinessFactsV1['invocation'] = { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: {
@@ -115,5 +115,46 @@ describe('presentSessionReadiness', () => {
       repair: null,
       guidance: null,
     });
+  });
+});
+
+describe('presentSessionReadinessChecklist', () => {
+  const checklist = (patch: Partial<SessionReadinessFactsV1>) =>
+    presentSessionReadinessChecklist(composeSessionReadinessV1(facts(patch)), { machineName: 'MacBook Pro' })
+      .map((row) => [row.id, row.state]);
+
+  it('lists one row per prerequisite and omits a connected account that is not needed', () => {
+    const rows = presentSessionReadinessChecklist(composeSessionReadinessV1(facts({})), { machineName: 'MacBook Pro' });
+    expect(rows.map((row) => [row.id, row.state])).toEqual([
+      ['machine', 'ok'], ['agent', 'ok'], ['invocation', 'ok'],
+    ]);
+    expect(rows[0]!.title).toBe('MacBook Pro');
+  });
+
+  it('marks the failing prerequisite and never certifies a fact that is stale or unread', () => {
+    expect(checklist({
+      machine: { status: 'offline', machineId: 'm1' },
+      agent: { agentId: 'codex', state: 'ready', current: false, observedAtMs: 1, repair: null },
+      invocation: null,
+    })).toEqual([['machine', 'bad'], ['agent', 'unknown'], ['invocation', 'unknown']]);
+    expect(checklist({ machine: { status: 'probing', machineId: 'm1' } })[0]).toEqual(['machine', 'unknown']);
+    expect(checklist({ agent: { agentId: 'codex', state: 'needsSignIn', current: true, observedAtMs: 1, repair: null } })[1])
+      .toEqual(['agent', 'bad']);
+  });
+
+  it('says when the person cannot ask it', () => {
+    const viewOnly = { ...invocation!, level: 'view' as const, capabilities: { ...invocation!.capabilities, submitAgentInput: false } };
+    expect(checklist({ invocation: viewOnly })[2]).toEqual(['invocation', 'bad']);
+  });
+
+  it('carries the connected account as its own row, unknown until its owner answers', () => {
+    const purpose = { consumer: { pluginId: 'linear', contributionId: 'linear' }, purpose: 'issues' } as never;
+    expect(checklist({ operation: 'credential', credential: { kind: 'personal', purpose, usable: null, repair: null } })[3])
+      .toEqual(['credential', 'unknown']);
+    expect(checklist({ operation: 'credential', credential: { kind: 'personal', purpose, usable: false, repair: null } })[3])
+      .toEqual(['credential', 'bad']);
+    expect(checklist({ operation: 'credential', credential: { kind: 'team', resourceId: 'r', teamId: 't',
+      readiness: { kind: 'policy_denied' }, recoveryAction: null } })[3]).toEqual(['credential', 'bad']);
+    expect(checklist({ operation: 'credential', credential: { kind: 'unknown' } })[3]).toEqual(['credential', 'unknown']);
   });
 });

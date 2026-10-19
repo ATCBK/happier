@@ -158,3 +158,122 @@ export function presentSessionReadiness(
         : null,
   };
 }
+
+export type SessionReadinessCheckState = 'ok' | 'bad' | 'unknown';
+export type SessionReadinessCheck = Readonly<{
+  id: 'machine' | 'agent' | 'invocation' | 'credential';
+  state: SessionReadinessCheckState;
+  title: string;
+  detail: string;
+}>;
+
+function checkMachine(
+  machine: SessionReadinessV1['machine'],
+  machineName: string | null,
+): SessionReadinessCheck {
+  const title = machineName ?? t('session.collaboration.readiness.facts.machine');
+  const row = (state: SessionReadinessCheckState, detail: string): SessionReadinessCheck => ({ id: 'machine', state, title, detail });
+  switch (machine?.status) {
+    case 'ready':
+      return row('ok', t('session.collaboration.readiness.facts.online'));
+    case 'offline':
+      return row('bad', t('session.collaboration.readiness.facts.offline'));
+    case 'revoked':
+    case 'replaced':
+      return row('bad', t('session.collaboration.readiness.facts.removed'));
+    case 'keyUnavailable':
+      return row('bad', t('session.collaboration.readiness.facts.locked'));
+    case 'rpcUnavailable':
+      return row('bad', t('session.collaboration.readiness.facts.notResponding'));
+    case 'missing':
+      return row('bad', t('session.collaboration.readiness.facts.noMachine'));
+    default:
+      return row('unknown', t('session.collaboration.readiness.facts.notChecked'));
+  }
+}
+
+function checkAgent(agent: SessionReadinessV1['agent']): SessionReadinessCheck {
+  const title = agent ? resolveAgentCatalogTitle(agent.agentId) : t('session.collaboration.readiness.facts.agent');
+  const row = (state: SessionReadinessCheckState, detail: string): SessionReadinessCheck => ({ id: 'agent', state, title, detail });
+  // A stale observation never certifies anything; it is said as not checked.
+  if (!agent?.current) return row('unknown', t('session.collaboration.readiness.facts.notChecked'));
+  switch (agent.state) {
+    case 'ready':
+      return row('ok', t('session.collaboration.readiness.facts.signedIn'));
+    case 'needsSignIn':
+      return row('bad', t('session.collaboration.readiness.facts.needsSignIn'));
+    case 'notInstalled':
+      return row('bad', t('session.collaboration.readiness.facts.notInstalled'));
+    case 'unsupported':
+      return row('bad', t('session.collaboration.readiness.facts.unsupported'));
+    default:
+      return row('unknown', t('session.collaboration.readiness.facts.notChecked'));
+  }
+}
+
+function checkInvocation(invocation: SessionReadinessV1['invocation']): SessionReadinessCheck {
+  if (!invocation) {
+    return { id: 'invocation', state: 'unknown', title: t('session.collaboration.readiness.facts.canAsk'),
+      detail: t('session.collaboration.readiness.facts.notChecked') };
+  }
+  if (!invocation.capabilities.submitAgentInput) {
+    return { id: 'invocation', state: 'bad', title: t('session.collaboration.readiness.facts.cannotAsk'),
+      detail: t('session.collaboration.readiness.facts.readOnly') };
+  }
+  const source = invocation.sources[0]?.kind;
+  return {
+    id: 'invocation',
+    state: 'ok',
+    title: t('session.collaboration.readiness.facts.canAsk'),
+    detail: source === 'owner'
+      ? t('session.collaboration.readiness.facts.yours')
+      : source === 'team' || source === 'group'
+        ? t('session.collaboration.readiness.facts.throughTeam')
+        : t('session.collaboration.readiness.facts.sharedWithYou'),
+  };
+}
+
+function checkCredential(credential: SessionReadinessV1['credential']): SessionReadinessCheck | null {
+  const title = t('session.collaboration.readiness.facts.account');
+  const row = (state: SessionReadinessCheckState, detail: string): SessionReadinessCheck => ({ id: 'credential', state, title, detail });
+  switch (credential.kind) {
+    case 'not_required':
+      return null;
+    case 'unknown':
+      return row('unknown', t('session.collaboration.readiness.facts.notChecked'));
+    case 'personal':
+      return credential.usable === null
+        ? row('unknown', t('session.collaboration.readiness.facts.notChecked'))
+        : credential.usable
+          ? row('ok', t('session.collaboration.readiness.facts.connected'))
+          : row('bad', t('session.collaboration.readiness.facts.reconnect'));
+    case 'team': {
+      const readiness = credential.readiness;
+      if (!readiness) return row('unknown', t('session.collaboration.readiness.facts.notChecked'));
+      if (readiness.kind === 'available') return row('ok', t('session.collaboration.readiness.facts.connected'));
+      return row('bad', readiness.kind === 'limit_reached'
+        ? t('session.collaboration.readiness.facts.limitReached')
+        : readiness.kind === 'policy_denied'
+          ? t('session.collaboration.readiness.facts.policyDenied')
+          : t('session.collaboration.readiness.facts.unavailable'));
+    }
+  }
+}
+
+/**
+ * The prerequisites behind the one cause (lab K3-R checklist), one row each, straight from the status
+ * owner's facts. Only an observed, current fact is ✓ or ✗; anything unread is "Not checked".
+ */
+export function presentSessionReadinessChecklist(
+  readiness: SessionReadinessV1,
+  names: Readonly<{ machineName: string | null }>,
+): readonly SessionReadinessCheck[] {
+  if (!readiness.configured) return [];
+  const credential = checkCredential(readiness.credential);
+  return [
+    checkMachine(readiness.machine, names.machineName),
+    checkAgent(readiness.agent),
+    checkInvocation(readiness.invocation),
+    ...(credential ? [credential] : []),
+  ];
+}

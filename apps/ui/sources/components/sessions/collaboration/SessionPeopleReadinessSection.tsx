@@ -1,12 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
-import type { SessionReadinessRepairV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { presentSessionReadiness } from '@/components/sessions/model/sessionReadinessPresentation';
 import { useSessionReadiness } from '@/components/sessions/model/useSessionReadiness';
+import { SessionReadinessChecklist } from '@/components/sessions/readiness/SessionReadinessChecklist';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -15,31 +13,6 @@ import { areServerAccountScopesEqual, type ServerAccountScope, type ServerAccoun
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-
-/**
- * Both repairs need a person to finish them (a sign-in terminal, an OAuth or device step), so the
- * button opens the page that runs that exact Action with its continuation, rather than starting an
- * attempt nobody here could complete.
- */
-function useOpenSessionReadinessRepair() {
-  const router = useRouter();
-  return React.useCallback(
-    (repair: SessionReadinessRepairV1) => {
-      if (repair.actionId === 'machines.agents.signIn.start') {
-        router.push({
-          pathname: '/(app)/settings/agents/[agentId]',
-          params: {
-            agentId: repair.input.agentId,
-            machineId: repair.input.machineId,
-          },
-        } as never);
-        return;
-      }
-      router.push({ pathname: '/(app)/settings/connected-services' } as never);
-    },
-    [router],
-  );
-}
 
 /**
  * Configured vs ready for this Session (C7, lab K3-R), in the People pane beside who follows it. The
@@ -77,17 +50,22 @@ function SessionPeopleReadinessRows(
     loading: state.loading,
     unavailableReason: state.unavailableReason,
   });
-  const openRepair = useOpenSessionReadinessRepair();
   const { refresh } = state;
   const checkAgain = React.useCallback(
     () => fireAndForget(refresh(), { tag: 'SessionPeopleReadiness.refresh' }),
     [refresh],
   );
-  const subtitle =
-    joinHappierFacts(presentation.cause, presentation.guidance) || undefined;
   const failed =
     !state.readiness && !state.loading && state.unavailableReason !== null;
-  const repair = presentation.repair;
+  // Healthy stays one quiet line; anything short of ready opens into its prerequisites.
+  const checklist = state.readiness && presentation.tone !== 'ready' ? (
+    <SessionReadinessChecklist
+      readiness={state.readiness}
+      presentation={presentation}
+      scope={props.accountLifetime.scope}
+      sessionId={props.sessionId}
+    />
+  ) : undefined;
   return (
     <View testID="session-people-readiness" style={styles.section}>
       <PaneSectionHeader title={t('session.collaboration.readiness.title')} />
@@ -100,23 +78,17 @@ function SessionPeopleReadinessRows(
           <Icon name="robot" size={18} color={theme.colors.text.secondary} />
         }
         title={presentation.title}
-        subtitle={subtitle}
+        subtitle={presentation.cause ?? undefined}
         subtitleLines={2}
         subtitleStyle={
           presentation.tone === 'attention' ? styles.attention : undefined
         }
         loading={state.loading && !state.readiness}
         accessibilityLiveRegion="polite"
+        bottomElement={checklist}
+        bottomElementInset="text"
         rightElement={
-          repair ? (
-            <RoundButton
-              testID="session-people-readiness-repair"
-              size="small"
-              display="secondary"
-              title={repair.label}
-              onPress={() => openRepair(repair.repair)}
-            />
-          ) : failed ? (
+          failed ? (
             <RoundButton
               testID="session-people-readiness-retry"
               size="small"
