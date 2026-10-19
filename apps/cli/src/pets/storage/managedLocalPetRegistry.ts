@@ -2,7 +2,7 @@ import { lstat, readFile, realpath, rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { PetPackageSourceV1 } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 
@@ -37,18 +37,18 @@ type ManagedLocalPetRegistryForgetResult =
   | Readonly<{ ok: true; sourceKey: string }>
   | Readonly<{ ok: false; errorCode: 'not_found' | 'validation_failed' | 'unsupported_source' | 'internal_error'; error: string }>;
 
-const PetSourceKeySchema = z.string().regex(/^pet:[a-f0-9]{32}$/u);
+const PetSourceKeySchema = z.string().check(z.regex(/^pet:[a-f0-9]{32}$/u));
 
 const ManagedLocalPetRegistryEntrySchema = z.object({
   kind: z.literal('happierManagedLocal'),
   sourceKey: PetSourceKeySchema,
-  packagePath: z.string().min(1).max(10_000),
-}).strip();
+  packagePath: z.string().check(z.minLength(1), z.maxLength(10_000)),
+});
 
 const ManagedLocalPetRegistryFileSchema = z.object({
   version: z.literal(1),
   pets: z.record(z.string(), z.unknown()),
-}).strip();
+});
 
 function registryPath(managedRoot: string): string {
   return join(managedRoot, MANAGED_LOCAL_PET_REGISTRY_FILE);
