@@ -626,7 +626,7 @@ export async function startStackDevTargets(
       return observed;
     };
 
-    const startTarget = async (plan, index, existingTunnel = null, refreshSourceRuntime = false) => {
+    const startTarget = async (plan, index, existingTunnel = null, refreshSourceRuntime = false, retryAttempt = 0) => {
       if (isSuperseded) return null;
       const { target, services } = plan;
       const { snapshot: selectedSnapshot, target: selectedRuntimeTarget } = resolvePlanRuntime(plan);
@@ -897,14 +897,35 @@ export async function startStackDevTargets(
           publishTargetState(plan, 'running');
           return TARGET_SYNC_READY;
         }
+        if (sourceSnapshot && !retainedSourceRuntime && startedRemoteTargets.has(target.name)) {
+          // A failed launch may never have published runtime state. Only
+          // verified absence permits a fresh start; otherwise recover the
+          // loaded identity before changing its route or retiring its runner.
+          beginPhase('runtime-identity');
+          const absence = await runProcess({
+            label: `remote:${target.name}`, command: 'ssh', args: [
+              ...openSsh.sshArgs, '-o', 'BatchMode=yes', target.ssh,
+              buildRemoteStackRetirementProbeCommand(target, { stackName, runtimeMode }),
+            ], env: infraEnv,
+          });
+          if (absence?.code !== 0) {
+            await verifyLoadedRuntimeIdentity(plan);
+            retainedSourceRuntime = sourceRuntimeObservationsByTarget.get(target.name);
+          }
+        }
+        // Generated candidates can collide with another Stack. A fresh retry
+        // tries another candidate; a retained runtime or live tunnel keeps the
+        // endpoint from its previous launch, including after a collision retry.
+        const retainedRemoteServerPort = retainedSourceRuntime || (tunnel && tunnel.exitCode == null && tunnel.signalCode == null)
+          ? remoteStackOptionsByTarget.get(target.name)?.remoteServerPort : null;
         const remoteServerPort =
           // A retained daemon keeps its launch route across controller instances.
           // Keep the co-located server on that runtime's private port; its canonical
           // reverse forward is a separate listener and must not become the server.
-          preservedServerPort ?? (!services.server ? preservedDaemonForward?.listenPort : null) ?? target.remoteServerPort ?? resolveDefaultRemoteServerPort({
+          preservedServerPort ?? (!services.server ? preservedDaemonForward?.listenPort : null) ?? target.remoteServerPort ?? retainedRemoteServerPort ?? resolveDefaultRemoteServerPort({
             localServerPort,
             targetIndex: index,
-            instanceId,
+            instanceId: instanceId + retryAttempt,
           });
         const remoteExpoPort = services.expo
           ? resolveDefaultRemoteExpoPort({ localExpoPort, targetIndex: index, instanceId })
@@ -951,22 +972,6 @@ export async function startStackDevTargets(
             targetHost: 'localhost',
             targetPort: remoteExpoPort,
           });
-        }
-        if (sourceSnapshot && !retainedSourceRuntime && startedRemoteTargets.has(target.name)) {
-          // A failed launch may never have published runtime state. Only
-          // verified absence permits a fresh start; otherwise recover the
-          // loaded identity before retirement so SSH loss cannot rebundle it.
-          beginPhase('runtime-identity');
-          const absence = await runProcess({
-            label: `remote:${target.name}`, command: 'ssh', args: [
-              ...openSsh.sshArgs, '-o', 'BatchMode=yes', target.ssh,
-              buildRemoteStackRetirementProbeCommand(target, { stackName, runtimeMode }),
-            ], env: infraEnv,
-          });
-          if (absence?.code !== 0) {
-            await verifyLoadedRuntimeIdentity(plan);
-            retainedSourceRuntime = sourceRuntimeObservationsByTarget.get(target.name);
-          }
         }
         if (refreshSourceRuntime) {
           // Worker failure can come from stale last-green bytes. Flush the
@@ -1384,7 +1389,7 @@ export async function startStackDevTargets(
               closeRequested.then(() => 'close'),
             ]);
             if (retryOutcome === 'close' || closed || isSuperseded) return;
-            worker = await startTarget(plan, index, tunnel, refreshSourceRuntime);
+            worker = await startTarget(plan, index, tunnel, refreshSourceRuntime, retryAttempt);
             if (targetFailuresByTarget.get(target.name)?.error?.code === 'HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED') return;
             if (worker === TARGET_SYNC_READY) return;
             tunnel = tunnelsByTarget.get(target.name) ?? null;
