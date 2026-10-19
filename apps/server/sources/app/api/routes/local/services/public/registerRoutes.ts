@@ -13,11 +13,10 @@ import {
     proxyLocalServicePreviewHttpRequest,
     type LocalServicePreviewHttpRequest,
     type LocalServicePreviewHttpResponseHeaders,
-    type LocalServicePreviewHttpResponseSink,
     type OpenLocalServicePreviewTunnel,
     type ProxyLocalServicePreviewHttpRequestResult,
 } from "@/app/local/services/preview/httpAdapter";
-import { writeLocalServicePreviewDownstream } from "@/app/local/services/preview/downstream";
+import { sendLocalServicePreviewHttpResponse, type LocalServicePreviewHttpReply } from '../httpResponse';
 import { encodeLocalServiceRequestPath } from "@/app/local/services/preview/requestTarget";
 import { scopedLocalServiceViewerTokenCookie } from '@/app/local/services/viewerCookie';
 import { LOCAL_SERVICE_APPLICATION_HTTP_METHODS } from '../hostRoutes';
@@ -113,23 +112,7 @@ type RouteRequest = Readonly<{
     authTokenAuthenticationEvidence?: readonly import("@happier-dev/protocol").AuthTokenAuthenticationEvidenceV1[];
 }>;
 
-type RouteReply = {
-    code?: (statusCode: number) => RouteReply;
-    header?: (name: string, value: string | readonly string[]) => RouteReply;
-    send?: (payload?: unknown) => unknown;
-    raw?: {
-        writeHead?: (statusCode: number, statusMessage: string, headers: Record<string, string | readonly string[]>) => void;
-        write?: (chunk: Uint8Array) => unknown;
-        end?: () => void;
-        destroy?: (error?: unknown) => void;
-        once?: (event: "close" | "drain" | "error", listener: () => void) => unknown;
-        on?: (event: "close" | "drain" | "error", listener: () => void) => unknown;
-        off?: (event: "close" | "drain" | "error", listener: () => void) => unknown;
-        removeListener?: (event: "close" | "drain" | "error", listener: () => void) => unknown;
-        destroyed?: boolean;
-        writableEnded?: boolean;
-    };
-};
+type RouteReply = LocalServicePreviewHttpReply;
 
 const PUBLIC_CONTROL_ROUTE_PATH = "/v1/local-services/public";
 const PUBLIC_STATUS_ROUTE_PATH = "/v1/local-services/public/status";
@@ -245,35 +228,6 @@ function withPublicResponsePrivacyHeaders(
 
 function applyPublicResponsePrivacyHeaders(reply: RouteReply): void {
     reply.header?.(PUBLIC_RESPONSE_REFERRER_POLICY_HEADER, PUBLIC_RESPONSE_REFERRER_POLICY_VALUE);
-}
-
-function createResponseSink(reply: RouteReply): LocalServicePreviewHttpResponseSink {
-    return {
-        writeHead(statusCode, statusMessage, headers) {
-            const safeHeaders = withPublicResponsePrivacyHeaders(headers);
-            if (reply.raw?.writeHead) {
-                reply.raw.writeHead(statusCode, statusMessage, { ...safeHeaders });
-                return;
-            }
-            reply.code?.(statusCode);
-            for (const [name, value] of Object.entries(safeHeaders)) {
-                reply.header?.(name, value);
-            }
-        },
-        write(chunk) {
-            return writeLocalServicePreviewDownstream(reply.raw, chunk);
-        },
-        end() {
-            if (reply.raw?.end) {
-                reply.raw.end();
-                return;
-            }
-            reply.send?.();
-        },
-        destroy(error) {
-            reply.raw?.destroy?.(error);
-        },
-    };
 }
 
 function createDownstreamAbortSignal(reply: RouteReply): AbortSignal | undefined {
@@ -670,17 +624,19 @@ export async function handleLocalServicePublicHttpRequest(
     if (registration.signal.aborted) { releaseConnection?.(); return undefined; }
     const downstream = createDownstreamAbortSignal(reply);
     const signal = downstream ? AbortSignal.any([registration.signal, downstream]) : registration.signal;
-    try {
-        return await proxyHttp({
-            preview: access.preview,
-            request: createPublicHttpRequest(request, signal),
-            response: createResponseSink(reply),
-            openTunnel: options.openTunnel,
-            observability: createPublicExposureObservabilityEmitter(options.observability, exposureId),
-        });
-    } finally {
-        releaseConnection?.();
-    }
+    return sendLocalServicePreviewHttpResponse(reply, async (response) => {
+        try {
+            return await proxyHttp({
+                preview: access.preview,
+                request: createPublicHttpRequest(request, signal),
+                response,
+                openTunnel: options.openTunnel,
+                observability: createPublicExposureObservabilityEmitter(options.observability, exposureId),
+            });
+        } finally {
+            releaseConnection?.();
+        }
+    }, withPublicResponsePrivacyHeaders);
 }
 
 export function registerLocalServicePublicRoutes(

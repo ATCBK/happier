@@ -18,8 +18,9 @@ import { createPresentUserSessionAccessAuthentication } from "@/app/session/acce
 
 const dbAccountFindUniqueMock = vi.hoisted(() => vi.fn());
 vi.mock("@/storage/db", async () => {
-    const { createDbTransactionMock } = await import('@/app/api/testkit/dbMocks');
+    const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import('@/app/api/testkit/dbMocks');
     const state = {
+        ...inTxPostgresControlStatementMock,
         account: {
             findUnique: (...args: unknown[]) => dbAccountFindUniqueMock(...args),
         },

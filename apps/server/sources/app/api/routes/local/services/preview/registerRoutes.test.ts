@@ -27,6 +27,7 @@ import { MachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines
 import { eventRouter } from '@/app/events/connectionEventRouter';
 import { forwardRpcCall } from '@/app/api/socket/rpc/forwardRpcCall';
 import type { Server } from 'socket.io';
+import * as logging from '@/utils/logging/log';
 
 // Only database, HTTP router/socket and network tunnel boundaries are replaced.
 const machineFindFirst = vi.hoisted(() => vi.fn(async (_query: unknown): Promise<{
@@ -37,10 +38,15 @@ const machineFindFirst = vi.hoisted(() => vi.fn(async (_query: unknown): Promise
 const sessionFindUnique = vi.hoisted(() => vi.fn(async (): Promise<SessionAccessProjectionRow | null> => null));
 const machineFindUnique = vi.hoisted(() => vi.fn(async (_query: unknown): Promise<unknown> => null));
 const homeSettingsFindUnique = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
-vi.mock('@/storage/db', () => {
-    const boundary = { machine: { findFirst: machineFindFirst, findUnique: machineFindUnique }, session: { findUnique: sessionFindUnique },
+vi.mock('@/storage/db', async () => {
+    const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import('@/app/api/testkit/dbMocks');
+    const boundary = { ...inTxPostgresControlStatementMock,
+        machine: { findFirst: machineFindFirst, findUnique: machineFindUnique,
+            findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+                (await Promise.all(where.id.in.map(id => machineFindUnique({ where: { id } })))).filter(row => row !== null),
+        }, session: { findUnique: sessionFindUnique },
         homeSettings: { findUnique: homeSettingsFindUnique }, homeGovernancePolicy: { findUnique: async () => null } };
-    return { db: { ...boundary, $transaction: async (callback: (tx: typeof boundary) => Promise<unknown>) => callback(boundary) } };
+    return { db: createDbTransactionMock(() => boundary).wrapDb(boundary) };
 });
 
 const preview: LocalServicePreviewResourceV1 = {
@@ -460,6 +466,95 @@ describe('local service preview routes', () => {
             const retired = await app.inject({ method: 'GET', url: '/', headers: { host: firstUrl.host, cookie: secondCookie } });
             expect(retired.statusCode).toBe(404);
         } finally { await app.close(); }
+    });
+
+    it.each([
+        { kind: 'private', failCleanup: true }, { kind: 'public', failCleanup: true },
+        { kind: 'private', failCleanup: false }, { kind: 'public', failCleanup: false },
+    ] as const)('contains a failure after the first SSE bytes at the real $kind HTTP ingress (failed cleanup: $failCleanup) and keeps serving', async ({ kind, failCleanup }) => {
+        const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'test-master-secret',
+            HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: '0',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: '1',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: 'default',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: '5173' };
+        const runtimes = createLocalServiceRouteRuntimes(env);
+        const registered = runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' });
+        if (!registered.ok || !registered.accessUrl) throw new Error('preview registration failed');
+        const exposure = runtimes.public.createExposure({ preview, requestedMode: 'secret_link', requestedTtlMs: 60_000,
+            actorId: 'user_1', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' });
+        if (!exposure.ok) throw new Error('public exposure failed');
+        const url = new URL(kind === 'private' ? registered.accessUrl : exposure.exposure.publicUrl);
+        let failAfterBytes = () => {};
+        const bytesReceived = new Promise<void>(resolve => { failAfterBytes = resolve; });
+        const storageError = Object.assign(new Error('private storage failure'), { code: 'P2024' });
+        // The tunnel is a real external transport boundary. Its failure and failed cleanup
+        // exercise the real HTTP adapter, sink, route and Fastify error lifecycle.
+        let failing = true;
+        const openTunnel: OpenLocalServicePreviewTunnel = async () => failing ? {
+            tunnelId: 'tunnel', substreamId: 'stream', write() {}, endWrite() {},
+            async *read() {
+                yield new TextEncoder().encode('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: first\n\n');
+                await bytesReceived;
+                throw new Error('upstream disconnected');
+            },
+            abort() {},
+            async close() { if (failCleanup) throw storageError; },
+        } : await tunnelBoundary('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok').openTunnel({ preview });
+        const log = vi.spyOn(logging, 'log').mockImplementation(() => {});
+        const rejections: unknown[] = [];
+        let rejected = () => {};
+        const onUnhandled = (reason: unknown) => { rejections.push(reason); rejected(); };
+        process.on('unhandledRejection', onUnhandled);
+        const app = fastify({ logger: false });
+        app.decorate('authenticate', async () => {});
+        registerLocalServiceRoutes(app as unknown as Fastify, { env, runtimes, openTunnel });
+        let socket: ReturnType<typeof connect> | undefined;
+        try {
+            const exchange = await app.inject({ method: 'GET', url: url.pathname + url.search, headers: { host: url.host } });
+            expect(exchange.statusCode).toBe(303);
+            const cookie = String(exchange.headers['set-cookie']).split(';')[0]!;
+            const listener = new URL(await app.listen({ port: 0, host: '127.0.0.1' }));
+            socket = connect(Number(listener.port), '127.0.0.1');
+            let response = '';
+            const closed = new Promise<void>(resolve => {
+                socket!.on('error', () => resolve());
+                socket!.on('close', () => resolve());
+                socket!.on('data', chunk => {
+                    response += chunk.toString();
+                    if (response.includes('data: first')) failAfterBytes();
+                });
+                socket!.on('connect', () => socket!.write(`GET /sse HTTP/1.1\r\nHost: ${url.host}\r\nCookie: ${cookie}\r\nConnection: close\r\n\r\n`));
+            });
+            const unhandled = new Promise<void>(resolve => { rejected = resolve; });
+            await Promise.race([closed, unhandled]);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(response).toContain('data: first');
+            expect(rejections).toEqual([]);
+            expect(socket.destroyed).toBe(true);
+            if (failCleanup) {
+                expect(log.mock.calls.some(([context]) => typeof context === 'object' && context !== null
+                    && Reflect.get(context, 'errorCode') === 'P2024')).toBe(true);
+            }
+            failing = false;
+            const recovered = await app.inject({ method: 'GET', url: '/', headers: { host: url.host, cookie } });
+            expect(recovered.statusCode).toBe(200);
+            expect(recovered.body).toBe('ok');
+            expect(rejections).toEqual([]);
+        } finally {
+            failAfterBytes();
+            socket?.destroy();
+            await app.close();
+            process.off('unhandledRejection', onUnhandled);
+            log.mockRestore();
+        }
     });
 
     it.each(['private', 'public'] as const)('contains a rejected Home read at the real %s upgrade ingress and recovers', async (kind) => {

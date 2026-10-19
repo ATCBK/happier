@@ -155,13 +155,15 @@ describe("public local-service exposure data plane (composed Fastify)", () => {
             const { exposure } = created.json() as {
                 exposure: { exposureId: string; publicUrl: string };
             };
-            const publicToken = new URL(exposure.publicUrl).searchParams.get("publicToken");
+            const publicUrl = new URL(exposure.publicUrl);
+            const publicToken = publicUrl.searchParams.get("publicToken");
             expect(typeof publicToken).toBe("string");
 
             // The URL->cookie exchange. Its `Location` is the second CRLF-terminated sink.
             const exchanged = await app.inject({
                 method: "GET",
                 url: `/v1/local-services/public/${exposure.exposureId}/foo%0d%0aX-Injected:%20yes%0d%0a%0d%0aGET%20/admin%20HTTP/1.1?publicToken=${encodeURIComponent(publicToken ?? "")}`,
+                headers: { host: publicUrl.host },
             });
             expect(exchanged.statusCode).toBe(303);
             const location = exchanged.headers.location;
@@ -175,7 +177,7 @@ describe("public local-service exposure data plane (composed Fastify)", () => {
             const proxied = await app.inject({
                 method: "GET",
                 url: String(location),
-                headers: { cookie: setCookie },
+                headers: { host: publicUrl.host, cookie: setCookie },
             });
             expect(proxied.statusCode).toBe(200);
 
