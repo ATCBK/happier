@@ -175,7 +175,10 @@ export function serializeProviderAccountUsageSnapshotMaterialV1(snapshot: Provid
     recoveryCreditDetails: snapshot.recoveryCreditDetails ?? null,
     subscription: subscription ? { ...subscription, observedAtMs: undefined,
       ...(subscription.lastRefreshError ? { lastRefreshError: { ...subscription.lastRefreshError, observedAtMs: undefined } } : {}) } : null,
-    refreshDiagnostics: snapshot.diagnostics?.filter(entry => entry.kind === 'provider_http') ?? [],
+    // Request ids, response dates and observation clocks change on an unchanged
+    // poll. Failure codes/status/retry facts still change material identity.
+    refreshDiagnostics: snapshot.diagnostics?.filter(entry => entry.kind === 'provider_http')
+      .map(({ observedAtMs: _observedAt, headers: _headers, ...material }) => material) ?? [],
     meters: snapshot.meters,
   };
   return JSON.stringify(material, (_key: string, value: unknown) => value && typeof value === 'object' && !Array.isArray(value)

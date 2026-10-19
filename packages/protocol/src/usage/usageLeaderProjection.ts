@@ -1,5 +1,5 @@
 import type { UsageAnalyticsBreakdownDimension, UsageAnalyticsBreakdownEntry, UsageAnalyticsContribution, UsageAnalyticsQueryResponse, UsageAnalyticsTimelineSource } from './usageAnalyticsContracts.js';
-import { aggregateUsageContributionCosts, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, withEffectiveUsageCost } from './usageAggregation.js';
+import { aggregateUsageContributionCosts, resolveUsageContributionCosts, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, withEffectiveUsageCost } from './usageAggregation.js';
 import { resolveEffectiveUsageCostUsd, resolveUsageContributionDimensionKey, type UsageCostMode } from './usageCostFacts.js';
 
 export type UsageLeaderDimension = Parameters<typeof resolveUsageContributionDimensionKey>[1];
@@ -75,45 +75,74 @@ export function buildUsageBreakdownList(rows: readonly (UsageLeaderContribution 
         .map(leader => ({ ...leader, ...decorations.get(leader.key) }));
 }
 
+function groupLegacyContributions(rows: readonly UsageAnalyticsContribution[], dimension: UsageLeaderDimension) {
+    const grouped = new Map<string, UsageAnalyticsContribution[]>();
+    for (const row of rows) {
+        // Pre-count responses witnessed raw model ids, including snapshot ids.
+        const key = dimension === 'model' ? row.modelId ?? 'unknown'
+            : resolveUsageContributionDimensionKey(row, dimension) ?? 'unknown';
+        const group = grouped.get(key);
+        if (group) group.push(row); else grouped.set(key, [row]);
+    }
+    return grouped;
+}
+
+function hasUsageEventCounts(rows: readonly UsageAnalyticsContribution[]): rows is readonly (UsageAnalyticsContribution & { eventCount: number })[] {
+    return rows.every(row => row.eventCount !== undefined);
+}
+
 /** Older contributions lack witnessed counts; keep their candidates and mark ranking incomplete. */
 export function reprojectUsageLeaders(value: UsageAnalyticsQueryResponse, contributions: readonly UsageAnalyticsContribution[], mode: UsageCostMode,
     projectCost: (raw: UsageLeaderContribution['cost'], rows: readonly UsageAnalyticsContribution[]) => UsageLeaderContribution['cost']):
-    Pick<UsageAnalyticsQueryResponse, 'breakdowns' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'coverage'> {
+    Pick<UsageAnalyticsQueryResponse, 'series' | 'breakdowns' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'coverage'> {
     let incomplete = false;
     const project = (entries: UsageLeader[] | undefined, rows: readonly UsageAnalyticsContribution[], dimension: UsageLeaderDimension, includeSources = false) => {
         if (!entries) return undefined;
-        if (rows.every(row => row.eventCount !== undefined)) {
-            return buildUsageLeaderList(rows.map(row => ({ ...row, eventCount: row.eventCount! })), dimension, entries.length, mode,
+        if (hasUsageEventCounts(rows)) {
+            return buildUsageLeaderList(rows, dimension, entries.length, mode,
                 new Map(entries.map(entry => [entry.key, entry.label])), includeSources) ?? [];
         }
         incomplete = true;
+        const grouped = groupLegacyContributions(rows, dimension);
         return entries.map(entry => {
             // Pre-count responses ranked raw model ids. Preserve that witnessed candidate
             // population until counts permit canonical regrouping; never invent counts.
-            const selected = rows.filter(row => (dimension === 'model' ? row.modelId ?? 'unknown'
-                : resolveUsageContributionDimensionKey(row, dimension) ?? 'unknown') === entry.key);
-            return { ...entry, ...(entry.cost ? { cost: projectCost(entry.cost, selected) } : {}) };
+            const selected = grouped.get(entry.key) ?? [];
+            return { ...entry, ...(entry.cost ? { cost: projectCost(entry.cost, selected) } : {}),
+                ...(includeSources && entry.sources ? { sources: entry.sources.map(part => ({ ...part,
+                    cost: projectCost(part.cost, selected.filter(row => (row.source ?? 'unknown') === part.source
+                        && (row.sourceContext?.path ?? 'unknown') === part.path
+                        && (row.sourceContext?.execution ?? 'unknown') === part.execution)),
+                })) } : {}) };
         });
     };
     const leaders = value.leaders && { ...value.leaders };
     const dimensions = { agents: 'agent', models: 'model', sessions: 'session', projects: 'project', workspaces: 'workspace', engines: 'engine' } as const;
     if (leaders) for (const key of Object.keys(dimensions) as (keyof typeof dimensions)[]) leaders[key] = project(leaders[key], contributions, dimensions[key]);
+    // A timeline partitions this query's selected money, not a sequence of new
+    // day-scoped queries. Resolve overlap before bucketing: a whole reported
+    // charge belongs to its observation time; covered earlier estimates are
+    // still raw facts, but cannot invalidate or duplicate that selected charge.
+    const timelineCosts = value.series || value.modelTimeline || value.engineTimeline ? resolveUsageContributionCosts(contributions, mode) : null;
+    const timelineRows = timelineCosts ? contributions.map((row, index) => ({ ...row, cost: timelineCosts[index]! })) : contributions;
     const timeline = (buckets: UsageAnalyticsQueryResponse['modelTimeline'], dimension: 'model' | 'engine') => buckets?.map(bucket => ({ ...bucket,
-        leaders: project(bucket.leaders, contributions.filter(row => row.observedAtMs >= bucket.bucketStartMs && row.observedAtMs < bucket.bucketEndMs), dimension, true) ?? [] }));
+        leaders: project(bucket.leaders, timelineRows.filter(row => row.observedAtMs >= bucket.bucketStartMs && row.observedAtMs < bucket.bucketEndMs), dimension, true) ?? [] }));
     const modelTimeline = timeline(value.modelTimeline, 'model');
     const engineTimeline = timeline(value.engineTimeline, 'engine');
+    const series = value.series?.map(bucket => ({ ...bucket, cost: projectCost(bucket.cost,
+        timelineRows.filter(row => row.observedAtMs >= bucket.bucketStartMs && row.observedAtMs < bucket.bucketEndMs)) }));
     const breakdowns = value.breakdowns && { ...value.breakdowns };
     if (breakdowns) for (const dimension of Object.keys(breakdowns) as UsageAnalyticsBreakdownDimension[]) {
         const entries = breakdowns[dimension];
         if (!entries) continue;
-        if (contributions.every(row => row.eventCount !== undefined)) {
-            breakdowns[dimension] = buildUsageBreakdownList(contributions.map(row => ({ ...row, eventCount: row.eventCount! })),
+        if (hasUsageEventCounts(contributions)) {
+            breakdowns[dimension] = buildUsageBreakdownList(contributions,
                 dimension, entries.length, mode, entries);
         } else {
             incomplete = true;
+            const grouped = groupLegacyContributions(contributions, dimension);
             breakdowns[dimension] = entries.map(entry => ({ ...entry, cost: projectCost(entry.cost,
-                contributions.filter(row => (dimension === 'model' ? row.modelId ?? 'unknown'
-                    : resolveUsageContributionDimensionKey(row, dimension) ?? 'unknown') === entry.key)) }));
+                grouped.get(entry.key) ?? []) }));
         }
     }
     const fullPopulation = contributions.every(row => row.eventCount !== undefined)
@@ -129,5 +158,5 @@ export function reprojectUsageLeaders(value: UsageAnalyticsQueryResponse, contri
         reasons: [...new Set([...value.coverage.reasons, 'ranked_truncation' as const])],
         ranked: value.coverage.ranked.map(entry => ({ ...entry, complete: false })),
     } : value.coverage && { ...value.coverage, ranked: ranked ?? value.coverage.ranked };
-    return { breakdowns, leaders, modelTimeline, engineTimeline, coverage };
+    return { series, breakdowns, leaders, modelTimeline, engineTimeline, coverage };
 }

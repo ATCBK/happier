@@ -1,13 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from './providerAccountUsagePrimitives.js';
 import { sealProviderAccountUsageSnapshot } from './accountUsage.js';
-import { ConnectedServiceQuotaGetResultV1Schema, openProviderAccountUsageRecordV4, projectProviderAccountUsageQuotaReadV1 } from './providerAccountUsageHistory.js';
+import { ConnectedServiceQuotaGetResultV1Schema, QualifiedProviderAccountUsageHistoryResponseV4Schema,
+  openProviderAccountUsageHistoryPageV4, openProviderAccountUsageRecordV4, projectProviderAccountUsageQuotaReadV1 } from './providerAccountUsageHistory.js';
+import { QualifiedProviderAccountUsageRecordResponseV4Schema } from './qualifiedConnectedAccountProjectionsV4.js';
 
 describe('opened accepted provider history', () => {
   const recordKey = { providerId: 'test', accountSubjectId: 'account', subjectKind: 'account' as const, quotaScope: 'account' as const };
   const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey, providerId: 'test', accountSubject: { kind: 'providerSubject', id: 'account' }, observedAtMs: 100, fetchedAtMs: 100, staleAfterMs: 1000, source: 'providerHttp', confidence: 'confirmed', meters: [], subscription: { status: 'subscribed', renewal: 'off', observedAtMs: 100, staleAfterMs: 1000, currentPeriodEndAtMs: 200 } });
   const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
   const metadata = { fetchedAt: 100, staleAfterMs: 1000, status: 'ok' as const };
+  it('opens page payloads without re-admitting each HTTP-admitted record envelope', () => {
+    const page = QualifiedProviderAccountUsageHistoryResponseV4Schema.parse({ entries: [{ id: 'witness', observedAtMs: 100,
+      record: { content: { t: 'plain', v: snapshot }, metadata, sources: [] } }], nextCursor: null });
+    const parse = vi.spyOn(QualifiedProviderAccountUsageRecordResponseV4Schema, 'parse');
+    try {
+      const opened = openProviderAccountUsageHistoryPageV4({ recordId: snapshot.recordId, accountMode: 'plain', page });
+      expect(opened.entries[0]!.snapshot).toEqual(snapshot);
+      expect(parse.mock.calls.length).toBe(0);
+      expect(() => openProviderAccountUsageHistoryPageV4({ recordId: snapshot.recordId, accountMode: 'plain',
+        page: { ...page, entries: [{ ...page.entries[0]!, record: { ...page.entries[0]!.record,
+          content: { t: 'plain', v: { ...snapshot, providerId: 'wrong' } } } }] } })).toThrow();
+    } finally { parse.mockRestore(); }
+  });
   it('projects retained plain fields through the same stored reader as encrypted snapshots while keeping writes strict', () => {
     const retained = { ...snapshot, retired: true, recordKey: { ...snapshot.recordKey, retired: true },
       accountSubject: { ...snapshot.accountSubject, retired: true }, subscription: { ...snapshot.subscription, retired: true } };
@@ -26,6 +41,19 @@ describe('opened accepted provider history', () => {
       subscription: { ...snapshot.subscription, enteredMonthlyPrice: { ...price, amount: 999 } } } }, metadata, sources: [] };
     expect(openProviderAccountUsageRecordV4({ recordId: snapshot.recordId, accountMode: 'plain', record }).subscription?.enteredMonthlyPrice).toBeUndefined();
     expect(openProviderAccountUsageRecordV4({ recordId: snapshot.recordId, accountMode: 'plain', record, enteredMonthlyPrice: price }).subscription?.enteredMonthlyPrice).toEqual(price);
+  });
+  it.each(['plain', 'e2ee'] as const)('retains a user price without inventing provider subscription evidence in %s mode', accountMode => {
+    const { subscription: _subscription, ...withoutSubscription } = snapshot;
+    const price = { amount: 1.23, currency: 'USD', enteredAtMs: 100 };
+    const sealed = sealProviderAccountUsageSnapshot({ material, snapshot: withoutSubscription, randomBytes: n => new Uint8Array(n).fill(3) });
+    const content = accountMode === 'plain' ? { t: 'plain' as const, v: withoutSubscription }
+      : { t: 'encrypted' as const, c: sealed.ciphertext, subscription: sealed.subscription, recoveryCreditDetails: sealed.recoveryCreditDetails };
+    const record = { content, metadata, sources: [] };
+    const opened = openProviderAccountUsageRecordV4({ recordId: snapshot.recordId, accountMode, material, record, enteredMonthlyPrice: price });
+    expect(opened.subscription).toEqual({ status: 'unavailable', renewal: 'unknown', observedAtMs: snapshot.observedAtMs,
+      staleAfterMs: snapshot.staleAfterMs, enteredMonthlyPrice: price });
+    expect(openProviderAccountUsageRecordV4({ recordId: snapshot.recordId, accountMode, material, record }).subscription).toBeUndefined();
+    expect(ProviderAccountUsageSnapshotV1Schema.safeParse(opened).success).toBe(true);
   });
   it('projects a current-only quota read with its configured advisory targets', () => {
     const source = { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'account' }, bindingKind: 'account' as const };

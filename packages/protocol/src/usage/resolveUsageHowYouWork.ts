@@ -156,5 +156,5 @@ export function resolveUsageHowYouWork(input: Readonly<{
         if (detail.permissions !== undefined) result.permissions = permissions;
         if (detail.acceptedInputs !== undefined) result.inputs = inputs;
     }
-    return UsageHowYouWorkSchema.parse(result);
+    return result;
 }

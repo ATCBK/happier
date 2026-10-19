@@ -5,7 +5,8 @@ import { projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { reprojectUsageLeaders } from './usageLeaderProjection.js';
 import { aggregateUsageContributionCosts } from './usageAggregation.js';
 
-import { resolveUsageCostBasis, resolveUsageCostFacts, type UsageCostMode } from './usageCostFacts.js';
+import { resolveUsageCostBasis, resolveUsageCostFacts, readUsagePageCostProjectionBasis, usagePageCostProjectionBasis, type UsageCostMode } from './usageCostFacts.js';
+import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 export * from './usageCostFacts.js';
 
 /** Standard catalog USD tariff over nonoverlapping token categories, never an invoice. */
@@ -56,6 +57,8 @@ export function repriceUsageObservationCost(rawCost: UsageObservationCost, model
 export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse, catalog: UsageModelPriceCatalog = value.priceCatalog ?? bundledUsageModelPriceCatalog,
   overrides: UsageModelPriceOverridesV1 = {}, mode: UsageCostMode = 'auto'): UsageAnalyticsQueryResponse {
   if (!value.contributions) return { ...value, priceCatalog: catalog };
+  const completed = readUsagePageCostProjectionBasis(value);
+  if (completed?.mode === mode && completed.catalog === catalog && sameStrictJsonValue(completed.overrides, overrides)) return value;
   const facts: UsageAnalyticsCostFact[] = [];
   let cacheSavingsUsd = 0;
   let cacheSavingsComplete = true;
@@ -73,6 +76,7 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
       source: categories ? 'model_price_unknown' : 'token_categories_unknown', complete: false });
     return { ...row, cost };
   });
+  const totalCost = aggregateUsageContributionCosts(contributions, mode);
   const projectCost = (raw: UsageObservationCost, rows: readonly UsageAnalyticsContribution[]): UsageObservationCost => {
     const { apiEquivalentUsd: _old, pricingSource: _source, effectiveUsd: _effective, ...observed } = raw;
     const allPriced = rows.every(row => row.cost.apiEquivalentUsd !== undefined);
@@ -81,12 +85,12 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
       pricingSource: rows.every(row => row.cost.pricingSource === rows[0]?.cost.pricingSource)
         ? rows[0]?.cost.pricingSource ?? `litellm:${catalog.provenance.revision}` : 'effective_model_prices',
     } : observed;
-    const selected = resolveUsageCostBasis(aggregateUsageContributionCosts(rows, mode), mode);
+    const selected = resolveUsageCostBasis(rows === contributions ? totalCost : aggregateUsageContributionCosts(rows, mode), mode);
     return selected ? { ...updated, effectiveUsd: selected.amountUsd } : updated;
   };
   const ranking = reprojectUsageLeaders(value, contributions, mode, projectCost);
   const totals = { ...value.totals, cost: projectCost(value.totals.cost, contributions) };
-  const selected = resolveUsageCostBasis(aggregateUsageContributionCosts(contributions, mode), mode);
+  const selected = resolveUsageCostBasis(totalCost, mode);
   const costPresentation = selected ? { mode, effectiveUsd: selected.amountUsd, currency: selected.currency, source: selected.source } : undefined;
   const factGroups = new Map<string, UsageAnalyticsCostFact[]>();
   for (const fact of facts) {
@@ -106,8 +110,9 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
     const { cacheSavingsUsd: _oldSavings, ...otherInsights } = insights;
     insights = { ...otherInsights, ...(cacheSavingsComplete ? { cacheSavingsUsd } : {}) };
   }
-  return { ...value, totals, contributions, costFacts: groupedFacts, priceCatalog: catalog, costPresentation, coverage, insights,
-    series: value.series?.map(bucket => ({ ...bucket, cost: projectCost(bucket.cost,
-      contributions.filter(row => row.observedAtMs >= bucket.bucketStartMs && row.observedAtMs < bucket.bucketEndMs)) })),
+  const response = { ...value, totals, contributions, costFacts: groupedFacts, priceCatalog: catalog, costPresentation, coverage, insights,
+    series: ranking.series,
     breakdowns: ranking.breakdowns, leaders: ranking.leaders, modelTimeline: ranking.modelTimeline, engineTimeline: ranking.engineTimeline };
+  Object.defineProperty(totals.cost, usagePageCostProjectionBasis, { value: { response, mode, catalog, overrides } });
+  return response;
 }

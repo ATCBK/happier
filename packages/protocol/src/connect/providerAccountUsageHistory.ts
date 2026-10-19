@@ -1,8 +1,6 @@
 import { z } from 'zod/mini';
 export * from './providerAccountUsagePageProjection.js';
-import { lazyZodSchema } from '../lazyZodSchema.js';
-import { buildProviderAccountUsagePageProjectionV1, packProviderAccountUsagePageProjectionV1,
-  getProviderAccountUsageQuotaHistoryV1, type PackedProviderAccountUsagePageProjectionV1Schema } from './providerAccountUsagePageProjection.js';
+import { getProviderAccountUsageQuotaPageFactsV1, getProviderAccountUsageQuotaHistoryV1, type PackedProviderAccountUsagePageProjectionV1Schema } from './providerAccountUsagePageProjection.js';
 import { serializeProviderAccountUsageSnapshotMaterialV1 } from './providerAccountUsagePrimitives.js';
 import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from './legacyConnectedServiceCompatibility.js';
 export { ProviderAccountUsageHistoryCursorV1Schema, ProviderAccountUsageHistoryWitnessV1Schema } from './providerAccountUsagePrimitives.js';
@@ -28,24 +26,22 @@ export {
   type ProviderAccountUsageWaitingWorkV1,
 } from './providerAccountUsageHistorySchemasV1.js';
 
-const QuotaReadProjectionFieldsSchema = lazyZodSchema(() =>
-  z.omit(ConnectedServiceQuotaGetResultV1Schema, { current: true, history: true, pageProjection: true }));
-
-export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: ConnectedServiceQuotaGetInputV1; current: ProviderAccountUsageSnapshotV1 | null; history?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; pageProjection?: z.infer<typeof PackedProviderAccountUsagePageProjectionV1Schema>; /** New page following an already coalesced prefix from this same read. */ appendHistory?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; nowMs: number; targets?: z.infer<typeof UsagePacingTargetsV1Schema>; waitingWork?: ProviderAccountUsageWaitingWorkV1; coalesceHistory?: boolean }>): ConnectedServiceQuotaGetResultV1 {
+export function projectProviderAccountUsageQuotaReadV1(input: Readonly<{ input: ConnectedServiceQuotaGetInputV1; current: ProviderAccountUsageSnapshotV1 | null; history?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; pageProjection?: z.infer<typeof PackedProviderAccountUsagePageProjectionV1Schema>; pageFacts?: ConnectedServiceQuotaGetResultV1['pageFacts']; /** New page following an already coalesced prefix from this same read. */ appendHistory?: z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema>; nowMs: number; targets?: z.infer<typeof UsagePacingTargetsV1Schema>; waitingWork?: ProviderAccountUsageWaitingWorkV1; coalesceHistory?: boolean }>): ConnectedServiceQuotaGetResultV1 {
   const history = input.pageProjection ? getProviderAccountUsageQuotaHistoryV1(input) : input.appendHistory ? appendCoalescedHistory(input.history, input.appendHistory)
     : input.history && input.coalesceHistory ? coalesceHistory(input.history) : input.history;
   const snapshots = history?.entries.map(entry => entry.snapshot);
-  const projected = QuotaReadProjectionFieldsSchema.parse({ source: input.input.source,
+  const result: ConnectedServiceQuotaGetResultV1 = { source: input.input.source, current: input.current,
+    ...(history ? { history } : {}), ...(input.pageFacts ? { pageFacts: input.pageFacts } : {}),
     unusedCapacity: deriveProviderAccountUsageUnusedCapacity({ history: snapshots, partial: history?.nextCursor != null, nowMs: input.nowMs }),
-    pace: input.current?.meters.map(meter => ({ meterId: meter.meterId, value: deriveProviderAccountUsagePace({ snapshot: input.current!, meterId: meter.meterId, nowMs: input.nowMs, history: snapshots }) })) ?? [], targets: input.targets ?? [], waitingWork: input.waitingWork ?? { status: 'unavailable', reason: 'read_failed' } });
+    pace: input.current?.meters.map(meter => ({ meterId: meter.meterId, value: deriveProviderAccountUsagePace({ snapshot: input.current!, meterId: meter.meterId, nowMs: input.nowMs, history: snapshots }) })) ?? [], targets: input.targets ?? [], waitingWork: input.waitingWork ?? { status: 'unavailable', reason: 'read_failed' } };
   // Current/history are already admitted by the record/page openers (or the
   // current-snapshot cache). Re-parsing them here clones the whole accumulated
-  // history on every progressive page. Action and Resource boundaries still
-  // validate the complete outward result; validate only new projection fields here.
-  const pageProjection = input.pageProjection ?? (input.input.projection && history?.nextCursor === null
-    ? packProviderAccountUsagePageProjectionV1(buildProviderAccountUsagePageProjectionV1({ recordId: input.current?.recordId ?? history.entries[0]?.snapshot.recordId ?? '', range: input.input.projection.range, history })) : undefined);
-  return { source: projected.source, current: input.current, ...(pageProjection ? { pageProjection } : history ? { history } : {}),
-    unusedCapacity: projected.unusedCapacity, pace: projected.pace, targets: projected.targets, waitingWork: projected.waitingWork };
+  // history on every progressive page. Derived fields also stay typed; the
+  // outward Action boundary validates serialized results.
+  if (!input.input.projection) return result;
+  const { history: _history, ...page } = result;
+  const pageFacts = input.pageFacts ?? getProviderAccountUsageQuotaPageFactsV1(result);
+  return { ...page, ...(pageFacts ? { pageFacts } : {}) };
 }
 
 /** Canonical equality basis for history projection and observation-writer HMACs. */
@@ -92,8 +88,16 @@ export class ProviderAccountUsageReadErrorV1 extends Error {
   }
 }
 
-export function openProviderAccountUsageRecordV4(input: Readonly<{ recordId: string; enteredMonthlyPrice?: ProviderAccountSubscriptionMonthlyPriceV1; accountMode: 'plain' | 'e2ee'; material?: AccountScopedCryptoMaterial; record: z.infer<typeof QualifiedProviderAccountUsageRecordResponseV4Schema> }>): ProviderAccountUsageSnapshotV1 {
+export function openProviderAccountUsageRecordV4(input: Readonly<{ recordId: string; enteredMonthlyPrice?: ProviderAccountSubscriptionMonthlyPriceV1; accountMode: 'plain' | 'e2ee'; material?: AccountScopedCryptoMaterial; record: unknown }>): ProviderAccountUsageSnapshotV1 {
   const record = QualifiedProviderAccountUsageRecordResponseV4Schema.parse(input.record);
+  return openAdmittedUsageRecord({ ...input, record });
+}
+
+/** Exact pages already admitted their envelopes at HTTP; payloads still open here. */
+function openAdmittedUsageRecord(input: Readonly<{ recordId: string; enteredMonthlyPrice?: ProviderAccountSubscriptionMonthlyPriceV1;
+  accountMode: 'plain' | 'e2ee'; material?: AccountScopedCryptoMaterial;
+  record: z.infer<typeof QualifiedProviderAccountUsageRecordResponseV4Schema> }>): ProviderAccountUsageSnapshotV1 {
+  const { record } = input;
   if ((input.accountMode === 'plain') !== (record.content.t === 'plain')) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_mode_mismatch');
   let snapshot: ProviderAccountUsageSnapshotV1 | null;
   if (record.content.t === 'plain') {
@@ -106,17 +110,20 @@ export function openProviderAccountUsageRecordV4(input: Readonly<{ recordId: str
   if (!snapshot) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
   if (snapshot.recordId !== input.recordId || snapshot.fetchedAtMs !== record.metadata.fetchedAt || snapshot.staleAfterMs !== record.metadata.staleAfterMs) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');
   // A provider observation cannot supply the independent user-owned price.
-  if (snapshot.subscription) {
-    const { enteredMonthlyPrice: _ignored, ...subscription } = snapshot.subscription;
+  if (snapshot.subscription || input.enteredMonthlyPrice) {
+    const { enteredMonthlyPrice: _ignored, ...subscription } = snapshot.subscription ?? {
+      status: 'unavailable' as const, renewal: 'unknown' as const,
+      observedAtMs: snapshot.observedAtMs, staleAfterMs: snapshot.staleAfterMs,
+    };
     snapshot = { ...snapshot, subscription: { ...subscription, ...(input.enteredMonthlyPrice ? { enteredMonthlyPrice: input.enteredMonthlyPrice } : {}) } };
   }
   return snapshot;
 }
 
 export function openProviderAccountUsageHistoryPageV4(input: Readonly<{ recordId: string; accountMode: 'plain' | 'e2ee'; material?: AccountScopedCryptoMaterial; page: z.infer<typeof QualifiedProviderAccountUsageHistoryResponseV4Schema> }>): z.infer<typeof OpenedProviderAccountUsageHistoryPageV1Schema> {
-  return OpenedProviderAccountUsageHistoryPageV1Schema.parse({ entries: input.page.entries.map(entry => {
-    const snapshot = openProviderAccountUsageRecordV4({ ...input, record: entry.record });
+  return { entries: input.page.entries.map(entry => {
+    const snapshot = openAdmittedUsageRecord({ ...input, record: entry.record });
     if (snapshot.fetchedAtMs !== entry.observedAtMs) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');
     return { id: entry.id, observedAtMs: entry.observedAtMs, snapshot };
-  }), nextCursor: input.page.nextCursor });
+  }), nextCursor: input.page.nextCursor };
 }

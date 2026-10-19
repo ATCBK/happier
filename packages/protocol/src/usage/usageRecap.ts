@@ -24,6 +24,7 @@ export type UsageRecapComposeInput = z.infer<typeof UsageRecapComposeInputSchema
 const count = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 const amount = lazyZodSchema(() => z.number().check(z.nonnegative()));
 const mixRow = lazyZodSchema(() => z.strictObject({ tokens: amount, events: count, name: z.optional(z.string()) }));
+const agentMixRow = lazyZodSchema(() => z.extend(mixRow, { agentId: z.optional(z.string().check(z.minLength(1))) }));
 const highlight = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('observed_peak'), bucketStartMs: count, bucketEndMs: count, tokens: amount }),
   z.strictObject({ kind: z.literal('linked_outcomes'), count }),
@@ -34,7 +35,7 @@ export const UsageRecapFactsSchema = lazyZodSchema(() => z.strictObject({
   activeDays: z.optional(count),
   streak: z.optional(z.strictObject({ longestDays: count })),
   modelMix: z.optional(z.array(mixRow)),
-  agentMix: z.optional(z.array(mixRow)),
+  agentMix: z.optional(z.array(agentMixRow)),
   cache: z.optional(z.strictObject({ readTokens: amount, writeTokens: amount })),
   rhythm: z.optional(z.strictObject({ calendarDays: UsageAnalyticsQueryResponseSchema.shape.activity._zod.def.innerType.shape.calendarDays._zod.def.innerType,
     weekdayHourBuckets: UsageAnalyticsQueryResponseSchema.shape.activity._zod.def.innerType.shape.weekdayHourBuckets._zod.def.innerType })),
@@ -44,7 +45,10 @@ export const UsageRecapFactsSchema = lazyZodSchema(() => z.strictObject({
   coach: z.optional(z.strictObject({ findings: z.array(z.strictObject({ detectorId: z.string().check(z.minLength(1)), evidenceCount: count })) })),
   highlights: z.optional(z.array(highlight)),
   dollars: z.optional(z.strictObject({ basis: UsageQuerySchema.shape.costBasis,
-    facts: z.array(UsageAnalyticsCostFactValueSchema).check(z.minLength(1)) })),
+    // Current development read projection: selected money is not a sum of raw comparison facts.
+    selected: z.nullable(z.strictObject({ kind: z.enum(['reported', 'estimated', 'api_equivalent', 'invoice', 'mixed']),
+      currency: z.string().check(z.minLength(1)), amountUsd: amount })),
+    facts: z.array(UsageAnalyticsCostFactValueSchema) })),
 }));
 export type UsageRecapFacts = z.infer<typeof UsageRecapFactsSchema>;
 

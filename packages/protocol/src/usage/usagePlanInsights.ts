@@ -4,9 +4,9 @@ import type { UsageQuery } from '../inputs/usageQuery.js';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetResultV1 } from '../connect/providerAccountUsageHistorySchemasV1.js';
 import { projectProviderAccountSubscriptionMonetaryFacts } from '../connect/accountSubscription.js';
 import { sameQualifiedConnectedAccountRef } from '../connect/qualifiedConnectedAccountPersistence.js';
-import { deriveProviderAccountUsageHeadroom, hasProviderAccountUsageWitnessedReset, resolveProviderAccountUsagePaceWindow } from '../connect/deriveProviderAccountUsagePace.js';
+import { deriveProviderAccountUsageHeadroom, resolveProviderAccountUsagePaceWindow } from '../connect/deriveProviderAccountUsagePace.js';
 import { isConnectedServiceQuotaObservationFresh } from '../connect/quotaObservationTime.js';
-import { getProviderAccountUsageQuotaHistoryV1 } from '../connect/providerAccountUsagePageProjection.js';
+import { getProviderAccountUsageQuotaPageFactsV1 } from '../connect/providerAccountUsagePageProjection.js';
 import type { UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import type { UsageHowYouWork } from './resolveUsageHowYouWork.js';
 import { resolveUsageBucketBounds, resolveUsageCalendarDateStart } from './usageCalendar.js';
@@ -112,9 +112,7 @@ function accountInsights(read: ConnectedServiceQuotaGetResultV1, input: Paramete
   const weather: UsagePlanInsights['accounts'][number]['weather'] = [];
   const modelHeadroom: UsagePlanInsights['accounts'][number]['modelHeadroom'] = [];
   const pricePerReset: UsagePlanInsights['accounts'][number]['pricePerReset'] = [];
-  const observations = [...(getProviderAccountUsageQuotaHistoryV1(read)?.entries.map(entry => entry.snapshot) ?? []), ...(current ? [current] : [])]
-    .filter(snapshot => snapshot.state === 'loaded_data' && snapshot.recordId === current?.recordId)
-    .sort((left, right) => left.observedAtMs - right.observedAtMs);
+  const witnessedResets = getProviderAccountUsageQuotaPageFactsV1(read)?.witnessedResets ?? [];
   for (const meter of current?.meters ?? []) {
     const base = { meterId: meter.meterId, label: meter.label, asOfMs: current!.observedAtMs };
     const pace = read.pace.find(entry => entry.meterId === meter.meterId)?.value;
@@ -131,14 +129,10 @@ function accountInsights(read: ConnectedServiceQuotaGetResultV1, input: Paramete
         resetAtMs: headroom.window.resetAtMs, method: 'model_specific_quota_meter', coverage: 'current_meter', qualification: headroom.qualification }
         : { ...base, modelId: meter.modelId, status: 'insufficient_basis', reason: headroom?.reason ?? 'unknown_observation_time' });
     const resets = new Set<number>();
-    if (selectedPrice && fresh && window) for (let index = 1; index < observations.length; index++) {
-      const previous = observations[index - 1]!;
-      const next = observations[index]!;
-      const ended = resolveProviderAccountUsagePaceWindow(previous, meter.meterId);
+    if (selectedPrice && fresh && window) for (const ended of witnessedResets) {
       // Count only the adjacent actual cycles witnessed by B, not timestamp churn or inferred gap cycles.
-      if (!ended || ended.windowStartAtMs < selectedPrice.period.startAtMs
-        || ended.resetAtMs > Math.min(nowMs!, selectedPrice.period.endAtMs)
-        || !hasProviderAccountUsageWitnessedReset({ previous, current: next, meterId: meter.meterId, nowMs: next.observedAtMs })) continue;
+      if (ended.meterId !== meter.meterId || ended.windowStartAtMs < selectedPrice.period.startAtMs
+        || ended.resetAtMs > Math.min(nowMs!, selectedPrice.period.endAtMs)) continue;
       resets.add(ended.resetAtMs);
     }
     pricePerReset.push(selectedPrice && fresh && resets.size > 0 ? { ...base, status: 'available', amount: selectedPrice.amount / resets.size,
@@ -178,5 +172,5 @@ function recordedWeek(input: Parameters<typeof projectUsagePlanInsights>[0]): Us
 /** Existing A/B/H composition only: no query, cache, inferred account link or model chooser. */
 export function projectUsagePlanInsights(input: Readonly<{ query: UsageQuery; nowMs?: number; quota?: readonly ConnectedServiceQuotaGetResultV1[];
   accounting?: UsageAnalyticsQueryResponse; accountingAsOfMs?: number; howYouWork?: UsageHowYouWork }>): UsagePlanInsights {
-  return UsagePlanInsightsSchema.parse({ accounts: (input.quota ?? []).map(read => accountInsights(read, input)), recordedWeek: recordedWeek(input) });
+  return { accounts: (input.quota ?? []).map(read => accountInsights(read, input)), recordedWeek: recordedWeek(input) };
 }

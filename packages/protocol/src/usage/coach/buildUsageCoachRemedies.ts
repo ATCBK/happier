@@ -4,7 +4,7 @@ import type { UsagePromptComposition } from '../../usage/coach/usagePromptCompos
 import { UsageCoachRemedySchema } from '../../usage/coach/coachRemedy.js';
 import { SessionModelSelectionIntentV1Schema } from '../../providers/selection/v1.js';
 import { buildBackendTargetKeyV2 } from '../../backends/targets/backendTargetRefV2.js';
-import { UsageMcpBindingUsageSchema, type UsageMcpBindingUsage } from '../../usage/coach/usageMcpBindingUsage.js';
+import { selectLatestUsageMcpBindingWindows, type UsageMcpBindingUsage } from '../../usage/coach/usageMcpBindingUsage.js';
 import type { McpServerCatalogSnapshotV1 } from '../../mcp/servers/serverCatalogV1.js';
 import { readSessionMcpSelectionV1FromMetadata } from '../../mcp/servers/sessionSelectionV1.js';
 
@@ -57,13 +57,10 @@ export function buildUsageCoachRemedies(input: Readonly<{
             if (!catalog || catalog.status !== 'ready' || catalog.authority !== 'active' || typeof catalog.revision !== 'number'
                 || finding.evidence.some(ref => ref.kind !== 'mcp_usage')) continue;
             const evidenceIds = [...new Set(finding.evidence.map(ref => ref.id))];
-            const records = (input.mcpUsage ?? []).flatMap(row => {
-                const parsed = createStoredReadSchema(UsageMcpBindingUsageSchema).safeParse(row);
-                return parsed.success && evidenceIds.includes(parsed.data.evidenceId) ? [parsed.data] : [];
-            });
+            const records = selectLatestUsageMcpBindingWindows((input.mcpUsage ?? []).filter(row => evidenceIds.includes(row.evidenceId)));
             if (!records.length || records.length !== evidenceIds.length
                 || new Set(records.map(row => row.evidenceId)).size !== records.length
-                || records.some(row => row.coverage !== 'complete' || row.bindings.some(binding => binding.catalogRevision !== catalog.revision))) continue;
+                || records.some(row => row.v !== 2 || row.coverage !== 'complete')) continue;
             const sources = [...new Set(records.map(row => row.sessionId))].map(id => input.sessions.filter(session => session.id === id));
             if (sources.some(sessions => sessions.length !== 1 || sessions[0]!.serverId !== input.serverId
                 || sessions[0]!.access?.capabilities.submitAgentInput !== true)) continue;

@@ -4,6 +4,50 @@ import { bundledUsageModelPriceCatalog } from './usageModelPriceCatalog.js';
 import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { addUsageCostForMode, createEmptyUsageCost } from './usageAggregation.js';
 
+it('reuses the completed cost projection across refreshes with unchanged accounting rows', () => {
+  const tokens = { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 };
+  const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' as const };
+  const raw: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 100, tokens, cost },
+    coverage: { status: 'complete', reasons: [], ranked: [], missingDimensions: [], range: { startMs: 0, endMs: 100, complete: true },
+      sources: [{ source: 'runtime', path: 'runtime', status: 'available', machineId: 'machine', eventCount: 100 }] },
+    contributions: Array.from({ length: 100 }, (_, index) => ({ id: String(index), observedAtMs: index,
+      sessionId: null, turnId: null, agentId: 'claude', modelId: null, machineId: null, projectKey: null,
+      workspaceId: null, source: 'runtime', eventCount: 1, tokens, cost })) };
+  const priced = repriceUsageAnalyticsResponse(raw);
+  const initial = projectUsagePageCost(priced, 'auto');
+  const located = { ...priced, coverage: { ...priced.coverage!, sources: priced.coverage!.sources.map(source => ({ ...source, displayLocation: 'Current machine' })) } };
+  let costReads = 0;
+  for (const row of priced.contributions!) {
+    const cost = row.cost;
+    Object.defineProperty(row, 'cost', { enumerable: true, get() { costReads++; return cost; } });
+  }
+  for (const response of [priced, located]) {
+    expect(repriceUsageAnalyticsResponse(response)).toBe(response);
+    expect(costReads, 'a pending refresh must retain the completed tariff projection').toBe(0);
+    const page = projectUsagePageCost(response, 'auto');
+    expect(page.amountUsd).toBe(100);
+    expect(costReads, 'independent refresh facts cannot re-aggregate settled accounting').toBe(0);
+    expect(page.accounting.contributions).toBe(initial.accounting.contributions);
+    expect(projectUsagePageCost(response, 'auto')).toBe(page);
+    if (response === located) expect(page.accounting.coverage!.sources[0]).toHaveProperty('displayLocation', 'Current machine');
+  }
+  expect(costReads, 'independent refresh facts cannot re-aggregate settled accounting').toBe(0);
+  // Replacing the population invalidates its projection even when all other
+  // fields were copied from a fully priced response.
+  expect(projectUsagePageCost({ ...priced, contributions: priced.contributions!.slice(0, 1) }, 'auto').amountUsd).toBe(1);
+  expect(projectUsagePageCost(priced, 'reported').amountUsd).toBe(100);
+  for (const cost of [
+    { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' as const },
+    { reportedUsd: 2, estimatedUsd: 0, currency: 'EUR', costSource: 'provider_reported' as const },
+  ]) {
+    const partial = repriceUsageAnalyticsResponse({ ...raw, contributions: [raw.contributions![0]!,
+      { ...raw.contributions![1]!, cost }] });
+    const native = projectUsagePageCost(partial, 'auto');
+    const transported = projectUsagePageCost(UsageAnalyticsQueryResponseSchema.parse(JSON.parse(JSON.stringify(partial))), 'auto');
+    expect({ selection: native.selection, amountUsd: native.amountUsd }).toEqual({ selection: transported.selection, amountUsd: transported.amountUsd });
+  }
+});
+
 it('never reclassifies a mixed aggregate with none provenance as reported money', () => {
   const mixed = { reportedUsd: 4, estimatedUsd: 0, currency: 'USD', costSource: 'none' as const };
   expect(resolveUsageCostBasis(mixed, 'reported')).toBeNull();
@@ -177,6 +221,28 @@ it('distinguishes witnessed zero from absent money in the page projection', () =
   });
   expect(projectUsagePageCost(response('none'), 'auto').amountUsd).toBeNull();
   expect(projectUsagePageCost(response('provider_reported'), 'auto').amountUsd).toBe(0);
+});
+
+it('reprojects source money with its leader when older contributions have no witnessed event counts', () => {
+  const tokens = { input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1_000_000 };
+  const cost = { reportedUsd: 0, estimatedUsd: 6, currency: 'USD', costSource: 'pricing_estimate' as const };
+  const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eventCount: 1, tokens, cost },
+    contributions: [{ id: 'old', observedAtMs: 1, sessionId: 'session', turnId: null, agentId: 'claude',
+      modelId: 'priced-model', machineId: null, projectKey: null, workspaceId: null, source: 'runtime',
+      sourceContext: { path: 'runtime', execution: 'happier' }, tokens, cost }],
+    engineTimeline: [{ bucketStartMs: 0, bucketEndMs: 10, leaders: [{ key: 'claude', eventCount: 1, tokens, cost,
+      sources: [{ source: 'runtime', path: 'runtime', execution: 'happier', eventCount: 1, tokens, cost }] }] }],
+  });
+  const result = repriceUsageAnalyticsResponse(response, { v: 1,
+    models: { 'priced-model': { inputUsdPerMillion: 9, outputUsdPerMillion: 0 } },
+    provenance: { source: 'litellm', origin: 'bundled', asOfMs: 1, revision: 'fixture', fetchStatus: 'ready' },
+  });
+  const page = projectUsagePageCost(UsageAnalyticsQueryResponseSchema.parse(result), 'auto');
+  const leader = page.accounting.engineTimeline![0]!.leaders[0]!;
+  expect(page.amountUsd).toBe(9);
+  expect(resolveUsageCostBasis(leader.cost!, 'auto')?.amountUsd).toBe(9);
+  expect(resolveUsageCostBasis(leader.sources![0]!.cost, 'auto')?.amountUsd).toBe(9);
+  expect(leader.sources![0]!.cost.estimatedUsd).toBe(6);
 });
 
 it('does not expose stale aggregate money when a selected API-equivalent bucket is partly unpriced', () => {

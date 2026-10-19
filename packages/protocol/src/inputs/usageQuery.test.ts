@@ -6,6 +6,12 @@ import { resolveEffectiveInputFields } from './inputFieldRuntime.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
 
 describe('shared UsageQuery', () => {
+  it('keeps quota-only demand distinct and out of the accounting transport', () => {
+    const full = normalizeUsageQuery({});
+    const quota = normalizeUsageQuery({ includeAccounting: false });
+    expect(getUsageQueryKey(quota)).not.toBe(getUsageQueryKey(full));
+    expect(usageQueryToAnalyticsRequest(quota)).not.toHaveProperty('includeAccounting');
+  });
   it('keys Session evidence demand without forwarding it to the accounting server', () => {
     const full = normalizeUsageQuery({});
     const accountingOnly = normalizeUsageQuery({ includeSessionEvidence: false, includeWorkEvidence: false, includeInsights: true });
@@ -16,6 +22,15 @@ describe('shared UsageQuery', () => {
     expect(usageQueryToAnalyticsRequest(accountingOnly)).toMatchObject({ includeInsights: true });
     expect(usageQueryToAnalyticsRequest(accountingOnly)).not.toHaveProperty('includeSessionEvidence');
     expect(usageQueryToAnalyticsRequest(accountingOnly)).not.toHaveProperty('includeWorkEvidence');
+  });
+  it('separates transcript demand from Session evidence and keeps it off the accounting transport', () => {
+    const summaryOnly = normalizeUsageQuery({ includeTranscriptEvidence: false });
+    expect(normalizeUsageQuery({}).includeTranscriptEvidence).toBe(true);
+    expect(summaryOnly.includeSessionEvidence).toBe(true);
+    expect(getUsageQueryKey({})).toBe(getUsageQueryKey({ includeTranscriptEvidence: true }));
+    expect(getUsageQueryKey(summaryOnly)).not.toBe(getUsageQueryKey({}));
+    expect(UsageAnalyticsQueryRequestSchema.safeParse(usageQueryToAnalyticsRequest(summaryOnly)).success).toBe(true);
+    expect(usageQueryToAnalyticsRequest(summaryOnly)).not.toHaveProperty('includeTranscriptEvidence');
   });
   it('retains a relative period as semantic input and resolves it at the analytics read clock', () => {
     const now = Date.parse('2026-10-11T20:30:00Z');
