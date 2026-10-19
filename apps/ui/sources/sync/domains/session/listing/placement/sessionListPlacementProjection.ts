@@ -74,14 +74,16 @@ export function projectSessionListPlacement(params: Readonly<{
     if (isPrimarySessionFailure(params.session)) {
         return createPlacement('failed', resolveSessionListPlacementTimestampForReason(params.session, 'failed'));
     }
-    if (runtimeStatus.isOnline && runtimeStatus.backgroundActive) {
-        return createPlacement('working', null);
-    }
+    // A finished turn the person has not read outranks background work: the foreground reply (often a
+    // question) is what is waiting on them. Once read, background work places the session in Working.
     if (isSessionListReadyForReview(params.session)) {
         return createPlacement('ready', resolveSessionListPlacementTimestampForReason(params.session, 'ready'));
     }
     if (params.session.hasUnreadMessages === true) {
         return createPlacement('unread', resolveSessionListPlacementTimestampForReason(params.session, 'unread'));
+    }
+    if (runtimeStatus.isOnline && runtimeStatus.backgroundActive) {
+        return createPlacement('working', null);
     }
 
     const sessionKey = params.sessionKey ?? normalizeSessionListPlacementKey(null, params.session.id);

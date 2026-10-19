@@ -92,25 +92,32 @@ describe('projectSessionListPlacement', () => {
         });
     });
 
-    it('places background activity in Working ahead of Ready after the foreground turn completed', () => {
+    it('places a completed turn awaiting review in Ready ahead of background activity', () => {
+        // The foreground turn ended with a reply the person has not read (often a question), while a
+        // background agent keeps running. That reply is what needs them; the background work does not.
         const nowMs = 10_000;
+        const backgroundActiveCompletedTurn = {
+            active: true,
+            activeAt: nowMs - 180_000,
+            presence: 'online' as const,
+            thinking: false,
+            thinkingAt: 0,
+            latestTurnStatus: 'completed' as const,
+            latestTurnStatusObservedAt: nowMs - 2_000,
+            lastRuntimeIssue: null,
+            runtimeActivityState: 'active' as const,
+            runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: nowMs - 1_000,
+            runtimeActivityRevision: 1,
+        };
 
         expect(projectSessionListPlacement({
             nowMs,
-            session: makeSession({
-                active: true,
-                activeAt: nowMs - 180_000,
-                presence: 'online',
-                thinking: false,
-                thinkingAt: 0,
-                latestTurnStatus: 'completed',
-                latestTurnStatusObservedAt: nowMs - 2_000,
-                lastRuntimeIssue: null,
-                runtimeActivityState: 'active',
-                runtimeActivityActiveCount: 1,
-                runtimeActivityObservedAt: nowMs - 1_000,
-                runtimeActivityRevision: 1,
-            }),
+            session: makeSession(backgroundActiveCompletedTurn),
+        }).kind).toBe('ready');
+        expect(projectSessionListPlacement({
+            nowMs,
+            session: makeSession({ ...backgroundActiveCompletedTurn, lastViewedSessionSeq: 1 }),
         })).toEqual({
             kind: 'working',
             timestamp: null,
@@ -140,6 +147,7 @@ describe('projectSessionListPlacement', () => {
                 runtimeActivityActiveCount: 1,
                 runtimeActivityObservedAt: nowMs - 3_600_000,
                 runtimeActivityRevision: 1,
+                lastViewedSessionSeq: 1,
             }),
         });
 

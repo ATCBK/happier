@@ -580,10 +580,9 @@ describe('buildInboxSessionState', () => {
         expect(state.markAllReadTargets).toEqual([]);
     });
 
-    it('excludes stale terminal pending requests from actionable inbox attention', () => {
-        const session = makeSession({
+    it('keeps a pending request left after a completed turn actionable until its runtime goes offline', () => {
+        const pendingAfterCompletedTurn = {
             active: true,
-            presence: 'online',
             thinking: true,
             thinkingAt: now - 120_000,
             latestTurnStatus: 'completed',
@@ -599,14 +598,19 @@ describe('buildInboxSessionState', () => {
                     },
                 },
             },
-        });
+        } as const;
 
-        const state = buildInboxSessionState({
-            sessions: [session],
+        const liveState = buildInboxSessionState({
+            sessions: [makeSession({ ...pendingAfterCompletedTurn, presence: 'online' })],
+            nowMs: now,
+        });
+        const offlineState = buildInboxSessionState({
+            sessions: [makeSession({ ...pendingAfterCompletedTurn, presence: now - 1_000 })],
             nowMs: now,
         });
 
-        expect(state.sessionsNeedingAttention).toEqual([]);
+        expect(liveState.sessionsNeedingAttention.map((entry) => entry.session.id)).toEqual(['session-1']);
+        expect(offlineState.sessionsNeedingAttention).toEqual([]);
     });
 
     it('excludes hidden system sessions from inbox attention', () => {
