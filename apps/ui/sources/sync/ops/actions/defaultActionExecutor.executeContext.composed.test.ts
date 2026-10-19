@@ -1316,6 +1316,12 @@ describe('withDefaultActionExecuteContext', () => {
             const { createDefaultActionExecutor } = await loadExecutor();
             const outcome = await createDefaultActionExecutor().execute('session.open', input, {
                 serverId, surface, defaultSessionId: 'session-a',
+                ...(surface === 'plugin' ? {
+                    authority: 'account_automation' as const,
+                    actionCaller: { kind: 'plugin' as const, pluginId: 'acme.reviewer', contributionLocalId: 'review',
+                        occurrenceId: 'occurrence-1',
+                        sourceCustody: { kind: 'managed' as const, immutableGenerationId: 'generation-1', installSource: 'npm' as const } },
+                } : {}),
             });
             expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
             expect(opened).toHaveLength(1);
