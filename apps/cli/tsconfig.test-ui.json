@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "node_modules/.cache/tsc/cli.test-ui.typecheck.tsbuildinfo"
+  },
+  "references": [
+    { "path": "./tsconfig.source.json" },
+    { "path": "../ui/tsconfig.source.json" }
+  ],
+  "files": [],
+  "include": [],
+  "exclude": []
+}

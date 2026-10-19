@@ -2,9 +2,10 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { runManagedChildCommand } from '../../../scripts/testing/process/managedChildLifecycle.mjs';
+import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
 import {
   parseVitestListJson,
   shouldVitestShardRunProceedWithoutFiles,
@@ -15,6 +16,8 @@ import {
 } from '../../../scripts/testing/vitestShardOutcomes.mjs';
 import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
 import { resolveMaxOldSpaceSizeMb, upsertMaxOldSpaceSize } from './withNodeHeapLimit.mjs';
+
+const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 
 function parsePositiveInt(raw) {
   const parsed = Number.parseInt(String(raw ?? '').trim(), 10);
@@ -97,9 +100,10 @@ async function listVitestLaneTestFiles({ configPath, nodeOptions, vitestArgs }) 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'happier-cli-vitest-list-'));
   const jsonPath = path.join(tmpDir, 'vitest-files.json');
   try {
+    const vitestCommand = resolveVitestNodeCommand(packageRoot);
     const result = await runManagedChildCommand({
-      command: 'vitest',
-      args: buildVitestListArgs({ configPath, vitestArgs, jsonPath }),
+      command: vitestCommand.command,
+      args: [...vitestCommand.argsPrefix, ...buildVitestListArgs({ configPath, vitestArgs, jsonPath })],
       spawnOptions: {
         env: { ...process.env, NODE_OPTIONS: nodeOptions },
         stdio: 'inherit',
@@ -140,9 +144,10 @@ export async function resolveCliVitestLaneAdmission({
 }
 
 function spawnVitestRun({ configPath, shardSpec, nodeOptions, vitestArgs, allowEmptyShard }) {
+  const vitestCommand = resolveVitestNodeCommand(packageRoot);
   return runManagedChildCommand({
-    command: 'vitest',
-    args: buildVitestShardArgs({ configPath, shardSpec, vitestArgs, allowEmptyShard }),
+    command: vitestCommand.command,
+    args: [...vitestCommand.argsPrefix, ...buildVitestShardArgs({ configPath, shardSpec, vitestArgs, allowEmptyShard })],
     spawnOptions: {
       env: {
         ...process.env,

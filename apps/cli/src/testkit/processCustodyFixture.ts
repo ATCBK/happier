@@ -1,19 +1,19 @@
-import { execFile } from 'node:child_process';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
-import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { execOrThrow, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { resolveNativeCustodyTarget } from '../test-setup';
 
-/** Stage the current source-native helper at the real runtime asset boundary. */
+/** Stage the prepared checkout-native helper at the real runtime asset boundary. */
 export async function createProcessCustodyFixture(input: Readonly<{ repoRoot?: string }> = {}): Promise<() => Promise<void>> {
     const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
     const scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-process-custody-fixture-')));
     const payload = join(scratch, 'native');
     try {
-        await stageProcessCustodyRuntime({ repoRoot: input.repoRoot ?? resolve('../..'), payloadDir: payload,
-            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
-            runCommand: async (command, args, options) => { await promisify(execFile)(command, args, { cwd: options?.cwd, env: options?.env }); },
+        const repoRoot = input.repoRoot ?? resolve('../..');
+        const { target, executablePath } = resolveNativeCustodyTarget(join(repoRoot, 'apps', 'cli'));
+        await stageProcessCustodyRuntime({ repoRoot, payloadDir: payload, target,
+            prebuiltExecutablePath: executablePath, runCommand: execOrThrow,
         });
         Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
     } catch (error) { await rm(scratch, { recursive: true, force: true }); throw error; }

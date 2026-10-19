@@ -6,15 +6,18 @@ type BuildLockContext = Readonly<{
   heldLockValue: string
 }>
 
-type EnsureBuildArtifactsReadyOnceOptions = {
+type CliTestBuildLockOptions = {
   lockPath: string
-  markerPaths: readonly string[]
   lockLabel: string
-  runBuild: (context: BuildLockContext) => Promise<void> | void
-  isReady?: () => boolean | Promise<boolean>
   timeoutMs?: number
   pollIntervalMs?: number
   staleAfterMs?: number
+}
+
+type EnsureBuildArtifactsReadyOnceOptions = CliTestBuildLockOptions & {
+  markerPaths: readonly string[]
+  runBuild: (context: BuildLockContext) => Promise<void> | void
+  isReady?: () => boolean | Promise<boolean>
 }
 
 const DEFAULT_BUILD_LOCK_TIMEOUT_MS = readPositiveIntegerEnv('HAPPIER_CLI_TEST_BUILD_LOCK_TIMEOUT_MS', 240_000)
@@ -46,23 +49,16 @@ async function buildArtifactsAreReady(
   return buildMarkersExist(markerPaths)
 }
 
-export async function ensureBuildArtifactsReadyOnce(
-  options: EnsureBuildArtifactsReadyOnceOptions,
-): Promise<void> {
+export async function withCliTestBuildLock<T>(
+  options: CliTestBuildLockOptions,
+  work: (context: BuildLockContext) => Promise<T> | T,
+): Promise<T> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_BUILD_LOCK_TIMEOUT_MS
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_BUILD_LOCK_POLL_INTERVAL_MS
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_BUILD_LOCK_STALE_AFTER_MS
 
-  await withWorkspaceBundleLock(
-    async ({ heldLockValue }) => {
-      // Existing outputs are trustworthy only while the canonical publication lock is held.
-      if (await buildArtifactsAreReady(options.markerPaths, options.isReady)) return
-
-      await options.runBuild({ heldLockValue })
-      if (!(await buildArtifactsAreReady(options.markerPaths, options.isReady))) {
-        throw new Error(`CLI ${options.lockLabel} build completed, but required outputs are still not ready`)
-      }
-    },
+  return await withWorkspaceBundleLock(
+    work,
     {
       lockPath: options.lockPath,
       heldLockValue: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
@@ -72,4 +68,18 @@ export async function ensureBuildArtifactsReadyOnce(
       errorLabel: `${options.lockLabel} lock`,
     },
   )
+}
+
+export async function ensureBuildArtifactsReadyOnce(
+  options: EnsureBuildArtifactsReadyOnceOptions,
+): Promise<void> {
+  await withCliTestBuildLock(options, async ({ heldLockValue }) => {
+    // Existing outputs are trustworthy only while the canonical publication lock is held.
+    if (await buildArtifactsAreReady(options.markerPaths, options.isReady)) return
+
+    await options.runBuild({ heldLockValue })
+    if (!(await buildArtifactsAreReady(options.markerPaths, options.isReady))) {
+      throw new Error(`CLI ${options.lockLabel} build completed, but required outputs are still not ready`)
+    }
+  })
 }

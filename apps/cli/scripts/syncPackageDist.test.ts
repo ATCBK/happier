@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { createTempDirSync } from '../src/testkit/fs/tempDir';
-import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE, withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 import { atomicPromoteDirectorySync, syncPackageDist } from './syncPackageDist.mjs';
 
 const workspaceBundleLockModulePath = fileURLToPath(
@@ -63,6 +63,7 @@ describe('syncPackageDist', () => {
       expect(() =>
         syncPackageDist({
           packageRoot,
+          repoRoot: packageRoot,
           cpSync() {
             throw new Error('copy failed');
           },
@@ -79,7 +80,7 @@ describe('syncPackageDist', () => {
     }
   });
 
-  it('waits for the shared CLI build lock before promoting package-dist', async () => {
+  it('preserves package-dist while another shared CLI build owns the lock', async () => {
     const packageRoot = createTempDirSync('happier-cli-sync-package-dist-lock-');
     try {
       const distDir = join(packageRoot, 'dist');
@@ -101,7 +102,8 @@ describe('syncPackageDist', () => {
               lockPollIntervalMs: 10,
               lockStaleAfterMs: 1_000,
             }),
-          ).toThrow(/Timed out waiting for workspace bundle lock/);
+          ).toThrow(expect.objectContaining({ code: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+            ? WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE : WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE }));
           expect(readFileSync(join(packageDistDir, 'index.mjs'), 'utf8')).toBe('export const previous = true;\n');
         },
         {

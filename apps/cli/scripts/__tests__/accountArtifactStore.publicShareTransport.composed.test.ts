@@ -17,11 +17,25 @@ const persistence = vi.hoisted(() => {
     isConsentRequired: false, createdAt: new Date(1), updatedAt: new Date(1),
   };
   const tx = {
+    homeSettings: { findUnique: async () => null },
+    homeGovernancePolicy: { findUnique: async () => null },
     artifact: { findFirst: async () => ({ id: artifactId }) },
     publicSessionShare: {
       findUnique: async () => state.removed ? null : share,
       findMany: async () => state.removed ? [] : [share],
       deleteMany: async () => { state.removed = true; return { count: 1 }; },
+    },
+    $queryRaw: async (query: TemplateStringsArray) => {
+      if (query.join('') !== 'SHOW statement_timeout') throw new Error('Unexpected transaction setting read');
+      return [{ statement_timeout: '0' }];
+    },
+    $executeRaw: async (query: TemplateStringsArray) => {
+      if (query.join('') !== 'SET TRANSACTION READ ONLY') throw new Error('Unexpected transaction mode');
+      return 0;
+    },
+    $executeRawUnsafe: async (query: string) => {
+      if (!/^SET LOCAL statement_timeout = \d+$/.test(query)) throw new Error('Unexpected transaction setting write');
+      return 0;
     },
     $queryRawUnsafe: async () => [{ cursor: 1 }],
   };
@@ -63,8 +77,8 @@ describe('Account Artifact public-link HTTP transport', () => {
         actionId: 'artifact.public_link.revoke',
         input: { artifactId: persistence.share.artifactId, shareId: persistence.share.id },
       })).catch((error: unknown) => error);
-      expect(deleteResponse).toEqual({ status: 200, body: { success: true } });
       expect(result).toMatchObject({ revoked: true });
+      expect(deleteResponse).toEqual({ status: 200, body: { success: true } });
       expect(persistence.state.removed).toBe(true);
       const after = await app.inject({ method: 'GET', url: '/v1/public-shares/lookup/content' });
       expect(after.statusCode).toBe(404);

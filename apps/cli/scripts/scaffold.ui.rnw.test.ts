@@ -11,8 +11,11 @@ import {
   createSurfaceContextFixture,
 } from '@happier-dev/plugin-sdk/testing';
 import type { RenderContext, RenderSurface, SurfaceContext } from '@happier-dev/plugin-sdk/ui';
-import { buildUiSurfaceTargets } from '@happier-dev/plugin-sdk/ui/build';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  discoverExecutablePluginUiArtifacts,
+  discoverHostedStaticPluginUiArtifacts,
+} from '../../../packages/plugin-sdk/src/ui/build/manifestArtifactDiscovery';
 
 // This renderer adapter is intentionally private to Plugin UI. It is used
 // only by this first-party generator integration test to mount emitted RNW
@@ -31,30 +34,29 @@ vi.mock('@happier-dev/plugin-sdk/ui/client', () => hostedClient);
 
 type GeneratedPluginModule = Readonly<{
   manifest: unknown;
-  mainSurface: Parameters<typeof buildUiSurfaceTargets>[0];
 }>;
 type GeneratedReactNativeSurfaceModule = Readonly<{ renderSurface: RenderSurface }>;
 async function importGeneratedModule<TModule>(path: string): Promise<TModule> {
   return await import(pathToFileURL(path).href) as TModule;
 }
 
-function resolveGeneratedUiEntry(
+async function resolveGeneratedUiEntry(
   sourceEntryPath: string,
   uiEntryPath: string,
-  mainSurface: Parameters<typeof buildUiSurfaceTargets>[0],
-): Readonly<{
-  entryPath: string;
-  target: ReturnType<typeof buildUiSurfaceTargets>[number];
-}> {
-  const targets = buildUiSurfaceTargets(mainSurface);
+  manifest: unknown,
+) {
+  const projectRoot = dirname(dirname(sourceEntryPath));
+  const manifestPath = join(projectRoot, 'test-manifest.json');
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const targets = [
+    ...await discoverExecutablePluginUiArtifacts(projectRoot, manifestPath, ['happier-source']),
+    ...await discoverHostedStaticPluginUiArtifacts(projectRoot, manifestPath),
+  ];
   expect(targets).toHaveLength(1);
   const target = targets[0];
-  if (!target) throw new Error('Generated UI surface must declare one executable build target.');
+  if (!target) throw new Error('Generated UI surface must declare one artifact.');
 
-  // Build-target entries are project-root-relative. The generated source entry
-  // lives at `src/index.ts`, so resolve the declared target from its project
-  // root rather than implicitly re-rooting it at `src/`.
-  const entryPath = join(dirname(dirname(sourceEntryPath)), target.entry);
+  const entryPath = 'entryPath' in target ? target.entryPath : join(target.sourceRoot, 'entry.ts');
   expect(entryPath).toBe(uiEntryPath);
   return { entryPath, target };
 }
@@ -83,15 +85,15 @@ describe('generated scaffold UI products', () => {
         }),
       ]));
 
-      const { entryPath, target } = resolveGeneratedUiEntry(
+      const { entryPath, target } = await resolveGeneratedUiEntry(
         scaffold.sourceEntryPath,
         scaffold.uiEntryPath,
-        plugin.mainSurface,
+        manifest,
       );
       expect(target).toMatchObject({
-        kind: 'reactNative',
-        rendererId: 'main-renderer',
-        entry: 'src/ui/renderSurface.tsx',
+        artifactId: 'main-renderer',
+        entryPath: join(dirname(dirname(scaffold.sourceEntryPath)), 'src/ui/renderSurface.tsx'),
+        requestedExports: ['renderSurface'],
       });
       const generatedSurface = await importGeneratedModule<GeneratedReactNativeSurfaceModule>(entryPath);
       expect(generatedSurface.renderSurface).toEqual(expect.any(Function));
@@ -137,10 +139,10 @@ describe('generated scaffold UI products', () => {
 
       const plugin = await importGeneratedModule<GeneratedPluginModule>(scaffold.sourceEntryPath);
       const manifest = PluginManifestV2Schema.parse(plugin.manifest);
-      const { entryPath } = resolveGeneratedUiEntry(
+      const { entryPath } = await resolveGeneratedUiEntry(
         scaffold.sourceEntryPath,
         scaffold.uiEntryPath,
-        plugin.mainSurface,
+        manifest,
       );
       await writeFile(entryPath, [
         "import * as React from 'react';",
@@ -228,12 +230,15 @@ describe('generated scaffold UI products', () => {
       if (!scaffold.ok || !scaffold.uiEntryPath) return;
 
       const plugin = await importGeneratedModule<GeneratedPluginModule>(scaffold.sourceEntryPath);
-      const { entryPath, target } = resolveGeneratedUiEntry(
+      const { entryPath, target } = await resolveGeneratedUiEntry(
         scaffold.sourceEntryPath,
         scaffold.uiEntryPath,
-        plugin.mainSurface,
+        plugin.manifest,
       );
-      expect(target).toEqual({ rendererId: 'main-renderer', entry: 'src/ui/index.ts', kind: 'hostedWeb' });
+      expect(target).toEqual({
+        artifactId: 'main-renderer',
+        sourceRoot: join(dirname(dirname(scaffold.sourceEntryPath)), '.happier-plugin/ui/hosted-web/main-renderer'),
+      });
 
       await importGeneratedModule(entryPath);
       await vi.waitFor(() => {

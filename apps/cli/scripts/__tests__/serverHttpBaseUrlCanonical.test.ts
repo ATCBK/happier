@@ -26,7 +26,7 @@ describe('CLI server HTTP base URL canonical helper', () => {
     const promptArtifactStore = readCliSource('agent/prompts/library/resolveCliPromptStackSystemAppendBlocks.ts');
 
     for (const source of [approvalArtifactStore, promptArtifactStore]) {
-      expect(source).toContain("import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';");
+      expect(source).toMatch(/import\s*\{[^}]*\bresolveServerHttpBaseUrl\b[^}]*\}\s*from\s*['"]@\/api\/client\/serverHttpBaseUrl['"]/u);
       expect(source).not.toMatch(/function\s+resolveServerHttpBaseUrl\s*\(/);
       expect(source).not.toContain('resolveLoopbackHttpUrl(configuration.apiServerUrl)');
     }

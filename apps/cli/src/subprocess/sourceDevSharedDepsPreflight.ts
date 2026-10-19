@@ -16,6 +16,7 @@ import {
 } from 'node:path';
 
 import { projectPath } from '@/projectPath';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import {
   buildHappyCliSubprocessInvocation,
   type HappyCliSubprocessInvocation,
@@ -39,6 +40,7 @@ type SourceDevSharedDepsProgress = Readonly<{
 }>;
 type RunSyncProcess = (input: Readonly<{
   scriptPath: string;
+  signal?: AbortSignal;
   checkOnly?: boolean;
   timeoutMs: number;
   lockTimeoutMs: number;
@@ -202,6 +204,7 @@ function formatSourceDevPreflightProcessError(params: Readonly<{
 
 async function runSourceDevSharedDepsSyncProcess(params: Readonly<{
   scriptPath: string;
+  signal?: AbortSignal;
   checkOnly?: boolean;
   timeoutMs: number;
   lockTimeoutMs: number;
@@ -211,6 +214,7 @@ async function runSourceDevSharedDepsSyncProcess(params: Readonly<{
   processEnv: SourceDevSharedDepsProcessEnv;
   onProgress: (progress: SourceDevSharedDepsProgress) => void;
 }>): Promise<void> {
+  params.signal?.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -230,12 +234,11 @@ async function runSourceDevSharedDepsSyncProcess(params: Readonly<{
     let lastProgress: SourceDevSharedDepsProgress | null = null;
     let timedOut = false;
     let settled = false;
-    let forceKillTimer: NodeJS.Timeout | null = null;
+    let termination: Promise<void> | null = null;
     const killChild = () => {
-      child.kill('SIGTERM');
-      forceKillTimer = setTimeout(() => {
-        child.kill('SIGKILL');
-      }, 5_000);
+      termination ??= terminateProcessTree(child, {
+        graceMs: 5_000,
+      }).catch(error => { finish(() => reject(error)); });
     };
     const consumeProgressLines = createProgressLineConsumer((progress) => {
       lastProgress = progress;
@@ -250,7 +253,7 @@ async function runSourceDevSharedDepsSyncProcess(params: Readonly<{
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
+      params.signal?.removeEventListener('abort', killChild);
       callback();
     };
 
@@ -263,8 +266,13 @@ async function runSourceDevSharedDepsSyncProcess(params: Readonly<{
     child.once('error', (error) => {
       finish(() => reject(error));
     });
-    child.once('close', (exitCode, signal) => {
+    child.once('close', async (exitCode, signal) => {
+      await termination;
       finish(() => {
+        if (params.signal?.aborted) {
+          reject(params.signal.reason);
+          return;
+        }
         if (timedOut) {
           const outputTail = output.trim();
           const lastProgressMessage = formatSourceDevSharedDepsLastProgress(lastProgress);
@@ -287,11 +295,13 @@ async function runSourceDevSharedDepsSyncProcess(params: Readonly<{
         }));
       });
     });
+    params.signal?.addEventListener('abort', killChild, { once: true });
   });
 }
 
 async function runSourceDevSharedDepsSync(params: Readonly<{
   scriptPath: string;
+  signal?: AbortSignal;
   checkOnly?: boolean;
   runSyncProcess: RunSyncProcess;
   processEnv: SourceDevSharedDepsProcessEnv;
@@ -333,6 +343,7 @@ async function runSourceDevSharedDepsSync(params: Readonly<{
     params.logDebug?.(params.beforeLogMessage);
     await params.runSyncProcess({
       scriptPath: params.scriptPath,
+      ...(params.signal ? { signal: params.signal } : {}),
       ...(params.checkOnly ? { checkOnly: true } : {}),
       timeoutMs: params.timeoutMs,
       lockTimeoutMs: params.lockTimeoutMs,
@@ -673,6 +684,7 @@ export function normalizeBundledWorkspaceNameFromPackageName(packageName: string
 
 export async function prepareSourceDevSharedDepsForHappyCliSpawn(params: Readonly<{
   args: readonly string[];
+  signal?: AbortSignal;
   launchOptions?: HappyCliSubprocessLaunchOptions;
   logDebug?: (message: string, payload?: unknown) => void;
   cliProjectPath?: string;
@@ -716,6 +728,7 @@ export async function prepareSourceDevSharedDepsForHappyCliSpawn(params: Readonl
 
     return await runSourceDevSharedDepsSync({
       scriptPath,
+      ...(params.signal ? { signal: params.signal } : {}),
       checkOnly: true,
       runSyncProcess,
       processEnv: process.env,
@@ -742,6 +755,7 @@ export async function prepareSourceDevSharedDepsForHappyCliSpawn(params: Readonl
 
 export async function prepareSourceDevSharedDepsForBundledPluginRuntimeLoad(params: Readonly<{
   packageName: string;
+  signal?: AbortSignal;
   workspaceNames?: readonly string[];
   admittedCopyOnly?: boolean;
   logDebug?: (message: string, payload?: unknown) => void;
@@ -783,6 +797,7 @@ export async function prepareSourceDevSharedDepsForBundledPluginRuntimeLoad(para
 
   return await runSourceDevSharedDepsSync({
     scriptPath,
+    ...(params.signal ? { signal: params.signal } : {}),
     runSyncProcess: params.runSyncProcess ?? runSourceDevSharedDepsSyncProcess,
     processEnv: params.processEnv ?? process.env,
     timeoutMs: params.timeoutMs ?? SOURCE_DEV_PREFLIGHT_PROCESS_TIMEOUT_MS,

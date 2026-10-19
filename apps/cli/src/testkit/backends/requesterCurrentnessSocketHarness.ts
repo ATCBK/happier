@@ -7,8 +7,23 @@ import { UpdateBodySchema } from '@happier-dev/protocol/updates';
 import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 const createUserScopedSocketConnection = sockets.createUserScopedSocketConnection;
 
+export type RequesterCurrentnessSocketHarness = Readonly<{
+    server: Server;
+    clients: Socket[];
+    disconnect(): Promise<void>;
+    reconnect(): Promise<void>;
+    pushProfile(accountId: string): Promise<void>;
+    pushSettings(accountId: string, settings: unknown, version: number): Promise<void>;
+    hintSettings(settingsVersion: number): Promise<void>;
+    hintAccountChange(): Promise<void>;
+    pushInvalidCurrentness(accountId: string): Promise<void>;
+    pushInvalidSettings(accountId: string): Promise<void>;
+    push(accountId: string, currentness: unknown): Promise<void>;
+    close(): Promise<void>;
+}>;
+
 /** Real Socket.IO channel; only the network endpoint is redirected from Home to loopback. */
-export async function createRequesterCurrentnessSocketHarness() {
+export async function createRequesterCurrentnessSocketHarness(): Promise<RequesterCurrentnessSocketHarness> {
     const http = createServer();
     const server = new Server(http, { path: '/v1/updates' });
     await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
@@ -51,6 +66,9 @@ export async function createRequesterCurrentnessSocketHarness() {
         },
         async hintSettings(settingsVersion: number) {
             await deliver(UpdateBodySchema.parse({ t: 'account-settings-changed', settingsVersion }));
+        },
+        async hintAccountChange() {
+            await deliver(UpdateBodySchema.parse({ t: 'account-change' }));
         },
         pushInvalidCurrentness: async (accountId: string) => await deliver({ t: 'update-account', id: accountId,
             encryptionCurrentness: { mode: 'unknown' } }),

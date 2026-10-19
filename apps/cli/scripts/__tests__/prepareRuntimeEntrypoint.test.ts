@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createTempDirSync } from '../../src/testkit/fs/tempDir';
 import { maybeRefreshLocalBundledWorkspacePackages, prepareRuntimeEntrypoint } from '../../bin/_prepareRuntimeEntrypoint.mjs';
-import { withWorkspaceBundleLock } from '../../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, withWorkspaceBundleLock } from '../../../../scripts/workspaces/workspaceBundleLock.mjs';
 import { resolveSourceDevSharedDepsStampPath } from '../../../../scripts/workspaces/sourceDevReadiness.mjs';
 import cliDistBuildManifest from '@happier-dev/cli-common/cliDistBuildManifest';
 
@@ -309,7 +309,7 @@ describe('maybeRefreshLocalBundledWorkspacePackages', () => {
     }
   });
 
-  it('waits for a live shared-dependency writer and refreshes after it releases the lock', async () => {
+  it('preserves a live shared-dependency writer and refreshes after it releases the lock', async () => {
     const repoRoot = createTempDirSync('happier-cli-prepare-entrypoint-lock-');
     try {
       const projectRoot = resolve(repoRoot, 'apps', 'cli');
@@ -349,6 +349,13 @@ describe('maybeRefreshLocalBundledWorkspacePackages', () => {
       let waitWatcher: ReturnType<typeof watch> | undefined;
       await withWorkspaceBundleLock(
         async () => {
+          if (process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0') {
+            await expect(maybeRefreshLocalBundledWorkspacePackages(projectRoot, {
+              lockModulePath: observedLockModulePath, lockPath,
+            })).rejects.toMatchObject({ code: WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE });
+            expect(existsSync(syncCalledPath)).toBe(false);
+            return;
+          }
           const waiting = new Promise<void>((resolveWaiting) => {
             waitWatcher = watch(resolve(repoRoot, '.project', 'tmp'), () => {
               if (existsSync(waitingPath)) resolveWaiting();
@@ -375,7 +382,10 @@ describe('maybeRefreshLocalBundledWorkspacePackages', () => {
           staleAfterMs: 1_000,
         },
       );
-      await refresh;
+      if (refresh) await refresh;
+      else await maybeRefreshLocalBundledWorkspacePackages(projectRoot, {
+        lockModulePath: observedLockModulePath, lockPath,
+      });
       expect(existsSync(syncCalledPath)).toBe(true);
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });

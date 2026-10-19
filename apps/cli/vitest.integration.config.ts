@@ -2,6 +2,7 @@ import { configDefaults, defineConfig } from 'vitest/config'
 import { fileURLToPath } from 'node:url'
 
 import dotenv from 'dotenv'
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs'
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating'
 import {
     workspacePackageOptimizationExcludes,
@@ -57,7 +58,8 @@ export default defineConfig({
                 singleFork: true,
             },
         },
-        setupFiles: ['./src/configureZodLocale.ts'],
+        setupFiles: [fileURLToPath(new URL('../../scripts/testing/vitestHomeSetup.mjs', import.meta.url)), './src/configureZodLocale.ts', './src/vitestHomeGuard.ts'],
+        sequence: { setupFiles: 'list' },
         include: [
             'src/**/*.integration.test.ts',
             'src/**/*.real.integration.test.ts',
@@ -67,6 +69,7 @@ export default defineConfig({
         ],
         exclude: [
             ...configDefaults.exclude,
+            '**/._*',
             ...resolveVitestFeatureTestExcludeGlobs(process.env),
             ...(process.env.HAPPIER_RUN_MUTAGEN_REAL_INTEGRATION === '1'
                 ? []
@@ -96,6 +99,7 @@ export default defineConfig({
         },
         env: {
             ...mergedTestEnv,
+            ...createTestHomeEnvironment().env,
         }
     },
     optimizeDeps: {

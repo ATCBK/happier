@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { createTempDirSync } from '../src/testkit/fs/tempDir';
-import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE, withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 import { main, resolveDistDir } from './rmDist.mjs';
 
 const workspaceBundleLockModulePath = fileURLToPath(
@@ -61,7 +61,7 @@ describe('rmDist', () => {
     }
   });
 
-  it('waits for the shared CLI build lock before removing dist', async () => {
+  it('preserves dist while another shared CLI build owns the lock', async () => {
     const rootDir = createTempDirSync('happier-cli-rm-dist-lock-');
     const originalCwd = process.cwd();
     try {
@@ -81,7 +81,9 @@ describe('rmDist', () => {
               lockPollIntervalMs: 10,
               lockStaleAfterMs: 1_000,
             }),
-          ).rejects.toThrow(/Timed out waiting for workspace bundle lock/);
+          ).rejects.toMatchObject({ code: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+            ? WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE : WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE });
+          expect(existsSync(join(rootDir, 'dist'))).toBe(true);
           expect(existsSync(join(rootDir, 'package-dist', 'index.mjs'))).toBe(true);
         },
         {

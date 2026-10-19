@@ -97,6 +97,9 @@ function createSandboxArtifactPublisher(sandbox: Sandbox) {
   return async ({ workspaceNames = [] }: { workspaceNames?: readonly string[] }) => {
     for (const workspaceName of workspaceNames) {
       if (workspaceName !== PLUGIN_WORKSPACE_NAME) continue;
+      // The generator process owns Plugin compilation before publication. Keep
+      // that boundary's failure contract when substituting this fixture process.
+      await createSandboxWorkspaceCompiler(sandbox)(sandbox.repoRoot, [PLUGIN_PACKAGE_NAME]);
       stagePluginPackage(sandbox);
     }
     return true;

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -20,17 +20,14 @@ import {
   writeWorkspacePackageFixture,
 } from './testkit/packageLayoutSandbox';
 import { writeSandboxTextFile } from './testkit/cliBinPreflightSandbox';
-import { installNativeAdmissionFixture } from '../../../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture, installWorkspaceAdmissionProcessAdapter } from '../../../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 import { defaultWorkspaceBuildBoundary, ensureWorkspacePackagesBuiltByName as ensurePackages } from '../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { withWorkspaceBundleLock } from '../../../../scripts/workspaces/workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from '../../../../scripts/workspaces/workspacePackageBuildLock.mjs';
+import { bundleWorkspacePackageDependencies } from '../../../../scripts/workspaces/bundleWorkspacePackageDependencies.mjs';
 
 const execFileAsync = promisify(execFile);
-
-// Prepare the real implementation graph before fixture case clocks begin. A cold
-// cli-common dependency build belongs to suite setup, not a target sandbox test.
-await loadCliCommonWorkspacesModule(resolve(import.meta.dirname, '../../../..'));
 
 describe('bundleWorkspaceDeps', () => {
   it.skipIf(process.platform !== 'linux')('prepares packages unreserved before owning the runtime copy lease', async () => {
@@ -38,7 +35,6 @@ describe('bundleWorkspaceDeps', () => {
     const cancellation = new AbortController();
     let publication: Promise<void> | undefined;
     let restoreSpawn: (() => void) | undefined;
-    let fixtureBinDir = '';
     try {
       const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: sandbox.repoRoot });
       const repoRoot = join(sandbox.repoRoot, 'native-owner');
@@ -57,16 +53,6 @@ describe('bundleWorkspaceDeps', () => {
         rmSync(join(repoRoot, 'packages', name, 'dist'), { recursive: true, force: true });
       }
       const sourceRoot = fileURLToPath(new URL('../../../../', import.meta.url));
-      const childProcess = createRequire(import.meta.url)('node:child_process') as typeof import('node:child_process');
-      const originalSpawn = childProcess.spawn;
-      const canonicalLauncher = join(sourceRoot, 'apps/stack/bin/hstack-exec');
-      childProcess.spawn = ((command, args, options) => originalSpawn(command === canonicalLauncher ? launcher : command,
-        args?.map(value => value === canonicalLauncher ? launcher : value), {
-          ...options,
-          ...(options?.env ? { env: { ...options.env, PATH: `${fixtureBinDir}:${options.env.PATH ?? ''}` } } : {}),
-        })) as typeof childProcess.spawn;
-      syncBuiltinESMExports();
-      restoreSpawn = () => { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); };
       const sourceScript = join(sourceRoot, 'apps/cli/scripts/bundleWorkspaceDeps.mjs');
       const fixtureScript = join(happyCliDir, 'scripts/bundleWorkspaceDeps.mjs');
       mkdirSync(dirname(fixtureScript), { recursive: true });
@@ -75,8 +61,10 @@ describe('bundleWorkspaceDeps', () => {
       writeFileSync(fixtureScript, readFileSync(sourceScript, 'utf8').replace(/from '([^']+)'/gu, (match, specifier: string) =>
         specifier.startsWith('.') ? `from ${JSON.stringify(pathToFileURL(resolve(dirname(sourceScript), specifier)).href)}` : match));
       const compiler = join(sandbox.repoRoot, 'compiler.mjs');
-      const helperEntry = pathToFileURL(join(sourceRoot, 'packages/cli-common/dist/workspaces/index.js')).href;
-      writeFileSync(compiler, `import { mkdirSync, writeFileSync } from 'node:fs'; import { join } from 'node:path';
+      const compilationRecord = join(sandbox.repoRoot, 'compilation-record.jsonl');
+      const helperEntry = pathToFileURL(join(sourceRoot, 'packages/cli-common/src/workspaces/index.ts')).href;
+      writeFileSync(compiler, `import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'; import { join } from 'node:path';
+appendFileSync(${JSON.stringify(compilationRecord)}, JSON.stringify(JSON.parse(readFileSync('package.json', 'utf8')).name) + '\\n');
 const output = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR;
 mkdirSync(join(output, 'workspaces'), { recursive: true });
 writeFileSync(join(output, 'index.js'), 'export const ready = true;\\n');
@@ -87,9 +75,9 @@ writeFileSync(join(output, 'workspaces/index.js'), ${JSON.stringify(`export * fr
       const memoryObservations = join(sandbox.repoRoot, 'memory-observations');
       writeFileSync(memory, '1 73400320\n');
       const { binDir } = writeFakeBin({ root: repoRoot, binDirName: 'node_modules/.bin', name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) /usr/bin/awk \'{print $1, $2}\' "$FIXTURE_MEMORY" | /usr/bin/tee -a "$FIXTURE_MEMORY_OBSERVATIONS" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
-      fixtureBinDir = binDir;
+      restoreSpawn = installWorkspaceAdmissionProcessAdapter({ launcher, binDir });
       writeFakeBin({ root: repoRoot, binDirName: 'node_modules/.bin', name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-      const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, npm_execpath: compiler, CI: '', FIXTURE_MEMORY: memory, FIXTURE_MEMORY_OBSERVATIONS: memoryObservations,
+      const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${binDir}:${process.env.PATH}`, npm_execpath: compiler, CI: '', FIXTURE_MEMORY: memory, FIXTURE_MEMORY_OBSERVATIONS: memoryObservations,
         HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]',
         HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
       const adapter = await import(pathToFileURL(fixtureScript).href);
@@ -119,14 +107,54 @@ writeFileSync(join(output, 'workspaces/index.js'), ${JSON.stringify(`export * fr
       await publication;
       expect(readFileSync(join(happyCliDir, 'node_modules/@happier-dev/protocol/dist/index.js'), 'utf8')).toContain('ready = true');
       expect(existsSync(copyLock)).toBe(false);
+      const compiledNames = () => readFileSync(compilationRecord, 'utf8').trim().split('\n').map(value => JSON.parse(value));
+      const beforeArtifact = compiledNames().length;
+      await adapter.bundleWorkspaceDeps({ repoRoot, happyCliDir, env, publicationMode: 'artifact', ensureWorkspacePackagesBuiltByName: ensure });
+      expect(compiledNames().slice(beforeArtifact)).toEqual(['@happier-dev/protocol']);
+      // The non-forced implementation admission must still repair stale source;
+      // only the selected runtime package is unconditionally rebuilt for packing.
+      writeFileSync(join(packageDir, 'src/index.ts'), 'export const changedImplementation = true;\n');
+      const beforeChangedHelper = compiledNames().length;
+      await adapter.bundleWorkspaceDeps({ repoRoot, happyCliDir, env, publicationMode: 'artifact', ensureWorkspacePackagesBuiltByName: ensure });
+      expect(compiledNames().slice(beforeChangedHelper)).toEqual(['@happier-dev/cli-common', '@happier-dev/protocol']);
+      // Package-local publishers consume the same implementation owner. An
+      // artifact target forces its runtime package, not an already-current tool.
+      const beforeGenericArtifact = compiledNames().length;
+      await bundleWorkspacePackageDependencies({ repoRoot, hostPackageDir: happyCliDir, env,
+        publicationMode: 'artifact', ensureWorkspacePackagesBuiltByName: ensure });
+      expect(compiledNames().slice(beforeGenericArtifact)).toEqual(['@happier-dev/protocol']);
+      writeFileSync(join(packageDir, 'src/index.ts'), 'export const changedGenericImplementation = true;\n');
+      const beforeChangedGenericHelper = compiledNames().length;
+      await bundleWorkspacePackageDependencies({ repoRoot, hostPackageDir: happyCliDir, env,
+        publicationMode: 'artifact', ensureWorkspacePackagesBuiltByName: ensure });
+      expect(compiledNames().slice(beforeChangedGenericHelper)).toEqual(['@happier-dev/cli-common', '@happier-dev/protocol']);
       writeWorkspacePackageFixture({ repoRoot, workspacePath: 'packages/extra', packageName: '@happier-dev/extra',
         files: { 'dist/index.js': 'export const selectedAfterWait = true;\n' } });
+      const copyWaitObserved = join(sandbox.repoRoot, 'copy-wait-observed');
+      // This ordinary waiter is a separate physical worker, not the charged
+      // Vitest process. Keep native admission/leases real in that worker.
+      const copyWorker = `
+import { writeFileSync } from 'node:fs';
+import { installWorkspaceAdmissionProcessAdapter } from ${JSON.stringify(pathToFileURL(join(sourceRoot, 'apps/stack/scripts/testkit/core/native_admission_fixture.mjs')).href)};
+import { defaultWorkspaceBuildBoundary, ensureWorkspacePackagesBuiltByName } from ${JSON.stringify(pathToFileURL(join(sourceRoot, 'scripts/workspaces/ensureWorkspacePackagesBuilt.mjs')).href)};
+import { bundleWorkspaceDeps } from ${JSON.stringify(pathToFileURL(fixtureScript).href)};
+const restore = installWorkspaceAdmissionProcessAdapter(${JSON.stringify({ launcher, binDir })});
+try {
+  await bundleWorkspaceDeps({ repoRoot: ${JSON.stringify(repoRoot)}, happyCliDir: ${JSON.stringify(happyCliDir)}, env: process.env,
+    ensureWorkspacePackagesBuiltByName: (root, names, options) => ensureWorkspacePackagesBuiltByName(root, names, {
+      ...options, workspaceBuildBoundary: { ...defaultWorkspaceBuildBoundary, workerLauncherPath: ${JSON.stringify(launcher)} },
+    }),
+    onWait: () => writeFileSync(${JSON.stringify(copyWaitObserved)}, 'waiting'),
+  });
+} finally { restore(); }
+`;
       await withWorkspaceBundleLock(async () => {
-        let observeWait: () => void = () => undefined;
-        const waited = new Promise<void>(resolveWait => { observeWait = resolveWait; });
-        publication = adapter.bundleWorkspaceDeps({ repoRoot, happyCliDir, env, signal: cancellation.signal,
-          ensureWorkspacePackagesBuiltByName: ensure, onWait: () => observeWait() });
-        await Promise.race([waited, publication.then(() => { throw new Error('copy must wait for the real foreign publication lease'); })]);
+        publication = execFileAsync(process.execPath, [
+          '--import', join(sourceRoot, 'packages/cli-common/registerSourceRuntime.mjs'), '--input-type=module', '-e', copyWorker,
+        ], { cwd: sourceRoot, env, signal: cancellation.signal }).then(() => undefined);
+        while (!existsSync(copyWaitObserved)) {
+          await Promise.race([delay(10), publication.then(() => { throw new Error('copy must wait for the real foreign publication lease'); })]);
+        }
         // The current manifest, not the selection prepared before waiting,
         // owns what the locked copier publishes.
         writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/extra'] });

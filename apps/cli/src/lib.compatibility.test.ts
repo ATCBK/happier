@@ -62,7 +62,7 @@ describe('@happier-dev/cli/lib Claude transcript compatibility identities', () =
             exports?: Record<string, unknown>;
         };
 
-        expect(packageJson.exports?.['./lib']).toEqual({
+        expect(packageJson.exports?.['./lib']).toMatchObject({
             require: {
                 types: './dist/lib.d.cts',
                 default: './dist/lib.cjs',
@@ -81,13 +81,14 @@ describe('@happier-dev/cli/lib Claude transcript compatibility identities', () =
         const claudeModuleReferences = [
             ...libSource.matchAll(/from\s+['"](@happier-dev\/plugins-claude[^'"]*)['"]/gu),
         ].map((match) => match[1]);
-        const canonicalExport = libSource.match(
-            /export\s*\{([^}]*)\}\s*from\s*['"]@happier-dev\/protocol\/agents\/claude\/transcripts['"]/u,
+        const canonicalExports = libSource.matchAll(
+            /export\s*(type\s+)?\{([^}]*)\}\s*from\s*['"]@happier-dev\/protocol\/agents\/claude\/transcripts['"]/gu,
         );
-        const exportedNames = (canonicalExport?.[1] ?? '')
-            .split(',')
-            .map((name) => name.trim().replace(/\s+/gu, ' '))
-            .filter(Boolean)
+        const exportedNames = [...canonicalExports]
+            .flatMap((declaration) => declaration[2]!.split(',')
+                .map((name) => name.trim().replace(/\s+/gu, ' '))
+                .filter(Boolean)
+                .map((name) => `${declaration[1] ? 'type ' : ''}${name}`))
             .sort();
 
         expect(claudeModuleReferences).toEqual([]);

@@ -19,10 +19,11 @@ describe('apps/cli package scripts', () => {
     expect(String(packageJson.scripts?.typecheck ?? '')).toContain(
       '--script=typecheck:local',
     );
-    expect(String(packageJson.scripts?.['typecheck:local'] ?? '')).toMatch(
-      /scripts\/workspaces\/runTypeScriptCli\.mjs --noEmit\b/,
+    expect(packageJson.scripts?.['typecheck:local']).toBe('yarn -s typecheck:source:finite');
+    expect(String(packageJson.scripts?.['typecheck:source:finite'] ?? '')).toMatch(
+      /scripts\/workspaces\/runTypeScriptCli\.mjs --verifyProjectCoverage tsconfig\.json\b/,
     );
-    expect(String(packageJson.scripts?.['typecheck:local'] ?? '')).not.toMatch(/\btsc\b/);
+    expect(String(packageJson.scripts?.['typecheck:source:finite'] ?? '')).not.toMatch(/\btsc\b/);
     expect(packageJson.scripts?.['pretypecheck:local']).toBeUndefined();
     expect(String(packageJson.scripts?.['typecheck:local'] ?? '')).not.toMatch(
       /prepare:declarations|buildSharedDeps/,

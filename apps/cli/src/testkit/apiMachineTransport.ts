@@ -11,6 +11,7 @@ export function createApiMachineTransportFixture() {
         onAutomationEventSourcesInvalidated: vi.fn<ApiMachineClient['onAutomationEventSourcesInvalidated']>(() => () => {}),
         onPendingSessionActivationHint: vi.fn<ApiMachineClient['onPendingSessionActivationHint']>(() => () => {}),
         onSessionDeletedChange: vi.fn<ApiMachineClient['onSessionDeletedChange']>(() => () => {}),
+        onSessionChanged: vi.fn<ApiMachineClient['onSessionChanged']>(() => () => {}),
         onSessionAccessRevoked: vi.fn<ApiMachineClient['onSessionAccessRevoked']>(() => () => {}),
         onSessionAccessReset: vi.fn<ApiMachineClient['onSessionAccessReset']>(() => () => {}),
         onSessionTranscriptRevised: vi.fn<ApiMachineClient['onSessionTranscriptRevised']>(() => () => {}),

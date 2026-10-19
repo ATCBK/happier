@@ -1,6 +1,21 @@
 import axios, { AxiosError, type AxiosAdapter, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
 import type { FastifyInstance } from 'fastify'
 import type { InjectOptions, Response as LightMyRequestResponse } from 'light-my-request'
+import { vi } from 'vitest'
+
+/** Existing method-boundary fixtures must also receive generic Axios requests.
+ * Keep their one HTTP handler/schema per route; never let a new request entry
+ * point escape to a real Home while get/post are fixture-owned. */
+export function installAxiosRequestMethodAdapter(): () => void {
+  const request = vi.spyOn(axios, 'request').mockImplementation(config => {
+    if (!config.url) throw new Error('axios fixture: missing url')
+    const method = (config.method ?? 'get').toLowerCase()
+    if (method === 'get') return axios.get(config.url, config)
+    if (method === 'post') return axios.post(config.url, config.data, config)
+    throw new Error(`axios fixture: unexpected method: ${method}`)
+  })
+  return () => { request.mockRestore() }
+}
 
 function normalizeHeaders(headers: AxiosRequestConfig['headers']): Record<string, string> {
   if (!headers) return {}

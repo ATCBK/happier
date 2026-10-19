@@ -13,6 +13,7 @@ import {
 } from './scripts/vitestWorkspacePackageResolution'
 import uiVitestConfig from '../ui/vitest.config'
 import { createWorkspaceHostSourceAlias } from '../../scripts/testing/vitestWorkspacePackageResolution'
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs'
 
 const packageRoot = fileURLToPath(new URL('.', import.meta.url))
 const resolve = (...paths: string[]) => resolvePath(packageRoot, ...paths)
@@ -46,7 +47,10 @@ const cliSourceRoot = resolve('./src')
 // UI harness's platform boundaries, including duplicated UI native dependencies
 // whose CommonJS loaders otherwise bypass test-local mocks.
 const uiPlatformAliases = Array.isArray(uiVitestConfig.resolve?.alias)
-    ? uiVitestConfig.resolve.alias.filter((alias) => alias.find !== '@')
+    // CLI semantic DOM tests use the real RNW alias below, not the UI
+    // react-test-renderer boundary for the same bare module.
+    ? uiVitestConfig.resolve.alias.filter((alias) => alias.find !== '@'
+        && !(alias.find instanceof RegExp && alias.find.source === '^react-native$'))
     : []
 
 // Cross-package tests compose real UI owners (Voice) and server routes (stored
@@ -74,10 +78,12 @@ export default defineConfig({
         // CLI "unit" tests include real filesystem/process work; 5s default is too tight under fork pools.
         testTimeout: 30_000,
         hookTimeout: 30_000,
-        setupFiles: ['./src/vitestSetup.ts'],
+        setupFiles: [resolve('../../scripts/testing/vitestHomeSetup.mjs'), './src/vitestSetup.ts'],
+        sequence: { setupFiles: 'list' },
         include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
         exclude: [
             ...configDefaults.exclude,
+            '**/._*',
             '**/*.slow.test.ts',
             '**/*.integration.test.ts',
             '**/*.real.integration.test.ts',
@@ -99,6 +105,7 @@ export default defineConfig({
         },
         env: {
             ...mergedTestEnv,
+            ...createTestHomeEnvironment().env,
         }
     },
     optimizeDeps: {

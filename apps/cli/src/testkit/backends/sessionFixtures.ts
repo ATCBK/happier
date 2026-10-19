@@ -188,6 +188,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
     const fixture = {
         sessionId,
         getServerBinding: () => serverBinding,
+        getServerFeaturesSnapshot: () => null,
         bindMcpRequestAuthPort(port: Parameters<ApiSessionClient['bindMcpRequestAuthPort']>[0]) {
             mcpRequestAuth = port;
         },
@@ -252,6 +253,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             });
         },
         async refreshSessionSnapshotFromServerBestEffort() {},
+        async disposeExecutionRuns() {},
         observeProviderInputSettlement() {},
         confirmUserMessageLocallyConsumed() {},
         getMetadataSnapshot() {
@@ -325,6 +327,7 @@ export function createCurrentSessionProjectionRecordFixture(
 export function createSessionNotificationContextFixture(sessionId: string): CurrentSessionProjectionRecordFixture {
     return createCurrentSessionProjectionRecordFixture({
         id: sessionId,
+        share: null,
         effectiveAccess: {
             v: 1,
             level: 'owner',

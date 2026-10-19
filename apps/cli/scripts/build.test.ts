@@ -51,13 +51,13 @@ describe('buildCliDist', () => {
         types: [], skipLibCheck: true, rootDir: 'src', noEmit: true, declaration: true,
       }, include: ['src/**/*.ts'] }));
       writeFileSync(join(packageRoot, 'tsconfig.build.json'), '{"extends":"./tsconfig.json"}');
-      const projectNames = ['foundation', 'services', 'core', 'source', 'test'];
+      const projectNames = ['foundation', 'services', 'core', 'source', 'test', 'test-ui'];
       for (const [index, name] of projectNames.entries()) {
         writeFileSync(join(packageRoot, `tsconfig.${name}.json`), JSON.stringify({
           extends: './tsconfig.json', compilerOptions: { composite: true, noEmit: false,
             emitDeclarationOnly: true, disableSourceOfProjectReferenceRedirect: true,
             outDir: `node_modules/.cache/${name}`, tsBuildInfoFile: `node_modules/.cache/${name}.tsbuildinfo` },
-          files: [name === 'test' ? 'src/index.test.ts' : 'src/foundation.ts'], include: [],
+          files: name === 'test-ui' ? [] : [name === 'test' ? 'src/index.test.ts' : 'src/foundation.ts'], include: [],
           references: projectNames.slice(0, index).map(previous => ({ path: `./tsconfig.${previous}.json` })),
         }));
       }
@@ -183,9 +183,13 @@ describe('buildCliDist', () => {
       writeFileSync(join(packageRoot, 'src/local.ts'), 'export const generation = "captured";\n');
       writeFileSync(join(packageRoot, 'src/index.ts'), [
         "import { generation } from '@/local';",
+        "import { z } from 'zod/mini';",
         "import { StoredMachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';",
         'const exactGeneration: "captured" = generation;',
-        'export const MachineMetadataSchema = StoredMachinePublishedMetadataV1Schema;',
+        // Match the published API owner: re-export its declaration identity,
+        // rather than inventing a new inferred schema value in the consumer.
+        "export { StoredMachinePublishedMetadataV1Schema as MachineMetadataSchema } from '@happier-dev/protocol/machines/machinePublishedContentV1';",
+        'export type MachineMetadata = z.infer<typeof StoredMachinePublishedMetadataV1Schema>;',
       ].join('\n'));
       const authoredConfig = JSON.stringify({
         compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'Bundler', rootDir: 'src',
@@ -381,7 +385,7 @@ describe('buildCliDist', () => {
         packageRoot,
         repoRoot: packageRoot,
         lockPath: join(packageRoot, 'build.lock'),
-        env: { HAPPIER_CLI_BUILD_OUTPUT_DIR: '' },
+        env: { HAPPIER_CLI_BUILD_OUTPUT_DIR: '', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         // Pkgroll is the compiler/process boundary. Keep source admission,
         // TypeScript, cache handling, the lock and publication real.
         runPkgrollBuildImpl: ({ packageJsonPath, outputDir }: { packageJsonPath: string; outputDir: string }) => {
@@ -435,6 +439,7 @@ describe('buildCliDist', () => {
       await buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         lockPath,
         lockTimeoutMs: 500,
         lockPollIntervalMs: 10,
@@ -492,6 +497,7 @@ describe('buildCliDist', () => {
       await buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         skipLock: true,
         rmDistImpl: async () => {},
         resolveTypeScriptCliInvocationImpl: () => ({
@@ -702,6 +708,7 @@ describe('buildCliDist', () => {
       await expect(buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         skipLock: true,
         rmDistImpl: async () => {},
         resolveTypeScriptCliInvocationImpl: () => ({
@@ -743,6 +750,7 @@ describe('buildCliDist', () => {
     try {
       await buildCliDist({
         packageRoot: aliasPackageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         rmDistImpl: async () => {},
         resolveTypeScriptCliInvocationImpl: () => ({
           argsPrefix: ['/canonical/runTypeScriptCli.mjs'],

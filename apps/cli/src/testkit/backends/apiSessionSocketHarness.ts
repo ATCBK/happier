@@ -285,6 +285,18 @@ export type ApiSessionSocketStub = {
     getHandlers: (event: string) => SocketEventHandler[];
 };
 
+export function resolveApiSessionSocketDefaultAck(event: string, payload: unknown): unknown {
+    if (event === 'update-state' || event === 'update-metadata') {
+        const request = payload as Readonly<{ expectedVersion: number; agentState?: unknown; metadata?: unknown }>;
+        return {
+            result: 'success',
+            version: request.expectedVersion + 1,
+            ...(event === 'update-state' ? { agentState: request.agentState } : { metadata: request.metadata }),
+        };
+    }
+    return { ok: true, id: 'm1', seq: 1, localId: 'l1' };
+}
+
 export function createApiSessionSocketStub(options: {
     id?: string;
     connected?: boolean;
@@ -356,7 +368,7 @@ export function createApiSessionSocketStub(options: {
             if (options.emitWithAck) {
                 return options.emitWithAck(event, payload, socket);
             }
-            return options.emitWithAckResult ?? { ok: true, id: 'm1', seq: 1, localId: 'l1' };
+            return options.emitWithAckResult ?? resolveApiSessionSocketDefaultAck(event, payload);
         }),
         volatile: {
             emit: vi.fn(),
