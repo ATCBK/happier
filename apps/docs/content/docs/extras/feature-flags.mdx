@@ -18,12 +18,12 @@ clear answer about whether a feature is available, it treats it as unavailable.
 That is why a feature can seem to vanish when a server is unreachable, and why
 a misconfigured self-hosted server hides features rather than half-enabling them.
 
-There are 141 features in the catalog. 22 of them have a switch you can
-reach; the other 119 are decided before you get there.
+There are 142 features in the catalog. 22 of them have a switch you can
+reach; the other 120 are decided before you get there.
 
 ## Features you can turn on yourself
 
-These appear in **Settings → Features**. 10 of the 22 are marked experimental.
+These appear in **Settings → Features**. 8 of the 22 are marked experimental.
 
 | Feature | Id | Kind | Default |
 | --- | --- | --- | --- |
@@ -46,8 +46,8 @@ These appear in **Settings → Features**. 10 of the 22 are marked experimental.
 | **Embedded terminal** | `terminal.embeddedPty` | Standard | On |
 | **Usage reporting** | `usage.reporting` | Standard | On |
 | **Voice** | `voice` | Standard | On |
-| **Voice agent** | `voice.agent` | Experimental | Off |
-| **Voice daemon inference** | `voice.daemonInference` | Experimental | Off |
+| **Voice agent** | `voice.agent` | Standard | On |
+| **Machine speech** | `voice.daemonInference` | Standard | On |
 | **Zen** | `zen.navigation` | Experimental | On |
 
 Experimental toggles are hidden until you turn on the experiments switch at the
@@ -151,6 +151,7 @@ behaviour but still needs the server to advertise the capability.
 | `search` | Personal Home plaintext transcript search indexing and authenticated query route. | server | — | `HAPPIER_FEATURE_SEARCH__ENABLED` |
 | `sessions` | Session-level product surfaces and control-plane capabilities. | client | — | — |
 | `sessions.agentSwitching` | Continue one Session in place with another coding Agent, and create configurable Sessions from a typed source-context recipe. | server | `sessions` | `HAPPIER_FEATURE_SESSIONS_AGENT_SWITCHING__ENABLED` |
+| `sessions.autonomousExchange` | Exact accepted-start custody and Account check-in controls for autonomous Session exchanges. | server | `sessions` | — |
 | `sessions.board` | Shared Session Board: durable Session surface items, their organization into Board views, and the Board Actions that author them. | server | `sessions` | `HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED` |
 | `sessions.conversations` | Human conversations inside a shared Session: discussions, authored messages, mentions and private read cursors. | server | `sessions`, `sharing.session` | `HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED` |
 | `sessions.drafts` | Cross-device composer and new-session draft synchronization. | server | `sessions` | `HAPPIER_FEATURE_SESSIONS_DRAFTS__ENABLED` |

@@ -34,8 +34,10 @@ Dictation has its own speech setup and remains available when conversations are 
   Experiments. An explicit off choice still disables conversations.
 - **Individual services and billing choices** add their own gates: **Happier Voice** needs the server-side
   `voice.happierVoice` feature, and the daemon-backed **Local voice** agent needs
-  **Settings → Features → Voice agent**, which remains experimental and off by
-  default, with Experiments and its Execution runs prerequisite enabled.
+  **Settings → Features → Voice agent**, which defaults on independently of
+  Experiments in 0.3 development. Its Subagents prerequisite remains experimental
+  and must be enabled. **Machine speech** also defaults on; explicit off
+  choices for either preference are preserved.
 
 No conversation provider is selected until you pick one. Opening Voice settings or
 checking setup does not acquire the microphone or start a provider. In 0.3 development,
@@ -44,6 +46,26 @@ gate; a direct link cannot bypass it. Dictation remains independent. See
 [Feature flags](/extras/feature-flags) for the full gating model.
 
 ## Conversation modes
+
+### Session messages in development
+
+Voice's development Action tools use the same Session messaging schemas and
+approval rules as the CLI and app. Send shares information; Ask can select inline
+waiting on that same send operation. Asking to get back later requests person
+approval before sending; screen confirmation admits the return to the session
+bound to that Voice conversation. Switching the visible session does not change
+that destination. The Voice tool cannot approve its own request, and a saved
+approval waiver does not grant person authority. Spoken confirmation through a
+generic tool call is not a substitute for that decision. A timeout stops observing
+accepted work without stopping it, and a returned answer requests no acknowledgment.
+
+Names must resolve unambiguously before sending. Group selection and its reviewed
+approval targets belong to the shared Actions front door, not a separate Voice
+recipient list. Delivery mute suppresses a sender's future effects for its receiver;
+the microphone **Mute** control below instead suspends recording. See
+[CLI reply modes](/apps/cli-sessions#reply-modes-03-development) for the common
+semantics. This describes unreleased source contracts; loaded Voice, composer and
+device validation remain separate from tool discovery.
 
 ### Session targets and preferences in development
 
