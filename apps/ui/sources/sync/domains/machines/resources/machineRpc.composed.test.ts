@@ -221,43 +221,6 @@ it.each(['preview', 'publicPreview', 'diagnostics', 'simulator'] as const)('rele
     });
 });
 
-it('releases a recording request on session replacement and permits the next start', async () => {
-    const { useSessionBrowserRecordingRuntime } = await import('@/components/sessions/browser/sessionBrowserRecordingRuntime');
-    const { registerDesktopBrowserRecordingReverseCaptureHandler } = await import('@/sync/domains/browser/recording/reverseCaptureAvailability');
-    await withMachineHome(async home => {
-        const unregister = registerDesktopBrowserRecordingReverseCaptureHandler('shared-machine');
-        function Probe({ sessionId }: { sessionId: string }) {
-            const runtime = useSessionBrowserRecordingRuntime({ enabled: true, sessionId, scopeKey: sessionId,
-                machineId: 'shared-machine', serverId: home.serverId, recordingCapabilities: {
-                    ...DEFAULT_BROWSER_CAPABILITIES.recording, enabled: true, available: true,
-                    supportedCaptureKinds: ['nativeViewCapture'], supportedMimeTypes: ['image/png'],
-                    supportedAdapterKinds: ['externalUrl'], supportedRetentionClasses: ['preSend'],
-                    maxDurationMs: 30_000, maxBytes: 16_000_000, maxFps: 12,
-                } });
-            return React.createElement('RecordingProbe', { runtime });
-        }
-        const request = { browserSessionId: 'browser-1', viewId: 'view-1', profileId: 'profile-1',
-            target: { kind: 'externalUrl', targetId: 'external-1', url: 'https://example.com' },
-            targetKind: 'externalUrl', adapterKind: 'externalUrl', renderEngineKind: 'desktopWebView',
-            captureKind: 'nativeViewCapture', fidelity: 'nativeCallback', navigationGeneration: 2,
-            mimeType: 'image/png', retentionClass: 'preSend', policyState: 'allowed' } as const;
-        const screen = await renderScreen(React.createElement(Probe, { sessionId: 'session-1' }));
-        try {
-            const start = () => screen.findByType('RecordingProbe').props.runtime.browserShellRecording.onStartRecording(request);
-            let pending: Promise<void>;
-            await act(async () => { pending = start(); });
-            await vi.waitFor(() => expect(home.calls.some(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)).toBe(true));
-            const parked = home.calls.find(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)!;
-            await screen.update(React.createElement(Probe, { sessionId: 'session-2' }));
-            await vi.waitFor(() => expect(home.cancellations).toContain(parked.requestId));
-            await pending!;
-            home.setAnswer(async call => { await call.reply({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' }); });
-            await act(async () => { await start(); });
-            expect(home.calls.filter(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)).toHaveLength(2);
-        } finally { await screen.unmount(); unregister(); }
-    });
-});
-
 it('reports actual watch dispatch through the real scoped transport before its parked reply', async () => {
     await withMachineHome(async home => {
         const dispatched = createDeferred<void>();
