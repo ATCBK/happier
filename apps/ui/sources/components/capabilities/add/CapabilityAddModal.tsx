@@ -415,6 +415,17 @@ export function CapabilityAddModalBody<Item>(
 }
 
 /**
+ * Whether the dialog reads as a phone page. A Collection's own layout says so for its list and details; an input mode
+ * (Link, Upload, Paste) sits outside any Collection, so there the device class that makes the card a full-screen page
+ * decides. One answer for the tabs and the footer.
+ */
+function useAddDialogNarrow(): boolean {
+  const layout = useHappierCollectionLayout();
+  const onPhone = useDeviceType() === 'phone';
+  return onPhone || layout?.mode === 'stacked';
+}
+
+/**
  * The modes as a tab list hugging their labels. Where the card is a phone page every label must still read whole, so
  * the glyphs step aside first (D44's order); the labels never truncate.
  */
@@ -424,8 +435,7 @@ function CatalogModes(props: Readonly<{
   onSelect: (key: string) => void;
   testID: string;
 }>): React.ReactElement {
-  const layout = useHappierCollectionLayout();
-  const narrow = layout?.mode === 'stacked';
+  const narrow = useAddDialogNarrow();
   return (
     <SegmentedTabBar
       tabs={props.modes.map((candidate) => ({
@@ -477,8 +487,8 @@ function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.React
 export function CapabilityAddFooter(
   props: Readonly<{ start: React.ReactNode; children: React.ReactNode; stacked?: boolean; testID?: string }>,
 ): React.ReactElement {
-  const onPhone = useDeviceType() === 'phone';
-  const stacked = props.stacked ?? onPhone;
+  const narrow = useAddDialogNarrow();
+  const stacked = props.stacked ?? narrow;
   if (stacked) {
     return (
       <View testID={props.testID} style={[styles.footer, styles.footerStacked]}>
