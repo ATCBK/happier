@@ -3501,12 +3501,12 @@ export function useWorkflowRun(runId: string | null | undefined, options: Readon
  * revision still arrives immediately. Ids with no loaded body are skipped by the
  * same canonical projection the collection already uses.
  */
-export function useWorkflowRunRows(runIds: readonly string[]): WorkflowRunRow[] {
+export function useWorkflowRunRows(runIds: readonly string[], scope?: import('@/sync/domains/scope/serverAccountScope').ServerAccountScope | null): WorkflowRunRow[] {
   return getStorage()(
     useShallow((state) => (
       runIds.length === 0
         ? (emptyArray as WorkflowRunRow[])
-        : resolveWorkflowRunRows(state.workflowRunsById, runIds, getActiveServerAccountScope())
+        : resolveWorkflowRunRows(state.workflowRunsById, runIds, scope === undefined ? getActiveServerAccountScope() : scope)
     ))
   ) as WorkflowRunRow[];
 }

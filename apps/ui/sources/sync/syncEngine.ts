@@ -5506,6 +5506,7 @@ class Sync {
             })()
         );
 
+        try {
         await updateSessionMetadataWithRetryRpc<Metadata, AgentState>({
             sessionId,
             metadataLayoutVersion:
@@ -5691,6 +5692,12 @@ class Sync {
             onMetadataCommitted: options?.onMetadataCommitted,
             maxAttempts: typeof options?.maxAttempts === 'number' ? options.maxAttempts : 8,
         });
+        } catch (error) {
+            // A refused CAS can still have read the winner's canonical tuple.
+            // Publish that read to its current mounted Home before its control settles.
+            if (mutationSession && ownsActiveProjection()) this.applySessions([mutationSession]);
+            throw error;
+        }
         } finally {
             accountCurrentnessSource?.dispose();
         }
