@@ -184,7 +184,7 @@ export async function createStandaloneVoicePolicyHarness(params: Readonly<{
             if (direct?.presence !== 'online' || row?.presence !== 'online') {
                 throw new Error(`Test daemon activity has not reached both Session carriers: ${JSON.stringify({
                     direct: direct ? { serverId: direct.serverId, active: direct.active, activeAt: direct.activeAt, presence: direct.presence } : null,
-                    row: row ? { serverId: row.serverId, active: row.active, activeAt: row.activeAt, presence: row.presence } : null,
+                    row: row ? { active: row.active, activeAt: row.activeAt, presence: row.presence } : null,
                     sockets: (sockets.get(connection.home.serverUrl) ?? []).map(socket => ({
                         connected: socket.connected, receiveListeners: socket.listenersAny().length,
                     })),

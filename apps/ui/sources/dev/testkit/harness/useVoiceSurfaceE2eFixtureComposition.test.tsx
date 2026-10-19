@@ -16,7 +16,7 @@ import {
 } from '@/sync/domains/settings/voiceSettings';
 import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
 import { voiceConversationBindingResolver } from '@/voice/binding/VoiceConversationBindingResolver';
-import { getVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
+import { getVoiceSessionSnapshot, setVoiceSessionSnapshot } from '@/voice/session/voiceSessionStore';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { selectVoiceTranscriptEntriesForConversationSession } from '@/voice/transcript/voiceTranscriptSelectors';
 
@@ -102,19 +102,23 @@ describe('useVoiceSurfaceE2eFixtureComposition', () => {
         });
         expect(Object.keys(settings.voice)).not.toContain('adapters');
         expect(settings.voice.ui?.activityFeedEnabled).toBe(true);
+        expect(getVoiceSessionSnapshot()).toMatchObject({
+            adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
+            sessionId: '__voice_agent__',
+            status: 'connected',
+            mode: 'idle',
+            canStop: true,
+        });
         expect(
             voiceConversationBindingResolver.resolveByControlSessionId({
                 controlSessionId: '__voice_agent__',
                 adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
             }),
-        ).toMatchObject({
-            conversationSessionId: 'voice-e2e-hidden-conversation',
-            targetSessionAddress: { serverId: getActiveServerSnapshot().serverId, sessionId: 'voice-e2e-root-session' },
-        });
-        // Presentation fixtures resolve persisted metadata, not a fabricated live lease.
-        expect(
-            voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__'),
         ).toBeNull();
+        // Persisted presentation metadata cannot become local live-control custody.
+        expect(
+            voiceSessionBindingStore.getState().runtimeBindingsByConversationSessionId['voice-e2e-hidden-conversation'],
+        ).toBeUndefined();
         expect(
             selectVoiceTranscriptEntriesForConversationSession(
                 getStorage().getState(),
@@ -123,12 +127,15 @@ describe('useVoiceSurfaceE2eFixtureComposition', () => {
         ).toEqual(['first', 'second']);
 
         expect(useVoiceTargetStore.getState().scope).toBe('global');
-        expect(getVoiceSessionSnapshot()).toMatchObject({
-            adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
-            sessionId: '__voice_agent__',
-            status: 'connected',
-            mode: 'idle',
-            canStop: true,
+        setVoiceSessionSnapshot({ ...getVoiceSessionSnapshot(), status: 'disconnected', canStop: false });
+        expect(
+            voiceConversationBindingResolver.resolveByControlSessionId({
+                controlSessionId: '__voice_agent__',
+                adapterId: 'happier.voice.elevenlabs/realtime-elevenlabs',
+            }),
+        ).toMatchObject({
+            conversationSessionId: 'voice-e2e-hidden-conversation',
+            targetSessionAddress: { serverId: getActiveServerSnapshot().serverId, sessionId: 'voice-e2e-root-session' },
         });
         await vi.waitFor(() => expect(featureRequests).toContain('/v1/features'));
         expect(await getServerFeaturesSnapshot()).toMatchObject({ status: 'ready', features: { features: { voice: { enabled: true } } } });

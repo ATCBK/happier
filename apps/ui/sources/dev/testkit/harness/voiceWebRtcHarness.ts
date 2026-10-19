@@ -12,7 +12,8 @@ export class TestVoiceAudioContext {
     readonly gain = { value: 1, setTargetAtTime: vi.fn() };
     readonly disconnectGain = vi.fn();
     readonly processor = {
-        onaudioprocess: null as ScriptProcessorNode['onaudioprocess'],
+        // Browser dispatch owns the DOM receiver; this fixture invokes only the callback.
+        onaudioprocess: null as OmitThisParameter<NonNullable<ScriptProcessorNode['onaudioprocess']>> | null,
         connect: vi.fn(), disconnect: vi.fn(),
     };
     readonly captureSource = { connect: vi.fn(), disconnect: vi.fn() };

@@ -17,7 +17,7 @@ export async function createRetainedVoiceAgentRpcBoundary(params: Readonly<{
         ExecutionRunListResponseSchema, ExecutionRunPublicStateSchema, ExecutionRunStopRequestSchema, ExecutionRunStopResponseSchema,
     } = await import('@happier-dev/protocol/execution/runs/index');
     const { ExecutionRunVoiceAgentIntentInputV1Schema } = await import('@happier-dev/protocol/execution/runs/startRequest');
-    const { convertBackendTargetRefV2ToV1 } = await import('@happier-dev/protocol/backends/targets/backendTargetRefV2');
+    const { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } = await import('@happier-dev/protocol/backends/targets/backendTargetRefV2');
     let retainedRun: ReturnType<typeof ExecutionRunPublicStateSchema.parse> | null = null;
     const requests: Array<{ method: string; input: unknown }> = [];
     return {
@@ -44,7 +44,7 @@ export async function createRetainedVoiceAgentRpcBoundary(params: Readonly<{
                 }
                 retainedRun ??= ExecutionRunPublicStateSchema.parse({
                     runId: params.runId ?? 'local-agent-run', callId: 'local-call', sidechainId: 'local-sidechain',
-                    intent: request.start.intent, backendTarget: convertBackendTargetRefV2ToV1(request.start.backendTarget),
+                    intent: request.start.intent, backendTarget: convertBackendTargetRefV2ToV1(readBackendTargetRefV2(request.start.backendTarget)),
                     permissionMode: request.start.permissionMode, retentionPolicy: request.start.retentionPolicy,
                     runClass: request.start.runClass, ioMode: request.start.ioMode,
                     status: 'running', startedAtMs: 1,

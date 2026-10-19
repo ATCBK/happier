@@ -42,7 +42,8 @@ export async function withGeneratedElevenLabsVoiceRuntime(
     const entry = BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES.find(value => value.pluginId === 'happier.voice.elevenlabs');
     if (!entry) throw new Error('Missing generated ElevenLabs contribution');
     const metadata = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
-    const features = createRootLayoutFeaturesResponse({ capabilities: { session: { pendingInput: { protocolVersion: 1 } } } });
+    const features = createRootLayoutFeaturesResponse();
+    features.capabilities.session.pendingInput = { protocolVersion: 1 };
     const home = await serveAccountHomes({
         homes: [{ key: 'qa', serverUrl: 'https://voice-qa-realtime.example.test', accountId: 'qa-account',
             currentAccount: true,
