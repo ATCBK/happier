@@ -5,9 +5,11 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+const { readWorkspaceSyncConflictDetailsResource, usesWorkspaceSyncSplitComparison } =
+    await import('./WorkspaceSyncConflictDetailsView');
+
 describe('WorkspaceSyncConflictDetailsView resource', () => {
     it('retains only current IDs and the selected path, never replicated root authority', async () => {
-        const { readWorkspaceSyncConflictDetailsResource } = await import('./WorkspaceSyncConflictDetailsView');
         const resource = {
             kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'workspace-a', workspaceRefId: 'workspace-c',
             controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'src/tool',
@@ -19,7 +21,6 @@ describe('WorkspaceSyncConflictDetailsView resource', () => {
         })).toBeNull();
     });
     it('keeps compact comparison navigation until the details pane itself is wide enough', async () => {
-        const { usesWorkspaceSyncSplitComparison } = await import('./WorkspaceSyncConflictDetailsView');
         expect(usesWorkspaceSyncSplitComparison(839)).toBe(false);
         expect(usesWorkspaceSyncSplitComparison(840)).toBe(true);
     });

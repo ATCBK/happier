@@ -32,6 +32,8 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
+const { NewSessionLaunchSurface } = await import('./NewSessionLaunchSurface');
+
 type MountedSurface = Readonly<{
     render: (input: Readonly<{ frozen: boolean }>) => Promise<void>;
     onRequestClose: ReturnType<typeof vi.fn>;
@@ -96,7 +98,6 @@ describe('NewSessionLaunchSurface web focus containment', () => {
 });
 
 async function mountSurface(initial: Readonly<{ frozen: boolean }>): Promise<MountedSurface> {
-    const { NewSessionLaunchSurface } = await import('./NewSessionLaunchSurface');
     const container = document.createElement('div');
     document.body.appendChild(container);
     const root = createRoot(container);

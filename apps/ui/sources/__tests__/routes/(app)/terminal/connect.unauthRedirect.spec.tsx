@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { encodeTerminalConnectLinkV4Payload } from '@happier-dev/protocol';
 import { standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { installTerminalRouteCommonModuleMocks, initializeTerminalRouteRuntimeForTests, renderTerminalRoute } from './terminalRouteTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,19 +27,11 @@ vi.mock('@/sync/domains/pending/pendingTerminalConnect', async () => (
     await import('@/sync/domains/pending/pendingTerminalConnect.web')
 ));
 
+// The web Home-selection owner needs the browser's document and tab storage,
+// in addition to the location read by this route.
+const browser = await installBrowserRuntimeForTests({ url: 'https://ui.example.test/terminal/connect' });
 await initializeTerminalRouteRuntimeForTests();
-
-function createStorage(): Storage {
-    const values = new Map<string, string>();
-    return {
-        get length() { return values.size; },
-        clear: () => values.clear(),
-        getItem: (key) => values.get(key) ?? null,
-        key: (index) => [...values.keys()][index] ?? null,
-        removeItem: (key) => { values.delete(key); },
-        setItem: (key, value) => { values.set(key, value); },
-    };
-}
+afterAll(() => browser.restore());
 
 function createV4Link(serverUrl: string, serverIdentityId: string) {
     const descriptor = {
@@ -71,30 +64,16 @@ async function activateServer(serverUrl: string) {
     return upsertAndActivateServer({ serverUrl, source: 'manual', scope: 'device', replaceEquivalentStoredUrl: true });
 }
 
-function setWindowLocation(href: string, sessionStorage: Storage) {
-    const url = new URL(href);
-    vi.stubGlobal('window', {
-        location: {
-            hash: url.hash,
-            pathname: url.pathname,
-            search: url.search,
-            href,
-        },
-        history: { replaceState: vi.fn() },
-        sessionStorage,
-    });
+function setWindowLocation(href: string) {
+    browser.reconfigureUrl(href);
 }
 
 describe('TerminalConnectScreen unauthenticated redirect', () => {
-    let sessionStorage: Storage;
-
     beforeEach(async () => {
+        browser.activate();
         replaceMock.mockClear();
         modalAlertAsyncMock.mockClear();
-        const localStorage = createStorage();
-        sessionStorage = createStorage();
-        vi.stubGlobal('localStorage', localStorage);
-        vi.stubGlobal('sessionStorage', sessionStorage);
+        browser.window.sessionStorage.clear();
         await activateServer('https://api.happier.dev');
         const { clearPendingTerminalConnect } = await import('@/sync/domains/pending/pendingTerminalConnect');
         clearPendingTerminalConnect();
@@ -104,12 +83,11 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
         const { clearPendingTerminalConnect } = await import('@/sync/domains/pending/pendingTerminalConnect');
         clearPendingTerminalConnect();
         standardCleanup();
-        vi.unstubAllGlobals();
     });
 
     it('captures a strict V4 descriptor in the real web owner and selects its Home before auth', async () => {
         const link = createV4Link('https://company.example.test', 'srv_company_home');
-        setWindowLocation(link.href, sessionStorage);
+        setWindowLocation(link.href);
         const Screen = (await import('@/app/(app)/terminal/connect')).default;
 
         await renderTerminalRoute(Screen, null);
@@ -128,16 +106,16 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
     });
 
     it('does not crash when bootstrap session storage is unavailable', async () => {
-        setWindowLocation('https://ui.example.test/terminal/connect', sessionStorage);
-        Object.defineProperty((globalThis as typeof globalThis & { window: Window }).window, 'sessionStorage', {
-            configurable: true,
-            get: () => { throw new Error('storage denied'); },
-        });
-        const Screen = (await import('@/app/(app)/terminal/connect')).default;
-
-        await expect(renderTerminalRoute(Screen, null)).resolves.toBeDefined();
-        const { getPendingTerminalConnect } = await import('@/sync/domains/pending/pendingTerminalConnect');
-        expect(getPendingTerminalConnect()).toBeNull();
+        setWindowLocation('https://ui.example.test/terminal/connect');
+        const deniedStorage = vi.spyOn(browser.window, 'sessionStorage', 'get').mockImplementation(() => { throw new Error('storage denied'); });
+        try {
+            const Screen = (await import('@/app/(app)/terminal/connect')).default;
+            await expect(renderTerminalRoute(Screen, null)).resolves.toBeDefined();
+            const { getPendingTerminalConnect } = await import('@/sync/domains/pending/pendingTerminalConnect');
+            expect(getPendingTerminalConnect()).toBeNull();
+        } finally {
+            deniedStorage.mockRestore();
+        }
     });
 
     it('uses real compatibility admission to prompt for an update without persistence or approval', async () => {
@@ -145,7 +123,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
             + '&server=https%3A%2F%2Fcompany.example.test'
             + '&pairingSecret=AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE'
             + '&createdAt=1800000000000&expiresAt=1800000060000';
-        setWindowLocation(href, sessionStorage);
+        setWindowLocation(href);
         const Screen = (await import('@/app/(app)/terminal/connect')).default;
 
         const screen = await renderTerminalRoute(Screen, null);
@@ -164,7 +142,7 @@ describe('TerminalConnectScreen unauthenticated redirect', () => {
     it('retains a strict V4 target without redirecting authentication through a different active Home', async () => {
         await activateServer('http://localhost:53288');
         const link = createV4Link('http://127.0.0.1:3005', 'srv_loopback_home');
-        setWindowLocation(link.href, sessionStorage);
+        setWindowLocation(link.href);
         const Screen = (await import('@/app/(app)/terminal/connect')).default;
 
         const screen = await renderTerminalRoute(Screen, null);

@@ -17,6 +17,7 @@ vi.mock('mermaid', () => ({
 }));
 
 installMarkdownCommonModuleMocks();
+const { MermaidRenderer } = await import('./MermaidRenderer.web');
 
 describe('MermaidRenderer web boundary', () => {
     beforeEach(() => {
@@ -28,7 +29,6 @@ describe('MermaidRenderer web boundary', () => {
         mermaidMocks.render.mockResolvedValue({
             svg: '<svg onclick="evil()"><script>evil()</script><text>safe</text></svg>',
         });
-        const { MermaidRenderer } = await import('./MermaidRenderer.web');
         const screen = await renderScreen(<MermaidRenderer content="graph TD; A-->B" />);
         try {
             await flushHookEffects({ cycles: 8, turns: 8 });
@@ -51,7 +51,6 @@ describe('MermaidRenderer web boundary', () => {
             dispose: vi.fn(),
         };
         const registerProducer = vi.fn(() => handle);
-        const { MermaidRenderer } = await import('./MermaidRenderer.web');
         const screen = await renderScreen(
             <InitialPresentationReadinessProvider value={{
                 presentationPending: true,
@@ -85,7 +84,6 @@ describe('MermaidRenderer web boundary', () => {
             complete: vi.fn(),
             dispose: vi.fn(),
         };
-        const { MermaidRenderer } = await import('./MermaidRenderer.web');
         const screen = await renderScreen(
             <InitialPresentationReadinessProvider value={{
                 presentationPending: true,
