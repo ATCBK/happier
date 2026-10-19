@@ -6,8 +6,9 @@ import type { createUsageObservationPublisher } from '../createUsageObservationP
 import type { NativeUsageCaptureAuthority, NativeUsageCaptureSource, NativeUsageCaptureStore } from './nativeUsageCaptureState';
 import { AsyncLock } from '@/utils/lock';
 import { deriveNativeUsageAccountingIdentity } from './nativeUsageAccountingIdentity';
+import type { NativeUsageSourceDescriptor } from './nativeUsageSourceDiscovery';
 
-export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'rootKind' | 'error' | 'accountingSources'>;
+export type { NativeUsageSourceDescriptor } from './nativeUsageSourceDiscovery';
 
 /** Discovery metadata is not part of the strict persisted accounting shape. */
 function projectCaptureSourceDescriptor(descriptor: NativeUsageSourceDescriptor): NativeUsageSourceDescriptor {
@@ -299,6 +300,8 @@ export function createNativeUsageCollector(input: NativeUsageCollectorDependenci
                 checkSignal(signal);
                 const descriptors = await input.discoverSources();
                 checkSignal(signal);
+                // A projection of this discovery only, never persisted or cached with capture custody.
+                const fileCounts = new Map(descriptors.map(descriptor => [identity(descriptor).sourceRootKey, descriptor.discoveredFileCount]));
                 const consented = sources.filter(source => source.consented).map(source => source.sourceId);
                 await Promise.all(consented.map(retire));
                 await commit(next => {
@@ -316,7 +319,10 @@ export function createNativeUsageCollector(input: NativeUsageCollectorDependenci
                 });
                 // Inventory disappearance is not permission to drop custody or an override.
                 await Promise.all(consented.map(activate));
-                return sources.map(view);
+                return sources.map(source => {
+                    const discoveredFileCount = fileCounts.get(source.sourceId);
+                    return { ...view(source), ...(discoveredFileCount === undefined ? {} : { discoveredFileCount }) };
+                });
             });
         },
         async get(sourceId?: string, signal?: AbortSignal) {

@@ -286,6 +286,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
             const inventory = await discoverAgentAccountingJsonlSource([join(rootPath, 'projects')], request.signal);
             return ok({ source: validation.value.publicSource, accountingSource: {
                 accountingSources: [CLAUDE_ASSISTANT_USAGE_SOURCE, CLAUDE_SDK_RESULT_USAGE_SOURCE],
+                discoveredFileCount: inventory.files.length,
                 rootPath, rootField: 'configDir', resourceKey: `claude:accounting:${createHash('sha256').update(rootPath).digest('base64url')}`,
                 changeObservation: 'watch_file_changes' as const,
                 watchFileChanges: { files: [...inventory.files], topologyDirectories: [...inventory.topologyDirectories] },

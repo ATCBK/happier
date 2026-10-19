@@ -308,6 +308,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           transcriptMediaReadRoots: mediaReadRoots.value,
           accountingSource: {
             accountingSources: [CODEX_NATIVE_ACCOUNTING_SOURCE],
+            discoveredFileCount: inventory.files.length,
             ...(mediaReadRoots.value.length === 1 ? { rootPath: mediaReadRoots.value[0], rootField: 'homePath' } : {}),
             resourceKey: `codex:accounting:${createHash('sha256').update(JSON.stringify(roots)).digest('base64url')}`,
             changeObservation: 'watch_file_changes' as const,

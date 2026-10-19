@@ -28,6 +28,8 @@ export const UsageSourceV1Schema = lazyZodSchema(() => z.strictObject({
   captureKind: z.optional(z.literal('from_logs')),
   externalSessionSource: z.optional(ExternalSessionsSourceSchema),
   root: z.strictObject({ kind: z.enum(['default', 'configured', 'materialized', 'override']), path: z.nullable(id) }),
+  /** Discovery metadata only: files already enumerated by the source, never sessions or token estimates. */
+  discoveredFileCount: z.optional(z.number().check(z.int(), z.nonnegative())),
   consent: z.enum(['enabled', 'disabled']),
   status: z.enum(['found', 'reading', 'ready', 'stopped', 'unavailable', 'error', 'unsupported']),
   coverage: z.enum(['unknown', 'partial', 'complete', 'unsupported']),
