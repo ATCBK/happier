@@ -9,7 +9,7 @@ type ScmNetworkTestHarness = {
     network: SessionOpsNetworkBoundary;
     serverId: string;
     storage: typeof import('@/sync/domains/state/storage').storage;
-    reset: () => void;
+    reset: () => Promise<void>;
     dispose: () => Promise<void>;
 };
 
@@ -27,13 +27,22 @@ export async function createScmNetworkTestHarness(): Promise<ScmNetworkTestHarne
         network,
         serverId: home.id,
         storage,
-        reset() {
+        async reset() {
+            // Global UI setup resets the physical credential/profile stores before
+            // each test. Republish through their real owners before Action admission.
+            await network.addHome(home.serverUrl, home.accountId);
             network.resetRequests();
             resetScopedMachineTransportCacheForTests();
             projectManager.clear();
             const machine = createMachineFixture();
             storage.setState(initialState, true);
-            storage.setState({ machineListByServerId: { [home.id]: [machine] } });
+            storage.setState({
+                machineListByServerId: { [home.id]: [machine] },
+                machineListStatusByServerId: { [home.id]: 'idle' },
+                settingsScope: { serverId: home.id, accountId: home.accountId },
+            });
+            storage.getState().applySettingsLocal({ experiments: true,
+                featureToggles: { ...storage.getState().settings.featureToggles, 'scm.writeOperations': true } });
             storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: home.id, active: true,
                 metadata: { machineId: machine.id, host: 'tester.local', path: '/repo' } })]);
         },

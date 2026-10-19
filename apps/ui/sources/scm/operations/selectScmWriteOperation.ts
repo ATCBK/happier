@@ -50,7 +50,8 @@ export function selectScmWriteOperation(input: Readonly<{
     provider?: string;
     machineReachable: boolean;
 }>): ScmWriteOperation | null {
-    const current = input.inFlight;
+    // A queued operation is still waiting for the person's confirmation: nothing is in progress yet.
+    const current = input.inFlight?.phase === 'running' ? input.inFlight : null;
     if (current) {
         return {
             phase: current.phase,

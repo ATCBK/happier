@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
+import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+
+const appState = vi.hoisted(() => ({ change: (_state: string) => {} }));
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -9,7 +12,10 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock(
         {
                     AppState: {
-                        addEventListener: () => ({ remove: () => {} }),
+                        addEventListener: (_event: string, listener: (state: string) => void) => {
+                            appState.change = listener;
+                            return { remove: () => { appState.change = () => {}; } };
+                        },
                     },
                     Platform: {
                         OS: 'web',
@@ -26,6 +32,33 @@ describe('useScmAdaptivePolling', () => {
     afterEach(() => {
         vi.useRealTimers();
     });
+
+    it.each(['disable', 'background', 'unmount', 'restart'] as const)(
+        'retires an outstanding response on %s without reviving its timer', async retirement => {
+            const { useScmAdaptivePolling } = await import('./useScmAdaptivePolling');
+            let finish!: () => void;
+            const invalidateAndAwait = vi.fn()
+                .mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }))
+                .mockResolvedValue(undefined);
+            const getSignature = () => 'sig';
+            const hook = await renderHook(({ enabled, activityToken }) => useScmAdaptivePolling({
+                enabled, activityToken, baseIntervalMs: 1000, stepIntervalMs: 1000,
+                maxIntervalMs: 4000, invalidateAndAwait, getSignature,
+            }), { initialProps: { enabled: true, activityToken: 0 }, flushOptions: { cycles: 0 } });
+            if (retirement === 'disable') await hook.rerender({ enabled: false, activityToken: 0 });
+            if (retirement === 'background') await act(async () => { appState.change('background'); });
+            if (retirement === 'unmount') await hook.unmount();
+            if (retirement === 'restart') await hook.rerender({ enabled: true, activityToken: 1 });
+            await act(async () => { finish(); });
+            expect(vi.getTimerCount()).toBe(retirement === 'restart' ? 1 : 0);
+            if (retirement !== 'unmount') await hook.unmount();
+            expect(vi.getTimerCount()).toBe(0);
+            const calls = invalidateAndAwait.mock.calls.length;
+            await flushHookEffects({ cycles: 1, advanceTimersMs: 60_000 });
+            expect(invalidateAndAwait).toHaveBeenCalledTimes(calls);
+            expect(vi.getTimerCount()).toBe(0);
+        },
+    );
 
     it('does not poll when baseIntervalMs is 0 (prevents tight loops)', async () => {
         const { useScmAdaptivePolling } = await import('./useScmAdaptivePolling');

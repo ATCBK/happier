@@ -3,7 +3,6 @@ import { t } from '@/text';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import {
     buildNonFastForwardFetchPromptDialog,
-    buildRemoteConfirmDialog,
     buildRemoteOperationBusyLabel,
     buildRemoteOperationSuccessDetail,
     type RemoteOperationKind,
@@ -14,9 +13,9 @@ import { getScmUserFacingError } from '@/scm/operations/userFacingErrors';
 import { trackBlockedScmOperation, type ScmOperationTracker } from '@/scm/operations/reporting';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
-import type { ScmPushRejectPolicy, ScmRemoteConfirmPolicy } from '@/scm/settings/preferences';
-import { shouldConfirmRemoteOperation } from '@/scm/settings/remoteConfirmationPolicy';
+import type { ScmPushRejectPolicy } from '@/scm/settings/preferences';
 import { runScmOperationWithGitIndexLockRecovery } from '@/scm/operations/gitIndexLockRecovery';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import {
     SCM_OPERATION_ERROR_CODES,
@@ -54,7 +53,6 @@ export async function executeScmRemoteOperation(input: Readonly<{
     scmSnapshot: ScmWorkingSnapshot | null;
     scmWriteEnabled: boolean;
     scmCommitStrategy: ScmCommitStrategy;
-    scmRemoteConfirmPolicy: ScmRemoteConfirmPolicy;
     scmPushRejectPolicy: ScmPushRejectPolicy;
     surface: ScmOperationSurface;
     tracking?: ScmOperationTracker | null;
@@ -62,11 +60,12 @@ export async function executeScmRemoteOperation(input: Readonly<{
     setScmOperationStatus: (status: string | null) => void;
     runWithOperationLock: (
         kind: ScmRemoteOperationKind,
-        run: () => Promise<void>,
+        run: (markRunning: () => void) => Promise<void>,
     ) => Promise<ScmRemoteOperationLockResult>;
     executeRemoteOperation: (
         kind: ScmRemoteOperationKind,
         target: RemoteTargetDisplay,
+        call: Readonly<{ confirmedByPerson: boolean; onDispatched: () => void }>,
     ) => Promise<ScmRemoteResponse>;
     removeIndexLock?: (
         request: ScmRepositoryRemoveIndexLockRequest,
@@ -74,6 +73,10 @@ export async function executeScmRemoteOperation(input: Readonly<{
     reportOperation: (input: RemoteOperationReportInput) => void;
     refreshAfterSuccess: (kind: ScmRemoteOperationKind) => Promise<void>;
     shouldContinue?: (() => boolean) | null;
+    /**
+     * The person already answered this press in a dialog of their own (a pull or push choice), so the remote
+     * Action's default confirmation is not asked again. Confirmation itself belongs to the Action executor.
+     */
     skipConfirmation?: boolean;
     retrySkipConfirmation?: boolean;
     policy?: ScmRemotePolicy;
@@ -125,43 +128,30 @@ export async function executeScmRemoteOperation(input: Readonly<{
     const remoteTarget = leaseTarget ?? inferRemoteTargetFromSnapshot(input.scmSnapshot);
     let shouldOfferFetchAfterPushReject = false;
     let pullRefreshed = false;
-    const isPullOrPush = input.kind === 'pull' || input.kind === 'push';
-    const shouldConfirmRemote = input.skipConfirmation === true
-        ? false
-        : shouldConfirmRemoteOperation(input.scmRemoteConfirmPolicy, input.kind);
 
-    if (isPullOrPush && (leasePush || shouldConfirmRemote)) {
-        const dialog = leaseTarget ? {
-            title: t('sessionGitPane.flow.lease.confirmTitle'),
-            body: t('sessionGitPane.flow.lease.confirmBody', { target: `${remoteTarget.remote}/${remoteTarget.branch}`, oid: leaseTarget.expectedRemoteOid.slice(0, 7) }),
-            confirmText: t('sessionGitPane.flow.lease.push'),
-            cancelText: t('common.cancel'),
-        } : buildRemoteConfirmDialog({
-            kind: input.kind,
-            target: remoteTarget,
-            detachedHeadLabel: t('files.detachedHead'),
-        });
-        const confirmed = await Modal.confirm(
-            dialog.title,
-            dialog.body,
-            { confirmText: dialog.confirmText, cancelText: dialog.cancelText, ...(leasePush ? { destructive: true } : {}) },
-        );
-        if (!confirmed) return;
-    }
-
-    const lockResult = await input.runWithOperationLock(input.kind, async () => {
+    const lockResult = await input.runWithOperationLock(input.kind, async (markRunning) => {
         let appliedOutcome: Extract<ScmOperationOutcome, { kind: 'succeeded' }> | null = null;
-        input.setScmOperationBusy(true);
-        input.setScmOperationStatus(buildRemoteOperationBusyLabel(input.kind, remoteTarget, t('files.detachedHead')));
+        // The pane is busy ("Pushing to origin/main…") once the Action reaches the Machine, not while its
+        // confirmation dialog is open and never for a decline or a waiting approval. Until then the lock
+        // only serializes presses (`queued`); the Action's dispatch makes it `running`.
+        const showBusy = () => {
+            markRunning();
+            input.setScmOperationBusy(true);
+            input.setScmOperationStatus(buildRemoteOperationBusyLabel(input.kind, remoteTarget, t('files.detachedHead')));
+        };
         try {
-            const runRemoteOperation = () => input.executeRemoteOperation(input.kind, remoteTarget);
-            let response = await runRemoteOperation();
+            const runRemoteOperation = (confirmedByPerson: boolean) =>
+                input.executeRemoteOperation(input.kind, remoteTarget, { confirmedByPerson, onDispatched: showBusy });
+            // A lease push is always confirmed by the Action itself; the replay after index-lock recovery is the same press.
+            let response = await runRemoteOperation(input.skipConfirmation === true && !leasePush);
+            // Declined, or waiting on an approval: nothing ran and nothing failed.
+            if (isScmActionNotRun(response)) return;
             if (normalizeScmOperationOutcome(response).kind === 'failed' && input.removeIndexLock) {
                 response = await runScmOperationWithGitIndexLockRecovery({
                     cwd: repoPath,
                     failedResponse: response,
                     removeIndexLock: input.removeIndexLock,
-                    retryOriginalOperation: runRemoteOperation,
+                    retryOriginalOperation: () => runRemoteOperation(true),
                 });
             }
             const outcome = normalizeScmOperationOutcome(response);

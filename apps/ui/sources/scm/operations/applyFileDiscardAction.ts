@@ -14,6 +14,7 @@ import { getScmUserFacingError } from '@/scm/operations/userFacingErrors';
 import { runScmOperationWithGitIndexLockRecovery } from '@/scm/operations/gitIndexLockRecovery';
 import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperationLock';
 import { reportSessionScmOperation, trackBlockedScmOperation } from '@/scm/operations/reporting';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { tracking } from '@/track';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
 
@@ -60,28 +61,18 @@ export async function applyFileDiscardAction(input: Readonly<{
         return;
     }
 
-    const confirmed = await Modal.confirm(
-        t('common.discardChanges'),
-        file.fullPath,
-        {
-            cancelText: t('common.cancel'),
-            confirmText: t('common.discard'),
-            destructive: true,
-        }
-    );
-    if (!confirmed) {
-        return;
-    }
-
+    // The Action policy owns the discard confirmation (and Settings → Actions can require approval).
     const lockResult = await withSessionProjectScmOperationLock({
         state: storage.getState(),
         sessionId,
         ...(serverId ? { serverId } : {}),
         operation: 'discard',
-        run: async () => {
+        // The pane shows the discard as work in progress once the confirmed Action is dispatched, not behind its dialog.
+        deferRunning: true,
+        run: async (markRunning) => {
             const runScmOperation = async () => sessionScmChangeDiscard(sessionId, {
                 entries: [{ path: file.fullPath, kind: file.status }],
-            }, serverId);
+            }, serverId, { onDispatched: markRunning });
             let response = await runScmOperation();
 
             if (!response.success) {
@@ -94,6 +85,8 @@ export async function applyFileDiscardAction(input: Readonly<{
                     });
                 }
             }
+
+            if (isScmActionNotRun(response)) return;
 
             if (!response.success) {
                 const shownDaemonUnavailable = tryShowDaemonUnavailableAlertForScmOperationFailure({

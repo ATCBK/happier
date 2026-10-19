@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol';
+import { ScmOperationErrorCodeSchema } from '@happier-dev/protocol/scm';
 
 import { getScmUserFacingError, isRecoverableGitIndexLockError } from './scmUserFacingErrors';
 
 describe('getScmUserFacingError', () => {
+    it('explains a missing root without blaming the source control tool', () => {
+        expect(getScmUserFacingError({ errorCode: ScmOperationErrorCodeSchema.parse('ROOT_NOT_FOUND'), fallback: 'Git unavailable' }))
+            .toContain('folder');
+    });
     it('maps known scm error codes to stable user-facing messages', () => {
         expect(
             getScmUserFacingError({

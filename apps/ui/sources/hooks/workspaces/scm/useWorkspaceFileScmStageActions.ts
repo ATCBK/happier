@@ -16,6 +16,7 @@ import { tracking } from '@/track';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
 import { machineScmChangeExclude, machineScmChangeInclude } from '@/sync/ops/scm/machineScm';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 type DiffMode = 'included' | 'pending' | 'both';
 
@@ -138,6 +139,9 @@ export function useWorkspaceFileScmStageActions(input: {
                     const response = stage
                         ? await machineScmChangeInclude(scope.machineId, { cwd: scope.rootPath, paths: [filePath] }, { serverId: scope.serverId })
                         : await machineScmChangeExclude(scope.machineId, { cwd: scope.rootPath, paths: [filePath] }, { serverId: scope.serverId });
+
+                    // Declined, or waiting on an approval: nothing ran and nothing failed.
+                    if (isScmActionNotRun(response)) return;
 
                     if (!response.success) {
                         const errorMessage = getScmUserFacingError({
@@ -281,6 +285,9 @@ export function useWorkspaceFileScmStageActions(input: {
                     const response = stageSelected
                         ? await machineScmChangeInclude(scope.machineId, { cwd: scope.rootPath, patch }, { serverId: scope.serverId })
                         : await machineScmChangeExclude(scope.machineId, { cwd: scope.rootPath, patch }, { serverId: scope.serverId });
+
+                    // Declined, or waiting on an approval: nothing ran and nothing failed.
+                    if (isScmActionNotRun(response)) return;
 
                     if (!response.success) {
                         const errorMessage = getScmUserFacingError({

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mergeScmCapabilities } from '@/scm/core/snapshotMappers';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { projectManager } from '@/sync/runtime/orchestration/projectManager';
+import type { ScmRpcFailure } from '@/sync/ops/scm/scmRpcFailure';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { withSessionProjectScmOperationLock } from './withOperationLock';
 
@@ -18,8 +19,10 @@ vi.mock('@/text', async () => {
 
 const { executeScmRemoteOperation } = await import('./executeScmRemoteOperation');
 
-function run(failureFeedback: 'alert' | 'outcomeLine', behavior?: Readonly<{ execute?: (kind: 'fetch' | 'pull' | 'push') => Promise<ScmRemoteResponse>; refresh?: () => Promise<void>; policy?: ScmRemotePolicy; leaseSupported?: boolean; pushRejectPolicy?: 'prompt_fetch' | 'auto_fetch'; kind?: 'pull' | 'push'; pushAfterPull?: boolean; confirmPolicy?: 'always' | 'never'; shouldContinue?: () => boolean; refreshedBranch?: string | null }>) {
+function run(failureFeedback: 'alert' | 'outcomeLine', behavior?: Readonly<{ execute?: (kind: 'fetch' | 'pull' | 'push', target: unknown, call: Readonly<{ confirmedByPerson: boolean; onDispatched: () => void }>) => Promise<ScmRemoteResponse>; refresh?: () => Promise<void>; policy?: ScmRemotePolicy; leaseSupported?: boolean; pushRejectPolicy?: 'prompt_fetch' | 'auto_fetch'; kind?: 'pull' | 'push'; pushAfterPull?: boolean; shouldContinue?: () => boolean; refreshedBranch?: string | null }>) {
     const reportOperation = vi.fn();
+    const setScmOperationBusy = vi.fn();
+    const setScmOperationStatus = vi.fn();
     const executeRemoteOperation = vi.fn(async () => ({
         success: false as const,
         errorCode: SCM_OPERATION_ERROR_CODES.REMOTE_NON_FAST_FORWARD,
@@ -50,13 +53,12 @@ function run(failureFeedback: 'alert' | 'outcomeLine', behavior?: Readonly<{ exe
         shouldContinue: behavior?.shouldContinue,
         scmWriteEnabled: true,
         scmCommitStrategy: 'atomic',
-        scmRemoteConfirmPolicy: behavior?.confirmPolicy ?? 'never',
         scmPushRejectPolicy: behavior?.pushRejectPolicy ?? 'prompt_fetch',
         surface: 'update',
-        setScmOperationBusy: vi.fn(),
-        setScmOperationStatus: vi.fn(),
+        setScmOperationBusy,
+        setScmOperationStatus,
         runWithOperationLock: (operation, body) => withSessionProjectScmOperationLock({
-            sessionId: 'remote-session', operation, run: body,
+            sessionId: 'remote-session', operation, deferRunning: true, run: body,
             // Delegate the storage facade to its real domain owner; ProjectManager takes a clock, not a server, as its third argument.
             state: {
                 beginSessionProjectScmOperation: (sessionId, kind) => projectManager.beginSessionProjectScmOperation(sessionId, kind),
@@ -73,7 +75,7 @@ function run(failureFeedback: 'alert' | 'outcomeLine', behavior?: Readonly<{ exe
         failureFeedback,
         policy: behavior?.policy,
     });
-    return { done, reportOperation };
+    return { done, reportOperation, setScmOperationBusy, setScmOperationStatus };
 }
 
 describe('executeScmRemoteOperation failure feedback', () => {
@@ -99,11 +101,50 @@ describe('executeScmRemoteOperation failure feedback', () => {
             await run('outcomeLine', { ...failure, execute, kind: 'pull', pushAfterPull: true, policy: { reconcile: 'merge' } }).done;
             expect(execute.mock.calls).toHaveLength(1);
         }
-        confirm.mockResolvedValue(false);
-        const execute = vi.fn(async () => ({ success: true }));
-        await run('outcomeLine', { execute, kind: 'pull', pushAfterPull: true, confirmPolicy: 'always', policy: { reconcile: 'merge' } }).done;
-        expect(execute).not.toHaveBeenCalled();
-        confirm.mockResolvedValue(true);
+    });
+
+    it('shows the busy state only once the Action is dispatched, after any confirmation, and never for a declined press', async () => {
+        let busyBeforeDispatch: unknown[] | null = null;
+        let phaseBefore: string | undefined;
+        let phaseAfter: string | undefined;
+        let thrown: unknown;
+        const confirmed = run('outcomeLine', { execute: async (_kind, _target, call) => {
+            try {
+                await Promise.resolve();
+                busyBeforeDispatch = [...confirmed.setScmOperationBusy.mock.calls, ...confirmed.setScmOperationStatus.mock.calls];
+                // The lock serializes presses from the start but only reads as work in progress once dispatched.
+                phaseBefore = projectManager.getSessionProjectScmInFlightOperation('remote-session')?.phase;
+                call.onDispatched();
+                phaseAfter = projectManager.getSessionProjectScmInFlightOperation('remote-session')?.phase;
+            } catch (error) { thrown = error; }
+            return { success: true };
+        } });
+        await confirmed.done;
+        expect(thrown).toBeUndefined();
+        expect(confirmed.reportOperation).toHaveBeenCalledWith(expect.objectContaining({ status: 'success' }));
+        expect(busyBeforeDispatch).toEqual([]);
+        expect([phaseBefore, phaseAfter]).toEqual(['queued', 'running']);
+        expect(confirmed.setScmOperationBusy.mock.calls[0]).toEqual([true]);
+        expect(confirmed.setScmOperationStatus.mock.calls[0]?.[0]).toEqual(expect.stringContaining('origin'));
+        // A decline resolves without ever dispatching: the pane was never marked busy.
+        const declined: ScmRpcFailure = { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_CANCELLED, error: 'declined', declined: true };
+        const cancelled = run('outcomeLine', { execute: async () => declined });
+        await cancelled.done;
+        expect(cancelled.setScmOperationBusy.mock.calls.filter(([busy]) => busy === true)).toEqual([]);
+        expect(cancelled.setScmOperationStatus.mock.calls.filter(([status]) => status !== null)).toEqual([]);
+    });
+
+    it('stays quiet when the person declines the Action confirmation: no push after pull, no report, no alert, no refresh', async () => {
+        const declined: ScmRpcFailure = { success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_CANCELLED, error: 'declined', declined: true };
+        const execute = vi.fn(async () => declined);
+        const refresh = vi.fn(async () => {});
+        alert.mockClear();
+        const { done, reportOperation } = run('alert', { execute, refresh, kind: 'pull', pushAfterPull: true, pushRejectPolicy: 'auto_fetch', policy: { reconcile: 'merge' } });
+        await done;
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(reportOperation).not.toHaveBeenCalled();
+        expect(alert).not.toHaveBeenCalled();
+        expect(refresh).not.toHaveBeenCalled();
     });
 
     it('does not push if the owning pane retires between the confirmed pull and push', async () => {
@@ -122,14 +163,6 @@ describe('executeScmRemoteOperation failure feedback', () => {
             if (refreshedBranch) expect(reportOperation).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'push', status: 'failed', outcome: expect.objectContaining({ kind: 'needs_input', nextActions: [{ kind: 'refresh' }] }) }));
         }
     });
-    it('always asks before rewriting an observed remote even when ordinary push confirmation is disabled', async () => {
-        confirm.mockClear().mockResolvedValue(false);
-        const execute = vi.fn(async () => ({ success: true }));
-        await run('outcomeLine', { execute, policy: { pushMode: 'force_with_lease', expectedRemoteOid: 'a'.repeat(40) } }).done;
-        expect(confirm).toHaveBeenCalled();
-        expect(execute).not.toHaveBeenCalled();
-    });
-
     it('rejects an unadvertised lease without dispatching an ordinary push', async () => {
         const execute = vi.fn(async () => ({ success: true }));
         const { done, reportOperation } = run('outcomeLine', { execute, leaseSupported: false, policy: { pushMode: 'force_with_lease', expectedRemoteOid: 'a'.repeat(40) } });

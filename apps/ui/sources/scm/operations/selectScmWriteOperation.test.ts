@@ -34,6 +34,15 @@ describe('selectScmWriteOperation', () => {
         }
     });
 
+    it('reports an operation as in progress only once it runs: a queued one still waits for the person\'s confirmation', () => {
+        const committed: ScmProjectOperationLogEntry = { id: 'c', sessionId: 'session', operation: 'commit', status: 'success', timestamp: 2, detail: 'abc123def' };
+        const inFlight = { id: 'op', startedAt: 5, sessionId: 'session', operation: 'push' as const };
+        expect(selectScmWriteOperation({ inFlight: { ...inFlight, phase: 'queued' }, log: [committed], machineReachable: true }))
+            .toMatchObject({ phase: 'succeeded', action: 'commit' });
+        expect(selectScmWriteOperation({ inFlight: { ...inFlight, phase: 'running' }, log: [committed], machineReachable: true }))
+            .toMatchObject({ phase: 'running', action: 'push', id: 'op' });
+    });
+
     it('keeps a terminal result and commit SHA visible after the operation lock clears', () => {
         expect(selectScmWriteOperation({
             inFlight: null,

@@ -165,7 +165,8 @@ describe('useFilesScmOperations integration', () => {
     beforeEach(() => {
         storage.setState(initialStorageState, true);
         projectManager.clear();
-        storage.getState().applySettingsLocal({ scmGitRepoPreferredBackend: 'git' } as any);
+        // These cases exercise the remote mechanics; the executor's confirmation is covered by scm/operations/scmUiConfirmation.test.ts.
+        storage.getState().applySettingsLocal({ scmGitRepoPreferredBackend: 'git', scmRemoteConfirmPolicy: 'never' } as any);
 
 	        mockSessionRPC.mockReset();
 	        mockMachineRPC.mockReset();
@@ -235,7 +236,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -259,7 +259,7 @@ describe('useFilesScmOperations integration', () => {
         expect(loadCommitHistory).toHaveBeenNthCalledWith(1, { reset: true });
         expect(loadCommitHistory).toHaveBeenNthCalledWith(2, { reset: true });
         expect(refreshScmData).toHaveBeenCalledTimes(1);
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(modalConfirm).not.toHaveBeenCalled();
         expect(modalAlert).not.toHaveBeenCalled();
 
         const operationLog = storage.getState().getSessionProjectScmOperationLog(sessionId);
@@ -298,7 +298,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -355,7 +354,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
@@ -400,7 +398,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData,
             loadCommitHistory,
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -448,7 +445,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -501,7 +497,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -549,7 +544,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -596,7 +590,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData,
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -653,7 +646,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -714,7 +706,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -775,7 +766,6 @@ describe('useFilesScmOperations integration', () => {
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
         } as any);
 
@@ -833,7 +823,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -902,7 +891,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -912,7 +900,8 @@ describe('useFilesScmOperations integration', () => {
             await hook.getCurrent().runRemoteOperation('push');
         });
 
-        expect(modalConfirm).toHaveBeenCalledTimes(2);
+        // The fetch offer after the rejected push is the only dialog.
+        expect(modalConfirm).toHaveBeenCalledTimes(1);
         expect(refreshScmData).toHaveBeenCalledTimes(1);
         expect(loadCommitHistory).not.toHaveBeenCalled();
         expect(invalidateFromMutationAndAwait).not.toHaveBeenCalled();
@@ -958,7 +947,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'never',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
@@ -1017,7 +1005,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'auto_fetch',
             refreshScmData,
             loadCommitHistory: vi.fn(async () => {}),
@@ -1027,7 +1014,7 @@ describe('useFilesScmOperations integration', () => {
             await hook.getCurrent().runRemoteOperation('push');
         });
 
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(modalConfirm).not.toHaveBeenCalled();
         expect(refreshScmData).toHaveBeenCalledTimes(1);
         expect(git(workspace, ['rev-parse', `origin/${branch}`])).toBe(remoteHead);
 
@@ -1058,7 +1045,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -1107,7 +1093,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
@@ -1154,7 +1139,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData: vi.fn(async () => {}),
             loadCommitHistory: vi.fn(async () => {}),
@@ -1195,7 +1179,6 @@ describe('useFilesScmOperations integration', () => {
             scmSnapshot: normalizeWorkingSnapshotForUi(snapshotResponse.snapshot, `local:${workspace}`),
             scmWriteEnabled: true,
             scmCommitStrategy: 'git_staging',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,

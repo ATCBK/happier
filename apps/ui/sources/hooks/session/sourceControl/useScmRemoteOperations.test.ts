@@ -90,11 +90,14 @@ describe('useScmRemoteOperations', () => {
         storage.getState().applySessions([createSessionFixture({ id: 'session-1', active: true, metadata: { path: '/repo', host: 'localhost', machineId: 'machine-1' } })]);
         modalMock.spies.confirm.mockClear();
         modalMock.spies.alert.mockClear();
-        sessionScmRemoteFetch.mockReset();
-        sessionScmRemoteFetch.mockResolvedValue({ success: true, stdout: 'fetched' });
-        sessionScmRemotePush.mockReset();
-        sessionScmRemotePush.mockResolvedValue({ success: true, stdout: 'pushed' });
-        sessionScmRemotePull.mockReset().mockResolvedValue({ success: true, stdout: 'pulled' });
+        // Like the real facades, a fake tells the pane its Action is dispatched; the pane shows busy from then on.
+        const dispatching = (stdout: string) => async (...args: readonly unknown[]): Promise<ScmRemoteResponse> => {
+            (args[3] as { onDispatched?: () => void } | undefined)?.onDispatched?.();
+            return { success: true, stdout };
+        };
+        sessionScmRemoteFetch.mockReset().mockImplementation(dispatching('fetched'));
+        sessionScmRemotePush.mockReset().mockImplementation(dispatching('pushed'));
+        sessionScmRemotePull.mockReset().mockImplementation(dispatching('pulled'));
         sessionScmRepositoryRemoveIndexLock.mockClear();
         invalidateFromMutationAndAwait.mockClear();
         loadCommitHistory.mockClear();
@@ -114,7 +117,6 @@ describe('useScmRemoteOperations', () => {
             scmSnapshot: snapshot,
             scmWriteEnabled: true,
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'always',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -128,28 +130,28 @@ describe('useScmRemoteOperations', () => {
         expect(sessionScmRemotePush).toHaveBeenCalledWith('session-1', {
             remote: 'origin',
             branch: 'main',
-        }, undefined);
+        }, undefined, { confirmedByPerson: true, onDispatched: expect.any(Function) });
         expect(invalidateFromMutationAndAwait).toHaveBeenCalledWith('session-1', undefined);
         expect(loadCommitHistory).toHaveBeenCalledWith({ reset: true });
     });
 
-    it('pushes only the observed upstream lease after explicit confirmation, even when confirmations are skipped', async () => {
+    it('pushes only the observed upstream lease and still leaves its confirmation to the push Action when confirmations are skipped', async () => {
         const { useScmRemoteOperations } = await import('./useScmRemoteOperations');
         const expectedRemoteOid = 'a'.repeat(40);
         const hook = await renderHook(() => useScmRemoteOperations({
             sessionId: 'session-1', sessionPath: '/repo',
             scmSnapshot: { ...snapshot, capabilities: { ...snapshot.capabilities, writeRemoteForceWithLease: true },
                 branch: { ...snapshot.branch, head: 'local-name', upstream: 'upstream/feature', upstreamOid: expectedRemoteOid, behind: 2 } },
-            scmWriteEnabled: true, scmCommitStrategy: 'atomic', scmRemoteConfirmPolicy: 'never',
+            scmWriteEnabled: true, scmCommitStrategy: 'atomic',
             scmPushRejectPolicy: 'prompt_fetch', refreshScmData, loadCommitHistory,
         }));
         await act(async () => {
             await hook.getCurrent().runRemoteOperation('push', { skipConfirmation: true, policy: { pushMode: 'force_with_lease', expectedRemoteOid } });
         });
-        expect(modalMock.spies.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
+        // A press that was answered in another dialog never skips the lease confirmation, which the push Action owns.
         expect(sessionScmRemotePush).toHaveBeenCalledWith('session-1', {
             remote: 'upstream', branch: 'feature', pushMode: 'force_with_lease', expectedRemoteOid,
-        }, undefined);
+        }, undefined, { confirmedByPerson: false, onDispatched: expect.any(Function) });
         expect(sessionScmRemoteFetch).not.toHaveBeenCalled();
     });
 
@@ -169,7 +171,6 @@ describe('useScmRemoteOperations', () => {
             scmSnapshot: snapshot,
             scmWriteEnabled: true,
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'never',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -201,7 +202,6 @@ describe('useScmRemoteOperations', () => {
             scmSnapshot: snapshot,
             scmWriteEnabled: true,
             scmCommitStrategy: 'atomic',
-            scmRemoteConfirmPolicy: 'never',
             scmPushRejectPolicy: 'prompt_fetch',
             refreshScmData,
             loadCommitHistory,
@@ -236,7 +236,7 @@ describe('useScmRemoteOperations', () => {
         const { useScmRemoteOperations } = await import('./useScmRemoteOperations');
         const hook = await renderHook(() => useScmRemoteOperations({
             sessionId: 'session-1', sessionPath: '/repo', scmSnapshot: snapshot,
-            scmWriteEnabled: true, scmCommitStrategy: 'atomic', scmRemoteConfirmPolicy: 'never',
+            scmWriteEnabled: true, scmCommitStrategy: 'atomic',
             scmPushRejectPolicy: 'prompt_fetch', refreshScmData, loadCommitHistory,
         }));
 
@@ -244,7 +244,7 @@ describe('useScmRemoteOperations', () => {
             await hook.getCurrent().runRemoteOperation('pull', { policy: { dirtyPolicy: 'autostash', reconcile: 'rebase' } });
         });
 
-        expect(sessionScmRemotePull).toHaveBeenCalledWith('session-1', { remote: 'origin', branch: 'main', dirtyPolicy: 'autostash', reconcile: 'rebase' }, undefined);
+        expect(sessionScmRemotePull).toHaveBeenCalledWith('session-1', { remote: 'origin', branch: 'main', dirtyPolicy: 'autostash', reconcile: 'rebase' }, undefined, { confirmedByPerson: false, onDispatched: expect.any(Function) });
         expect(storage.getState().getSessionProjectScmOperationLog('session-1')).toEqual(expect.arrayContaining([
             expect.objectContaining({ operation: 'pull', status: 'failed', outcome }),
         ]));

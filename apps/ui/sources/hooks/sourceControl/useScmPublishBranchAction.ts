@@ -4,6 +4,7 @@ import { Modal } from '@/modal';
 import { resolvePublishRemoteFromSnapshot } from '@/scm/operations/remoteTarget';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 type PublishBranchResponse = Readonly<{
     success: boolean;
@@ -66,6 +67,7 @@ export function useScmPublishBranchAction(input: UseScmPublishBranchActionInput)
         setPublishBusy(true);
         try {
             const response = await executePublish(publishRemote);
+            if (isScmActionNotRun(response)) return false;
             if (!response.success) {
                 Modal.alert(t('common.error'), response.error || response.stderr || t('files.branchMenu.publish.failed'));
                 return false;
