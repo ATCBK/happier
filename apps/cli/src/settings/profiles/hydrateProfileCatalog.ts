@@ -1,3 +1,4 @@
+import { $ZodError } from 'zod/v4/core';
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import type { StoredCredentials } from '@/persistence';
 import { readStoredCredentials } from '@/persistence';
@@ -136,7 +137,7 @@ function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActivePro
           : !current() || code === 'scope-retired' ? 'scope-retired'
           : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' ? code
           : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
-          : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable' };
+          : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
       }
       if (!context && reloadAfterPending.has(key)) continue;
       if (!await publishCatalog(catalog)) return { status: 'unavailable', reason: 'scope-retired' };

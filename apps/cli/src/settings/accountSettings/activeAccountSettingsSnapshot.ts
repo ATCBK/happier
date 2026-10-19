@@ -461,6 +461,18 @@ export function readConnectedAccountCatalogFromSnapshot(snapshot: ActiveAccountS
     ?? { status: 'loading' };
 }
 
+/** A row reobservation precedes cleanup; omitted phase metadata cannot erase the same row's observed outcome. */
+export function preserveConnectedAccountCatalogCleanup(
+  previous: ConnectedAccountCatalogSnapshotV1 | undefined,
+  next: ConnectedAccountCatalogSnapshotV1,
+): ConnectedAccountCatalogSnapshotV1 {
+  return previous?.status === 'ready' && next.status === 'ready'
+    && previous.cleanup !== undefined && next.cleanup === undefined
+    && previous.revision === next.revision && isDeepStrictEqual(previous.record, next.record)
+    ? { ...next, cleanup: previous.cleanup }
+    : next;
+}
+
 /** The row revision is independent of Account preferences; the existing Account lifetime owns publication. */
 export function commitActiveConnectedAccountCatalog(input: Readonly<{
   scopeKey: string; lifetimeToken: number; key: ConnectedAccountCatalogKeyV1; catalog: ConnectedAccountCatalogSnapshotV1;
@@ -469,8 +481,9 @@ export function commitActiveConnectedAccountCatalog(input: Readonly<{
     || input.catalog.status === 'ready' && input.catalog.record.key !== input.key) return false;
   const incumbent = published?.scopeKey === input.scopeKey
     ? readConnectedAccountCatalogFromSnapshot(published, input.key) : undefined;
-  const unchanged = incumbent !== undefined && JSON.stringify(incumbent) === JSON.stringify(input.catalog);
-  const catalog = unchanged ? incumbent : input.catalog;
+  const observed = preserveConnectedAccountCatalogCleanup(incumbent, input.catalog);
+  const unchanged = incumbent !== undefined && isDeepStrictEqual(incumbent, observed);
+  const catalog = unchanged ? incumbent : observed;
   const next = input.key === 'configurations' ? { ...active, connectedConfigurationCatalog: catalog }
     : { ...active, connectedPurposeCatalog: catalog };
   active = next;
@@ -489,16 +502,30 @@ export function beginActiveConnectedAccountCatalogRefresh(input: Readonly<{
   return true;
 }
 
+function preserveProviderConnectionsCatalogAuthority(
+  incumbent: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'],
+  next: ProviderConnectionsCatalogSnapshotV1,
+): ProviderConnectionsCatalogSnapshotV1 {
+  // Cleanup is not a new row authority. Keep the admitted catalog identity
+  // when a reobserved equal row gains its independent maintenance outcome.
+  return incumbent?.status === 'ready' && next.status === 'ready'
+    && incumbent.revision === next.revision && isDeepStrictEqual(incumbent.catalog, next.catalog)
+    ? { ...next, catalog: incumbent.catalog }
+    : next;
+}
+
 /** Change the Provider facet without serializing a domain mirror in preferences. */
 export function replaceProviderConnectionsCatalogInSnapshot(snapshot: ActiveAccountSettingsSnapshot,
   catalog: ProviderConnectionsCatalogSnapshotV1): ActiveAccountSettingsSnapshot {
-  return { ...snapshot, providerConnectionsCatalog: catalog };
+  return { ...snapshot, providerConnectionsCatalog: preserveProviderConnectionsCatalogAuthority(snapshot.providerConnectionsCatalog, catalog) };
 }
 
 export function commitActiveProviderConnectionsCatalog(input: Readonly<{
   scopeKey: string; lifetimeToken: number; catalog: ProviderConnectionsCatalogSnapshotV1;
 }>): boolean {
-  return commitActiveAccountCatalog({ ...input, facet: 'providerConnectionsCatalog' });
+  const incumbent = published?.scopeKey === input.scopeKey ? published.providerConnectionsCatalog : undefined;
+  const catalog = preserveProviderConnectionsCatalogAuthority(incumbent, input.catalog);
+  return commitActiveAccountCatalog({ ...input, catalog, facet: 'providerConnectionsCatalog' });
 }
 
 export function beginActiveProviderConnectionsCatalogRefresh(input: Readonly<{ scopeKey: string; lifetimeToken: number }>): boolean {

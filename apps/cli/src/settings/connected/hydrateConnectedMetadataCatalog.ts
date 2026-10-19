@@ -1,3 +1,4 @@
+import { $ZodError } from 'zod/v4/core';
 import type { ConnectedMetadataCatalogV1 } from '@happier-dev/protocol/connect/connectedMetadataCatalogV1';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -62,7 +63,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
         catalog = unavailable(requestInput.signal?.aborted ? 'cancelled' : !current() || code === 'scope-retired' ? 'scope-retired'
           : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
             : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
-              : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable');
+              : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable');
       }
       if (!current()) return unavailable('scope-retired');
       if (refreshAfterInFlight.delete(key)) { requestInput = uncancelledInput; continue; }

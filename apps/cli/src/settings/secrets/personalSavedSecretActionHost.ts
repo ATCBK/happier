@@ -14,8 +14,9 @@ import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTrans
 import { runWithServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { getRandomBytes } from '@/api/encryption';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { captureSavedSecretSourcePreparationForOperation, prepareSavedSecretResourceCreateForOperation, readSavedSecretCatalogForOperation,
-    type SavedSecretOperationContextV1 } from './hydrateSavedSecretCatalog';
+import { captureSavedSecretSourcePreparationForOperation, prepareSavedSecretResourceCreateForOperation } from "./hydrateSavedSecretCatalog";
+import { readSavedSecretCatalogForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 
 function refusal(code: string, details?: unknown): never {
     throw Object.assign(new Error(code), { code, ...(details === undefined ? {} : { details }) });

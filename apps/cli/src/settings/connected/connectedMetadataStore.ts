@@ -5,7 +5,7 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
-import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { classifyHomeDomainHttpMutationFailureV1, readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { loadConnectedMetadataCatalogV1, type ConnectedMetadataCatalogV1, type ConnectedMetadataSourceTransferV1 } from '@happier-dev/protocol/connect/connectedMetadataCatalogV1';
 import {
   ConnectedPresentationRowReadResponseV1Schema, ConnectedAcknowledgementsRowReadResponseV1Schema,
@@ -74,10 +74,11 @@ export function createCliConnectedMetadataStore(input: MetadataStoreInput) {
     // A durable mutation receipt remains true after retirement; private reads do not.
     if (body === undefined) await assertCurrent();
     if (response.status < 200 || response.status >= 300 && response.status !== 409) {
+      const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
       throw Object.assign(new Error('Connected metadata transport unavailable'), { code:
-        body !== undefined && response.status >= 500 ? 'outcome_unknown'
+        rollback?.code ?? (body !== undefined && response.status >= 500 ? 'outcome_unknown'
           : response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
-          : [404, 405, 501].includes(response.status) ? 'unsupported' : 'unreachable' });
+          : [404, 405, 501].includes(response.status) ? 'unsupported' : 'unreachable') });
     }
     return response.data;
   };

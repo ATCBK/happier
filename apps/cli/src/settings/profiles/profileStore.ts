@@ -26,6 +26,7 @@ import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSa
 import { parseSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { readSavedSecretRevisionsFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { resolveCliHomeTarget } from '@/server/homeTarget';
+import { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
 
 /** Captured Home/Account transport shared by Profile hydration and typed Actions. */
 export function createCliProfileStore(input: Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>) {
@@ -107,7 +108,7 @@ function createCapturedCliProfileStore(input: Readonly<{
   const readTransfer = async () => ProfileTransferRowReadResponseV1Schema.parse(await request(PROFILE_TRANSFER_ROUTE_V1));
   const mutateRecord = async (mutation: ProfileRowMutationV1) => ProfileRowMutationResponseV1Schema.parse(await request(
     PROFILE_RECORDS_ROUTE_V1, ProfileRowMutationV1Schema.parse(mutation)));
-  const readProfileCatalogCapture = async (migrateSkills = false) => {
+  const prepareProfileCatalogCapture = async (migrateSkills = false) => {
     const context = await readStorageContext();
     const settingsVersion = input.readSettingsVersion?.();
     const captured: { source: Awaited<ReturnType<typeof readSourceSnapshot>> | null } = { source: null };
@@ -125,11 +126,11 @@ function createCapturedCliProfileStore(input: Readonly<{
           await verifyCurrent();
           return artifact;
         }),
-        writeRecord: async (record, expectedRevision) => {
+        writeRecord: async (record, expectedRevision) => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
           const written = await store.writeRecord({ record, expectedRevision, operation: 'update' });
           return written.status === 'updated' ? { status: 'updated' as const, revision: written.revision }
             : { status: written.status === 'conflict' ? 'conflict' as const : 'unavailable' as const };
-        },
+        }),
       } } : {}),
       readSource: async () => {
         captured.source = await readSourceSnapshot();
@@ -143,6 +144,13 @@ function createCapturedCliProfileStore(input: Readonly<{
         || input.readSettingsVersion() !== settingsVersion)
         ? { status: 'unavailable', reason: 'reference-conflict' } : catalog;
     return { catalog: result, source: captured.source };
+  };
+  const readProfileCatalogCapture = async (migrateSkills = false) => {
+    // Loading can migrate skills; that callback leaves preparation before any
+    // write. Fresh admission still guards disclosure and downstream publication.
+    const captured = await runWithRequesterSessionCurrentnessCheckpoint(() => prepareProfileCatalogCapture(migrateSkills), { readOnly: true });
+    await verifyCurrent();
+    return captured;
   };
   const readProfileCatalog = async (options?: Readonly<{ migrateSkills: true }>) => (await readProfileCatalogCapture(options?.migrateSkills)).catalog;
   const readSourceSnapshot = async () => {

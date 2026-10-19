@@ -21,11 +21,9 @@ import {
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createSavedSecretMaterializerFromSnapshotV1 } from './savedSecretCatalog';
-import {
-  createInvocationSavedSecretOperationContextV1,
-  hydrateSavedSecretCatalog,
-  refreshSavedSecretCatalogForOperation,
-} from './hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
+import { refreshSavedSecretCatalogForOperation } from "./hydrateSavedSecretCatalog";
 import * as savedSecretOperationOwner from './hydrateSavedSecretCatalog';
 import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -33,6 +31,8 @@ import { decodeBase64 } from '@/api/encryption';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { emptyMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 
 vi.mock('axios', () => ({
   default: { get: vi.fn(), post: vi.fn() },
@@ -55,6 +55,9 @@ describe('Saved Secret catalog hydration', () => {
     let source: import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null = initial;
     const context = createInvocationSavedSecretOperationContextV1({ credentials: { token, encryption: null }, snapshot: initial,
       serverHttpBaseUrl: 'https://captured-source.example', isCurrent: async () => true, readSourceSnapshot: () => source });
+    expect(await context.commitMcpCatalog({ status: 'ready', authority: 'inactive', revision: 'absent',
+      catalog: emptyMcpServerCatalogV1(), diagnostics: [] })).toBe(false);
+    expect(context.readSnapshot()?.mcpServerCatalog).toBeUndefined();
     const privateCatalog = { status: 'ready' as const, rows: [], tombstones: [], diagnostics: [] };
     source = { ...initial, loadedAtMs: 2 };
     expect(context.readSnapshot()?.loadedAtMs).toBe(2);
@@ -123,7 +126,7 @@ describe('Saved Secret catalog hydration', () => {
     vi.unstubAllGlobals();
   });
 
-  it('publishes invocation Connected-account catalogs across preference refresh without changing Settings and retires late writes', async () => {
+  it('retains exact invocation catalog cleanup across preference and data reobservation and retires late writes', async () => {
     const token = 'connected-invocation-token';
     const scopeKey = resolveAccountSettingsScopeKeyForToken(token);
     const snapshot = { source: 'network' as const, settings: AccountSettingsSchema.parse({}), rawSettings: {},
@@ -132,15 +135,59 @@ describe('Saved Secret catalog hydration', () => {
     const context = createInvocationSavedSecretOperationContextV1({ credentials: { token, encryption: null }, snapshot,
       serverHttpBaseUrl: 'https://connected-home.example', isCurrent: async () => current });
     const catalog = { status: 'ready' as const, revision: 7,
-      record: { key: 'configurations' as const, value: { v: 1 as const, entries: [] } } };
+      record: { key: 'configurations' as const, value: { v: 1 as const, entries: [] } },
+      cleanup: { status: 'complete' as const } };
     expect(await context.commitConnectedAccountCatalog({ key: 'configurations', catalog })).toBe(true);
     expect(context.readSnapshot()).toMatchObject({ settingsVersion: 4, connectedConfigurationCatalog: catalog });
     expect(await context.replaceAccountSettings({ ...snapshot, settingsVersion: 5 })).toBe(true);
     expect(context.readSnapshot()).toMatchObject({ settingsVersion: 5, connectedConfigurationCatalog: catalog });
+    const beforeReobservation = context.readSnapshot();
+    const reobserved = { status: 'ready' as const, revision: catalog.revision, record: catalog.record };
+    expect(await context.commitConnectedAccountCatalog({ key: 'configurations', catalog: reobserved })).toBe(true);
+    expect(context.readSnapshot()).toBe(beforeReobservation);
+    const cleanupPending = { status: 'cleanup-pending' as const, reason: 'source-unavailable' as const };
+    expect(await context.commitConnectedAccountCatalog({ key: 'configurations', catalog: { ...catalog, cleanup: cleanupPending } })).toBe(true);
+    expect(context.readSnapshot()?.connectedConfigurationCatalog).toMatchObject({ cleanup: cleanupPending });
+    expect(await context.commitConnectedAccountCatalog({ key: 'configurations', catalog: { ...reobserved, revision: 8 } })).toBe(true);
+    expect(context.readSnapshot()?.connectedConfigurationCatalog).not.toHaveProperty('cleanup');
     current = false;
     expect(await context.commitConnectedAccountCatalog({ key: 'configurations', catalog: { ...catalog, revision: 8 } })).toBe(false);
     expect(context.readSnapshot()).toBeNull();
     expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('preserves private Provider row authority across cleanup but refuses changed data and retired writes', async () => {
+    const token = 'provider-invocation-cleanup-token';
+    const admitted = { status: 'ready' as const, revision: 7, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    const snapshot = { source: 'network' as const, settings: AccountSettingsSchema.parse({}), rawSettings: {},
+      settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKeyForToken(token),
+      providerConnectionsCatalog: admitted };
+    let current = true;
+    const context = createInvocationSavedSecretOperationContextV1({ credentials: { token, encryption: null }, snapshot,
+      serverHttpBaseUrl: 'https://provider-home.example', isCurrent: async () => current });
+    const reobserved = { ...admitted, catalog: structuredClone(admitted.catalog) };
+    expect(await context.commitProviderConnectionsCatalog({ expectedSettingsVersion: 4, catalog: reobserved })).toBe(true);
+    expect(context.readSnapshot()?.providerConnectionsCatalog).toBe(admitted);
+    expect(await context.commitProviderConnectionsCatalog({ expectedSettingsVersion: 4,
+      catalog: { ...reobserved, cleanup: { status: 'complete' } } })).toBe(true);
+    const completed = context.readSnapshot()!;
+    expect(completed.providerConnectionsCatalog).toMatchObject({ cleanup: { status: 'complete' } });
+    expect(sameProviderConnectionsCatalogAuthority(admitted, completed.providerConnectionsCatalog)).toBe(true);
+    expect(completed.settings).toBe(snapshot.settings);
+    expect(completed.settingsVersion).toBe(snapshot.settingsVersion);
+    expect(getActiveAccountSettingsSnapshot()).toBeNull();
+
+    const changedCatalog = ProviderConnectionsCatalogV1Schema.parse({ ...admitted.catalog,
+      connectionTombstones: [{ v: 1, id: 'pc_retired', contributionKey: null, lastDisplayName: 'Removed', deletedAt: 1 }] });
+    expect(await context.commitProviderConnectionsCatalog({ expectedSettingsVersion: 4,
+      catalog: { ...reobserved, catalog: changedCatalog } })).toBe(true);
+    expect(sameProviderConnectionsCatalogAuthority(admitted, context.readSnapshot()?.providerConnectionsCatalog)).toBe(false);
+    expect(await context.commitProviderConnectionsCatalog({ expectedSettingsVersion: 4,
+      catalog: { ...reobserved, revision: admitted.revision + 1 } })).toBe(true);
+    expect(sameProviderConnectionsCatalogAuthority(admitted, context.readSnapshot()?.providerConnectionsCatalog)).toBe(false);
+    current = false;
+    expect(await context.commitProviderConnectionsCatalog({ expectedSettingsVersion: 4, catalog: reobserved })).toBe(false);
+    expect(context.readSnapshot()).toBeNull();
   });
 
   it.each([

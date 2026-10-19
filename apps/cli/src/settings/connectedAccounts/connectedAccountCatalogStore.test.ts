@@ -14,9 +14,42 @@ import * as persistence from '@/persistence';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { createCliConnectedAccountCatalogStore } from './connectedAccountCatalogStore';
+import { refreshActiveConnectedAccountCatalog } from './hydrateConnectedAccountCatalog';
 
 describe('Connected catalog source admission', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+  it('retains confirmed database rollback through configuration catalog hydration', async () => {
+    const credentials = { token: 'configuration-read-rollback', encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
+      settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+    });
+    expect(await refreshActiveConnectedAccountCatalog({ credentials, key: 'configurations' })).toMatchObject({
+      status: 'unavailable', reason: 'database_transaction_conflict_exhausted' });
+  });
+
+  it.each([
+    { status: 500, body: { error: 'database_transaction_conflict_exhausted' }, code: 'outcome_unknown' },
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted', statusCode: 503 }, code: 'database_transaction_conflict_exhausted' },
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted' }, code: 'outcome_unknown' },
+  ])('preserves configuration mutation disposition for HTTP $status / $code', async ({ status, body, code }) => {
+    const credentials = { token: 'connected-rollback', encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
+      settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, mutation) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/account/entity-rows/connected-accounts/configurations');
+      expect(ConnectedAccountCatalogRowMutationV1Schema.parse(mutation)).toMatchObject({ expectedRevision: 4 });
+      return { status, data: body };
+    });
+    await expect(createCliConnectedAccountCatalogStore({ credentials }).writeRecord({ expectedRevision: 4,
+      record: { key: 'configurations', value: { v: 1, entries: [] } } })).rejects.toMatchObject({ code });
+  });
 
   it('observes admitted configuration authority without transferring an absent source or writing Settings', async () => {
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'configuration-read-owner' })).toString('base64url')}.signature`, encryption: null };

@@ -13,7 +13,7 @@ import { commitActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, 
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { parseSettingsFromContent, readAccountSettingsV2Raw, replaceAccountSettingsV2RawForOwnerCutover } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { classifyHomeDomainHttpMutationFailureV1, readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { retainLegacyRoleArtifactsV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -23,9 +23,12 @@ import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/ac
 import { randomBytes } from 'node:crypto';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { resolveCliHomeTarget } from '@/server/homeTarget';
-import { captureSavedSecretReferencesForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
 import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
+import { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Captures the incumbent Home/Account/key lifetime, without a parallel Settings publication. */
 export function createCliPromptLibraryStore(input: Readonly<{
@@ -73,9 +76,11 @@ export function createCliPromptLibraryStore(input: Readonly<{
     });
     if (body === undefined) await assertCredentialCurrent();
     if (response.status < 200 || response.status >= 300 && response.status !== 409) {
+      const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
       throw Object.assign(new Error('Prompt library Account transport unavailable'), { code:
-        response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
-          : response.status === 404 ? 'unsupported' : 'unreachable' });
+        rollback?.code ?? (body !== undefined && response.status >= 500 ? 'outcome_unknown'
+          : response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
+          : response.status === 404 ? 'unsupported' : 'unreachable') });
     }
     return { status: response.status, data: response.data as unknown };
   };
@@ -88,18 +93,19 @@ export function createCliPromptLibraryStore(input: Readonly<{
     return context;
   };
   const readRows = async () => PromptLibraryRowsListResponseV1Schema.parse(await request(PROMPT_LIBRARY_ROWS_ROUTE_V1));
-  const readPromptLibraryCatalog = async (onReady?: (catalog: PromptLibraryCatalogSnapshotV1) => void | Promise<void>) => {
+  const preparePromptLibraryCatalog = async (onReady?: (catalog: PromptLibraryCatalogSnapshotV1) => void | Promise<void>,
+    options?: Readonly<{ maintainSource?: false }>) => {
     const context = await readStorageContext();
-    const catalog = await loadPromptLibraryCatalogV1({ ...context, signal: input.signal,
+    const catalog = await loadPromptLibraryCatalogV1({ ...context, signal: input.signal, ...options,
       readRows,
       skillMigration: {
-        writeRecord,
+        writeRecord: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => writeRecord(value)),
         readArtifact: ref => runWithServerHttpBaseUrl(base, async () => {
-          if (ref.serverId !== undefined && ref.serverId !== base
-            && ref.serverId !== input.credentials.requesterSessionCredentialScope?.serverId) {
-            const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: ref.serverId });
+          if (ref.serverId !== undefined && ref.serverId !== base) {
+            const capturedHomeId = input.credentials.requesterSessionCredentialScope?.serverId
+              ?? (await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: base })).profileId;
             // The current captured Account can only migrate its own Home's skills.
-            if (target.applicationUrl.replace(/\/+$/, '') !== base) return null;
+            if (!capturedHomeId || !await isServerProfileHomeIdentity(capturedHomeId, ref.serverId)) return null;
           }
           await assertCredentialCurrent();
           const result = await createCredentialedAccountArtifactStore(input.credentials).read(ref.artifactId, { signal: input.signal });
@@ -107,16 +113,16 @@ export function createCliPromptLibraryStore(input: Readonly<{
           return result;
         }),
       },
-      ...(onReady ? { onReadyBeforeCleanup: async (catalog: PromptLibraryCatalogSnapshotV1) => {
+      ...(onReady ? { onReadyBeforeCleanup: async (catalog: PromptLibraryCatalogSnapshotV1) => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
         const admitted = await readStorageContext();
         assertCurrent();
         if (admitted.mode !== context.mode) throw Object.assign(new Error('Account mode changed'), { code: 'account-mode-mismatch' });
         await onReady(catalog);
-      } } : {}),
+      }) } : {}),
       transfer: {
-        readSourceSnapshot,
-        initializeRecord: writeRecord,
-        replaceSource: async value => {
+        readSourceSnapshot: () => runWithoutRequesterSessionCurrentnessCheckpoint(readSourceSnapshot),
+        initializeRecord: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => writeRecord(value)),
+        replaceSource: async value => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
           const current = await readStorageContext();
           if (current.mode !== context.mode) throw Object.assign(new Error('Account mode changed'), { code: 'account-mode-mismatch' });
           const response = await replaceAccountSettingsV2RawForOwnerCutover({ credentials: input.credentials,
@@ -130,8 +136,8 @@ export function createCliPromptLibraryStore(input: Readonly<{
           return response.success ? { status: 'applied', settingsVersion: response.version }
             : response.error === 'version-mismatch' ? { status: 'conflict', currentSettingsVersion: response.currentVersion }
               : { status: 'rejected' };
-        },
-        retainLegacyRoleArtifacts: raw => runWithServerHttpBaseUrl(base, async () => {
+        }),
+        retainLegacyRoleArtifacts: raw => runWithoutRequesterSessionCurrentnessCheckpoint(() => runWithServerHttpBaseUrl(base, async () => {
           assertCurrent();
           const accountId = readAccountIdFromToken(input.credentials.token);
           if (!accountId) throw new Error('Account identity unavailable');
@@ -143,8 +149,8 @@ export function createCliPromptLibraryStore(input: Readonly<{
           } });
           assertCurrent();
           return receipts;
-        }),
-        normalizeHistory: value => normalizeAccountSettingsHistoryClientV1({ destinationAuthority: value, ports: {
+        })),
+        normalizeHistory: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => normalizeAccountSettingsHistoryClientV1({ destinationAuthority: value, ports: {
           request: (path, value) => requestResponse(path, value.body),
           readCurrentness: () => fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: base,
             authorizationHeaders: headers, signal: input.signal }),
@@ -166,8 +172,14 @@ export function createCliPromptLibraryStore(input: Readonly<{
               payload: raw, randomBytes: length => new Uint8Array(randomBytes(length)) }) };
           },
           unavailable: (_status, message) => { throw new Error(message); },
-        } }),
+        } })),
       } });
+    return { context, catalog };
+  };
+  const readPromptLibraryCatalog = async (...args: Parameters<typeof preparePromptLibraryCatalog>) => {
+    // Only reads share requester evidence. Every transfer/migration callback
+    // above that can publish or mutate leaves preparation before its fences.
+    const { context, catalog } = await runWithRequesterSessionCurrentnessCheckpoint(() => preparePromptLibraryCatalog(...args), { readOnly: true });
     const admitted = await readStorageContext();
     assertCurrent();
     return admitted.mode === context.mode ? catalog : { status: 'unavailable' as const, reason: 'account-mode-mismatch' as const };
@@ -196,10 +208,36 @@ export function createCliPromptLibraryStore(input: Readonly<{
       const response = PromptLibraryRowMutationResponseV1Schema.safeParse(await request(
         `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(value.record.key)}`, mutation));
       if (!response.success) throw Object.assign(new Error('Prompt library mutation outcome is unknown'), { code: 'outcome_unknown' });
+      if (response.data.status === 'updated') catalogReads.clear();
       return response.data;
   };
+  // Join only concurrent reads in this captured store and cancellation lifetime. Nothing is retained
+  // after settlement: the next invocation observes new rows, including remote edits/deletions.
+  const catalogReads = new Map<AbortSignal | undefined, Promise<PromptLibraryCatalogSnapshotV1>>();
+  const readCatalog: ArtifactFolderActionPortV1['readCatalog'] = async (signal = input.signal, key = 'folders') => {
+    assertCurrent(); signal?.throwIfAborted();
+    const transport: Readonly<{ readPromptLibraryCatalog: typeof readPromptLibraryCatalog; readSourceSnapshot: typeof readSourceSnapshot }> =
+      signal === input.signal ? { readPromptLibraryCatalog, readSourceSnapshot }
+      : createCliPromptLibraryStore({ ...input, signal });
+    let pending = catalogReads.get(signal);
+    if (!pending) {
+      const owned = transport.readPromptLibraryCatalog(undefined, { maintainSource: false })
+        .finally(() => { if (catalogReads.get(signal) === owned) catalogReads.delete(signal); });
+      catalogReads.set(signal, owned);
+      pending = owned;
+    }
+    const catalog = await pending;
+    assertCurrent(); signal?.throwIfAborted();
+    const occupied = (catalog.status === 'ready' || catalog.status === 'partial') &&
+      (catalog.rows.some(row => row.record.key === key) || catalog.tombstones.some(row => row.key === key) ||
+        catalog.diagnostics.some(row => row.key === key));
+    if (catalog.status !== 'ready' && catalog.status !== 'partial' || occupied) return { catalog };
+    const source = await transport.readSourceSnapshot();
+    assertCurrent(); signal?.throwIfAborted();
+    return { catalog, rawSettings: source.raw, sourceSettingsVersion: source.version };
+  };
   return {
-    assertCurrent, readStorageContext, readPromptLibraryCatalog, readSourceSnapshot, writeRecord, readRows,
+    assertCurrent, readStorageContext, readPromptLibraryCatalog, readCatalog, readSourceSnapshot, writeRecord, readRows,
     /** Raw census reads never activate destinations or run retained-source maintenance. */
     readRow: async (key: PromptLibraryCatalogKeyV1) => PromptLibraryRowReadResponseV1Schema.parse(
       await request(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${encodeURIComponent(key)}`)),

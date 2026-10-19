@@ -20,7 +20,7 @@ import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profil
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createCliNotificationChannelStore } from './notificationChannelStore';
 
 describe('notification catalog initial signing resource transfer', () => {
@@ -205,7 +205,11 @@ describe('notification catalog historical signing recovery', () => {
           expect(recorded).toEqual({ t: 'plain', v: { preferredLanguage: 'de' } });
           if (state === 'exact') expect(mutations[0]!.operation).toMatchObject({ savedSecretTransfers: [{ source: {
             kind: 'notification-channel-signing-secret', channelId: channel.id }, resourceId, expectedRevision: 3 }] });
-          else expect(mutations[0]!.operation.savedSecretTransfers ?? []).toEqual([]);
+          else {
+            const operation = mutations[0]!.operation;
+            if (operation.kind !== 'normalize') throw new Error('Expected historical normalization');
+            expect(operation.savedSecretTransfers ?? []).toEqual([]);
+          }
           expect(JSON.stringify(mutations[0]!.operation)).not.toContain('historical signing bytes');
         }
         expect(operationContext.readSnapshot()?.settingsVersion).toBe(7);

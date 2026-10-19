@@ -16,6 +16,19 @@ function publish(token: string) {
   return credentials;
 }
 
+it('retains confirmed database rollback through connected metadata hydration', async () => {
+  const credentials = publish('metadata-rollback');
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+  });
+  expect(await refreshActiveConnectedMetadataCatalog({ credentials })).toMatchObject({
+    presentation: { status: 'unavailable', reason: 'database_transaction_conflict_exhausted' },
+    acknowledgements: { status: 'unavailable', reason: 'database_transaction_conflict_exhausted' },
+  });
+});
+
 it('publishes catalog-only changes without advancing Settings and reobserves an overtaking demanded wake', async () => {
   const credentials = publish('metadata-wake');
   vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { deriveSettingsSecretsKeySetV1, encryptSecretStringV1 } from '@happier-dev/protocol/crypto/settingsSecretStringsV1';
 import { createAccountScopedCryptoMaterialSnapshotV1, openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -13,8 +13,11 @@ import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken, resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createDeferred } from '@/testkit/async/deferred';
-import { prepareActiveMcpServerCatalog, refreshActiveMcpServerCatalog, refreshActiveMcpServerCatalogAfterChange } from './hydrateMcpServerCatalog';
-import { createCliMcpServerStore } from './mcpServerStore';
+import { prepareActiveMcpServerCatalog, projectMcpServerCatalogRefreshFailure, refreshActiveMcpServerCatalog, refreshActiveMcpServerCatalogAfterChange } from './hydrateMcpServerCatalog';
+import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from './mcpServerStore';
+import { createProjectSessionRuntimeFixture } from '@/daemon/testkit/projectSessionRuntimeFixture';
+import { prepareRequesterSessionBootstrap } from "@/daemon/sessionEncryption/requesterSessionCredentials";
+import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { McpRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
@@ -59,6 +62,91 @@ function mockAccountReads(readRow: () => Promise<unknown>, readHistory: () => Pr
 }
 
 describe('CLI MCP catalog Account publication', () => {
+  it('retains confirmed database rollback through MCP catalog hydration', async () => {
+    const credentials = seedAccount();
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+    });
+    expect(await refreshActiveMcpServerCatalog({ credentials })).toMatchObject({
+      status: 'unavailable', reason: 'database_transaction_conflict_exhausted' });
+  });
+  it.each([
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted', statusCode: 503 }, code: 'database_transaction_conflict_exhausted' },
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted' }, code: 'outcome_unknown' },
+    { status: 500, body: { error: 'database_transaction_conflict_exhausted' }, code: 'outcome_unknown' },
+  ])('preserves MCP mutation disposition for HTTP $status / $code', async ({ status, body, code }) => {
+    const credentials = seedAccount();
+    mockAccountReads(async () => present(4));
+    vi.spyOn(axios, 'post').mockImplementation(async (url, mutation) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/account/entity-rows/mcp');
+      expect(McpServerCatalogRowMutationV1Schema.parse(mutation)).toMatchObject({ expectedRevision: 4 });
+      return { status, data: body };
+    });
+    await expect(createCliMcpServerStore({ credentials }).writeCatalog({ expectedRevision: 4,
+      catalog: { v: 1, servers: [], bindings: [] } })).rejects.toMatchObject({ code });
+  });
+  it.each([false, true])('keeps legacy activation behind fresh requester authority within a preparation checkpoint (revoked=%s)', async revoked => {
+    const catalog: McpServerCatalogV1 = { v: 1, servers: [], bindings: [] };
+    const raw = { mcpServersStrictMode: true, mcpServersSettingsV1: { ...catalog, strictMode: true } };
+    const f = await createProjectSessionRuntimeFixture({ accountSettings: raw });
+    // Legacy activation needs a real Account identity, not an opaque fixture
+    // bearer: keep its actual source read, strict mutation and row writer live.
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester', fixture: f.directory })).toString('base64url')}.signature`, encryption: null };
+    const prepared = await prepareRequesterSessionBootstrap({ credentials, attribution: f.bootstrap.attribution,
+      boundary: { serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test', happyHomeDir: f.directory },
+      verifyMachineAdmissionCurrent: async () => f.isHomeCurrent() });
+    if (!prepared) throw new Error('Missing admitted requester');
+    onTestFinished(prepared.cleanupOnFailure);
+    const get = vi.mocked(axios.get).getMockImplementation()!;
+    let sourceRead = false;
+    let catalogRowObserved = false;
+    let row: unknown = { status: 'absent' };
+    let writes = 0;
+    vi.mocked(axios.get).mockImplementation(async (url, options) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/entity-rows/mcp') {
+        catalogRowObserved = true;
+        return { status: 200, data: row };
+      }
+      if (path === '/v2/account/settings' && catalogRowObserved) {
+        sourceRead = true;
+        if (revoked) f.retire();
+      }
+      return get(url, options);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      if (new URL(String(url)).pathname !== '/v1/account/entity-rows/mcp') throw new Error('Unexpected MCP effect');
+      const mutation = McpServerCatalogRowMutationV1Schema.parse(body);
+      writes++;
+      row = { status: 'present', revision: 1, content: mutation.content };
+      return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
+    });
+    const operationContext = prepared.admitted.savedSecretOperationContext;
+    const result = await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+      expect(await prepared.admitted.isCurrent()).toBe(true);
+      try { return await createCliMcpServerStoreForOperation({ operationContext }).readCatalogForOperation(); }
+      catch { return null; }
+    });
+    expect(sourceRead).toBe(true);
+    if (revoked) {
+      expect(writes).toBe(0);
+      expect(result).not.toMatchObject({ status: 'ready' });
+    } else {
+      expect(result).toMatchObject({ status: 'ready', catalog });
+      expect(writes).toBe(1);
+    }
+  });
+
+  it('classifies a Mini schema failure as invalid stored content', () => {
+    const parsed = McpServerCatalogRowMutationV1Schema.safeParse(null);
+    if (parsed.success) throw new Error('Expected the canonical MCP row mutation to reject null');
+    expect(projectMcpServerCatalogRefreshFailure({ error: parsed.error, current: true })).toEqual({
+      status: 'unavailable', reason: 'invalid-stored-content',
+    });
+  });
+
   it('promotes a retained personal MCP reference before first activation at the fresh Settings baseline', async () => {
     const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(4) };
     const credentials: StoredCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'mcp-import-account' })).toString('base64url')}.signature`,

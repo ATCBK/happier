@@ -1,4 +1,6 @@
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { MemorySettingsSecretsUnavailableError } from './memorySettingsErrors';
+export { MemorySettingsSecretsUnavailableError } from './memorySettingsErrors';
 
 import { DEFAULT_MEMORY_SETTINGS, normalizeMemorySettings } from '@happier-dev/protocol/memory/memorySettings';
 import { sealSecretsDeepV1, unsealSecretsDeepWithKeysV1 } from '@happier-dev/protocol/crypto/settingsSecretStringsV1';
@@ -36,21 +38,6 @@ function finalizeMemorySettingsForPersistence(
     ...next,
     enabledAtMs: previous.enabled ? (prevEnabledAtMs || nextEnabledAtMs || fallbackNowMs) : (nextEnabledAtMs || fallbackNowMs),
   };
-}
-
-export class MemorySettingsSecretsUnavailableError extends Error {
-  readonly code = 'memory_settings_secrets_unavailable';
-  readonly cause: unknown;
-
-  constructor(cause?: unknown) {
-    super(
-      cause instanceof Error
-        ? `memory_settings_secrets_unavailable: ${cause.message}`
-        : 'memory_settings_secrets_unavailable',
-    );
-    this.name = 'MemorySettingsSecretsUnavailableError';
-    this.cause = cause;
-  }
 }
 
 function hasUnavailableSealedSecret(value: unknown): boolean {

@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { createActionExecutor, getActionSpec } from '@happier-dev/protocol';
 import { ProfileRecordV1Schema, buildProfilePhysicalKey, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { createLightSqliteHarness } from '../../../../server/sources/testkit/lightSqliteHarness';
@@ -12,10 +13,86 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createCliProfileStore } from './profileStore';
-import { createActionExecutor, getActionSpec } from '@happier-dev/protocol';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { createCliProfileActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliProfileActionDeps';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
+
+it('refuses an unknown launch Profile through real admission and MCP without reading remembered builtin visibility', async () => {
+  const database = await createLightSqliteHarness({ tempDirPrefix: 'happier-profile-admission-', initAuth: true, initEncrypt: true });
+  const server = createAuthenticatedTestApp({ authentication: 'real' }) as Fastify;
+  try {
+    const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 7 } });
+    const credentials = { token: await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' }), encryption: null };
+    const reads: string[] = [];
+    server.addHook('onRequest', async (request, reply) => {
+      reads.push(`${request.method} ${request.url}`);
+      // Unrelated remembered builtin evidence is an unavailable HTTP boundary.
+      if (request.url.includes('authoring-memory')) return reply.code(503).send();
+    });
+    accountRoutes(server);
+    artifactsRoutes(server);
+    const origin = await server.listen({ port: 0, host: '127.0.0.1' });
+    await runWithServerHttpBaseUrl(origin, async () => {
+      setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+        settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+      const diagnostics: { phase: string; elapsedMs?: number }[] = [];
+      const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+        profileActionExecute: createCliProfileActionExecuteV1({ credentials, serverId: 'profile-home', serverHttpBaseUrl: origin,
+          callMachineAction: async () => { throw new Error('Unknown Profile must not reach the Machine'); } }),
+      });
+      const bridge = createActionToolExecutorBridge({ surface: 'agent',
+        resolveCallerPermissionMode: () => 'default',
+        resolveActiveTurnPermissionWitness: () => ({ turnId: 'profile-turn',
+          causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } }),
+        executor: { execute: (actionId, input, context) => executor.execute(actionId, input, { ...context,
+          serverId: 'profile-home', runtimeAccountId: account.id,
+          actionCaller: { kind: 'session', sessionId: 'profile-parent', starterDepth: 0, turnDepth: 0 },
+          recordActionStartDiagnostic: diagnostic => diagnostics.push(diagnostic),
+        }) },
+      });
+      const tools = new Map<string, (args: unknown, extra?: unknown) => Promise<unknown>>();
+      registerHappierMcpBuiltInTools({ registerTool: (name, _metadata, handler) => { tools.set(name, handler); } }, {
+        sessionId: 'profile-parent', surface: 'agent', deps: { ...bridge,
+          resolveActionOptions: input => bridge.resolveActionOptions(input, 'profile-parent'),
+          changeTitle: async () => { throw new Error('Unexpected title mutation'); } },
+      });
+      const execute = tools.get('action_execute');
+      if (!execute) throw new Error('Missing real MCP Action registration');
+      const response = CallToolResultSchema.parse(await execute({ actionId: 'session.spawn_new', input: {
+        creationKey: 'unknown-profile-child', profileId: 'qa-r37g-no-such-profile',
+        executionTarget: { serverId: 'profile-home', machineId: 'profile-machine' },
+        directory: { kind: 'path', path: '/workspace' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      } }));
+      const text = response.content.find(block => block.type === 'text');
+      if (text?.type !== 'text') throw new Error('Missing MCP result text');
+      expect({ isError: response.isError, result: JSON.parse(text.text) }).toEqual({ isError: true,
+        result: { errorCode: 'target_unavailable', error: 'target_unavailable',
+          details: { code: 'target_unavailable', reason: 'profile_unavailable' } } });
+      expect(ActionExecuteFailureSchema.safeParse({ ok: false, ...JSON.parse(text.text) }).success).toBe(true);
+      expect(reads.some(path => path.includes('/entity-rows/profiles'))).toBe(true);
+      expect(reads.filter(path => path.includes('authoring-memory'))).toEqual([]);
+      expect(diagnostics.filter(item => item.phase === 'agent_start_context' && item.elapsedMs !== undefined)).toEqual([]);
+      expect(await db.session.count({ where: { accountId: account.id } })).toBe(0);
+      const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'profile-home' };
+      expect(await executor.execute('launch_profiles.read', { id: 'qa-r37g-no-such-profile' }, context))
+        .toMatchObject({ ok: true, result: { status: 'invalid', reason: 'profile-not-found', id: 'qa-r37g-no-such-profile' } });
+      expect(reads.filter(path => path.includes('authoring-memory'))).toEqual([]);
+      // Real builtins still require remembered visibility; its failure must not
+      // be misreported as evidence that the builtin does not exist.
+      await expect(executor.execute('launch_profiles.read', { id: 'azure-openai' }, context))
+        .resolves.toMatchObject({ ok: false, errorCode: 'action_failed' });
+      expect(reads.some(path => path.includes('authoring-memory'))).toBe(true);
+    });
+  } finally {
+    resetActiveAccountSettingsSnapshotForTests();
+    await server.close(); await database.close();
+  }
+}, 120_000);
 
 it('saves a retained 0.2-shaped Profile and deletes it through the real Action binding, HTTP catalog and SQLite tombstone', async () => {
   const database = await createLightSqliteHarness({ tempDirPrefix: 'happier-profile-actions-', initAuth: true, initEncrypt: true });

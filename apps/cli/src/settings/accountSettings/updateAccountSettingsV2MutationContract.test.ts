@@ -280,12 +280,8 @@ describe('updateAccountSettingsV2WithRetry canonical mutation contract', () => {
           content: {
             t: 'plain',
             v: {
-              // A known root whose shape the Account document itself owns.
-              // `providerSettingsV1` is deliberately NOT usable here: its
-              // catalog definition declares `structuralBoundsOwner:
-              // 'domainOwned'`, so the Provider domain — not the Account
-              // node policy — bounds its nesting and cardinality.
-              profiles: overdeep,
+              // A current preference root, rather than a transferred entity catalog.
+              showLineNumbers: overdeep,
               sessionPendingQueueDeliveryTiming: 'after_foreground_ready',
             },
           },
@@ -341,14 +337,14 @@ describe('updateAccountSettingsV2WithRetry canonical mutation contract', () => {
     await expect(updateAccountSettingsV2WithRetry({
       credentials: createCredentials(),
       mutation: {
-        operations: [{ op: 'reset', key: 'promptExternalLinksV1' }],
+        operations: [{ op: 'reset', key: 'showLineNumbers' }],
       },
       deps: {
         fetchSettings: async () => ({
           content: {
             t: 'plain',
             v: {
-              promptExternalLinksV1: 'malformed-present-root',
+              showLineNumbers: 'malformed-present-root',
               futureSettingOwnedElsewhere: { preserve: true },
             },
           },
