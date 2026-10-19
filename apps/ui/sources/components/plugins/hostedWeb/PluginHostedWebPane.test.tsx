@@ -1721,6 +1721,8 @@ describe('PluginHostedWebPane', () => {
         const postMessage = vi.fn();
         const iframeSource = { postMessage } as unknown as WindowProxy;
         const previousWindow = (globalThis as { window?: unknown }).window;
+        const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+        Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'https://host.happier.test' } });
         const browserWindow = {
             addEventListener: (event: string, listener: (event: MessageEvent) => void) => {
                 if (event === 'message') listeners.add(listener);
@@ -1731,7 +1733,11 @@ describe('PluginHostedWebPane', () => {
             dispatchEvent: (event: MessageEvent) => { for (const listener of [...listeners]) listener(event); },
         };
         (globalThis as { window?: unknown }).window = browserWindow;
-        onTestFinished(() => { (globalThis as { window?: unknown }).window = previousWindow; });
+        onTestFinished(() => {
+            (globalThis as { window?: unknown }).window = previousWindow;
+            if (previousLocation) Object.defineProperty(globalThis, 'location', previousLocation);
+            else Reflect.deleteProperty(globalThis, 'location');
+        });
         const canonicalHostApi = {
             authorPlugin: { id: 'acme.preview', version: '1.2.3' },
             mount: canonicalMount,
