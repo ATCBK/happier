@@ -216,6 +216,29 @@ describe('modelPacks installer (native)', () => {
       expect(progress.at(-1)).toEqual({ verified: bytes.length, filesDone: 1 });
     });
 
+    it('advances progress while checking files an interrupted install left on disk', async () => {
+      const kept = multiChunkBytes(4);
+      const stale = multiChunkBytes(5);
+      const fresh = multiChunkBytes(6);
+      const fs = createFs(new Map([[`${PACK_URI}/kept.bin`, kept], [`${PACK_URI}/stale.bin`, stale]]));
+      useNativeDownloads(fs, () => fresh);
+      const progress: Array<{ loaded: number; total: number; filesDone: number }> = [];
+      await ensureModelPackInstalled({
+        ...installOptions, signal: new AbortController().signal,
+        onProgress: (p) => progress.push({ loaded: p.loaded, total: p.total, filesDone: p.filesDone }),
+      }, {
+        fs, fetch: fetchManifest(manifest([
+          { path: 'kept.bin', url: 'https://example.com/kept.bin', sha256: await sha256Hex(kept), sizeBytes: kept.length },
+          { path: 'stale.bin', url: 'https://example.com/stale.bin', sha256: await sha256Hex(fresh), sizeBytes: fresh.length },
+        ])),
+      });
+      // Checking a kept file moves the bar instead of leaving it frozen until the whole file is hashed.
+      expect(progress.some((p) => p.filesDone === 0 && p.loaded > 0 && p.loaded < kept.length)).toBe(true);
+      // A rejected file's checked bytes are withdrawn, so its redownload is not counted twice.
+      expect(progress.every((p) => p.loaded <= p.total)).toBe(true);
+      expect(progress.at(-1)).toEqual({ loaded: kept.length + fresh.length, total: kept.length + fresh.length, filesDone: 2 });
+    });
+
     it('starts the largest files first so they transfer alongside the small ones', async () => {
       const small = new Uint8Array([1]);
       const medium = new Uint8Array(16).fill(2);

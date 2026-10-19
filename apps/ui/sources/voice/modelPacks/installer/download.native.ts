@@ -174,12 +174,14 @@ async function downloadAndVerifyFile(opts: {
   signal: AbortSignal;
   onProgress?: (p: Progress) => void;
   /** Bytes hashed by the current verification pass; a repeated pass starts again from 0. */
-  onVerifyProgress?: (bytes: number) => void;
+  onVerifyProgress?: (bytes: number, source: 'existing' | 'downloaded') => void;
+  /** A file left on disk failed verification and is downloaded again. */
+  onExistingRejected?: () => void;
 }): Promise<void> {
   const file = getPackFile(opts.fs, opts.rootDir, opts.entry.path, { createParents: true });
   if (file.exists) {
     try {
-      const actual = await sha256FileHex(file, opts.signal, opts.onVerifyProgress);
+      const actual = await sha256FileHex(file, opts.signal, (bytes) => opts.onVerifyProgress?.(bytes, 'existing'));
       if (actual === opts.entry.sha256.toLowerCase()) return;
       file.delete();
     } catch (error) {
@@ -192,6 +194,7 @@ async function downloadAndVerifyFile(opts: {
         console.warn('[modelPacks] Failed to remove unverified model pack file', cleanupError);
       }
     }
+    opts.onExistingRejected?.();
   }
 
   try {
@@ -200,7 +203,7 @@ async function downloadAndVerifyFile(opts: {
       downloader: opts.downloader, url: opts.entry.url, fileUri: file.uri, signal: opts.signal, onProgress: opts.onProgress,
     });
 
-    const actual = await sha256FileHex(file, opts.signal, opts.onVerifyProgress);
+    const actual = await sha256FileHex(file, opts.signal, (bytes) => opts.onVerifyProgress?.(bytes, 'downloaded'));
     if (actual !== opts.entry.sha256.toLowerCase()) {
       throw new Error('model_pack_sha256_mismatch');
     }
@@ -267,8 +270,18 @@ export async function downloadManifestFiles(opts: {
       onProgress: (p) => {
         if (advance(clampToFile(p.loaded))) report();
       },
-      onVerifyProgress: (bytes) => {
+      onVerifyProgress: (bytes, source) => {
         setVerified(clampToFile(bytes));
+        // Bytes an interrupted install left on disk are already present; checking them advances the
+        // transfer too, so resuming over a large kept file does not freeze the bar while it is hashed.
+        if (source === 'existing') advance(clampToFile(bytes));
+        report();
+      },
+      onExistingRejected: () => {
+        // The kept bytes turned out unusable; withdraw them so the redownload is not counted twice.
+        loadedTotal -= loadedThisFile;
+        loadedThisFile = 0;
+        setVerified(0);
         report();
       },
     });
