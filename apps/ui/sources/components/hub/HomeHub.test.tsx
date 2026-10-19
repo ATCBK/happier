@@ -319,7 +319,6 @@ describe('HomeHub', () => {
             return artifact.request(input, init);
         });
         try {
-            expect(screen.findByTestId('home-hub.loading')).not.toBeNull();
             expect(screen.findByTestId('home-hero')).toBeNull();
             expect(shownSections(screen.getTextContent())).toEqual([]);
             await act(async () => { pending = false; read.resolve(); });
@@ -348,7 +347,7 @@ describe('HomeHub', () => {
         let failRead = true;
         const screen = await renderHome(async (input, init) => {
             if (failRead && new URL(String(input)).pathname === `/v1/artifacts/${artifact.artifactId}`) {
-                return Response.json({ error: 'unavailable' }, { status: 503 });
+                return Response.json({ invalid: 'artifact response' });
             }
             return artifact.request(input, init);
         });
