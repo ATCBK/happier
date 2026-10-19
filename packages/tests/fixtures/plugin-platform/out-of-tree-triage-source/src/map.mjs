@@ -16,6 +16,7 @@ import {
     MAX_TRIAGE_ROW_FACTS_V1,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
 } from '@happier-dev/triage-protocol/v1';
+import { normalizeScmHostingRepositoryIdentity } from '@happier-dev/plugin-sdk/scm';
 
 /** The source's own kind vocabulary, declared in its descriptor. */
 const KIND_BY_PROVIDER_TYPE = Object.freeze({ change: 'change', ticket: 'ticket' });
@@ -156,6 +157,8 @@ export function mapLedgerRow(row, collisionScope) {
     };
     if (isIntegerMs(row.updated_at)) observation.sourceUpdatedAtMs = row.updated_at;
     if (isNonEmptyString(row.revision)) observation.nativeRevision = row.revision;
+    const repository = normalizeScmHostingRepositoryIdentity(row.repository);
+    if (repository !== null) observation.repository = repository;
     return observation;
 }
 

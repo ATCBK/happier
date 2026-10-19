@@ -18,7 +18,7 @@
  * against it — asserting by measurement that every published entry point
  * resolved inside that consumer rather than back into the repository.
  *
- * All three author-facing packages are packed. In particular, the SDK comes
+ * Every consumed author-facing package is packed. In particular, the SDK comes
  * from the canonical pack sandbox, whose prepublication step vendors its
  * private workspace closure. A repository symlink would let Node walk back
  * into private source dependencies and make this proof green for bytes an
@@ -67,6 +67,16 @@ async function installPackedSourceConsumer(consumerRoot) {
         packageRelDir: 'packages/triage-protocol',
         destinationDir: consumerRoot,
     });
+    const helperTarballs = [];
+    for (const packageRelDir of ['packages/plugin-ui', 'packages/triage-sources']) {
+        const packed = await exportPackSandboxTarball({
+            monorepoRoot: repoRoot,
+            packageRelDir,
+            destinationDir: consumerRoot,
+        });
+        assert.equal(typeof packed.tarball?.name, 'string');
+        helperTarballs.push(`./${packed.tarball.name}`);
+    }
     const fixtureTarball = runNpm(
         ['pack', '--ignore-scripts', '--silent', '--pack-destination', consumerRoot],
         fixtureRoot,
@@ -88,6 +98,7 @@ async function installPackedSourceConsumer(consumerRoot) {
         'install',
         `./${sdkTarball}`,
         `./${protocolTarball}`,
+        ...helperTarballs,
         `./${fixtureTarball}`,
         '--legacy-peer-deps',
         '--offline',

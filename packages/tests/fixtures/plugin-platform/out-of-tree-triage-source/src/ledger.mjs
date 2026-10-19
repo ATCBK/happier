@@ -49,6 +49,11 @@ const CURATED_ROWS = Object.freeze([
         checks: { state: 'passing', label: 'All checks passing' },
         owner: 'r.okafor',
         url: 'https://ledger.invalid/acme/ledger/change/17',
+        repository: Object.freeze({
+            kind: 'custom',
+            deployment: 'https://forge.example.test/Forge',
+            repository: 'Team/Repo',
+        }),
     }),
     // Malformed: the provider omitted the identity every mapping needs.
     Object.freeze({
