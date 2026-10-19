@@ -17,6 +17,7 @@ import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAc
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
 import { admitWorkflowRun, cancelWorkflowRun, commitWorkflowInvocationFact } from "./workflowRunService";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { observeLazyPrismaQuery } from "@/app/changes/accountPublicationContention.testkit";
 import { cancelAutomationRun } from "@/app/automations/automationRunService";
 import { revokeMachineInTx } from "@/app/machines/machineMutations";
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
@@ -183,7 +184,10 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                 let advanced = false;
                 return body(new Proxy(tx, { get(target, property, receiver) {
                     if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
-                    return async (query: string, ...values: unknown[]) => {
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
                         if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
                             advanced = true;
                             publishingPeer = true;
@@ -194,9 +198,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                             } finally { publishingPeer = false; }
                             publications++;
                         }
-                        try { return await target.$queryRawUnsafe(query, ...values); }
-                        catch (error) { const state = sqlState(error); if (state) conflicts.push(state); throw error; }
-                    };
+                    });
                 } }));
             }, operation === "exhaustion" ? { ...options, isolationLevel: "Serializable" } : options);
         db.$transaction = interleaved as typeof db.$transaction;
@@ -311,7 +313,10 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                 let advanced = false;
                 const boundary = new Proxy(tx, { get(target, property, receiver) {
                     if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
-                    return async (query: string, ...values: unknown[]) => {
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
                         if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
                             advanced = true;
                             publishingPeer = true;
@@ -321,9 +326,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                                 }));
                             } finally { publishingPeer = false; }
                         }
-                        try { return await target.$queryRawUnsafe(query, ...values); }
-                        catch (error) { const state = sqlState(error); if (state) conflicts.push(state); throw error; }
-                    };
+                    });
                 } });
                 return operation(boundary);
             }, options);
@@ -369,7 +372,10 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                 let advanced = false;
                 return operation(new Proxy(tx, { get(target, property, receiver) {
                     if (property !== "$queryRawUnsafe") return Reflect.get(target, property, receiver);
-                    return async (query: string, ...values: unknown[]) => {
+                    return (query: string, ...values: unknown[]) => observeLazyPrismaQuery(target.$queryRawUnsafe(query, ...values), () => ({
+                        started() {},
+                        settled(succeeded, error) { if (!succeeded) { const state = sqlState(error); if (state) conflicts.push(state); } },
+                    }), async () => {
                         if (!advanced && query.includes('FROM "Account"') && query.includes("FOR ")) {
                             advanced = true;
                             publishingPeer = true;
@@ -379,9 +385,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                                 }));
                             } finally { publishingPeer = false; }
                         }
-                        try { return await target.$queryRawUnsafe(query, ...values); }
-                        catch (error) { const state = sqlState(error); if (state) conflicts.push(state); throw error; }
-                    };
+                    });
                 } }));
             }, options);
         };

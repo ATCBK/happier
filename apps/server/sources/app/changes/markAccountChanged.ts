@@ -65,6 +65,8 @@ export function afterAccountChangePublication(tx: Tx, project: (tx: Tx) => Promi
  * Add an Account-owned publication operation to the same terminal phase.
  * Existing resource rows must already be locked; no Session/resource locks may
  * be acquired by the operation. This also owns the Feed's Account counter tail.
+ * Sole exception: already-exclusively-admitted physical Account erasure queues
+ * its final Account.delete and existing FK cascades after its publications.
  */
 export function enqueueAccountChangePublication(
     tx: Tx, accountIds: readonly string[], publish: (tx: Tx) => Promise<void>,

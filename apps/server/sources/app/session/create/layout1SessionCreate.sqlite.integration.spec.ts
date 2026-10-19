@@ -763,9 +763,16 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                     pendingVersion: 4,
                 },
             });
-            await db.$executeRaw`INSERT INTO AccountSessionFollow
-                (accountId, sessionId, following, notificationLevel, includeInVoice, voiceDeliveredFrontier)
-                VALUES (${owner.id}, ${created.session.id}, true, 'important', true, ${JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null })})`;
+            await db.accountSessionFollow.create({
+                data: {
+                    accountId: owner.id,
+                    sessionId: created.session.id,
+                    following: true,
+                    notificationLevel: "important",
+                    includeInVoice: true,
+                    voiceDeliveredFrontier: JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null }),
+                },
+            });
             const creationChange = await db.accountChange.findUniqueOrThrow({
                 where: {
                     accountId_kind_entityId: {

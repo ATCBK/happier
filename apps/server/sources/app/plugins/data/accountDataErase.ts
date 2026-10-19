@@ -4,7 +4,7 @@ import { type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } f
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from "@/app/machines/managed/managedRead";
 import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { enqueueAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { eventRouter } from "@/app/events/eventRouter";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
@@ -911,7 +911,13 @@ export async function deleteAccountForErasure(input: Readonly<{
                 detail: { action: "account.delete", summary: { outcome: "deleted" } },
             });
         }
-        await tx.account.delete({ where: { id: input.accountId } });
+        // This already-exclusively-admitted erasure is the sole resource-tail
+        // exception: allocate queued invalidations before the Account and its
+        // retained rows disappear through their existing FK cascades/SET NULL.
+        const deletedAccountId = input.accountId;
+        enqueueAccountChangePublication(tx, [deletedAccountId], async publicationTx => {
+            await publicationTx.account.delete({ where: { id: deletedAccountId } });
+        });
         return { status: "deleted" };
     }, { isolationLevel: "ReadCommitted", transactionClass: "account-erasure.delete-retired" });
 }
