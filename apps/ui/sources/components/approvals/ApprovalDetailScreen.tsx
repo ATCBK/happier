@@ -36,7 +36,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
 import { ApprovalRequesterConfirmationSection, useApprovalRequesterViewer } from './ApprovalRequesterConfirmationSection';
-import { resolveApprovalHomeName } from './approvalRequesterLabels';
+import { readApprovalRequesterSurface, resolveApprovalHomeName } from './approvalRequesterLabels';
 import { BrowserOpenOperationStatusRow } from './BrowserOpenOperationStatus';
 import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from './ActionApprovalFieldsCard';
 import {
@@ -70,7 +70,7 @@ import {
   alertApprovalFailure,
   ApprovalExecutionError,
   assertApprovalExecutionSucceeded,
-  presentApprovalFailure,
+  presentRecordedApprovalFailure,
   isApprovalDecisionStale,
   isApprovalReplayRouteUnavailable,
   useApprovalHome,
@@ -200,11 +200,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     ? JSON.stringify([parsed.request.actionId, parsed.request.actionArgs,
         parsed.request.v === 2 ? parsed.request.executionOriginV1 : null, parsed.request.createdBy])
     : null;
-  const requesterSurface = parsed?.kind === 'built_in'
-    ? parsed.request.v === 2
-      ? parsed.request.executionOriginV1.surface
-      : parsed.request.requestedSurface ?? ''
-    : parsed?.request.createdBy.surface ?? '';
+  const requesterSurface = readApprovalRequesterSurface(parsed?.request ?? null, parsed?.kind === 'built_in');
   const sessionId = parsed?.kind === 'built_in'
     ? parsed.request.v === 2
       ? parsed.request.executionOriginV1.sessionId ?? parsed.request.createdBy.sessionId ?? ''
@@ -571,8 +567,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     : { errorCode: parsed.request.execution.errorCode, error: parsed.request.execution.error });
   // The readable reason leads; its typed code waits in the technical disclosure.
   const executionFailure = executionFailureResult
-    ? presentApprovalFailure(executionFailureResult,
-        executionFailureResult.error || executionFailureResult.errorCode || t('approvals.decisionError'))
+    ? presentRecordedApprovalFailure(executionFailureResult)
     : null;
   // The same outcome headline the composer card reads, so one failed request names itself alike on both.
   const failureHeadline = parsed.kind === 'built_in' && builtInExecutionFailure

@@ -63,6 +63,8 @@ export function presentApprovalFailure(
     if (error instanceof HappyError && error.code === 'present_user_required') {
         return { reason: t('approvals.decisionAuthorityError'), code: null };
     }
+    // The approved plugin change never reached the Machine's plugin service; the code stays in Technical details.
+    if (code === 'plugin_change_daemon_unavailable') return { reason: t('approvals.pluginChangeDaemonUnavailable'), code };
     // The Home or its requester was briefly unreachable before the effect ran: nothing changed, and retrying is right.
     if (typeof code === 'string' && TRANSIENT_AVAILABILITY_CODES.has(code) && !(error instanceof ApprovalExecutionError)) {
         return { reason: t('approvals.transientFailure'), code };
@@ -74,6 +76,14 @@ export function presentApprovalFailure(
             ? neutralReason : fallbackMessage;
     // Retain the typed code, never opaque transport prose or private details.
     return { reason, code: typeof code === 'string' && /^[a-z][a-z0-9_]*$/.test(code) ? code : null };
+}
+
+/**
+ * A settled request whose approved effect failed. The decision was saved, so a bare machine code never
+ * reads as "failed to update approval": it reads as an unrecorded reason, with the code in Technical details.
+ */
+export function presentRecordedApprovalFailure(failure: Readonly<{ errorCode?: string; error?: string }>): ReturnType<typeof presentApprovalFailure> {
+    return presentApprovalFailure(failure, failure.error || failure.errorCode || t('approvals.failureNoReason'), t('approvals.failureNoReason'));
 }
 
 /**

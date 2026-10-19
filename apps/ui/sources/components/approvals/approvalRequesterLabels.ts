@@ -1,3 +1,4 @@
+import type { ApprovalRequest } from '@happier-dev/protocol';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
 import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
@@ -45,6 +46,34 @@ export function describeUnnamedApprovalSession(
   return home
     ? t('detailPages.approval.sessionOnHome', { home })
     : t('detailPages.approval.sessionElsewhere');
+}
+
+/**
+ * The surface a request arrived through, read once for every approval surface: a current built-in
+ * request records it on its immutable execution origin, an older one as its requested surface, and
+ * any other family on its creator.
+ */
+export function readApprovalRequesterSurface(
+  request: ApprovalRequest | Readonly<{ createdBy: Readonly<{ surface?: string }> }> | null,
+  builtIn: boolean,
+): string {
+  if (!request) return '';
+  if (!builtIn) return request.createdBy.surface ?? '';
+  const approval = request as ApprovalRequest;
+  return approval.v === 2 ? approval.executionOriginV1.surface : (approval.requestedSurface ?? '');
+}
+
+/**
+ * The requester line for a session this device cannot name. A request the person made themselves
+ * from the app is theirs, so it reads as "You" rather than as a session they did not ask through.
+ */
+export function describeUnnamedApprovalRequester(
+  surface: string | null | undefined,
+  homeName: string | null | undefined,
+): string {
+  return surface?.trim() === 'ui'
+    ? t('detailPages.approval.requesterYou')
+    : describeUnnamedApprovalSession(homeName);
 }
 
 const ORIGIN_LABEL_KEYS = {

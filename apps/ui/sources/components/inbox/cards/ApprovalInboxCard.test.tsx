@@ -369,6 +369,25 @@ describe('ApprovalInboxCard', () => {
     expect(text).not.toContain(t('inbox.work.rows.approvalNeeded'));
   });
 
+  it('names the person, not a session, when the person made the request themselves from the app', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const cardTextFor = async (surface: 'ui' | 'agent') => {
+      const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'agent', sessionId: 'cmv06zc2b003itmv4tsr5fin7' }, actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+        executionOriginV1: { v: 1, authority: surface === 'ui' ? 'present_user' : 'account_automation', caller: { kind: 'host' },
+          requestId: `own-${surface}`, surface, serverId: serverIdB, sessionId: 'cmv06zc2b003itmv4tsr5fin7', actionId: 'session.list',
+          sessionListAccess: 'current_session' } });
+      const screen = await renderScreen(<ApprovalInboxCard onPress={() => {}} artifact={{ ...createApprovalArtifact(),
+        header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) }} />);
+      return screen.getTextContent();
+    };
+
+    const own = await cardTextFor('ui');
+    expect(own).toContain(t('detailPages.approval.requesterYou'));
+    expect(own).not.toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
+    expect(await cardTextFor('agent')).toContain(t('detailPages.approval.sessionOnHome', { home: 'Home B' }));
+  });
+
   it('names the Home of a session this device cannot list when that Home has no name of its own', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     // A saved Home known only by its address: this device is signed in to it, so the session is on this Home.

@@ -14,7 +14,8 @@ import { readResourceProposalApproval } from '@/components/approvals/resourcePro
 import { describeResourceProposalInboxFacts } from '@/components/approvals/resourceProposal/resourceProposalLabels';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import {
-  describeUnnamedApprovalSession,
+  describeUnnamedApprovalRequester,
+  readApprovalRequesterSurface,
   resolveApprovalHomeName,
   resolveApprovalHomeSentenceName,
 } from '@/components/approvals/approvalRequesterLabels';
@@ -177,7 +178,8 @@ export const ApprovalInboxCard = React.memo(
     const askingSession =
       sessionTitle ??
       (sessionId && !(serverId && scopedReading.status === 'resolving')
-        ? describeUnnamedApprovalSession(
+        ? describeUnnamedApprovalRequester(
+            readApprovalRequesterSurface(parsedApproval?.request ?? null, parsedApproval?.family === 'built_in'),
             resolveApprovalHomeSentenceName(serverId),
           )
         : null);

@@ -1269,6 +1269,24 @@ describe('ApprovalDetailScreen', () => {
     }))).toBe('approvals.failureGeneric');
   });
 
+  it('says what failed when a recorded failure carries only a machine code, never that the decision could not be saved', async () => {
+    const artifact = await createDaemonRoutedApprovalArtifact();
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const reasonOf = async (errorCode: string) => {
+      const request = ApprovalRequestV2Schema.parse({
+        ...JSON.parse(artifact.body), status: 'failed', updatedAtMs: 2,
+        decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { executedAtMs: 2, ok: false, errorCode, error: errorCode, effectAttempted: true },
+      });
+      currentArtifact = { ...artifact, header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+      const screen = await renderScreen(<ApprovalDetailScreen artifactId={currentArtifact.id} />);
+      return approvalItem(screen, 'approvals.execution-failure')?.props.subtitle;
+    };
+
+    expect(await reasonOf('plugin_change_daemon_unavailable')).toBe('approvals.pluginChangeDaemonUnavailable');
+    expect(await reasonOf('executor_failed')).toBe('approvals.failureNoReason');
+  });
+
   it('presents a durable Provider refusal through the shared Provider error copy', async () => {
     const artifact = await createDaemonRoutedApprovalArtifact();
     const request = ApprovalRequestV2Schema.parse({
