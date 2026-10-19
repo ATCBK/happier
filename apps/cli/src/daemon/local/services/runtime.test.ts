@@ -280,14 +280,17 @@ describe('createLocalServicesDaemonRuntime', () => {
 
     it('publishes native summary changes without HTTP presentation work until an inventory reader arrives', async () => {
         vi.useFakeTimers();
+        const readProcessFacts = vi.fn(async () => new Map([
+            [400, { pid: 400, ppid: 1, command: 'node server.js', cwd: '/repo/app' }],
+        ]));
         const probe = vi.fn(async () => true);
         const title = vi.fn<typeof fetch>(async () => new Response('<title>Local app</title>', {
             headers: { 'content-type': 'text/html' },
         }));
         const runtime = createLocalServicesDaemonRuntime({
             machineId: 'machine-a', inventoryEnabled: () => true, refreshIntervalMs: 1_000,
-            scan: async () => ({ listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' }],
-                processes: new Map(), workspaces: [], diagnostics: [] }),
+            scan: async () => ({ listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400 }],
+                processes: new Map(), readProcessFacts, workspaces: [], diagnostics: [] }),
             endpointEnricher: createLocalServiceEndpointEnricher({ now: Date.now,
                 timeoutMs: 250, concurrency: 1, successTtlMs: 30_000, failureTtlMs: 5_000, probe }),
             pageTitleEnricher: createLocalPageTitleEnricher({ maxBodyBytes: 1_024,
@@ -297,6 +300,9 @@ describe('createLocalServicesDaemonRuntime', () => {
         try {
             await vi.advanceTimersByTimeAsync(2_000);
             expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
+            expect(readProcessFacts).not.toHaveBeenCalled();
+            // A count-only observation cannot replace or freshen the detailed inventory.
+            expect(runtime.inventoryRegistry.getSnapshot().generatedAt).toBe(0);
             expect(probe).not.toHaveBeenCalled();
             expect(title).not.toHaveBeenCalled();
             const watched = await runtime.inventoryRoutes.watchSnapshot({ sinceGeneratedAt: 0 });
@@ -304,11 +310,13 @@ describe('createLocalServicesDaemonRuntime', () => {
             if (!watched.changed) throw new Error('Expected the newly scanned inventory');
             expect(watched.snapshot.entries[0]?.endpoint?.probeState).toBe('ready');
             expect(watched.snapshot.entries[0]?.presentation?.pageTitle).toBe('Local app');
+            expect(watched.snapshot.entries[0]?.provenance?.process?.cwd).toBe('/repo/app');
             const snapshot = await runtime.inventoryRoutes.getSnapshot();
             expect(snapshot.entries[0]?.endpoint?.probeState).toBe('ready');
             expect(snapshot.entries[0]?.presentation?.pageTitle).toBe('Local app');
             expect(probe).toHaveBeenCalled();
             expect(title).toHaveBeenCalled();
+            expect(readProcessFacts).toHaveBeenCalled();
         } finally { unsubscribe(); await runtime.stop(); vi.useRealTimers(); }
     });
 
@@ -318,8 +326,11 @@ describe('createLocalServicesDaemonRuntime', () => {
         const pendingScan = new Promise<void>(resolve => { releaseScan = resolve; });
         const scan = vi.fn(async () => {
             await pendingScan;
-            return { listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' as const }],
-                processes: new Map(), workspaces: [], diagnostics: [] };
+            return { listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' as const, pid: 400 }],
+                processes: new Map(), workspaces: [], diagnostics: [],
+                readProcessFacts: async () => new Map([
+                    [400, { pid: 400, ppid: 1, command: 'node server.js', cwd: '/repo/app' }],
+                ]) };
         });
         const runtime = createLocalServicesDaemonRuntime({
             machineId: 'machine-a', inventoryEnabled: () => true, refreshIntervalMs: 1_000, scan,
@@ -332,7 +343,9 @@ describe('createLocalServicesDaemonRuntime', () => {
             await vi.advanceTimersByTimeAsync(1_000);
             const presented = runtime.inventoryRoutes.getSnapshot();
             releaseScan();
-            expect((await presented).entries[0]?.endpoint?.probeState).toBe('ready');
+            const snapshot = await presented;
+            expect(snapshot.entries[0]?.endpoint?.probeState).toBe('ready');
+            expect(snapshot.entries[0]?.provenance?.process?.cwd).toBe('/repo/app');
             expect(scan).toHaveBeenCalledTimes(1);
             expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
         } finally { releaseScan(); unsubscribe(); await runtime.stop(); vi.useRealTimers(); }

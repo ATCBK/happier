@@ -17,6 +17,8 @@ import { readWindowsLocalServiceListeners } from './windows';
 export type LocalServicesScanResult = Readonly<{
     listeners: readonly LocalServiceListenerFact[];
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
+    /** The same socket observation's optional detail phase, owned by its refresh flight. */
+    readProcessFacts?: () => Promise<ReadonlyMap<number, LocalServiceProcessFact>>;
     workspaces: readonly LocalServiceWorkspaceFact[];
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
     /** Private OS coverage facts consumed by the canonical ownership normalizer. */
@@ -31,14 +33,16 @@ export type LocalServicesScanResult = Readonly<{
  * stdout on a stalled loop — indistinguishable from "nothing is listening". Linux reads `/proc`
  * and spawns nothing, so it has never been exposed to it.
  */
-export async function scanPlatformLocalServices(): Promise<LocalServicesScanResult> {
+export async function scanPlatformLocalServices(options: Readonly<{ includeProcessFacts?: boolean }> = {}): Promise<LocalServicesScanResult> {
     if (process.platform === 'darwin') {
         const result = await readDarwinLocalServiceListeners({
             execFile: execFileWithDeadline,
+            ...options,
         });
         return {
             listeners: result.listeners,
             processes: result.processes,
+            ...(result.readProcessFacts ? { readProcessFacts: result.readProcessFacts } : {}),
             workspaces: [],
             diagnostics: result.diagnostics,
         };
@@ -47,10 +51,12 @@ export async function scanPlatformLocalServices(): Promise<LocalServicesScanResu
     if (process.platform === 'win32') {
         const result = await readWindowsLocalServiceListeners({
             execFile: execFileWithDeadline,
+            ...options,
         });
         return {
             listeners: result.listeners,
             processes: result.processes,
+            ...(result.readProcessFacts ? { readProcessFacts: result.readProcessFacts } : {}),
             workspaces: [],
             diagnostics: result.diagnostics,
         };
@@ -60,10 +66,12 @@ export async function scanPlatformLocalServices(): Promise<LocalServicesScanResu
         readFile,
         readdir,
         readlink,
+        ...options,
     });
     return {
         listeners: result.listeners,
         processes: result.processes,
+        ...(result.readProcessFacts ? { readProcessFacts: result.readProcessFacts } : {}),
         workspaces: [],
         diagnostics: result.diagnostics,
         socketOwnerReadFailures: result.socketOwnerReadFailures,

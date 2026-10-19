@@ -15,6 +15,14 @@ beforeEach(() => installLocalServiceCensusFixture([
 const listenOutput = 'p123\ncnode\nf3\nn127.0.0.1:5173\n';
 
 describe('Darwin local services', () => {
+    it('defers process census for listener-only demand without losing its later detailed observation', async () => {
+        const opened = vi.spyOn(fs, 'open');
+        const result = await readDarwinLocalServiceListeners({ execFile: async () => ({ stdout: listenOutput }), includeProcessFacts: false });
+        expect(result.listeners).toEqual([expect.objectContaining({ pid: 123, port: 5173 })]);
+        expect(result.processes.size).toBe(0);
+        expect(opened).not.toHaveBeenCalled();
+        expect((await result.readProcessFacts?.())?.get(123)).toMatchObject({ cwd: '/Users/lee/repo/app' });
+    });
     it('measures listener clients from the same lsof scan and refuses partial zero evidence', async () => {
         // An accepted socket may move to a worker while its listener remains in the parent.
         const output = 'p123\nf3\nn*:5173\nTST=LISTEN\nf5\nn*:8080\nTST=LISTEN\np456\nf4\nn127.0.0.1:5173->127.0.0.1:55000\nTST=ESTABLISHED\n';

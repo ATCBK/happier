@@ -125,6 +125,17 @@ function boundaryFor(fixture: ProcfsFixture, readPaths: string[] = []) {
 }
 
 describe('readLinuxLocalServiceListeners', () => {
+    it('defers process census for listener-only demand without losing its later detailed observation', async () => {
+        const opened = vi.spyOn(fs, 'open');
+        const result = await readLinuxLocalServiceListeners({ ...boundaryFor(procfsFixture()), includeProcessFacts: false });
+        expect(result.listeners).toEqual(expect.arrayContaining([
+            expect.objectContaining({ pid: 321, port: 5173 }),
+        ]));
+        expect(result.processes.size).toBe(0);
+        expect(opened).not.toHaveBeenCalled();
+        const processes = await result.readProcessFacts?.();
+        expect(processes?.get(321)).toMatchObject({ cwd: '/repo/web', processOwnership: 'self' });
+    });
     it('counts busy-host connections with less CPU than rescanning clients per listener, preserving scan calls and bytes', async () => {
         const header = TCP4_FIXTURE.split('\n')[0]!;
         const lines = Array.from({ length: 256 }, (_, index) =>
