@@ -299,6 +299,7 @@ export type MachineVitalsActionResultById = {
                     t: number;
                     y: number | null;
                 }[];
+                pressureSource?: 'kernel_level' | 'psi' | 'events' | 'none' | undefined;
             };
             disk: {
                 volumeId: string | null;

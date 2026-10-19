@@ -252,6 +252,7 @@ export type SkillsActionResultById = {
             pluginOwned: {
                 pluginName: string;
             } | null;
+            userInvocable?: boolean | undefined;
         }[];
     };
     readonly "skills.found.read": {

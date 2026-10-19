@@ -125,7 +125,7 @@ export type SessionLifecycleActionInputById = {
                     };
                 };
             };
-            view: 'walkthrough' | 'files';
+            view: 'walkthrough' | 'files' | 'commits';
             explain?: boolean | undefined;
             comparisonId?: string | undefined;
         } | undefined;

@@ -88,21 +88,18 @@ export type SessionControlActionInputById = {
         serverId?: string | undefined;
     };
     readonly "session.exchange.control": {
+        sessionId: SessionTargetV1<true>;
+        originInputLocalId: string;
         decision: 'continue';
-        observedRevision?: unknown;
-        sessionId: SessionTargetV1<true>;
-        originInputLocalId: string;
     } | {
-        decision: 'continue_more';
-        observedRevision?: unknown;
         sessionId: SessionTargetV1<true>;
         originInputLocalId: string;
+        decision: 'continue_more';
         additionalTurns?: 10 | undefined;
     } | {
-        decision: 'stop';
-        observedRevision?: unknown;
         sessionId: SessionTargetV1<true>;
         originInputLocalId: string;
+        decision: 'stop';
     };
     readonly "session.turn.cancel": {
         sessionId: string;
