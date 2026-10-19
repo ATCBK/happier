@@ -16,9 +16,38 @@ import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdent
 import type { AgentSessionConfigurationSnapshotV1 } from '@happier-dev/protocol/runtime/agentSessionV1';
 
 import { permissionMode } from '@/agent/executionRuns/policy/permissionMode';
-import { resolveMcpToolIdentity, type McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
+import { prepareMcpToolCatalog, resolveMcpToolIdentity, type McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
 import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { SessionInputCausalPermissionAuthorityV1Schema, type SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+
+/** Admission for a fresh Run input; an earlier turn never supplies its authority. */
+export function resolveExecutionRunInputAuthority(input: Readonly<{
+  permissionMode: string;
+  causalPermissionAuthority?: unknown;
+  effectiveCallerPermissionMode?: string;
+}>): Readonly<{
+  ok: true;
+  causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
+  effectiveCallerPermissionMode: string;
+}> | Readonly<{ ok: false; errorCode: 'execution_run_not_allowed'; error: string }> {
+  const failure = { ok: false as const, errorCode: 'execution_run_not_allowed' as const,
+    error: 'causal_permission_authority_invalid' };
+  const hasAuthority = Object.hasOwn(input, 'causalPermissionAuthority');
+  // A private caller mode proves that this input must carry its original witness.
+  if (!hasAuthority && input.effectiveCallerPermissionMode !== undefined) return failure;
+  const parsed = SessionInputCausalPermissionAuthorityV1Schema.safeParse(hasAuthority
+    ? input.causalPermissionAuthority
+    : { kind: 'admittedSessionInputV1', admittedPermissionCeiling: permissionMode(input.permissionMode) });
+  if (!parsed.success) return failure;
+  const resolved = resolveCausalPermissionMode({ currentPermissionMode: permissionMode(input.permissionMode),
+    context: { causalPermissionAuthority: parsed.data,
+      ...(input.effectiveCallerPermissionMode !== undefined ? { callerPermissionMode: input.effectiveCallerPermissionMode } : {}) },
+  });
+  return resolved.ok
+    ? { ok: true, causalPermissionAuthority: parsed.data, effectiveCallerPermissionMode: resolved.effectiveMode }
+    : failure;
+}
 
 const EXECUTION_RUN_EXACT_READ_ONLY_SHELL_COMMANDS = new Set([
   'git status',
@@ -167,11 +196,11 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
     mcpTool?: ResolvedMcpToolIdentityV1;
   }>) => Promise<void> | void;
   }>): ExecutionRunPermissionHandler {
-  const pending = new Map<string, { resolve: (value: { decision: 'approved' | 'denied' }) => void; readCurrentDecision: () => ReturnType<typeof resolveExecutionRunImmediateDecision> }>();
+  const pending = new Map<string, { resolve: (value: { decision: 'approved' | 'denied' }) => void; readCurrentDecision: () => ReturnType<typeof resolveExecutionRunImmediateDecision>; preparing?: boolean }>();
 
   function respondToPermissionRequest(toolCallId: string, approved: boolean): boolean {
     const request = pending.get(toolCallId) ?? null;
-    if (!request) return false;
+    if (!request || request.preparing) return false;
     pending.delete(toolCallId);
     request.resolve({ decision: approved && request.readCurrentDecision()?.decision !== 'denied' ? 'approved' : 'denied' });
     return true;
@@ -206,6 +235,19 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
       return readImmediate(toolCallId, toolName, input, context);
     },
     async handleToolCall(toolCallId, toolName, input, context) {
+      const catalogPreparation = prepareMcpToolCatalog({ toolName, context: args.getMcpToolContext?.() });
+      if (catalogPreparation) {
+        let cancelled = false;
+        const cancellation = new Promise<void>(resolve => {
+          pending.set(toolCallId, { preparing: true, readCurrentDecision: () => null,
+            resolve: () => { cancelled = true; resolve(); } });
+        });
+        const request = pending.get(toolCallId);
+        // Cancellation owns this waiter, never the shared catalog hydration.
+        await Promise.race([catalogPreparation, cancellation]);
+        if (cancelled || pending.get(toolCallId) !== request) return { decision: 'denied' };
+        pending.delete(toolCallId);
+      }
       const immediate = readImmediate(toolCallId, toolName, input, context);
       if (immediate) return immediate;
 

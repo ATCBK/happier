@@ -52,6 +52,49 @@ describe('normalizeStrictJsonReviewOutput', () => {
     expect(res.structuredMeta).toMatchObject({ kind: 'review_findings.v2', payload: { reviewOutcome: outcome, findings: [] } });
   });
 
+  it.each([false, true])('omits absent optional model finding fields without losing findings (follow-up: %s)', (followUp) => {
+    const finding = { id: 'f1', title: 'Issue', severity: 'high', category: 'correctness', summary: 'Check this.' };
+    const retainedFinding = { ...finding, id: 'f2', patch: '+fixed', confidence: 0.8 };
+    const res = normalizeStrictJsonReviewOutput({
+      runId: 'review', callId: 'review-call', sidechainId: 'review-sidechain', backendId: 'claude',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, startedAtMs: 1, finishedAtMs: 2,
+      ...(followUp ? { intentInput: {
+        kind: 'review_follow_up.v1', parentRunRef: { runId: 'parent', callId: 'parent-call', backendId: 'claude' },
+        threadId: 'thread', messageMarkdown: 'Explain', summary: 'Original', overviewMarkdown: 'Original',
+      } } : {}),
+      rawText: JSON.stringify({
+        summary: 'Reviewed.', answerMarkdown: 'Explained.',
+        [followUp ? 'updatedFindings' : 'findings']: [{
+          ...finding, filePath: null, startLine: null, endLine: null, whyItMatters: null, evidence: null,
+          confidence: null, suggestion: null, patch: '', attributionConfidence: null,
+        }, retainedFinding],
+      }),
+    });
+
+    expect(res.status).toBe('succeeded');
+    const payload = res.structuredMeta?.payload as Record<string, unknown> | undefined;
+    const findings = payload?.[followUp ? 'updatedFindings' : 'findings'];
+    expect(findings).toEqual([finding, retainedFinding]);
+  });
+
+  it('keeps required finding fields and non-null optional values strict', () => {
+    const finding = { id: 'f1', title: 'Issue', severity: 'high', category: 'correctness', summary: 'Check this.' };
+    for (const invalid of [
+      ...Object.keys(finding).map((key) => ({ ...finding, [key]: null })),
+      { ...finding, patch: 123 },
+    ]) {
+      const res = normalizeStrictJsonReviewOutput({
+        runId: 'review', callId: 'review-call', sidechainId: 'review-sidechain', backendId: 'claude',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, startedAtMs: 1, finishedAtMs: 2,
+        rawText: JSON.stringify({ summary: 'Reviewed.', findings: [invalid] }),
+      });
+
+      expect(res.status).toBe('failed');
+      expect(res.toolResultOutput).toMatchObject({ error: { code: 'invalid_output' } });
+      expect(res.structuredMeta).toBeUndefined();
+    }
+  });
+
   it('publishes only the captured inventory file count, preserving zero and rejecting model counts', () => {
     const comparison = ScmComparisonSchema.parse({ id: 'captured', source: { kind: 'workingTree' },
       repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', reasons: [],

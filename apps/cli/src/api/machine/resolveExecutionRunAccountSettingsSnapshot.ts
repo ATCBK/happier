@@ -2,7 +2,8 @@ import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { sameStoredCredentials, type StoredCredentials } from '@/persistence';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import { createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import { projectMcpServerCatalogRefreshFailure } from '@/settings/mcp/hydrateMcpServerCatalog';
 

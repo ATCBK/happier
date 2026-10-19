@@ -7,6 +7,7 @@ import type { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { applyExecutionRunAction } from './executionRunApplyAction';
 import type { ExecutionRunState } from './executionRunTypes';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
+import { createTestExecutionRunHostRuntime } from './testkit';
 
 function succeededRun(): ExecutionRunState {
   return {
@@ -190,6 +191,38 @@ describe('applyExecutionRunAction review host action', () => {
 });
 
 describe('applyExecutionRunAction review follow-up admission', () => {
+  it.each([false, true])('admits an idle retained reviewer but keeps an active turn busy (in flight: %s)', async (turnInFlight) => {
+    const resumeHandle = {
+      kind: 'provider_session.v1' as const,
+      backendTarget: readBackendTargetRefV2({ kind: 'builtInAgent', agentId: 'claude' }),
+      providerSessionId: 'retained-review-session',
+    };
+    const controller: ExecutionRunController = {
+      kind: 'backend', controllerOccurrenceId: 'current-review',
+      backend: { ...createTestExecutionRunHostRuntime(), interaction: {
+        kind: 'retained_agent_session.v1',
+        capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true },
+      } },
+      backendSupportsResume: true, runtimeId: 'retained-review-session',
+      buffer: '', sidechainStreamBuffer: '', sidechainStreamKey: '', streamWriter: null,
+      cancelled: false, turnCount: 2, turnEpoch: 2, turnInFlight,
+      turnCancelReason: null, turnCancelEpoch: null, admittedLiveInterventions: [],
+      admittedLiveInterventionsSignal: null, lastMarkerWriteAtMs: 2,
+      terminalPromise: Promise.resolve(), resolveTerminal: () => {},
+    };
+    const { result, started } = await followUp({
+      ...succeededRun(), status: 'running', runClass: 'long_lived', ioMode: 'streaming',
+      retentionPolicy: 'resumable', resumeHandle,
+    }, controller);
+    if (turnInFlight) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_busy' });
+      expect(started).toEqual([]);
+    } else {
+      expect(result).toMatchObject({ ok: true, result: { runId: 'follow-up' } });
+      expect(started).toEqual([expect.objectContaining({ resumeHandle, parentRunId: 'run-1' })]);
+    }
+  });
+
   async function followUp(run: ExecutionRunState, controller?: ExecutionRunController) {
     const started: unknown[] = [];
     const result = await applyExecutionRunAction({

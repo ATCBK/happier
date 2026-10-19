@@ -26,6 +26,7 @@ describe('ExecutionRunHostBridge ensure-or-start response', () => {
         let publishedCallId: string | undefined;
         try {
             bridge = new ExecutionRunHostBridge({
+                resolveRunReportPolicy: async () => ({ preset: 'important' }),
                 parentProvider: 'codex', cwd: directory, happyHomeDir: directory,
                 // The Session transcript transport exposes creation before native
                 // provisioning; a user can cancel this accepted Run at that boundary.

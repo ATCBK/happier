@@ -1,13 +1,15 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SCM_COMMIT_MESSAGE_MAX_LENGTH } from '@happier-dev/protocol/scm';
 
-const ModelOutputSchema = z.object({
-  title: z.string().min(1).max(200),
-  body: z.string().max(20_000).optional(),
-  message: z.string().max(SCM_COMMIT_MESSAGE_MAX_LENGTH).optional(),
-  confidence: z.number().min(0).max(1).optional(),
-}).passthrough();
+import { parseTrailingJsonObject } from '@/agent/executionRuns/profiles/shared/parseTrailingJsonObject';
+
+const ModelOutputSchema = z.looseObject({
+  title: z.string().check(z.minLength(1), z.maxLength(200)),
+  body: z.optional(z.string().check(z.maxLength(20_000))),
+  message: z.optional(z.string().check(z.maxLength(SCM_COMMIT_MESSAGE_MAX_LENGTH))),
+  confidence: z.optional(z.number().check(z.minimum(0), z.maximum(1))),
+});
 
 export type CommitMessageModelOutput = z.infer<typeof ModelOutputSchema>;
 
@@ -20,12 +22,8 @@ export function parseCommitMessageModelOutput(rawText: string): CommitMessageMod
   const trimmed = rawText.trim();
   if (!trimmed) return null;
 
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    parsed = null;
-  }
+  // The shared Run-output reader tolerates the prose or code fence a model puts around its JSON.
+  const parsed = parseTrailingJsonObject(trimmed);
 
   const result = ModelOutputSchema.safeParse(parsed);
   if (!result.success) {

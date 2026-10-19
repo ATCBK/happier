@@ -6,9 +6,12 @@ import type {
   ExecutionRunRetentionPolicy,
   ExecutionRunStartRequest,
   ExecutionRunResultContractV1,
+  ReviewScmScopeV1,
   ConnectedServiceBindingsV2,
   ProviderBoundModelRef,
 } from '@happier-dev/protocol';
+import type { ScmCommitMessageContext, ScmCommitMessageContextInput } from '@/agent/runtime/bridges/executionRun/kinds/scmCommitMessage/loadScmCommitMessageContext';
+import type { CaptureScmComparisonInput } from '@/scm/comparisons/captureScmComparison';
 
 /**
  * Bounds the complete raw task result retained in memory and returned by the
@@ -122,12 +125,18 @@ export type ExecutionRunProfileInvalidOutputRepairPromptParams = Readonly<{
 export type ExecutionRunProfilePrepareStartParams = Readonly<{
   /** Trusted host scope, independent of caller-authored intent input. */
   sessionId?: string | null;
-  request: Omit<ExecutionRunStartRequest, 'backendTarget'> & Readonly<{
+  request: {
+    [Key in keyof ExecutionRunStartRequest as Key extends 'backendTarget' ? never : Key]: ExecutionRunStartRequest[Key];
+  } & Readonly<{
     backendTarget: ExecutionRunStartRequest['backendTarget'] | BackendTargetRefV1;
   }>;
   cwd: string;
   /** Offered-model truth from the host probe, never caller-authored intent input. */
   contextWindowTokens?: number;
+  /** Runner preparations reach SCM through their retained daemon snapshot. */
+  resolveReviewScmScope?: (input: Readonly<{ cwd: string; intentInput?: unknown }>) => Promise<ReviewScmScopeV1>;
+  loadScmCommitMessageContext?: (input: ScmCommitMessageContextInput) => Promise<ScmCommitMessageContext>;
+  captureScmCommitTarget?: CaptureScmComparisonInput['captureCommitTarget'];
 }>;
 
 export type ExecutionRunIntentProfile = Readonly<{

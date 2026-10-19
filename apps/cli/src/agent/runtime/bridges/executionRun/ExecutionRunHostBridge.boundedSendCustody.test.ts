@@ -5,6 +5,7 @@ import type { ExecutionRunState } from './executionRunTypes';
 import { ExecutionRunHostBridge } from './ExecutionRunHostBridge';
 import { settleExecutionRunController } from './settleExecutionRunController';
 import { createTestExecutionRunHostRuntime } from './testkit/runtime';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -80,16 +81,20 @@ describe('ExecutionRunHostBridge bounded send custody', () => {
     vi.useFakeTimers();
 
     let settled = false;
+    const attribution = materializeActionRequestAttributionV1({ requestRef: 'steer-request',
+      requester: { serverId: 'home', accountId: 'carol' }, persona: { serverId: 'home', sessionId: 'bot-session' }, origin: null });
     const send = bridge.send(runId, {
       message: 'Use the updated direction.',
       delivery: 'steer_if_supported',
+      actionRequestAttributionV1: attribution,
     });
     void send.finally(() => {
       settled = true;
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(controller.admittedLiveInterventions).toHaveLength(1));
     const adopted = controller.admittedLiveInterventions.shift();
     expect(adopted).toBeDefined();
+    expect(adopted?.actionRequestAttributionV1).toEqual(attribution);
 
     vi.advanceTimersByTime(120_001);
     await Promise.resolve();
@@ -109,8 +114,7 @@ describe('ExecutionRunHostBridge bounded send custody', () => {
       delivery: 'steer_if_supported',
       signal: cancellation.signal,
     });
-    await Promise.resolve();
-    expect(controller.admittedLiveInterventions).toHaveLength(1);
+    await vi.waitFor(() => expect(controller.admittedLiveInterventions).toHaveLength(1));
 
     vi.advanceTimersByTime(120_001);
     await Promise.resolve();
@@ -136,7 +140,7 @@ describe('ExecutionRunHostBridge bounded send custody', () => {
     void send.finally(() => {
       settled = true;
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(controller.admittedLiveInterventions).toHaveLength(1));
     const adopted = controller.admittedLiveInterventions.shift();
     expect(adopted).toBeDefined();
     (controller as ExecutionRunBackendController & {
@@ -176,8 +180,7 @@ describe('ExecutionRunHostBridge bounded send custody', () => {
     });
 
     try {
-      await Promise.resolve();
-      expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_busy' });
+      await vi.waitFor(() => expect(result).toMatchObject({ ok: false, errorCode: 'execution_run_busy' }));
       expect(controller.admittedLiveInterventions).toHaveLength(0);
     } finally {
       vi.advanceTimersByTime(120_001);

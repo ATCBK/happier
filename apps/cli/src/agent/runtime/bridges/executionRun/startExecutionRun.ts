@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 import type { SessionId } from '@/agent/core/AgentMessage';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
@@ -16,14 +17,17 @@ import { ExecutionRunVoiceAgentIntentInputV1Schema } from '@happier-dev/protocol
 import { resolveScmPullRequestReviewScope } from '@happier-dev/protocol/reviews/scmPullRequestScope';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBindingsV2, ProviderBoundModelRef, ExecutionRunResultContractV1, SessionInputAdmissionResultV1, SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
 import { withExecutionRunStartFailureDetails, projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
 import { projectExecutionRunRequestedConfiguration, projectExecutionRunResolvedSelection } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 import { resolveExecutionRunNotifyParentDefaultV1 } from '@happier-dev/protocol/execution/runs/executionRunNotifyParentDefaultV1';
 import { SECOND_OPINION_RESULT_SCHEMA_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
+import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { resolveExecutionRunRoleV1 } from '@/agent/executionRuns/profiles/review/reviewRole';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { getActiveAccountSettingsSnapshotLifetimeToken, readAccountRoleOverridesFromSnapshot,
+  type AccountSettingsSnapshotResolver } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveEffectiveCodingPromptPlan } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
 import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
@@ -32,6 +36,7 @@ import { readWorktreeChangeFingerprint } from '@/scm/readWorktreeChangeFingerpri
 import { runScmCommand } from '@/scm/runtime';
 import type { ExecutionRunHostRuntime } from './executionRunHostRuntime';
 import type { RegisterExecutionRunOccurrence } from './runOccurrenceWitness';
+import { projectExecutionRunInputTurn } from './runOccurrenceWitness';
 import type {
   ExecutionRunManagerStartParams,
   ExecutionRunStartResult,
@@ -65,12 +70,14 @@ import { resolveExecutionRunImplicitRoleIdV1 } from '@happier-dev/protocol/promp
 import type { ExecutionRunPermissionRequestStoreProvider } from './executionRunPermissionResponseTarget';
 import { resolveExecutionRunRuntimeSettings } from './runtimeSettings';
 import { permissionMode } from '@/agent/executionRuns/policy/permissionMode';
+import { resolveExecutionRunInputAuthority } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ExecutionRunTranscriptPublisher } from './executionRunTranscriptPublisher';
 import { isExecutionRunControllerCurrent, settleExecutionRunController } from './settleExecutionRunController';
 import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
 import { assertExecutionRunStructuredOutputModelAllowed } from './structuredOutputAdmission';
-import { executionRunChildSelectionNeedsAppliedParent, resolveExecutionRunChildSelection, type ExecutionRunAppliedParentSelection, type ExecutionRunAppliedParentSelectionReader, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
+import { executionRunChildSelectionNeedsAppliedParent, resolveExecutionRunAgentDefaultSelection, resolveExecutionRunChildSelection, type ExecutionRunAppliedParentSelection, type ExecutionRunAppliedParentSelectionReader, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
+import { projectExecutionRunError } from './errors';
 
 type SendAcp = ExecutionRunTranscriptPublisher;
 
@@ -206,12 +213,13 @@ type ExecuteBoundedRun = (args: {
   params: ExecutionRunManagerStartParams;
 }) => Promise<void>;
 
-/** Role resolution and prompt credentials belong to host composition only,
+/** Caller lifetime, role resolution and prompt credentials belong to host composition only,
  * never a profile hook or backend start request. */
 export function omitExecutionRunRoleCompositionContext(
   params: ExecutionRunManagerStartParams,
-): Omit<ExecutionRunManagerStartParams, 'resolvedRole' | 'roleSessionMetadata' | 'promptCredentials' | 'requesterWorkAttributionV1'> {
+): Omit<ExecutionRunManagerStartParams, 'signal' | 'resolvedRole' | 'roleSessionMetadata' | 'promptCredentials' | 'requesterWorkAttributionV1'> {
   const {
+    signal: _signal,
     resolvedRole: _resolvedRole,
     roleSessionMetadata: _roleSessionMetadata,
     promptCredentials: _promptCredentials,
@@ -246,6 +254,8 @@ async function retireProvisionedRuntimeWithoutDispatch(params: Readonly<{
 
 type StartExecutionRunArgs = Readonly<{
   params: ExecutionRunManagerStartParams;
+  /** The host's captured Account authority; never fall back to ambient state when supplied. */
+  resolveAccountSettingsSnapshot?: AccountSettingsSnapshotResolver;
   /** Host-private scope and opened-parent reader; never an authored Run input. */
   childSelectionContext?: Readonly<{
     lifecycle: 'attached' | 'independent';
@@ -274,6 +284,7 @@ type StartExecutionRunArgs = Readonly<{
     permissionMode: string;
     workspaceWrites?: 'allow' | 'deny';
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     modelId?: string;
     modelSelection?: ProviderBoundModelRef;
     teamCredentialModel?: import('@happier-dev/protocol').TeamCredentialProviderModelSelectionV1;
@@ -306,6 +317,7 @@ type StartExecutionRunArgs = Readonly<{
       resultContract?: ExecutionRunResultContractV1;
       structuredInput?: import('@happier-dev/protocol').HappierStructuredInputV1;
       causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+      actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     }>,
   ) => Promise<{ ok: boolean; errorCode?: string; error?: string }>;
   enqueueRetainedRunInitialInput?: (input: Readonly<{
@@ -327,6 +339,8 @@ type StartExecutionRunArgs = Readonly<{
 }>;
 
 export async function startExecutionRun(args: StartExecutionRunArgs): Promise<ExecutionRunStartResult> {
+  if (args.params.actionRequestAttributionV1) args = { ...args, params: { ...args.params,
+    actionRequestAttributionV1: materializeActionRequestAttributionV1(args.params.actionRequestAttributionV1) } };
   const actionRequestId = typeof args.params.actionRequestId === 'string'
     ? args.params.actionRequestId.trim()
     : '';
@@ -356,16 +370,40 @@ export async function startExecutionRun(args: StartExecutionRunArgs): Promise<Ex
 async function startAdmittedExecutionRun(
   args: StartExecutionRunArgs, runId: string, requestBoundRunId: string | null,
 ): Promise<ExecutionRunStartResult> {
+  if (args.params.sessionId === null) {
+    const authority = resolveExecutionRunInputAuthority({ permissionMode: args.params.permissionMode,
+      ...(Object.hasOwn(args.params, 'causalPermissionAuthority') ? { causalPermissionAuthority: args.params.causalPermissionAuthority } : {}),
+    });
+    if (!authority.ok) throw markExecutionRunStartFailure(Object.assign(new Error(authority.error), { code: authority.errorCode }), 'noRunCreated');
+    args = { ...args, params: { ...args.params, causalPermissionAuthority: authority.causalPermissionAuthority } };
+  }
   const requestedConfiguration = projectExecutionRunRequestedConfiguration({
     modelId: args.params.teamCredentialModel?.modelId ?? args.params.modelSelection?.modelId ?? args.params.modelId,
     sessionConfigOptionOverrides: args.params.sessionConfigOptionOverrides,
   });
   try {
+    const roleId = args.params.roleId ?? resolveExecutionRunImplicitRoleIdV1(args.params.intent);
+    const frozenRole = args.params.resolvedRole ?? (roleId
+      ? readSessionRolesV1(args.params.roleSessionMetadata)?.sessionRoles[roleId] : undefined);
+    let accountRoleOverrides: AccountRoleOverridesReadV1 | undefined;
+    if (roleId && !frozenRole) {
+      if (args.resolveAccountSettingsSnapshot) {
+        const snapshot = await args.resolveAccountSettingsSnapshot();
+        const operationContext = args.resolveAccountSettingsSnapshot.readOperationContext?.();
+        accountRoleOverrides = snapshot?.scopeKey && operationContext
+          ? await prepareActiveAccountRoleOverrides({ credentials: operationContext.credentials, scopeKey: snapshot.scopeKey,
+            lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), operationContext })
+          : snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
+            : { status: 'unavailable' as const, reason: 'source-unavailable' };
+      } else {
+        accountRoleOverrides = createActionSettingsProvider({ scopeKey: args.params.promptCredentials
+          ? resolveAccountSettingsScopeKeyForToken(args.params.promptCredentials.token) : undefined }).getAccountRoleOverrides();
+      }
+    }
     const role = resolveExecutionRunRoleV1({
-      roleId: args.params.roleId ?? resolveExecutionRunImplicitRoleIdV1(args.params.intent),
+      roleId,
       resolvedRole: args.params.resolvedRole,
-      accountRoleOverrides: createActionSettingsProvider({ scopeKey: args.params.promptCredentials
-        ? resolveAccountSettingsScopeKeyForToken(args.params.promptCredentials.token) : undefined }).getAccountRoleOverrides(),
+      accountRoleOverrides,
       sessionMetadata: args.params.roleSessionMetadata,
       defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(args.params.backendTarget)) },
     });
@@ -467,9 +505,8 @@ async function startAdmittedExecutionRun(
         parent = { status: 'unavailable' };
       }
     }
-    const agentTargetKey = buildBackendTargetKeyV2(readBackendTargetRefV2(originalParams.backendTarget));
-    const defaults = originalParams.childSelection === 'agentDefault'
-      ? ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.parse(originalParams.accountSettings?.providerDefaultModelSelectionsByAgentTargetKeyV1 ?? {}) : null;
+    const agentDefaultSelection = originalParams.childSelection === 'agentDefault'
+      ? resolveExecutionRunAgentDefaultSelection(originalParams) : null;
     if (originalParams.childSelection === 'agentDefault' && !originalParams.accountSettings) {
       throw Object.assign(new Error('The child Account defaults are unavailable. Choose an explicit model.'), { code: 'execution_run_child_default_unavailable' });
     }
@@ -483,7 +520,7 @@ async function startAdmittedExecutionRun(
       connectedServicesDefaultServiceIds: originalParams.connectedServicesDefaultServiceIds,
       parent,
       ...(originalParams.childSelection ? { childSelection: originalParams.childSelection,
-        agentDefaultSelection: defaults?.[agentTargetKey]?.ref ?? null } : {}),
+        agentDefaultSelection } : {}),
     });
     if (childSelection.inheritedFromDifferentAgent && childSelection.modelSelection?.providerConnectionId) {
       if (!args.admitInheritedProviderSelection) {
@@ -681,6 +718,7 @@ async function startAdmittedExecutionRun(
       runClass: args.params.runClass,
       ioMode: args.params.ioMode,
       notifyParentOnCompletion,
+      ...(args.params.runReportPolicy ? { runReportPolicy: args.params.runReportPolicy } : {}),
       ...(runtimeSettings ? { runtimeSettings } : {}),
       ...(Object.keys(launch).length > 0 ? { launch } : {}),
       status: 'running',
@@ -856,6 +894,7 @@ async function startAdmittedExecutionRun(
         ...(typeof bootstrapTimeoutMs === 'number' ? { bootstrapTimeoutMs } : {}),
         disabledActionIds,
       }, {
+        ...(args.params.signal ? { signal: args.params.signal } : {}),
         createRuntime: ({
           backendTarget,
           backendId: runtimeBackendId,
@@ -886,6 +925,7 @@ async function startAdmittedExecutionRun(
               ...(args.params.causalPermissionAuthority
                 ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
                 : {}),
+              ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
               start: {
                 ...startParams,
                 profileId: profileId ?? undefined,
@@ -964,6 +1004,7 @@ async function startAdmittedExecutionRun(
       ...(args.params.causalPermissionAuthority
         ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
         : {}),
+      ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
       ...(typeof args.params.modelId === 'string' && args.params.modelId.trim().length > 0
         ? { modelId: args.params.modelId }
         : {}),
@@ -1026,6 +1067,7 @@ async function startAdmittedExecutionRun(
       kind: 'backend',
       ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
       ...(args.params.workflowRunId ? { workflowRunId: args.params.workflowRunId } : {}),
+      ...(args.params.workflowScope ? { workflowScope: args.params.workflowScope } : {}),
       controllerOccurrenceId,
       backend,
       backendSupportsResume: false,
@@ -1117,7 +1159,7 @@ async function startAdmittedExecutionRun(
     if (args.params.runClass === 'bounded') {
       // Provision the backend session and run kickoff asynchronously so the caller can dismiss
       // the UI draft card immediately after the SubAgentRun tool-call is injected.
-      void (async () => {
+      const provisioningPromise = (async () => {
         try {
           const readiness = await backendReadinessPromise;
           if (!readiness) return;
@@ -1174,14 +1216,14 @@ async function startAdmittedExecutionRun(
               // Converge with stop/disposal even if executeBoundedRun throws before its own settlement.
               await settleExecutionRunController({ runId, controller: ctrl, controllers: args.controllers });
             });
-        } catch (e: any) {
-          const message = e instanceof Error ? e.message : 'Execution failed';
+        } catch (e: unknown) {
+          const error = projectExecutionRunError(e);
+          const message = error.message;
           const finishedAtMs = args.getNowMs();
-          const code = e instanceof VoiceAgentError ? e.code : 'execution_run_failed';
           try {
             await args.finishRun(
               runId,
-              { status: 'failed', summary: message, finishedAtMs, error: { code, message } },
+              { status: 'failed', summary: message, finishedAtMs, error },
               {
                 output: {
                   status: 'failed',
@@ -1193,7 +1235,7 @@ async function startAdmittedExecutionRun(
                   intent: args.params.intent,
                   startedAtMs,
                   finishedAtMs,
-                  error: { code, message },
+                  error,
                 },
                 isError: true,
               },
@@ -1205,6 +1247,8 @@ async function startAdmittedExecutionRun(
         }
       })();
 
+      ctrl.provisioningPromise = provisioningPromise;
+      void provisioningPromise;
       return startResult;
     }
 
@@ -1446,6 +1490,7 @@ async function startAdmittedExecutionRun(
             ...(args.params.causalPermissionAuthority
               ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
               : {}),
+            ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
           });
           if (!result.ok) {
             if (result.errorCode === 'execution_run_send_outcome_unknown') {
@@ -1465,17 +1510,25 @@ async function startAdmittedExecutionRun(
           await settleExecutionRunController({ runId, controller: ctrl, controllers: args.controllers });
           return;
         }
-        const message = error instanceof Error ? error.message : 'Execution failed';
+        const terminalError = projectExecutionRunError(error);
+        const message = terminalError.message;
         const finishedAtMs = args.getNowMs();
-        const code = error instanceof VoiceAgentError
-          ? error.code
-          : (error as { code?: unknown } | null)?.code === 'execution_run_not_allowed'
-            ? 'execution_run_not_allowed'
-            : 'execution_run_failed';
+        // Start already transferred the detached initial instruction into this
+        // owner. Provisioning can fail before send creates a native turn; keep
+        // that exact input's terminal refusal rather than losing its custody.
+        const current = args.runs.get(runId);
+        if (args.params.sessionId === null && args.params.localInputId && current && !current.inputTurns) {
+          // Public reads and retained checkpoints project the registered
+          // controller until retirement, so its witness must agree too.
+          ctrl.inputTurnOccurrenceId = controllerOccurrenceId;
+          ctrl.lastInputTurn = { turnId: args.params.localInputId, inputIds: [args.params.localInputId], state: 'failed' };
+          args.runs.set(runId, { ...current, inputTurns: { occurrenceId: controllerOccurrenceId,
+            last: projectExecutionRunInputTurn(ctrl.lastInputTurn) } });
+        }
         try {
           await args.finishRun(
             runId,
-            { status: 'failed', summary: message, finishedAtMs, error: { code, message } },
+            { status: 'failed', summary: message, finishedAtMs, error: terminalError },
             {
               output: {
                 status: 'failed',
@@ -1487,7 +1540,7 @@ async function startAdmittedExecutionRun(
                 intent: args.params.intent,
                 startedAtMs,
                 finishedAtMs,
-                error: { code, message },
+                error: terminalError,
               },
               isError: true,
             },
@@ -1525,13 +1578,13 @@ async function startAdmittedExecutionRun(
       throw markExecutionRunStartFailure(e, 'outcomeUnknown');
     }
     args.budgetRegistry?.releaseExecutionRun(runId);
-    const message = e instanceof Error ? e.message : 'Execution failed';
+    const error = projectExecutionRunError(e);
+    const message = error.message;
     const finishedAtMs = args.getNowMs();
-    const code = e instanceof VoiceAgentError ? e.code : 'execution_run_failed';
     try {
       await args.finishRun(
         runId,
-        { status: 'failed', summary: message, finishedAtMs, error: { code, message } },
+        { status: 'failed', summary: message, finishedAtMs, error },
         {
           output: {
             status: 'failed',
@@ -1543,7 +1596,7 @@ async function startAdmittedExecutionRun(
             intent: args.params.intent,
             startedAtMs,
             finishedAtMs,
-            error: { code, message },
+            error,
           },
           isError: true,
         },

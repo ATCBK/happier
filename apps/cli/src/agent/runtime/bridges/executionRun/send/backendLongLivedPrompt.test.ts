@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 
 import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
 import {
@@ -11,6 +12,7 @@ import type { ExecutionRunBackendController } from '@/agent/executionRuns/contro
 import { failureSignal } from '@/agent/executionRuns/controllers/failureSignal';
 import { createExecutionRunCodedError } from '@/agent/runtime/bridges/executionRun/errors';
 import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
+import { createRuntimeTurnFailureAlreadySurfacedError } from '@/agent/runtime/turns/runtimeTurnOperations';
 
 function createResumableBackendHarness(): Readonly<{
   runtime: ExecutionRunHostRuntime;
@@ -63,6 +65,20 @@ function createLongLivedResumableRun(overrides?: Partial<ExecutionRunState>): Ex
 }
 
 describe('sendBackendLongLivedRun (resume)', () => {
+  it('admits a new public retained input with its own Run ceiling instead of reusing an opener authority', async () => {
+    const deliverInput = vi.fn<ExecutionRunHostRuntime['deliverInput']>(async () => ({ status: 'admitted' as const }));
+    const { runtime } = createTestExecutionRunHostRuntime({ deliverInput });
+    const run = createLongLivedResumableRun({ sessionId: null });
+    await expect(sendBackendLongLivedRun({ runId: run.runId, params: { message: 'Read the workspace', resume: true },
+      runs: new Map([[run.runId, run]]), controllers: new Map(), budgetRegistry: null, createRuntime: () => runtime,
+      maxTurns: null, getNowMs: () => 123, finishRun: async () => {}, sendAcp: async () => {}, parentProvider: 'codex',
+      streamedTranscriptSession: null, writeActivityMarker: async () => {},
+    })).resolves.toEqual({ ok: true });
+    expect(deliverInput.mock.calls[0]?.[2]).toMatchObject({
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
+    });
+  });
+
   it.each(['initial', 'retained'])('projects native acceptance of a detached %s Workflow input before acknowledging send', async (inputKind) => {
     type RuntimeEvent = Parameters<NonNullable<ExecutionRunHostRuntime['subscribeRuntimeEvents']>>[0] extends (event: infer E) => void ? E : never;
     const listeners = new Set<(event: RuntimeEvent) => void>();
@@ -105,21 +121,29 @@ describe('sendBackendLongLivedRun (resume)', () => {
     expect(listeners.size).toBe(0);
   });
 
-  it('preserves a typed durable interaction failure in the Run terminal witness', async () => {
-    const capacityError = Object.assign(
+  it.each(['interaction_capacity', 'usage_limit'] as const)('preserves a typed %s failure in the Run terminal witness', async kind => {
+    const errorCode = kind === 'interaction_capacity' ? 'workflow_interaction_capacity_exceeded' : 'provider_usage_exhausted';
+    const completionError = kind === 'interaction_capacity' ? Object.assign(
       createExecutionRunCodedError(
         'workflow_interaction_capacity_exceeded',
         'Workflow interaction exceeds durable capacity',
       ),
       { code: 'workflow_interaction_capacity_exceeded', recoverable: true as const },
-    );
+    ) : createRuntimeTurnFailureAlreadySurfacedError({ message: 'Usage limit reached', event: {
+      kind: 'turn-failed', sessionId: 'native', sequence: 3, emittedAtMs: 100, turnId: 'native-turn',
+      diagnostic: { code: errorCode, severity: 'error', details: { runtimeAuthClassification: {
+        kind: 'usage_limit', serviceId: 'openai-codex', source: 'structured_provider_error', resetsAtMs: 42_000,
+      } } },
+    } });
     const { runtime } = createTestExecutionRunHostRuntime({
       deliverInput: async () => ({ status: 'admitted' as const }),
-      waitForTurnCompletion: async () => { throw capacityError; },
+      waitForTurnCompletion: async () => { throw completionError; },
     });
     const run = createLongLivedResumableRun({ status: 'running' });
     const runs = new Map([[run.runId, run]]);
-    const finishRun = vi.fn(async (_runId: string, _next: unknown) => undefined);
+    let resolveFinish!: () => void;
+    const finishPending = new Promise<void>(resolve => { resolveFinish = resolve; });
+    const finishRun = vi.fn(async (_runId: string, _next: unknown) => await finishPending);
     const controller: ExecutionRunBackendController = {
       kind: 'backend', controllerOccurrenceId: 'long-lived-capacity', backend: runtime, backendSupportsResume: true,
       runtimeId: 'child_runtime_active', buffer: '', sidechainStreamBuffer: '', sidechainStreamKey: '',
@@ -128,27 +152,41 @@ describe('sendBackendLongLivedRun (resume)', () => {
       lastMarkerWriteAtMs: 0, failureSignal: failureSignal(), pendingHostBarrier: Promise.resolve(),
       terminalPromise: new Promise<void>(() => {}), resolveTerminal: () => undefined,
     };
-
-    await expect(sendBackendLongLivedRun({
-      runId: run.runId,
-      params: { message: 'Continue', localInputId: 'workflow-input-1' },
-      runs,
-      controllers: new Map([[run.runId, controller]]),
-      budgetRegistry: null,
-      createRuntime: () => runtime,
-      maxTurns: null,
-      getNowMs: () => 123,
-      finishRun,
-      sendAcp: async () => {},
-      parentProvider: 'codex',
-      streamedTranscriptSession: null,
-      writeActivityMarker: async () => undefined,
-    })).resolves.toEqual({ ok: true });
-    await vi.waitFor(() => expect(finishRun).toHaveBeenCalledOnce());
-    expect(finishRun.mock.calls[0]?.[1]).toMatchObject({
-      status: 'failed',
-      error: { code: 'workflow_interaction_capacity_exceeded' },
-    });
+    const failedTurnBusyStates: boolean[] = [];
+    try {
+      await expect(sendBackendLongLivedRun({
+        runId: run.runId,
+        params: { message: 'Continue', localInputId: 'workflow-input-1' },
+        runs,
+        controllers: new Map([[run.runId, controller]]),
+        budgetRegistry: null,
+        createRuntime: () => runtime,
+        maxTurns: null,
+        getNowMs: () => 123,
+        finishRun,
+        sendAcp: async () => {},
+        parentProvider: 'codex',
+        streamedTranscriptSession: null,
+        writeActivityMarker: async () => undefined,
+        onPublicStateUpdated: () => {
+          if (controller.lastInputTurn?.state === 'failed') failedTurnBusyStates.push(controller.turnInFlight);
+        },
+      })).resolves.toEqual({ ok: true });
+      await vi.waitFor(() => expect(finishRun).toHaveBeenCalledOnce());
+      expect(finishRun.mock.calls[0]?.[1]).toMatchObject({
+        status: 'failed',
+        error: { code: errorCode, ...(kind === 'usage_limit' ? {
+          runtimeIssueV1: { source: 'usage_limit', usageLimit: { resetAtMs: 42_000 } },
+        } : {}) },
+      });
+      expect(controller.currentInputTurn).toBeUndefined();
+      expect(controller.lastInputTurn).toMatchObject({ inputIds: ['workflow-input-1'], state: 'failed' });
+      expect(controller.turnInFlight).toBe(false);
+      expect(failedTurnBusyStates).toContain(false);
+      expect(failedTurnBusyStates).not.toContain(true);
+      expect(runs.get(run.runId)?.error).toMatchObject({ code: errorCode,
+        ...(kind === 'usage_limit' ? { runtimeIssueV1: { usageLimit: { resetAtMs: 42_000 } } } : {}) });
+    } finally { resolveFinish(); }
   });
 
   it('waits for the retained initial Pending admission before delivering an immediate follow-up', async () => {
@@ -209,10 +247,10 @@ describe('sendBackendLongLivedRun (resume)', () => {
     );
   });
 
-  it('keeps the authored input identity and validated result on the exact settled turn', async () => {
+  it.each(['raw', 'fenced'])('keeps the authored input identity and validated %s result on the exact settled turn', async encoding => {
     let controller!: ExecutionRunBackendController;
     const deliverInput = vi.fn(async () => {
-      controller.buffer = '{"changed":true}';
+      controller.buffer = encoding === 'fenced' ? '```json\n{"changed":true}\n```' : '{"changed":true}';
       return { status: 'admitted' as const };
     });
     const { runtime } = createTestExecutionRunHostRuntime({
@@ -338,14 +376,16 @@ describe('sendBackendLongLivedRun (resume)', () => {
     const controllers = new Map<string, ExecutionRunBackendController>();
     const finishRun = vi.fn(async () => undefined);
     const causalPermissionAuthority = { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const };
+    const actionRequestAttributionV1 = materializeActionRequestAttributionV1({ requestRef: 'resumed-request',
+      requester: { serverId: 'home', accountId: 'bob' }, persona: { serverId: 'home', sessionId: 'bot-session' }, origin: null });
     const args = {
-      runId: run.runId, params: { message: 'try this', resume: true, causalPermissionAuthority }, runs, controllers,
+      runId: run.runId, params: { message: 'try this', resume: true, causalPermissionAuthority, actionRequestAttributionV1, effectiveCallerPermissionMode: 'read-only' }, runs, controllers,
       budgetRegistry: null, createRuntime: () => runtime, maxTurns: null, getNowMs: () => 123,
       finishRun, sendAcp: async () => {}, parentProvider: 'codex' as const, streamedTranscriptSession: null,
       writeActivityMarker: async () => {},
     };
     const result = await sendBackendLongLivedRun(args);
-    expect(deliverInput).toHaveBeenCalledWith('test_runtime_1', { text: 'try this' }, { causalPermissionAuthority });
+    expect(deliverInput).toHaveBeenCalledWith('test_runtime_1', { text: 'try this' }, { causalPermissionAuthority, actionRequestAttributionV1, effectiveCallerPermissionMode: 'read-only' });
     expect(result).toEqual({ ok: false, errorCode: 'provider_busy', error: 'Provider is busy' });
     expect(finishRun).not.toHaveBeenCalled();
     expect(controllers.get(run.runId)?.turnInFlight).toBe(false);
@@ -354,7 +394,7 @@ describe('sendBackendLongLivedRun (resume)', () => {
     controller.turnInFlight = true;
     expect(await sendBackendLongLivedRun({ ...args, params: { ...args.params, delivery: 'steer_if_supported' } }))
       .toEqual({ ok: false, errorCode: 'steer_unavailable', error: 'Steering is unavailable' });
-    expect(steerInput).toHaveBeenCalledWith('test_runtime_1', { text: 'try this' }, { causalPermissionAuthority });
+    expect(steerInput).toHaveBeenCalledWith('test_runtime_1', { text: 'try this' }, { causalPermissionAuthority, actionRequestAttributionV1, effectiveCallerPermissionMode: 'read-only' });
     expect(controller.turnInFlight).toBe(true);
     expect(finishRun).not.toHaveBeenCalled();
   });

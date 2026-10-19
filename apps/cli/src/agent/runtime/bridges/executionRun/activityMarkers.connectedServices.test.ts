@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol';
 import { reloadConfiguration } from '@/configuration';
 import { listExecutionRunMarkers, listExecutionRunMarkersForRehydration, reconcileRetainedExecutionRunRecords } from '@/daemon/executionRunRegistry';
 
@@ -71,7 +72,7 @@ describe('writeExecutionRunActivityMarker marker privacy', () => {
       runClass: 'bounded',
       ioMode: 'request_response',
       launch: { connectedServicesRegistration: registration, selectionSource: 'inherited', modelId: 'applied-model',
-        modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'parent-provider', modelId: 'applied-model' },
+        modelSelection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'parent-provider', modelId: 'applied-model' }),
         connectedServicesSelection: null },
       status: 'running',
       startedAtMs: 10,

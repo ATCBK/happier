@@ -63,6 +63,9 @@ export type OwnedExecutionRunProfileDescriptor = Readonly<{
 }>;
 
 export type ExecutionRunProfileCatalogOptions = Readonly<{
+  resolveReviewScmScope?: Parameters<NonNullable<ExecutionRunIntentProfile['prepareStartParams']>>[0]['resolveReviewScmScope'];
+  loadScmCommitMessageContext?: Parameters<NonNullable<ExecutionRunIntentProfile['prepareStartParams']>>[0]['loadScmCommitMessageContext'];
+  captureScmCommitTarget?: Parameters<NonNullable<ExecutionRunIntentProfile['prepareStartParams']>>[0]['captureScmCommitTarget'];
   resolveAgentIdentity?: (agentId: string) => Readonly<{
     pluginId: string;
     localId: string;
@@ -285,6 +288,17 @@ export function buildExecutionRunProfileCatalog(
   const profileDescriptorsById = new Map<string, OwnedExecutionRunProfileDescriptor>();
   const profileDescriptorIdsByIntent = new Map<ExecutionRunIntent, string[]>();
   const runtimeProfilesById = new Map<string, ExecutionRunIntentProfile>();
+  const builtInProfilesByIntent = options.resolveReviewScmScope || options.loadScmCommitMessageContext || options.captureScmCommitTarget
+    ? new Map([...BUILT_IN_PROFILE_MAP].map(([intent, profile]) => [intent, profile.prepareStartParams ? {
+      ...profile,
+      prepareStartParams: (params: Parameters<NonNullable<ExecutionRunIntentProfile['prepareStartParams']>>[0]) =>
+        profile.prepareStartParams!({ ...params,
+          ...(options.resolveReviewScmScope ? { resolveReviewScmScope: options.resolveReviewScmScope } : {}),
+          ...(options.loadScmCommitMessageContext ? { loadScmCommitMessageContext: options.loadScmCommitMessageContext } : {}),
+          ...(options.captureScmCommitTarget ? { captureScmCommitTarget: options.captureScmCommitTarget } : {}),
+        }),
+    } : profile] as const))
+    : BUILT_IN_PROFILE_MAP;
 
   for (const input of profileDescriptors) {
     const descriptor = normalizeDescriptor(input);
@@ -295,7 +309,7 @@ export function buildExecutionRunProfileCatalog(
     const intentIds = profileDescriptorIdsByIntent.get(descriptor.definition.intent) ?? [];
     intentIds.push(descriptor.qualifiedId);
     profileDescriptorIdsByIntent.set(descriptor.definition.intent, intentIds);
-    const baseProfile = BUILT_IN_PROFILE_MAP.get(descriptor.definition.intent);
+    const baseProfile = builtInProfilesByIntent.get(descriptor.definition.intent);
     if (!baseProfile) {
       return failProfileSelection(
         'execution_run_profile_intent_unsupported',
@@ -309,7 +323,7 @@ export function buildExecutionRunProfileCatalog(
   }
 
   return Object.freeze({
-    builtInProfilesByIntent: BUILT_IN_PROFILE_MAP,
+    builtInProfilesByIntent,
     profileDescriptorsById: Object.freeze(profileDescriptorsById),
     profileDescriptorIdsByIntent: Object.freeze(new Map(
       Array.from(profileDescriptorIdsByIntent.entries()).map(([intent, ids]) => [

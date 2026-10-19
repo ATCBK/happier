@@ -82,7 +82,7 @@ describe.each(['finite', 'retained'] as const)('native %s Run recovery before te
                 },
                 async cancel({ turnId }) { emit({ kind: 'turn-cancelled', turnId, cause: 'user' }); return { status: 'requested' as const, turnId }; },
                 async dispose() { disposals.push(occurrence); },
-                async updateConfiguration() { policyUpdates.push(occurrence); return { status: 'applied' as const }; },
+                async updateConfiguration() { policyUpdates.push(occurrence); return { status: 'applied' as const, changed: [] }; },
             };
         } } };
         const options = {

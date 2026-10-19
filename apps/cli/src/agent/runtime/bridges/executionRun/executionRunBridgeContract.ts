@@ -70,6 +70,7 @@ export interface ExecutionRunHostBridgeContract {
       resultContract?: ExecutionRunResultContractV1;
       structuredInput?: import('@happier-dev/protocol').HappierStructuredInputV1;
       causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+      effectiveCallerPermissionMode?: string;
       signal?: AbortSignal;
       /** Host-private exact-input interaction target; never an RPC field. */
       permissionRequestStore?: ExecutionRunPermissionRequestStore;
@@ -77,7 +78,7 @@ export interface ExecutionRunHostBridgeContract {
   ): Promise<{ ok: boolean; errorCode?: string; error?: string }>;
   ensure(
     runId: string,
-    params: Readonly<{ resume?: boolean; causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1 }>,
+    params: Readonly<{ resume?: boolean; signal?: AbortSignal; causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1 }>,
   ): Promise<{ ok: boolean; errorCode?: string; error?: string }>;
   ensureOrStart(params: Readonly<{
     runId?: string | null;

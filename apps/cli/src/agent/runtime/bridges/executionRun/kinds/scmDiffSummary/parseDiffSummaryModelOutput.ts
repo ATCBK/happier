@@ -1,21 +1,17 @@
 import { ScmDiffSummaryModelOutputSchema, normalizeScmDiffSummaryModelOutput } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmDiffSummaryModelOutput } from '@happier-dev/protocol';
 
+import { parseTrailingJsonObject } from '@/agent/executionRuns/profiles/shared/parseTrailingJsonObject';
+
 export type DiffSummaryModelOutput = ScmDiffSummaryModelOutput;
 
 export function parseDiffSummaryModelOutput(
   rawText: string,
   context?: Parameters<typeof normalizeScmDiffSummaryModelOutput>[1],
 ): DiffSummaryModelOutput | null {
-  const trimmed = rawText.trim();
-  if (!trimmed) return null;
-
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    parsed = null;
-  }
+  // The shared Run-output reader tolerates the prose or code fence a model puts around its JSON.
+  // The strict protocol schema below remains the contract.
+  const parsed = parseTrailingJsonObject(rawText);
 
   const result = ScmDiffSummaryModelOutputSchema.safeParse(parsed);
   if (!result.success) return null;

@@ -3,27 +3,10 @@ import type { ExecutionRunPermissionInteractionMode } from './executionRunPermis
 import { createExecutionRunPermissionHandler } from './executionRunPermissionDecision';
 import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import type { AcpPermissionCallContext } from '@/agent/acp/permissions/acpPermissionHandler';
+import { isHostOccurrenceQuestion } from '@/agent/permissions/requestKind';
+import { buildRunScopedExecutionPermissionRequestId, readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 
-function requestIdPrefix(runId: string): string {
-  return `execution-run:${encodeURIComponent(runId)}:`;
-}
-
-function occurrenceRequestIdPrefix(runId: string, controllerOccurrenceId: string): string {
-  return `${requestIdPrefix(runId)}${encodeURIComponent(controllerOccurrenceId)}:`;
-}
-
-export function buildRunScopedExecutionPermissionRequestId(params: Readonly<{
-  runId: string;
-  controllerOccurrenceId: string;
-  providerRequestId: string;
-}>): string {
-  const runId = String(params.runId ?? '').trim();
-  const controllerOccurrenceId = String(params.controllerOccurrenceId ?? '').trim();
-  if (!runId || !controllerOccurrenceId) {
-    throw new Error('Execution-run permission request identity requires run and controller occurrence ids');
-  }
-  return `${occurrenceRequestIdPrefix(runId, controllerOccurrenceId)}${encodeURIComponent(params.providerRequestId)}`;
-}
+export { buildRunScopedExecutionPermissionRequestId };
 
 export function readRunScopedExecutionProviderRequestId(params: Readonly<{
   runId: string;
@@ -32,14 +15,9 @@ export function readRunScopedExecutionProviderRequestId(params: Readonly<{
 }>): string | null {
   const runId = String(params.runId ?? '').trim();
   const controllerOccurrenceId = String(params.controllerOccurrenceId ?? '').trim();
-  if (!controllerOccurrenceId) return null;
-  const prefix = occurrenceRequestIdPrefix(runId, controllerOccurrenceId);
-  if (!runId || !params.requestId.startsWith(prefix)) return null;
-  try {
-    return decodeURIComponent(params.requestId.slice(prefix.length));
-  } catch {
-    return null;
-  }
+  const identity = readRunScopedExecutionPermissionRequestIdentity(params.requestId);
+  return runId && controllerOccurrenceId && identity?.runId === runId && identity.controllerOccurrenceId === controllerOccurrenceId
+    ? identity.providerRequestId : null;
 }
 
 export function createRunScopedExecutionPermissionHandler(params: Readonly<{
@@ -83,17 +61,18 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
       ? { ...context, mcpToolPolicy: policy } : context;
   };
   const readImmediate: NonNullable<AcpPermissionHandler['getImmediateDecision']> = (toolCallId, toolName, input, context) => {
+    if (isHostOccurrenceQuestion(toolName, context)) return null;
     const inherited = params.handler.getImmediateDecision?.(toolCallId, toolName, input, mcpContext(toolName, context)) ?? null;
     if (inherited?.decision === 'denied' || inherited?.decision === 'abort') return inherited;
     return toolPolicy?.getImmediateDecision(toolCallId, toolName, input, context) ?? inherited;
   };
 
-  const abortExact = async (requestId: string, reason: string): Promise<void> => {
+  const abortExact = async (requestId: string, reason: string, options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void> => {
     if (!pendingRequestIds.has(requestId) && !cleanupRequestIds.has(requestId)) return;
     cleanupRequestIds.add(requestId);
     abortingRequestIds.add(requestId);
     try {
-      await abortPendingRequestAndFlush.call(params.handler, requestId, reason);
+      await abortPendingRequestAndFlush.call(params.handler, requestId, reason, options);
       await params.onPendingRequestAborted?.({ requestId, reason });
       pendingRequestIds.delete(requestId);
       cleanupRequestIds.delete(requestId);
@@ -121,7 +100,9 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
         const requestId = scopedRequestId(toolCallId);
         const immediate = readImmediate(requestId, toolName, input, context);
         if (immediate) return immediate;
-        const interactionMode = params.readInteractionMode?.();
+        // Startup questions have no admitted executable turn. Keep their exact
+        // Run scope, but let the Session question owner collect the person's answer.
+        const interactionMode = isHostOccurrenceQuestion(toolName, context) ? undefined : params.readInteractionMode?.();
         if (interactionMode === 'deterministic' || interactionMode === 'fail_closed') {
           return { decision: 'denied' };
         }
@@ -138,12 +119,12 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
           if (!abortingRequestIds.has(requestId)) pendingRequestIds.delete(requestId);
         }
       },
-      async abortPendingRequestAndFlush(toolCallId, reason) {
-        await abortExact(scopedRequestId(toolCallId), reason);
+      async abortPendingRequestAndFlush(toolCallId, reason, options) {
+        await abortExact(scopedRequestId(toolCallId), reason, options);
       },
-      async abortPendingRequestsAndFlush(reason) {
+      async abortPendingRequestsAndFlush(reason, options) {
         await Promise.all([...new Set([...pendingRequestIds, ...cleanupRequestIds])].map(async (requestId) => {
-          await abortExact(requestId, reason);
+          await abortExact(requestId, reason, options);
         }));
       },
     },

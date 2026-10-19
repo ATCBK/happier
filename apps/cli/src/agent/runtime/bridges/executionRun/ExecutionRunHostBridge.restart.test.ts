@@ -1,11 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { isPidPresent } from '@happier-dev/cli-common/process';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
@@ -16,10 +17,11 @@ import { writeExecutionRunActivityMarker } from './activityMarkers';
 import type { ExecutionRunState } from './executionRunTypes';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import { ensureExecutionRun } from './ensureExecutionRun';
-import { buildReviewFindingsV2Payload } from '@/agent/reviews/normalize/buildReviewFindingsV2Payload';
 import { createTestExecutionRunHostRuntime } from './testkit';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { RetainedExecutionRunRecordSchema, projectExecutionRunHostLoss, projectRetainedExecutionRunState } from './retainedState';
+import { buildReviewFindingsV2Payload } from '@/agent/reviews/normalize/buildReviewFindingsV2Payload';
+import integrationConfig from '../../../../../vitest.integration.config';
 
 // The observation transport is unavailable after the host has died. All
 // retained-state parsing, ownership and fallback selection remain real.
@@ -101,26 +103,56 @@ describe('execution lifecycle restart recovery', () => {
     expect(resumedLoss.terminalEventId).not.toBe(first.terminalEventId);
   });
 
-  it.each(['ephemeral', 'resumable'] as const)('reconciles actual process death after an earlier empty baseline (%s)', async (retentionPolicy) => {
-    const observer = bridge();
-    await observer.recoverRetainedRuns();
-    const child = fork(fileURLToPath(new URL('./testkit/retainedRunHost.fixture.ts', import.meta.url)), {
-      execArgv: ['--import', fileURLToPath(new URL('../../../../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url))],
-      env: { ...process.env, TSX_TSCONFIG_PATH: fileURLToPath(new URL('../../../../../tsconfig.json', import.meta.url)) },
-      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-    });
+  describe('real retained host fixture', () => {
+    let observer: ExecutionRunHostBridge;
+    let child: ReturnType<typeof fork> | undefined;
+    let phase: string;
+    let completed: boolean;
     let stderr = '';
-    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    try {
-      const waitForHostMessage = (phase: string) => new Promise<unknown>((resolve, reject) => {
-        child.once('message', resolve);
-        child.once('error', reject);
-        child.once('exit', (code) => reject(new Error(`Retained host exited before ${phase} (${code}): ${stderr}`)));
+
+    const waitForHostMessage = (phase: string) => new Promise<unknown>((resolve, reject) => {
+      child!.once('message', resolve);
+      child!.once('error', reject);
+      child!.once('exit', (code) => reject(new Error(`Retained host exited before ${phase} (${code}): ${stderr}`)));
+    });
+
+    // Cold source loading is fixture setup. Reuse the integration lane's hook
+    // budget; the actual host-loss assertions retain the unit test budget.
+    beforeEach(async () => {
+      phase = 'recovering empty baseline';
+      completed = false;
+      stderr = '';
+      child = undefined;
+      onTestFinished(() => {
+        if (!completed) console.error('Actual retained host failure phase', phase);
       });
+      observer = bridge();
+      await observer.recoverRetainedRuns();
+      phase = 'child readiness';
+      child = fork(fileURLToPath(new URL('./testkit/retainedRunHost.fixture.ts', import.meta.url)), {
+        execArgv: ['--import', fileURLToPath(new URL('../../../../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url))],
+        env: { ...process.env, TSX_TSCONFIG_PATH: fileURLToPath(new URL('../../../../../tsconfig.runtime.json', import.meta.url)) },
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+      });
+      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       expect(await waitForHostMessage('readiness')).toBe('ready');
+    }, integrationConfig.test?.hookTimeout);
+
+    afterEach(async () => {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill('SIGKILL');
+        await exited;
+      }
+    });
+
+    it.each(['ephemeral', 'resumable'] as const)('reconciles actual process death after an earlier empty baseline (%s)', async (retentionPolicy) => {
+      const host = child!;
+      phase = 'retaining child state';
       const retained = waitForHostMessage('retaining state');
-      child.send(state('parent-session', retentionPolicy));
+      host.send(state('parent-session', retentionPolicy));
       expect(await retained).toBe('retained');
+      phase = 'recognizing live child';
       // The daemon's boolean process-recognition adapter collapses an
       // unreadable process to false. It is not proof of owner death/reuse.
       await gcExecutionRunMarkers({
@@ -129,9 +161,10 @@ describe('execution lifecycle restart recovery', () => {
       });
       await observer.recoverRetainedRuns();
       expect(observer.get('restart-run')).toBeNull(); // No local authority over a live foreign host.
-      const exited = once(child, 'exit');
-      child.kill('SIGKILL');
+      const exited = once(host, 'exit');
+      host.kill('SIGKILL');
       await exited;
+      phase = 'observing child host loss';
       await observer.waitForTerminal('restart-run');
       expect(observer.getPublic('restart-run')).toMatchObject({
         status: 'failed', error: { code: 'execution_run_host_lost' },
@@ -142,13 +175,8 @@ describe('execution lifecycle restart recovery', () => {
       });
       expect((await observer.takeWorkerUpdate('parent-session', new AbortController().signal))?.update)
         .toMatchObject({ ownerState: 'failed', transcriptPointer: { runId: 'restart-run' } });
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        const exited = once(child, 'exit');
-        child.kill('SIGKILL');
-        await exited;
-      }
-    }
+      completed = true;
+    });
   });
 
   it.each([null, 'parent-session'])('restores resumable control state independently of marker visibility (%s)', async (sessionId) => {
@@ -161,7 +189,7 @@ describe('execution lifecycle restart recovery', () => {
     });
     await removeExecutionRunMarker(run.runId);
     const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
-    const path = join(directory, 'tmp', 'daemon-execution-runs', `state-${Buffer.from(run.runId).toString('base64url')}.sealed`);
+    const path = join(directory, 'tmp', 'daemon-execution-runs', `state-${createHash('sha256').update(JSON.stringify([run.runId])).digest('hex')}.sealed`);
     const record = RetainedExecutionRunRecordSchema.parse(storage.openJson({ purpose: 'execution_run_state', ciphertext: readFileSync(path, 'utf8') }));
     writeFileSync(path, storage.sealJson({ purpose: 'execution_run_state', value: { ...record, future: true,
       state: { ...record.state, future: true, launch: { ...record.state.launch, future: true },
@@ -186,7 +214,9 @@ describe('execution lifecycle restart recovery', () => {
     const resumedRuns = new Map([[run.runId, restored]]);
     const controllers = new Map<string, ExecutionRunController>();
     const voiceAgentManager = new VoiceAgentManager({
-      createRuntime: () => runtime, resolveSystemAppendBlocks: async () => [], responseTimeoutMs: 1_000,
+      createRuntime: () => runtime,
+      resolvePromptPreparation: async () => ({ systemAppendBlocks: [], memoryRecallGuidanceEnabled: false, disabledActionIds: [] }),
+      responseTimeoutMs: 1_000,
     });
     expect(await ensureExecutionRun({
       runId: run.runId, params: { resume: true }, runs: resumedRuns, controllers,
@@ -200,17 +230,22 @@ describe('execution lifecycle restart recovery', () => {
     await voiceAgentManager.dispose();
   });
 
-  it('refuses corrupted known fields in a real sealed retained record', async () => {
+  it('isolates corrupted known fields in a real sealed retained record and keeps the bridge usable', async () => {
     const run = state('parent-session', 'resumable');
     await writeExecutionRunActivityMarker({ runId: run.runId, nowMs: 10, opts: { force: true },
       runs: new Map([[run.runId, run]]), controllers: new Map(), enqueueMarkerWrite: async (_id, write) => { await write(); } });
     const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
-    const path = join(directory, 'tmp', 'daemon-execution-runs', `state-${Buffer.from(run.runId).toString('base64url')}.sealed`);
+    const path = join(directory, 'tmp', 'daemon-execution-runs', `state-${createHash('sha256').update(JSON.stringify([run.runId])).digest('hex')}.sealed`);
     const record = RetainedExecutionRunRecordSchema.parse(storage.openJson({ purpose: 'execution_run_state', ciphertext: readFileSync(path, 'utf8') }));
-    writeFileSync(path, storage.sealJson({ purpose: 'execution_run_state', value: { ...record,
+    const corrupt = storage.sealJson({ purpose: 'execution_run_state', value: { ...record,
       state: { ...record.state, depth: -1 },
-    } }));
-    await expect(readRetainedExecutionRunRecords()).rejects.toMatchObject({ code: 'execution_run_state_unavailable' });
+    } });
+    writeFileSync(path, corrupt);
+    await expect(readRetainedExecutionRunRecords()).resolves.toEqual([]);
+    const restarted = bridge();
+    await expect(restarted.recoverRetainedRuns()).resolves.toBeUndefined();
+    expect(restarted.get(run.runId)).toBeNull();
+    expect(readFileSync(path, 'utf8')).toBe(corrupt);
   });
 
   it.each(['ephemeral', 'resumable'] as const)('records abrupt host loss and exact input failure (%s)', async (retentionPolicy) => {

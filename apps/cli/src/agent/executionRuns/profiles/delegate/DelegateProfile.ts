@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { DelegateOutputV1Schema } from '@happier-dev/protocol/messages/structured/delegateOutputV1';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
@@ -61,14 +61,14 @@ function normalizeDelegateBoundedCompletion(params: Readonly<{
 
   const trimmed = params.rawText.trim();
   const parsedJson: any = parseTrailingJsonObject(trimmed);
-  const ModelOutputSchema = z.object({
-    summary: z.string().min(1),
-    deliverables: z.array(z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      details: z.string().optional(),
-    }).passthrough()),
-  }).passthrough();
+  const ModelOutputSchema = z.looseObject({
+    summary: z.string().check(z.minLength(1)),
+    deliverables: z.array(z.looseObject({
+      id: z.string().check(z.minLength(1)),
+      title: z.string().check(z.minLength(1)),
+      details: z.optional(z.string()),
+    })),
+  });
   const parsedModel = ModelOutputSchema.safeParse(parsedJson);
   if (!parsedModel.success) {
     const delegateRecovery = params.structuredOutputRecovery?.delegate;

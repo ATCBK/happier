@@ -105,6 +105,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
     backendTarget?: BackendTargetRefV1;
     permissionMode: string;
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     accountSettings?: Readonly<Record<string, unknown>> | null;
   }) => ExecutionRunHostRuntime;
   sendAcp: ExecutionRunTranscriptPublisher;
@@ -117,7 +118,10 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   onModelOutput?: () => void;
   requireReplayCapture?: boolean;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
+  readNativeOfferedModel?: ExecutionRunController['readNativeOfferedModel'];
+  nativeModelRegistry?: ExecutionRunController['nativeModelRegistry'];
   causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+  actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
   attachRetainedRunSessionInput?: AttachRetainedRunSessionInput;
   registerRunOccurrence?: (params: Parameters<AttachRetainedRunSessionInput>[0]) => () => void;
 }>): Promise<ExecutionRunEnsureResult> {
@@ -174,6 +178,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
       ...(args.causalPermissionAuthority
         ? { causalPermissionAuthority: args.causalPermissionAuthority }
         : {}),
+      ...(args.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.actionRequestAttributionV1 } : {}),
       accountSettings: args.run.runtimeSettings?.accountSettings ?? null,
       ...materialization.hooks,
     });
@@ -190,6 +195,8 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   const resumeCtrl: ExecutionRunBackendController = {
     kind: 'backend',
     ...(args.profileCatalog ? { profileCatalog: args.profileCatalog } : {}),
+    readNativeOfferedModel: args.readNativeOfferedModel,
+    nativeModelRegistry: args.nativeModelRegistry,
     controllerOccurrenceId,
     backend,
     backendSupportsResume: false,

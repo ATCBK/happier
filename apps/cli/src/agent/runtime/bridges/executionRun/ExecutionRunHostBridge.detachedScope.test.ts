@@ -27,6 +27,7 @@ import { buildRunScopedExecutionPermissionRequestId } from '@/agent/executionRun
 import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 import type { AgentState } from '@/api/types';
 import { waitForExecutionRunTerminal } from '@happier-dev/protocol';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ExecutionRunPermissionRequestStore, ExecutionRunPermissionRequestStoreProvider } from './executionRunPermissionResponseTarget';
 import { buildExecutionRunPermissionRequestEnvelope } from '@/agent/executionRuns/policy/executionRunPermissionInteractionPolicy';
 
@@ -478,7 +479,7 @@ describe('ExecutionRunHostBridge detached task scope', () => {
         runId: started.runId,
         localInputId: 'workflow-input-capacity',
         get: async ({ runId }) => ({ run: manager.getPublic(runId) }),
-      })).resolves.toEqual({ kind: 'failed', code: 'workflow_interaction_capacity_exceeded' });
+      })).resolves.toMatchObject({ kind: 'failed', code: 'workflow_interaction_capacity_exceeded', message: expect.any(String) });
     } finally {
       await manager.dispose();
     }
@@ -586,7 +587,7 @@ describe('ExecutionRunHostBridge detached task scope', () => {
       resourceId: 'resource-detached',
       teamId: 'team-detached',
       expectedResourceRevision: 7,
-      agentTargetKey: `backend:${TEST_BACKEND_ID}:built_in` as never,
+      agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: TEST_BACKEND_ID }),
       modelId: 'model-detached' as never,
       deliveryMode: 'brokered' as const,
     };
@@ -656,6 +657,7 @@ describe('ExecutionRunHostBridge detached task scope', () => {
         sessionId: 'happier_parent_session_1',
         intent: 'task',
         backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID },
+        modelSelection: null,
         instructions: 'Return a bounded result.',
         intentInput: {
           input: { topic: 'session scope' },

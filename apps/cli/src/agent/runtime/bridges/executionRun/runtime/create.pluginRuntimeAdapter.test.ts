@@ -15,7 +15,7 @@ import type {
   ExecutionRunPermissionCapability,
   RuntimePermissionResponseOutcome,
 } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
-import { SavedSecretOperationAdmissionError } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 // One runtime, one lifetime: the signal must stay stable across calls so
@@ -44,6 +44,9 @@ vi.mock('@/daemon/controlClient', () => ({
     releaseExecutionRunConnectedServicesMock(...args),
   requestExecutionRunConnectedServiceRuntimeAuthRefresh: (...args: unknown[]) =>
     requestExecutionRunConnectedServiceRuntimeAuthRefreshMock(...args),
+  recoverExecutionRunConnectedServicesRejectedStart: async () => { throw new Error('Unexpected daemon startup recovery'); },
+  recoverExecutionRunConnectedServiceRuntimeFailure: async () => { throw new Error('Unexpected daemon turn recovery'); },
+  completeExecutionRunConnectedServiceRuntimeTurn: async () => { throw new Error('Unexpected daemon turn completion'); },
 }));
 
 vi.mock('./providerLaunch', () => ({
@@ -1329,6 +1332,7 @@ describe('createExecutionRunBackend (plugin runtimeCore adapter)', () => {
         agentId: 'codex',
         cwd: '/tmp/project',
       }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(createExecutionRunBackendMock).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -19,15 +19,17 @@ import { isAbortLikeError, normalizeExecutionRunSendDelivery, resolveInFlightDel
 import { resolveExecutionRunRuntimeBackendId } from '../backendTargets';
 import {
   createExecutionRunCodedError,
+  createExecutionRunDiagnosticError,
   createExecutionRunTimeoutError,
   isExecutionRunTimeoutError,
-  readExecutionRunErrorCode,
+  projectExecutionRunError,
   type ExecutionRunTimeoutError,
 } from '../errors';
 import { logger } from '@/ui/logger';
 import type { ExecutionRunTranscriptPublisher } from '../executionRunTranscriptPublisher';
 import { settleExecutionRunController } from '../settleExecutionRunController';
 import type { ExecutionRunTurnResultV1, JsonValue } from '@happier-dev/protocol';
+import { projectExecutionRunInputTurn } from '../runOccurrenceWitness';
 
 const UNPROBEABLE_LIVENESS_SETTLE_GRACE_MS = 50;
 const MAX_UNPROBEABLE_LIVENESS_SETTLE_GRACE_MS = 250;
@@ -125,6 +127,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
         localInputId: string;
         resultContract?: import('@happier-dev/protocol').ExecutionRunResultContractV1;
       }>,
+      effectiveCallerPermissionMode?: string,
     ): Promise<void> {
       backendCtrl.turnCount += 1;
       backendCtrl.turnEpoch += 1;
@@ -135,16 +138,17 @@ export async function executeBoundedBackendRun(args: Readonly<{
       const result = await backendCtrl.backend.deliverInput(
         backendCtrl.runtimeId!,
         { text: turnPrompt },
-        causalPermissionAuthority || exactInput
+        causalPermissionAuthority || exactInput || effectiveCallerPermissionMode !== undefined
           ? {
               ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
               ...(exactInput ? { localId: exactInput.localInputId } : {}),
               ...(exactInput?.resultContract ? { resultContract: exactInput.resultContract } : {}),
+              ...(effectiveCallerPermissionMode !== undefined ? { effectiveCallerPermissionMode } : {}),
             }
           : undefined,
       );
       if (result.status !== 'admitted') {
-        throw createExecutionRunCodedError(result.diagnostic.code, result.diagnostic.message ?? result.diagnostic.code);
+        throw createExecutionRunDiagnosticError(result.diagnostic, args.getNowMs());
       }
       resolveInitialInputAdmission();
     }
@@ -254,8 +258,9 @@ export async function executeBoundedBackendRun(args: Readonly<{
             const result = await backendCtrl.backend.steerInput!(
               backendCtrl.runtimeId!,
               { text: next.message },
-              next.causalPermissionAuthority
-                ? { causalPermissionAuthority: next.causalPermissionAuthority }
+              next.causalPermissionAuthority || next.effectiveCallerPermissionMode !== undefined
+                ? { ...(next.causalPermissionAuthority ? { causalPermissionAuthority: next.causalPermissionAuthority } : {}),
+                    ...(next.effectiveCallerPermissionMode !== undefined ? { effectiveCallerPermissionMode: next.effectiveCallerPermissionMode } : {}) }
                 : undefined,
             );
             if (result.status !== 'admitted') {
@@ -307,7 +312,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
         retireLiveIntervention();
         await backendCtrl.backend.cancel(backendCtrl.runtimeId!);
         if (backendCtrl.cancelled) return;
-        const updatedSendPromise = sendTurnPrompt(updatedPrompt, next.causalPermissionAuthority);
+        const updatedSendPromise = sendTurnPrompt(updatedPrompt, next.causalPermissionAuthority, undefined, next.effectiveCallerPermissionMode);
         void updatedSendPromise.catch((error) => {
           logger.debug('[ExecutionRuns] replacement turn send rejected after external ACK', error);
         });
@@ -337,8 +342,8 @@ export async function executeBoundedBackendRun(args: Readonly<{
           ...run,
           inputTurns: {
             occurrenceId: backendCtrl.inputTurnOccurrenceId,
-            current: backendCtrl.currentInputTurn,
-            ...(backendCtrl.lastInputTurn ? { last: backendCtrl.lastInputTurn } : {}),
+            current: projectExecutionRunInputTurn(backendCtrl.currentInputTurn),
+            ...(backendCtrl.lastInputTurn ? { last: projectExecutionRunInputTurn(backendCtrl.lastInputTurn) } : {}),
           },
         });
       }
@@ -558,7 +563,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
       if (run && backendCtrl.inputTurnOccurrenceId) {
         args.runs!.set(runId, {
           ...run,
-          inputTurns: { occurrenceId: backendCtrl.inputTurnOccurrenceId, last: backendCtrl.lastInputTurn },
+          inputTurns: { occurrenceId: backendCtrl.inputTurnOccurrenceId, last: projectExecutionRunInputTurn(backendCtrl.lastInputTurn) },
         });
       }
       args.onPublicStateUpdated?.(runId);
@@ -594,13 +599,13 @@ export async function executeBoundedBackendRun(args: Readonly<{
       if (run && backendCtrl.inputTurnOccurrenceId) {
         args.runs!.set(runId, {
           ...run,
-          inputTurns: { occurrenceId: backendCtrl.inputTurnOccurrenceId, last: backendCtrl.lastInputTurn },
+          inputTurns: { occurrenceId: backendCtrl.inputTurnOccurrenceId, last: projectExecutionRunInputTurn(backendCtrl.lastInputTurn) },
         });
       }
       args.onPublicStateUpdated?.(runId);
     }
-    const message = e instanceof Error ? e.message : 'Execution failed';
-    const executionRunErrorCode = readExecutionRunErrorCode(e) ?? 'execution_run_failed';
+    const error = projectExecutionRunError(e);
+    const message = error.message;
     if (isExecutionRunTimeoutError(e)) {
       backendCtrl.cancelled = true;
       // As with explicit Stop, provider cancellation cannot gate host terminal
@@ -616,7 +621,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
       const livenessProbe = e && typeof e === 'object' ? (e as ExecutionRunTimeoutError).livenessProbe : null;
       await args.finishRun(
         runId,
-        { status: 'timeout', summary: message, finishedAtMs, error: { code: executionRunErrorCode, message } },
+        { status: 'timeout', summary: message, finishedAtMs, error },
         {
           output: {
             status: 'timeout',
@@ -626,7 +631,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
             sidechainId,
             finishedAtMs,
             startedAtMs,
-            error: { code: executionRunErrorCode, message },
+            error,
             ...(livenessProbe === undefined ? {} : { livenessProbe }),
           },
           isError: true,
@@ -638,7 +643,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
     const finishedAtMs = args.getNowMs();
     await args.finishRun(
       runId,
-      { status: 'failed', summary: message, finishedAtMs, error: { code: executionRunErrorCode, message } },
+      { status: 'failed', summary: message, finishedAtMs, error },
       {
         output: {
           status: 'failed',
@@ -648,7 +653,7 @@ export async function executeBoundedBackendRun(args: Readonly<{
           sidechainId,
           finishedAtMs,
           startedAtMs,
-          error: { code: executionRunErrorCode, message },
+          error,
         },
         isError: true,
       },

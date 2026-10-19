@@ -107,9 +107,9 @@ it('opens the admitted managed source for the actual Run controller and consumes
             permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' });
         phase = 'terminal Run settlement';
         await manager.waitForTerminal(started.runId);
-        expect(differentProviderAuthority).toMatchObject({ status: 'not_current', reason: 'identity_mismatch' });
         expect(manager.get(started.runId), JSON.stringify({ summary: manager.get(started.runId)?.summary,
             result: manager.getLatestToolResult(started.runId), sourceOpens })).toMatchObject({ status: 'succeeded' });
+        expect(differentProviderAuthority).toMatchObject({ status: 'not_current', reason: 'identity_mismatch' });
         expect(sourceOpens).toBe(1);
         expect(await readFile(join(directory, 'gateway-started'), 'utf8')).toMatch(/^\d+$/);
         expect(runSignal && (runSignal as AbortSignal).aborted).toBe(true);

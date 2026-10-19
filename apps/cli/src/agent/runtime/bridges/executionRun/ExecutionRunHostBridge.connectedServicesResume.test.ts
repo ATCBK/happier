@@ -4,7 +4,7 @@ import axios from 'axios';
 import { afterAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { createExecutionRunHostBackendFromConversationRuntime,
-  type AgentExecutionRunConversationEventV1, type AgentExecutionRunOpenRequest,
+  type AgentExecutionRunConversationEventV1, type AgentExecutionRunConversationRuntimeV1, type AgentExecutionRunOpenRequest,
   type AgentExecutionRunRuntime, type AgentSessionOpenRequest,
   type AgentSessionRuntime, type AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionExecutionRunBrokerAuthorityResponseV1 } from '@happier-dev/protocol';
@@ -107,6 +107,37 @@ describe('connected execution-run resume custody', () => {
       resolveProviderOpened();
       return runtime;
     };
+    // Retained Runs open the conversation facet; finite open terminalizes after
+    // one turn and cannot supply the retained handle this test exercises.
+    const openConversation = async (request: AgentExecutionRunOpenRequest): Promise<AgentExecutionRunConversationRuntimeV1> => {
+      providerRequests.push(request);
+      if (request.kind === 'fork') throw new Error('Fixture does not support fork');
+      if (request.kind === 'resume') {
+        loadEntered?.();
+        await loadGate;
+        if (failLoad) throw new Error('Provider refused resume');
+      }
+      let emit: ((event: AgentExecutionRunConversationEventV1) => void) | null = null;
+      resolveProviderOpened();
+      return {
+        watch(listener) {
+          emit = listener;
+          emitCheckpoint = () => emit?.({ kind: 'provider-session-id', providerSessionId: 'provider-thread', emittedAtMs: 1 });
+          emitCheckpoint();
+          return { dispose() { emit = null; } };
+        },
+        async send(input) {
+          emit?.({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery, emittedAtMs: 1 });
+          emit?.({ kind: 'turn-start', turnId: input.delivery.turnId, startedBy: 'host', emittedAtMs: 1 });
+          return { status: 'admitted' };
+        },
+        async cancel(input) {
+          emit?.({ kind: 'turn-cancelled', turnId: input.turnId, cause: input.reason, emittedAtMs: 1 });
+          return { status: 'requested', turnId: input.turnId };
+        },
+        async dispose() { emit = null; },
+      };
+    };
     // Session-owned Voice uses the ordinary public Session facet, not the
     // detached executionRunContext facet. This mirrors the successful native
     // Voice fixture's external provider boundary.
@@ -150,25 +181,25 @@ describe('connected execution-run resume custody', () => {
           capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true,
             executionRunContext: { versions: [1] } } } },
         factory: () => ({ sessions: { open: openSession,
-          executionRunContextV1: { open: openProvider } } }),
+          executionRunContextV1: { open: openProvider, openConversation } } }),
         sessionRunnerFactory: { module: './agent-runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
       } } });
     const agent = { pluginId: plugin.manifest.id, localId: 'agent' };
     const agentId = `${agent.pluginId}/${agent.localId}`;
     const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController, happyHomeDir: directory,
       plugins: [{ manifest: plugin.manifest, files: {
-        'agent-runtime.mjs': `let open, openSession; export function configure(callback, sessionCallback) { open = callback; openSession = sessionCallback; }
+        'agent-runtime.mjs': `let open, openSession, openConversation; export function configure(callback, sessionCallback, conversationCallback) { open = callback; openSession = sessionCallback; openConversation = conversationCallback; }
           export function createRuntime() { return { sessions: {
             open: request => openSession(request),
-            executionRunContextV1: { open: request => open(request) } } }; }`,
+            executionRunContextV1: { open: request => open(request), openConversation: request => openConversation(request) } } }; }`,
         'daemon.mjs': `import * as leaf from './agent-runtime.mjs';
           export function activate(api) { api.agents.register('agent', leaf.createRuntime, {
             sessionRunnerFactory: { module: './agent-runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 } }); }
-          export function configureUnitLeaf(open, openSession) { leaf.configure(open, openSession); return { activate }; }`,
+          export function configureUnitLeaf(open, openSession, openConversation) { leaf.configure(open, openSession, openConversation); return { activate }; }`,
       }, instantiateCommittedModule(module) {
         const configure = module.configureUnitLeaf;
         if (typeof configure !== 'function') throw new Error('Missing provider boundary fixture');
-        const configured: unknown = configure(openProvider, openSession);
+        const configured: unknown = configure(openProvider, openSession, openConversation);
         if (!configured || typeof configured !== 'object' || !('activate' in configured)) throw new Error('Missing activation');
         return configured as PluginDaemonModuleNamespace;
       } }] });
@@ -267,6 +298,7 @@ describe('connected execution-run resume custody', () => {
       activations.length = 0;
       providerOpened = new Promise<void>((resolve) => { resolveProviderOpened = resolve; });
       bridge = new ExecutionRunHostBridge({ parentProvider: 'codex', cwd: fixture.happyHomeDir,
+        resolveRunReportPolicy: async () => ({ preset: 'important' }),
         happyHomeDir: fixture.happyHomeDir, sendAcp: async () => {}, getNowMs: () => 1_700_000_000_000,
         sessionInteractionHost: { session: parentSession, machineId: 'fixture-machine', permissionHandler: parentPermissions },
         // Prepare the actual, empty attached Session prompt sources through the

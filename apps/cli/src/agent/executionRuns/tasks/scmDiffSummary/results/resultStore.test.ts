@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ScmComparisonSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryGenerateSuccessSchema, ScmDiffSummaryResultEditSchema } from '@happier-dev/protocol';
+import { ScmComparisonSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { ScmDiffSummaryResultEditSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { createScmDiffSummaryResultStore } from './resultStore';
 import { presentReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 
@@ -61,6 +62,22 @@ async function setupPartialApplication() {
 }
 
 describe('saved SCM result owner', () => {
+  it('publishes a refined walkthrough with omitted changes reachable in Other changes without changing analysis or other outputs', async () => {
+    const { store, request } = await setup();
+    await store.beginRefinement({ ...request, expectedRevision: 0, inputId: 'refinement', output: 'walkthrough' });
+    const published = await store.publish({ ...request, inputId: 'refinement', modelOutput: { walkthrough: {
+      ...modelWalkthrough, title: 'Refined', stops: [modelWalkthrough.stops[0]], otherChangeRefs: [],
+    } } });
+    expect(published).toMatchObject({ success: true, result: { revision: 1, output: {
+      analysis: output.analysis,
+      outputs: { summary: output.outputs?.summary, commitPlan: output.outputs?.commitPlan,
+        walkthrough: { state: 'complete', value: { title: 'Refined', stops: [output.outputs!.walkthrough!.value!.stops[0]],
+          otherChangeRefs: ['change-2'] } } },
+    } } });
+    expect(await store.read(request)).toEqual(published);
+    if (!published.success) throw new Error(published.error);
+    expect(ScmDiffSummaryGenerateOutputSchema.safeParse(published.result.output).success).toBe(true);
+  });
   it('normalizes additive stored fields across read, inventory and canonical edit writes without relaxing known fields or model inputs', async () => {
     const { directory, store, request } = await setup();
     const file = join(directory, `${request.resultId}.json`);

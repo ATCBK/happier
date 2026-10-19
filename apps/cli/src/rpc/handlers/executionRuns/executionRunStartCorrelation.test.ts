@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
 
 import type { AgentMessage } from '@/agent/core/AgentMessage';
@@ -6,6 +9,7 @@ import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executio
 import { buildExecutionRunProfileCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
 import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
 import { createTestExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/testkit';
+import { reloadConfiguration } from '@/configuration';
 
 const runtimeFactoryMock = vi.hoisted(() => ({
   createExecutionRunBridgeRuntime: vi.fn(),
@@ -24,6 +28,19 @@ vi.mock('@/daemon/executionRunRegistry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/daemon/executionRunRegistry')>()),
   writeExecutionRunMarker: markerWriterMock.writeExecutionRunMarker,
 }));
+
+// The Session RPC process reaches daemon admission over HTTP. Keep the request
+// owner and response parser real while admitting this fixture's isolated Runs.
+vi.mock('@/daemon/controlHttp', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/daemon/controlHttp')>();
+  const { EXECUTION_RUN_ADMISSION_PATH } = await import('@/daemon/lifecycle/admissionDrain');
+  return {
+    ...actual,
+    daemonPost: async (...args: Parameters<typeof actual.daemonPost>) => args[0] === EXECUTION_RUN_ADMISSION_PATH
+      ? { admitted: true }
+      : actual.daemonPost(...args),
+  };
+});
 
 import { ExecutionRunHostBridge } from '@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge';
 
@@ -95,9 +112,19 @@ function createDetachedStartHarness() {
 }
 
 describe('execution.run.start correlation freedom', () => {
-  beforeEach(() => {
+  let happyHomeDir: string;
+  beforeEach(async () => {
+    happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-start-correlation-'));
+    vi.stubEnv('HAPPIER_HOME_DIR', happyHomeDir);
+    reloadConfiguration();
     runtimeFactoryMock.createExecutionRunBridgeRuntime.mockReset();
     markerWriterMock.writeExecutionRunMarker.mockClear();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    reloadConfiguration();
+    await rm(happyHomeDir, { recursive: true, force: true });
   });
 
   it('treats raw parent refs as correlation and keeps a human start at depth zero', async () => {
@@ -219,6 +246,7 @@ describe('execution.run.start correlation freedom', () => {
       await manager.start({
         sessionId: 'session-owner',
         intent: 'task',
+        modelSelection: null,
         backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID },
         instructions: 'Use the owning Account configuration.',
         intentInput: { input: { topic: 'runtime owner' } },

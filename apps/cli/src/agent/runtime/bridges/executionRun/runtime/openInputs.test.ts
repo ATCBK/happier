@@ -39,8 +39,8 @@ it('delivers a native model keyed by the admitted installed Agent without requir
 
 describe('resolveExecutionRunChildSelection', () => {
     it('inherits a known parent before the summary default, and uses that default when the parent is unavailable', () => {
-        const summaryDefault = { agentTargetKey: providerSelection.agentTargetKey,
-            providerConnectionId: 'pc_summary_default', modelId: 'summary-model' };
+        const summaryDefault = ProviderBoundModelRefSchema.parse({ agentTargetKey: providerSelection.agentTargetKey,
+            providerConnectionId: 'pc_summary_default', modelId: 'summary-model' });
         expect(resolveExecutionRunChildSelection({ backendTarget: codexTarget, lifecycle: 'attached',
             parent: appliedParent, fallbackSelection: summaryDefault })).toMatchObject({
             modelId: 'applied-model', modelSelection: providerSelection, selectionSource: 'inherited',
@@ -60,8 +60,8 @@ describe('resolveExecutionRunChildSelection', () => {
         });
     });
     it('uses the child Agent Account default only after an explicit choice, without inheriting parent credentials', () => {
-        const childDefault = { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(claudeTarget)),
-            providerConnectionId: 'pc_child_default', modelId: 'default-model' };
+        const childDefault = ProviderBoundModelRefSchema.parse({ agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(claudeTarget)),
+            providerConnectionId: 'pc_child_default', modelId: 'default-model' });
         const result = resolveExecutionRunChildSelection({ backendTarget: claudeTarget, lifecycle: 'attached', parent: appliedParent,
             childSelection: 'agentDefault', agentDefaultSelection: childDefault });
         expect(result).toMatchObject({ modelSelection: childDefault, modelId: 'default-model', selectionSource: 'explicit' });

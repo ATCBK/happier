@@ -1,679 +1,268 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
-import {
-  createTestExecutionRunHostRuntime,
-  type TestExecutionRunHostRuntime,
-} from '@/agent/runtime/bridges/executionRun/testkit';
-import { runGit } from '@/scm/rpc/__tests__/testRpcHarness';
-import { buildExecutionRunProfileCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
-import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
-
-// One runtime, one lifetime: the signal must stay stable across calls so
-// subscribers do not accumulate against a fresh controller each read.
-const TEST_RUNTIME_LIFETIME_SIGNAL = new AbortController().signal;
-
-type TestRuntimeFactoryInput = Readonly<{
-  cwd: string;
-  runId?: string;
-  backendId: string;
-  backendTarget?: unknown;
-  modelId?: string;
-  permissionMode: string;
-  accountSettings?: Readonly<Record<string, unknown>> | null;
-  start?: unknown;
-  happyHomeDir?: string | null;
-  engineRegistry?: unknown;
-}>;
-
-type TestRuntimeFactory = (opts: TestRuntimeFactoryInput) => ExecutionRunHostRuntime;
-
-const TEST_PRIMARY_BACKEND_ID = `${'primary'}.${'backend'}` as never;
-
-const {
-  createExecutionRunRuntimeMock,
-  dispatchBridgeLifecycleHookEvent,
-  runtimeFactoryRef,
-} = vi.hoisted(() => {
-  const runtimeFactoryRef: { current: TestRuntimeFactory | null } = { current: null };
-  return {
-    createExecutionRunRuntimeMock: vi.fn((opts: TestRuntimeFactoryInput): ExecutionRunHostRuntime => {
-      const factory = runtimeFactoryRef.current;
-      if (!factory) {
-        throw new Error('Test execution-run runtime factory was not configured');
-      }
-      return factory(opts);
-    }),
-    dispatchBridgeLifecycleHookEvent: vi.fn().mockResolvedValue(undefined),
-    runtimeFactoryRef,
-  };
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
+  return createBundledPluginPublicationFsFixture(actual);
 });
 
-vi.mock('./createExecutionRunBridgeRuntime', () => ({
-  createExecutionRunBridgeRuntime: createExecutionRunRuntimeMock,
-}));
+import { withAdmittedSessionRun, type AdmittedSessionRunFixture } from './testkit/admittedSessionRun';
 
-vi.mock('@/plugins/runtime/hooks/execution/dispatchBridgeLifecycleHookEvent', () => ({
-  dispatchBridgeLifecycleHookEvent,
-}));
+import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
+import { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
 
-function createExecutionRunManager(
-  managerCtor: typeof import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge').ExecutionRunHostBridge,
-  opts: ConstructorParameters<typeof managerCtor>[0] & Readonly<{ createRuntime: TestRuntimeFactory }>,
-): InstanceType<typeof managerCtor> {
-  const { createRuntime, ...bridgeOptions } = opts;
-  runtimeFactoryRef.current = createRuntime;
-  return new managerCtor(bridgeOptions) as InstanceType<typeof managerCtor>;
-}
+import { createNativeSessionBoundary } from './testkit/nativeSessionContext';
+import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
-function createStaticRuntime(responseText: string): TestExecutionRunHostRuntime {
-  let runtime: TestExecutionRunHostRuntime;
-  runtime = createTestExecutionRunHostRuntime({
-    onSendPrompt: async () => {
-      runtime.emitMessage({ type: 'model-output', fullText: responseText });
-    },
-    onWaitForTurnCompletion: async () => {},
-  });
-  return runtime;
-}
+const presentUser = { verifiedPeerAuthority: 'present_user' } as const;
+const readRun = async (fixture: AdmittedSessionRunFixture, runId: string) => fixture.bridge
+  ? fixture.bridge.getPublic(runId)!
+  : ExecutionRunGetResponseSchema.parse(await fixture.rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId }, presentUser)).run;
+const wait = (fixture: AdmittedSessionRunFixture, runId: string) => fixture.bridge
+  ? fixture.bridge.waitForTerminal(runId) : fixture.rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, { runId }, presentUser);
+const send = (fixture: AdmittedSessionRunFixture, runId: string, message: string, resume = false) => fixture.bridge
+  ? fixture.bridge.send(runId, { message, resume }) : fixture.rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_SEND, { runId, message, resume }, presentUser);
+const stop = (fixture: AdmittedSessionRunFixture, runId: string) => fixture.bridge
+  ? fixture.bridge.stop(runId) : fixture.rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_STOP, { runId }, presentUser);
+const rawStart = (fixture: AdmittedSessionRunFixture, input: Record<string, unknown> = {}) => fixture.rpc.invokeLocal(
+  SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+    sessionId: fixture.session.sessionId, intent: 'delegate', backendTarget: { kind: 'agent', identity: fixture.agentIdentity },
+    instructions: 'Inspect.', permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded',
+    ioMode: 'request_response', modelSelection: null, connectedServices: null, ...input,
+  }, presentUser);
 
-function createResumableStaticRuntime(responseText: string): TestExecutionRunHostRuntime {
-  let runtime: TestExecutionRunHostRuntime;
-  runtime = createTestExecutionRunHostRuntime({
-    resumeSupported: true,
-    replayResumeSupported: true,
-    resumeRuntimeId: 'child_session_resumed',
-    providerSessionId: 'child_session_resumed',
-    onSendPrompt: async () => {
-      runtime.emitMessage({ type: 'model-output', fullText: responseText });
-    },
-    onWaitForTurnCompletion: async () => {},
-  });
-  return runtime;
-}
-
-describe('ExecutionRunManager execution-run registry integration', () => {
-  const originalHappyHomeDir = process.env.HAPPIER_HOME_DIR;
-  const originalHappyServerUrl = process.env.HAPPIER_SERVER_URL;
-  const originalHappyWebappUrl = process.env.HAPPIER_WEBAPP_URL;
-  let happyHomeDir: string;
-  let workspaceDir: string;
-  let activePluginReloadController: PluginReloadController | null;
-
-  async function publishCurrentRuntimeRegistry(): Promise<void> {
-    const [
-      { pluginReloadController },
-      { resolveExecutablePluginRuntimeRegistry },
-    ] = await Promise.all([
-      import('@/plugins/runtime/reload/singleton'),
-      import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry'),
-    ]);
-    const registry = await resolveExecutablePluginRuntimeRegistry({
-      happyHomeDir,
-      generation: 1,
-    });
-    const adoption = await pluginReloadController.adoptPreparedRuntimeRegistry({
-      registry,
-      changedPluginIds: [],
-      durableRevision: 1,
-      runningSessionDisposition: 'retainRunningSessions',
-    });
-    if (!adoption.ok) {
-      throw new Error('Failed to publish the test plugin runtime registry');
-    }
-    activePluginReloadController = pluginReloadController;
-  }
-
-  beforeEach(() => {
-    happyHomeDir = join(tmpdir(), `happier-cli-exec-run-mgr-registry-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    workspaceDir = mkdtempSync(join(tmpdir(), 'happier-cli-exec-run-registry-workspace-'));
-    runGit(workspaceDir, ['init', '--initial-branch=main']);
-    process.env.HAPPIER_HOME_DIR = happyHomeDir;
-    runtimeFactoryRef.current = null;
-    createExecutionRunRuntimeMock.mockClear();
-    dispatchBridgeLifecycleHookEvent.mockReset();
-    dispatchBridgeLifecycleHookEvent.mockResolvedValue(undefined);
-    activePluginReloadController = null;
-    vi.resetModules();
-  });
-
-  afterEach(async () => {
-    await activePluginReloadController?.shutdown();
-    if (existsSync(happyHomeDir)) {
-      rmSync(happyHomeDir, { recursive: true, force: true });
-    }
-    rmSync(workspaceDir, { recursive: true, force: true });
-    if (originalHappyHomeDir === undefined) {
-      delete process.env.HAPPIER_HOME_DIR;
-    } else {
-      process.env.HAPPIER_HOME_DIR = originalHappyHomeDir;
-    }
-    if (originalHappyServerUrl === undefined) {
-      delete process.env.HAPPIER_SERVER_URL;
-    } else {
-      process.env.HAPPIER_SERVER_URL = originalHappyServerUrl;
-    }
-    if (originalHappyWebappUrl === undefined) {
-      delete process.env.HAPPIER_WEBAPP_URL;
-    } else {
-      process.env.HAPPIER_WEBAPP_URL = originalHappyWebappUrl;
-    }
-  });
-
+describe('ExecutionRunHostBridge admitted registry integration', () => {
   it('writes a running marker on start and a terminal marker on completion', async () => {
-    await publishCurrentRuntimeRegistry();
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-    const { listExecutionRunMarkers } = await import('@/daemon/executionRunRegistry');
-
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: () =>
-        createStaticRuntime(
-          JSON.stringify({
-            findings: [],
-            summary: 'ok',
-          }),
-        ),
-      sendAcp: async () => {},
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'review',
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'Review this repo.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    });
-
-    const running = await listExecutionRunMarkers();
-    expect(running.some((m) => m.runId === started.runId)).toBe(true);
-
-    await manager.waitForTerminal(started.runId);
-
-    expect(dispatchBridgeLifecycleHookEvent).toHaveBeenCalledWith(expect.objectContaining({
-      happyHomeDir,
-      event: expect.objectContaining({
-        eventId: 'executionRun.started',
-        happySessionId: 'parent_session_1',
-        payload: expect.objectContaining({
-          runId: started.runId,
-          intent: 'review',
-          runClass: 'bounded',
-        }),
-      }),
-    }));
-    expect(dispatchBridgeLifecycleHookEvent).toHaveBeenCalledWith(expect.objectContaining({
-      happyHomeDir,
-      event: expect.objectContaining({
-        eventId: 'executionRun.completed',
-        happySessionId: 'parent_session_1',
-        payload: expect.objectContaining({
-          runId: started.runId,
-          status: 'succeeded',
-        }),
-      }),
-    }));
-
-    // Marker writes are best-effort and may lag the terminal promise. Poll briefly until the
-    // terminal marker is visible to avoid brittle timing assumptions.
-    let marker: Awaited<ReturnType<typeof listExecutionRunMarkers>>[number] | null = null;
-    for (let i = 0; i < 25; i += 1) {
-      const markers = await listExecutionRunMarkers();
-      marker = markers.find((m) => m.runId === started.runId) ?? null;
-      if (marker?.status === 'succeeded') break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    if (!marker) throw new Error('Expected terminal execution-run marker');
-    expect(marker.status).toBe('succeeded');
-    expect(marker.intent).toBe('review');
-    expect(marker.backendTarget).toEqual({ kind: 'backend', backendId: TEST_PRIMARY_BACKEND_ID });
-    expect(marker.permissionMode).toBe('read_only');
-    expect(typeof marker.startedAtMs).toBe('number');
-    expect(typeof marker.updatedAtMs).toBe('number');
-  }, 60_000);
-
-  it('consumes the current contributed profile launch facts and rejects the same selection after removal', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-    const prompts: string[] = [];
-    let profilePresent = true;
-    let profileSourceCustody: import('@happier-dev/protocol').PluginSourceCustodyV1 = {
-      kind: 'managed' as const,
-      immutableGenerationId: 'immutable-memory-1',
-      installSource: 'archive' as const,
-    };
-    let catalogReads = 0;
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: () => {
-        let runtime: TestExecutionRunHostRuntime;
-        runtime = createTestExecutionRunHostRuntime({
-          onSendPrompt: async (_runtimeId, prompt) => {
-            prompts.push(prompt);
-            runtime.emitMessage({
-              type: 'model-output',
-              fullText: 'Remember the repository-specific policy.',
-            });
-          },
-          onWaitForTurnCompletion: async () => {},
-        });
-        return runtime;
-      },
-      sendAcp: async () => {},
-      getNowMs: () => 1_700_000_000_000,
-      resolveExecutionRunProfileCatalog: async () => {
-        catalogReads += 1;
-        const profileCatalog = buildExecutionRunProfileCatalog(profilePresent ? [{
-          pluginId: 'acme.memory',
-          sourceCustody: profileSourceCustody,
-          definition: {
-            id: 'memory', intent: 'memory_hints', title: 'Acme memory hints', promptAsset: 'memory-prompt',
-            compatibleAgents: [TEST_PRIMARY_BACKEND_ID],
-            defaults: { retention: 'ephemeral', runClass: 'bounded', io: 'streaming' },
-          },
-        }] : [], {
-          resolvePromptAssetBlocks: async () => [{
-            id: 'plugin_prompt_asset.acme.memory/memory-prompt',
-            scope: 'session',
-            text: 'Contributed memory policy',
-          }],
-        });
-        const engineRegistry = {
-          contributions: {
-            agentDefinitionsById: new Map(),
-                      },
-          resolveForBackendId: vi.fn(),
-          resolveExecutionSurfaces: vi.fn(),
-        } as never;
-        return {
-          profileCatalog,
-          engineRegistry,
-        };
-      },
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1', intent: 'memory_hints', profileId: 'acme.memory/memory',
-      profileSourceCustody: { kind: 'managed', immutableGenerationId: 'immutable-memory-1', installSource: 'archive' },
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'Recall this repository.', permissionMode: 'read_only',
-      retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response',
-    });
-    await manager.waitForTerminal(started.runId);
-
-    expect(prompts[0]).toContain('Contributed memory policy\n\nRecall this repository.');
-    expect(manager.get(started.runId)).toMatchObject({
-      retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'streaming',
-      profileSourceCustody: {
-        kind: 'managed', immutableGenerationId: 'immutable-memory-1', installSource: 'archive',
-      },
-    });
-    expect(createExecutionRunRuntimeMock).toHaveBeenCalledWith(expect.objectContaining({
-      engineRegistry: expect.objectContaining({
-        contributions: expect.objectContaining({
-          agentDefinitionsById: expect.any(Map),
-        }),
-      }),
-    }));
-
-    profileSourceCustody = {
-      kind: 'managed', immutableGenerationId: 'immutable-memory-2', installSource: 'archive',
-    };
-    await expect(manager.start({
-      sessionId: 'parent_session_1', intent: 'memory_hints', profileId: 'acme.memory/memory',
-      profileSourceCustody: { kind: 'managed', immutableGenerationId: 'immutable-memory-1', installSource: 'archive' },
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'Recall stale.', permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'streaming',
-    })).rejects.toMatchObject({ code: 'execution_run_profile_stale' });
-
-    profilePresent = false;
-    await expect(manager.start({
-      sessionId: 'parent_session_1', intent: 'memory_hints', profileId: 'acme.memory/memory',
-      profileSourceCustody: { kind: 'managed', immutableGenerationId: 'immutable-memory-1', installSource: 'archive' },
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'Recall again.', permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'streaming',
-    })).rejects.toMatchObject({ code: 'execution_run_profile_stale' });
-    expect(catalogReads).toBe(3);
+    await withAdmittedSessionRun({ run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const started = await fixture.start({ modelId: 'requested-child-model' });
+      await native.waitForInputs(1);
+      expect(native.opens).toMatchObject([{ configuration: { model: { value: 'requested-child-model' } } }]);
+      await vi.waitFor(async () => expect((await listExecutionRunMarkers()).find(marker => marker.runId === started.runId))
+        .toMatchObject({ status: 'running', intent: 'delegate', permissionMode: 'read_only' }));
+      await vi.waitFor(() => expect(fixture.lifecycleEvents).toContainEqual(expect.objectContaining({
+        eventId: 'executionRun.started', happySessionId: fixture.session.sessionId,
+        payload: expect.objectContaining({ runId: started.runId, intent: 'delegate', runClass: 'bounded' }),
+      })));
+      native.complete();
+      await fixture.rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, { runId: started.runId }, { verifiedPeerAuthority: 'present_user' });
+      const state = ExecutionRunGetResponseSchema.parse(await fixture.rpc.invokeLocal(
+        SESSION_RPC_METHODS.EXECUTION_RUN_GET, { runId: started.runId }, { verifiedPeerAuthority: 'present_user' }));
+      const agentId = readAgentRoutingIdForContributionIdentity(indexAgentRoutingIdsByContributionIdentity(
+        fixture.admittedRuntime.registry.contributes.agents), fixture.agentIdentity);
+      expect(state.run).toMatchObject({ status: 'succeeded', backendTarget: { kind: 'builtInAgent', agentId } });
+      await vi.waitFor(async () => expect((await listExecutionRunMarkers()).find(marker => marker.runId === started.runId))
+        .toMatchObject({ status: 'succeeded', intent: 'delegate', permissionMode: 'read_only',
+          backendTarget: { kind: 'backend', backendId: agentId },
+          startedAtMs: expect.any(Number), updatedAtMs: expect.any(Number) }));
+      await vi.waitFor(() => expect(fixture.lifecycleEvents).toContainEqual(expect.objectContaining({
+        eventId: 'executionRun.completed', happySessionId: fixture.session.sessionId,
+        payload: expect.objectContaining({ runId: started.runId, status: 'succeeded' }),
+      })));
+    } });
   });
 
-  it('fails closed when a custom profile resolver omits the matching contribution snapshot', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-    const createRuntime = vi.fn(() => {
-      throw Object.assign(new Error('Execution runtime should not be reached'), {
-        code: 'execution_runtime_reached',
+  it('consumes admitted profile launch facts and refuses replaced or removed source custody', async () => {
+    await withAdmittedSessionRun({ profile: true, run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const profile = fixture.admittedRuntime.registry.contributes.executionRunProfiles?.find(entry => entry.definition.id === 'memory');
+      const current = profile?.pluginId
+        ? fixture.admittedRuntime.registry.pluginFinalPolicyCurrentRuntimesById?.get(profile.pluginId) : null;
+      if (!current?.applied) throw new Error('Missing admitted profile custody');
+      const selection = { intent: 'memory_hints' as const, profileId: `${profile!.pluginId}/memory`, profileSourceCustody: current.sourceCustody };
+      const started = await fixture.start({ ...selection, instructions: 'Recall this repository.',
+        retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' });
+      await native.waitForInputs(1);
+      expect(JSON.stringify(native.inputs[0])).toContain('Contributed memory policy');
+      expect(JSON.stringify(native.inputs[0])).toContain('Recall this repository.');
+      native.complete();
+      await wait(fixture, started.runId);
+      expect(await readRun(fixture, started.runId)).toMatchObject({ retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'streaming' });
+      await fixture.replaceAgent({ profile: true });
+      expect(await rawStart(fixture, selection)).toMatchObject({ ok: false, errorCode: 'execution_run_profile_stale' });
+      await fixture.replaceAgent({ profile: false });
+      expect(await rawStart(fixture, selection)).toMatchObject({ ok: false, errorCode: 'execution_run_profile_stale' });
+      expect(native.opens).toHaveLength(1);
+    } });
+  });
+
+  it('refuses a fresh Run after its authoritative contribution snapshot is retired', async () => {
+    await withAdmittedSessionRun({ run: async fixture => {
+      await fixture.admittedRuntime.dispose();
+      expect(await rawStart(fixture)).toMatchObject({ ok: false, errorCode: 'execution_run_invalid_action_input',
+        details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
+      expect(fixture.nativeOpen).not.toHaveBeenCalled();
+      expect(await listExecutionRunMarkers()).toEqual([]);
+    } });
+  });
+
+  it('retains its admitted Agent across source retirement until native disposal', async () => {
+    await withAdmittedSessionRun({ run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const started = await fixture.start();
+      await native.waitForInputs(1);
+      await fixture.admittedRuntime.dispose();
+      expect(native.isDisposed()).toBe(false);
+      expect(fixture.activationDisposals).toEqual([]);
+      native.complete();
+      await wait(fixture, started.runId);
+      await native.whenDisposed();
+      expect(native.isDisposed()).toBe(true);
+      await vi.waitFor(() => expect(fixture.activationDisposals).toEqual([fixture.agentIdentity.pluginId]));
+      expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'succeeded' });
+    } });
+  });
+
+  it('ACKs retained ephemeral inputs before completion, publishes activity, and emits the final tool result only on stop', async () => {
+    await withAdmittedSessionRun({ resume: true, directOwner: true, run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const transcript = vi.spyOn(fixture.session, 'enqueueAgentMessageCommitted');
+      const finalResults = () => transcript.mock.calls.filter(([, body]) => body.type === 'tool-result');
+      const messages = () => transcript.mock.calls.flatMap(([, body]) => body.type === 'message' ? [body.message] : []);
+      const started = await fixture.start({ instructions: '', runClass: 'long_lived', retentionPolicy: 'ephemeral',
+        ioMode: 'request_response', display: { title: 'Global Voice', participantLabel: 'Voice', groupId: 'group_1' } });
+      await native.waitForOpens(1);
+      await vi.waitFor(async () => expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'running', turnInFlight: false }));
+      const beforeSend = Date.now();
+      expect(await send(fixture, started.runId, 'hello')).toMatchObject({ ok: true });
+      await native.waitForInputs(1);
+      native.complete('reply:hello');
+      await vi.waitFor(() => expect(messages()).toEqual(['reply:hello']));
+      await vi.waitFor(async () => expect(await readRun(fixture, started.runId)).toMatchObject({
+        status: 'running', turnInFlight: false, display: { groupId: 'group_1' },
+      }));
+      expect(finalResults()).toHaveLength(0);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          send(fixture, started.runId, 'next'),
+          new Promise(resolve => { timeout = setTimeout(() => resolve({ ok: false, errorCode: 'timeout' }), 500); }),
+        ]);
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      } finally { clearTimeout(timeout); }
+      await native.waitForInputs(2);
+      expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'running', turnInFlight: true });
+      native.complete('reply:next');
+      await vi.waitFor(() => expect(messages()).toEqual(['reply:hello', 'reply:next']));
+      expect(finalResults()).toHaveLength(0);
+      await vi.waitFor(async () => {
+        const marker = (await listExecutionRunMarkers()).find(value => value.runId === started.runId);
+        expect(marker).toMatchObject({ status: 'running', permissionMode: 'read_only' });
+        expect(marker!.lastActivityAtMs).toBeGreaterThanOrEqual(beforeSend);
+        expect(marker!.updatedAtMs).toBeGreaterThanOrEqual(beforeSend);
       });
-    });
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime,
-      sendAcp: async () => {},
-      resolveExecutionRunProfileCatalog: async () => buildExecutionRunProfileCatalog() as never,
-    });
-
-    await expect(manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'plan',
-      profileId: 'acme.missing/plan',
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'Plan this change.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    })).rejects.toMatchObject({
-      code: 'execution_run_contribution_snapshot_unavailable',
-    });
-    expect(createRuntime).not.toHaveBeenCalled();
-  }, 60_000);
-
-  it('retains the per-start engine snapshot lease until its runtime is disposed', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-    const release = vi.fn(async () => undefined);
-    const engineRegistry = {
-      contributions: {
-        agentDefinitionsById: new Map(),
-              },
-      resolveForBackendId: vi.fn(),
-      resolveExecutionSurfaces: vi.fn(),
-    } as never;
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: () => createStaticRuntime('unused'),
-      sendAcp: async () => {},
-      resolveExecutionRunProfileCatalog: async () => ({
-        profileCatalog: buildExecutionRunProfileCatalog(),
-        engineRegistry,
-        release,
-      }),
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'plan',
-      modelSelection: null,
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: '',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'long_lived',
-      ioMode: 'request_response',
-    });
-
-    expect(release).not.toHaveBeenCalled();
-    await expect(manager.stop(started.runId)).resolves.toMatchObject({ ok: true });
-    expect(release).toHaveBeenCalledTimes(1);
-  }, 60_000);
-
-  it('updates lastActivityAtMs for long-lived sends (best-effort)', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-    const { listExecutionRunMarkers } = await import('@/daemon/executionRunRegistry');
-
-    let nowMs = 1_700_000_000_000;
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: () => createStaticRuntime('ok'),
-      sendAcp: async () => {},
-      getNowMs: () => nowMs,
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'delegate',
-      modelSelection: null,
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: '',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'long_lived',
-      ioMode: 'request_response',
-    });
-
-    nowMs = 1_700_000_000_500;
-    const sent = await manager.send(started.runId, { message: 'hello' });
-    expect(sent.ok).toBe(true);
-    expect(dispatchBridgeLifecycleHookEvent).toHaveBeenCalledWith(expect.objectContaining({
-      happyHomeDir,
-      event: expect.objectContaining({
-        eventId: 'executionRun.messageSent',
-        happySessionId: 'parent_session_1',
-        payload: expect.objectContaining({
-          runId: started.runId,
-          message: 'hello',
-          resume: false,
-        }),
-      }),
-    }));
-
-    const markers = await listExecutionRunMarkers();
-    const marker = markers.find((m) => m.runId === started.runId) ?? null;
-    if (!marker) throw new Error('Expected running execution-run marker');
-    expect(marker.status).toBe('running');
-    expect(marker.permissionMode).toBe('read_only');
-    expect(marker.lastActivityAtMs).toBe(nowMs);
-    expect(marker.updatedAtMs).toBe(nowMs);
-
-    const stopped = await manager.stop(started.runId);
-    expect(stopped.ok).toBe(true);
-    await manager.waitForTerminal(started.runId);
-    expect(dispatchBridgeLifecycleHookEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        happyHomeDir,
-        event: expect.objectContaining({
-          eventId: 'executionRun.stopped',
-          happySessionId: 'parent_session_1',
-          payload: expect.objectContaining({
-            runId: started.runId,
-            reason: 'user',
-          }),
-        }),
-      }),
-    );
+      await vi.waitFor(() => expect(fixture.lifecycleEvents).toContainEqual(expect.objectContaining({ eventId: 'executionRun.messageSent',
+        happySessionId: fixture.session.sessionId, payload: expect.objectContaining({ runId: started.runId, message: 'hello', resume: false }) })));
+      expect(await stop(fixture, started.runId)).toMatchObject({ ok: true });
+      await wait(fixture, started.runId);
+      expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'cancelled' });
+      await vi.waitFor(() => expect(finalResults()).toHaveLength(1));
+      await vi.waitFor(() => expect(fixture.lifecycleEvents).toContainEqual(expect.objectContaining({ eventId: 'executionRun.stopped',
+        payload: expect.objectContaining({ runId: started.runId, reason: 'user' }) })));
+    } });
   });
 
-  it('preserves runId when direct send resumes a resumable long-lived run', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-
-    const runtimeInputs: TestRuntimeFactoryInput[] = [];
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: (opts) => {
-        runtimeInputs.push(opts);
-        return createResumableStaticRuntime('ok');
-      },
-      sendAcp: async () => {},
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'delegate',
-      modelSelection: null,
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: '',
-      permissionMode: 'read_only',
-      retentionPolicy: 'resumable',
-      runClass: 'long_lived',
-      ioMode: 'request_response',
-    });
-
-    const stopped = await manager.stop(started.runId);
-    expect(stopped.ok).toBe(true);
-    await manager.waitForTerminal(started.runId);
-    runtimeInputs.length = 0;
-
-    const sent = await manager.send(started.runId, { message: 'resume this run', resume: true });
-
-    expect(sent.ok).toBe(true);
-    expect(runtimeInputs.at(-1)?.runId).toBe(started.runId);
+  it('preserves the Run identity and native checkpoint when direct send resumes a stopped Run', async () => {
+    await withAdmittedSessionRun({ resume: true, directOwner: true, run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const started = await fixture.start({ instructions: '', runClass: 'long_lived', retentionPolicy: 'resumable' });
+      await native.waitForOpens(1);
+      expect(await stop(fixture, started.runId)).toMatchObject({ ok: true });
+      await wait(fixture, started.runId);
+      await native.whenDisposed();
+      const resumed = await send(fixture, started.runId, 'resume this run', true);
+      expect(resumed, JSON.stringify({ resumed, opens: native.opens.map(open => ({ kind: open.kind, sessionId: open.sessionId })) })).toMatchObject({ ok: true });
+      await native.waitForInputs(1);
+      expect(native.opens.at(-1)).toMatchObject({ kind: 'resume', providerSessionId: 'registry-native-session' });
+      expect(await readRun(fixture, started.runId)).toMatchObject({ runId: started.runId, status: 'running' });
+      expect(JSON.stringify(native.inputs.at(-1))).toContain('resume this run');
+      await stop(fixture, started.runId);
+      await wait(fixture, started.runId);
+    } });
   });
 
-  it('runs a resumed bounded input through canonical bounded completion and settles terminal waiters', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-
-    const prompts: string[] = [];
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: () => {
-        let runtime: TestExecutionRunHostRuntime;
-        runtime = createTestExecutionRunHostRuntime({
-          resumeSupported: true,
-          resumeRuntimeId: 'child_session_resumed',
-          providerSessionId: 'child_session_resumed',
-          onSendPrompt: async (_sessionId, prompt) => {
-            prompts.push(prompt);
-            runtime.emitMessage({
-              type: 'model-output',
-              fullText: prompts.length === 1 ? 'first' : 'resumed',
-            });
-          },
-          onWaitForTurnCompletion: async () => {},
-        });
-        return runtime;
-      },
-      sendAcp: async () => {},
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    const started = await manager.start({
-      sessionId: null,
-      intent: 'agent',
-      backendTarget: { kind: 'builtInAgent', agentId: TEST_PRIMARY_BACKEND_ID },
-      instructions: 'Initial task.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'resumable',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    });
-    await manager.waitForTerminal(started.runId);
-    expect(manager.getPublic(started.runId)).toMatchObject({
-      status: 'succeeded',
-      lifecycle: { v: 1, state: 'recoverable_with_input' },
-    });
-    await expect(manager.ensure(started.runId, { resume: true })).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'execution_run_not_allowed',
-      error: 'Resume requires input',
-      resumeFailureKind: 'permanent',
-    });
-
-    await expect(manager.send(started.runId, {
-      message: 'Review again.',
-      resume: true,
-    })).resolves.toEqual({ ok: true });
-
-    await vi.waitFor(() => {
-      expect(manager.get(started.runId)?.status).toBe('succeeded');
-    });
-    await expect(manager.waitForTerminal(started.runId)).resolves.toBeUndefined();
-    expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain('Review again.');
-    expect(manager.getRunningCount()).toBe(0);
+  it('settles resumed bounded inputs through canonical completion without a new Run', async () => {
+    await withAdmittedSessionRun({ resume: true, directOwner: true, run: async fixture => {
+      const native = createNativeSessionBoundary();
+      fixture.nativeOpen.mockImplementation(native.open);
+      const started = await fixture.start({ retentionPolicy: 'resumable' });
+      await native.waitForInputs(1);
+      native.complete(JSON.stringify({ summary: 'first', deliverables: [] }));
+      await wait(fixture, started.runId);
+      expect(await readRun(fixture, started.runId)).toMatchObject({ status: 'succeeded', lifecycle: { v: 1, state: 'recoverable_with_input' } });
+      expect(await fixture.bridge!.ensure(started.runId, { resume: true }))
+        .toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed' });
+      expect(native.inputs).toHaveLength(1);
+      const resumed = await send(fixture, started.runId, 'Review again.', true);
+      expect(resumed, JSON.stringify({ resumed, opens: native.opens.map(open => ({ kind: open.kind, sessionId: open.sessionId })) })).toMatchObject({ ok: true });
+      await native.waitForInputs(2);
+      native.complete(JSON.stringify({ summary: 'resumed', deliverables: [] }));
+      await wait(fixture, started.runId);
+      expect(await readRun(fixture, started.runId)).toMatchObject({ runId: started.runId, status: 'succeeded' });
+      expect(native.inputs).toHaveLength(2);
+      expect(JSON.stringify(native.inputs[1])).toContain('Review again.');
+      expect((await listExecutionRunMarkers()).filter(marker => marker.status === 'running')).toEqual([]);
+    } });
   });
 
-  it('passes the concrete configured ACP backend id through execution-run state instead of customAcp', async () => {
-    await publishCurrentRuntimeRegistry();
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
+  it('preserves the configured ACP definition id through actual subprocess execution and public state', async () => {
+    await withAdmittedSessionRun({ runtimePluginIds: ['happier.agent.custom-acp'], acpCatalog(directory) {
+      const script = writeAcpTestAgentScript({ dir: directory, fileName: 'registry-acp-agent.mjs', source: `
+        let buffer = ''; const send = message => process.stdout.write(JSON.stringify(message) + '\\n');
+        process.stdin.on('data', chunk => { buffer += chunk.toString(); let newline;
+          while ((newline = buffer.indexOf('\\n')) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+            if (!line.trim()) continue; const request = JSON.parse(line);
+            const ok = result => send({ jsonrpc: '2.0', id: request.id, result });
+            if (request.method === 'initialize') ok({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+            else if (request.method === 'session/new') ok({ sessionId: 'configured-provider-session' });
+            else if (request.method === 'session/prompt') {
+              send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: request.params.sessionId,
+                update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text',
+                  text: JSON.stringify({ summary: 'Configured ACP completed.', deliverables: [] }) } } } });
+              ok({ stopReason: 'end_turn' });
+            }
+            else if (request.id != null) ok({});
+          }
+        });` });
+      return AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'review-bot', name: 'review-bot', title: 'Review Bot',
+        launch: { kind: 'command', command: process.execPath, args: [script] }, env: {},
+        capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown', supportsConfigOptions: 'unknown', promptImageSupport: 'no' },
+        createdAt: 1, updatedAt: 2 }] });
+    }, run: async fixture => {
+      const started = await fixture.start({ backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' } });
+      await wait(fixture, started.runId);
+      const run = await readRun(fixture, started.runId);
+      expect(run, JSON.stringify(run.error)).toMatchObject({ status: 'succeeded', backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' } });
+      expect(fixture.nativeOpen).not.toHaveBeenCalled();
+      await vi.waitFor(async () => {
+        const marker = (await listExecutionRunMarkers()).find(marker => marker.runId === started.runId);
+        expect(marker).toMatchObject({ status: 'succeeded' });
+        // The canonical bounded marker keeps identity, not launch selectors.
+        expect(marker?.backendTarget).toEqual({ kind: 'backend', backendId: 'review-bot' });
+      });
+    } });
+  });
 
-    const observedBackendIds: string[] = [];
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: (opts: { backendId: string }) => {
-        observedBackendIds.push(opts.backendId);
-        return createStaticRuntime('ok');
-      },
-      sendAcp: async () => {},
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    const started = await manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'review',
-      backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
-      instructions: 'Review this repo.',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'bounded',
-      ioMode: 'request_response',
-    });
-
-    expect(observedBackendIds).toEqual(['review-bot']);
-    expect(manager.get(started.runId)?.backendId).toBe('review-bot');
-    expect(manager.get(started.runId)?.backendTarget).toEqual({
-      kind: 'configuredAcpBackend',
-      backendId: 'review-bot',
-    });
-  }, 60_000);
-
-  // Isolation custody itself belongs to the one execution-run runtime composer
-  // (`runtime/create.ts`, covered by its own ephemeral-cleanup test). What this
-  // bridge owns is refusing the run: a startup probe failure must surface from
-  // `start` and register no controller.
-  it('surfaces a startup probe failure without registering a controller', async () => {
-    const { ExecutionRunHostBridge: ExecutionRunManager } = await import('@/agent/runtime/bridges/executionRun/ExecutionRunHostBridge');
-
-    const nativeRuntime: ExecutionRunHostRuntime = Object.freeze({
-      async readResumeSupport() {
-        throw new Error('startup probe failed');
-      },
-      async provisionRuntime() {
-        return { runtimeId: 'unreachable-session' };
-      },
-      async deliverInput(): Promise<never> {
-        // The startup probe rejects before admission, so reaching input
-        // delivery at all would mean the refusal leaked a usable controller.
-        throw new Error('Input delivery is unreachable once the startup probe fails');
-      },
-      getRuntimeLifetimeSignal() {
-        return TEST_RUNTIME_LIFETIME_SIGNAL;
-      },
-      async cancel() {},
-      subscribeMessages() {
-        return () => undefined;
-      },
-      async dispose() {},
-    });
-
-    const manager = createExecutionRunManager(ExecutionRunManager, {
-      parentProvider: TEST_PRIMARY_BACKEND_ID,
-      cwd: workspaceDir,
-      createRuntime: () => nativeRuntime,
-      sendAcp: async () => {},
-      getNowMs: () => 1_700_000_000_000,
-    });
-
-    await expect(manager.start({
-      sessionId: 'parent_session_1',
-      intent: 'delegate',
-      backendTarget: { kind: 'builtInAgent', agentId: 'pi' },
-      instructions: '',
-      permissionMode: 'read_only',
-      retentionPolicy: 'ephemeral',
-      runClass: 'long_lived',
-      ioMode: 'request_response',
-    })).rejects.toThrow('startup probe failed');
-
-    expect(manager.getRunningCount()).toBe(0);
-    expect(manager.listPublic()).toEqual([
-      expect.objectContaining({
-        status: 'failed',
-        error: expect.objectContaining({ message: 'startup probe failed' }),
-      }),
-    ]);
+  it('projects native SDK startup rejection as terminal failure without a usable controller', async () => {
+    await withAdmittedSessionRun({ run: async fixture => {
+      fixture.nativeOpen.mockRejectedValue(new Error('startup probe failed'));
+      const started = await fixture.start();
+      await wait(fixture, started.runId);
+      const run = await readRun(fixture, started.runId);
+      expect(run).toMatchObject({ status: 'failed', lifecycle: { v: 1, state: 'unavailable' },
+        error: expect.objectContaining({ message: 'startup probe failed' }) });
+      expect(run.interaction).toBeUndefined();
+      expect(fixture.nativeOpen).toHaveBeenCalledTimes(1);
+      await vi.waitFor(async () => expect((await listExecutionRunMarkers()).find(marker => marker.runId === started.runId))
+        .toMatchObject({ status: 'failed' }));
+    } });
   });
 });

@@ -71,6 +71,7 @@ export function createReviewRunCommentService(deps: Readonly<{
       findings: readonly ReviewFinding[];
       reviewedFingerprint: string | null;
       workflowRunId?: string;
+      workflowScope?: NonNullable<ReviewCommentPrincipalHeaderV1['workflowScope']>;
     }>): Promise<ReviewRunMaterialization> {
       const engineId = params.run.backendId;
       const reviewGroupId = params.run.display?.groupId;
@@ -102,6 +103,7 @@ export function createReviewRunCommentService(deps: Readonly<{
           };
           let comment = resultComment(await deps.execute('reviews.comments.create', input, {
             principal: {
+              ...(params.workflowScope ? { workflowScope: params.workflowScope } : {}),
               actor: params.workflowRunId
                 ? { kind: 'workflow', runId: params.workflowRunId }
                 : { kind: 'agent', agentId: engineId, sessionId: params.run.sessionId! },
@@ -116,7 +118,8 @@ export function createReviewRunCommentService(deps: Readonly<{
           }));
           const reRaised = comment.state === 'dismissed';
           if (reRaised || (reviewGroupId && !comment.metadata?.reviewGroupIds?.includes(reviewGroupId))) {
-            const principal = { actor: params.workflowRunId ? { kind: 'workflow' as const, runId: params.workflowRunId } : { kind: 'agent' as const, agentId: engineId, sessionId: params.run.sessionId! } };
+            const principal = { actor: params.workflowRunId ? { kind: 'workflow' as const, runId: params.workflowRunId } : { kind: 'agent' as const, agentId: engineId, sessionId: params.run.sessionId! },
+              ...(params.workflowScope ? { workflowScope: params.workflowScope } : {}) };
             try {
               comment = resultComment(await deps.execute('reviews.comments.transition', {
                 ...scope, commentId: comment.id, expectedState: comment.state, expectedServerRevision: comment.serverRevision,

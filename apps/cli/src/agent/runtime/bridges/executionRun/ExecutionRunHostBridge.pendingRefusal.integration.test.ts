@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,10 +45,14 @@ vi.mock('node:fs', async original => {
 
 const TEST_BACKEND_ID = 'test.pending-refusal/agent' as never;
 let directory: string;
+let admittedFixture: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
+let openNativeSession: (request: AgentSessionOpenRequest) => Promise<AgentSessionRuntime>;
 const bridges: ExecutionRunHostBridge[] = [];
-const parentSessions: ReturnType<typeof createMutableApiSessionClientFixture>[] = [];
-beforeEach(() => {
+const parentSessions: Pick<ReturnType<typeof createMutableApiSessionClientFixture>, 'close'>[] = [];
+beforeAll(() => {
   directory = mkdtempSync(join(tmpdir(), 'happier-run-refusal-'));
+});
+beforeEach(() => {
   vi.stubEnv('HAPPIER_HOME_DIR', directory);
   reloadConfiguration();
 });
@@ -57,7 +61,12 @@ afterEach(async () => {
   await Promise.all(parentSessions.splice(0).map(session => session.close()));
   vi.unstubAllEnvs();
   reloadConfiguration();
-  rmSync(directory, { recursive: true, force: true });
+});
+afterAll(async () => {
+  // Model admission and the bridge must observe the same authoritative controller.
+  // Its fixture owns shutdown once, after every table row has released its Runs.
+  try { await admittedFixture?.dispose(); }
+  finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 function createHarness(detached = false, checkConnectedServicesGenerationCurrent?: ConstructorParameters<typeof ExecutionRunHostBridge>[0]['checkConnectedServicesGenerationCurrent'],
@@ -81,6 +90,8 @@ function createHarness(detached = false, checkConnectedServicesGenerationCurrent
   parentSessions.push(parentSession);
   const permissionHandler = new ProviderEnforcedPermissionHandler(parentSession, { logPrefix: '[Run refusal fixture]' });
   const manager = new ExecutionRunHostBridge({
+    // External Account preference input for this admission fixture.
+    resolveRunReportPolicy: async () => ({ preset: 'important' }),
     parentProvider: TEST_BACKEND_ID,
     cwd: detached ? directory : process.cwd(),
     sendAcp,
@@ -93,7 +104,7 @@ function createHarness(detached = false, checkConnectedServicesGenerationCurrent
       session: Object.assign(parentSession, {
         sessionId: 'session-1',
         enqueueAgentMessageCommitted,
-        enqueueSessionUserMessageWithDisposition: async input => {
+        enqueueSessionUserMessageWithDisposition: async (input: Parameters<typeof enqueueSessionUserMessageWithDisposition>[0]) => {
           const disposition = await enqueueSessionUserMessageWithDisposition(input);
           observeFirstEnqueuedInput();
           return disposition;
@@ -143,7 +154,8 @@ function createHarness(detached = false, checkConnectedServicesGenerationCurrent
 }
 
 describe('retained Run provider-effect refusal', () => {
-  it('settles refused inputs and failed prior publication through the admitted Agent, saved SCM result and strict public consumer', async () => {
+  it.each(['native_unavailable', 'followup_unavailable', 'async_native_refused', 'initial', 'followup', 'publication_failed', 'active_host_refused', 'active_native_refused', 'active_unknown'] as const)(
+    'settles refused inputs and failed prior publication through the admitted Agent, saved SCM result and strict public consumer (%s)', async phase => {
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const sent = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
     let emit: ((event: AgentSessionRuntimeEvent) => void) | undefined;
@@ -164,8 +176,8 @@ describe('retained Run provider-effect refusal', () => {
         sessionRunnerFactory: { module: './agent.mjs', export: 'createRuntime', runtimeApiVersion: 1 } } } });
     const agent = { pluginId: plugin.manifest.id, localId: 'agent' };
     const agentId = `${agent.pluginId}/${agent.localId}`;
-    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ happyHomeDir: directory,
-      controller: pluginReloadController,
+    openNativeSession = open;
+    const fixture = admittedFixture ??= await createAuthoredAdmittedPluginRuntimeFixture({ happyHomeDir: directory, controller: pluginReloadController,
       plugins: [{ manifest: plugin.manifest, files: {
         'agent.mjs': `let open; export function configure(callback) { open = callback; }
           export function createRuntime() { return { sessions: { open: request => open(request) } }; }`,
@@ -176,7 +188,7 @@ describe('retained Run provider-effect refusal', () => {
           export function configureUnitLeaf(open) { leaf.configure(open); return { activate }; }`,
       }, instantiateCommittedModule(module) {
         if (typeof module.configureUnitLeaf !== 'function') throw new Error('Missing external Agent boundary');
-        const configured: unknown = module.configureUnitLeaf(open);
+        const configured: unknown = module.configureUnitLeaf((request: AgentSessionOpenRequest) => openNativeSession(request));
         if (!configured || typeof configured !== 'object' || !('activate' in configured)
           || typeof configured.activate !== 'function') throw new Error('Missing external Agent activation');
         return configured as PluginDaemonModuleNamespace;
@@ -193,7 +205,6 @@ describe('retained Run provider-effect refusal', () => {
           agentContribution: { ...agent, sourceCustody }, materializationKey: request.runId,
           connectedServicesBindings: request.connectedServices, connectedServiceSelectionsEnv: {}, sessionDirectory: directory, materializedRoot: null },
       } }));
-      for (const phase of ['initial', 'followup', 'publication_failed', 'active_host_refused', 'active_native_refused', 'active_unknown'] as const) {
       sent.mockClear();
       sent.mockImplementation(async () => ({ status: 'admitted' }));
       let current = true;
@@ -212,8 +223,8 @@ describe('retained Run provider-effect refusal', () => {
         connectedServices: { v: 2, bindingsByServiceId: { [`${service.pluginId}/${service.localId}`]: {
           source: 'connected', selection: 'profile', profileId: 'fixture-profile' } } },
         intentInput: { cwd: directory, source: comparison.comparison.source, comparisonId: comparison.comparison.id, outputs: ['commitPlan'] } });
-      while (harness.manager.getPublic(started.runId).status === 'running'
-        && !harness.manager.getPublic(started.runId).interaction) {
+      while (harness.manager.getPublic(started.runId)?.status === 'running'
+        && !harness.manager.getPublic(started.runId)?.interaction) {
         await harness.manager.waitForRunStateChange(started.runId);
       }
       const provisioned = harness.manager.getPublic(started.runId);
@@ -225,7 +236,7 @@ describe('retained Run provider-effect refusal', () => {
       const input = (localId: string): ExecutionRunAdmittedPendingInputV1 => ({ role: 'user', content: { type: 'text', text: 'Generate the plan.' },
         localId, authorAccountId: 'account-1', inputAdmissionReceipt: null, pendingProviderAction: 'send' });
       const priorPlan = { groups: [{ id: 'preserved', message: 'fix: retained output', rationale: 'Already analysed.', changeRefs: [] }], leftOutChangeRefs: [] };
-      const hasPriorOutput = phase !== 'initial';
+      const hasPriorOutput = phase !== 'initial' && phase !== 'native_unavailable' && phase !== 'async_native_refused';
       if (hasPriorOutput) {
         expect(harness.consume(input(`initial:${started.runId}`))).toBe(true);
         await vi.waitFor(() => expect(sent).toHaveBeenCalledOnce());
@@ -277,7 +288,7 @@ describe('retained Run provider-effect refusal', () => {
           await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read(scope), phase).toMatchObject({ success: true,
             result: { output: { outputs: { commitPlan: { state: 'complete', value: priorPlan } } } } }));
           await harness.manager.dispose();
-          continue;
+          return;
         }
         emit!({ kind: 'message-delta', sessionId: nativeSessionId, sequence: 4, emittedAtMs: 4, turnId: request.delivery.turnId,
           channel: 'assistant', text: JSON.stringify({ commitPlan: priorPlan }) });
@@ -295,16 +306,34 @@ describe('retained Run provider-effect refusal', () => {
         await scmDiffSummaryResultStore.publishProgress({ ...scope, expectedRevision: saved.result.revision,
           output: { ...saved.result.output, outputs: { commitPlan: { state: 'partial', value: priorPlan } } } });
       }
-      current = false;
-      const refusedInputId = phase === 'initial' ? `initial:${started.runId}` : 'followup-refused';
-      expect(harness.consume(input(refusedInputId))).toBe(true);
-      await vi.waitFor(() => expect(harness.settlements).toContainEqual(expect.objectContaining({
-        kind: 'rejected_before_effect', localId: refusedInputId, diagnostic: { code: 'execution_run_connected_service_generation_refresh_required',
+      const nativeUnavailable = phase === 'native_unavailable' || phase === 'followup_unavailable';
+      const nativeRefusal = nativeUnavailable || phase === 'async_native_refused';
+      current = nativeRefusal;
+      if (nativeUnavailable) sent.mockImplementation(async () => ({ status: 'unavailable', retryable: true,
+        diagnostic: { code: 'native_terminal_host_unavailable', severity: 'error', message: 'Terminal host unavailable' } }));
+      const failureCode = nativeRefusal ? 'native_terminal_host_unavailable' : 'execution_run_connected_service_generation_refresh_required';
+      const refusedInputId = !hasPriorOutput ? `initial:${started.runId}` : 'followup-refused';
+      if (phase === 'async_native_refused') {
+        // Direct Run send has a completion waiter but no claimed Pending row.
+        // Its dispatch ACK can precede a correlated native rejection.
+        expect(await harness.manager.send(started.runId, { message: 'Generate the plan.', localInputId: refusedInputId }))
+          .toMatchObject({ ok: true });
+        await vi.waitFor(() => expect(sent).toHaveBeenCalledOnce());
+        const controller = harness.controllers.get(started.runId) as ExecutionRunBackendController;
+        await vi.waitFor(() => expect(controller.turnInFlight).toBe(true));
+        const request = sent.mock.calls[0]![0];
+        emit!({ kind: 'input-rejected', sessionId: nativeSessionId, sequence: 2, emittedAtMs: 2,
+          inputIds: request.inputIds, diagnostic: { code: failureCode, severity: 'error', message: 'Terminal host unavailable' }, retryable: true });
+      } else {
+        expect(harness.consume(input(refusedInputId))).toBe(true);
+      }
+      if (phase !== 'async_native_refused') await vi.waitFor(() => expect(harness.settlements).toContainEqual(expect.objectContaining({
+        kind: 'rejected_before_effect', localId: refusedInputId, diagnostic: { code: failureCode,
           message: expect.any(String), severity: 'error' }, retryable: true,
       })));
       await vi.waitFor(() => expect(harness.manager.get(started.runId)).toMatchObject({ status: 'failed',
         error: { code: phase === 'publication_failed' ? 'execution_run_transcript_custody_unavailable'
-          : 'execution_run_connected_service_generation_refresh_required' } }));
+          : failureCode } }));
       await harness.manager.waitForTerminal(started.runId);
       expect(generationSignals.length).toBeGreaterThan(0);
       expect(generationSignals.every(signal => signal === runtimeSignal)).toBe(true);
@@ -316,12 +345,14 @@ describe('retained Run provider-effect refusal', () => {
           payload: { outputs: { commitPlan: { state: 'failed', ...(hasPriorOutput ? { value: priorPlan } : {}) } } } } });
       expect(await scmDiffSummaryResultStore.read(scope)).toMatchObject({ success: true,
         result: { output: { outputs: { commitPlan: { state: 'failed', ...(hasPriorOutput ? { value: priorPlan } : {}) } } } } });
-      expect(sent).toHaveBeenCalledTimes(phase === 'initial' ? 0 : 1);
+      const sentBeforeRetry = (hasPriorOutput ? 1 : 0) + (nativeRefusal ? 1 : 0);
+      expect(sent).toHaveBeenCalledTimes(sentBeforeRetry);
       current = true;
+      sent.mockImplementation(async () => ({ status: 'admitted' }));
       expect(await harness.manager.ensure(started.runId, { resume: true })).toMatchObject({ ok: true });
       expect(harness.manager.getPublic(started.runId)).toMatchObject({ status: 'running', lifecycle: { state: 'current' } });
       expect(harness.consume(input('explicit-retry'))).toBe(true);
-      await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(phase === 'initial' ? 1 : 2));
+      await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(sentBeforeRetry + 1));
       const retried = sent.mock.calls.at(-1)![0];
       if (retried.delivery.kind !== 'newTurn') throw new Error('Expected an explicit recovery turn');
       emit!({ kind: 'input-accepted', sessionId: nativeSessionId, sequence: 6, emittedAtMs: 6,
@@ -333,7 +364,6 @@ describe('retained Run provider-effect refusal', () => {
       await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read(scope)).toMatchObject({ success: true,
         result: { output: { outputs: { commitPlan: { state: 'complete', value: priorPlan } } } } }));
       await harness.manager.dispose();
-      }
-    } finally { await manager?.dispose(); await fixture.dispose(); }
+    } finally { await manager?.dispose(); }
   });
 });

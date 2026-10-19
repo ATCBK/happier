@@ -8,6 +8,8 @@ import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invo
 import type { ExecutionRunPermissionRequestStore } from '@/agent/runtime/bridges/executionRun/executionRunPermissionResponseTarget';
 import type { ExecutionRunWorkflowObservationBinding } from '@/agent/runtime/bridges/executionRun/executionRunWorkflowObservation';
 import type { ExecutionRunProfileContributionCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
+import type { ExecutionRunManagerStartParams, ExecutionRunNativeOfferedModelReader } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
+import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 
 export type ExecutionRunControllerOccurrenceV1 = Readonly<{
   runId: string;
@@ -36,6 +38,8 @@ export type ExecutionRunLiveIntervention = Readonly<{
   message: string;
   delivery: ExecutionRunSendDelivery;
   causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+  actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
+  effectiveCallerPermissionMode?: string;
   authorizeProviderEffect?: () => Promise<void>;
   resolve: () => void;
   reject: (e: Error) => void;
@@ -45,6 +49,8 @@ export type ExecutionRunBackendController = {
   kind: 'backend';
   /** Same admitted snapshot as this occurrence's executable runtime. */
   profileCatalog?: ExecutionRunProfileContributionCatalog;
+  readNativeOfferedModel?: ExecutionRunNativeOfferedModelReader;
+  nativeModelRegistry?: ResolvedContributionRegistry;
   /** Stable identity for this exact controller lifetime, including resume replacements. */
   controllerOccurrenceId: string;
   backend: ExecutionRunHostRuntime;
@@ -59,8 +65,10 @@ export type ExecutionRunBackendController = {
   turnCount: number;
   turnEpoch: number;
   turnInFlight: boolean;
+  /** A child borrowing this retained conversation holds this controller's turn until settlement. */
+  delegatedTurn?: Readonly<{ admission: Promise<string | null>; settled: Promise<void> }>;
   /** Native evidence for the current and most recently settled input turn, never a history ledger. */
-  currentInputTurn?: ExecutionRunInputTurnV1;
+  currentInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string }>;
   /** Host-private interaction binding for exactly `currentInputTurn`. */
   currentInputPermissionRequestStore?: Readonly<{
     localInputId: string;
@@ -72,9 +80,11 @@ export type ExecutionRunBackendController = {
   workflowObservation?: ExecutionRunWorkflowObservationBinding;
   /** Admitted Workflow Action leaf identity retained only by this live controller. */
   workflowRunId?: string;
+  /** Same live admission lifetime as workflowRunId; not a retained authority grant. */
+  workflowScope?: ExecutionRunManagerStartParams['workflowScope'];
   /** The first provider-emitted resume identity won over any provisional runtime address. */
   providerResumeIdentityObserved?: boolean;
-  lastInputTurn?: ExecutionRunInputTurnV1;
+  lastInputTurn?: ExecutionRunInputTurnV1 & Readonly<{ committedResultLocalId?: string }>;
   /** Stable exact-result observation occurrence for this controller lifetime. */
   inputTurnOccurrenceId?: string;
   /**
@@ -123,6 +133,8 @@ export type ExecutionRunBackendController = {
 export type ExecutionRunVoiceAgentController = {
   kind: 'voice_agent';
   profileCatalog?: ExecutionRunProfileContributionCatalog;
+  readNativeOfferedModel?: ExecutionRunNativeOfferedModelReader;
+  nativeModelRegistry?: ResolvedContributionRegistry;
   controllerOccurrenceId: string;
   /** Same controller-owned occurrence proof used by backend Runs. */
   executionRunOccurrence?: ExecutionRunControllerOccurrenceV1;

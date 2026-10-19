@@ -1,8 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { createExecutionRunPermissionHandler } from './executionRunPermissionDecision';
+import { createExecutionRunPermissionHandler, resolveExecutionRunInputAuthority } from './executionRunPermissionDecision';
 import { createRunScopedExecutionPermissionHandler } from './runScopedExecutionPermissionHandler';
 
 describe('execution-run hands-off permission ceiling', () => {
+  it('admits public inputs from Run policy and refuses missing private authority', () => {
+    const publicInput = resolveExecutionRunInputAuthority({ permissionMode: 'read_only' });
+    if (!publicInput.ok) throw new Error(publicInput.error);
+    const handler = createExecutionRunPermissionHandler({ permissionMode: 'read_only', backendId: 'claude' });
+    const context = { causalPermissionAuthority: publicInput.causalPermissionAuthority,
+      callerPermissionMode: publicInput.effectiveCallerPermissionMode };
+    expect(handler.getImmediateDecision('public-read', 'Read', { file_path: '/repo/a' }, context)).toEqual({ decision: 'approved' });
+    expect(handler.getImmediateDecision('public-write', 'Write', { path: '/repo/a' }, context)).toEqual({ decision: 'denied' });
+    expect(handler.getImmediateDecision('idle-read', 'Read', { file_path: '/repo/a' }, { causalPermissionAuthority: null })).toEqual({ decision: 'denied' });
+    expect(resolveExecutionRunInputAuthority({ permissionMode: 'yolo', effectiveCallerPermissionMode: 'read-only' }))
+      .toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed', error: 'causal_permission_authority_invalid' });
+    expect(resolveExecutionRunInputAuthority({ permissionMode: 'yolo', causalPermissionAuthority: null }))
+      .toMatchObject({ ok: false, errorCode: 'execution_run_not_allowed', error: 'causal_permission_authority_invalid' });
+  });
+
+  it('keeps the original authority immutable while bounding later caller and Run modes', () => {
+    const causalPermissionAuthority = Object.freeze({ kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const });
+    expect(resolveExecutionRunInputAuthority({ permissionMode: 'read_only', causalPermissionAuthority, effectiveCallerPermissionMode: 'yolo' }))
+      .toMatchObject({ ok: true, causalPermissionAuthority, effectiveCallerPermissionMode: 'read-only' });
+    expect(resolveExecutionRunInputAuthority({ permissionMode: 'yolo', causalPermissionAuthority, effectiveCallerPermissionMode: 'read-only' }))
+      .toMatchObject({ ok: true, causalPermissionAuthority, effectiveCallerPermissionMode: 'read-only' });
+    expect(causalPermissionAuthority.admittedPermissionCeiling).toBe('yolo');
+  });
+
+  it('keeps retained native tools below the current caller mode without rewriting its original ceiling', () => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode: 'yolo', backendId: 'claude' });
+    const causalPermissionAuthority = { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const };
+    const context = { causalPermissionAuthority, callerPermissionMode: 'read-only' };
+    expect(handler.getImmediateDecision('write', 'Write', { path: '/repo/a' }, context)).toEqual({ decision: 'denied' });
+    expect(handler.getImmediateDecision('read', 'Read', { file_path: '/repo/a' }, context)).toEqual({ decision: 'approved' });
+    expect(causalPermissionAuthority.admittedPermissionCeiling).toBe('yolo');
+  });
+
   it.each(['read-only', 'yolo'])('keeps listed builtin writes below the admitted read-only ceiling (%s)', (permissionMode) => {
     const handler = createExecutionRunPermissionHandler({ permissionMode, backendId: 'claude',
       allowedTools: ['Write', 'mcp__wilson-brief__*'], unlistedTools: 'deny' });

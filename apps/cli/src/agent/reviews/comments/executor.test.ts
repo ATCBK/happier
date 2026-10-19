@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 
 import { createCliReviewCommentActionExecutorFromCredentials } from './executor';
+import { ReviewCommentActionOutputSchemasV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import {
     REVIEW_COMMENT_PRINCIPAL_HEADER_V1,
     ReviewCommentPrincipalHeaderV1Schema,
@@ -165,7 +166,10 @@ describe('createCliReviewCommentActionExecutorFromCredentials', () => {
             credentials: { token: 'token-1', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(5) } },
             resolveAccountId: () => 'account-1', resolveAccountEncryptionMode: async () => 'e2ee',
         });
-        await expect(executor('reviews.comments.create', input)).resolves.toMatchObject({ comment: canonicalComment });
+        const result = ReviewCommentActionOutputSchemasV1['reviews.comments.create'].parse(await executor('reviews.comments.create', input));
+        // Create omitted optional evidence; the canonical sensitive mutation
+        // preserves that absence, which has the same no-evidence meaning as [].
+        expect({ ...result.comment, evidence: result.comment.evidence ?? [] }).toMatchObject(canonicalComment);
         expect(axiosPostMock).toHaveBeenCalledTimes(2);
         const bytes = JSON.stringify(axiosPostMock.mock.calls.map((call) => call[1]));
         for (const value of [input.body, 'PRIVATE-selected-code', 'PRIVATE-tag']) expect(bytes).not.toContain(value);
@@ -417,6 +421,9 @@ describe('createCliReviewCommentActionExecutorFromCredentials', () => {
     it('revalidates the host-derived principal immediately before signing and sending the effect', async () => {
         const installationKeyPair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
         const events: string[] = [];
+        // This boundary must never run after asynchronous authority withdrawal.
+        // Reset the prior encrypted-transport fixture as well as its call history.
+        axiosPostMock.mockRejectedValue(new Error('effect_dispatched_without_current_authority'));
         const executor = createCliReviewCommentActionExecutorFromCredentials({
             ...plainEventStorageParams,
             credentials: {
@@ -432,10 +439,16 @@ describe('createCliReviewCommentActionExecutorFromCredentials', () => {
                 };
             },
             assertPrincipalCurrent: () => {
-                events.push('currentness-check');
-                if (events.filter((event) => event === 'currentness-check').length === 2) {
-                    throw new Error('execution_run_host_action_stale');
-                }
+                const currentness = Promise.resolve().then(() => {
+                    events.push('currentness-check');
+                    if (events.filter((event) => event === 'currentness-check').length === 2) {
+                        throw new Error('execution_run_host_action_stale');
+                    }
+                });
+                // The regression discards this promise; observe its rejection so
+                // RED reports the dispatched effect rather than a harness error.
+                void currentness.catch(() => {});
+                return currentness;
             },
         });
 

@@ -101,6 +101,7 @@ it.each([
     } } };
     const host = createNativeAgentExecutionRunHostRuntime({
         runtime,
+        supportsResume: false,
         lease: { pluginId: 'acme.agent', pluginVersion: '1.0.0', agentId: 'acme.agent/default',
             localAgentId: 'default', occurrenceId: 'profile-fixture', isCurrent: () => true },
         options: { cwd: '/repo', runId: 'profile-run', scope: 'detached', backendId: 'acme.agent/default', permissionMode: 'no_tools',
@@ -934,10 +935,10 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 readInitialProfileContext: () => 'Saved captured explanation: the retained change is blue.',
                 sessionRunContext: {
                     kind: 'happier_session_run' as const, sessionId: 'session-parent',
-                    origin: { kind: 'session_discussion' as const, discussionId: 'discussion-1', messageIds: ['message-1'] },
+                    origin: { kind: 'discussion' as const, serverId: 'server-1', discussionId: 'discussion-1', messageIds: ['message-1'] },
                     supportedReadActions: [
                         'session.transcript.get',
-                        'session.discussion.read',
+                        'discussion.read',
                     ] as const,
                 },
             };
@@ -987,8 +988,8 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 expect(requests.at(-1)?.input.text).toContain('source-session');
                 expect(requests.at(-1)?.input.text).toContain('discussion-1');
                 expect(requests.at(-1)?.input.text).toContain('session.transcript.get');
-                expect(requests.at(-1)?.input.text).toContain('session.discussion.read');
-                expect(requests.at(-1)?.input.text).not.toContain('session.discussion.post');
+                expect(requests.at(-1)?.input.text).toContain('discussion.read');
+                expect(requests.at(-1)?.input.text).not.toContain('discussion.post');
                 expect((await delivery.delivery.deliver({ ...firstInput, localId: `${occurrence}-second`,
                     content: { type: 'text', text: 'Second input' }, meta: undefined })).status).toBe('admitted');
                 expect(requests.at(-1)?.input.text).toContain('Second input');
@@ -2057,6 +2058,8 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 code: 'provider_run_failed',
                 severity: 'error',
                 message: `event echoed ${secret}`,
+                details: { runtimeAuthClassification: { kind: 'usage_limit', serviceId: 'openai-codex',
+                    source: 'structured_provider_error', resetsAtMs: 42_000 } },
             },
         });
         expect(eventMessages).toContainEqual({
@@ -2074,6 +2077,7 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         expect(JSON.stringify(failureLog.mock.calls)).not.toContain('private-policy-value');
         await expect(eventHost.waitForTurnCompletion!()).rejects.toMatchObject({
             executionRunErrorCode: 'provider_run_failed', message: 'event echoed [REDACTED]',
+            runtimeIssueV1: { source: 'usage_limit', usageLimit: { resetAtMs: 42_000 } },
         });
         await eventHost.dispose();
     });

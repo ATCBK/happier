@@ -7,6 +7,7 @@ import {
   notRepositoryResponse,
   runScmRoute,
 } from '@/scm/rpc/dispatch';
+import type { ScmBackendRegistry } from '@/scm/registry';
 
 type ScmSnapshotEntry = Readonly<{
   path: string;
@@ -20,18 +21,24 @@ function isScmSnapshotEntry(value: unknown): value is ScmSnapshotEntry {
   return typeof anyValue.path === 'string' && anyValue.path.length > 0;
 }
 
-export async function loadScmCommitMessageContext(params: Readonly<{
+export type ScmCommitMessageContextInput = Readonly<{
   workingDirectory: string;
   maxFiles: number;
   maxTotalDiffChars: number;
   scope?: unknown;
-}>): Promise<
+}>;
+
+export type ScmCommitMessageContext =
   | { ok: true; snapshot: ScmWorkingSnapshot; diffsByPath: ReadonlyArray<{ path: string; diff: string }> }
-  | { ok: false; errorCode: string; error: string }
-> {
+  | { ok: false; errorCode: string; error: string };
+
+export async function loadScmCommitMessageContext(
+  params: ScmCommitMessageContextInput & Readonly<{ registry?: ScmBackendRegistry }>,
+): Promise<ScmCommitMessageContext> {
   const workingDirectory = params.workingDirectory;
 
   const snapshotRes = await runScmRoute<ScmStatusSnapshotRequest, ScmStatusSnapshotResponse>({
+    registry: params.registry,
     request: {},
     workingDirectory,
     onNonRepository: async ({ cwd }) =>
@@ -87,6 +94,7 @@ export async function loadScmCommitMessageContext(params: Readonly<{
   for (const path of candidatePaths) {
     if (remaining <= 0) break;
     const diffRes = await runScmRoute<ScmDiffFileRequest, ScmDiffFileResponse>({
+      registry: params.registry,
       request: { path, area: 'both' },
       workingDirectory,
       onNonRepository: async () => notRepositoryResponse<ScmDiffFileResponse>(),

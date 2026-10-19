@@ -1,5 +1,5 @@
 import type { ExecutionRunScmDiffSummaryInputV1 } from '@happier-dev/protocol';
-import { captureScmComparison, readCapturedScmComparison, type CapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
+import { captureScmComparison, readCapturedScmComparison, type CapturedScmComparison, type CaptureScmComparisonInput } from '@/scm/comparisons/captureScmComparison';
 import { resolveCwd } from '@/scm/runtime';
 import { resolveFilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 
@@ -7,6 +7,7 @@ export async function loadScmDiffSummaryContext(params: Readonly<{
   input: ExecutionRunScmDiffSummaryInputV1;
   workingDirectory: string;
   sessionId?: string;
+  captureCommitTarget?: CaptureScmComparisonInput['captureCommitTarget'];
 }>): Promise<CapturedScmComparison> {
   const input = params.input;
   const authorized = resolveCwd(input.cwd, params.workingDirectory, resolveFilesystemAccessPolicy());
@@ -24,6 +25,7 @@ export async function loadScmDiffSummaryContext(params: Readonly<{
       checkpointReceiptId: input.checkpointReceiptId, turnEvidenceMode: input.turnEvidenceMode });
   }
   return await captureScmComparison({ cwd: authorized.cwd, source: input.source,
+    ...(params.captureCommitTarget ? { captureCommitTarget: params.captureCommitTarget } : {}),
     sessionId, turnId: input.turnId, checkpointReceiptId: input.checkpointReceiptId,
     turnEvidenceMode: input.turnEvidenceMode });
 }

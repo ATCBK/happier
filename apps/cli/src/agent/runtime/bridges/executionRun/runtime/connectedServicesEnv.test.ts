@@ -90,6 +90,23 @@ function createDeps(overrides: Partial<{
 }
 
 describe('resolveExecutionRunConnectedServicesEnv', () => {
+    it('releases a successful late response when its Run was cancelled before admission', async () => {
+        const controller = new AbortController();
+        const deps = createDeps();
+        const request = deps.requestMaterialization.getMockImplementation()!;
+        deps.requestMaterialization.mockImplementation(async (...args) => {
+            const response = await request(...args);
+            controller.abort();
+            return response;
+        });
+        await expect(resolveExecutionRunConnectedServicesEnv({ runId: 'run_1', backendId: 'codex',
+            backendSourceKind: 'built_in', cwd: '/tmp/project', connectedServices: CONNECTED_BINDINGS,
+            signal: controller.signal, deps,
+        })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(deps.release).toHaveBeenCalledWith({ runId: 'run_1', runnerPid: 777, activationId: ACTIVATION_ID });
+        expect(loggerInfoMock).not.toHaveBeenCalledWith('[EXECUTION RUN] connected services: materialized', expect.anything());
+    });
+
     it('recovers the exact Run activation then rematerializes retained native state without prior release', async () => {
         const recoverRuntimeFailure = vi.fn(async () => ({ status: 'continue' as const, input: 'Continue where you left off', rematerialize: true }));
         const deps = createDeps({ recoverRuntimeFailure });
@@ -108,7 +125,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
         await resolved?.rematerializeForRecovery('native-original');
         expect(deps.requestMaterialization).toHaveBeenLastCalledWith(expect.objectContaining({
             runId: 'run_1', recovery: { activationId: ACTIVATION_ID, nativeResumeId: 'native-original' },
-        }));
+        }), expect.anything());
         expect(deps.release).not.toHaveBeenCalled();
     });
     it('materializes an attached parent pool rather than Account defaults or the selected parent member', async () => {
@@ -134,7 +151,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
             modelId: 'parent-model', connectedServices: { v: 2, bindingsByServiceId: {
                 [OPENAI_CODEX_ACCOUNT_SERVICE_ID]: { source: 'connected', selection: 'group', groupId: 'pool-X' },
             } },
-        }));
+        }), expect.anything());
         expect(deps.resolveSessionSpawnDefaults).not.toHaveBeenCalled();
         expect(deps.readCredentials).not.toHaveBeenCalled();
     });
@@ -168,7 +185,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
             ok: true, result: { results: [{ ok: true }] },
         });
         if (native) expect(deps.requestMaterialization).not.toHaveBeenCalled();
-        else expect(deps.requestMaterialization).toHaveBeenCalledWith(expect.objectContaining({ connectedServices: selection }));
+        else expect(deps.requestMaterialization).toHaveBeenCalledWith(expect.objectContaining({ connectedServices: selection }), expect.anything());
         expect(deps.readCredentials).not.toHaveBeenCalled();
     });
 
@@ -205,7 +222,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
             runId: 'run_1', backendId: 'codex', backendSourceKind: 'built_in',
             connectedServices: CONNECTED_BINDINGS, cwd: '/tmp/project', modelId: 'gpt-6.1-sol', deps,
         });
-        expect(deps.requestMaterialization).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-6.1-sol' }));
+        expect(deps.requestMaterialization).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-6.1-sol' }), expect.anything());
         await expect(resolved?.recoverRejectedStart(classification)).resolves.toBe(true);
         expect(recoverRejectedStart).toHaveBeenCalledWith({
             runId: 'run_1', runnerPid: 777, activationId: ACTIVATION_ID, modelId: 'gpt-6.1-sol', classification,
@@ -279,7 +296,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
             agentId: 'codex',
             connectedServices: CONNECTED_BINDINGS,
             cwd: '/tmp/project',
-        });
+        }, expect.anything());
         // QA2-F02: explicit selections never consult the session defaulting owner.
         expect(deps.resolveSessionSpawnDefaults).not.toHaveBeenCalled();
     });
@@ -622,7 +639,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
 
     it('retains cleanup for retry when the daemon reports cleanup did not complete', async () => {
         const release = vi.fn()
-            .mockResolvedValueOnce({ ok: true as const, released: false })
+            .mockResolvedValueOnce({ ok: false as const, errorCode: 'connected_service_run_cleanup_failed' })
             .mockResolvedValueOnce({ ok: true as const, released: true });
         const resolved = await resolveExecutionRunConnectedServicesEnv({
             runId: 'run_1',
@@ -633,9 +650,23 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
             deps: createDeps({ release }),
         });
 
-        await expect(resolved!.cleanup()).rejects.toThrow('cleanup did not complete');
+        await expect(resolved!.cleanup()).rejects.toMatchObject({
+            executionRunErrorCode: 'connected_service_run_cleanup_failed',
+        });
         await resolved!.cleanup();
         expect(release).toHaveBeenCalledTimes(2);
+    });
+
+    it('finishes cleanup when its exact activation was already released or superseded', async () => {
+        const release = vi.fn(async () => ({ ok: true as const, released: false }));
+        const resolved = await resolveExecutionRunConnectedServicesEnv({
+            runId: 'run_1', backendId: 'codex', backendSourceKind: 'built_in',
+            connectedServices: CONNECTED_BINDINGS, cwd: '/tmp/project', deps: createDeps({ release }),
+        });
+        await expect(resolved!.cleanup()).resolves.toBeUndefined();
+        await expect(resolved!.cleanup()).resolves.toBeUndefined();
+        expect(release).toHaveBeenCalledWith({ runId: 'run_1', runnerPid: 777, activationId: ACTIVATION_ID });
+        expect(release).toHaveBeenCalledTimes(1);
     });
 
     describe('QA2-F03 decision logging (one line per run start; values never logged)', () => {

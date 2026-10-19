@@ -4,9 +4,12 @@ import { resolveNativeAgentLaunchEnvironment } from '@/agent/runtime/launchEnvir
 import { HappierStructuredInputV1Schema } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
+import { materializeActionRequestAttributionV1, type ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { AccountSettings, SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
 import type {
     AgentExecutionRunEvent,
+    AgentExecutionRunConversationEventV1,
+    AgentExecutionRunConversationRuntimeV1,
     AgentExecutionRunOpenRequest,
     AgentExecutionRunRuntime,
     AgentExecutionRunRuntimeFactory,
@@ -39,7 +42,8 @@ import {
 import {
     createNativeAgentCurrentExecutionRunUiServices,
 } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
-import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import { createExecutionRunPermissionHandler, resolveExecutionRunInputAuthority } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import { permissionMode as normalizeExecutionRunPermissionMode } from '@/agent/executionRuns/policy/permissionMode';
 import {
     buildExecutionRunPermissionRequestEnvelope,
     resolveExecutionRunPermissionInteractionMode,
@@ -81,7 +85,7 @@ import { resolveStructuredInputProviderDispatchContext } from '@/agent/runtime/t
 import { readConnectedServiceChildMemberLogContextFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { logger } from '@/ui/logger';
 import { publishSkillLaunchNotice } from '@/prompts/skills/runtime/publishRunnerSkillNotice';
-import { createExecutionRunCodedError, readExecutionRunErrorCode, readExecutionRunRejectedStartDiagnostic, sanitizeExecutionRunError as sanitizeThrownError, type ExecutionRunRejectedStartError } from './errors';
+import { createExecutionRunCodedError, createExecutionRunDiagnosticError, readExecutionRunErrorCode, readExecutionRunRejectedStartDiagnostic, sanitizeExecutionRunError as sanitizeThrownError, type ExecutionRunRejectedStartError } from './errors';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
@@ -101,7 +105,6 @@ import {
     isWorkflowInteractionCapacityError,
     WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
 } from '@/agent/permissions/interactionPersistenceError';
-import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 
 type NativeAgentRunUsagePublisher = Readonly<{
     provider: string;
@@ -132,11 +135,13 @@ export type NativeAgentSessionContextLeaseFactory = ((params: Readonly<{
     signal: AbortSignal;
     readSessionRuntime(): AgentSessionRuntime | null;
     readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
+    actionRequestAttributionV1?: ActionRequestAttributionV1;
 }>) => Promise<NativeAgentSessionContextLease> | NativeAgentSessionContextLease) & Readonly<{
     bindInvocationServices?: (params: Readonly<{
         services: PluginServices;
         signal: AbortSignal;
         readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
+        actionRequestAttributionV1?: ActionRequestAttributionV1;
     }>) => Promise<PluginServices>;
     respondToPermissionRequest?: (requestId: string, approved: boolean) => boolean;
     abortPendingPermissionRequests?: (reason: string) => Promise<void>;
@@ -162,6 +167,7 @@ export type NativeAgentExecutionRunContextLeaseFactory = ((params: Readonly<{
     services: PluginServices;
     signal: AbortSignal;
     readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
+    actionRequestAttributionV1?: ActionRequestAttributionV1;
 }>) => Promise<NativeAgentExecutionRunContextLease> | NativeAgentExecutionRunContextLease) & Pick<
     NativeAgentSessionContextLeaseFactory,
     'bindInvocationServices' | 'respondToPermissionRequest' | 'abortPendingPermissionRequests' | 'onTurnTerminal' | 'resolveStructuredInputForDispatch'
@@ -251,6 +257,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         currentSession: HostCurrentSessionUiServices;
         signal: AbortSignal;
         readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
+        actionRequestAttributionV1?: ActionRequestAttributionV1;
     }>) => Promise<PluginServices>;
 }>): NativeAgentExecutionRunContextLeaseFactory {
     const runId = readRequiredString(params.runId, 'a run id');
@@ -354,10 +361,12 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         services,
         signal,
         readActiveTurnAdmissionWitness,
+        actionRequestAttributionV1,
     }: Readonly<{
         services: PluginServices;
         signal: AbortSignal;
         readActiveTurnAdmissionWitness?: () => AgentInvocationTurnAdmissionWitness | null;
+        actionRequestAttributionV1?: ActionRequestAttributionV1;
     }>): Promise<Readonly<{
         services: PluginServices;
         currentSession: HostCurrentSessionUiServices;
@@ -378,15 +387,17 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
                 currentSession,
                 signal,
                 ...(readActiveTurnAdmissionWitness ? { readActiveTurnAdmissionWitness } : {}),
+                ...(!readActiveTurnAdmissionWitness && actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
             })
             : services;
         return Object.freeze({ services: boundServices, currentSession });
     };
-    const factory: NativeAgentExecutionRunContextLeaseFactory = async ({ services, signal, readActiveTurnAdmissionWitness }) => {
+    const factory: NativeAgentExecutionRunContextLeaseFactory = async ({ services, signal, readActiveTurnAdmissionWitness, actionRequestAttributionV1 }) => {
         const bound = await bindInvocationServices({
             services,
             signal,
             ...(readActiveTurnAdmissionWitness ? { readActiveTurnAdmissionWitness } : {}),
+            ...(!readActiveTurnAdmissionWitness && actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
         });
         const nativeHome = params.agent ? await resolveNativeAgentSessionNativeHomeService({
             agent: params.agent,
@@ -645,18 +656,27 @@ function toHostMessage(
 }
 
 function sessionEventToHostMessage(
-    event: AgentSessionRuntimeEvent,
+    event: AgentExecutionRunConversationEventV1,
     sanitize: (value: string) => string,
 ): AgentMessage | null {
     switch (event.kind) {
+        case 'tool-call':
+            return event.turnId !== undefined && event.sidechainId === undefined
+                ? { type: 'tool-call', callId: event.toolCallId, toolName: event.toolName, args: event.input }
+                : null;
+        case 'tool-result':
+            return event.turnId !== undefined && event.sidechainId === undefined
+                ? { type: 'tool-result', callId: event.toolCallId, result: event.output,
+                    ...(event.isError === undefined ? {} : { isError: event.isError }) }
+                : null;
         case 'message-delta':
-            if (!isForegroundTurnRuntimeTranscriptEvent(event)) return null;
+            if (event.turnId === undefined || event.sidechainId !== undefined) return null;
             return event.channel === 'assistant'
                 ? { type: 'model-output', textDelta: event.text,
                     ...(event.messageId ? { messageId: event.messageId } : {}) }
                 : { type: 'event', name: 'thinking', payload: { textDelta: event.text } };
         case 'transcript-message-committed':
-            return event.role === 'assistant' && isForegroundTurnRuntimeTranscriptEvent(event)
+            return event.role === 'assistant' && event.turnId !== undefined && event.sidechainId === undefined
                 ? { type: 'model-output', messageId: event.messageId, fullText: event.text }
                 : null;
         case 'provider-session-id':
@@ -840,6 +860,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     runtime: AgentRuntime;
     /** Additive detached facet for a Session-primary Agent. */
     executionRunContextV1?: AgentSessionExecutionRunRuntimeFactoryV1;
+    /** Host-selected retained interaction; never changes the finite V1 facet. */
+    retainedConversation?: boolean;
     lease: NativeAgentRuntimeLeaseIdentity;
     options: CreateCliExecutionRunBackendParams;
     supportsResume: boolean;
@@ -856,6 +878,9 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     const directExecutionRuns = params.runtime.executionRuns;
     if (!params.executionRunContextV1 && !directExecutionRuns) {
         throw new Error(`Agent runtime '${params.lease.agentId}' does not support execution runs`);
+    }
+    if (params.retainedConversation && !params.executionRunContextV1?.openConversation) {
+        throw createExecutionRunCodedError('execution_run_protocol_unsupported', 'Agent does not support retained detached conversations');
     }
     const runId = readRequiredString(params.options.runId, 'a run id');
     const profileId = readRequiredString(
@@ -896,8 +921,11 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     const listeners = new Set<(message: AgentMessage) => void>();
     let provisionPromise: Promise<Readonly<{ runtimeId: string }>> | null = null;
     let openRequest: AgentExecutionRunOpenRequest | null = null;
-    let nativeRuntimePromise: Promise<AgentExecutionRunRuntime> | null = null;
-    let nativeRuntime: AgentExecutionRunRuntime | null = null;
+    type NativeRun =
+        | Readonly<{ kind: 'finite'; runtime: AgentExecutionRunRuntime }>
+        | Readonly<{ kind: 'conversation'; runtime: AgentExecutionRunConversationRuntimeV1 }>;
+    let nativeRuntimePromise: Promise<NativeRun> | null = null;
+    let nativeRuntime: NativeRun | null = null;
     let watchDisposable: { dispose(): void | Promise<void> } | null = null;
     let executionRunContextLease: NativeAgentExecutionRunContextLease | null = null;
     let lastSequence = -1;
@@ -908,14 +936,32 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     let rejectedStart: ExecutionRunRejectedStartError | null = null;
     let checkpointId: string | null = null;
     let recovery: AbortController | null = null;
-    let admittedInputMeta: Parameters<AgentExecutionRunRuntime['send']>[1];
+    let admittedInputMeta: (NonNullable<Parameters<AgentExecutionRunRuntime['send']>[1]> & Readonly<{
+        effectiveCallerPermissionMode?: string;
+        actionRequestAttributionV1?: ActionRequestAttributionV1;
+    }>) | undefined;
+    let conversationTurnOrdinal = 0;
+    let conversationTurn: Readonly<{ turnId: string; inputIds: readonly [string] }> | null = null;
+    let conversationTurnSettlement: Promise<void> | null = null;
+    let turnSettled = false;
     let resolveTerminal!: () => void;
     let rejectTerminal!: (error: Error) => void;
-    const terminalPromise = new Promise<void>((resolve, reject) => {
-        resolveTerminal = resolve;
-        rejectTerminal = reject;
-    });
-    void terminalPromise.catch(() => undefined);
+    let terminalPromise!: Promise<void>;
+    function resetTurnCompletion(): void {
+        terminalPromise = new Promise<void>((resolve, reject) => {
+            resolveTerminal = resolve;
+            rejectTerminal = reject;
+        });
+        void terminalPromise.catch(() => undefined);
+    }
+    resetTurnCompletion();
+
+    function rejectTurnCompletion(error: Error): void {
+        // A later native death cannot change a completed turn's promise, but
+        // must remain a failure for the next input's completion observer.
+        if (turnSettled) { resetTurnCompletion(); turnSettled = false; }
+        rejectTerminal(error);
+    }
 
     function logProviderFailure(phase: 'open' | 'send' | 'stop' | 'event', code: string): void {
         logger.warn('[EXECUTION RUN] provider failure', {
@@ -952,28 +998,45 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             : input;
     }
 
+    function readConversationAdmissionWitness(): AgentInvocationTurnAdmissionWitness | null {
+        if (!conversationTurn || terminal || disposed) return null;
+        return {
+            inputId: conversationTurn.inputIds[0], turnId: conversationTurn.turnId,
+            userMessageSeq: null, userMessageSeqs: [],
+            callerPermissionMode: normalizeExecutionRunPermissionMode(admittedInputMeta?.effectiveCallerPermissionMode ?? params.options.permissionMode),
+            ...(admittedInputMeta?.causalPermissionAuthority
+                ? { causalPermissionAuthority: admittedInputMeta.causalPermissionAuthority } : {}),
+            ...(admittedInputMeta?.actionRequestAttributionV1
+                ? { actionRequestAttributionV1: admittedInputMeta.actionRequestAttributionV1 } : {}),
+        };
+    }
+
     function failRuntime(message: string, code?: string): void {
         if (terminal) return;
         terminal = true;
         const error = code ? createExecutionRunCodedError(code, message) : new Error(message);
         emit({ type: 'status', status: 'error', detail: message });
-        rejectTerminal(error);
+        rejectTurnCompletion(error);
     }
 
     function settleEvent(normalizedEvent: AgentExecutionRunEvent): void {
         const message = toHostMessage(normalizedEvent, sanitizeProviderDiagnosticText);
         if (message) emit(message);
         if (normalizedEvent.kind === 'run-complete' || normalizedEvent.kind === 'run-cancelled') {
-            terminal = true;
+            // A retained conversation settles this input, while its host Run
+            // remains available. Only the finite facet equates the two lifetimes.
+            terminal = !params.retainedConversation;
+            turnSettled = true;
             if (normalizedEvent.kind === 'run-complete' && !params.sessionTurnRecoveryOwned && params.options.connectedServiceRuntimeTurnCompleted) {
                 void params.options.connectedServiceRuntimeTurnCompleted().then(resolveTerminal, resolveTerminal);
             } else resolveTerminal();
         } else if (normalizedEvent.kind === 'run-failed') {
             terminal = true;
-            rejectTerminal(createExecutionRunCodedError(
-                normalizedEvent.diagnostic?.code ?? 'agent_execution_run_failed',
-                diagnosticMessage(normalizedEvent.diagnostic, sanitizeProviderDiagnosticText),
-            ));
+            rejectTurnCompletion(normalizedEvent.diagnostic ? createExecutionRunDiagnosticError({
+                ...normalizedEvent.diagnostic,
+                message: diagnosticMessage(normalizedEvent.diagnostic, sanitizeProviderDiagnosticText),
+            }, normalizedEvent.emittedAtMs, params.lease.agentId) : createExecutionRunCodedError(
+                'agent_execution_run_failed', diagnosticMessage(undefined, sanitizeProviderDiagnosticText)));
         }
     }
 
@@ -998,7 +1061,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                     watchDisposable = null;
                     nativeRuntime = null;
                     nativeRuntimePromise = null;
-                    await previous?.dispose();
+                    await previous?.runtime.dispose();
                     await executionRunContextLease?.dispose();
                     executionRunContextLease = null;
                 },
@@ -1018,7 +1081,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                         ...admittedInputMeta,
                         localInputId: `runtime-continuation:${randomUUID()}`,
                     };
-                    const result = await nativeRuntime!.send({ text: input }, {
+                    const result = await sendNative(nativeRuntime!, { text: input }, {
                         ...admittedInputMeta,
                         signal: recoverySignal,
                     });
@@ -1041,7 +1104,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         }
     }
 
-    function handleEvent(event: AgentExecutionRunEvent): void {
+    function handleEvent(event: AgentExecutionRunEvent, allowRecovery = true): void {
         const parsed = AgentExecutionRunEventSchema.safeParse(event);
         if (!parsed.success) {
             failRuntime(`Native Agent execution run '${runId}' emitted an invalid runtime event`);
@@ -1071,12 +1134,12 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 logProviderFailure('event', rejection.executionRunErrorCode);
                 rejectedStart = rejection;
                 terminal = true;
-                rejectTerminal(rejection);
+                rejectTurnCompletion(rejection);
                 return;
             }
         }
         if (normalizedEvent.kind === 'run-failed') logProviderFailure('event', normalizedEvent.diagnostic?.code ?? 'agent_execution_run_failed');
-        if (normalizedEvent.kind === 'run-failed' && normalizedEvent.diagnostic && checkpointId
+        if (allowRecovery && normalizedEvent.kind === 'run-failed' && normalizedEvent.diagnostic && checkpointId
             // This typed ACP outcome is admission uncertainty, not an accepted
             // turn failure. Provider health facts cannot authorize continuation.
             && normalizedEvent.diagnostic.code !== 'acp_input_custody_unknown'
@@ -1091,24 +1154,160 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         settleEvent(normalizedEvent);
     }
 
-    async function openNative(request: AgentExecutionRunOpenRequest): Promise<AgentExecutionRunRuntime> {
+    function handleConversationEvent(event: AgentExecutionRunConversationEventV1): void {
+        if (terminal || disposed) return;
+        type RunEventInput<Event = AgentExecutionRunEvent> = Event extends AgentExecutionRunEvent
+            ? Omit<Event, 'sequence' | 'runId' | 'emittedAtMs'> : never;
+        const emitRunEvent = (value: RunEventInput, allowRecovery = true): void => {
+            handleEvent({ ...value, runId, sequence: lastSequence + 1, emittedAtMs: event.emittedAtMs ?? Date.now() }, allowRecovery);
+        };
+        if (event.kind === 'provider-session-id') {
+            emitRunEvent({ kind: 'checkpoint', checkpointId: event.providerSessionId });
+            return;
+        }
+        if (event.kind === 'runtime-ended') {
+            // A correlated turn failure already owns recovery; native process
+            // exit can repeat that failure while the old runtime is retiring.
+            if (recovery) return;
+            const allowRecovery = conversationTurn !== null;
+            conversationTurn = null;
+            const fail = () => emitRunEvent({ kind: 'run-failed',
+                diagnostic: event.diagnostic ?? { code: 'agent_execution_run_ended', severity: 'error' } }, allowRecovery);
+            // Native completion can precede its durable host acknowledgement.
+            // Preserve that completed input, then expose idle death to future
+            // observers without replaying the previous input through recovery.
+            if (!allowRecovery && conversationTurnSettlement) void conversationTurnSettlement.then(fail);
+            else fail();
+            return;
+        }
+        const active = conversationTurn;
+        if (!active) return;
+        if (event.kind === 'input-rejected' || event.kind === 'input-custody-unknown' || event.kind === 'input-delivery-failed') {
+            if (event.inputIds.length !== active.inputIds.length || !event.inputIds.every(id => active.inputIds.includes(id))) return;
+            if (event.kind === 'input-delivery-failed' && event.delivery.turnId !== active.turnId) return;
+            conversationTurn = null;
+            // Typed non-admission/custody facts prohibit continuation regardless
+            // of the provider diagnostic's vocabulary or retryability.
+            emitRunEvent({ kind: 'run-failed', diagnostic: event.kind === 'input-rejected' ? event.diagnostic : event.issue }, false);
+            return;
+        }
+        if (!('turnId' in event) || event.turnId !== active.turnId) return;
+        switch (event.kind) {
+            case 'tool-call':
+            case 'tool-result': {
+                const message = sessionEventToHostMessage(event, sanitizeProviderDiagnosticText);
+                if (message) emit(message);
+                return;
+            }
+            case 'message-delta':
+                if (event.sidechainId !== undefined) return;
+                emitRunEvent({ kind: 'output-delta', channel: event.channel, text: event.text, ...(event.messageId ? { messageId: event.messageId } : {}) });
+                return;
+            case 'transcript-message-committed':
+                if (event.sidechainId !== undefined || event.role !== 'assistant') return;
+                emitRunEvent({ kind: 'output-message-committed', channel: 'assistant', text: event.text, messageId: event.messageId });
+                return;
+            case 'turn-start':
+            case 'turn-progress':
+                emitRunEvent({ kind: 'run-progress' });
+                return;
+            case 'turn-complete':
+            case 'turn-cancelled':
+            case 'turn-failed': {
+                conversationTurn = null;
+                const settle = () => emitRunEvent(event.kind === 'turn-failed'
+                    ? { kind: 'run-failed', diagnostic: event.diagnostic }
+                    : event.kind === 'turn-cancelled'
+                        ? { kind: 'run-cancelled', ...(event.diagnostic ? { diagnostic: event.diagnostic } : {}) }
+                        : { kind: 'run-complete' });
+                const custody = params.createExecutionRunContext?.onTurnTerminal?.(active.turnId);
+                if (custody) {
+                    const settlement = custody.then(settle, error => {
+                        const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+                        failRuntime(failure.message, readExecutionRunErrorCode(failure) ?? undefined);
+                    });
+                    conversationTurnSettlement = settlement;
+                    void settlement.then(() => { if (conversationTurnSettlement === settlement) conversationTurnSettlement = null; });
+                } else settle();
+                return;
+            }
+        }
+    }
+
+    async function sendNative(
+        opened: NativeRun,
+        input: AgentSessionInput,
+        options: Parameters<AgentExecutionRunRuntime['send']>[1],
+    ): Promise<Awaited<ReturnType<AgentExecutionRunRuntime['send']>>> {
+        // The caller's current mode is host-private admission metadata. Only
+        // the existing public SDK options cross the Agent boundary, including
+        // when recovery resends the host's admitted input metadata.
+        const providerOptions = {
+            ...(options?.signal ? { signal: options.signal } : {}),
+            ...(options?.localInputId ? { localInputId: options.localInputId } : {}),
+            ...(options?.resultContract ? { resultContract: options.resultContract } : {}),
+            ...(options?.causalPermissionAuthority ? { causalPermissionAuthority: options.causalPermissionAuthority } : {}),
+        };
+        if (opened.kind === 'finite') return await opened.runtime.send(input, providerOptions);
+        if (terminal) {
+            await terminalPromise;
+            throw new Error(`Native Agent execution run '${runId}' has already terminated`);
+        }
+        if (conversationTurn) return { status: 'unavailable' as const };
+        const authority = resolveExecutionRunInputAuthority({
+            permissionMode: params.options.permissionMode,
+            ...(options?.causalPermissionAuthority !== undefined
+                ? { causalPermissionAuthority: options.causalPermissionAuthority } : {}),
+            ...(admittedInputMeta?.effectiveCallerPermissionMode !== undefined
+                ? { effectiveCallerPermissionMode: admittedInputMeta.effectiveCallerPermissionMode } : {}),
+        });
+        if (!authority.ok) return { status: 'rejected', diagnostic: {
+            code: authority.errorCode, message: authority.error, severity: 'error',
+        } };
+        if (turnSettled) { resetTurnCompletion(); turnSettled = false; }
+        const turnId = `${runId}-turn-${++conversationTurnOrdinal}`;
+        const inputIds = [options?.localInputId ?? `${runId}-input-${conversationTurnOrdinal}`] as const;
+        conversationTurn = { turnId, inputIds };
+        try {
+            return await opened.runtime.send({ inputIds: [...inputIds], input, delivery: { kind: 'newTurn', turnId },
+                ...(options?.causalPermissionAuthority ? { causalPermissionAuthority: options.causalPermissionAuthority } : {}) }, {
+                ...providerOptions, permissionIntent: normalizeExecutionRunPermissionMode(authority.effectiveCallerPermissionMode),
+            });
+        } catch (error) {
+            conversationTurn = null;
+            const failure = sanitizeThrownError(error, sanitizeProviderDiagnosticText);
+            failRuntime(failure.message, readExecutionRunErrorCode(failure) ?? undefined);
+            throw failure;
+        }
+    }
+
+    async function openNative(request: AgentExecutionRunOpenRequest): Promise<NativeRun> {
         assertUsable();
         if (nativeRuntimePromise) return await nativeRuntimePromise;
         const invokedAtMs = Date.now();
         nativeRuntimePromise = (async () => {
             const fallbackServices = await servicesPromise;
             assertUsable();
+            const initialActionAttribution = admittedInputMeta
+                ? admittedInputMeta.actionRequestAttributionV1
+                : params.options.actionRequestAttributionV1;
             const context = params.createExecutionRunContext
                 ? (executionRunContextLease = await params.createExecutionRunContext({
                     services: fallbackServices,
                     signal,
+                    ...(params.retainedConversation ? { readActiveTurnAdmissionWitness: readConversationAdmissionWitness } : {}),
+                    ...(!params.retainedConversation && initialActionAttribution
+                        ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(initialActionAttribution) } : {}),
                 })).context
                 : createNativeAgentInvocationContext({
                     lease: params.lease,
                     runId,
                     signal,
                     services: params.bindInvocationServices
-                        ? await params.bindInvocationServices({ services: fallbackServices, signal })
+                        ? await params.bindInvocationServices({ services: fallbackServices, signal,
+                            ...(!params.retainedConversation && initialActionAttribution
+                                ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(initialActionAttribution) } : {}),
+                            ...(params.retainedConversation ? { readActiveTurnAdmissionWitness: readConversationAdmissionWitness } : {}) })
                         : fallbackServices,
                     invokedAtMs,
                 });
@@ -1128,7 +1327,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 );
             }
             assertUsable();
-            let opened: AgentExecutionRunRuntime;
+            let opened: NativeRun;
             const admittedRequest = {
                 ...request,
                 ...(request.kind === 'create' ? { input: withRunSkillIndex(request.input, executionRunContextLease?.skillIndex) } : {}),
@@ -1141,9 +1340,11 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 if (!('executionRun' in context)) {
                     throw new Error('Session-primary detached execution requires execution-run scope');
                 }
-                opened = await params.executionRunContextV1.open(admittedRequest, context);
+                opened = params.retainedConversation
+                    ? { kind: 'conversation', runtime: await params.executionRunContextV1.openConversation!(admittedRequest, context) }
+                    : { kind: 'finite', runtime: await params.executionRunContextV1.open(admittedRequest, context) };
             } else {
-                opened = await directExecutionRuns!.open(admittedRequest, context);
+                opened = { kind: 'finite', runtime: await directExecutionRuns!.open(admittedRequest, context) };
             }
             try {
                 assertUsable();
@@ -1151,15 +1352,31 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 openingInitialInput = request.kind === 'create';
                 if (request.kind === 'resume') checkpointId = request.checkpointId;
                 if (request.kind === 'create') admittedInputMeta = {
+                    ...(initialActionAttribution
+                        ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(initialActionAttribution) } : {}),
+                    ...(admittedInputMeta?.effectiveCallerPermissionMode !== undefined
+                        ? { effectiveCallerPermissionMode: admittedInputMeta.effectiveCallerPermissionMode } : {}),
                     ...(request.localInputId ? { localInputId: request.localInputId } : {}),
                     ...(request.resultContract ? { resultContract: request.resultContract } : {}),
                     ...(request.causalPermissionAuthority ? { causalPermissionAuthority: request.causalPermissionAuthority } : {}),
                 };
-                watchDisposable = opened.watch(event => { if (nativeRuntime === opened) handleEvent(event); });
+                watchDisposable = opened.kind === 'finite'
+                    ? opened.runtime.watch(event => { if (nativeRuntime === opened) handleEvent(event); })
+                    : opened.runtime.watch(event => { if (nativeRuntime === opened) handleConversationEvent(event); });
+                if (opened.kind === 'conversation' && admittedRequest.kind === 'create') {
+                    const result = await sendNative(opened, admittedRequest.input, { ...admittedInputMeta, signal });
+                    if (result.status !== 'admitted') throw createExecutionRunCodedError(result.diagnostic?.code ?? 'agent_execution_run_input_rejected', diagnosticMessage(result.diagnostic, sanitizeProviderDiagnosticText));
+                }
                 if (rejectedStart) throw rejectedStart;
             } catch (error) {
-                if (rejectedStart === error) throw error;
-                await opened.dispose();
+                if (nativeRuntime === opened) nativeRuntime = null;
+                if (rejectedStart === error) {
+                    if (opened.kind === 'conversation') {
+                        try { await opened.runtime.dispose(); } catch { /* Preserve the classified pre-start refusal. */ }
+                    }
+                    throw error;
+                }
+                await opened.runtime.dispose();
                 throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
             } finally {
                 openingInitialInput = false;
@@ -1241,6 +1458,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
         },
         getRuntimeLifetimeSignal: () => signal,
         async deliverInput(runtimeId, admittedInput, meta) {
+            if (meta?.actionRequestAttributionV1) meta = { ...meta,
+                actionRequestAttributionV1: materializeActionRequestAttributionV1(meta.actionRequestAttributionV1) };
             assertUsable();
             if (!provisionPromise || runtimeId !== runId) {
                 throw new Error(`Native Agent execution run '${runId}' is not provisioned for runtime '${runtimeId}'`);
@@ -1261,6 +1480,9 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
                 return rejectStructuredInputBeforeProviderEffect(error);
             }
             if (!nativeRuntimePromise) {
+                // This private admission field must survive deferred first
+                // opening without entering the public SDK open request.
+                admittedInputMeta = { ...meta, localInputId: localId };
                 openRequest = Object.freeze({
                     kind: 'create' as const,
                     runId,
@@ -1285,7 +1507,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             admittedInputMeta = { ...meta, localInputId: localId };
             let result: Awaited<ReturnType<AgentExecutionRunRuntime['send']>>;
             try {
-                result = await opened.send(input, {
+                result = await sendNative(opened, input, {
                     signal,
                     ...(meta?.localId ? { localInputId: meta.localId } : {}),
                     ...(meta?.resultContract ? { resultContract: meta.resultContract } : {}),
@@ -1325,7 +1547,11 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             if (!opened) return;
             let result: Awaited<ReturnType<AgentExecutionRunRuntime['stop']>>;
             try {
-                result = await opened.stop({ signal });
+                result = opened.kind === 'finite'
+                    ? await opened.runtime.stop({ signal })
+                    : conversationTurn
+                        ? await opened.runtime.cancel?.({ turnId: conversationTurn.turnId, reason: 'user' }, { signal }) ?? { status: 'unsupported' }
+                        : { status: 'notRunning' };
             } catch (error) {
                 logProviderFailure('stop', readExecutionRunErrorCode(error) ?? 'agent_execution_run_stop_failed');
                 throw sanitizeThrownError(error, sanitizeProviderDiagnosticText);
@@ -1350,7 +1576,7 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             // any never-settling provider open or dispose below.
             if (nativeRuntimePromise && !terminal) {
                 terminal = true;
-                rejectTerminal(createDisposedError());
+                rejectTurnCompletion(createDisposedError());
             }
             ownedAbortController.abort(new Error('Native Agent execution run disposed'));
             recovery?.abort(new Error('Execution Run recovery disposed'));
@@ -1362,9 +1588,9 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             // block this return on a provider open that never settles, and a
             // provider cleanup failure is logged nowhere the caller depends
             // on. A late-settling open is disposed when it settles.
-            const cleanupOpened = (opened: AgentExecutionRunRuntime | null): void => {
+            const cleanupOpened = (opened: NativeRun | null): void => {
                 if (!opened) return;
-                void Promise.resolve().then(() => opened.dispose()).catch(() => undefined);
+                void Promise.resolve().then(() => opened.runtime.dispose()).catch(() => undefined);
             };
             if (nativeRuntime) {
                 cleanupOpened(nativeRuntime);
@@ -1414,6 +1640,9 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                     services: executionContext.services,
                     signal: executionContext.signal,
                     readSessionRuntime: () => sourceSession,
+                    ...(params.options.actionRequestAttributionV1 ? {
+                        actionRequestAttributionV1: materializeActionRequestAttributionV1(params.options.actionRequestAttributionV1),
+                    } : {}),
                 });
                 const readBoundaryError = (): Error | null => {
                     if (!params.lease.isCurrent()) {
@@ -1503,7 +1732,9 @@ export function createNativeAgentSessionExecutionRunHostRuntime(params: Readonly
                         ...(sessionContext.usagePublisher || params.options.start?.observeWorkflowUsage || sessionContext.observeSkillUse ? {
                             observeSessionUsage: (event: Extract<AgentSessionRuntimeEvent, { kind: 'usage-observed' | 'skill-usage' }>) => {
                                 if (event.kind === 'skill-usage') {
-                                    if (!readBoundaryError()) void sessionContext.observeSkillUse?.(event).catch(() => undefined);
+                                    if (!readBoundaryError() && sourceSession?.skillsDelivered !== false) {
+                                        void sessionContext.observeSkillUse?.(event).catch(() => undefined);
+                                    }
                                     return;
                                 }
                                 const publisher = sessionContext.usagePublisher;
@@ -1765,7 +1996,8 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                 });
                 unsubscribeEvents = operations.subscribeRuntimeEvents((event) => {
                     if ('type' in event) return;
-                    if (event.kind === 'skill-usage' && !disposed && !signal.aborted && params.lease.isCurrent()) {
+                    if (event.kind === 'skill-usage' && !disposed && !signal.aborted && params.lease.isCurrent()
+                        && sourceSession?.skillsDelivered !== false) {
                         void sessionContext.observeSkillUse?.(event).catch(() => undefined);
                     }
                     for (const listener of runtimeEventListeners) listener(event);
@@ -1921,6 +2153,8 @@ export function createNativeAgentSessionInteractionHostRuntime(params: Readonly<
                             ...(params.options.causalPermissionAuthority
                                 ? { causalPermissionAuthority: params.options.causalPermissionAuthority }
                                 : {}),
+                            ...(params.options.actionRequestAttributionV1
+                                ? { actionRequestAttributionV1: params.options.actionRequestAttributionV1 } : {}),
                         });
                     } catch (error) {
                         throw pendingTurnAdmissionFailure ?? error;

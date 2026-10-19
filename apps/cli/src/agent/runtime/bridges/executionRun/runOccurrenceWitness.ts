@@ -3,6 +3,7 @@ import type { ExecutionRunInputTurnV1 } from '@happier-dev/protocol';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type {
     ExecutionRunController,
+    ExecutionRunBackendController,
     ExecutionRunControllerOccurrenceV1,
 } from '@/agent/executionRuns/controllers/types';
 
@@ -62,6 +63,11 @@ export type ExecutionRunInputTurnsProjectionV1 = Readonly<{
     last?: ExecutionRunInputTurnV1;
 }>;
 
+export function projectExecutionRunInputTurn({ committedResultLocalId: _localId, ...turn }:
+    NonNullable<ExecutionRunBackendController['currentInputTurn']>): ExecutionRunInputTurnV1 {
+    return turn;
+}
+
 /**
  * The one exact-input observation every reader shares: public state, the
  * blocking exact-input wait and stop's final witness capture.
@@ -70,7 +76,8 @@ export type ExecutionRunInputTurnsProjectionV1 = Readonly<{
  * occurrence that labels it — the canonical occurrence witness for a
  * Session-owned retained Run, or the detached/bounded controller's own
  * exact-result occurrence. Without a live labelled controller the Run's
- * retained `inputTurns` stands.
+ * retained `inputTurns` stands. The controller identity also labels a Run with
+ * no exact-input turn; retaining that identity does not retain live authority.
  */
 export function projectExecutionRunInputTurns(params: Readonly<{
     runId: string;
@@ -79,14 +86,15 @@ export function projectExecutionRunInputTurns(params: Readonly<{
     reader: ExecutionRunOccurrenceWitnessReaderV1;
 }>): ExecutionRunInputTurnsProjectionV1 | undefined {
     const controller = params.controller;
-    if (controller?.kind !== 'backend') return params.retained;
+    if (!controller) return params.retained;
     const occurrenceId = params.reader.readCurrentRunOccurrence(params.runId)?.occurrenceId
-        ?? controller.inputTurnOccurrenceId;
+        ?? (controller.kind === 'backend' ? controller.inputTurnOccurrenceId : undefined)
+        ?? controller.controllerOccurrenceId;
     if (!occurrenceId) return params.retained;
     return {
         occurrenceId,
-        ...(controller.currentInputTurn ? { current: controller.currentInputTurn } : {}),
-        ...(controller.lastInputTurn ? { last: controller.lastInputTurn } : {}),
+        ...(controller.kind === 'backend' && controller.currentInputTurn ? { current: projectExecutionRunInputTurn(controller.currentInputTurn) } : {}),
+        ...(controller.kind === 'backend' && controller.lastInputTurn ? { last: projectExecutionRunInputTurn(controller.lastInputTurn) } : {}),
     };
 }
 

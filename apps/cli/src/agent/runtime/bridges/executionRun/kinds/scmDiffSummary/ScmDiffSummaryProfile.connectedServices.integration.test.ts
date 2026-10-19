@@ -10,6 +10,8 @@ import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSu
 import { prepareReviewWalkthroughTurn } from '@/agent/executionRuns/profiles/review/reviewWalkthroughTurn';
 import { buildExecutionRunProfileStartParams } from '@/agent/runtime/bridges/executionRun/profileStart';
 import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
+import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
+import { publishExecutionRunTurn } from '@/agent/runtime/bridges/executionRun/publishExecutionRunTurn';
 import { captureScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { withTempDir } from '@/testkit/fs/tempDir';
 
@@ -20,6 +22,31 @@ const connectedRoute: ConnectedServiceBindingsV2 = { v: 2, bindingsByServiceId: 
 } };
 
 describe('saved SCM generator credential routing', () => {
+  it('persists a late-resolved route through the live Run publisher', async () => {
+    await withTempDir('happier-scm-live-route-', async cwd => {
+      execFileSync('git', ['init', '-q'], { cwd });
+      const captured = await captureScmComparison({ cwd, source: { kind: 'workingTree' } });
+      const request = {
+        backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, intent: 'scm_diff_summary' as const,
+        permissionMode: 'read_only', retentionPolicy: 'resumable' as const, runClass: 'long_lived' as const, ioMode: 'streaming' as const,
+        intentInput: { cwd, source: captured.comparison.source, comparisonId: captured.comparison.id, outputs: ['summary'] },
+      };
+      const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
+      const run: ExecutionRunState = {
+        ...request, sessionId: null, runId: 'late-route-run', callId: 'call', sidechainId: 'sidechain', depth: 0,
+        backendId: 'claude', instructions: String(prepared?.instructions ?? ''), intentInput: prepared?.intentInput,
+        startedAtMs: 1, status: 'running', launch: { connectedServicesSelection: connectedRoute },
+      };
+      // Only native controller identity and transcript transport are external boundaries.
+      const controller = { kind: 'backend', cancelled: false } as ExecutionRunBackendController;
+      const runs = new Map([[run.runId, run]]);
+      await publishExecutionRunTurn({ runId: run.runId, turnId: '', rawText: '', started: true, finishedAtMs: 1,
+        controller, controllers: new Map([[run.runId, controller]]), runs, parentProvider: 'claude', sendAcp: async () => {} });
+      const output = ScmDiffSummaryGenerateOutputSchema.parse(runs.get(run.runId)?.latestToolResult);
+      const saved = ScmDiffSummaryResultResponseSchema.parse(await scmDiffSummaryResultStore.read({ cwd, resultId: output.resultId! }));
+      expect(saved).toMatchObject({ success: true, result: { generator: { connectedServices: connectedRoute } } });
+    });
+  });
   it.each([connectedRoute, null])('persists the admitted route through profile preparation and the saved-result reader (%j)', async connectedServices => {
     await withTempDir('happier-scm-route-', async cwd => {
       execFileSync('git', ['init', '-q'], { cwd });

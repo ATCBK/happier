@@ -4,7 +4,7 @@ import type { ExecutionRunController } from '@/agent/executionRuns/controllers/t
 import type { FinishExecutionRun } from './executionRunFinishRun';
 import { settleExecutionRunController } from './settleExecutionRunController';
 import { readExecutionRunControllerHostBarrier } from '@/agent/executionRuns/controllers/failureSignal';
-import { createExecutionRunOccurrenceWitnessRegistry, projectExecutionRunInputTurns } from './runOccurrenceWitness';
+import { createExecutionRunOccurrenceWitnessRegistry, projectExecutionRunInputTurn, projectExecutionRunInputTurns } from './runOccurrenceWitness';
 
 export async function stopExecutionRun(args: Readonly<{
   runId: string;
@@ -39,7 +39,7 @@ export async function stopExecutionRun(args: Readonly<{
       if (occurrenceId) {
         args.runs.set(args.runId, {
           ...run,
-          inputTurns: { occurrenceId, last: ctrl.lastInputTurn },
+          inputTurns: { occurrenceId, last: projectExecutionRunInputTurn(ctrl.lastInputTurn) },
         });
       }
     }

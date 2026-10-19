@@ -12,8 +12,17 @@ it.each(['finite', 'retained'] as const)('records delivered skill use from a %s 
         items: [{ name: 'guide', skillId: 'library-guide', digest: `sha256:${'a'.repeat(64)}` }] };
     const account = { accountId: 'parent-account', serverHttpBaseUrl: 'https://home.example.test' };
     let publish: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    let admittedTurnId: string | undefined;
+    let sequence = 0;
     const runtime: AgentRuntime = { sessions: { async open() { return {
-        send: async () => ({ status: 'admitted' as const }),
+        send: async request => {
+            admittedTurnId = request.delivery.turnId;
+            publish?.({ kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery,
+                sequence: ++sequence, sessionId: 'session-parent', emittedAtMs: sequence });
+            publish?.({ kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host',
+                sequence: ++sequence, sessionId: 'session-parent', emittedAtMs: sequence });
+            return { status: 'admitted' as const };
+        },
         cancel: async () => ({ status: 'notRunning' as const }),
         watch(listener) { publish = listener; return { dispose() { publish = undefined; } }; },
         dispose: async () => {},
@@ -39,12 +48,14 @@ it.each(['finite', 'retained'] as const)('records delivered skill use from a %s 
             sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: true } });
     try {
         await host.provisionRuntime({ initialPrompt: 'Use the guide' });
-        const event = AgentSessionRuntimeEventSchema.parse({ kind: 'skill-usage', sequence: 2,
-            sessionId: 'session-parent', emittedAtMs: 1, turnId: mode === 'finite' ? 'usage-run-turn-1' : 'retained-turn',
+        if (!admittedTurnId) throw new Error('Expected an admitted native turn');
+        const event = AgentSessionRuntimeEventSchema.parse({ kind: 'skill-usage', sequence: ++sequence,
+            sessionId: 'session-parent', emittedAtMs: sequence, turnId: admittedTurnId,
             skills: [{ name: 'guide', path: '/private/run/skills/guide/SKILL.md' }] });
+        if (event.kind !== 'skill-usage') throw new Error('Expected skill usage fixture');
         publish?.(event);
         await vi.waitFor(() => expect(recorded).toHaveBeenCalledWith({ skillIds: ['library-guide'], account }));
-        publish?.({ ...event, sequence: 3, skills: [{ name: 'guide', path: '/native/guide/SKILL.md' }] });
+        publish?.({ ...event, sequence: ++sequence, skills: [{ name: 'guide', path: '/native/guide/SKILL.md' }] });
         expect(recorded).toHaveBeenCalledTimes(1);
     } finally {
         await host.dispose(); recorded.mockRestore();

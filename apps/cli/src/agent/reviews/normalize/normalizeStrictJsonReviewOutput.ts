@@ -18,6 +18,11 @@ function parseModelFinding(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ReviewFindingSchema.safeParse(value);
   // Persisted references are attached only by the host ReviewComment owner.
   const { comment: _modelComment, ...finding } = value as Record<string, unknown>;
+  // Models use an empty patch to report that no replacement was proposed.
+  if (finding.patch === '') delete finding.patch;
+  for (const [key, schema] of Object.entries(ReviewFindingSchema.shape)) {
+    if (finding[key] === null && schema.safeParse(undefined).success) delete finding[key];
+  }
   return ReviewFindingSchema.safeParse(finding);
 }
 

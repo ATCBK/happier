@@ -60,7 +60,7 @@ export function createExecutionRunTranscriptProjection<TRest extends unknown[], 
     enqueueAgentMessageCommitted?: ExecutionRunSidechainEnqueue<TRest, TResult>;
   }>;
 }>): Readonly<{ enqueueAgentMessageCommitted?: ExecutionRunSidechainEnqueue<TRest, TResult> }> {
-  const enqueue = args.session.enqueueAgentMessageCommitted;
+  const enqueue = args.session.enqueueAgentMessageCommitted?.bind(args.session);
   if (!enqueue) return Object.freeze({});
   return Object.freeze({
     enqueueAgentMessageCommitted(provider: ACPProvider, body: ACPMessageData, ...rest: TRest) {
@@ -184,6 +184,7 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
   let permissionCapability: ExecutionRunPermissionCapability = args.ctrl.backend.permissionCapability ?? 'static';
   let outputTurnEpoch = args.ctrl.turnEpoch;
   let currentMessageId: string | null = null;
+  let hasAnonymousDraft = false;
   let completedAssistantPrefix = '';
   let completedStreamPrefix = '';
 
@@ -447,10 +448,14 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
     if (outputTurnEpoch !== args.ctrl.turnEpoch) {
       outputTurnEpoch = args.ctrl.turnEpoch;
       currentMessageId = null;
+      hasAnonymousDraft = false;
       completedAssistantPrefix = '';
       completedStreamPrefix = '';
     }
-    const startsMessage = Boolean(msg.messageId && msg.messageId !== currentMessageId);
+    // Some native codecs learn the stable message id only at commit. That
+    // commit replaces the current anonymous draft; it does not start a row.
+    const startsMessage = Boolean(msg.messageId && msg.messageId !== currentMessageId && !hasAnonymousDraft)
+      || (!msg.messageId && typeof msg.fullText !== 'string' && currentMessageId !== null);
     const prefix = startsMessage ? args.ctrl.buffer : completedAssistantPrefix;
     const nextFullText = typeof msg.fullText === 'string'
       ? (msg.messageId ? prefix + msg.fullText : msg.fullText)
@@ -464,10 +469,17 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
       args.ctrl.streamWriter?.flushAll({ reason: 'tool-call-boundary' });
       completedStreamPrefix = args.ctrl.sidechainStreamBuffer;
       completedAssistantPrefix = prefix;
-      currentMessageId = msg.messageId ?? null;
-    } else if (!msg.messageId && typeof msg.fullText === 'string') {
+    }
+    if (msg.messageId) {
+      currentMessageId = msg.messageId;
+      hasAnonymousDraft = false;
+    } else if (typeof msg.fullText === 'string') {
       currentMessageId = null;
       completedAssistantPrefix = '';
+      hasAnonymousDraft = false;
+    } else {
+      currentMessageId = null;
+      hasAnonymousDraft = true;
     }
     args.ctrl.buffer = nextFullText;
 
@@ -498,6 +510,7 @@ export function createExecutionRunControllerMessageHandler(args: Readonly<{
     args.onModelOutput?.();
   };
   return (message) => {
+    if (args.ctrl.delegatedTurn) return;
     const acceptance = args.ctrl.pendingInputAcceptance;
     if (!acceptance) {
       publishMessage(message);
