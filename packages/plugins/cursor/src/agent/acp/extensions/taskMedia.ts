@@ -1,4 +1,4 @@
-import type { ZodSafeParseResult } from 'zod';
+import type { z as zodMiniCore0 } from 'zod/mini';
 
 import {
   cursorGenerateImageNotificationSchema,
@@ -9,12 +9,12 @@ import {
 
 export function parseCursorTaskRequest(
   value: unknown,
-): ZodSafeParseResult<CursorTaskNotification> {
+): zodMiniCore0.core.util.SafeParseResult<CursorTaskNotification> {
   return cursorTaskNotificationSchema.safeParse(value);
 }
 
 export function parseCursorGeneratedMedia(
   value: unknown,
-): ZodSafeParseResult<CursorGenerateImageNotification> {
+): zodMiniCore0.core.util.SafeParseResult<CursorGenerateImageNotification> {
   return cursorGenerateImageNotificationSchema.safeParse(value);
 }
