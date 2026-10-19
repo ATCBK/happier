@@ -240,6 +240,13 @@ _.env.pipeline.production.local
 /qa-shots/
 /logs/
 /isolate-*-v8.log
+/apps/stack/isolate-*-v8.log
+
+# Browser QA exports, finite compiler probes and hook-source backups
+/apps/ui/output/playwright/
+/apps/ui/tsconfig.*.tmp.json
+/apps/cli/tsconfig.*.tmp.json
+/apps/ui/sources/hooks/server/*.orig
 
 # Mis-rooted browser captures and one-off local probes
 /--full
