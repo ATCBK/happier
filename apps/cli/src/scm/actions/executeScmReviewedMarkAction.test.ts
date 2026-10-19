@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScmComparison } from '@happier-dev/protocol/scm';
-import { createAccountScopedCryptoMaterialSnapshotV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol';
+import { createAccountScopedCryptoMaterialSnapshotV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1, deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol';
 import { encrypt, encodeBase64, decodeBase64, decryptResult } from '@/api/encryption';
 import tweetnacl from 'tweetnacl';
 import { createCliScmReviewedMarkAction, clearCliScmReviewedMarks } from './executeScmReviewedMarkAction';
@@ -76,7 +76,7 @@ describe('explicit CLI personal reviewed Action', () => {
         record: { comparisonId: 'basis', reviewedChangeRefs: ['exact'] } });
     expect(retainedRecord).toBeDefined();
   });
-  it.each(['legacy', 'dataKey'] as const)('writes and opens marks with the actual %s Account codec', async type => {
+  it.each(['legacy', 'dataKey'] as const)('writes data-key-readable marks from actual %s Account credentials', async type => {
     const key = new Uint8Array(32).fill(7);
     const encryption = type === 'legacy' ? { type, secret: key } : { type, machineKey: key, publicKey: tweetnacl.box.keyPair.fromSecretKey(key).publicKey };
     const snapshot = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
@@ -90,7 +90,7 @@ describe('explicit CLI personal reviewed Action', () => {
     await expect(createCliScmReviewedMarkAction({ credentials: { token: 'token', encryption }, serverBaseUrl: 'https://home',
       resolveAuthorizationHeaders, comparison, changeRefs: ['exact'], reviewed: true })).resolves.toMatchObject({ success: true });
     const encoded = network.post.mock.calls[0][1].mutations[0].value;
-    expect(decryptResult(key, type, decodeBase64(encoded))).toEqual({ status: 'authenticated',
+    expect(decryptResult(type === 'legacy' ? deriveAccountMachineKeyFromRecoverySecret(key) : key, 'dataKey', decodeBase64(encoded))).toEqual({ status: 'authenticated',
       value: { v: 1, comparisonId: 'basis', reviewedChangeRefs: ['exact'] } });
   });
 });
