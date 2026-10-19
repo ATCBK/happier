@@ -228,7 +228,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...happierPageTextMetrics('sectionTitle'),
         color: theme.colors.text.primary,
     },
-    cardTopMark: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
+    // The card's own region, laid over it without drawing or taking input: a real rectangle for Post a snapshot to open from
+    // (the popover measurer rejects zero-size anchors).
+    cardRegion: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
     provenance: {
         ...Typography.default(),
         ...happierPageTextMetrics('meta'),
@@ -431,12 +433,12 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         recordRevision={props.item.revision} testID={`${testID}.save.widget`} /> : null,
         };
     }, [props.canEdit, props.density, props.item.itemId, props.item.revision, props.sessionId, readyItem, title, widgetDescriptor, appRuntime, boardSurface.scope, testID, itemMark]);
-    const cardTopRef = React.useRef<View>(null);
+    const cardRegionRef = React.useRef<View>(null);
     const snapshotCard = React.useMemo(() => ({
-        anchorRef: cardTopRef,
+        anchorRef: cardRegionRef,
         // Web scrolls the card to the top of the pane so the panel opens downward over its own card.
         reveal: () => {
-            const node: unknown = cardTopRef.current;
+            const node: unknown = cardRegionRef.current;
             if (Platform.OS === 'web' && typeof HTMLElement !== 'undefined' && node instanceof HTMLElement) node.scrollIntoView({ block: 'start' });
         },
     }), []);
@@ -847,8 +849,8 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
 
     return (
         <View ref={entityDrag.ref} onLayout={entityDrag.onLayout} collapsable={false}>
-            {/* A zero-height mark at the card's top edge: Post a snapshot opens on its own card from here. */}
-            <View ref={cardTopRef} pointerEvents="none" style={styles.cardTopMark} />
+            {/* The card's own region: Post a snapshot opens on its own card from here. */}
+            <View ref={cardRegionRef} testID={`${testID}-card-region`} pointerEvents="none" style={styles.cardRegion} />
             <SessionSurfaceEntityTargetFeedback drag={entityDrag} testID={testID} />
             {inputs.popover}
             {definitionFlows.panel}
