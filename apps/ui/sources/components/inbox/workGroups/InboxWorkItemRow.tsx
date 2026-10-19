@@ -21,7 +21,7 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { InboxWorkRow } from '../InboxWorkRow';
 import { InboxRelativeTime } from '../InboxRelativeTime';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
-import { createWorkflowInvocationRoute, createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveWorkflowProblemPresentation } from '@/components/workflows/presentation/workflowProblemPresentation';
@@ -34,10 +34,12 @@ import { getSessionStatus } from '@/utils/sessions/sessionUtils';
 import { resolveWorkStatusTone, type WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
 import { readInboxSessionTitle } from '@/components/inbox/sessionAttention/inboxSessionPrivacy';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
+import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { ApprovalInboxCard } from '@/components/inbox/cards/ApprovalInboxCard';
 import { formatAutomationRunCauseLabel, formatAutomationRunStateLabel } from '@/components/automations/list/automationListFormatting';
 import { useAutomation } from '@/sync/domains/state/storage';
-import { readInboxApprovalServerId } from '../inboxItemFocus';
+import { readInboxApprovalServerId, resolveInboxItemPageRoute } from '../inboxItemFocus';
 
 import type { InboxItemFocus } from '../inboxItemFocus';
 import { InboxSessionRowMenu } from './InboxSessionRowMenu';
@@ -57,6 +59,8 @@ export function presentInboxSessionStatus(session: Session, nowMs: number): Work
 }
 
 
+
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 
 function sessionServerId(session: Session): string | null {
     return session.serverId ?? null;
@@ -94,7 +98,7 @@ function InboxWorkflowRunRow(props: Readonly<{
             const focus: InboxItemFocus = { kind: 'workflow_run', serverId: lifetime.scope.serverId, id: item.runId,
                 ...(invocationId ? { invocationId } : {}) };
             if (props.onSelectItem) props.onSelectItem(focus);
-            else props.navigate(invocationId ? createWorkflowInvocationRoute(item.runId, invocationId) : createWorkflowRunRoute(item.runId));
+            else props.navigate(resolveInboxItemPageRoute(focus));
         } catch (error) {
             if (!controller.signal.aborted && lifetime.isCurrent()) {
                 const problem = resolveWorkflowProblemPresentation(error);
@@ -191,6 +195,12 @@ type RowProps = Readonly<{
 export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowProps) {
     const { theme } = useUnistyles();
     const { item } = props;
+    // The Session this row shows is demanded like a visible list row: an undecided one is not "locked".
+    const demanded = item.kind === 'session'
+        ? { sessionId: item.entry.candidate.session?.id, serverId: item.entry.candidate.address?.serverId ?? item.entry.candidate.serverId }
+        : item.kind === 'stalled' ? { sessionId: item.session.id, serverId: sessionServerId(item.session) } : null;
+    const demandedAddress = normalizeSessionAddress(demanded?.serverId, demanded?.sessionId);
+    useSessionContentDemand(demandedAddress ? [demandedAddress] : NO_SESSION_ADDRESSES, { tag: 'inbox.hydrateSessionRow', hydrate: 'unsettled' });
     const nowMs = Date.now();
     const page = props.presentation === 'screen';
     // Phones keep only a small control right of a label (lab `phone-P4`); the row press opens.

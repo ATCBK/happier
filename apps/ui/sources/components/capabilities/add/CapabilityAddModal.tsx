@@ -9,7 +9,7 @@ import {
   type CollectionDetailRenderContext,
 } from '@happier-dev/plugin-ui/components';
 
-import { HappierPressable, useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
+import { HappierCollectionRestingRowsContext, HappierPressable, useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -378,40 +378,38 @@ export function CapabilityAddModalBody<Item>(
     </View>
   );
 
-  // The resting list sits on the page's own edges and the dialog is its page: its start takes the tools band's gutter,
-  // like the lab's list, while the loading rows and empty states (which draw their own insets) and the list beside
-  // details (a table with its own) run edge to edge.
-  const gutter = openKey === null && catalog.items.length > 0;
-
   return (
     <CoreCollectionScope>
-      <View style={[styles.fill, gutter ? styles.restingGutter : null]}>
-        <Collection<Item>
-          model={model}
-          anatomy={catalog.anatomy}
-          accessibilityLabel={config.title}
-          presentation="list"
-          detail="auto"
-          renderDetail={renderDetail}
-          minListWidth={CATALOG_SURFACE_LIST_ROLE.minListWidthPx}
-          minDetailWidth={CATALOG_SURFACE_LIST_ROLE.minDetailWidthPx}
-          preferredListRatio={CATALOG_SURFACE_LIST_ROLE.preferredListRatio}
-          loading={catalog.loading}
-          empty={onlyFailures ? failureLines : catalog.empty}
-          search={{
-            label: t('capabilities.add.searchLabel'),
-            value: catalog.query,
-            onValueChange: catalog.onQueryChange,
-            placeholder: catalog.searchPlaceholder,
-            width: 'fill',
-            testID: `${config.testID}:search`,
-          }}
-          header={(slots) => <CatalogToolsBand open={openKey !== null} gutter={gutter}>{tools(slots.search)}{onlyFailures ? null : failureLines}</CatalogToolsBand>}
-          testID={`${config.testID}:collection`}
-          listTestID={`${config.testID}:list`}
-          detailTestID={`${config.testID}:detail`}
-        />
-      </View>
+      {/* The dialog's list keeps one rhythm: the same ruled rows and insets at rest, beside the details and loading. */}
+      <HappierCollectionRestingRowsContext.Provider value="ruled">
+        <View style={styles.fill}>
+          <Collection<Item>
+            model={model}
+            anatomy={catalog.anatomy}
+            accessibilityLabel={config.title}
+            presentation="list"
+            detail="auto"
+            renderDetail={renderDetail}
+            minListWidth={CATALOG_SURFACE_LIST_ROLE.minListWidthPx}
+            minDetailWidth={CATALOG_SURFACE_LIST_ROLE.minDetailWidthPx}
+            preferredListRatio={CATALOG_SURFACE_LIST_ROLE.preferredListRatio}
+            loading={catalog.loading}
+            empty={onlyFailures ? failureLines : catalog.empty}
+            search={{
+              label: t('capabilities.add.searchLabel'),
+              value: catalog.query,
+              onValueChange: catalog.onQueryChange,
+              placeholder: catalog.searchPlaceholder,
+              width: 'fill',
+              testID: `${config.testID}:search`,
+            }}
+            header={(slots) => <CatalogToolsBand open={openKey !== null}>{tools(slots.search)}{onlyFailures ? null : failureLines}</CatalogToolsBand>}
+            testID={`${config.testID}:collection`}
+            listTestID={`${config.testID}:list`}
+            detailTestID={`${config.testID}:detail`}
+          />
+        </View>
+      </HappierCollectionRestingRowsContext.Provider>
       {catalog.footer === undefined || openKey !== null ? null : (
         <View style={styles.listFooter} testID={`${config.testID}:list-footer`}>{catalog.footer}</View>
       )}
@@ -477,11 +475,10 @@ function CapabilityAddBackLink(props: Readonly<{ label: string; onPress: () => v
 }
 
 /** The tools band; on a phone the pushed details are the page, so the band steps aside while they show. */
-function CatalogToolsBand(props: Readonly<{ open: boolean; gutter: boolean; children: React.ReactNode }>): React.ReactElement | null {
+function CatalogToolsBand(props: Readonly<{ open: boolean; children: React.ReactNode }>): React.ReactElement | null {
     const layout = useHappierCollectionLayout();
     if (props.open && layout?.mode === 'stacked') return null;
-    // Inside the resting gutter the dialog's own padding already keeps the band's start edge.
-    return <View style={[styles.toolsBand, props.gutter ? styles.toolsBandInGutter : null]}>{props.children}</View>;
+    return <View style={styles.toolsBand}>{props.children}</View>;
 }
 
 /**
@@ -653,9 +650,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.space.s24,
     paddingBottom: theme.space.s12,
   },
-  toolsBandInGutter: { paddingLeft: 0 },
-  // The resting rows already keep the dialog's end edge (their action's own inset); only their start needs the gutter.
-  restingGutter: { paddingLeft: theme.space.s24 },
   tools: {
     flexDirection: 'row',
     alignItems: 'center',

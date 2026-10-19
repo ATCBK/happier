@@ -126,22 +126,25 @@ function sameScope(left: ServerAccountScope, right: ServerAccountScope): boolean
 }
 
 /**
- * An explicit "Ask <person>" from elsewhere in the app: fills an empty new Discussion with an addressed
- * request the person still reads and sends. Words already in that draft are never replaced.
+ * An explicit "Ask <someone>" from elsewhere in the app: fills an empty draft with an addressed request
+ * the person still reads and sends — a new Discussion (with its title), or a reply in an existing one.
+ * Words already in that draft are never replaced.
  */
-export function seedNewDiscussionDraft(input: Readonly<{
+export function seedDiscussionDraft(input: Readonly<{
     scope: ServerAccountScope;
-    title: string;
+    address?: DiscussionDraftAddress;
+    title?: string;
     text: string;
     mentions: readonly DiscussionMentionSpan[];
 }>): boolean {
-    const address: DiscussionDraftAddress = { kind: 'newDiscussion' };
+    const address: DiscussionDraftAddress = input.address ?? { kind: 'newDiscussion' };
     const current = readDiscussionDraftFields(input.scope, address);
     if (current.text.trim() || current.title.trim()) return false;
     writeDiscussionSessionDraft({
         scope: input.scope,
         address,
-        patch: { title: input.title, text: input.text, mentions: mentionValues(parseDiscussionMentionSpans(input.mentions, input.text)) },
+        patch: { ...(address.kind === 'newDiscussion' && input.title !== undefined ? { title: input.title } : {}),
+            text: input.text, mentions: mentionValues(parseDiscussionMentionSpans(input.mentions, input.text)) },
     });
     return true;
 }

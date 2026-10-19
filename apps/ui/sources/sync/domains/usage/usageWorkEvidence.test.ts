@@ -154,12 +154,18 @@ describe('opened Session usage work evidence', () => {
                 permissions: null, inputs: null,
             });
         }
-        expect(compose(projectSessionUsageWorkEvidence({ ...session,
+        const runtimeEmpty = projectSessionUsageWorkEvidence({ ...session,
             agentState: AgentStateSchema.parse({ requests: {}, completedRequests: {} }),
-        }, []))).toMatchObject({ permissions: { requestCount: 0, pairedDecisionCount: 0 }, inputs: { acceptedCount: 0, steeringCount: 0 } });
-        expect(compose(projectSessionUsageWorkEvidence({ ...session, agentState: null,
+        }, []);
+        expect(runtimeEmpty.permissions).toEqual([]);
+        expect(compose(runtimeEmpty)).toMatchObject({ permissions: null, inputs: { acceptedCount: 0, steeringCount: 0 } });
+        const confirmationEmpty = projectSessionUsageWorkEvidence({ ...session, agentState: null,
             metadata: { actionConfirmationsV1: { v: 1, requests: {}, completedRequests: {} } },
-        }))).toMatchObject({ permissions: { requestCount: 0, pairedDecisionCount: 0 }, inputs: null });
+        });
+        expect(confirmationEmpty.permissions).toEqual([]);
+        // An observed empty map survives projection, but partial history cannot
+        // establish zero permission requests over the whole selected period.
+        expect(compose(confirmationEmpty)).toMatchObject({ permissions: null, inputs: null });
     });
     it('admits only the current equal-Account opened subset and applies witnessed filters without broadening unknown dimensions', () => {
         const scope = { serverId: 'home-a', accountId: 'account-a' };

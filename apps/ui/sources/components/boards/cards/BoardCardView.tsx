@@ -13,6 +13,8 @@ import { Typography } from '@/constants/Typography';
 import { shadowLevelStyle } from '@/shadowElevation';
 import { getStorage } from '@/sync/domains/state/storage';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
+import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -52,6 +54,8 @@ function readBodyRefreshAtMs(body: BoardCardBody, nowMs: number): number | null 
         .filter((at): at is number => at !== null);
     return deadlines.length === 0 ? null : Math.min(...deadlines);
 }
+
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 
 /** The session's context line, read from its own row by this card only. */
 const SessionContext = React.memo(function SessionContext(props: Readonly<{ serverId: string; sessionId: string }>) {
@@ -136,6 +140,9 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
 }>) {
     const { theme } = useUnistyles();
     const { card } = props;
+    // A Session card names itself from encrypted content: it demands that content like a visible list row.
+    const sessionAddress = card.body.kind === 'session' ? normalizeSessionAddress(card.body.serverId, card.body.sessionId) : null;
+    useSessionContentDemand(sessionAddress ? [sessionAddress] : NO_SESSION_ADDRESSES, { tag: 'board.hydrateSessionCard', hydrate: 'unsettled' });
     const unavailable = card.availability !== 'ready';
     // The item is still arriving: the card holds its title's line with a skeleton rather than naming it unavailable.
     const loading = card.availability === 'not_loaded';

@@ -40,6 +40,7 @@ import {
 
 /** Below this width a row can't hold name · value · type · ⋯ side by side: rows become value + chevron. */
 const INLINE_MIN_WIDTH_PX = 440;
+const NEW_ROW_ID = '\u0000new';
 const MACHINE_VALUE_REGEX = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
 type RowType =
@@ -145,6 +146,11 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
   });
   const [width, setWidth] = React.useState<number | null>(null);
   const [pendingRow, setPendingRow] = React.useState(false);
+  const [typeWidths, setTypeWidths] = React.useState<Readonly<Record<string, number>>>({});
+  const onTypeWidth = React.useCallback(
+    (rowId: string, width: number) => setTypeWidths((current) => (current[rowId] === width ? current : { ...current, [rowId]: width })),
+    [],
+  );
   const inline = width === null || width >= INLINE_MIN_WIDTH_PX;
 
   const secretName = React.useCallback(
@@ -207,6 +213,12 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
     setWidth((current) => (current === next ? current : next));
   }, []);
 
+  const typeColumnWidth = Math.max(
+    0,
+    ...editor.rows.map((row) => typeWidths[row.key] ?? 0),
+    pendingRow ? (typeWidths[NEW_ROW_ID] ?? 0) : 0,
+  );
+
   const describe = (valueRef: ValueRefV1): string =>
     describeValueRef(valueRef, secretName);
 
@@ -229,6 +241,8 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
             scope={props.scope}
             declaredName={props.declaredNames === true}
             description={props.descriptions?.[row.key]}
+            typeColumnWidth={typeColumnWidth}
+            onTypeWidth={onTypeWidth}
             onSubmit={(key, valueRef) =>
               editor.submitEntry(row.key, key, valueRef)
             }
@@ -282,6 +296,8 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
           secretName={null}
           scope={props.scope}
           autoFocus
+          typeColumnWidth={typeColumnWidth}
+          onTypeWidth={onTypeWidth}
           onSubmit={(key, valueRef) => {
             const result = editor.submitEntry(null, key, valueRef);
             if (result.ok) setPendingRow(false);
@@ -335,12 +351,21 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
     declaredName?: boolean;
     /** What the declared name is for, quietly under the row. */
     description?: string;
+    /** The list's one source-column width (the widest source any row shows), so name, value and source line up down the list. */
+    typeColumnWidth: number;
+    onTypeWidth: (rowId: string, width: number) => void;
     onSubmit: (key: string, valueRef: ValueRefV1) => SubmitResult;
     onRemove: () => void;
     onEditInModal: () => void;
   }>,
 ) {
   const { theme } = useUnistyles();
+  const { onTypeWidth } = props;
+  const rowId = props.rowKey ?? NEW_ROW_ID;
+  const onTypeLayout = React.useCallback(
+    (event: LayoutChangeEvent) => onTypeWidth(rowId, Math.ceil(event.nativeEvent.layout.width)),
+    [onTypeWidth, rowId],
+  );
   const savedType = rowType(props.valueRef);
   const [type, setType] = React.useState<RowType>(savedType);
   const [name, setName] = React.useState(props.rowKey ?? '');
@@ -604,6 +629,8 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
         </View>
         {/* The source and ⋯ stay together at their own width: a row too narrow for them under the value wraps them below it, never truncating the chosen source. */}
         <View style={styles.trailing}>
+        <View style={[styles.typeCell, { minWidth: props.typeColumnWidth }]}>
+          <View style={styles.typeNatural} onLayout={onTypeLayout}>
           {special ? (
             <Text
               variant="meta"
@@ -620,6 +647,8 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
               onSelect={chooseType}
             />
           )}
+          </View>
+        </View>
           <DropdownMenu
             testID={`${props.testID}.more`}
             open={menuOpen}
@@ -705,6 +734,9 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
     gap: theme.space.s8,
   },
+  // Every row's source sits in one column as wide as the widest source (measured on the natural child, so it can shrink back).
+  typeCell: { flexShrink: 0, alignItems: 'flex-start' },
+  typeNatural: { flexShrink: 0 },
   typeFixed: {
     flexShrink: 0,
     paddingHorizontal: theme.space.s8,

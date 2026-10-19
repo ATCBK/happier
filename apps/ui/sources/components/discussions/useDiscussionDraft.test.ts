@@ -12,7 +12,7 @@ import {
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import type { DiscussionDraftSubmission } from '@/sync/ops/discussions/discussionRepository';
 
-import { seedNewDiscussionDraft, useDiscussionDraft } from './useDiscussionDraft';
+import { seedDiscussionDraft, useDiscussionDraft } from './useDiscussionDraft';
 
 const scope = { serverId: 'discussion-draft-home', accountId: 'discussion-draft-account' } as const;
 const newAddress = { kind: 'newDiscussion' } as const;
@@ -416,13 +416,13 @@ describe('useDiscussionDraft', () => {
     it('seeds an empty new Discussion with an addressed request, and never replaces words already there', async () => {
         const seed = { scope, title: 'Reading desk isn’t ready', text: '@Ana Its machine is offline.',
             mentions: [{ start: 0, end: 4, accountId: 'ana' }] } as const;
-        expect(seedNewDiscussionDraft(seed)).toBe(true);
+        expect(seedDiscussionDraft(seed)).toBe(true);
         const seeded = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
         expect(seeded.getCurrent()).toMatchObject({ title: seed.title, text: seed.text, mentions: seed.mentions });
         await seeded.unmount();
 
         writeDiscussionSessionDraft({ scope, address: newAddress, patch: { title: '', text: 'My own unsent words', mentions: [] } });
-        expect(seedNewDiscussionDraft(seed)).toBe(false);
+        expect(seedDiscussionDraft(seed)).toBe(false);
         const kept = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
         expect(kept.getCurrent().text).toBe('My own unsent words');
         await kept.unmount();

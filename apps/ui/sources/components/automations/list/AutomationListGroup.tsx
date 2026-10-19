@@ -11,6 +11,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Switch } from '@/components/ui/forms/Switch';
 import { navigateWithBlurOnWeb } from '@/utils/platform/deferOnWeb';
 import { createAdmittedWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { t } from '@/text';
 import {
     formatAutomationNextRun,
@@ -77,12 +78,13 @@ export const AutomationListGroup = React.memo((props: Props) => {
         targetType: AutomationDefinition['targetType'],
     ) => {
         if (!mutationsEnabled) return;
+        const lifetime = captureActiveServerAccountScopeLifetime();
         const admitted = await runNowController.runNow(automationId, targetType, {
             isInvocationCurrent: props.isInvocationCurrent,
         });
         // Only the server's declared correspondence opens a managed Run. A
         // legacy receipt keeps the incumbent acknowledgement-in-place behaviour.
-        const route = createAdmittedWorkflowRunRoute(admitted?.workflowRun);
+        const route = createAdmittedWorkflowRunRoute(admitted?.workflowRun, lifetime?.scope.serverId);
         if (route === null || !props.isInvocationCurrent()) return;
         navigateWithBlurOnWeb(() => router.push(route as never));
     }, [mutationsEnabled, props.isInvocationCurrent, router, runNowController]);

@@ -114,8 +114,16 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
             scene="inboxZero"
             title={t('capabilities.skillsUpdates.updates.nothingToChoose')}
             reason={t('capabilities.skillsUpdates.choose.nothingWaits')}
-            // Nothing to decide here, so the way back is a quiet button, not an invitation.
-            secondaryAction={{ label: t('capabilities.skills.allSkills'), onPress: home, testID: 'skills.choose.nothingWaits.back' }}
+            // Nothing to decide here, so the way back is a plain bordered button under the words, not an invitation.
+            actionFooter={
+              <RoundButton
+                testID="skills.choose.nothingWaits.back"
+                display="secondary"
+                title={t('capabilities.skills.allSkills')}
+                style={styles.backAction}
+                onPress={home}
+              />
+            }
           />
         ) : (
           <>
@@ -232,4 +240,6 @@ const styles = StyleSheet.create((theme) => ({
   barRow: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s16, paddingHorizontal: theme.space.s16 },
   count: { color: theme.colors.text.primary, fontVariant: ['tabular-nums'] },
   grow: { flex: 1 },
+  // The way back sits a step under the state's words.
+  backAction: { marginTop: theme.space.s16 },
 }));

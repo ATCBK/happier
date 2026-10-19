@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createAutomationRunFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -40,8 +40,12 @@ import type { InboxItemView } from './inboxItems';
 import { InboxWorkItemRow } from './workGroups/InboxWorkItemRow';
 import { Text } from '@/components/ui/text/Text';
 import { InboxWorkRow } from './InboxWorkRow';
+import { resolveInboxItemPageRoute } from './inboxItemFocus';
+import { readWorkflowRunTarget } from '@/sync/domains/workflows/workflowRunRoute';
 
 const routerPush = vi.hoisted(() => vi.fn());
+const viewport = vi.hoisted(() => ({ width: 1024 }));
+let heldInvocationId: string | null = null;
 const initialStorageState = storage.getState();
 
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
@@ -50,7 +54,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ View: 'View',
-        useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
+        useWindowDimensions: () => ({ width: viewport.width, height: 768, scale: 1, fontScale: 1 }),
     });
 });
 vi.mock('react-native-unistyles', async () => {
@@ -307,6 +311,8 @@ describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-
         expect(workflowRetry).not.toHaveBeenCalled();
     });
     beforeEach(async () => {
+        heldInvocationId = null;
+        viewport.width = 1024;
         storage.setState({ settings: { ...storage.getState().settings, sessionListIdentityDisplay: 'agentLogo' } });
         routerPush.mockClear();
         connection = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-a',
@@ -320,12 +326,48 @@ describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-
                 });
                 if (path === '/v3/automations/runs/workflow-storage') {
                     const operation = JSON.parse(String(init?.body)) as { operation: string };
-                    if (operation.operation === 'invocations.list') return Response.json({ invocations: [], parentRevision: 0 });
+                    if (operation.operation === 'invocations.list') return Response.json({ invocations: heldInvocationId ? [
+                        createWorkflowInvocationIndexFixture({ id: heldInvocationId, runId: 'library-run', lifecycle: 'waiting_for_review' }),
+                    ] : [], parentRevision: 0 });
                 }
                 return new Response('{}', { status: 404 });
             },
         });
         vi.useFakeTimers({ now: NOW, toFake: ['Date', 'setInterval', 'clearInterval'] });
+    });
+
+    it.each([false, true])('keeps the exact Run and Home through mobile and wide navigation (held=%s)', async (held) => {
+        const { InboxContent } = await import('./InboxContent');
+        heldInvocationId = held ? 'held/step' : null;
+        const model = createModel();
+        const hosted = { ...model, workflowAttention: { ...model.workflowAttention, serverId: 'server-a' } };
+        const routes: string[] = [];
+        for (const width of [390, 1440]) {
+            viewport.width = width;
+            const selected: InboxItemFocus[] = [];
+            const screen = await renderScreen(<InboxContent model={hosted} view="updates"
+                {...(width > 390 ? { onSelectItem: (focus: InboxItemFocus) => selected.push(focus) } : {})} />);
+            await screen.pressByTestIdAsync('inbox.run.library-run');
+            await vi.waitFor(() => expect(width === 390 ? routerPush.mock.calls.length : selected.length).toBeGreaterThan(0));
+            const route = width === 390 ? String(routerPush.mock.calls.at(-1)?.[0]) : resolveInboxItemPageRoute(selected[0]!);
+            routes.push(route);
+            const url = new URL(route, 'https://app.test');
+            expect(url.searchParams.get('serverId')).toBe('server-a');
+            expect(url.searchParams.get('invocationId')).toBe(heldInvocationId);
+            expect(readWorkflowRunTarget({ runId: decodeURIComponent(url.pathname.split('/').at(-1)!), ...Object.fromEntries(url.searchParams) }))
+                .toEqual({ kind: 'managed', runId: 'library-run' });
+            await screen.unmount();
+        }
+        expect(routes[0]).toBe(routes[1]);
+    });
+
+    it('does not rebind another Home\'s Inbox Run to the active Home', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const model = createModel();
+        const screen = await renderScreen(<InboxContent model={{ ...model,
+            workflowAttention: { ...model.workflowAttention, serverId: 'other-home' } }} view="updates" />);
+        await screen.pressByTestIdAsync('inbox.run.library-run');
+        expect(routerPush).not.toHaveBeenCalled();
     });
     afterEach(async () => {
         await standardCleanup();

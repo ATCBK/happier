@@ -29,6 +29,9 @@ import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachabi
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
+import { isSessionContentUnsettled } from '@/sync/domains/session/encryptedContentAvailability';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 
 import { useBoardAddSources, type BoardHomes } from '../model/useBoardContent';
 
@@ -198,6 +201,12 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const { rowsByServerId, machineLists, library, runs, loading } = useBoardAddSources(props.homes);
+    // The Sessions it offers are named from encrypted content: the undecided ones are demanded like list rows.
+    const undecidedSessions = React.useMemo(() => Object.entries(rowsByServerId).flatMap(([serverId, rows]) => (
+        Object.values(rows ?? {}).filter(row => typeof row.archivedAt !== 'number' && isSessionContentUnsettled(row))
+            .map((row): SessionAddress => ({ serverId, sessionId: row.id }))
+    )), [rowsByServerId]);
+    useSessionContentDemand(undecidedSessions, { tag: 'board.hydrateAddSessions', hydrate: 'unsettled' });
     const openingGroups = (['sessions', 'workflows', 'runs', 'machines'] as const).filter(group => loading[group]);
     const reachabilityRevision = useMachineReachabilityRevision();
     const machineScopeBindings = useServerCredentialAccountScopeBindings(Object.keys(machineLists));

@@ -137,6 +137,7 @@ function ProjectAttach(
         <RoundButton
           testID="save-memory-decision.attach"
           size="small"
+          display="secondary"
           disabled={!ready || busy}
           loading={busy}
           title={t('memoryContext.memory.sheetAttach', {

@@ -31,15 +31,21 @@ export function memoryDecisionTargetId(target: MemoryScopeTargetV1): string {
     : `project:${target.projectRef.serverId}:${target.projectRef.projectKey}`;
 }
 
-export function memoryDecisionTargetLabel(row: MemoryDecisionTarget): string {
-  if (row.target.scope === 'account')
-    return t('memoryContext.memory.sheetSaveToOnlyMe');
-  return (
-    row.label ??
-    (row.workspaceRef
-      ? resolveWorkspaceRefDisplayName(row.workspaceRef)
-      : row.target.projectRef.projectKey)
-  );
+function memoryDecisionBaseLabel(row: MemoryDecisionTarget): string {
+  if (row.target.scope === 'account') return t('memoryContext.memory.sheetSaveToOnlyMe');
+  return row.label ?? (row.workspaceRef ? resolveWorkspaceRefDisplayName(row.workspaceRef) : row.target.projectRef.projectKey);
+}
+
+/** Names for the offered places; Projects that share a name are told apart by the one workspace-label owner. */
+export function memoryDecisionTargetLabels(rows: readonly MemoryDecisionTarget[]): ReadonlyMap<string, string> {
+  const refs = rows.flatMap((row) => (row.workspaceRef ? [row.workspaceRef] : []));
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(memoryDecisionBaseLabel(row), (counts.get(memoryDecisionBaseLabel(row)) ?? 0) + 1);
+  return new Map(rows.map((row) => {
+    const base = memoryDecisionBaseLabel(row);
+    const label = (counts.get(base) ?? 0) > 1 && row.workspaceRef ? resolveWorkspaceRefDisplayName(row.workspaceRef, refs) : base;
+    return [memoryDecisionTargetId(row.target), label] as const;
+  }));
 }
 
 /** The destination the Action itself picks when nothing was chosen: which listed place that is, or null when unknown. */
@@ -77,7 +83,7 @@ function useSessionNaturalTarget(
         : rows.filter(
             (row) =>
               row.target.scope === 'project' &&
-              memoryDecisionTargetLabel(row) === name,
+              memoryDecisionBaseLabel(row) === name,
           );
     return {
       id: named.length === 1 ? memoryDecisionTargetId(named[0]!.target) : null,
@@ -138,13 +144,14 @@ function TargetChoice(
     },
     [selectTarget, targets],
   );
+  const labels = React.useMemo(() => memoryDecisionTargetLabels(targets), [targets]);
   const options = React.useMemo(
     () =>
       targets.map((row) => ({
         id: memoryDecisionTargetId(row.target),
-        label: memoryDecisionTargetLabel(row),
+        label: labels.get(memoryDecisionTargetId(row.target)) ?? memoryDecisionBaseLabel(row),
       })),
-    [targets],
+    [labels, targets],
   );
   return (
     <View testID="save-memory-decision.target" style={styles.target}>
@@ -177,6 +184,8 @@ function TargetChoice(
             active ? memoryDecisionTargetId(active.target) : undefined
           }
           onSelect={choose}
+          search
+          searchPlaceholder={t('common.search')}
           itemTrigger={{
             title: t('memoryContext.memory.sheetSaveTo'),
             itemProps: {
@@ -266,16 +275,10 @@ export function SaveMemoryDecisionTargetChooser(
   );
 }
 
-/** The place the sheet saves to, for the header's one-line subtitle; null while it is the Action's own default. */
+/** The chosen place's name for the header's one-line subtitle; null while it is the Action's own default. */
 export function memoryDecisionChosenLabel(model: Model): string | null {
-  const row = model.selectedTarget
-    ? (model.targets.find(
-        (candidate) =>
-          memoryDecisionTargetId(candidate.target) ===
-          memoryDecisionTargetId(model.selectedTarget!),
-      ) ?? null)
-    : null;
-  return row ? memoryDecisionTargetLabel(row) : null;
+  const { selectedTarget, targets } = model;
+  return selectedTarget ? (memoryDecisionTargetLabels(targets).get(memoryDecisionTargetId(selectedTarget)) ?? null) : null;
 }
 
 const styles = StyleSheet.create((theme) => ({
