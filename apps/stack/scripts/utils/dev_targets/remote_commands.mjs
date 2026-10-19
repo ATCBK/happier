@@ -1328,6 +1328,8 @@ const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
   'HAPPIER_WEBAPP_URL',
   'HAPPIER_SQLITE_BUSY_TIMEOUT_MS',
   'HAPPIER_SQLITE_CONNECTION_LIMIT',
+  // A Stack's Postgres pool budget (overrides DATABASE_URL connection_limit) belongs to its server too.
+  'HAPPIER_DB_CONNECTION_LIMIT',
   // The Stack's chosen server log level (resolved by server_env.mjs) applies wherever its server runs.
   'HAPPIER_STACK_SERVER_LOG_LEVEL',
   'HAPPIER_SERVER_LOG_LEVEL',
