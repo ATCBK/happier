@@ -10,6 +10,7 @@ import { buildWorkBoardArtifactHeaderV1 } from '../boards/workBoardArtifactV1.js
 import { buildWidgetDefinitionArtifactHeaderV1, readWidgetDefinitionArtifactV1 } from '../widgets/widgetDefinitionArtifactV1.js';
 import { WidgetDefinitionV1Schema } from '../widgets/widgetDefinitionV1.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
+import { ACCOUNT_NOTICE_ARTIFACT_KIND_V1, readAccountNoticeArtifactV1 } from '../activity/usageNoticeArtifactV1.js';
 
 type ArtifactSharedWriteContextV1 = Readonly<{ current: ArtifactSharingResourceV1; shared: boolean }>;
 
@@ -32,6 +33,13 @@ function requireSharedContent(header: Readonly<Record<string, unknown>>, body: A
 /** Generic key-holding writes consume the same authored projections as typed writes and restore. */
 export function prepareArtifactHeaderForBodyV1(header: Readonly<Record<string, unknown>>, body: ArtifactBodyV1 | null,
   context?: ArtifactSharedWriteContextV1): Readonly<Record<string, unknown>> {
+  if (header.kind === ACCOUNT_NOTICE_ARTIFACT_KIND_V1) {
+    // This kind owns a paired notice source, not workspace revision provenance.
+    const notice = readAccountNoticeArtifactV1({ header, body });
+    if (!notice) throw Object.assign(new Error('artifact_content_unavailable'), { code: 'content_unavailable' });
+    requireSharedContent(notice, body, context);
+    return notice;
+  }
   // Workspace identity is supplied separately by the host to private revision metadata.
   const { source: _source, ...publicHeader } = header;
   header = publicHeader;
@@ -64,6 +72,11 @@ export function prepareArtifactHeaderForRevisionV1(input: Readonly<{
   /** Actual audience admission from the key-holding Artifact owner, never header metadata. */
   shared?: boolean;
 }>): Readonly<Record<string, unknown>> {
+  if (input.header.kind === ACCOUNT_NOTICE_ARTIFACT_KIND_V1) {
+    return prepareArtifactHeaderForBodyV1(input.header, input.body, {
+      current: { artifactId: input.artifactId, header: input.header }, shared: input.shared === true,
+    });
+  }
   const { source: _source, ...publicHeader } = input.header;
   input = { ...input, header: publicHeader };
   const kind = input.header.kind;

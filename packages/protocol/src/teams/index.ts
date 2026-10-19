@@ -13,3 +13,5 @@ export * from './team.js';
 export * from './identity/index.js';
 export * from './directory/index.js';
 export * from './externalGroupBindings/index.js';
+export * from './resourceGrantAccessV1.js';
+export * from './resourceRecipientKeyPreparationV1.js';

@@ -12,6 +12,7 @@ type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; 
 export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params: Readonly<{
   options?: ArtifactListSelectionOptionsV1;
   readPage: (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>) => Promise<ArtifactListPage<T>>;
+  readBodies?: (items: readonly T[]) => Promise<readonly T[]>;
   encodeCursor: (item: T) => string;
 }>): Promise<Readonly<{ items: readonly T[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> {
   const options = params.options;
@@ -29,7 +30,7 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   let cursor: string | undefined;
   do {
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
-      ...(options.includeBody ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
+      ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     options.signal?.throwIfAborted();
     if (page.coverage === 'partial') coverage = 'partial';
     all.push(...page.items);
@@ -37,7 +38,11 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   } while (cursor);
   const search = options.search?.trim().toLocaleLowerCase();
   const title = (item: T) => typeof item.header.title === 'string' ? item.header.title : '';
-  const items = all.filter(item => (!options.kind || item.header.kind === options.kind)
+  const matching = all.filter(item => !options.kind || item.header.kind === options.kind);
+  // Open selected bodies before sorting/cursors so a fresh read keeps content and revisions aligned.
+  const selected = options.includeBody && params.readBodies ? await params.readBodies(matching) : matching;
+  options.signal?.throwIfAborted();
+  const items = selected.filter(item => (!options.kind || item.header.kind === options.kind)
     && (!search || title(item).toLocaleLowerCase().includes(search)));
   items.sort((left, right) => {
     const primary = options.sort === 'title_asc' ? title(left).localeCompare(title(right))

@@ -31,6 +31,27 @@ const JAVASCRIPT_MIMES = new Set(['text/javascript', 'application/javascript', '
 type Element = DefaultTreeAdapterTypes.Element;
 type ImportMap = Readonly<Record<string, string | null>>;
 
+// These native browser bindings are used only by the serialized guest below.
+// Keep their reflection-only types local so host compilers need no DOM globals.
+type NativeDomPrototype = Readonly<{ prototype: object }>;
+declare const Node: NativeDomPrototype;
+declare const Element: NativeDomPrototype;
+declare const HTMLTemplateElement: NativeDomPrototype;
+declare const Document: NativeDomPrototype;
+declare const Range: NativeDomPrototype;
+declare const DocumentFragment: NativeDomPrototype;
+declare const CharacterData: NativeDomPrototype;
+declare const DocumentType: NativeDomPrototype;
+declare const ShadowRoot: NativeDomPrototype;
+declare const NodeList: Readonly<{ prototype: { item(index: number): unknown } }>;
+declare const DOMParser: {
+  new(): object;
+  readonly prototype: { parseFromString(html: string, mimeType: string): unknown };
+};
+declare const XMLHttpRequest: Readonly<{ prototype: {
+  open(this: unknown, method: string, url: string | URL, async?: boolean, username?: string | null, password?: string | null): void;
+} }>;
+
 function scriptJson(value: unknown): string {
   return JSON.stringify(value).replaceAll('<', '\\u003c').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
 }
@@ -53,7 +74,7 @@ function installFrameAdmission(): void {
   const apply = Reflect.apply;
   const hasInstance = Function.prototype[Symbol.hasInstance];
   const readType = Object.getOwnPropertyDescriptor(NativeNode.prototype, 'nodeType')!.get!;
-  const isNode = (value: unknown): value is Node => {
+  const isNode = (value: unknown): boolean => {
     try { apply(readType, value, []); return true; }
     catch (error) {
       if (apply(hasInstance, NativeTypeError, [error])) return false;
@@ -68,17 +89,17 @@ function installFrameAdmission(): void {
   const forbidden = new Set(['iframe', 'frame', 'frameset', 'object', 'embed']);
   const isForbidden = forbidden.has.bind(forbidden);
   const refuse = (): never => { throw new NativeException('Nested browsing contexts are unavailable', 'SecurityError'); };
-  const assertNode = (node: Node): void => {
+  const assertNode = (node: unknown): void => {
     const isElement = apply(readType, node, []) === 1;
     const name = isElement ? apply(readName, node, []) : null;
     if (isElement && isForbidden(name)) refuse();
-    const children: NodeListOf<ChildNode> = apply(readChildren, node, []);
+    const children: unknown = apply(readChildren, node, []);
     for (let index = 0; index < apply(readLength, children, []); index++) {
       const child = apply(readItem, children, [index]);
       if (child !== null) assertNode(child);
     }
     if (name === 'template') {
-      let content: DocumentFragment;
+      let content: unknown;
       try { content = apply(readTemplate, node, []); }
       catch (error) {
         // A non-HTML element named template has no native template content.
