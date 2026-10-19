@@ -7,12 +7,19 @@ import { browserViewKey } from '../view/key.js';
 import { BROWSER_VIEW_ID_MAX_LENGTH } from '../view/v1.js';
 import { BrowserCommandDispatchResultV1Schema } from '../control/v1.js';
 import { BrowserAutomationActionResultV1Schema, BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationInterruptedResultV1Schema, BrowserAutomationTimelineV1Schema } from './v1.js';
+import { BrowserDiagnosticsEvalResultV1Schema, BrowserDiagnosticsGetPropertiesResultV1Schema, BrowserDiagnosticsReleaseObjectGroupResultV1Schema, BrowserDiagnosticsElementPickerResultV1Schema } from '../diagnostics/v1.js';
+
+/** Interactive verbs with an actual mounted injected-engine producer. */
+export const MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS = [
+  'browser.diagnostics.eval', 'browser.diagnostics.getProperties', 'browser.diagnostics.releaseObjectGroup',
+  'browser.diagnostics.elementPicker.start', 'browser.diagnostics.elementPicker.cancel',
+] as const;
 
 /** A continuation of an already-admitted daemon Action, on the exact client-owned view. */
 export const UiBrowserAutomationDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   sessionId: z.string().check(z.trim(), z.minLength(1)),
-  actionId: z.enum([...ACTION_ID_FAMILIES_V1.browser_automation, 'browser.control.takeControl', 'browser.control.handBack', 'browser.view.openExternal']),
+  actionId: z.enum([...ACTION_ID_FAMILIES_V1.browser_automation, ...MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS, 'browser.control.takeControl', 'browser.control.handBack', 'browser.view.openExternal']),
   input: z.unknown(),
   authority: z.optional(z.enum(['present_user', 'account_automation'])),
 }));
@@ -24,6 +31,10 @@ export const UiBrowserAutomationDispatchResultV1Schema = lazyZodSchema(() => z.u
   BrowserAutomationTimelineV1Schema,
   BrowserAutomationCancelActiveResultV1Schema,
   BrowserAutomationInterruptedResultV1Schema,
+  BrowserDiagnosticsEvalResultV1Schema,
+  BrowserDiagnosticsGetPropertiesResultV1Schema,
+  BrowserDiagnosticsReleaseObjectGroupResultV1Schema,
+  BrowserDiagnosticsElementPickerResultV1Schema,
   z.strictObject({ ok: z.literal(false), errorCode: z.string().check(z.minLength(1)), error: z.string().check(z.minLength(1)) }),
 ]));
 

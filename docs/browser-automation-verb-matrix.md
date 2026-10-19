@@ -81,6 +81,17 @@ same exact mounted-view registration and captured Home/Account lifetime. Continu
 remains on the existing sideband custody path, not a per-frame Action loop. A daemon command's
 unconfirmed response cannot be projected as an accepted takeover or overwrite current owner events.
 
+In 0.3 development, mounted console evaluation, property reads, object-group release and element
+picker Actions name both `browserSessionId` and `viewId`. UI controls enter the Action front door;
+the default runtime and authenticated reverse dispatcher resolve the same mounted diagnostics
+owner and its injected-engine bridge. Evaluation, property reads and picking require interaction
+to be enabled on that surface; object-group release remains available for cleanup. A missing or
+retired view refuses execution. The Action input selects client placement for `injectedPage` and
+Machine placement for `cdp`. UI approval retains the mounted invocation and rechecks the view,
+navigation generation and interaction state before delivery. Sidecar-owned views continue through
+the daemon diagnostics adapter and CDP. These are current source contracts, not loaded-runtime or native-platform
+certification.
+
 The overflow menu and non-framable/slow-frame escape use `browser.view.openExternal`. Its closed
 input names the Browser Session, view and command; the runtime resolves the current page URL from
 that mounted owner and opens it in the answering client's system browser without navigating or

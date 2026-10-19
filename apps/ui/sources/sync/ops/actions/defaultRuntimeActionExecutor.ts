@@ -9,6 +9,7 @@ import {
 import {
     readRegisteredBrowserRuntimeAutomationAdapter,
     readRegisteredBrowserRuntimeControlAdapter,
+    readRegisteredBrowserRuntimeDiagnosticsAdapter,
 } from '@/sync/domains/browser/actions/runtimeControlRegistry';
 import { readRegisteredBrowserRecordingAttachAdapter } from '@/sync/domains/browser/recording/runtimeAttachRegistry';
 import { readRegisteredBrowserContextAnnotationAdapter } from '@/sync/domains/browser/context/runtimeAnnotationRegistry';
@@ -113,6 +114,7 @@ export function createDefaultRuntimeActionExecutor(
             : {}),
         ...(input.browserAutomation ? { automation: input.browserAutomation } : {}),
         ...(!input.browserAutomation ? { resolveAutomation: (request) => readRegisteredBrowserRuntimeAutomationAdapter(request.browserSessionId, request.viewId) } : {}),
+        resolveDiagnostics: (request) => readRegisteredBrowserRuntimeDiagnosticsAdapter(request.browserSessionId, request.viewId),
         // BRW-15 attach-to-composer leaf: resolve the registered recording-attach owner so the
         // `browser.recording.attachToComposer` action dispatches a real attach (fail-closed when
         // no owner is registered).

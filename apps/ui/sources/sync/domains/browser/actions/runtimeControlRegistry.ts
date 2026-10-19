@@ -1,5 +1,6 @@
 import type {
     BrowserRuntimeAutomationAdapter,
+    BrowserRuntimeDiagnosticsAdapter,
     BrowserRuntimeControlAdapter,
     BrowserRuntimeWorkspaceOpeningAdapter,
 } from './runtimeActionExecutor';
@@ -13,12 +14,14 @@ type BrowserRuntimeControlRegistration = Readonly<{
     token: BrowserRuntimeControlRegistrationToken;
     control: BrowserRuntimeControlAdapter;
     automation?: BrowserRuntimeAutomationAdapter;
+    diagnostics?: BrowserRuntimeDiagnosticsAdapter;
 }>;
 
 export type BrowserRuntimeControlAdapterRegistration = Readonly<{
     browserSessionId: string;
     control: BrowserRuntimeControlAdapter;
     automation?: BrowserRuntimeAutomationAdapter | null | undefined;
+    diagnostics?: BrowserRuntimeDiagnosticsAdapter | null | undefined;
 }>;
 
 const registrationsBySessionId = new Map<string, BrowserRuntimeControlRegistration[]>();
@@ -69,6 +72,7 @@ export function registerBrowserRuntimeControlAdapter(
         token,
         control: input.control,
         ...(input.automation ? { automation: input.automation } : {}),
+        ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     });
     registrationsBySessionId.set(browserSessionId, registrations);
 
@@ -105,6 +109,10 @@ export function readRegisteredBrowserRuntimeAutomationAdapter(
     viewId?: string,
 ): BrowserRuntimeAutomationAdapter | null {
     return readRegistration(browserSessionId, viewId)?.automation ?? null;
+}
+
+export function readRegisteredBrowserRuntimeDiagnosticsAdapter(browserSessionId: string, viewId: string): BrowserRuntimeDiagnosticsAdapter | null {
+    return readRegistration(browserSessionId, viewId)?.diagnostics ?? null;
 }
 
 export function clearBrowserRuntimeControlRegistryForTests(): void {

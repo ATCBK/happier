@@ -109,6 +109,12 @@ export function createBrowserDiagnosticsActionRoutes(input: Readonly<{
         if (!interaction) return disabled('browser_diagnostics_route_unavailable');
         const parsed = getActionSpec(actionId).inputSchema.safeParse(rawInput ?? {});
         if (!parsed.success) return invalidParameters;
+        // Action routing owns the Browser Session; injected/CDP engine requests keep their
+        // original closed schemas and derive their page from the registered view binding.
+        if (actionId !== 'browser.diagnostics.pause' && actionId !== 'browser.diagnostics.resume') {
+          const { browserSessionId: _browserSessionId, ...engineInput } = parsed.data as Record<string, unknown>;
+          return await interaction.dispatch(actionId, engineInput);
+        }
         return await interaction.dispatch(actionId, parsed.data);
       }
       return invalidParameters;

@@ -3,6 +3,7 @@ import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFa
 import { BrowserCommandV1Schema, BrowserOpenViewInProgressV1Schema } from '@happier-dev/protocol/browser/control/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { getActionRequiredServerFeatureId } from '@happier-dev/protocol/actions/actionRequiredServerFeature';
+import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 import type { ActionExecuteResult, RuntimeActionExecute, RuntimeActionExecuteArgs, RuntimeActionIdV1 } from '@happier-dev/protocol';
 
 import type { BrowserDaemonControlRoutes } from '../control/routes';
@@ -293,16 +294,26 @@ export function createBrowserDaemonRuntimeActionExecutor(
       if (sessionBrowserMismatch) return invalidParametersResult;
       return await executeBrowserControlAction(args, input);
     }
-    if (sessionBrowserMismatch) return invalidParametersResult;
     if (BROWSER_DIAGNOSTICS_ACTION_IDS.has(args.actionId)) {
       if (!featureGate.isEnabled('browser.diagnostics')) {
         return browserRuntimeActionDisabledResult('browser_diagnostics_route_unavailable');
       }
+      if ((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(args.actionId)) {
+        const parsed = parseRuntimeActionInput(args);
+        if (!parsed.ok) return parsed.result;
+        const view = parsed.input as Readonly<{ browserSessionId: string; viewId: string }>;
+        if (input.ownsAutomationView && !input.ownsAutomationView(view)) {
+          return input.uiAutomation ? await input.uiAutomation({ ...args, input: parsed.input })
+            : browserRuntimeActionDisabledResult('browser_ui_automation_unavailable');
+        }
+      }
+      if (sessionBrowserMismatch) return invalidParametersResult;
       if (!input.diagnostics) {
         return browserRuntimeActionDisabledResult('browser_diagnostics_route_unavailable');
       }
       return await input.diagnostics.dispatch(args.actionId, args.input);
     }
+    if (sessionBrowserMismatch) return invalidParametersResult;
     if (BROWSER_CONTEXT_ACTION_IDS.has(args.actionId)) {
       if (!featureGate.isEnabled('browser.context')) {
         return browserRuntimeActionDisabledResult('browser_context_route_unavailable');

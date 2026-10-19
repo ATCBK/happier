@@ -10,6 +10,7 @@ import type { ActionExecutorContext } from '@happier-dev/protocol/actions/execut
 import type { PublicActionInputById } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { readRegisteredBrowserRuntimeWorkspaceOpeningAdapter } from './runtimeControlRegistry';
+import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 
 import {
     dispatchBrowserControlCommand,
@@ -64,6 +65,8 @@ export type BrowserRuntimeAutomationAdapter = Readonly<{
     controlService: BrowserAutomationControlService | null | undefined;
 }>;
 
+export type BrowserRuntimeDiagnosticsAdapter = Readonly<{ execute: RuntimeActionExecute }>;
+
 /** A real workspace presentation owner, with no synthetic Browser view or control state. */
 export type BrowserRuntimeWorkspaceOpeningAdapter = Readonly<{
     scopeId: string;
@@ -75,6 +78,8 @@ export type CreateBrowserRuntimeActionExecutorInput = Readonly<{
     control?: BrowserRuntimeControlAdapter;
     resolveControl?: (input: Readonly<{ browserSessionId: string; viewId: string; kind?: BrowserCommandV1['kind'] }>) => BrowserRuntimeControlAdapter | null | undefined;
     automation?: BrowserRuntimeAutomationAdapter;
+    diagnostics?: BrowserRuntimeDiagnosticsAdapter;
+    resolveDiagnostics?: (input: Readonly<{ browserSessionId: string; viewId: string }>) => BrowserRuntimeDiagnosticsAdapter | null | undefined;
     resolveAutomation?: (
         input: Readonly<{ browserSessionId: string; viewId?: string }>,
     ) => BrowserRuntimeAutomationAdapter | null | undefined;
@@ -456,10 +461,15 @@ export function createBrowserRuntimeActionExecutor(
             return await attachExecutor(parsed.input);
         }
 
-        // Diagnostics, capture and recording share catalog admission and the exact-Machine
-        // Action transport. They are not BrowserCommands or mounted client-state effects.
+        // Other diagnostics, capture and recording use catalog admission and the exact-Machine
+        // transport. Interactive diagnostics prefer the exact registered mounted engine below.
         const parsed = parseRuntimeActionInput(args);
         if (!parsed.ok) return parsed.result;
+        if ((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(args.actionId)) {
+            const view = readBrowserViewInput(parsed.input);
+            const diagnostics = input.diagnostics ?? (view ? input.resolveDiagnostics?.(view) : null);
+            if (diagnostics) return await diagnostics.execute({ ...args, input: parsed.input });
+        }
         const unavailableReason = BROWSER_DIAGNOSTICS_ACTION_IDS.has(args.actionId) ? 'browser_diagnostics_unavailable'
             : BROWSER_CONTEXT_ACTION_IDS.has(args.actionId) ? 'browser_context_unavailable'
                 : BROWSER_RECORDING_ACTION_IDS.has(args.actionId) ? 'browser_recording_unavailable'

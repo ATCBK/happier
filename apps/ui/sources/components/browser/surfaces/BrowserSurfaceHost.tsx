@@ -16,6 +16,7 @@ import { isDaemonAuthoritativeBrowserView } from '@/sync/domains/browser/control
 import { useBrowserAutomationRuntime } from '@/components/browser/automation/useBrowserAutomationRuntime';
 import { BrowserStreamedSurfaceRuntimeHost } from '@/components/browser/streamed/useBrowserStreamedSurfaceRuntime';
 import { useBrowserDiagnosticsRuntime } from '@/components/browser/diagnostics/useBrowserDiagnosticsRuntime';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { BrowserLaunchpadOpenTargetOptions } from '@/components/browser/launchpad/BrowserLaunchpad';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import {
@@ -395,12 +396,21 @@ export function BrowserSurfaceHost(props: Readonly<{
         void annotationAdapter?.dispatch(request);
     }, [props.browserSessionId]);
 
+    const mountedDiagnosticsActions = useMountedActionExecution(browserActionAccountLifetime?.scope, { retainInvocation: true, openOnRequest: true });
     const liveBrowserDiagnostics = useBrowserDiagnosticsRuntime({
         view: focusedView ?? null,
         enabled: policy.diagnosticsEnabled === true,
         automationEnabled: policy.automationEnabled === true,
         daemonSnapshotServerId: props.localServicePreviewServerId,
         onElementPickerResult: handleElementPickerAnnotationBridge,
+        actionExecute: mountedDiagnosticsActions.execute,
+        actionContext: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            defaultSessionId: props.pluginBrowserActionContext?.sessionId ?? undefined,
+            serverId: browserActionAccountLifetime?.scope.serverId,
+            expectedAccountId: browserActionAccountLifetime?.scope.accountId },
+        isCurrent: () => mountedRef.current && !unavailableReason && Object.is(previousResetKeyRef.current, resetKey)
+            && browserActionAccountLifetime?.isCurrent() === true
+            && (!presenceServerId || areServerProfileIdentifiersEquivalent(presenceServerId, browserActionAccountLifetime.scope.serverId)),
     });
     const renderableLiveBrowserDiagnostics = hasRenderableBrowserDiagnostics(liveBrowserDiagnostics, focusedView)
         ? liveBrowserDiagnostics
@@ -599,15 +609,16 @@ export function BrowserSurfaceHost(props: Readonly<{
         }
         const unregister = [...new Set([props.browserSessionId, focusedView?.browserSessionId].filter((id): id is string => Boolean(id)))].map(browserSessionId =>
             registerBrowserRuntimeControlAdapter({ browserSessionId, control: runtimeControlAdapter,
+                ...(liveBrowserDiagnostics?.runtimeAdapter ? { diagnostics: liveBrowserDiagnostics.runtimeAdapter } : {}),
                 ...(runtimeAutomationAdapter ? { automation: runtimeAutomationAdapter } : {}) }));
         return () => unregister.forEach(dispose => dispose());
-    }, [runtimeControlAdapter, props.browserSessionId, focusedView?.browserSessionId, runtimeAutomationAdapter, unavailableReason]);
+    }, [runtimeControlAdapter, props.browserSessionId, focusedView?.browserSessionId, runtimeAutomationAdapter, liveBrowserDiagnostics?.runtimeAdapter, unavailableReason]);
 
     React.useEffect(() => {
         const machineId = props.pluginBrowserActionContext?.machineId?.trim();
         const sessionId = props.pluginBrowserActionContext?.sessionId?.trim();
-        if (!machineId || !sessionId || !focusedView || !runtimeAutomationAdapter || unavailableReason
-            || policy.automationEnabled !== true
+        if (!machineId || !sessionId || !focusedView || (!runtimeAutomationAdapter && !liveBrowserDiagnostics?.bridge) || unavailableReason
+            || (policy.automationEnabled !== true && policy.diagnosticsEnabled !== true)
             || (focusedView.engineKind !== 'webIframe' && focusedView.engineKind !== 'nativeWebView'
                 && focusedView.engineKind !== 'desktopWebView')) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
@@ -632,7 +643,7 @@ export function BrowserSurfaceHost(props: Readonly<{
             unregister?.();
         };
     }, [focusedView?.browserSessionId, focusedView?.viewId, focusedView?.engineKind,
-        policy.automationEnabled, props.pluginBrowserActionContext?.machineId,
+        policy.automationEnabled, policy.diagnosticsEnabled, Boolean(liveBrowserDiagnostics?.bridge), props.pluginBrowserActionContext?.machineId,
         props.pluginBrowserActionContext?.serverId, props.pluginBrowserActionContext?.sessionId,
         runtimeAutomationAdapter, unavailableReason]);
 

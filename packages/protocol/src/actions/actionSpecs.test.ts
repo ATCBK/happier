@@ -16,6 +16,7 @@ import {
 } from '../execution/runs/index.js';
 import { actionSpecToActionDefinitionV1, listActionSpecsForCatalogSurface, serializeActionSpec } from './actionCatalog.js';
 import { listVoiceToolActionSpecs } from './actionSpecs.js';
+import { resolveActionExecutionPlacementForInput } from './actionSpecs.js';
 import { ActionInputHintsSchema, ActionSpecSchema, PUBLIC_ACTION_IDS, PUBLIC_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SIGNED_ROOT_ACTION_IDS, SignedRootActionIdSchema, SESSION_TRANSCRIPT_GET_MAX_LIMIT, ActionSurfaceSchema, PLUGIN_ACTION_INPUT_SCHEMAS, PLUGIN_ACTION_OUTPUT_SCHEMAS, PLUGIN_INVOCABLE_ACTION_IDS, PluginInvocableActionIdSchema, SessionTranscriptGetExternalShareableInputV1Schema, getActionContextualDefaults, getActionSpec, isActionSpecSurfacedOn, isHumanSecretApiExcludedActionId, isInternalActionId, isPluginProvenanceOnlyActionId, isPluginSurfaceExcludedActionId, isVoicePromptHotPathSpec, isVoiceSdkSafeActionSpec, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, projectSessionSpawnNewApiRequest, resolveRuntimeActionHostEffectClass } from './actionSpecs.js';
 import { HOME_GOVERNANCE_ACTION_IDS_V1 } from '../home/governance/actionsV1.js';
 import { TEAM_ACTION_IDS_V1 } from '../teams/actionsV1.js';
@@ -3121,6 +3122,27 @@ describe('Action Spec Registry', () => {
     expect(() => getActionSpec('daemon.browser.recording.start' as ActionId)).toThrow();
     expect(() => getActionSpec('daemon.localServices.preview.snapshot' as ActionId)).toThrow();
     expect(() => getActionSpec('daemon.devices.simulator.preview.action' as ActionId)).toThrow();
+  });
+
+  it('places injected diagnostics approval at the mounted client while CDP remains on its Machine', () => {
+    const spec = getActionSpec('browser.diagnostics.eval');
+    const input = spec.inputSchema.parse({ v: 1, browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0,
+      tier: 'injectedPage', evalRequestId: 'eval_1', expression: 'document.title', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true });
+    expect(resolveActionExecutionPlacementForInput(spec, input)).toBe('client');
+    expect(resolveActionExecutionPlacementForInput(spec, { ...input, tier: 'cdp' })).toBe('machine');
+    expect(spec.executionPlacements).toEqual(['client', 'machine']);
+  });
+
+  it('binds each diagnostics picker Action to its admitted engine verb and exact Browser Session', () => {
+    for (const action of ['start', 'cancel'] as const) {
+      const schema = getActionSpec(`browser.diagnostics.elementPicker.${action}`).inputSchema;
+      const input = { v: 1, browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0,
+        tier: 'injectedPage', pickerRequestId: 'picker_1', diagnosticsInteractionEnabled: true, action };
+      expect(schema.safeParse(input).success).toBe(true);
+      expect(schema.safeParse({ ...input, action: action === 'start' ? 'cancel' : 'start' }).success).toBe(false);
+      const { browserSessionId: _session, ...unqualified } = input;
+      expect(schema.safeParse(unqualified).success).toBe(false);
+    }
   });
 
   it('does not declare retired unbacked runtime actions', () => {

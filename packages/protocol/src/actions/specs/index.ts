@@ -3,6 +3,7 @@ import { z } from 'zod/mini';
 import { RuntimeActionIdV1Schema, type RuntimeActionIdV1 } from '../actionIds.js';
 import type { PreNormalizedActionSpec, PreNormalizedActionSurfaces } from '../actionSpecs.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
+import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '../../browser/automation/reverseDispatchV1.js';
 import { RUNTIME_DANGER_ACTION_IDS } from '../danger.js';
 import { runtimeActionSideEffectClass } from '../safety.js';
 import { isRuntimeActionExecutorReal, resolveRuntimeActionSurfaces } from '../surfaces.js';
@@ -156,6 +157,11 @@ function createRuntimeActionSpecFor<
     sideEffectClass,
     outputSchema: params.outputSchema,
     inputSchema: params.inputSchema,
+    ...((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(actionId) ? {
+      executionPlacements: ['client', 'machine'] as const,
+      executionPlacementForInput: (input: unknown) => typeof input === 'object' && input !== null
+        && 'tier' in input && input.tier === 'injectedPage' ? 'client' as const : 'machine' as const,
+    } : {}),
     ...(actionId === 'browser.view.open' ? {
       operation: { version: 1 as const, visibility: 'activity' as const, progress: 'reported' as const,
         presentation: { onStart: 'current' as const } },

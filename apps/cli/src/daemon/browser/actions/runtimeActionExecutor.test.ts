@@ -736,6 +736,7 @@ describe('daemon browser runtime action executor', () => {
       input: {
         v: 1,
         evalRequestId: 'eval_1',
+        browserSessionId: 'browser_session_1',
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'injectedPage',
@@ -812,6 +813,7 @@ describe('daemon browser runtime action executor', () => {
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'cdp',
+        browserSessionId: 'browser_session_1',
         expression: 'location.href',
         objectGroupId: 'group_1',
         diagnosticsInteractionEnabled: true,
@@ -824,6 +826,7 @@ describe('daemon browser runtime action executor', () => {
       input: {
         v: 1,
         propertyRequestId: 'prop_1',
+        browserSessionId: 'browser_session_1',
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'cdp',
@@ -839,6 +842,7 @@ describe('daemon browser runtime action executor', () => {
       input: {
         v: 1,
         pickerRequestId: 'picker_1',
+        browserSessionId: 'browser_session_1',
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'cdp',
@@ -866,21 +870,21 @@ describe('daemon browser runtime action executor', () => {
     await expect(execute(runtimeArgs({
       actionId: 'browser.diagnostics.eval',
       input: {
-        v: 1, evalRequestId: 'eval_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
+        v: 1, evalRequestId: 'eval_1', browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
         expression: 'location.href', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true,
       },
     }))).resolves.toEqual(unavailable);
     await expect(execute(runtimeArgs({
       actionId: 'browser.diagnostics.getProperties',
       input: {
-        v: 1, propertyRequestId: 'prop_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
+        v: 1, propertyRequestId: 'prop_1', browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
         objectId: 'object_1', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true,
       },
     }))).resolves.toEqual(unavailable);
     await expect(execute(runtimeArgs({
       actionId: 'browser.diagnostics.elementPicker.start',
       input: {
-        v: 1, pickerRequestId: 'picker_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
+        v: 1, pickerRequestId: 'picker_1', browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
         action: 'start', diagnosticsInteractionEnabled: true,
       },
     }))).resolves.toEqual(unavailable);

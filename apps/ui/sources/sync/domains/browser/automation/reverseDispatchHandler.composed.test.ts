@@ -9,8 +9,7 @@ import { buildBrowserAdapterCapabilities } from '../adapters/capabilities';
 import { createInjectedPageAutomationOwner } from '@/components/browser/adapters/automation/injectedPageRuntime';
 import { createActionExecutor, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
-import { createDaemonRuntimeActionExecutor } from '../../../../../../cli/src/daemon/runtimeActionExecutor';
-import { createBrowserAutomationReverseDispatcher } from '../../../../../../cli/src/daemon/browser/automation/reverseDispatch';
+import { loadBrowserDaemonRuntimeForTests } from '@/dev/testkit/harness/browserDaemonRuntime';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 // The system browser is the only effect substituted in this composed route.
@@ -21,6 +20,7 @@ const boundView = { ...view, sessionId: 'happier-session' };
 const request = { v: 1, ...view, automationRequestId: 'click-1', actionKind: 'click', navigationGeneration: 0, requestedBy: 'agent', requesterRef: { kind: 'agent', id: 'agent-1' }, timeoutMs: 1000, payload: { selector: '#button' } } as const;
 const args: RuntimeActionExecuteArgs = { actionId: 'browser.automation.click', input: request,
   context: { surface: 'agent', authority: 'account_automation', defaultSessionId: 'happier-session' } };
+const { createDaemonRuntimeActionExecutor, createBrowserAutomationReverseDispatcher } = await loadBrowserDaemonRuntimeForTests();
 
 function mountView(executePageAction?: (signal: AbortSignal) => Promise<Readonly<{ status: 'succeeded' }>>, withAutomation = true) {
   const controlService = createBrowserAutomationControlService({ nowMs: () => Date.now() });
