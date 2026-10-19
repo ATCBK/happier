@@ -46,10 +46,14 @@ export function buildToolHeaderModel(input: {
      */
     historicalAgentId?: string | null;
     answeringSession?: Readonly<{ sessionId: string; name: string | null }>;
+    serverId?: Parameters<typeof resolveToolHeaderTextPresentation>[0]['serverId'];
+    viewerScope?: Parameters<typeof resolveToolHeaderTextPresentation>[0]['viewerScope'];
+    answeringAccountActor?: Parameters<typeof resolveToolHeaderTextPresentation>[0]['answeringAccountActor'];
 }): ToolHeaderModel {
     const toolForRendering = normalizeToolCallForRendering(input.tool);
     const headerText = resolveToolHeaderTextPresentation({ tool: toolForRendering, metadata: input.metadata,
-        answeringSession: input.answeringSession });
+        answeringSession: input.answeringSession, serverId: input.serverId,
+        viewerScope: input.viewerScope, answeringAccountActor: input.answeringAccountActor });
     const normalizedToolName = headerText.normalizedToolName;
     const knownTool = knownTools[normalizedToolName as keyof typeof knownTools] as any;
 

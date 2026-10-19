@@ -56,6 +56,9 @@ export function registerSessionQuestionAnswerDelivery(input: Readonly<{
                     senderSessionId: actor.data.sessionId,
                     answeredBy: { v: 1 as const, kind: 'happierSession' as const,
                         sourceSessionId: actor.data.sessionId, via: 'action' as const },
+                } : actor?.success && actor.data.kind === 'person' && actor.data.accountId ? {
+                    answeredBy: { v: 1 as const, kind: 'happierApp' as const,
+                        actor: { kind: 'person' as const, accountId: actor.data.accountId } },
                 } : {}),
                 ...(input.machineAdmissionTransport ? { machineAdmissionTransport: input.machineAdmissionTransport } : {}),
                 signal: input.signal,

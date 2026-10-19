@@ -2,11 +2,12 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { InteractionTransientAuthorRequestV1Schema, InteractionTransientQuestionsAuthorRequestV1Schema } from '../../plugins/interactions/transientV1.js';
+import { SessionPermissionAccountIdV1Schema } from './v1.js';
 
 const NonemptyText = z.string().check(z.trim(), z.minLength(1));
 
 export const SessionQuestionHandlerV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('person') }),
+    z.strictObject({ kind: z.literal('person'), accountId: z.optional(SessionPermissionAccountIdV1Schema) }),
     z.strictObject({ kind: z.literal('session'), sessionId: NonemptyText }),
 ]));
 export type SessionQuestionHandlerV1 = z.infer<typeof SessionQuestionHandlerV1Schema>;

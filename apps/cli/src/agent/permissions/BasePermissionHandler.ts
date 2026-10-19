@@ -1903,7 +1903,9 @@ export abstract class BasePermissionHandler {
             const outcome = await this.handleIncomingPermissionResponse(response, {
                 expectedRequestKind: 'user_action',
                 ...(permissionDecisionActorV1 ? { permissionDecisionActorV1 } : {}),
-                ...(!nonPerson && permissionDecisionActorV1 ? { answeredBy: { kind: 'person' as const } } : {}),
+                ...(!nonPerson && permissionDecisionActorV1 ? { answeredBy: {
+                    kind: 'person' as const, accountId: permissionDecisionActorV1.accountId,
+                } } : {}),
                 ...(nonPerson ? { isCurrent: isTokenQuestionAnswerEligible } : {}),
             });
             if (outcome.status === 'not_found') {

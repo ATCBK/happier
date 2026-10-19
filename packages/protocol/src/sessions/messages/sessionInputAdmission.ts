@@ -270,6 +270,8 @@ const HappierAppProvenanceSchema = lazyZodSchema(() => z.strictObject({
   actor: z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('owner') }),
     z.strictObject({ kind: z.literal('sharedCollaborator') }),
+    /** Host-stamped question answerer; no grant or relationship is inferred. */
+    z.strictObject({ kind: z.literal('person'), accountId: AccountIdSchema }),
   ]),
 }));
 

@@ -11,7 +11,7 @@ describe('runAgentStatePermissionsPhase (request kind)', () => {
     const changed = new Set<string>();
     const request = { tool: 'AskUserQuestion', kind: 'user_action', createdAt: 100,
       arguments: { questions: [{ question: 'Revision?' }], answeredBy: { kind: 'session', sessionId: 'forged' } } };
-    const run = (answeredBy?: { kind: 'session'; sessionId: string } | { kind: 'person' }) => runAgentStatePermissionsPhase({ state,
+    const run = (answeredBy?: { kind: 'session'; sessionId: string } | { kind: 'person'; accountId?: string }) => runAgentStatePermissionsPhase({ state,
       agentState: { requests: {}, completedRequests: { question: { ...request, status: 'approved', completedAt: 200,
         structuredAnswersV1: { 'Revision?': ['3'] }, ...(answeredBy ? { answeredBy } : {}) } } },
       incomingToolIds: new Set<string>(), mainHistoryStartLoaded: true, changed, allocateId: () => 'question-message', enableLogging: false });
@@ -38,6 +38,9 @@ describe('runAgentStatePermissionsPhase (request kind)', () => {
     // An authoritative refresh is not a Session-global last answerer.
     run({ kind: 'person' });
     expect(message.tool?.permission).toMatchObject({ answeredBy: { kind: 'person' } });
+    run({ kind: 'person', accountId: 'bob' });
+    expect(message.tool?.permission).toMatchObject({ answeredBy: { kind: 'person', accountId: 'bob' } });
+    expect(message.meta?.actionRequestAttributionV1).toBe(cause);
     run();
     expect(message.tool?.permission).not.toHaveProperty('answeredBy');
   });
