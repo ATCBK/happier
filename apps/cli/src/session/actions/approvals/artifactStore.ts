@@ -313,11 +313,17 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         && request.status === 'executing'
         && request.decision?.kind === 'approve'
         && request.execution === undefined;
+      // The replay owner can refuse a stale origin before claiming execution.
+      const isApprovedStale = existingRequest.status === 'approved'
+        && request.status === 'failed'
+        && request.decision?.kind === 'approve'
+        && request.execution?.ok === false
+        && request.execution.errorCode === 'approval_stale';
       const isExecutingTerminal = existingRequest.status === 'executing'
         && (request.status === 'executed' || request.status === 'failed')
         && request.decision?.kind === 'approve'
         && request.execution !== undefined;
-      if ((!isOpenDecision && !isApprovedExecution && !isExecutingTerminal)
+      if ((!isOpenDecision && !isApprovedExecution && !isApprovedStale && !isExecutingTerminal)
         || request.updatedAtMs < existingRequest.updatedAtMs) {
         return { ok: false, errorCode: 'invalid_transition', error: 'target_action_approval_invalid_transition' };
       }
