@@ -66,7 +66,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("P
                 const attempt = ++publicationAttempts;
                 const receipt = await tx.account.update({ where: { id: publication.id },
                     data: { seq: { increment: 1 } }, select: { seq: true } });
-                afterTx(tx, () => { publishedAttempts.push(attempt); });
+                afterTx(tx, () => {
+                    publishedAttempts.push(attempt);
+                    // The same error after commit cannot authorize another
+                    // transaction or repeat this already-published effect.
+                    throw expiredError;
+                });
                 return receipt;
             }, { transactionClass: "test-expired-terminal-publication" });
 
