@@ -1,4 +1,4 @@
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";
 import { HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
 
@@ -35,18 +35,27 @@ export async function publishHomeGovernanceChangedInTx(
     }>,
 ): Promise<number> {
     const excluded = new Set(options?.excludeAccountIds ?? []);
-    const viewers = await tx.account.findMany({
+    const readViewers = (accountIds?: readonly string[]) => tx.account.findMany({
         where: {
             status: "active",
             ...(options?.audience === "all_active_accounts"
                 ? {}
                 : { homeRole: { in: ["owner", "admin"] } }),
+            ...(accountIds ? { id: { in: [...accountIds] } } : {}),
         },
         select: { id: true },
     });
+    const capturedAccountIds = (await readViewers())
+        .map(viewer => viewer.id).filter(accountId => !excluded.has(accountId));
+    if (capturedAccountIds.length === 0) return 0;
+    // ReadCommitted callers may capture a viewer just before that Account is
+    // retired, demoted or erased. Fence the captured audience and recheck its
+    // current eligibility before the strict cursor allocator sees these IDs.
+    await acquireAccountChangePublicationLocksInTx(tx, capturedAccountIds, { includeSingleAccount: true });
+    const viewers = await readViewers(capturedAccountIds);
 
     return (await markAccountsChanged(tx, {
-        accountIds: viewers.map((viewer) => viewer.id).filter((accountId) => !excluded.has(accountId)),
+        accountIds: viewers.map((viewer) => viewer.id),
         entityId: HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     })).length;
 }

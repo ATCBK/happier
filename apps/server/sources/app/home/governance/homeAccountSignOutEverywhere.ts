@@ -22,6 +22,7 @@ export async function signOutHomeAccountEverywhereInTx(tx: Tx, input: Readonly<{
     actorAccountId: string;
     targetAccountId: string;
     env: NodeJS.ProcessEnv;
+    emailDeliveryReady: boolean;
 }>): Promise<HomeGovernanceResult<HomeAccountRowV1>> {
     const admission = await authorizeHomeGovernanceMutationInTx(tx, {
         actorAccountId: input.actorAccountId,
@@ -44,6 +45,7 @@ export async function signOutHomeAccountEverywhereInTx(tx: Tx, input: Readonly<{
         actorAccountId: input.actorAccountId,
         accountId: target.accountId,
         env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
     });
     return account
         ? { status: "ok", result: account }

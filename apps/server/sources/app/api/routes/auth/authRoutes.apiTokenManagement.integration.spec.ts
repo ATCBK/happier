@@ -250,7 +250,8 @@ describe("authRoutes (API-token management) (integration)", () => {
                 payload: { tag, metadataLayoutVersion: 1, sharedMetadata: { ciphertext: '{"v":1}' },
                     ownerMetadata: { t: 'plain', v: { v: 1 } }, encryptionMode: 'plain' } });
             const tag = randomUUID();
-            expect((await create(tag, authorization.token)).statusCode).toBe(200);
+            const attributed = await create(tag, authorization.token);
+            expect(attributed.statusCode, attributed.body).toBe(200);
             const created = await db.session.findUniqueOrThrow({ where: { accountId_tag: { accountId: account.id, tag } } });
             expect(created.createdByApiTokenId).toBe(childId);
             expect((await create(tag)).statusCode).toBe(200);

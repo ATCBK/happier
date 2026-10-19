@@ -111,10 +111,10 @@ export async function readAuthEmailReadinessFacts(
  * Consumed by method readiness so the product can explain which mail-dependent operations are
  * unavailable rather than failing them, or silently sending nothing, at submit time.
  */
-export async function isAuthEmailDeliveryReady(source: HomeConfigSource): Promise<boolean> {
-    // Transport and link come from one Home-effective configuration. Inside a transaction the caller
-    // passes `tx`, so the Home settings are read through it: SQLite runs one connection, and a read
-    // around the open transaction would wait on it until P2028.
+export async function isAuthEmailDeliveryReady(source: Omit<HomeConfigSource, "tx">): Promise<boolean> {
+    // Prepare this fact before opening a transaction: the registered link-target
+    // owner can await descriptor publication, native endpoint state and continuity IO.
+    // Transaction owners consume the boolean alongside their Home-effective configuration.
     const env = await readHomeEffectiveEnv(source);
     const resolver = processApplicationLinkTarget;
     return await resolveAuthEmailReadiness({

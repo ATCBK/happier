@@ -83,7 +83,6 @@ async function transferTeamMembershipsForAccountReplacementInTx(
     const impacts = await captureSessionAccessMembershipImpactsInTx(tx, {
         accountIds: [input.oldAccountId, input.replacementAccountId],
         changes,
-        origin: "relationship_change",
     });
     const moved = await tx.teamMembership.updateMany({
         where: { accountId: input.oldAccountId },

@@ -1,7 +1,8 @@
 import Fastify from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
-import { sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
+import { sealEncryptedDataKeyEnvelopeV1, ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
+import { decodeBase64 } from "privacy-kit";
 import tweetnacl from "tweetnacl";
 
 import { startSocket } from "@/app/api/socket";
@@ -121,8 +122,12 @@ describe("authRoutes (Account erasure) (integration)", () => {
         const retainedPublicLog = await db.publicShareAccessLog.create({ data: { publicShareId: publicShare.id, userId: recipient.id } });
         await db.publicShareAccessLog.create({ data: { publicShareId: publicShare.id, userId: author.id } });
 
-        const retainedDiscussion = await db.sessionDiscussion.create({ data: {
-            sessionId: surviving.id,
+        const retainedDiscussion = await db.discussion.create({ data: {
+            ownerAccountId: owner.id,
+            encryptionMode: "plain",
+            anchorSessionId: surviving.id,
+            dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            anchorV1: { kind: "session", sessionId: surviving.id },
             creationLocalId: "erased-author-discussion",
             creationEqualityEvidenceV1: { kind: "plainDigest", digest: "A".repeat(43) },
             createdByAccountId: author.id,
@@ -130,8 +135,7 @@ describe("authRoutes (Account erasure) (integration)", () => {
             messageSeq: 1,
             lastMessageAt: new Date(),
         } });
-        const retainedDiscussionMessage = await db.sessionDiscussionMessage.create({ data: {
-            sessionId: surviving.id,
+        const retainedDiscussionMessage = await db.discussionMessage.create({ data: {
             discussionId: retainedDiscussion.id,
             localId: "erased-author-message",
             requestEqualityEvidenceV1: { kind: "plainDigest", digest: "B".repeat(43) },
@@ -139,11 +143,11 @@ describe("authRoutes (Account erasure) (integration)", () => {
             authorAccountId: author.id,
             content: { t: "plain", v: { v: 1, parts: [{ t: "text", text: "Retained body" }] } },
         } });
-        await db.sessionDiscussionMessageMention.create({ data: {
+        await db.discussionMessageMention.create({ data: {
             messageId: retainedDiscussionMessage.id,
             accountId: author.id,
         } });
-        await db.sessionDiscussionReadState.create({ data: {
+        await db.discussionReadState.create({ data: {
             discussionId: retainedDiscussion.id,
             accountId: author.id,
             lastReadSeq: 1,
@@ -164,16 +168,16 @@ describe("authRoutes (Account erasure) (integration)", () => {
         await expect(db.sessionShare.count({ where: { sharedWithUserId: author.id } })).resolves.toBe(0);
         await expect(db.session.findUnique({ where: { id: owned.id } })).resolves.toBeNull();
         await expect(db.account.findUnique({ where: { id: author.id } })).resolves.toBeNull();
-        await expect(db.sessionDiscussion.findUnique({ where: { id: retainedDiscussion.id } })).resolves.toMatchObject({
+        await expect(db.discussion.findUnique({ where: { id: retainedDiscussion.id } })).resolves.toMatchObject({
             createdByAccountId: null,
         });
-        await expect(db.sessionDiscussionMessage.findUnique({
+        await expect(db.discussionMessage.findUnique({
             where: { id: retainedDiscussionMessage.id },
         })).resolves.toMatchObject({ authorAccountId: null });
-        await expect(db.sessionDiscussionMessageMention.count({
+        await expect(db.discussionMessageMention.count({
             where: { messageId: retainedDiscussionMessage.id },
         })).resolves.toBe(0);
-        await expect(db.sessionDiscussionReadState.count({
+        await expect(db.discussionReadState.count({
             where: { discussionId: retainedDiscussion.id, accountId: author.id },
         })).resolves.toBe(0);
         await expect.soft(db.sessionShareAccessLog.findMany({ select: { id: true } })).resolves.toEqual([{ id: retainedLog.id }]);

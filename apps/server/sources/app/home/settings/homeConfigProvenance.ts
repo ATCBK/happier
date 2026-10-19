@@ -1,5 +1,7 @@
 import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 
+import { readStartupHomeEnv } from './startupHomeEnv';
+
 /**
  * Which source put a value into a configuration overlay (plan `2026-09-26-home-owner-console` §3.2,
  * invariants I1/I2).
@@ -10,7 +12,8 @@ import type { ServerConfigEnv } from '@happier-dev/protocol/serverConfig/serverC
  * here. The overlay owner stamps each value it fills; a stamp travels with object spreads (it is an
  * enumerable symbol key, which spreads copy and env iteration, JSON and child-process environments
  * ignore) and applies only while the key still holds the stamped text, so a copy that overwrites the
- * key reads as the deployment's value again. An object with no stamp is a deployment environment.
+ * key reads as the deployment's value again. Restart values also retain their source through the active startup snapshot, including the
+ * string-only copy applied to process.env. Other unstamped values are deployment configuration.
  */
 export type HomeConfigValueSource = 'deployment' | 'home' | 'inferred';
 
@@ -43,5 +46,8 @@ export function readHomeConfigValueSource(env: ServerConfigEnv, key: string): Ho
     const value = env[key];
     if (value === undefined || value.trim() === '') return null;
     const stamp = readStamps(env)[key];
-    return stamp && stamp.value === value ? stamp.source : 'deployment';
+    if (stamp && stamp.value === value) return stamp.source;
+    const startup = readStartupHomeEnv();
+    if (startup?.snapshot.applied.includes(key) && startup.env[key] === value) return 'home';
+    return 'deployment';
 }

@@ -176,8 +176,10 @@ export async function setHomeGovernancePolicy(input: Readonly<{
     patch: HomeGovernancePolicySetInputV1;
     env: NodeJS.ProcessEnv;
 }>): Promise<HomeGovernancePolicySetResult> {
+    const emailDeliveryReady = input.patch.authenticationPolicy !== undefined
+        && await isAuthEmailDeliveryReady({ env: input.env });
     const attempt = async () => await inTx(async (tx) => {
-        const result = await setHomeGovernancePolicyInTx(tx, input);
+        const result = await setHomeGovernancePolicyInTx(tx, { ...input, emailDeliveryReady });
         if (result.status === "applied") {
             const minimumEligibilityMayChange = input.patch.teamCreationPolicy !== undefined
                 || input.patch.teamsVisibleToMembers !== undefined
@@ -256,8 +258,8 @@ async function assessAuthenticationPolicyChangeInTx(
     tx: Tx,
     policy: HomeAuthenticationPolicyV1 | null,
     env: NodeJS.ProcessEnv,
+    emailDeliveryReady: boolean,
 ): Promise<AuthenticationPolicyAssessment> {
-    const emailDeliveryReady = await isAuthEmailDeliveryReady({ env, tx });
     const stored = (await readHomeGovernancePolicyInTx(tx)).authentication;
     const current = await resolveEffectiveHomeAuthMethodsInTx(tx, {
         env,
@@ -349,6 +351,7 @@ export async function setHomeGovernancePolicyInTx(
         actorAccountId: string;
         patch: HomeGovernancePolicySetInputV1;
         env: NodeJS.ProcessEnv;
+        emailDeliveryReady: boolean;
     }>,
 ): Promise<HomeGovernancePolicySetResult> {
     const operations = new Set<"set_team_creation_policy" | "set_authentication_policy">();
@@ -388,7 +391,7 @@ export async function setHomeGovernancePolicyInTx(
 
     let widening = false;
     if (input.patch.authenticationPolicy !== undefined) {
-        const assessment = await assessAuthenticationPolicyChangeInTx(tx, input.patch.authenticationPolicy, input.env);
+        const assessment = await assessAuthenticationPolicyChangeInTx(tx, input.patch.authenticationPolicy, input.env, input.emailDeliveryReady);
         if (!assessment.valid) return { status: "invalid_policy" };
         // §3.4 bound 5: widening is the owner's confirmed decision, never a side effect of a save.
         if (assessment.widens && input.patch.confirmWidening !== true) return { status: "widening_unconfirmed" };

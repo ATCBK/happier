@@ -83,7 +83,7 @@ describe('resolveAuthEntry', () => {
         overrides: Readonly<{
             status?: 'active' | 'suspended';
             accountStatus?: 'active' | 'disabled';
-            firstName?: string;
+            name?: string;
             username?: string;
         }> = {},
     ) {
@@ -91,7 +91,7 @@ describe('resolveAuthEntry', () => {
             data: {
                 publicKey: crypto.randomUUID(),
                 encryptionMode: 'plain',
-                ...(overrides.firstName ? { firstName: overrides.firstName } : {}),
+                ...(overrides.name ? { name: overrides.name } : {}),
                 ...(overrides.username ? { username: overrides.username } : {}),
                 ...(overrides.accountStatus ? { status: overrides.accountStatus } : {}),
             },
@@ -622,7 +622,7 @@ describe('resolveAuthEntry', () => {
 
     it('continues an effective member of an inherited-policy Team without another login', async () => {
         const team = await db.team.create({ data: { name: 'Acme Team' } });
-        const account = await member(team.id, { firstName: 'Alice', username: 'alice' });
+        const account = await member(team.id, { name: 'Alice', username: 'alice' });
 
         const projection = await resolveAuthEntry(
             { v: 1, scope: { kind: 'team', teamId: team.id } },
@@ -641,7 +641,7 @@ describe('resolveAuthEntry', () => {
             state: 'already_member',
             scope: { kind: 'team' },
             home: { serverId: expect.any(String), displayName: 'home.example.test', storageMode: 'encrypted', hosting: null },
-            account: { firstName: 'Alice', lastName: null, username: 'alice', avatarUrl: null },
+            account: { name: 'Alice', firstName: 'Alice', lastName: null, username: 'alice', avatarUrl: null },
             team: { teamId: team.id, name: 'Acme Team', logo: null },
             actions: [{ kind: 'continue' }],
             autoRedirect: null,
@@ -651,10 +651,10 @@ describe('resolveAuthEntry', () => {
     it('projects the exact authenticated Account on admission and changes it when the credential changes', async () => {
         const team = await db.team.create({ data: { name: 'Acme Team' } });
         const alice = await db.account.create({ data: {
-            publicKey: crypto.randomUUID(), encryptionMode: 'plain', firstName: 'Alice', username: 'alice',
+            publicKey: crypto.randomUUID(), encryptionMode: 'plain', name: 'Alice', username: 'alice',
         } });
         const bob = await db.account.create({ data: {
-            publicKey: crypto.randomUUID(), encryptionMode: 'plain', firstName: 'Bob', username: 'bob',
+            publicKey: crypto.randomUUID(), encryptionMode: 'plain', name: 'Bob', username: 'bob',
         } });
         const env = {
             HAPPIER_FEATURE_TEAMS__ENABLED: '1',
@@ -670,12 +670,12 @@ describe('resolveAuthEntry', () => {
         await expect(entryFor(alice.id)).resolves.toMatchObject({
             state: 'admission_required',
             home: { displayName: 'home.example.test' },
-            account: { firstName: 'Alice', username: 'alice' },
+            account: { name: 'Alice', firstName: 'Alice', username: 'alice' },
         });
         await expect(entryFor(bob.id)).resolves.toMatchObject({
             state: 'admission_required',
             home: { displayName: 'home.example.test' },
-            account: { firstName: 'Bob', username: 'bob' },
+            account: { name: 'Bob', firstName: 'Bob', username: 'bob' },
         });
         await expect(resolveAuthEntry(
             { v: 1, scope: { kind: 'team', teamId: team.id } },
@@ -830,7 +830,7 @@ describe('resolveAuthEntry', () => {
             state: 'already_member',
             scope: { kind: 'team' },
             home: { serverId: expect.any(String), displayName: null, storageMode: null, hosting: null },
-            account: { firstName: null, lastName: null, username: null, avatarUrl: null },
+            account: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
             team: { teamId: team.id, name: 'Restricted Evidence Team', logo: null },
             actions: [{ kind: 'continue' }],
             autoRedirect: null,
@@ -934,7 +934,7 @@ describe('resolveAuthEntry', () => {
             state: 'already_member',
             scope: { kind: 'invitation' },
             home: { serverId: expect.any(String), displayName: null, storageMode: 'encrypted', hosting: null },
-            account: { firstName: null, lastName: null, username: null, avatarUrl: null },
+            account: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
             team: { teamId: team.id, name: 'Acme', logo: null },
             actions: [{ kind: 'continue' }],
             autoRedirect: null,

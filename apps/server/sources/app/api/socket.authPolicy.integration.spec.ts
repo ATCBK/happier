@@ -7,7 +7,7 @@ import { startSocket } from "./socket";
 import { getAccountRevocationSocketRoom } from "./socketRooms";
 import type { Fastify as AppFastify } from "./types";
 import { auth } from "@/app/auth/auth";
-import { db } from "@/storage/db";
+import { db, withSqliteReadSnapshot } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
 type ProviderRequiredErrorPayload = {
@@ -173,17 +173,18 @@ type PausedAdmissionBoundary = Readonly<{
     restore: () => void;
 }>;
 
-function pausePostConnectAccountCurrentnessRead(
+async function pausePostConnectAccountCurrentnessRead(
     server: Server,
     accountId: string,
-): PausedAdmissionBoundary {
+): Promise<PausedAdmissionBoundary> {
     const reached = deferred();
     const release = deferred();
-    const originalFindUnique = db.account.findUnique;
+    const accountReader = await withSqliteReadSnapshot(async reader => reader.account);
+    const originalFindUnique = accountReader.findUnique;
     let paused = false;
     // Intercept only the persistence boundary once the real socket has joined
     // the revocation room. No verifier is mocked or selected by call count.
-    const findUniqueSpy = vi.spyOn(db.account, "findUnique").mockImplementation((...args) => {
+    const findUniqueSpy = vi.spyOn(accountReader, "findUnique").mockImplementation((...args) => {
         const query = originalFindUnique(...args);
         if (
             paused
@@ -213,7 +214,7 @@ function pausePostConnectAccountCurrentnessRead(
         release: release.resolve,
         restore: () => {
             findUniqueSpy.mockRestore();
-            Reflect.set(db.account, "findUnique", originalFindUnique);
+            Reflect.set(accountReader, "findUnique", originalFindUnique);
         },
     };
 }
@@ -413,27 +414,10 @@ describe("startSocket (auth policy enforcement)", () => {
             {
                 name: "user",
                 configure: async (_accountId: string): Promise<Readonly<Record<string, string>>> => ({}),
-                pauseAdmission: (): PausedAdmissionBoundary => {
-                    const admissionReached = deferred();
-                    const releaseAdmission = deferred();
-                    const originalFindUnique = db.account.findUnique;
-                    const findUniqueSpy = vi.spyOn(db.account, "findUnique").mockImplementation((...args) => {
-                        const query = originalFindUnique(...args);
-                        if (args[0].select?.id === true && args[0].select?.status === true) {
-                            admissionReached.resolve();
-                            return pausePrismaQuery(query, releaseAdmission.promise);
-                        }
-                        return query;
-                    });
-                    return {
-                        reached: admissionReached.promise,
-                        release: releaseAdmission.resolve,
-                        restore: () => {
-                            findUniqueSpy.mockRestore();
-                            Reflect.set(db.account, "findUnique", originalFindUnique);
-                        },
-                    };
-                },
+                // User admission has no separate entity lookup after token verification.
+                // Pause its existing final currentness read, not the removed duplicate
+                // eligibility lookup. Session and Machine retain their earlier lookups.
+                pauseAdmission: pausePostConnectAccountCurrentnessRead,
             },
             {
                 name: "session",
@@ -515,10 +499,11 @@ describe("startSocket (auth policy enforcement)", () => {
                 authority: "present_user",
             });
             const socketAuth = await admission.configure(account.id);
-            const pausedAdmission = admission.pauseAdmission();
-
             const app = Fastify({ logger: false }) as unknown as AppFastify;
             startSocket(app);
+            const socketServer = app.machineDaemonPresence;
+            if (!(socketServer instanceof Server)) throw new Error("Expected the live Socket.IO server");
+            const pausedAdmission = await admission.pauseAdmission(socketServer, account.id);
             await app.listen({ port: 0, host: "127.0.0.1" });
             const address = app.server.address();
             const port = typeof address === "object" && address ? address.port : null;
@@ -610,7 +595,7 @@ describe("startSocket (auth policy enforcement)", () => {
             startSocket(app);
             const socketServer = app.machineDaemonPresence;
             if (!(socketServer instanceof Server)) throw new Error("Expected the live Socket.IO server");
-            const pausedCurrentness = pausePostConnectAccountCurrentnessRead(socketServer, account.id);
+            const pausedCurrentness = await pausePostConnectAccountCurrentnessRead(socketServer, account.id);
             await app.listen({ port: 0, host: "127.0.0.1" });
             const address = app.server.address();
             const port = typeof address === "object" && address ? address.port : null;
@@ -712,7 +697,7 @@ describe("startSocket (auth policy enforcement)", () => {
             startSocket(app);
             const socketServer = app.machineDaemonPresence;
             if (!(socketServer instanceof Server)) throw new Error("Expected the live Socket.IO server");
-            const pausedCurrentness = pausePostConnectAccountCurrentnessRead(socketServer, account.id);
+            const pausedCurrentness = await pausePostConnectAccountCurrentnessRead(socketServer, account.id);
             await app.listen({ port: 0, host: "127.0.0.1" });
             const address = app.server.address();
             const port = typeof address === "object" && address ? address.port : null;

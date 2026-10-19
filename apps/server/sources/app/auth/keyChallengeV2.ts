@@ -15,7 +15,7 @@ const ACCOUNT_DIRECTORY_CHALLENGE_ID_PREFIX = "account_directory:";
 
 export type KeyChallengeV2LoginPurpose = "account" | "account_directory";
 
-interface IssuedKeyChallengeV2 extends KeyChallengeV2IssueResponse {
+export interface IssuedKeyChallengeV2 extends KeyChallengeV2IssueResponse {
     audience: { origin: string; serverIdentityId: string };
 }
 

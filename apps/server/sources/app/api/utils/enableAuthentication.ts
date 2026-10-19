@@ -1,8 +1,9 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../types";
 import { log } from "@/utils/logging/log";
+import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
@@ -39,10 +40,10 @@ import {
 /** Account and declared Session-purpose routes without custom restricted-error configuration. */
 export const AccountRouteAuthenticationForbiddenResponseSchema = z.union([
     PresentUserRequiredResponseSchema,
-    z.object({ error: z.literal("provider-required"), provider: z.string() }).strict(),
-    z.object({ error: z.literal("not-eligible") }).strict(),
-    z.object({ error: z.literal("credential_origin_denied") }).strict(),
-    z.object({ error: z.literal("credential_scope_denied") }).strict(),
+    z.strictObject({ error: z.literal("provider-required"), provider: z.string() }),
+    z.strictObject({ error: z.literal("not-eligible") }),
+    z.strictObject({ error: z.literal("credential_origin_denied") }),
+    z.strictObject({ error: z.literal("credential_scope_denied") }),
 ]);
 
 function readScalarHeader(value: unknown): string | null {
@@ -126,7 +127,7 @@ export function enableAuthentication(app: Fastify) {
             || effectActionId !== null
             || encodedTarget !== null;
         // Never log bearer tokens or header contents.
-        const logDiagnostics = readServerConfig(await readRequestHomeEnv(request), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
+        const logDiagnostics = readServerConfig(await timeWebLatencyPhase('auth.home_env', () => readRequestHomeEnv(request)), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
         if (logDiagnostics) {
             log(
                 { module: 'auth-decorator' },
@@ -158,6 +159,8 @@ export function enableAuthentication(app: Fastify) {
                 method: request.method,
                 path: request.url,
                 body: request.body,
+                ...(readScalarHeader(request.headers['idempotency-key']) === null ? {}
+                    : { idempotencyKey: readScalarHeader(request.headers['idempotency-key'])! }),
                 ...(typeof routeSessionId === 'string' && routeSessionId.length > 0
                     ? { sessionRouteTarget: { kind: 'session' as const, sessionId: routeSessionId,
                         ...(routeActionId ? { actionId: routeActionId } : {}),
@@ -237,12 +240,12 @@ export function enableAuthentication(app: Fastify) {
         // route families that explicitly reject legacy Home authority use
         // only the strict current verifier; ordinary Home routes retain
         // the explicitly named compatibility reader.
-        const verification = earlyRequestPrincipals.get(request) ?? await verifyRequestPrincipal({
+        const verification = earlyRequestPrincipals.get(request) ?? await timeWebLatencyPhase('auth.verify_principal', () => verifyRequestPrincipal({
             authorizationHeader: authHeader,
             allowLegacyHomeToken: request.routeOptions?.config?.allowAccountDirectoryToken !== true
                 && request.routeOptions?.config?.allowLegacyHomeToken !== false,
             env: process.env,
-        });
+        }));
         if (
             verification.status === "absent"
             || verification.status === "invalid"

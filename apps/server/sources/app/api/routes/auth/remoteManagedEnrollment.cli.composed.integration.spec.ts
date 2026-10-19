@@ -33,7 +33,7 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
     const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
     beforeAll(async () => {
         harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-qb73-', initAuth: true, initEncrypt: true,
-            env: { HAPPIER_SERVER_IDENTITY_ID: 'srv_qb73_home' } });
+            env: { HAPPIER_SERVER_IDENTITY_ID: 'srv_qb73_home', TERMINAL_AUTH_REQUEST_TTL_SECONDS: '60' } });
         app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
         app.addHook('onResponse', async (request, reply) => { requests.push({ path: request.url.split('?')[0]!, status: reply.statusCode }); });
         enableAuthentication(app);
@@ -43,7 +43,7 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
     }, 120_000);
     afterAll(async () => { await app.close(); if (harness) await harness.close(); });
 
-    it.each(['current', 'current-e2ee', 'retired', 'misbound-approval'] as const)('enrolls only the current exact admission (%s)', async admission => {
+    it.each(['current', 'current-e2ee', 'retired', 'misbound-approval', 'expired-consent'] as const)('enrolls only the current exact admission (%s)', async admission => {
         const succeeds = admission === 'current' || admission === 'current-e2ee';
         requests.length = 0;
         const beforeRequests = await db.terminalAuthRequest.count();
@@ -126,21 +126,28 @@ describe('remote managed enrollment through real CLI processes and Home', () => 
             child.on('close', status => resolveResult({ status: status ?? 1, stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') }));
             child.stdin.end(JSON.stringify({ descriptor, guestHome, guestEntrypoint: process.env.HAPPIER_TEST_REMOTE_ENROLLMENT_ENTRYPOINT,
                 guestExecutable: process.env.HAPPIER_TEST_REMOTE_ENROLLMENT_EXECUTABLE,
+                // The server's supported minimum policy is the old effective
+                // cutoff in this fixture. Use real wall time and CLI processes.
+                ...(admission === 'expired-consent' ? { approvalDelayMs: 61_000 } : {}),
                 misbind: admission === 'misbound-approval', correlation: { homeId: descriptor!.homeServerIdentityId,
                 managedId: row.id, requestId: row.admittedActionRequestId, expectedIntentRevision: row.intentRevision, controller, resource } }));
         });
-        expect(result.stdout, JSON.stringify(requests)).toContain(succeeds ? '"ok":true' : admission === 'retired' ? 'auth wait' : 'approval_wiring_failed');
+        expect(result.stdout, JSON.stringify(requests)).toContain(succeeds ? '"ok":true' : admission === 'retired' ? 'auth wait' : admission === 'expired-consent' ? 'auth_request_expired' : 'approval_wiring_failed');
         expect(result.status, result.stdout).toBe(succeeds ? 0 : 1);
         if (admission !== 'misbound-approval') {
             const outcome = JSON.parse(result.stdout);
             expect(outcome.task.ok).toBe(succeeds);
             expect(outcome.operation.state).toBe(succeeds ? 'succeeded' : 'failed');
             if (admission === 'retired') expect(outcome.operation.error.error).toMatch(/auth wait \(exit 1; code ERR_BAD_REQUEST; category http_error; HTTP 409\)/u);
+            if (admission === 'expired-consent') {
+                expect(outcome.operation.error.error).toContain('Retry');
+                expect(outcome.lateConsent).toEqual({ rejected: true, waitStatus: 1, waitCode: 'AUTH_REQUEST_EXPIRED' });
+            }
         }
         const pending = await db.terminalAuthRequest.findMany();
         expect(pending).toHaveLength(beforeRequests + 1);
         const ownPending = pending.find(request => request.responseAccountId === account.id);
-        if (admission === 'misbound-approval') expect(ownPending).toBeUndefined();
+        if (admission === 'misbound-approval' || admission === 'expired-consent') expect(ownPending).toBeUndefined();
         else {
             expect(ownPending).toBeDefined();
             expect(ownPending?.claimedAt).not.toBeNull();

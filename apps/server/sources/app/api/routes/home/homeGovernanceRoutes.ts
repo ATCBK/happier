@@ -31,6 +31,7 @@ import { inTx } from "@/storage/inTx";
 import type { Fastify } from "../../types";
 import { registerHomeManagedIdentityProviderRoutes } from "./homeManagedIdentityProviderRoutes";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
+import { isAuthEmailDeliveryReady } from "@/app/auth/email/resolveAuthEmailDelivery";
 
 const ERROR_RESPONSES = {
     400: HomeGovernanceErrorV1Schema,
@@ -94,10 +95,12 @@ export function homeGovernanceRoutes(app: Fastify): void {
         async (request, reply) => {
             const requestHomeEnv = await readRequestHomeEnv(request);
             if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
+            const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
             const projection = await inTx(async (tx) => await readHomeGovernanceProjectionInTx(tx, {
                 viewerAccountId: request.userId,
                 teamsEnabled: teamsEnabled(requestHomeEnv),
                 env: requestHomeEnv,
+                emailDeliveryReady,
             }));
             if (projection.status === "rejected") {
                 const status = projection.code === "home_governance_forbidden"
@@ -150,9 +153,11 @@ export function homeGovernanceRoutes(app: Fastify): void {
         async (request, reply) => {
             const requestHomeEnv = await readRequestHomeEnv(request);
             if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
+            const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
             const listing = await inTx(async (tx) => await listHomeAccountsInTx(tx, {
                 actorAccountId: request.userId,
                 env: requestHomeEnv,
+                emailDeliveryReady,
                 ...(request.body.cursor !== undefined ? { cursor: request.body.cursor } : {}),
                 ...(request.body.limit !== undefined ? { limit: request.body.limit } : {}),
             }), { isolationLevel: "Serializable" /* The ordered Account ids and their projected rows must come from the same listing snapshot. */ });
@@ -207,10 +212,12 @@ export function homeGovernanceRoutes(app: Fastify): void {
         async (request, reply) => {
             const requestHomeEnv = await readRequestHomeEnv(request);
             if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
+            const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
             const outcome = await inTx(async (tx) => await readHomeAccountDetailInTx(tx, {
                 actorAccountId: request.userId,
                 accountId: request.body.accountId,
                 env: requestHomeEnv,
+                emailDeliveryReady,
             }));
             if (outcome.status === "rejected") {
                 return await reply.code(homeGovernanceErrorHttpStatusV1(outcome.code)).send({ error: outcome.code });
@@ -234,10 +241,12 @@ export function homeGovernanceRoutes(app: Fastify): void {
         async (request, reply) => {
             const requestHomeEnv = await readRequestHomeEnv(request);
             if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
+            const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
             const outcome = await inTx(async (tx) => await signOutHomeAccountEverywhereInTx(tx, {
                 actorAccountId: request.userId,
                 targetAccountId: request.body.accountId,
                 env: requestHomeEnv,
+                emailDeliveryReady,
             }), { isolationLevel: "Serializable" });
             if (outcome.status === "rejected") {
                 return await reply.code(homeGovernanceErrorHttpStatusV1(outcome.code)).send({ error: outcome.code });
@@ -260,11 +269,13 @@ export function homeGovernanceRoutes(app: Fastify): void {
         async (request, reply) => {
             const requestHomeEnv = await readRequestHomeEnv(request);
             if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
+            const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
             const outcome = await inTx(async (tx) => await setHomeRoleInTx(tx, {
                 actorAccountId: request.userId,
                 targetAccountId: request.body.accountId,
                 homeRole: request.body.homeRole,
                 env: requestHomeEnv,
+                emailDeliveryReady,
             }), { isolationLevel: "Serializable" });
             if (outcome.status === "rejected") {
                 return await reply.code(homeGovernanceErrorHttpStatusV1(outcome.code)).send({ error: outcome.code });
@@ -293,6 +304,8 @@ export function homeGovernanceRoutes(app: Fastify): void {
             },
             async (request, reply) => {
                 if (request.validationError) return await reply.code(400).send({ error: "invalid_home_input" as const });
+                const requestHomeEnv = await readRequestHomeEnv(request);
+                const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: requestHomeEnv });
                 const outcome = await inTx(async (tx) => {
                     const transition = await setAccountStatusInTx(tx, {
                         actorAccountId: request.userId,
@@ -306,6 +319,8 @@ export function homeGovernanceRoutes(app: Fastify): void {
                         account: await readHomeAccountRowInTx(tx, {
                             actorAccountId: request.userId,
                             accountId: request.body.accountId,
+                            env: requestHomeEnv,
+                            emailDeliveryReady,
                         }),
                     };
                 }, { isolationLevel: "Serializable" });

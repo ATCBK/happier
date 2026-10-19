@@ -273,6 +273,7 @@ describe("Personal Home Teams bootstrap", () => {
         const nextOwner = await createAccount();
 
         const promoted = await inTx(async (tx) => await setHomeRoleInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: initialOwner.id,
             targetAccountId: nextOwner.id,
             homeRole: "owner",
@@ -280,6 +281,7 @@ describe("Personal Home Teams bootstrap", () => {
         }));
         expect(promoted.status).toBe("ok");
         const demoted = await inTx(async (tx) => await setHomeRoleInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: nextOwner.id,
             targetAccountId: initialOwner.id,
             homeRole: "member",

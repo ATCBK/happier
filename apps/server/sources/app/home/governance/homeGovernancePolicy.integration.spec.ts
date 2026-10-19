@@ -68,6 +68,7 @@ describe("Home governance policy singleton", () => {
     it("creates the row on the first patch and advances the revision", async () => {
         const owner = await createAccount("owner");
         const created = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 0, teamCreationPolicy: "self_service" },
@@ -85,6 +86,7 @@ describe("Home governance policy singleton", () => {
         });
 
         const narrowed = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 1, authenticationPolicy: { v: 1, admission: "invitation_only" } },
@@ -126,6 +128,7 @@ describe("Home governance policy singleton", () => {
         // This deployment serves managed OIDC/GitHub callbacks but has no WorkOS platform.
         const env = { ...POLICY_ENV, HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test" };
         const beyondCeiling = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env,
             patch: {
@@ -148,6 +151,7 @@ describe("Home governance policy singleton", () => {
             approvedGitHubEnterpriseOrigins: ["https://github.corp.example:8443"],
         };
         const created = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env,
             patch: { expectedRevision: 0, teamProviderPolicy: providerPolicy },
@@ -162,6 +166,7 @@ describe("Home governance policy singleton", () => {
 
         // Resetting to inheritance is always a recoverable write.
         await expect(inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env,
             patch: { expectedRevision: 1, teamProviderPolicy: null },
@@ -184,6 +189,7 @@ describe("Home governance policy singleton", () => {
             approvedGitHubEnterpriseOrigins: [],
         };
         await expect(inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: { ...POLICY_ENV, HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test" },
             patch: { expectedRevision: 3, teamProviderPolicy: providerPolicy },
@@ -215,6 +221,7 @@ describe("Home governance policy singleton", () => {
         };
 
         const result = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 4, teamProviderPolicy: providerPolicy },
@@ -230,6 +237,7 @@ describe("Home governance policy singleton", () => {
         const owner = await createAccount("owner");
 
         const result = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: {
                 ...POLICY_ENV,
@@ -258,6 +266,7 @@ describe("Home governance policy singleton", () => {
     it("rejects a private identity-network policy outside the deployment ceiling without advancing revision", async () => {
         const owner = await createAccount("owner");
         const created = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: {
@@ -268,6 +277,7 @@ describe("Home governance policy singleton", () => {
         expect(created).toMatchObject({ status: "applied", policy: { revision: 1 } });
 
         const result = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: {
@@ -307,6 +317,7 @@ describe("Home governance policy singleton", () => {
         };
 
         const result = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: enabledEnv,
             patch: { expectedRevision: 0, identityNetworkPolicy: policy },
@@ -339,12 +350,14 @@ describe("Home governance policy singleton", () => {
     it("refuses a stale revision and preserves the current policy", async () => {
         const owner = await createAccount("owner");
         await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 0, teamCreationPolicy: "self_service" },
         }));
 
         const conflict = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 0, teamCreationPolicy: "disabled" },
@@ -369,12 +382,14 @@ describe("Home governance policy singleton", () => {
     it("reports a stale authentication-policy editor as a revision conflict before validating its draft", async () => {
         const owner = await createAccount("owner");
         await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 0, teamCreationPolicy: "self_service" },
         }));
 
         const conflict = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: {
@@ -403,6 +418,7 @@ describe("Home governance policy singleton", () => {
     it("lets only one of two editors at the same revision win", async () => {
         const owner = await createAccount("owner");
         await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 0, teamCreationPolicy: "managed_only" },
@@ -410,11 +426,13 @@ describe("Home governance policy singleton", () => {
 
         const outcomes = await Promise.all([
             inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+                emailDeliveryReady: false,
                 actorAccountId: owner,
                 env: POLICY_ENV,
                 patch: { expectedRevision: 1, teamCreationPolicy: "self_service" },
             }), { isolationLevel: "Serializable" }),
             inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+                emailDeliveryReady: false,
                 actorAccountId: owner,
                 env: POLICY_ENV,
                 patch: { expectedRevision: 1, teamCreationPolicy: "disabled" },
@@ -449,6 +467,7 @@ describe("Home governance policy singleton", () => {
     it("checks every changed field before applying any of them", async () => {
         const admin = await createAccount("admin");
         const rejected = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: admin,
             env: POLICY_ENV,
             patch: {
@@ -466,12 +485,14 @@ describe("Home governance policy singleton", () => {
     it("clears an authentication narrowing back to inheritance", async () => {
         const owner = await createAccount("owner");
         await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             patch: { expectedRevision: 0, authenticationPolicy: { v: 1, admission: "closed" } },
         }));
 
         const cleared = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: POLICY_ENV,
             // Clearing a narrowing re-offers what it closed: a widening the owner confirms (§3.4).
@@ -509,6 +530,7 @@ describe("Home governance policy singleton", () => {
         });
 
         const result = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner,
             env: {
                 ...POLICY_ENV,
@@ -552,6 +574,7 @@ describe("Home governance policy singleton", () => {
         });
 
         const result = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner.id,
             env: {
                 ...POLICY_ENV,
@@ -602,6 +625,7 @@ describe("Home governance policy singleton", () => {
         });
 
         const repaired = await inTx(async (tx) => await setHomeGovernancePolicyInTx(tx, {
+            emailDeliveryReady: false,
             actorAccountId: owner.id,
             env: {
                 ...POLICY_ENV,
