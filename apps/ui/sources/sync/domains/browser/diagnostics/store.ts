@@ -872,6 +872,27 @@ export function applyBrowserDiagnosticEvents(
     return viewsByKey === state.viewsByKey ? state : { viewsByKey };
 }
 
+/**
+ * Diagnostics describe the view's current document. When the view moves to a newer navigation
+ * generation, the older document's events leave the view (a page without a collector would never
+ * replace them) and its late stragglers stay rejected by the generation check in
+ * {@link applyBrowserDiagnosticEvents}.
+ */
+export function advanceBrowserDiagnosticsGeneration(
+    state: BrowserDiagnosticsUiStore,
+    input: Readonly<{ browserSessionId: string; viewId: string; navigationGeneration: number }>,
+): BrowserDiagnosticsUiStore {
+    const key = browserViewKey(input);
+    const existing = state.viewsByKey[key];
+    if (!existing || existing.navigationGeneration >= input.navigationGeneration) return state;
+    return {
+        viewsByKey: {
+            ...state.viewsByKey,
+            [key]: { ...existing, navigationGeneration: input.navigationGeneration, events: [] },
+        },
+    };
+}
+
 export function selectBrowserDiagnosticsEventCount(
     state: BrowserDiagnosticsUiStore,
     input: Readonly<{ browserSessionId: string; viewId: string }>,

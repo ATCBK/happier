@@ -17,6 +17,7 @@ export type {
     UseBrowserDiagnosticsDaemonSnapshotInput,
 } from './daemonSnapshot';
 export {
+    advanceBrowserDiagnosticsGeneration,
     applyBrowserDiagnosticEvents,
     createBrowserDiagnosticsUiStore,
     selectBrowserDiagnosticsEventCount,

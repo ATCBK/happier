@@ -516,6 +516,30 @@ describe('useBrowserDiagnosticsRuntime', () => {
         }));
     });
 
+    it('drops the previous document\'s events when the view moves to a new navigation generation, and ignores its late stragglers', async () => {
+        stubCryptoRandomUuid();
+        const view = createLocalPreviewView({ engineKind: 'nativeWebView' });
+        const hook = await renderHook(({ currentView }: { currentView: BrowserControlViewState }) =>
+            useBrowserDiagnosticsRuntime({ view: currentView, enabled: true }), { initialProps: { currentView: view } });
+        const bridge = hook.getCurrent()!.bridge!;
+        const consoleEvent = (generation: number, eventId: string): BrowserDiagnosticEventV1 => ({
+            v: 1, eventId, browserSessionId: bridge.browserSessionId, viewId: bridge.viewId, navigationGeneration: generation, capturedAtMs: 2_000,
+            family: 'console', kind: 'console.entry', fidelity: 'injectedPage', trusted: false,
+            collector: { collectorId: bridge.collectorId, nonce: bridge.nonce, version: bridge.collectorVersion },
+            data: { level: 'info', argCount: 1, textAvailable: true },
+            redaction: { level: 'metadataOnly', queryRedacted: true, headersRedacted: true, truncated: false },
+        });
+        const eventCount = () => selectBrowserDiagnosticsForView(hook.getCurrent()!.state, { browserSessionId: view.browserSessionId, viewId: view.viewId }).eventCount;
+        await act(async () => bridge.onEvents([consoleEvent(7, 'evt_old_1'), consoleEvent(7, 'evt_old_2')]));
+        expect(eventCount()).toBe(2);
+
+        // An external page carries no collector, so nothing ever replaces the old events; the drawer must not keep counting them.
+        await hook.rerender({ currentView: { ...view, adapterKind: 'externalUrl', engineKind: 'webIframe', navigationGeneration: 8, currentUrl: 'https://example.com/' } });
+        expect(eventCount()).toBe(0);
+        await act(async () => bridge.onEvents([consoleEvent(7, 'evt_late')]));
+        expect(eventCount()).toBe(0);
+    });
+
     it('does not create a fake injected bridge for local-preview web iframes but still ingests daemon snapshots', async () => {
         stubCryptoRandomUuid();
         const snapshotClient = vi.fn(async () => ({

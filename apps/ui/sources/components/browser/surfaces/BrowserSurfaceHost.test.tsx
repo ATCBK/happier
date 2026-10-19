@@ -1691,8 +1691,8 @@ describe('BrowserSurfaceHost', () => {
         });
 
         await vi.waitFor(() => expect(screen.findByTestId('browser-surface-launchpad')).toBeNull());
-        // Blurred address field shows the pretty display URL (scheme/trailing-slash trimmed).
-        expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('preview.happier.test/current-registration');
+        // Blurred address field names a relay preview by the service it exposes, keeping the path.
+        expect(screen.findByTestId('browser-surface-address')?.props.value).toBe('localhost:5173/current-registration');
         expect(screen.findByType('iframe').props.src).toBe(registeredUrl);
         expect(onViewTargetChange).toHaveBeenCalledWith({
             browserSessionId: 'browser_session_default',

@@ -18,6 +18,7 @@ import type {
     BrowserDiagnosticsObjectInspectorEntry,
 } from './BrowserDiagnosticsEvalConsole';
 import {
+    advanceBrowserDiagnosticsGeneration,
     applyBrowserDiagnosticEvents,
     createBrowserDiagnosticsUiStore,
     selectBrowserDiagnosticsEventCount,
@@ -252,6 +253,10 @@ export function useBrowserDiagnosticsRuntime(
     const browserSessionId = input.view?.browserSessionId;
     const viewId = input.view?.viewId;
     const navigationGeneration = input.view?.navigationGeneration;
+    React.useEffect(() => {
+        if (browserSessionId === undefined || viewId === undefined || navigationGeneration === undefined) return;
+        eventSource.setState((current) => advanceBrowserDiagnosticsGeneration(current, { browserSessionId, viewId, navigationGeneration }), true);
+    }, [eventSource, browserSessionId, viewId, navigationGeneration]);
     const injected = !!input.view && canAttachInjectedDiagnostics(input.view, input.automationEnabled === true);
     const desktopInjected = !!input.view && !injected && canAttachDesktopInjectedDiagnostics(input.view);
     const requiresOriginHandshake = input.view?.engineKind === 'webIframe';

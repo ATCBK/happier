@@ -172,6 +172,8 @@ export type BrowserUrlFieldProps = Readonly<{
      * bar reflects a loaded page and wants this; the launchpad's entry box starts empty and does not.
      */
     formatWhileBlurred?: boolean;
+    /** Names the blurred address by another host than the URL's (a relay preview's exposed service). */
+    displayHost?: string;
     /** Clear the draft after a successful submit (a new-tab entry box, not an address bar). */
     clearOnSubmit?: boolean;
     searchUrlTemplate?: string;
@@ -244,7 +246,7 @@ export function BrowserUrlField(props: BrowserUrlFieldProps): React.ReactElement
     const resting = densityKey === 'capsule' && !focused && props.value.length > 0;
     const displayValue = focused || props.formatWhileBlurred !== true
         ? rawDraft
-        : formatBrowserDisplayUrl(props.value, { hostOnly: densityKey === 'capsule' });
+        : formatBrowserDisplayUrl(props.value, { hostOnly: densityKey === 'capsule', displayHost: props.displayHost });
 
     const handleFocus = React.useCallback(() => {
         editIntent.current = { key: props.editIntentKey, started: false };

@@ -208,6 +208,12 @@ describe('WebIframeEngine diagnostics wiring', () => {
         const reloaded = new URL(screen.findByType('iframe').props.src);
         expect(reloaded.pathname + reloaded.search.replace(/&__happierCollector=.*/, '')).toBe('/other?x=1');
         expect(JSON.parse(reloaded.searchParams.get('__happierCollector')!).navigationGeneration).toBe(7);
+
+        // The host derives the reload key from its latest effect only, so the next command (Stop) arrives without it.
+        // That must not remount the frame at the opening page: the reloaded document is still the current one.
+        await screen.update(element(7, { navigationCommand: { commandId: 'command_stop_after_reload', kind: 'stop' } }));
+        const afterStop = new URL(screen.findByType('iframe').props.src);
+        expect(afterStop.pathname + afterStop.search.replace(/&__happierCollector=.*/, '')).toBe('/other?x=1');
         await screen.unmount();
     });
 

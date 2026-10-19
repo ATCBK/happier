@@ -451,8 +451,8 @@ describe('BrowserShell', () => {
         // No inner tab strip — the shell is a single-active-view renderer; tab order/active live on
         // the details-workspace engine. The sole view's content/address renders directly.
         expect(screen.findByTestId('browser-shell-tab-view_1')).toBeNull();
-        // Blurred address field shows the pretty display URL (scheme/trailing-slash trimmed).
-        expect(screen.findByTestId('browser-shell-address')?.props.value).toBe('preview.happier.test');
+        // Blurred address field names a relay preview by the service it exposes, not its isolated host.
+        expect(screen.findByTestId('browser-shell-address')?.props.value).toBe('localhost:5173');
         // The `webIframe` engine in this fixture declares no history capability, and a control the
         // active engine can NEVER fulfil is HIDDEN, not shipped permanently disabled
         // (`selectBrowserToolbarModel`'s `showBackForward`). `disabled` is reserved for the

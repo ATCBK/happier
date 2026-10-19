@@ -129,6 +129,12 @@ function NavigationContainedIframe(props: WebIframeEngineProps): React.ReactElem
 
 function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
+    // The host derives the reload key from its latest effect only, so the command after a Reload (Stop, Back)
+    // arrives without it. The frame keeps the key of its last reload: dropping it would remount the frame
+    // and load the opening page instead of the one the preview is on.
+    const retainedNavigationKeyRef = React.useRef(props.navigationKey);
+    if (props.navigationKey !== undefined) retainedNavigationKeyRef.current = props.navigationKey;
+    const navigationKey = retainedNavigationKeyRef.current;
     const hasLoadedCurrentNavigationRef = React.useRef(false);
     const [loadedDocumentRevision, setLoadedDocumentRevision] = React.useState(0);
     const [cooperativeReadyUrl, setCooperativeReadyUrl] = React.useState<string | null>(null);
@@ -144,10 +150,10 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     // A reload (the host's fresh navigation key) reloads the page the preview is on, not the one it was
     // opened at. The new identity still arrives in the navigation URL, so the base is chosen before the
     // frame sees any source change.
-    if (props.navigationKey !== undefined && reloadBase?.navigationKey !== props.navigationKey) {
-        setReloadBase({ navigationKey: props.navigationKey, forUrl: props.url, url: frameUrlRef.current });
+    if (navigationKey !== undefined && reloadBase?.navigationKey !== navigationKey) {
+        setReloadBase({ navigationKey, forUrl: props.url, url: frameUrlRef.current });
     }
-    const navigationUrl = (props.navigationKey !== undefined && reloadBase?.navigationKey === props.navigationKey
+    const navigationUrl = (navigationKey !== undefined && reloadBase?.navigationKey === navigationKey
         && reloadBase.forUrl === props.url ? reloadBase.url : null) ?? props.url;
     const diagnosticsRef = React.useRef(props.diagnostics);
     const automationRef = React.useRef(props.automation);
@@ -231,7 +237,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         cooperativeDocumentRetiredRef.current = false;
         setCooperativeReadyUrl(null);
         setPreviewTransportUnavailable(false);
-    }, [props.navigationKey, props.url, props.html, cooperativeNavigation?.url, reloadCommandId]);
+    }, [navigationKey, props.url, props.html, cooperativeNavigation?.url, reloadCommandId]);
 
     React.useLayoutEffect(() => {
         if (!cooperativeNavigation || typeof window === 'undefined') return;
@@ -528,7 +534,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         cooperativeNavigation,
         cooperativeReadyUrl,
         cooperativeNavigation ? null : loadedDocumentRevision,
-        props.navigationKey,
+        navigationKey,
         props.url,
         props.html,
         props.sandbox,
@@ -749,7 +755,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         bridgeEnabled,
         bridgeExactDocumentChannel,
         bridgeTargetOrigin,
-        props.navigationKey,
+        navigationKey,
         props.url,
         props.html,
     ]);
@@ -793,9 +799,9 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     return (
         <View testID={`${props.testID}-container`} style={browserFrameStyles.root}>
             {React.createElement('iframe', {
-                'data-browser-navigation-key': props.navigationKey,
+                'data-browser-navigation-key': navigationKey,
                 'data-testid': props.testID,
-                key: props.navigationKey,
+                key: navigationKey,
                 onError: props.onError,
                 onLoad: handleLoad,
                 ref: iframeRef,
