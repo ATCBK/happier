@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { measurePictureTone } from './pictureTone';
+import Color from 'color';
+import { measurePictureColor, measurePictureTone } from './pictureTone';
 
 /** A 100 × 10 picture: a night sky on the left half, a pale sky on the right, the bottom rows dissolved. */
 function picture() {
@@ -56,3 +57,16 @@ describe('measurePictureTone', () => {
     ).toBeUndefined();
   });
 });
+
+describe('measurePictureColor', () => {
+  it('reads the mean colour of a region, a dissolved foot seen as the page', () => {
+    const page = [245, 245, 245] as const;
+    const night = Color(measurePictureColor(picture(), page, { x0: 0, x1: 0.5, y0: 0, y1: 0.8 })!).rgb().array();
+    expect(night.map(Math.round)).toEqual([20, 26, 40]);
+    // Half night, half page: the mean is taken in linear light, so it reads lighter than the sRGB midpoint.
+    const half = Color(measurePictureColor(picture(), page, { x0: 0, x1: 0.5, y0: 0.6, y1: 1 })!);
+    expect(half.luminosity()).toBeGreaterThan(Color.rgb(132, 135, 142).luminosity());
+    expect(measurePictureColor(picture(), page, { x0: 0.4, x1: 0.4, y0: 0, y1: 1 })).toBeUndefined();
+  });
+});
+

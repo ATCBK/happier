@@ -26,7 +26,7 @@ export function WallpaperHaze(
     height: Math.max(2, Math.round(props.size.height / 4)),
   };
   const at = `${((props.focus.x / props.size.width) * 100).toFixed(1)}% ${((props.focus.y / props.size.height) * 100).toFixed(1)}%`;
-  const maskOf = (ellipse: string, solid: string) => `radial-gradient(ellipse ${ellipse} at ${at}, #000 ${solid}, transparent 100%)`;
+  const maskOf = (ellipse: string, solid: string, centre = at) => `radial-gradient(ellipse ${ellipse} at ${centre}, #000 ${solid}, transparent 100%)`;
   const layer = (blur: number, ellipse: string, solid: string) => {
     const mask = maskOf(ellipse, solid);
     return (
@@ -59,7 +59,7 @@ export function WallpaperHaze(
     );
   };
   const { layers, veil } = props.haze;
-  const veilMask = veil ? maskOf(`${veil.rx * 100}% ${veil.ry * 100}%`, `${veil.solid * 100}%`) : null;
+  const veilMask = veil ? maskOf(`${veil.rx * 100}% ${veil.ry * 100}%`, `${veil.solid * 100}%`, `${(veil.at.x * 100).toFixed(1)}% ${(veil.at.y * 100).toFixed(1)}%`) : null;
   return (
     <>
       {layers.map(spec => <React.Fragment key={spec.blur}>{layer(spec.blur, `${spec.rx * 100}% ${spec.ry * 100}%`, `${spec.solid * 100}%`)}</React.Fragment>)}
