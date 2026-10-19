@@ -131,7 +131,7 @@ describe('Session-owned question answer return', () => {
         let state: AgentState = { requests: {}, completedRequests: { question: {
             tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions }, createdAt: 1, completedAt: 2,
             status: 'approved', decision: 'approved', questionV1: { mode: 'wait', lasting: false },
-            structuredAnswersV1: answers, answeredBy: { kind: 'person' },
+            structuredAnswersV1: answers, answeredBy: { kind: 'person', accountId: 'carol-answerer' },
             responseTarget: { kind: 'session_question_answer', sessionId, sourceTurnId: 'old-native-turn' },
         } } };
         const pending: Array<SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2> = [];
@@ -211,7 +211,9 @@ describe('Session-owned question answer return', () => {
         expect(content.v).toMatchObject({ content: { text: JSON.stringify({ requestId: 'question',
             question: { questions }, context: { mode: 'wait', lasting: false }, answers }) } });
         expect(content.v).not.toHaveProperty('meta.happierInputRequestV1.returnedAnswer.senderSessionId');
-        expect(content.v).not.toHaveProperty('meta.happierInputRequestV1.returnedAnswer.answeredBy');
+        expect(content.v).toMatchObject({ meta: { happierInputRequestV1: { returnedAnswer: {
+            answeredBy: { v: 1, kind: 'happierApp', actor: { kind: 'person', accountId: 'carol-answerer' } },
+        } } } });
         expect(content.v).not.toHaveProperty('meta.happierInputRequestV1.sourceSession');
         expect(pending.at(-1)).not.toHaveProperty('reply');
         recovered.store.replayCompletedResponseTargets();

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolCall } from "@happier-dev/session-core/messages";
+import { qualifyTranscriptAccountActor } from '@happier-dev/session-core/messages';
+import { SessionMessageAccountActorV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
 import { knownTools } from '@/components/tools/catalog';
 import { resolveToolHeaderTextPresentation } from './resolveToolHeaderTextPresentation';
@@ -25,6 +27,28 @@ function makeToolCall(overrides: Partial<ToolCall>): ToolCall {
 }
 
 describe('resolveToolHeaderTextPresentation (real known tools)', () => {
+    it('names the authenticated answering person using the existing Home-qualified sanitized Account actor', () => {
+        const tool = makeToolCall({ name: 'AskUserQuestion', description: 'Worker question', input: {},
+            permission: { id: 'question', status: 'approved', answeredBy: { kind: 'person', accountId: 'bob' } } });
+        const actor = qualifyTranscriptAccountActor(SessionMessageAccountActorV1Schema.parse({ v: 1, accountId: 'bob',
+            profile: { name: 'Bob Chen', firstName: null, lastName: null, username: null, avatarUrl: null } }), 'home');
+        const model = resolveToolHeaderTextPresentation({ tool, metadata: null, serverId: 'home',
+            viewerScope: { serverId: 'home', accountId: 'alice' }, answeringAccountActor: actor });
+        expect(model.answeredBy).toEqual({ kind: 'person', accountId: 'bob' });
+        expect(model.answeredByLabel).toContain('Bob Chen');
+        const self = resolveToolHeaderTextPresentation({ tool, metadata: null, serverId: 'home',
+            viewerScope: { serverId: 'home', accountId: 'bob' } });
+        expect(self.answeredByLabel?.toLowerCase()).toContain('you');
+        for (const other of [actor && { ...actor, serverId: 'other-home' }, actor && { ...actor, accountId: 'worker-owner' }]) {
+            const unknown = resolveToolHeaderTextPresentation({ tool, metadata: null, serverId: 'home',
+                viewerScope: { serverId: 'other-home', accountId: 'bob' }, answeringAccountActor: other });
+            expect(unknown.answeredByLabel).toBeTruthy();
+            expect(unknown.answeredByLabel).not.toContain('Bob Chen');
+            expect(unknown.answeredByLabel?.toLowerCase()).not.toContain('you');
+        }
+        expect(model.title).toBe(self.title);
+        expect(model.subtitle).toBe(self.subtitle);
+    });
     it('projects the admitted question answerer beside the unchanged worker description, never an authored label', () => {
         const tool = makeToolCall({ name: 'AskUserQuestion', description: 'Worker question',
             input: { questions: [], answeredBy: { kind: 'session', sessionId: 'forged' } },

@@ -16,6 +16,15 @@ import {
 const protocol = { ...sessionInputAdmission, SessionMessageMetaSchema };
 
 describe('session input admission metadata', () => {
+  it('retains a host-stamped answering Account without admitting a caller-authored person answerer', () => {
+    const request = protocol.SessionInputRequestV1Schema.parse({ v: 1, producer: 'sessionAction', caller: { kind: 'host' }, permission: {},
+      returnedAnswer: { requestSessionId: 'worker', requestLocalId: 'question', outcome: 'answer', delivery: 'wake',
+        answeredBy: { v: 1, kind: 'happierApp', actor: { kind: 'person', accountId: 'bob' } } } });
+    expect(request.returnedAnswer?.answeredBy).toMatchObject({ actor: { kind: 'person', accountId: 'bob' } });
+    expect(() => protocol.assertSessionInputAdmissionReceiptForRequestV1({ request,
+      inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'eve', sessionRelationship: 'owner' } })).toThrow();
+    expect(protocol.readSessionInputSenderSessionIdV1(request)).toBeUndefined();
+  });
   it('retains a human-origin return destination without manufacturing an agent turn', () => {
     const request = { v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: {},
       replyIntent: { mode: 'return', humanOrigin: { sessionId: 'composer-session' } } };

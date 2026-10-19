@@ -73,6 +73,20 @@ function prepareQuestion() {
 const answer = { id: 'question', approved: true, answers: { 'Choose?': ['Yes'], 'Revision?': ['3'] } };
 
 describe('manager answers at the registered question RPC owner', () => {
+    it('attributes a present person to the authenticated answering Account, not the worker or manager owner', async () => {
+        const { session, rpc } = prepareQuestion();
+        const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user',
+            authorization: { kind: 'session.permission.respond', sessionId: 'worker',
+                actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' } } };
+        for (const answeredBy of [{ kind: 'person', accountId: 'eve' }, { kind: 'session', sessionId: 'forged' }]) {
+            expect(await rpc({ ...answer, answeredBy }, context)).toMatchObject({ ok: false, errorCode: 'permission_response_invalid' });
+            expect(session.agentState.completedRequests!.question).toBeUndefined();
+        }
+        await expect(rpc(answer, context)).resolves.toBeUndefined();
+        expect(session.agentState.completedRequests!.question).toMatchObject({
+            answeredBy: { kind: 'person', accountId: 'bob' }, structuredAnswersV1: answer.answers,
+        });
+    });
     it('never takes the answering actor or requester from authored answer fields', async () => {
         const managed = prepareQuestion();
         const forged = { ...answer, answeredBy: { kind: 'session', sessionId: 'forged' },
