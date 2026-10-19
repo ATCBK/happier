@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { ParticipantRecipientV1 } from '@happier-dev/protocol';
 import type { SessionDraftSessionMessagingValueV1 } from '@happier-dev/protocol/drafts/sessionDrafts';
+import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 
 import { projectSessionFollowerCensus } from '@/components/sessions/collaboration/SessionPeopleFollowSections';
 import { useSessionFollowers } from '@/components/sessions/follow/useSessionFollowers';
@@ -21,15 +22,17 @@ import { useDiscussionTitleProjections } from '@/sync/ops/discussions/useDiscuss
 import { AGENT_INPUT_MENU_ICON_SIZE_PX } from '../definitions/agentInputChipIconMetrics';
 import { resolveSessionParticipantTargetLabel } from './recipientOptions';
 import { SessionTalkDiscussionChoices } from './SessionTalkDiscussionChoices';
+import { createSessionTalkMatchingFilter, SessionTalkMatchingStep } from './SessionTalkMatchingStep';
 import { useSessionTalkTargets, type SessionTalkTargets } from './sessionTalkTargets';
 
 export type SessionTalkIntent = SessionDraftSessionMessagingValueV1;
 export type SessionTalkVerb = 'send' | 'ask' | 'post_update';
 /** The selectors the composer offers, each previewed by the Action's own resolver. */
-export type SessionTalkSelector = 'manager' | 'workers' | 'siblings' | 'followers' | 'following' | 'discussion';
-/** A chosen selector: the Discussion selector carries which Discussion. */
+export type SessionTalkSelector = 'manager' | 'workers' | 'siblings' | 'followers' | 'following' | 'matching' | 'discussion';
+/** A chosen selector: Discussion carries which Discussion, Matching its filter (never the rows it showed). */
 export type SessionTalkTarget =
-  | Readonly<{ selector: Exclude<SessionTalkSelector, 'discussion'> }>
+  | Readonly<{ selector: Exclude<SessionTalkSelector, 'discussion' | 'matching'> }>
+  | Readonly<{ selector: 'matching'; filter: SessionListFilterV1 }>
   | Readonly<{ selector: 'discussion'; discussionId: string }>;
 
 const RELATION_SELECTORS = [
@@ -45,6 +48,7 @@ const SELECTOR_ICON: Readonly<Record<SessionTalkSelector, IconName>> = {
   siblings: 'arrows-left-right',
   followers: 'bell',
   following: 'eye',
+  matching: 'funnel-simple',
   discussion: 'chats-circle',
 };
 
@@ -69,6 +73,7 @@ export function readSessionTalkTarget(
     return null;
   const target = intent.target;
   if (target.selector === 'discussion') return { selector: 'discussion', discussionId: target.discussionId };
+  if (target.selector === 'matching') return { selector: 'matching', filter: target.filter };
   return (RELATION_SELECTORS as readonly string[]).includes(target.selector)
     ? { selector: target.selector as (typeof RELATION_SELECTORS)[number] }
     : null;
@@ -108,6 +113,8 @@ export type SessionTalkPickerProps = Readonly<{
     onRecipientChange: (next: ParticipantRecipientV1 | null) => void;
   }> | null;
   requestClose: () => void;
+  /** The popover's height budget for the picker; a step never asks for more. */
+  maxHeight?: number;
 }>;
 
 /**
@@ -123,15 +130,21 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
   const selectedTarget = readSessionTalkTarget(props.intent);
   const selected = selectedTarget?.selector ?? null;
   // The Discussion selector needs one Discussion; the step below chooses it, and the row then previews it.
-  const [step, setStep] = React.useState<'targets' | 'discussion'>('targets');
+  const [step, setStep] = React.useState<'targets' | 'discussion' | 'matching'>('targets');
   const [discussionId, setDiscussionId] = React.useState<string | null>(
     () => (selectedTarget?.selector === 'discussion' ? selectedTarget.discussionId : null),
   );
   const [commitDiscussion, setCommitDiscussion] = React.useState(false);
+  // Matching previews the chosen filter; while its step is open, the filter being edited.
+  const chosenFilter = selectedTarget?.selector === 'matching' ? selectedTarget.filter : null;
+  const [draftFilter, setDraftFilter] = React.useState<SessionListFilterV1 | null>(null);
+  const matchingFilter = step === 'matching' ? draftFilter : chosenFilter;
   const targets = useSessionTalkTargets(props.sessionId, props.serverId, {
     enabled: verb !== 'post_update',
     ...(discussionId ? { discussionId } : {}),
+    ...(matchingFilter ? { matchingFilter } : {}),
   });
+  const matchingSummary = useMatchingSummary(targets.matching);
   const discussionTitle = useDiscussionTitleProjections(React.useMemo(
     () => (discussionId ? [{ serverId: props.serverId, discussionId }] : []),
     [discussionId, props.serverId],
@@ -152,12 +165,25 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
     },
     [props.intent, props.onIntentChange],
   );
-  // The popover keeps its height while the list turns into the audience and back.
+  // The popover keeps its height while the list turns into the audience, a step, and back.
   const [bodyMinHeight, setBodyMinHeight] = React.useState(0);
   const onBodyLayout = React.useCallback((event: LayoutChangeEvent) => {
     const height = Math.ceil(event.nativeEvent.layout.height);
     setBodyMinHeight((current) => (height > current ? height : current));
   }, []);
+  // The Matching step brings its own footer and takes the people footer's place in the same frame.
+  const [footerHeight, setFooterHeight] = React.useState(0);
+  const onFooterLayout = React.useCallback((event: LayoutChangeEvent) => {
+    setFooterHeight(Math.ceil(event.nativeEvent.layout.height));
+  }, []);
+  const [verbHeight, setVerbHeight] = React.useState(0);
+  const onVerbLayout = React.useCallback((event: LayoutChangeEvent) => {
+    setVerbHeight(Math.ceil(event.nativeEvent.layout.height));
+  }, []);
+  // The step takes the frame the list set (its body plus the people footer and its margin), within the popover's budget.
+  const listFrame = bodyMinHeight > 0 ? bodyMinHeight + footerHeight + theme.space.s8 : undefined;
+  const budget = props.maxHeight !== undefined ? props.maxHeight - verbHeight - 2 * theme.space.s8 : undefined;
+  const matchingFrame = listFrame !== undefined && budget !== undefined ? Math.min(listFrame, budget) : listFrame ?? budget;
 
   const chooseTarget = (target: SessionTalkTarget) => {
     props.participants?.onRecipientChange(null);
@@ -209,7 +235,7 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
   );
   return (
     <View style={styles.root} testID="session-talk-picker">
-      <View style={styles.verb}>
+      <View style={styles.verb} onLayout={onVerbLayout}>
         <SegmentedTabBar<SessionTalkVerb>
           tabs={verbTabs}
           activeTabId={verb}
@@ -228,11 +254,26 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
           )}
         </Text>
       </View>
-      <View style={{ minHeight: bodyMinHeight }} onLayout={onBodyLayout}>
+      {/* The Matching step fills the frame the list set; it never grows it. */}
+      <View
+        style={{ minHeight: step === 'matching' ? matchingFrame ?? 0 : bodyMinHeight }}
+        onLayout={step === 'matching' ? undefined : onBodyLayout}
+      >
       {verb === 'post_update' ? (
         <SessionTalkAudience
           sessionId={props.sessionId}
           serverId={props.serverId}
+        />
+      ) : step === 'matching' && props.serverId && draftFilter ? (
+        <SessionTalkMatchingStep
+          serverId={props.serverId}
+          filter={draftFilter}
+          onFilterChange={setDraftFilter}
+          summary={matchingSummary}
+          canUse={targets.matching.coverage === 'complete' && targets.matching.addresses.length > 0 && !targets.matching.loading}
+          onUse={() => chooseTarget({ selector: 'matching', filter: draftFilter })}
+          onBack={() => setStep('targets')}
+          frameHeight={matchingFrame}
         />
       ) : step === 'discussion' && props.serverId ? (
         <SessionTalkDiscussionChoices
@@ -292,6 +333,26 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
             );
           })}
           <Item
+            testID="session-talk-target:matching"
+            rowRole="menu"
+            icon={<Icon name={SELECTOR_ICON.matching} size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={iconColor} />}
+            title={chosenFilter ? selectorTitle('matching') : t('session.participants.talk.matchingChoose')}
+            subtitle={chosenFilter ? describeTalkPreview(targets.matching) : t('session.participants.talk.matchingHint')}
+            detail={chosenFilter && targets.matching.coverage === 'complete' && targets.matching.names.length > 0
+              ? String(targets.matching.names.length) : undefined}
+            selected={selected === 'matching'}
+            rightElement={selected === 'matching' ? check : undefined}
+            showChevron={selected !== 'matching'}
+            showDivider={false}
+            accessibilityRole="radio"
+            accessibilityChecked={selected === 'matching'}
+            onPress={() => {
+              if (!props.serverId) return;
+              setDraftFilter(chosenFilter ?? createSessionTalkMatchingFilter(props.serverId));
+              setStep('matching');
+            }}
+          />
+          <Item
             testID="session-talk-target:discussion"
             rowRole="menu"
             icon={<Icon name={SELECTOR_ICON.discussion} size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={iconColor} />}
@@ -344,7 +405,8 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
         </View>
       )}
       </View>
-      <View style={styles.footer}>
+      {step === 'matching' && verb !== 'post_update' ? null : (
+      <View style={styles.footer} onLayout={onFooterLayout}>
         <Icon
           name="users"
           size={AGENT_INPUT_MENU_ICON_SIZE_PX}
@@ -354,8 +416,29 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
           {t('session.participants.talk.peopleFooter')}
         </Text>
       </View>
+      )}
     </View>
   );
+}
+
+/**
+ * The Matching step's footer line: how many sessions the filter reaches now. While a new filter is
+ * checked, the last answer stays with "refreshing" rather than flashing to Loading (lab T1 stale).
+ */
+function useMatchingSummary(preview: SessionTalkTargets['matching']): string {
+  const last = React.useRef<string | null>(null);
+  if (preview.loading && preview.names.length === 0) {
+    return last.current
+      ? `${last.current} · ${t('session.participants.talk.refreshing')}`
+      : t('common.loading');
+  }
+  const summary = preview.coverage === 'complete'
+    ? preview.names.length === 0
+      ? t('session.participants.talk.noMatches')
+      : `${t('session.participants.talk.matchCount', { count: preview.names.length })} · ${summarizeNames(preview.names)}`
+    : describeTalkPreview(preview);
+  if (preview.coverage === 'complete') last.current = summary;
+  return summary;
 }
 
 /**
