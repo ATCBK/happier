@@ -326,6 +326,7 @@
 | `./actions` | `ExternalSessionsSource` | type | any |
 | `./actions` | `FilesystemActionInputById` | type | any |
 | `./actions` | `FilesystemActionResultById` | type | any |
+| `./actions` | `FilesystemTreeNode` | type | any |
 | `./actions` | `FindActionInputById` | type | any |
 | `./actions` | `FindActionResultById` | type | any |
 | `./actions` | `FollowEventDeliveryV1` | type | any |

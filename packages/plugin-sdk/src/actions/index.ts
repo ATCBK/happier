@@ -116,6 +116,7 @@ export type { ExternalSessionsActionResultById } from './dtos/externalSessionsAc
 export type { ExternalSessionsSource } from './dtos/pluginActionDtoSupport.generated.js';
 export type { FilesystemActionInputById } from './dtos/filesystemActionDtos.generated.js';
 export type { FilesystemActionResultById } from './dtos/filesystemActionDtos.generated.js';
+export type { FilesystemTreeNode } from './actionTypeMap.generated.js';
 export type { FindActionInputById } from './dtos/findActionDtos.generated.js';
 export type { FindActionResultById } from './dtos/findActionDtos.generated.js';
 export type { FollowEventDeliveryV1 } from './dtos/pluginActionDtoSupport.generated.js';

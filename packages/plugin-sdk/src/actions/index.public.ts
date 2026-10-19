@@ -1,4 +1,5 @@
 export type { ActionContract } from './service.js';
+export type { FilesystemTreeNode } from './actionTypeMap.generated.js';
 export type { BoardItemRefV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { SessionTargetV1, SessionTargetSelectorV1, ActionSessionTargetDeclarationV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { FollowPolicyV1, FollowEventMapV1, FollowEventDeliveryV1 } from './dtos/pluginActionDtoSupport.generated.js';

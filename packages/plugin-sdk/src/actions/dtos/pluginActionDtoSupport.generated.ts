@@ -193,6 +193,14 @@ export type ActionSessionTargetDeclarationV1 = {
     field: string;
     cardinality: 'one' | 'many';
 };
+export interface FilesystemTreeNode {
+    readonly name: string;
+    readonly path: string;
+    readonly type: 'file' | 'directory';
+    readonly size?: number;
+    readonly modified?: number;
+    readonly children?: readonly FilesystemTreeNode[];
+}
 export type UsageCoachFinding = {
     detectorId: 'duplicated_instructions' | 'model_misfit' | 'idle_recaching' | 'approval_friction' | 'mcp_overhead' | 'repeated_file_reads' | 'compaction_storms' | 'anomalous_looping_usage' | 'cache_busting_prompt_changes' | 'outside_usage' | 'context_bloat' | 'cache_economics' | 'effort_audit' | 'subagent_fanout';
     evidenceKey: string;
@@ -9017,14 +9025,6 @@ export type SessionTerminalLayoutV1 = {
     first: SessionTerminalLayoutV1;
     second: SessionTerminalLayoutV1;
 };
-export interface FilesystemTreeNode {
-    readonly name: string;
-    readonly path: string;
-    readonly type: 'file' | 'directory';
-    readonly size?: number;
-    readonly modified?: number;
-    readonly children?: readonly FilesystemTreeNode[];
-}
 export type PluginSettingFieldSchemaV2 = {
     type?: 'string' | 'number' | 'boolean' | 'object' | 'null' | 'array' | 'integer' | undefined;
     title?: string | undefined;
