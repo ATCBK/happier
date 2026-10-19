@@ -16,6 +16,9 @@ import { uploadBulkPayloadFromFileViaMachineCarrier } from '../plumbing/uploadBu
 import { createBufferedTransferDestination } from '../carriers/createBufferedTransferDestination';
 import { downloadBulkPayloadViaDirectExportToDestination } from '../plumbing/directTransferExportDownload';
 import { resolveMachineCarrierRoute } from '../plumbing/machineCarrierHttpLease';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { observeTransferOperation } from '../plumbing/observeTransferOperation';
 
 type TransferFailureResponse = Readonly<{ success: false; error: string; errorCode?: string }>;
 export type ComposerMediaStageUploadResult = Readonly<{
@@ -284,6 +287,8 @@ export async function releaseComposerContent(
     rawHandle: ComposerContentHandleV1,
     options?: Readonly<{
         signal?: AbortSignal | null;
+        /** Stops waiting after a failed turn; the exact-Home cleanup still runs. */
+        observerSignal?: AbortSignal | null;
         claimant?: Readonly<{ composer: ComposerRefV1; attachmentInstanceId: string }>;
     }>,
 ): Promise<Readonly<{ success: true }> | TransferFailureResponse> {
@@ -302,17 +307,23 @@ export async function releaseComposerContent(
         machineId: handle.data.executionTarget.machineId,
         serverId: handle.data.executionTarget.serverId,
     });
-    return await transferClient.call<ComposerMediaStageReleaseResponse, Readonly<{
-        handle: ComposerContentHandleV1;
-        claimant?: Readonly<{ composer: ComposerRefV1; attachmentInstanceId: string }>;
-    }>>({
-        machineMethod: RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_RELEASE,
-        request: {
-            handle: handle.data,
-            ...(composer?.success && attachmentInstanceId?.success
-                ? { claimant: { composer: composer.data, attachmentInstanceId: attachmentInstanceId.data } }
-                : {}),
-        },
-        signal: options?.signal ?? null,
+    const cleanup = runWithHomeCredentialRequestSignal(handle.data.executionTarget.serverId, async credentialSignal => {
+        const cancellation = mergeAbortSignals([credentialSignal, options?.signal ?? undefined]);
+        try {
+            return await transferClient.call<ComposerMediaStageReleaseResponse, Readonly<{
+                handle: ComposerContentHandleV1;
+                claimant?: Readonly<{ composer: ComposerRefV1; attachmentInstanceId: string }>;
+            }>>({
+                machineMethod: RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_RELEASE,
+                request: {
+                    handle: handle.data,
+                    ...(composer?.success && attachmentInstanceId?.success
+                        ? { claimant: { composer: composer.data, attachmentInstanceId: attachmentInstanceId.data } }
+                        : {}),
+                },
+                signal: cancellation.signal,
+            });
+        } finally { cancellation.dispose(); }
     });
+    return await observeTransferOperation(cleanup, options?.observerSignal);
 }

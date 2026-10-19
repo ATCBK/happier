@@ -15,6 +15,7 @@ import {
     type TransferFinalizeRecoveryFailure,
 } from '../plumbing/directTransferFinalizeRecovery';
 import { TRANSFER_FINALIZE_RECOVERY_REQUIRED_ERROR_CODE } from '../plumbing/directTransferImportClient';
+import { observeTransferOperation } from '../plumbing/observeTransferOperation';
 
 export type SessionAttachmentTransferContext = Readonly<{
     kind: 'sessionBound';
@@ -103,9 +104,9 @@ export async function uploadDaemonSessionAttachmentFromReader(params: SessionAtt
                 errorCode: TRANSFER_FINALIZE_RECOVERY_REQUIRED_ERROR_CODE,
                 recovery: createTransferFinalizeRecovery<SessionAttachmentsUploadFinalizeResponse>({
                     expiresAt: recoveryExpiry,
-                    retryFinalize: async () => {
+                    retryFinalize: async (signal) => {
                         try {
-                            const retried = await readFinalizeResponse(request);
+                            const retried = await readFinalizeResponse(request, signal);
                             if (retried.success) return settleTransferFinalizeRecovery({ status: 'finalized', response: retried });
                             if (retried.errorCode === TRANSFER_FINALIZE_RECOVERY_REQUIRED_ERROR_CODE) return retainTransferFinalizeRecovery({ status: 'recovery_required', error: retried.error });
                             return settleTransferFinalizeRecovery({ status: 'unavailable', reason: 'session_unavailable', error: retried.error });
@@ -113,9 +114,9 @@ export async function uploadDaemonSessionAttachmentFromReader(params: SessionAtt
                             return retainTransferFinalizeRecovery({ status: 'unavailable', reason: 'session_unavailable', error: error instanceof Error ? error.message : 'Session attachment scope is unavailable' });
                         }
                     },
-                    discard: async () => {
+                    discard: async (signal) => {
                         try {
-                            const discarded = await context.call<SessionRpcFailure | { success: true }>(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT, request);
+                            const discarded = await context.call<SessionRpcFailure | { success: true }>(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT, request, signal);
                             return discarded.success
                                 ? settleTransferFinalizeRecovery({ status: 'discarded' })
                                 : settleTransferFinalizeRecovery({ status: 'unavailable', reason: 'session_unavailable', error: discarded.error });
@@ -139,7 +140,8 @@ export async function uploadDaemonSessionAttachmentFromReader(params: SessionAtt
             },
             sendChunk: (request, signal) => context.call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK, request, signal),
             finalize,
-            abort: (request) => context.call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT, request),
+            abort: (request) => observeTransferOperation(
+                context.call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT, request), params.signal),
             retainUploadAfterFinalize: isTransferFinalizeRecoveryFailure,
             signal: params.signal,
             onProgress: params.onProgress,
@@ -205,7 +207,8 @@ export async function downloadDaemonSessionAttachmentToDestination(params: Reado
         }, signal),
         readChunk: (request, signal) => context.call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK, request, signal),
         finalize: (request, signal) => context.call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE, request, signal),
-        abort: (request) => context.call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT, request),
+        abort: (request) => observeTransferOperation(
+            context.call(RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT, request), params.signal),
         onInit: params.onInit,
         signal: params.signal,
     });
