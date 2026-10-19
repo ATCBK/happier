@@ -1,4 +1,4 @@
-import type { BoardItemRefV1 } from '@happier-dev/protocol/boards/workBoardV1';
+import { buildWorkBoardItemKeyV1, type BoardItemRefV1 } from '@happier-dev/protocol/boards/workBoardV1';
 
 import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -6,22 +6,52 @@ import { readSessionListRowForServerId } from '@/sync/domains/session/listing/se
 import { isSessionRetiredForServer, type SessionsDomain } from '@/sync/store/domains/sessions';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { WorkflowRunWindow } from '@/components/workflows/library/workflowLibraryReads';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
-type BoardEntitySourceState = 'ready' | 'loading' | 'settled' | 'retired';
+type BoardEntitySourceState = 'ready' | 'loading' | 'settled' | 'retired' | 'failed';
+
+export function readBoardSessionHomeObservation(
+    cache: SessionsDomain['concurrentSessionListCacheByServerId'], serverId: string,
+) {
+    const key = Object.keys(cache).find(key => areServerProfileIdentifiersEquivalent(key, serverId));
+    return key ? cache[key]?.listObservation ?? null : null;
+}
 
 /** A settled cache miss is unavailable here, not evidence that a Session was deleted. */
 export function readBoardSessionSourceState(
     state: Pick<SessionsDomain, 'sessionListRowsByServerId' | 'deletedSessionIds' | 'concurrentSessionListCacheByServerId'>,
     ref: BoardItemRefV1,
+    previous?: BoardEntitySourceState,
 ): BoardEntitySourceState {
     const { serverId, id } = ref.qualifiedId;
     if (readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, id)) return 'ready';
     if (isSessionRetiredForServer(state.deletedSessionIds, id, serverId)) return 'retired';
-    const key = Object.keys(state.concurrentSessionListCacheByServerId)
-        .find(key => areServerProfileIdentifiersEquivalent(key, serverId));
-    const observation = key ? state.concurrentSessionListCacheByServerId[key]?.listObservation : null;
-    return observation && (observation.lastSuccessAt !== null || observation.phase === 'ready'
-        || observation.phase === 'error' || observation.phase === 'offline') ? 'settled' : 'loading';
+    const observation = readBoardSessionHomeObservation(state.concurrentSessionListCacheByServerId, serverId);
+    if (observation?.phase === 'error' || observation?.phase === 'offline') return 'failed';
+    if ((!observation || observation.phase === 'loading' || observation.phase === 'refreshing') && previous && previous !== 'loading') return previous;
+    return observation && (observation.lastSuccessAt !== null || observation.phase === 'ready') ? 'settled' : 'loading';
+}
+
+type BoardSessionSource = Readonly<{ state: BoardEntitySourceState; row: SessionListRenderableSession | null }>;
+
+/** Visit-local settled facts for the demanded Sessions. A re-read is not a new result. */
+export function createBoardSessionSourceProjection() {
+    let previous = new Map<string, BoardSessionSource>();
+    return (state: Parameters<typeof readBoardSessionSourceState>[0], refs: readonly BoardItemRefV1[]): readonly BoardSessionSource[] => {
+        const next = new Map<string, BoardSessionSource>();
+        const sources = refs.map(ref => {
+            const key = buildWorkBoardItemKeyV1(ref);
+            const old = previous.get(key);
+            const phase = readBoardSessionSourceState(state, ref, old?.state);
+            const row = readSessionListRowForServerId(state.sessionListRowsByServerId, ref.qualifiedId.serverId, ref.qualifiedId.id)
+                ?? (phase === 'ready' ? old?.row ?? null : null);
+            const source = old?.state === phase && old.row === row ? old : { state: phase, row };
+            next.set(key, source);
+            return source;
+        });
+        previous = next;
+        return sources;
+    };
 }
 
 export function readBoardMachineSourceState(state: Readonly<{

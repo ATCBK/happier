@@ -1,4 +1,4 @@
-import type { SessionReportsV1 } from '@happier-dev/protocol';
+import type { SessionManagedSessionsV1 } from '@happier-dev/protocol';
 import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import { hasProjectedActiveTurn } from '@/sync/domains/session/attention/runtimePresentation';
@@ -9,11 +9,11 @@ import type { WorkStatusInput } from './resolveWorkStatusTone';
 
 export type SessionWorkStatusFacts = Extract<WorkStatusInput, { kind: 'session' }>['facts'];
 
-type SessionReportCounts = Readonly<{ reports?: SessionReportsV1 | null }>;
+type SessionReportCounts = Readonly<{ managedSessions?: SessionManagedSessionsV1 | null }>;
 
 /** The reports the server counts as still going for this Session: working, waiting on a person, or stalled. */
 function countOutstandingReports(session: SessionReportCounts): number {
-    const reports = session.reports;
+    const reports = session.managedSessions;
     return reports ? reports.working + reports.needsYou + reports.stalled : 0;
 }
 

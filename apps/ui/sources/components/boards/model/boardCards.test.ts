@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BoardItemRefV1 } from '@happier-dev/protocol';
+import { buildWorkBoardItemKeyV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
 vi.mock('@/text', async () => {
@@ -32,7 +33,7 @@ const NOW = 1_000_000;
 afterEach(clearMachineRequestReachabilityForTest);
 
 function member(ref: BoardItemRefV1, available = true): BoardMember {
-    return { key: JSON.stringify([ref.kind, ref.qualifiedId.serverId, ref.qualifiedId.id]), ref, picked: true, sourced: false, available };
+    return { key: buildWorkBoardItemKeyV1(ref), ref, picked: true, sourced: false, available };
 }
 
 const permissionSession = createSessionListRenderableSessionFixture({
@@ -53,6 +54,39 @@ const workingSession = createSessionListRenderableSessionFixture({
 });
 
 describe('board cards', () => {
+    it('settles linked-task status with its Session read and recovers without replacing the task', () => {
+        const ref = { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-cold' }, pluginId: 'com.acme.tasks' } as const;
+        const task = { title: 'Cold linked work', category: 'completed' as const,
+            linkedSessions: [{ serverId: 'home-a', sessionId: permissionSession.id }] };
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => null, task: () => task,
+            workflowRun: () => null, machine: () => null, workflow: () => null,
+            machineSessionCounts: new Map(), accountScopedHome: () => true };
+        const project = createBoardCardProjection();
+        expect(project([member(ref)], facts)[0]?.status.bucket).toBe('idle');
+        const settled = { ...facts, missingEntityReason: (item: BoardItemRefV1) => item.kind === 'session' ? 'read failed' : null };
+        expect(project([member(ref)], settled)[0]).toMatchObject({ availability: 'ready', title: task.title,
+            status: { bucket: 'offline' } });
+        expect(project([member(ref)], { ...settled, session: () => permissionSession })[0]?.status.bucket).toBe('needs_you');
+    });
+
+    it('keeps external task cards, uses linked-agent status, and refreshes that status without changing task facts', () => {
+        const ref = { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'issue-7' }, pluginId: 'com.acme.tasks' } as const;
+        const task = { title: 'Fix payments', category: 'backlog' as const, categoryLabel: 'Backlog',
+            linkedSessions: [{ serverId: 'home-a', sessionId: permissionSession.id }] };
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => permissionSession, workflowRun: () => null,
+            machine: () => null, workflow: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+            task: () => task };
+        const project = createBoardCardProjection();
+        const cards = project([member(ref)], facts);
+        expect(cards[0]).toMatchObject({ title: 'Fix payments', availability: 'ready', status: { bucket: 'needs_you' } });
+        expect(project([member(ref)], { ...facts, session: () => workingSession })[0]?.status.bucket).toBe('working');
+        expect(buildBoardCards([member(ref)], { ...facts, task: () => ({ ...task, linkedSessions: [] }) })[0]?.status)
+            .toMatchObject({ bucket: 'idle', word: 'Backlog' });
+        const unavailable = buildBoardCards([member(ref)], { ...facts, task: () => null,
+            missingEntityReason: () => 'boards.card.unavailable' })[0];
+        expect(unavailable).toMatchObject({ ref, availability: 'content_unavailable' });
+    });
+
     it('binds Session settlement to its exact Home while retaining a real row over a tombstone', async () => {
         const serverId = 'srv_board_source';
         const profile = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: serverId,
@@ -76,7 +110,7 @@ describe('board cards', () => {
         }, ref)).toBe('ready');
         expect(readBoardSessionSourceState({ ...cold, concurrentSessionListCacheByServerId: {
             [serverId]: { serverName: null, listObservation: { phase: 'error', lastSuccessAt: null } },
-        } }, ref)).toBe('settled');
+        } }, ref)).toBe('failed');
     });
 
     it('binds Machine settlement to applied canonical inventory and retains its cached row during refresh', () => {

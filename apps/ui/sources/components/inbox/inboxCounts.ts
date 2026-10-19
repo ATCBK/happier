@@ -1,4 +1,5 @@
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
+import type { InboxItem } from './inboxItems';
 
 /**
  * The one Inbox count. The rail badge, the popover's header and the page's two views all read it, so
@@ -25,6 +26,7 @@ export function countInboxItems(parts: InboxCountParts): number {
 
 /** The model facts the counts read; lengths only. */
 export type InboxCountSource = Readonly<{
+    items?: readonly InboxItem[];
     openApprovals: ArrayLike<unknown>;
     openUsageNotices: ArrayLike<unknown>;
     actionOperationEntries: ArrayLike<unknown>;
@@ -36,6 +38,13 @@ export type InboxCountSource = Readonly<{
 
 /** The "Needs you" view's share of the count. */
 export function countInboxNeedsYou(model: InboxCountSource): number {
+    if (model.items) return countInboxItems({
+        sessions: model.items.filter(item => item.producer === 'live' && item.source.kind === 'session' && item.view === 'needs_you' && !item.read).length,
+        workflowRuns: model.workflowAttention.runIds.length - model.items.filter(item => item.source.kind === 'workflow_run' && item.view !== 'needs_you').length,
+        automationRuns: model.automationAttention.runIds.length - model.items.filter(item => item.source.kind === 'automation_run' && item.view !== 'needs_you').length,
+        approvalsAndNotices: model.openApprovals.length + model.items.filter(item => item.producer === 'notice' && item.view === 'needs_you').length,
+        operations: model.actionOperationEntries.length, friendRequests: 0,
+    });
     return countInboxItems({
         sessions: model.sessionPresentation.sessionsNeedingAttention.length,
         workflowRuns: model.workflowAttention.runIds.length,
@@ -48,6 +57,7 @@ export function countInboxNeedsYou(model: InboxCountSource): number {
 
 /** The "Updates" view's share of the count: finished sessions to read and friend requests. */
 export function countInboxUpdates(model: InboxCountSource): number {
+    if (model.items) return model.items.filter(item => item.view === 'updates' && !item.read).length + model.friendRequests.length;
     return countInboxItems({
         sessions: model.sessionPresentation.readySessions.length,
         workflowRuns: 0,
@@ -58,12 +68,17 @@ export function countInboxUpdates(model: InboxCountSource): number {
     });
 }
 
+export function countInboxMentions(model: Pick<InboxCountSource, 'items'>): number {
+    return model.items?.filter(item => item.view === 'mentions' && !item.read).length ?? 0;
+}
+
 /** Everything in the Inbox: the number the rail badge shows. */
 export function countInbox(model: InboxCountSource): number {
-    return countInboxNeedsYou(model) + countInboxUpdates(model);
+    return countInboxNeedsYou(model) + countInboxUpdates(model) + countInboxMentions(model);
 }
 
 /** Whether the "Needs you" view draws any row, counted or parked: its empty state waits for none. */
 export function hasInboxNeedsYouRows(model: Pick<InboxModel, 'workGroups'> & InboxCountSource): boolean {
+    if (model.items) return model.items.some(item => item.view === 'needs_you') || countInboxNeedsYou(model) > 0;
     return model.workGroups.length > 0 || countInboxNeedsYou(model) > 0;
 }

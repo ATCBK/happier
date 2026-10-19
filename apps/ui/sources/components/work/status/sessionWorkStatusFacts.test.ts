@@ -80,7 +80,7 @@ describe('readSessionWorkStatusFacts', () => {
 
     it('never calls a lead settled while its reports are still outstanding (R-10), whoever counts them', () => {
         const lead = createSessionListRenderableSessionFixture({
-            active: true, activeAt: NOW, latestTurnStatus: 'completed', reports: { total: 2, working: 1, needsYou: 0, stalled: 0 },
+            active: true, activeAt: NOW, latestTurnStatus: 'completed', managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0 },
         });
         // The server's count of the lead's reports, read from the Session itself.
         const fromAwareness = readSessionWorkStatusFacts(lead, NOW);
@@ -95,7 +95,7 @@ describe('readSessionWorkStatusFacts', () => {
         expect(withOutstandingReports(settled, 0)).toBe(settled);
 
         const doneReports = createSessionListRenderableSessionFixture({
-            active: true, activeAt: NOW, latestTurnStatus: 'completed', reports: { total: 2, working: 0, needsYou: 0, stalled: 0 },
+            active: true, activeAt: NOW, latestTurnStatus: 'completed', managedSessions: { total: 2, working: 0, needsYou: 0, stalled: 0 },
         });
         expect(readSessionWorkStatusFacts(doneReports, NOW).settled).toBe(true);
     });
@@ -104,7 +104,7 @@ describe('readSessionWorkStatusFacts', () => {
         // An offline lead whose reports still work, with no turn of its own in flight: not settled (R-10),
         // and not stalled either.
         const offlineLead = createSessionListRenderableSessionFixture({
-            presence: 1, active: false, activeAt: 1, reports: { total: 2, working: 1, needsYou: 0, stalled: 0 },
+            presence: 1, active: false, activeAt: 1, managedSessions: { total: 2, working: 1, needsYou: 0, stalled: 0 },
         });
         expect(readSessionWorkStatusFacts(offlineLead, NOW).settled).toBe(false);
         expect(readSessionWorkStalled(offlineLead, NOW)).toBe(false);

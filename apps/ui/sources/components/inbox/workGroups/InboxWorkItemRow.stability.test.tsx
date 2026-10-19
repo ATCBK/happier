@@ -5,6 +5,9 @@ import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { buildInboxWorkGroups, type InboxWorkItem } from '@/activity/presentation/buildInboxWorkGroups';
+import { en } from '@/text/translations/en';
+import { buildInboxItems } from '../inboxItems';
+import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 
 const paints = vi.hoisted(() => new Map<string, number>());
 const openUrl = vi.hoisted(() => vi.fn(async () => {}));
@@ -26,12 +29,30 @@ vi.mock('@expo/vector-icons', async () => {
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    const { tLoose, setPreferredLanguageFromSettings } = await vi.importActual<typeof import('@/text/i18n')>('@/text/i18n');
+    setPreferredLanguageFromSettings('en');
     return createTextModuleMock({ translate: (key, options) => key === 'workflows.run.attentionWaitRow' ? `${options?.step} is waiting for you`
-        : key === 'workflows.run.attentionWaitRowMore' ? `${options?.step} and ${options?.count} more wait for you` : key });
+        : key === 'workflows.run.attentionWaitRowMore' ? `${options?.step} and ${options?.count} more wait for you`
+        : key.startsWith('files.') ? tLoose(key) : key });
 });
 const { InboxWorkItemRow } = await import('./InboxWorkItemRow');
 
 describe('Inbox Work row stability', () => {
+    it('presents an interrupted run without a hold as a neutral Update through the same Inbox mapping', async () => {
+        const row = workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'interrupted', state: 'interrupted' }), null);
+        const groups = buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], automationRuns: [], automationServerId: null,
+            openApprovals: [], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null });
+        const item = groups.flatMap(group => group.items)[0];
+        if (!item) throw new Error('interrupted_item_missing');
+        const projected = buildInboxItems({ workGroups: groups, sessionPresentation: { sessionsNeedingAttention: [], readySessions: [],
+            markAllReadTargets: [], pendingRequestHydrationTargets: [] }, workflowServerId: 'home', accountServerId: 'home', notices: [] });
+        expect(projected[0]).toMatchObject({ type: 'update', view: 'updates' });
+        const screen = await renderScreen(<InboxWorkItemRow item={item} spansHomes={false} workflowServerId="home" identityDisplay="none"
+            presentation="screen" navigate={vi.fn()} settle={vi.fn(async () => {})} setReminder={vi.fn(async () => {})} />);
+        const rendered = screen.tree.root.findAll(node => node.props.testID === 'inbox.run.interrupted' && node.props.status !== undefined)[0];
+        expect(rendered?.props.status).toMatchObject({ tone: 'neutral', bucket: 'idle' });
+        expect(resolveWorkStatusTone({ kind: 'workflow_run', facts: { state: 'interrupted', word: 'Interrupted' } }).tone).toBe('attention');
+    });
     it('opens the canonical PR URL as the Landing primary action even in a list-detail Inbox', async () => {
         const session = createSessionFixture({ id: 'landing', serverId: 'home' });
         const navigate = vi.fn();
@@ -40,7 +61,8 @@ describe('Inbox Work row stability', () => {
             link: { sessionId: session.id, serverId: 'home', number: 42, url: 'https://github.com/acme/widgets/pull/42', state: 'open', observedAt: 100 } } as const;
         const screen = await renderScreen(<InboxWorkItemRow item={item} spansHomes={false} workflowServerId="home" identityDisplay="none"
             presentation="screen" navigate={navigate} onSelectItem={onSelectItem} settle={vi.fn(async () => {})} setReminder={vi.fn(async () => {})} />);
-        expect(JSON.stringify(screen.tree.toJSON())).toContain('files.sourceControl.pullRequests.states.open');
+        expect(JSON.stringify(screen.tree.toJSON())).toContain(en.files.sourceControlOperations.update.pullRequests.states.open);
+        expect(JSON.stringify(screen.tree.toJSON())).not.toContain('files.sourceControl.pullRequests.states.open');
         await act(async () => { screen.findHostByTestId('inbox.landing.landing')!.props.onPress(); });
         expect(openUrl).toHaveBeenCalledWith(item.link.url);
         expect(navigate).not.toHaveBeenCalled();
@@ -87,7 +109,7 @@ describe('Inbox Work row stability', () => {
         const changedBefore = paints.get('inbox.run.b.summary') ?? 0;
         expect(before).toBeGreaterThan(0);
         const next = buildInboxWorkGroups({ ...input, workflowRuns: [a, run('b', '2026-09-30T11:05:00.000Z')] }, first);
-        await act(async () => screen.tree.update(draw(next.flatMap((group) => group.items))));
+        await screen.update(draw(next.flatMap((group) => group.items)));
         expect(paints.get('inbox.run.a.summary')).toBe(before);
         expect(paints.get('inbox.run.b.summary')).toBeGreaterThan(changedBefore);
     });

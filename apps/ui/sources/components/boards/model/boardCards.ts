@@ -1,6 +1,7 @@
 import { buildWorkBoardItemKeyV1, type BoardItemRefV1, type WorkBoardV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import type { WorkflowRunStateV1, WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowTriggerSummaryInputV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
+import type { PluginWorkItemV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 
 import {
     resolveWorkStatusTone,
@@ -37,6 +38,7 @@ export type BoardCardAvailability = 'ready' | 'not_loaded' | 'home_unavailable' 
 export type MachineSessionCounts = Readonly<{ running: number; needsYou: number }>;
 
 export type BoardCardBody =
+    | Readonly<{ kind: 'task'; item: PluginWorkItemV1 }>
     | Readonly<{ kind: 'session'; serverId: string; sessionId: string; statusDetail?: string }>
     | Readonly<{ kind: 'workflow_run'; runId: string; state: WorkflowRunStateV1; attentionLabel: string | null; startedAt: string | null;
         progress: WorkflowRunSummaryV1['stepProgress'] }>
@@ -76,6 +78,7 @@ export type BoardWorkflowFacts = Readonly<{
 export type BoardCardFacts = Readonly<{
     nowMs: number;
     session: (ref: BoardItemRefV1) => SessionListRenderableSession | null;
+    task?: (ref: Extract<BoardItemRefV1, { kind: 'task' }>) => PluginWorkItemV1 | null;
     workflowRun: (ref: BoardItemRefV1) => WorkflowRunRow | null;
     machine: (ref: BoardItemRefV1) => Machine | null;
     /** The credential-bound Account for this exact Machine Home; absent authority fails closed. */
@@ -156,6 +159,16 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
     if (!member.available || ((member.ref.kind === 'workflow_run' || member.ref.kind === 'workflow')
         && !facts.accountScopedHome(member.ref.qualifiedId.serverId))) return unavailableStatus('home_unavailable');
     switch (member.ref.kind) {
+        case 'task': {
+            const task = facts.task?.(member.ref);
+            if (!task) return missingEntity(member, facts).status;
+            const linkedStatuses = task.linkedSessions.map(link => {
+                const ref = { kind: 'session' as const, qualifiedId: { serverId: link.serverId, id: link.sessionId } };
+                return readBoardWorkStatus({ ...member, ref, key: buildWorkBoardItemKeyV1(ref) }, facts);
+            });
+            return resolveWorkStatusTone({ kind: 'task', facts: { category: task.category,
+                word: task.categoryLabel, linkedStatuses } });
+        }
         case 'session': {
             const row = facts.session(member.ref);
             return row ? resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(row, facts.nowMs) })
@@ -206,6 +219,11 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
     const base = { key: member.key, ref: member.ref, picked: member.picked, availability: 'ready' as const };
     const { serverId, id } = member.ref.qualifiedId;
     switch (member.ref.kind) {
+        case 'task': {
+            const task = facts.task?.(member.ref);
+            return task ? { ...base, title: task.title, status: readBoardWorkStatus(member, facts), body: { kind: 'task', item: task } }
+                : missingEntity(member, facts);
+        }
         case 'session': {
             const row = facts.session(member.ref);
             if (!row) return missingEntity(member, facts);
@@ -293,6 +311,21 @@ function createBoardProjection<T>(project: (member: BoardMember, facts: BoardCar
             let refreshAt: number | null = null;
             let machineOnline: boolean | null = null;
             switch (member.ref.kind) {
+                case 'task': {
+                    const task = facts.task?.(member.ref);
+                    source = task;
+                    if (task) {
+                        const linkedRows = task.linkedSessions.map(link => facts.session({ kind: 'session',
+                            qualifiedId: { serverId: link.serverId, id: link.sessionId } }));
+                        // Include linked rows in the projection inputs: unchanged tracker facts cannot freeze agent state.
+                        for (const row of linkedRows) {
+                            if (!row) continue;
+                            const at = readSessionStatusNextRefreshAtMs(row, facts.nowMs);
+                            if (at !== null) refreshAt = refreshAt === null ? at : Math.min(refreshAt, at);
+                        }
+                    }
+                    break;
+                }
                 case 'session': {
                     const row = facts.session(member.ref);
                     source = row;
@@ -316,6 +349,12 @@ function createBoardProjection<T>(project: (member: BoardMember, facts: BoardCar
                 machineOnline, counts?.needsYou ?? 0, counts?.running ?? 0,
                 member.ref.kind === 'machine' ? facts.managedMachine?.(member.ref) : undefined,
                 facts.missingEntityReason?.(member.ref) ?? null];
+            if (member.ref.kind === 'task') {
+                for (const link of facts.task?.(member.ref)?.linkedSessions ?? []) {
+                    const ref = { kind: 'session' as const, qualifiedId: { serverId: link.serverId, id: link.sessionId } };
+                    inputs.push(facts.session(ref), facts.missingEntityReason?.(ref) ?? null);
+                }
+            }
             const prior = entries.get(member.key);
             const entry = prior && inputs.every((input, index) => input === prior.inputs[index])
                 && (prior.refreshAt === null || facts.nowMs < prior.refreshAt)

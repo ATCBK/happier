@@ -18,7 +18,8 @@ function runCard(state: 'cancelled' | 'outcome_uncertain' | 'waiting_for_review'
         nowMs: Date.now(), session: () => null, machine: () => null, workflow: () => null,
         machineSessionCounts: new Map(), accountScopedHome: () => true,
         workflowRun: () => workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ state,
-            attentionRequired: true }), null),
+            workflowCustodyState: state === 'cancelled' ? 'settled' : 'pending',
+            attentionRequired: true, createdAt: new Date(Date.now() - 120_000).toISOString() }), null),
     })[0]!;
 }
 
@@ -51,21 +52,26 @@ describe('Board body facts', () => {
         expect(screen.findHostByTestId('board-card:definition:run')).toBeNull();
     });
 
-    it('keeps stopped and uncertain attention neutral, and names a genuine hold without inventing review eligibility', async () => {
-        const screen = await renderScreen(<BoardCardView card={runCard('cancelled')} />);
+    it('keeps a stopped Run neutral with its outcome and age, and names genuine attention without inventing review eligibility', async () => {
+        const stopped = runCard('cancelled');
+        expect(stopped.status).toMatchObject({ bucket: 'finished', tone: 'neutral' });
+        const screen = await renderScreen(<BoardCardView card={stopped} />);
         expect(screen.getTextContent()).toContain('workflows.runState.cancelled');
-        expect(screen.getTextContent()).toContain('workStatus.buckets.needs_you');
+        expect(screen.getTextContent()).toContain('boards.card.run.started(age=time.minutesAgoShort(count=2))');
+        expect(screen.getTextContent()).not.toContain('workStatus.buckets.needs_you');
         expect(screen.getTextContent()).not.toContain('boards.card.run.waitingForYou');
         await screen.update(<BoardCardView card={runCard('outcome_uncertain')} />);
+        expect(screen.getTextContent()).toContain('workflows.runState.outcome_uncertain');
+        expect(screen.getTextContent()).toContain('workStatus.buckets.needs_you');
         expect(screen.getTextContent()).not.toContain('boards.card.run.waitingForYou');
         await screen.update(<BoardCardView card={runCard('waiting_for_review')} />);
         // The hold is named once, by the card's state word; the body does not restate it in other words.
-        expect(screen.getTextContent()).toContain('workflows.runState.waiting_for_review');
+        expect(screen.getTextContent().split('workStatus.buckets.needs_you')).toHaveLength(2);
         expect(screen.getTextContent()).not.toContain('workflows.review.waitTitle');
         expect(screen.getTextContent()).not.toContain('boards.card.run.waitingForYou');
         // In a status group the title row drops the word, so the hold moves to its own line.
         await screen.update(<BoardCardView card={runCard('waiting_for_review')} showStatusWord={false} />);
-        expect(screen.getTextContent()).toContain('workflows.runState.waiting_for_review');
+        expect(screen.getTextContent().split('workStatus.buckets.needs_you')).toHaveLength(2);
     });
 
     it('refreshes workflow countdown and Run age with unchanged cards while unrelated cards stay stable', async () => {
@@ -111,6 +117,13 @@ describe('Board body facts', () => {
         expect(count(groupedNeedsYou.getTextContent(), 'Interrupted')).toBe(1);
     });
 
+    it('drops the kind line when the title already reads as the kind (an untitled Run)', async () => {
+        const named = { ...runCard('cancelled'), title: 'Prepare the 0.3 release' };
+        const untitled = { ...runCard('cancelled'), title: 'boards.kinds.workflow_run' };
+        expect((await renderScreen(<BoardCardView card={named} />)).getTextContent()).toContain('boards.kinds.workflow_run');
+        await standardCleanup();
+        expect((await renderScreen(<BoardCardView card={untitled} />)).getTextContent().split('boards.kinds.workflow_run')).toHaveLength(2);
+    });
     it('says a settled unavailable item once: the kind as its title, one status word and one reason, with no placeholder or repeated kind', async () => {
         const card = buildBoardCards([{ key: 'gone', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-gone' } },
             picked: true, sourced: false, available: true }], {

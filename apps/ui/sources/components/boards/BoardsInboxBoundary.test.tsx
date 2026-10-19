@@ -10,6 +10,8 @@ import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, 
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { BoardsInboxBoundary } from '@/components/boards/BoardsInboxBoundary';
 
+await import('@/sync/syncEngine');
+
 // These spies observe actual HTTP Run storage and Automation REST requests.
 const runRequests = vi.fn();
 const automationRequests = vi.fn();
@@ -25,9 +27,9 @@ beforeEach(async () => {
     runRequests.mockReset();
     automationRequests.mockReset();
     automationRequests.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
-    boundary = await installWorkflowActionHttpBoundary({ fixtureResponse: runRequests, automationRuns: automationRequests });
     const home = await upsertAndActivateServer({ serverUrl: 'https://boards-inbox-boundary.test' });
     serverId = home.id;
+    boundary = await installWorkflowActionHttpBoundary({ fixtureResponse: runRequests, automationRuns: automationRequests });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     storage.setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' },
         isDataReady: true, sessions: {}, friends: {}, machineListByServerId: {}, workflowRunsById: {}, workflowRunListWindows: {},
@@ -38,7 +40,7 @@ afterEach(async () => {
     await standardCleanup();
     (await import('@/components/workflows/library/workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
     (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
-    boundary.dispose();
+    await boundary.dispose();
     storage.setState(previousState);
     publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
 });
@@ -59,12 +61,12 @@ describe('Boards Inbox demand over HTTP', () => {
         const screen = await renderScreen(view(false));
         expect(runRequests).not.toHaveBeenCalled();
         expect(automationRequests).not.toHaveBeenCalled();
-        await act(async () => { screen.tree.update(view(true)); });
+        await screen.update(view(true));
         expect(runRequests).toHaveBeenCalledTimes(1);
         expect(automationRequests).toHaveBeenCalledTimes(1);
         expect(mounts).toBe(1);
         expect(unmounts).toBe(0);
-        await act(async () => { screen.tree.update(view(false)); });
+        await screen.update(view(false));
         expect(mounts).toBe(1);
         expect(unmounts).toBe(0);
         const reads = runRequests.mock.calls.length;

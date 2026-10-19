@@ -4,7 +4,7 @@ import type { BoardItemRefV1 } from '@happier-dev/protocol';
 import type { BoardCard } from './boardCards';
 import { resolveBoardCardOpenTarget } from './boardCardOpenTarget';
 
-function card(kind: BoardItemRefV1['kind'], bucket: BoardCard['status']['bucket'], availability: BoardCard['availability'] = 'ready'): BoardCard {
+function card(kind: Exclude<BoardItemRefV1['kind'], 'task'>, bucket: BoardCard['status']['bucket'], availability: BoardCard['availability'] = 'ready'): BoardCard {
     return {
         key: `${kind}:x`,
         ref: { kind, qualifiedId: { serverId: 'home-a', id: 'x' } },
@@ -17,6 +17,16 @@ function card(kind: BoardItemRefV1['kind'], bucket: BoardCard['status']['bucket'
 }
 
 describe('resolveBoardCardOpenTarget', () => {
+    it('opens a task only when its current source supplies a page, never an unavailable or unopenable item', () => {
+        const task: BoardCard = { ...card('session', 'idle'),
+            ref: { kind: 'task', pluginId: 'com.acme.tasks', qualifiedId: { serverId: 'home-a', id: 'task-1' } } };
+        expect(resolveBoardCardOpenTarget(task, { inboxAvailable: true })).toBeNull();
+        const withPage: BoardCard = { ...task, body: { kind: 'task', item: {
+            title: 'Task', category: 'backlog', linkedSessions: [], page: { pageId: 'tasks' },
+        } } };
+        expect(resolveBoardCardOpenTarget(withPage, { inboxAvailable: true })).toEqual({ kind: 'item', ref: task.ref });
+        expect(resolveBoardCardOpenTarget({ ...withPage, availability: 'content_unavailable' }, { inboxAvailable: true })).toBeNull();
+    });
     it('routes secondary actions to native detail and the workflow Run composer, not Inbox or direct execution', () => {
         const held = card('workflow_run', 'needs_you');
         expect(resolveBoardCardOpenTarget(held, { inboxAvailable: true, action: 'review' }))

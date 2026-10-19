@@ -1,5 +1,6 @@
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
+import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,8 +23,9 @@ vi.mock('@/components/ui/popover', async importOriginal =>
     }));
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { SelectionList } = await import('@/components/ui/selectionList');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { AddToBoardButton } = await import('./AddToBoardPopover');
+const { AddToBoardButton, AddToBoardPopover } = await import('./AddToBoardPopover');
 const { t } = await import('@/text');
 
 // The native Markdown package is a rendering boundary this picker never renders.
@@ -34,10 +36,14 @@ let previousStorage = storage.getState();
 const run = createWorkflowRunSummaryFixture({ id: 'run-picker' });
 const runPage = await boardRunStoragePage([run]);
 
+function Picker(props: Omit<React.ComponentProps<typeof AddToBoardPopover>, 'anchorRef'>) {
+    const anchorRef = React.useRef<View>(null);
+    return <><AddToBoardButton anchorRef={anchorRef} open={props.open} onOpenChange={props.onOpenChange} />
+        <AddToBoardPopover {...props} anchorRef={anchorRef} /></>;
+}
+
 function picker(open = true) {
-    return <AddToBoardButton
-        board={{ id: 'board-picker', name: 'Picker', source: { picked: [] }, mode: 'canvas', snap: true,
-            positionsByItemRef: {}, pinnedInSessions: false }}
+    return <Picker
         homes={{ activeServerId: serverId, mountedServerIds: [serverId], isHomeMounted: (id) => id === serverId }}
         onBoardKeys={new Set()}
         onAdd={() => {}}
@@ -67,7 +73,37 @@ afterEach(async () => {
     storage.setState(previousStorage);
 });
 
-describe('AddToBoardButton library recovery', () => {
+describe('AddToBoardPopover library recovery', () => {
+    it('says which groups are loading and settles each independently', async () => {
+        const definitions = createDeferred<void>();
+        const runs = createDeferred<void>();
+        const sessions = createDeferred<void>();
+        // Keep bootstrap's real Session reads in flight instead of letting an
+        // unanswered HTTP fixture replace this case's loading observation with error.
+        for (const path of ['/v2/sessions', '/v2/sessions/active']) harness.home.answer(serverId, path, {
+            body: { sessions: [], nextCursor: null, hasNext: false }, respondAfter: sessions.promise,
+        });
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [], respondAfter: definitions.promise });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]), respondAfter: runs.promise });
+        storage.setState({ concurrentSessionListCacheByServerId: { [serverId]: {
+            serverName: null, listObservation: { phase: 'loading', lastSuccessAt: null },
+        } } });
+        try {
+            const screen = await renderScreen(picker());
+            // One loading line names every group still opening; it narrows as each settles.
+            const loading = () => screen.findAllByType(SurfaceStateCard).filter(node => node.props.kind === 'loading')
+                .map(node => `${node.props.testID}: ${node.props.title}`);
+            expect(loading()).toEqual(['board-add.loading: Opening Sessions, Workflows, and Workflow runs']);
+            definitions.resolve();
+            await waitForHomeGovernance(() => expect(loading()).toEqual(['board-add.loading: Opening Sessions and Workflow runs']));
+            await act(async () => storage.setState({ concurrentSessionListCacheByServerId: { [serverId]: {
+                serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 },
+            } } }));
+            expect(loading()).toEqual(['board-add.loading: Opening Workflow runs']);
+            runs.resolve();
+            await waitForHomeGovernance(() => expect(loading()).toEqual([]));
+        } finally { definitions.resolve(); runs.resolve(); sessions.resolve(); }
+    });
     it('updates a Machine option from the exact Home request reachability without changing its presence row', async () => {
         const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
         const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');

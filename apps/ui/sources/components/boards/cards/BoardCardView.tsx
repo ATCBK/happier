@@ -30,6 +30,7 @@ import type { BoardCardAction } from '../model/boardCardOpenTarget';
  */
 
 const KIND_ICON: Readonly<Record<BoardCard['ref']['kind'], IconName>> = {
+    task: 'check-square',
     session: 'chat-circle',
     workflow_run: 'tree-structure',
     workflow: 'clock',
@@ -75,6 +76,8 @@ function runAttentionLine(body: Extract<BoardCardBody, { kind: 'workflow_run' }>
 /** `shownWord`: the state word on screen, which the body never says again. */
 function describeBody(body: BoardCardBody, nowMs: number, shownWord: string | null): string | null {
     switch (body.kind) {
+        case 'task':
+            return null;
         case 'workflow_run': {
             const age = ageOf(body.startedAt, nowMs);
             const state = runAttentionLine(body) ?? (age ? t('boards.card.run.started', { age }) : null);
@@ -149,6 +152,7 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
     const body = unavailable
         ? (card.unavailableReason ?? (card.availability === 'home_unavailable' ? t('boards.card.unavailableBody') : null))
         : describeBody(card.body, nowMs, shownWord);
+    const kindLabel = t(`boards.kinds.${card.ref.kind}`);
     return (
         <View style={[styles.content, resolveBoardCardAction(card) ? styles.contentAboveAction : null]}>
             <View style={[styles.titleRow, props.gripped ? styles.titleRowGripped : null]}>
@@ -169,10 +173,12 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
             </View>
             {/* A settled unavailable card, and an unreadable Session (its detail is the reason it cannot be named),
                 is already titled by its kind; the line would only repeat it. */}
-            {(unavailable && !loading) || (card.body.kind === 'session' && card.body.statusDetail !== undefined) ? null : <View style={styles.metaRow}>
+            {/* An untitled item whose title already reads as its kind (a Run with no name) skips the line too. */}
+            {(unavailable && !loading) || (card.body.kind === 'session' && card.body.statusDetail !== undefined)
+                || (card.body.kind !== 'session' && card.title === kindLabel) ? null : <View style={styles.metaRow}>
                 {card.body.kind === 'session'
                     ? <SessionContext serverId={card.body.serverId} sessionId={card.body.sessionId} />
-                    : <Text numberOfLines={1} style={styles.kind}>{t(`boards.kinds.${card.ref.kind}`)}</Text>}
+                    : <Text numberOfLines={1} style={styles.kind}>{kindLabel}</Text>}
             </View>}
             {body ? <Text style={[styles.body, unavailable ? styles.quiet : null]}>{body}</Text> : null}
             {groupedWord ? <Text testID={`board-card:${card.key}:needs`} style={[styles.body, workStatusWordStyle(card.status.tone)]}>{groupedWord}</Text> : null}

@@ -25,7 +25,7 @@ import { WidgetSetupStep } from '@/components/widgets/add/WidgetSetupStep';
 import type { WidgetSetupSubmitResult } from '@/components/widgets/add/widgetSetupModel';
 import { selectBuiltinWidgetCandidates } from '@/components/widgets/widgetCatalog';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import type { AddToBoardWidgets } from '@/components/boards/header/AddToBoardPopover';
+import { AddToBoardPopover, type AddToBoardWidgets } from '@/components/boards/header/AddToBoardPopover';
 import { runWidgetSetupCommand } from '@/components/widgets/surface/widgetSurfaceSetup';
 
 // HTTP, device credential storage and native theme are system boundaries.
@@ -49,10 +49,13 @@ vi.mock('react-native', async () => {
 vi.mock('@legendapp/list/react-native', async original => (await import('@/dev/testkit/mocks/legendList'))
     .createCapturingLegendListMock({ original: await original<Record<string, unknown>>() }).module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+await import('@/sync/syncEngine');
 const previousState = storage.getState();
 const previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 const previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
-afterEach(async () => { await standardCleanup(); retirePresentationNotice(); storage.setState(previousState); runtimeFetch.mockReset(); vi.restoreAllMocks();
+afterEach(async () => { await standardCleanup();
+    await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+    retirePresentationNotice(); storage.setState(previousState); runtimeFetch.mockReset(); vi.restoreAllMocks();
     publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable); });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -126,8 +129,9 @@ describe('mounted WorkBoard Action settlement', () => {
         await vi.waitFor(() => expect(screen.findByTestId('board-header.add')).not.toBeNull());
         // Consume the real BoardScreen handler exposed to its Add surface; only
         // HTTP loses the acknowledgement and rejects the subsequent read-back.
-        const widgets = screen.root.find(node => node.props.board?.id === board.id && typeof node.props.widgets?.addInstance === 'function')
-            .props.widgets as AddToBoardWidgets;
+        const surface = screen.findByType(AddToBoardPopover);
+        const widgets = surface.props.widgets as AddToBoardWidgets;
+        expect(widgets.scope).toMatchObject({ owner: { kind: 'workBoard', boardId: board.id } });
         const instance = { v: 1, id: 'unknown-message-copy', definition: { kind: 'builtin', id: 'machine_fleet' }, bindings: {} } as const;
         const restoreReads = b.loseNextWriteAcknowledgement();
         try {

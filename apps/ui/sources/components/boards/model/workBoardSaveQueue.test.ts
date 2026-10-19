@@ -175,6 +175,7 @@ describe('WorkBoard Account Artifact save queue', () => {
         await b.store.refresh(); b.offline(true);
         await b.store.refresh();
         expect(b.store.getReadState()).toMatchObject({ status: 'error', hasSnapshot: true });
+        expect(b.store.getBoardReadState('b1')).toMatchObject({ status: 'error', hasSnapshot: true });
         expect(b.store.getBoards()).toEqual(base);
         b.offline(false); await b.store.refresh();
         expect(b.store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
@@ -209,6 +210,28 @@ describe('WorkBoard Account Artifact save queue', () => {
             expect(store.getBoards().boards.map(board => board.id)).toEqual(['b2']);
             expect(store.getSummaries().map(board => board.id)).toEqual(['b1', 'b2']);
             expect(persistence.rows.get('b1')).toBe(broken);
+        } finally { release(); }
+    });
+
+    it('keeps a failed body local to its Board while the index and readable neighbor remain ready', async () => {
+        const persistence = createWorkBoardArtifactBoundary(WorkBoardsV1Schema.parse({ v: 1,
+            boards: [...base.boards, createWorkBoardV1({ id: 'b2', name: 'Other' })] }));
+        let failed = true;
+        const store = createWorkBoardAccountStore({ ...persistence.transport, read: async (id, options) => {
+            if (id === 'b1' && failed) throw new Error('Network unavailable');
+            return persistence.transport.read(id, options);
+        } }, () => true);
+        const release = store.retainView(() => () => {}, 'all');
+        try {
+            await store.refresh();
+            expect(store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoardReadState('b1')).toMatchObject({ status: 'error', hasSnapshot: false });
+            expect(store.getBoardReadState('b2')).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoards().boards.map(board => board.id)).toEqual(['b2']);
+            failed = false;
+            await store.refresh();
+            expect(store.getBoardReadState('b1')).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoards().boards.map(board => board.id)).toEqual(['b1', 'b2']);
         } finally { release(); }
     });
 
@@ -320,6 +343,28 @@ describe('WorkBoard Account Artifact save queue', () => {
         await store.refresh();
         expect(persistence.reads).toEqual(['b1']);
         releaseBody(); releaseHeaders();
+    });
+
+    it('settles the index as soon as headers arrive while demanded bodies remain pending', async () => {
+        const persistence = createWorkBoardArtifactBoundary(base);
+        let finish!: (value: WorkBoardArtifactV1 | null) => void;
+        let started!: () => void;
+        const reading = new Promise<void>(resolve => { started = resolve; });
+        const store = createWorkBoardAccountStore({ ...persistence.transport, read: async () => {
+            started(); return new Promise(resolve => { finish = resolve; });
+        } }, () => true);
+        const release = store.retainView(() => () => {}, 'all');
+        const refreshing = store.refresh();
+        try {
+            await reading;
+            expect(store.getSummaries().map(board => board.id)).toEqual(['b1']);
+            expect(store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoardReadState('b1')).toMatchObject({ status: 'loading', hasSnapshot: false });
+        } finally {
+            finish(persistence.rows.get('b1')!);
+            await refreshing;
+            release();
+        }
     });
 
     it('acknowledges a newly created Board after its same id was deleted', async () => {

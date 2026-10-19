@@ -39,11 +39,7 @@ export function installBoardLibraryTestHarness() {
     let executorLoader: Awaited<ReturnType<typeof installRealActionExecutorModuleLoader>> | undefined;
     const restore = async (serverUrl: string, accountId: string) => {
         connection = await restoreServerAccountForTest({ serverUrl, accountId,
-            request: async (url, init) => {
-                const { serverFetch } = await import('@/sync/http/client');
-                const target = new URL(String(url));
-                return serverFetch(`${target.pathname}${target.search}`, init);
-            },
+            request: home.request,
         });
     };
     return {

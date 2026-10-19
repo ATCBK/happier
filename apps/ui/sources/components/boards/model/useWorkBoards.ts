@@ -21,6 +21,11 @@ import { t } from '@/text';
 import { createWorkBoardUiActionPort, type WorkBoardEntityContext } from './workBoardEntityDrop';
 import { createWorkBoardAccountStore } from './workBoardAccountStore';
 import { projectDisplayedWorkBoards, type WorkBoardSaveOutcome, type WorkBoardSaveQueue, type WorkBoardSaveState } from './workBoardSaveQueue';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
+
+export type WorkBoardUiSaveQueue = Omit<WorkBoardSaveQueue, 'dispatch'> & Readonly<{
+    dispatch(intent: WorkBoardIntentV1, confirmation?: ActionExecutorContext['presentUserConfirmation']): Promise<WorkBoardSaveOutcome>;
+}>;
 
 type MountedBoards = ReturnType<typeof createWorkBoardAccountStore> & Readonly<{ retain(demand: string): () => void; isCurrent(): boolean }>;
 const stores = new WeakMap<ActiveServerAccountScopeLifetime, WeakMap<AuthCredentials, MountedBoards>>();
@@ -107,7 +112,7 @@ function useBoardStore(bodyDemand = 'headers') {
 }
 
 /** Present-user capability ingress; the Account's raw queue remains below Action admission. */
-export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardSaveQueue {
+export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardUiSaveQueue {
     const store = useBoardStore();
     const lifetime = useActiveServerAccountScopeLifetime();
     const scope = lifetime?.scope ?? null;
@@ -119,7 +124,7 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
             const current = latestContext.current;
             return isCurrent() && scope && current && current.board.id === boardId ? { ...current, scope } : null;
         }, queue, store.readBoardAccess, () => isCurrent() ? projectDisplayedWorkBoards(store.getBoards(), queue.getState().pending) : null) });
-        const dispatch = async (intent: WorkBoardIntentV1): Promise<WorkBoardSaveOutcome> => {
+        const dispatch: WorkBoardUiSaveQueue['dispatch'] = async (intent, confirmation) => {
             if (!isCurrent() || !scope) return { status: 'refused', code: 'board_scope_retired' };
             const previousFailure = queue.getState().failure;
             let result: Awaited<ReturnType<typeof executor.execute>>;
@@ -131,7 +136,8 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
                         serverId: scope.serverId, expectedAccountId: scope.accountId, surface: 'ui', authority: 'present_user',
                         actionCaller: { kind: 'host' }, actionRequestId: randomUUID(),
                     })
-                    : await executor.execute('boards.apply', { intent }, { serverId: scope.serverId, expectedAccountId: scope.accountId, surface: 'ui' });
+                    : await executor.execute('boards.apply', { intent }, { serverId: scope.serverId, expectedAccountId: scope.accountId, surface: 'ui',
+                        ...(confirmation ? { presentUserConfirmation: confirmation } : {}) });
             } catch {
                 if (isCurrent()) queue.recordFailure(intent, 'unavailable');
                 return { status: 'refused', code: isCurrent() ? 'board_action_unavailable' : 'board_scope_retired' };
@@ -159,10 +165,11 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
     }, [store, scope?.serverId, scope?.accountId, lifetime]);
 }
 
-export function useWorkBoardReadState() {
+export function useWorkBoardReadState(boardId?: string) {
     const store = useBoardStore();
-    const state = React.useSyncExternalStore(store.subscribe, store.getReadState, store.getReadState);
-    const retry = React.useCallback(() => { store.invalidateBodies(); return store.refresh(); }, [store]);
+    const snapshot = React.useCallback(() => boardId ? store.getBoardReadState(boardId) : store.getReadState(), [store, boardId]);
+    const state = React.useSyncExternalStore(store.subscribe, snapshot, snapshot);
+    const retry = React.useCallback(() => { store.invalidateBodies(boardId ? [boardId] : undefined); return store.refresh(); }, [store, boardId]);
     return { ...state, retry };
 }
 
@@ -194,7 +201,7 @@ export function useWorkBoard(boardId: string | null): WorkBoardV1 | null {
     return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
-export function useDispatchWorkBoardIntent(context?: Omit<WorkBoardEntityContext, 'scope'>): (intent: WorkBoardIntentV1) => Promise<WorkBoardSaveOutcome> {
+export function useDispatchWorkBoardIntent(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardUiSaveQueue['dispatch'] {
     return useWorkBoardSaveQueue(context).dispatch;
 }
 

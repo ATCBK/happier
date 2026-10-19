@@ -21,6 +21,7 @@ vi.mock('socket.io-client', async (importOriginal) =>
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routeParams = vi.hoisted(() => ({ item: undefined as string | string[] | undefined }));
+const viewport = vi.hoisted(() => ({ width: 390 }));
 let harness: Awaited<ReturnType<typeof serveActionHomes>>;
 const readAnswers = new Map<string, { status?: number; body: unknown; respondAfter?: Promise<void> }>();
 let homeA = '';
@@ -90,7 +91,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 // The canonical root router mock does not cover this deep SDK entry; the route body stays real.
 vi.mock('expo-router/build/Route', () => ({ useRouteNode: () => null }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
-    useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+    useWindowDimensions: () => ({ width: viewport.width, height: 844, scale: 1, fontScale: 1 }),
 }));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 // Only Radix's DOM host is substituted; the app owns alert custody and controls.
@@ -138,6 +139,7 @@ await loadSyncSingletonForTests();
 
 describe('InboxView mark as read', () => {
     beforeEach(async () => {
+        viewport.width = 390;
         await loadSyncSingletonForTests();
         storage.setState(initialStorageState, true);
         readAnswers.clear();
@@ -194,6 +196,8 @@ describe('InboxView mark as read', () => {
     });
 
     it('uses the route item as the only row focus and reopens Needs you when it changes', async () => {
+        // The retained list/detail selection belongs to a wide Inbox; phones open the item page.
+        viewport.width = 1200;
         const { storage } = await import('@/sync/domains/state/storageStore');
         const unread = unreadSession(homeA);
         if (!unread.viewer) throw new Error('Expected a private viewer fixture');
@@ -205,14 +209,9 @@ describe('InboxView mark as read', () => {
                 attention: { needsAttention: true, reasons: ['manual'], primary: 'manual', presentation: 'full' },
             },
         });
-        storage.setState((state) => ({
-            sessions: { ...state.sessions, [focused.id]: focused },
-            sessionListRowsByServerId: {
-                ...state.sessionListRowsByServerId,
-                [homeA]: { ...state.sessionListRowsByServerId[homeA], [focused.id]: focused },
-            },
-            ordinarySessionListMembershipByServerId: { [homeA]: ['session-x', focused.id], [homeB]: ['session-x'] },
-        }));
+        storage.getState().applySessions([focused]);
+        // Hydration does not enroll a Session into the ordinary list corpus.
+        storage.getState().applyServerScopedSessionListRows(homeA, [focused], { source: 'ordinary', mode: 'append' });
         const { InboxPage } = await import('@/app/(app)/inbox/index');
         const screen = await renderScreen(<InboxPage />);
         await press(nodesByTestId(screen.tree, 'inbox.view:updates')[0]);
@@ -222,7 +221,13 @@ describe('InboxView mark as read', () => {
         await screen.update(<InboxPage />);
         const focusedRow = () => screen.findAllByType(HappierWorkRowShell)
             .find(node => node.props.testID === 'inbox.session.needs-focus');
-        expect(focusedRow()?.props.selected).toBe(true);
+        const { InboxContent } = await import('@/components/inbox/InboxContent');
+        const model: React.ComponentProps<typeof InboxContent>['model'] = screen.findByType(InboxContent).props.model;
+        expect(focusedRow()?.props.selected, JSON.stringify({
+            items: model.items.map(item => ({ id: item.source.id, type: item.type, view: item.view })),
+            needsAttention: model.sessionPresentation.sessionsNeedingAttention.map(entry => ({ id: entry.candidate.sessionId, reasons: entry.candidate.personalAttention.reasons })),
+            ready: model.sessionPresentation.readySessions.map(candidate => candidate.sessionId),
+        })).toBe(true);
         await press(nodesByTestId(screen.tree, 'inbox.view:updates')[0]);
         await screen.update(<InboxPage />);
         // A render with the same item preserves the person's chosen Updates tab.
@@ -301,7 +306,7 @@ describe('InboxView mark as read', () => {
         const dismiss = nodesByTestId(tree, 'web-modal-button-0');
         expect(dismiss).toHaveLength(1);
         await press(dismiss[0]);
-        expect(tree.root.findAllByType(WebAlertModal)).toHaveLength(0);
+        await waitForHomeGovernance(() => expect(tree.root.findAllByType(WebAlertModal)).toHaveLength(0));
         answerReadState(homeB);
         await press(nodesByTestId(tree, 'inbox.ready.mark_all_read')[0]);
         await waitForHomeGovernance(() => expect(nodesByTestId(tree, 'inbox.ready.mark_all_read')).toHaveLength(0));

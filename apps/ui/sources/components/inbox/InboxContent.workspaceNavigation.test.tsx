@@ -5,10 +5,12 @@ import { renderScreen } from '@/dev/testkit';
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { Text } from '@/components/ui/text/Text';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
-import { EMPTY_WORKFLOW_ATTENTION_SOURCE } from '@/hooks/inbox/useWorkflowAttentionSource';
+import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
 import { createUsageNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { UsageNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
+import { buildInboxItems } from './inboxItems';
+import type { InboxView } from './InboxContent';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -19,24 +21,26 @@ function createModel(includeApproval = true): InboxModel {
     const openApprovals = includeApproval ? [{ id: 'voice-start', title: 'Start Voice', isDecrypted: true as const,
         header: { title: 'Start Voice', actionId: 'ui.voice_global.start', serverIdentityId: 'voice-home' },
         headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }] : [];
+    const workGroups = buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [], automationRuns: [],
+        automationServerId: null, openApprovals: openApprovals as InboxModel['openApprovals'],
+        stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null });
+    const sessionPresentation = { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] };
     return {
         source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
         openApprovals,
-        friendRequests: [], sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
+        friendRequests: [], sessionPresentation,
         targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
         markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false,
-        workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [], automationRuns: [],
-            automationServerId: null, openApprovals: openApprovals as InboxModel['openApprovals'],
-            stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
-        spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
-        automationAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE, automationAttentionItems: [],
+        workGroups,
+        spansHomes: false, ...createInboxAttentionFixture(),
+        items: buildInboxItems({ workGroups, sessionPresentation, workflowServerId: null, accountServerId: null, notices: [] }),
         openUsageNotices: [], dismissUsageNotice: async () => {},
         markRead: async () => {}, resolveActionOperation: () => {}, settle: async () => {}, setReminder: async () => {},
     };
 }
 
-async function renderHostedInbox(model: InboxModel) {
+async function renderHostedInbox(model: InboxModel, view?: InboxView) {
     const { InboxContent } = await import('./InboxContent');
     function HostedInbox() {
         const [route, setRoute] = React.useState('/inbox');
@@ -44,7 +48,7 @@ async function renderHostedInbox(model: InboxModel) {
             push: href => setRoute(String(href)), replace: href => setRoute(String(href)), back: () => setRoute('/inbox'),
         }), []);
         return <DestinationInstanceHost tabId="inbox-qa" ref={{ kind: 'inbox', params: {} }} pathname={route} focused visible navigation={navigation}>
-            {route === '/inbox' ? <InboxContent model={model} /> : <Text testID="opened-destination">{route}</Text>}
+            {route === '/inbox' ? <InboxContent model={model} view={view} /> : <Text testID="opened-destination">{route}</Text>}
         </DestinationInstanceHost>;
     }
     return renderScreen(<HostedInbox />);
@@ -62,7 +66,7 @@ it('opens Usage in the Inbox workspace and dismisses a notice without opening an
     const model = { ...createModel(false),
         openUsageNotices: [{ artifact, header: UsageNoticeArtifactHeaderV1Schema.parse(artifact.rawHeader) }], dismissUsageNotice: dismiss,
     };
-    const screen = await renderHostedInbox(model);
+    const screen = await renderHostedInbox(model, 'updates');
     await screen.pressByTestIdAsync(`inbox.usage-notice.dismiss.${artifact.id}`);
     expect(dismiss.mock.calls[0]?.[0]).toEqual(model.openUsageNotices[0]);
     expect(screen.findByTestId(`inbox.usage-notice.${artifact.id}`)).not.toBeNull();
@@ -83,7 +87,7 @@ it('files a machine alert under Machines, opens the tab its push would, and dism
     const model = { ...createModel(false),
         openUsageNotices: [{ artifact, header: UsageNoticeArtifactHeaderV1Schema.parse(artifact.rawHeader) }], dismissUsageNotice: dismiss,
     };
-    const screen = await renderHostedInbox(model);
+    const screen = await renderHostedInbox(model, 'updates');
     expect(screen.findByTestId('inbox.section.machines')).not.toBeNull();
     expect(screen.findByTestId('inbox.section.usage')).toBeNull();
     expect(screen.getTextContent()).toContain('edge-1 is short on memory');

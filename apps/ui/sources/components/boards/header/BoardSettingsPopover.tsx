@@ -23,6 +23,7 @@ import { t } from '@/text';
 import type { BoardCard } from '../model/boardCards';
 import type { BoardHomes } from '../model/useBoardContent';
 import { BoardSessionFilterControl } from './BoardSessionFilterControl';
+import type { WorkBoardUiSaveQueue } from '../model/useWorkBoards';
 
 /**
  * Board settings (lab `boards-B4`), from the header's ⋯: the name; what's on the board — smart sections
@@ -44,7 +45,7 @@ export const BoardSettingsButton = React.memo(function BoardSettingsButton(props
     homes: BoardHomes;
     pickedCards: readonly BoardCard[];
     canvasAvailable: boolean;
-    dispatch: (intent: WorkBoardIntentV1) => void;
+    dispatch: WorkBoardUiSaveQueue['dispatch'];
     /** Removes a pick with the board's live membership, so an item a section still holds keeps its place. */
     onRemoveItem: (ref: BoardItemRefV1) => void;
     onDeleted: () => void;
@@ -110,8 +111,10 @@ export const BoardSettingsButton = React.memo(function BoardSettingsButton(props
                                         );
                                         if (!confirmed) return;
                                         close();
-                                        props.dispatch({ kind: 'delete', boardId: props.board.id });
-                                        props.onDeleted();
+                                        // This exact Action was just confirmed here. Carry that fact to
+                                        // canonical policy; explicit Ask-first still owns its approval.
+                                        const outcome = await props.dispatch({ kind: 'delete', boardId: props.board.id }, { actionId: 'boards.apply' });
+                                        if (outcome.status === 'applied') props.onDeleted();
                                     }}
                                 />
                             </FloatingOverlay>

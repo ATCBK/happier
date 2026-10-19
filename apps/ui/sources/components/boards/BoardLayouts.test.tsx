@@ -52,7 +52,7 @@ afterEach(async () => {
     physicalFocus.keys.length = 0;
 });
 
-function card(kind: BoardItemRefV1['kind'], id: string, bucket: BoardCard['status']['bucket']): BoardCard {
+function card(kind: Exclude<BoardItemRefV1['kind'], 'task'>, id: string, bucket: BoardCard['status']['bucket']): BoardCard {
     const ref: BoardItemRefV1 = { kind, qualifiedId: { serverId: 'home-a', id } };
     return {
         key: JSON.stringify([kind, 'home-a', id]),

@@ -35,7 +35,7 @@ export const TodoList = React.memo<TodoListProps>(function TodoList(props) {
             if (!next) return entityReorderRefused('todo_reorder_stale');
             if (next.every((id, index) => id === ids[index])) return entityReorderRefused('same-position');
             return { status: 'allowed', effect: {
-                actionId: 'todos.reorder', input: { scope, sourceId, position },
+                actionId: 'tasks.internal.reorder', input: { scope, sourceId, position },
                 preview: entityReorderPreview(position, todos),
             } };
         },

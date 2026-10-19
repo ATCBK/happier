@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { WorkBoardV1 } from '@happier-dev/protocol';
+import type { WorkBoardArtifactSummaryV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 
 import { usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -13,7 +14,7 @@ import { BoardsInboxBoundary } from './BoardsInboxBoundary';
 import { BOARDS_ROUTE, createBoardRoute, readOpenBoardId } from './boardsRoutes';
 import { describeBoardSummaryLine, hasWorkBoardContent } from './model/boardCards';
 import { useBoardLiveSummary } from './model/useBoardContent';
-import { useDispatchWorkBoardIntent, useWorkBoardSaveState, useWorkBoards } from './model/useWorkBoards';
+import { useDispatchWorkBoardIntent, useWorkBoardSaveState, useWorkBoardSummaries, useWorkBoards } from './model/useWorkBoards';
 import { resolveCollectionSaveFailure } from './model/boardSaveFailure';
 import { BoardSaveFailureLine } from './BoardSaveFailureLine';
 import { BoardReadState } from './BoardReadState';
@@ -46,17 +47,17 @@ const LiveBoardRow = React.memo(function LiveBoardRow(props: Readonly<{ board: W
     );
 });
 
-const BoardRow = React.memo(function BoardRow(props: Readonly<{ board: WorkBoardV1; selected: boolean }>) {
+const BoardRow = React.memo(function BoardRow(props: Readonly<{ summary: WorkBoardArtifactSummaryV1; board: WorkBoardV1 | null; selected: boolean }>) {
     const router = useRouter();
-    const { board } = props;
-    const onPress = React.useCallback(() => router.push(createBoardRoute(board.id) as never), [board.id, router]);
-    if (hasWorkBoardContent(board)) return <LiveBoardRow board={board} selected={props.selected} onPress={onPress} />;
+    const { board, summary } = props;
+    const onPress = React.useCallback(() => router.push(createBoardRoute(summary.id) as never), [summary.id, router]);
+    if (board && hasWorkBoardContent(board)) return <LiveBoardRow board={board} selected={props.selected} onPress={onPress} />;
     return (
         <CollectionNavigationRow
-            testID={`boards-column:board:${board.id}`}
-            href={createBoardRoute(board.id)}
-            title={board.name}
-            subtitle={`${t('boards.meta.handPicked')} · ${t('boards.meta.empty')}`}
+            testID={`boards-column:board:${summary.id}`}
+            href={createBoardRoute(summary.id)}
+            title={summary.name}
+            subtitle={board ? `${t('boards.meta.handPicked')} · ${t('boards.meta.empty')}` : undefined}
             icon={<Icon name="squares-four" />}
             selected={props.selected}
             onPress={onPress}
@@ -80,7 +81,8 @@ export const BoardsColumn = React.memo(function BoardsColumn(props: Readonly<{
     surface?: 'plane' | 'page';
 }>) {
     const pathname = usePathname();
-    const boards = useWorkBoards().boards;
+    const bodies = useWorkBoards().boards;
+    const boards = useWorkBoardSummaries();
     const [query, setQuery] = React.useState('');
     const needle = query.trim().toLowerCase();
     const matchingBoards = needle ? boards.filter(board => board.name.toLowerCase().includes(needle)) : boards;
@@ -102,10 +104,11 @@ export const BoardsColumn = React.memo(function BoardsColumn(props: Readonly<{
                 title={t('boards.title')}
                 search={{ value: query, onChangeText: setQuery, placeholder: t('common.search'), testID: 'boards-column:search' }}
             >
-                <BoardReadState size="line" retained={boards.length > 0} />
+                <BoardReadState place="column" size="line" retained={boards.length > 0} />
                 {/* The board rows' live lines share one Inbox model; the list itself never remounts for it. */}
                 <BoardsInboxBoundary boards={matchingBoards}>
-                    {matchingBoards.map((board) => <BoardRow key={board.id} board={board} selected={openId === board.id} />)}
+                    {matchingBoards.map((summary) => <BoardRow key={summary.id} summary={summary}
+                        board={bodies.find(board => board.id === summary.id) ?? null} selected={openId === summary.id} />)}
                 </BoardsInboxBoundary>
                 <CollectionNavigationRow
                     testID="boards-column:new-row"

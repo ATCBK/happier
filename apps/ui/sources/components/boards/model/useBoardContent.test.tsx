@@ -22,6 +22,7 @@ const { storage } = await import('@/sync/domains/state/storageStore');
 const { useBoardCards, useBoardMembership, useBoardWidgets } = await import('./useBoardContent');
 const { resolveBoardPruneMembership } = await import('./boardMembership');
 const { buildBoardCards } = await import('./boardCards');
+const { t } = await import('@/text');
 const { useWorkflowDefinitionLibrary, useWorkflowRunWindow } = await import('@/components/workflows/library/workflowLibraryReads');
 const runAnswer = vi.fn<(input: unknown) => HomeDomainAnswer>();
 // Markdown is a third-party rendering boundary; membership never renders it.
@@ -56,8 +57,54 @@ function runsBoard(startedBy: readonly ('you' | 'agents' | 'triggers')[] = []) {
 }
 
 describe('Board shared Run filter membership', () => {
-    it('settles an absent Session after its own Home answers and recovers when the row arrives', async () => {
+    it('settles a coordinators-only Run selection as complete empty without requesting Runs', async () => {
+        const board = { ...runsBoard(), source: { picked: [], filter: normalizeSessionListFilterV1({
+            show: 'runs', coordinator: 'coordinator', homeServerIds: homes.mountedServerIds,
+        }) } };
+        const hook = await renderHook(() => useBoardMembership(board, homes));
+        expect(hook.getCurrent()).toMatchObject({ members: [], complete: true });
+        expect(harness.home.requestsFor(RUN_STORAGE_PATH)).toHaveLength(0);
+    });
+    it('reads a task-linked Session through its canonical Home when the source retains a profile alias', async () => {
+        const { adoptHomeProfile, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
+        const profile = await adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: 'srv_board_task_home',
+            canonicalServerUrl: 'https://board-task-alias.test', revision: 1,
+            endpoints: [{ kind: 'https', url: 'https://board-task-alias.test' }],
+        }, source: 'manual' });
+        const ref = { kind: 'task', pluginId: 'com.acme.tasks', qualifiedId: { serverId: profile.id, id: 'task' } } as const;
+        const key = buildWorkBoardItemKeyV1(ref);
+        const now = Date.now();
+        const row = createSessionListRenderableSessionFixture({ id: 'worker', active: true, activeAt: now,
+            hasPendingPermissionRequests: true, pendingRequestObservedAt: now });
+        storage.setState({ sessionListRowsByServerId: { [profile.id]: { [row.id]: row } } });
+        const sessionRef = { kind: 'session' as const, qualifiedId: { serverId: profile.id, id: row.id } };
+        const membership = { members: [{ key, ref, picked: true, sourced: false, available: true },
+            { key: buildWorkBoardItemKeyV1(sessionRef), ref: sessionRef, picked: true, sourced: false, available: true }], complete: true,
+            taskItems: new Map([[key, { title: 'External task', category: 'completed' as const,
+                linkedSessions: [{ serverId: profile.id, sessionId: row.id }] }]]) };
+        const taskHomes: BoardHomes = { activeServerId: 'srv_board_task_home', mountedServerIds: ['srv_board_task_home'],
+            isHomeMounted: id => areServerProfileIdentifiersEquivalent(id, profile.id) };
+        const hook = await renderHook(() => useBoardCards(membership, taskHomes));
+        expect(hook.getCurrent().map(card => card.status.bucket)).toEqual(['needs_you', 'needs_you']);
+        await act(async () => storage.setState({ sessionListRowsByServerId: {}, concurrentSessionListCacheByServerId: {
+            [profile.id]: { serverName: null, listObservation: { phase: 'error', lastSuccessAt: null } },
+        } }));
+        expect(hook.getCurrent().map(card => card.status.bucket)).toEqual(['offline', 'offline']);
+        await act(async () => storage.setState({ sessionListRowsByServerId: { [profile.id]: { [row.id]: row } } }));
+        expect(hook.getCurrent().map(card => card.status.bucket)).toEqual(['needs_you', 'needs_you']);
+    });
+    it('settles an absent Session after its own Home answers and recovers when the row arrives', async ({ onTestFinished }) => {
         const serverId = homes.activeServerId!;
+        // Keep the real bootstrap read pending while this case drives the
+        // Home's observation states; an unanswered route is a settled error.
+        const sessionRead = createDeferred<void>();
+        onTestFinished(() => sessionRead.resolve());
+        harness.home.answer(serverId, '/v2/sessions', {
+            body: { sessions: [], nextCursor: null, hasNext: false }, respondAfter: sessionRead.promise,
+        });
+        harness.home.answer(serverId, '/v2/sessions/active', {
+            body: { sessions: [], nextCursor: null, hasNext: false }, respondAfter: sessionRead.promise,
+        });
         const ref = { kind: 'session' as const, qualifiedId: { serverId, id: 'late-or-uncached' } };
         const membership = { members: [{ key: buildWorkBoardItemKeyV1(ref), ref, picked: true, sourced: false, available: true }], complete: true };
         storage.setState({ sessionListRowsByServerId: {}, deletedSessionIds: {}, concurrentSessionListCacheByServerId: {} });
@@ -67,11 +114,25 @@ describe('Board shared Run filter membership', () => {
             return useBoardCards(membership, homes, props);
         }, { initialProps: { enabled: true } });
         expect(hook.getCurrent()[0]?.availability).toBe('not_loaded');
+        // A failed read is terminal for loading, and phone grouping must not call it Idle.
+        await act(async () => storage.setState({ concurrentSessionListCacheByServerId: {
+            [serverId]: { serverName: null, listObservation: { phase: 'error', lastSuccessAt: null } },
+        } }));
+        expect(hook.getCurrent()[0]).toMatchObject({ availability: 'content_unavailable',
+            status: { bucket: 'offline' }, body: { kind: 'none' } });
+        expect(hook.getCurrent()[0]?.unavailableReason).toBe(t('boards.card.readFailed'));
+        const failedCard = hook.getCurrent()[0];
+        await act(async () => storage.setState({ concurrentSessionListCacheByServerId: {
+            [serverId]: { serverName: null, listObservation: { phase: 'loading', lastSuccessAt: null } },
+        } }));
+        expect(hook.getCurrent()[0]).toBe(failedCard);
+        await act(async () => storage.setState({ concurrentSessionListCacheByServerId: {} }));
+        expect(hook.getCurrent()[0]).toBe(failedCard);
         // A different Home's settlement says nothing about this qualified Session.
         await act(async () => storage.setState({ concurrentSessionListCacheByServerId: {
             other: { serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 } },
         }, deletedSessionIds: { [ref.qualifiedId.id]: 'other' } }));
-        expect(hook.getCurrent()[0]?.availability).toBe('not_loaded');
+        expect(hook.getCurrent()[0]).toBe(failedCard);
         await act(async () => storage.setState({ concurrentSessionListCacheByServerId: {
             [serverId]: { serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 } },
         } }));
@@ -84,9 +145,20 @@ describe('Board shared Run filter membership', () => {
         const row = createSessionListRenderableSessionFixture({ id: ref.qualifiedId.id });
         await act(async () => storage.setState({ sessionListRowsByServerId: { [serverId]: { [row.id]: row } } }));
         expect(hook.getCurrent()[0]?.availability).toBe('ready');
+        const readyCard = hook.getCurrent()[0];
+        await act(async () => storage.setState({ sessionListRowsByServerId: {}, concurrentSessionListCacheByServerId: {
+            [serverId]: { serverName: null, listObservation: { phase: 'refreshing', lastSuccessAt: 1 } },
+        } }));
+        expect(hook.getCurrent()[0]).toBe(readyCard);
         await act(async () => storage.setState({ sessionListRowsByServerId: {}, deletedSessionIds: { [row.id]: serverId },
             concurrentSessionListCacheByServerId: {} }));
         expect(hook.getCurrent()[0]?.availability).toBe('content_unavailable');
+        await act(async () => storage.setState({ deletedSessionIds: {}, concurrentSessionListCacheByServerId: {
+            [serverId]: { serverName: null, listObservation: { phase: 'loading', lastSuccessAt: null } },
+        } }));
+        (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime();
+        await hook.rerender({ enabled: true });
+        expect(hook.getCurrent()[0]?.availability).toBe('not_loaded');
         await hook.rerender({ enabled: false });
         const inactiveRenders = renders;
         await act(async () => storage.setState({ deletedSessionIds: {}, concurrentSessionListCacheByServerId: {
@@ -95,8 +167,12 @@ describe('Board shared Run filter membership', () => {
         expect(renders).toBe(inactiveRenders);
     });
 
-    it('settles an absent Machine only after an applied inventory and preserves a cached Machine during refresh', async () => {
+    it('settles an absent Machine only after an applied inventory and preserves a cached Machine during refresh', async ({ onTestFinished }) => {
         const serverId = homes.activeServerId!;
+        // Drive the source observations below without a bootstrap HTTP miss settling them concurrently.
+        const inventoryRead = createDeferred<void>();
+        onTestFinished(() => inventoryRead.resolve());
+        harness.home.answer(serverId, '/v1/machines?includeRevoked=true', { body: [], respondAfter: inventoryRead.promise });
         const ref = { kind: 'machine' as const, qualifiedId: { serverId, id: 'removed-machine' } };
         const membership = { members: [{ key: buildWorkBoardItemKeyV1(ref), ref, picked: true, sourced: false, available: true }], complete: true };
         storage.setState({ machineListByServerId: { [serverId]: null }, machineListStatusByServerId: { [serverId]: 'loading' } });
@@ -194,8 +270,8 @@ describe('Board shared Run filter membership', () => {
     });
 
     it('refreshes Session and machine statuses at canonical deadlines without store writes', async () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(100_000);
+        // Exercise deadline deltas in the shared clock's current epoch, not backwards time travel.
+        vi.useFakeTimers({ now: Date.now() });
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '1000');
         const row = createSessionListRenderableSessionFixture({ id: 'expiring-session', active: true,
             activeAt: Date.now(), hasPendingPermissionRequests: true, pendingRequestObservedAt: Date.now() });

@@ -3,11 +3,13 @@ import * as React from 'react';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { t } from '@/text';
+import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 
-import { BoardScreen } from './BoardScreen';
+import { BoardScreen, FilteredBoardScreen } from './BoardScreen';
+import { readFilteredBoardRoute } from './boardsRoutes';
 import { BoardReadState } from './BoardReadState';
 import { BoardsColumn, useCreateBoard } from './BoardsColumn';
-import { useWorkBoardReadState, useWorkBoards } from './model/useWorkBoards';
+import { useWorkBoardReadState, useWorkBoardSummaries } from './model/useWorkBoards';
 
 /**
  * `/boards`. Beside the column, main shows the first board (its row is selected); with no board yet,
@@ -15,8 +17,18 @@ import { useWorkBoardReadState, useWorkBoards } from './model/useWorkBoards';
  * destination's first screen.
  */
 export const BoardsIndex = React.memo(function BoardsIndex() {
+    const params = useLocalSearchParams<{ filter?: string | string[] }>();
+    if (params.filter !== undefined) {
+        const filter = readFilteredBoardRoute(params.filter);
+        return filter ? <FilteredBoardScreen filter={filter} /> : <EmptyState layout="page"
+            title={t('boards.card.unavailable')} subtitle={t('boards.card.unavailableBody')} />;
+    }
+    return <SavedBoardsIndex />;
+});
+
+const SavedBoardsIndex = React.memo(function SavedBoardsIndex() {
     const columnVisible = useAppShellColumn().columnVisible;
-    const first = useWorkBoards().boards[0] ?? null;
+    const first = useWorkBoardSummaries()[0] ?? null;
     const read = useWorkBoardReadState();
     const createBoard = useCreateBoard();
     if (!columnVisible) return <BoardsColumn surface="page" />;

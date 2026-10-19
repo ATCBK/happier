@@ -218,6 +218,46 @@ describe('ApprovalInboxCard', () => {
     ).not.toContain('widgets.definition.update');
   });
 
+  it('answers a simple request from its row and leaves anything else behind Review', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli', sessionId: 'session-1' }, actionId: 'account.name.set', actionArgs: { name: 'Captain' },
+      summary: 'Change name', executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli',
+        caller: { kind: 'host' }, serverId: serverIdB, actionId: 'account.name.set', requestId: 'request-a' } });
+    const simple = { ...createApprovalArtifact(), header: { ...buildApprovalRequestArtifactHeaderV1(request), sessionId: 'session-1' },
+      body: JSON.stringify(request) } satisfies DecryptedArtifact;
+    const screen = await renderScreen(<ApprovalInboxCard artifact={simple} inlineActionLabel="Review" onPress={() => {}} />);
+    expect(screen.findHostByTestId(`inbox.approval.${simple.id}.allow_once`)).toBeTruthy();
+    expect(screen.findHostByTestId(`inbox.approval.${simple.id}.deny`)).toBeTruthy();
+    expect(screen.findHostByTestId(`inbox.approval.${simple.id}.review`)).toBeFalsy();
+    // Where it comes from leads the row, above the title.
+    expect(screen.getTextContent()).toContain('Secondary Home session');
+
+    const unreviewed = { ...simple, body: JSON.stringify({ ...request, actionArgs: { name: 'Captain', unreviewed: true } }) };
+    const other = await renderScreen(<ApprovalInboxCard artifact={unreviewed} inlineActionLabel="Review" onPress={() => {}} />);
+    expect(other.findHostByTestId(`inbox.approval.${simple.id}.allow_once`)).toBeFalsy();
+    expect(other.findHostByTestId(`inbox.approval.${simple.id}.review`)).toBeTruthy();
+  });
+  it('sets a simple request\'s Deny and Allow once beneath the row on a phone, outside the row button', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli', sessionId: 'session-1' }, actionId: 'account.name.set', actionArgs: { name: 'Captain' },
+      summary: 'Change name', executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli',
+        caller: { kind: 'host' }, serverId: serverIdB, actionId: 'account.name.set', requestId: 'request-a' } });
+    const simple = { ...createApprovalArtifact(), header: { ...buildApprovalRequestArtifactHeaderV1(request), sessionId: 'session-1' },
+      body: JSON.stringify(request) } satisfies DecryptedArtifact;
+    const screen = await renderScreen(<ApprovalInboxCard artifact={simple} decideBelow narrow onPress={() => {}} />);
+    const below = screen.findHostByTestId(`inbox.approval.${simple.id}:below`);
+    expect(below).toBeTruthy();
+    expect(below?.findAllByProps({ testID: `inbox.approval.${simple.id}.allow_once` }).length).toBeGreaterThan(0);
+    expect(below?.findAllByProps({ testID: `inbox.approval.${simple.id}.deny` }).length).toBeGreaterThan(0);
+
+    // Anything the row cannot decide whole is opened by the row itself: no button beneath it.
+    const unreviewed = { ...simple, body: JSON.stringify({ ...request, actionArgs: { name: 'Captain', unreviewed: true } }) };
+    const other = await renderScreen(<ApprovalInboxCard artifact={unreviewed} decideBelow narrow onPress={() => {}} />);
+    expect(other.findHostByTestId(`inbox.approval.${simple.id}:below`)).toBeFalsy();
+    expect(other.findHostByTestId(`inbox.approval.${simple.id}.allow_once`)).toBeFalsy();
+  });
   it('says who asked on one line, without the machine, the folder or the Home address', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const artifact = {
@@ -313,10 +353,10 @@ describe('ApprovalInboxCard', () => {
   it('says the asking Session once when the title already names it', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
-      createdBy: { surface: 'cli' }, actionId: 'session.reports_to.set', summary: 'Set Session lead',
+      createdBy: { surface: 'cli' }, actionId: 'session.manager.set', summary: 'Set Session lead',
       actionArgs: { sessionId: 'session-1', leadSessionId: null, expectedLeadSessionId: null },
       executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'lead-once',
-        surface: 'cli', serverId: serverIdB, actionId: 'session.reports_to.set', sessionId: 'session-1' } });
+        surface: 'cli', serverId: serverIdB, actionId: 'session.manager.set', sessionId: 'session-1' } });
     const artifact: DecryptedArtifact = { ...createApprovalArtifact(),
       header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
     const screen = await renderScreen(<ApprovalInboxCard artifact={artifact} onPress={() => {}} />);

@@ -12,6 +12,10 @@ import { WORK_HOST, useWorkTheme } from '@/components/work/map/WorkMapView';
  */
 export const InboxWorkRow = React.memo(function InboxWorkRow(props: Readonly<{
     testID: string; title: string; facts?: readonly React.ReactNode[]; mark?: React.ReactNode;
+    /** Where it comes from, above the title (lab coordination P4); omit when it would repeat the title. */
+    source?: string | null;
+    /** Who it involves, under the facts. */
+    byline?: HappierWorkSummaryProps['byline'];
     phase?: HappierWorkSummaryProps['phase']; status?: HappierWorkSummaryProps['trailingState']; time?: React.ReactNode;
     /**
      * A narrow row (a phone, the rail popover; labs `phone-P4`, `inbox-I2`) has no state column: the
@@ -21,6 +25,8 @@ export const InboxWorkRow = React.memo(function InboxWorkRow(props: Readonly<{
      */
     narrow?: boolean;
     accessibilityLabel?: string; selected?: boolean; onPress: () => void; trailingAccessory?: React.ReactNode;
+    /** Actions beneath the row's text, on its text column: a phone row's answer (lab coordination `P4-Ap`). */
+    belowAccessory?: React.ReactNode;
     accessibilityLiveRegion?: 'none' | 'polite' | 'assertive';
     accessibilityActions?: HappierWorkRowShellProps['accessibilityActions'];
     onAccessibilityAction?: HappierWorkRowShellProps['onAccessibilityAction'];
@@ -33,10 +39,10 @@ export const InboxWorkRow = React.memo(function InboxWorkRow(props: Readonly<{
         ...(props.facts ?? []).filter((fact): fact is string => typeof fact === 'string'));
     const facts = props.narrow && props.time ? [...(props.facts ?? []), <React.Fragment key="age">{props.time}</React.Fragment>] : props.facts ?? [];
     return <HappierWorkRowShell testID={props.testID} accessibilityLabel={label} selected={props.selected}
-        onPress={props.onPress} trailingAccessory={props.trailingAccessory} accessibilityActions={props.accessibilityActions}
+        onPress={props.onPress} trailingAccessory={props.trailingAccessory} belowAccessory={props.belowAccessory} accessibilityActions={props.accessibilityActions}
         onAccessibilityAction={props.onAccessibilityAction} density={density} showDivider={props.showDivider} theme={theme}>
         <HappierWorkSummary testID={`${props.testID}.summary`} title={props.title} phase={props.phase ?? 'attention'}
-            mark={props.mark} facts={facts} trailingState={props.narrow ? null : props.status} trailingTime={props.narrow ? undefined : props.time}
+            mark={props.mark} facts={facts} source={props.source && props.source !== props.title ? props.source : undefined} byline={props.byline} trailingState={props.narrow ? null : props.status} trailingTime={props.narrow ? undefined : props.time}
             accessibilityLabel={label} accessibilityLiveRegion={props.accessibilityLiveRegion} density={density} attentionMark={false}
             titleLines={props.narrow && density === 'page' ? 2 : 1} theme={theme} host={WORK_HOST} />
     </HappierWorkRowShell>;
