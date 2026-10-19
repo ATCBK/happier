@@ -38,9 +38,13 @@ export function defineTriageCompositeIdentifierStringV1(maxUtf8Bytes: number): P
 export const TriageIdentifierV1ProtocolSchema = defineTriageSingleLineStringV1(MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1);
 export const TriageCollisionScopeV1ProtocolSchema = defineTriageCompositeIdentifierStringV1(MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1);
 
-// Triage's existing public identity is readonly, including the nested source.
-// Preserve that declaration contract while retaining the exact source parser.
-const sourceIdentity: ProtocolComposableSchema<Readonly<PluginContributionIdentityV1>> = PluginContributionIdentityV1Schema;
+/** Preserve Triage's public readonly identity independently of DSL inference. */
+export type TriageEntryRefV1 = Readonly<{
+  source: Readonly<PluginContributionIdentityV1>;
+  kindId: string;
+  collisionScope: string;
+  entryId: string;
+}>;
 
 /**
  * The minimal source-qualified Task/entry identity, shared with Protocol
@@ -49,11 +53,10 @@ const sourceIdentity: ProtocolComposableSchema<Readonly<PluginContributionIdenti
  * remain Triage-owned. Both this envelope and its source identity are closed.
  * Keep this leaf independent of the SDK and Triage feature protocol.
  */
-export const TriageEntryRefV1Schema = defineProtocolObject({
-  source: sourceIdentity,
+export const TriageEntryRefV1Schema: ProtocolComposableSchema<TriageEntryRefV1> = defineProtocolObject({
+  source: PluginContributionIdentityV1Schema,
   kindId: TriageIdentifierV1ProtocolSchema,
   collisionScope: TriageCollisionScopeV1ProtocolSchema,
   entryId: TriageIdentifierV1ProtocolSchema,
 }, { policy: 'closed' });
-export type TriageEntryRefV1 = ReturnType<typeof TriageEntryRefV1Schema.parse>;
 export const TriageEntryRefV1JsonSchema: PluginJsonSchemaV2 = TriageEntryRefV1Schema.jsonSchema;

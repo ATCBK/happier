@@ -1723,6 +1723,8 @@
 | `./notifications` | `NotificationsService` | type | daemon |
 | `./notifications` | `PluginNotificationRegistrationApi` | type | daemon |
 | `./protocol` | `CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1` | value | any |
+| `./protocol` | `MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1` | value | any |
+| `./protocol` | `MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1` | value | any |
 | `./protocol` | `PluginJsonSchema` | type | any |
 | `./protocol` | `ProtocolArrayOptions` | type | any |
 | `./protocol` | `ProtocolCollectionOpaqueCursorV1` | type | any |
@@ -1747,6 +1749,13 @@
 | `./protocol` | `ProtocolUtf8StringOptions` | type | any |
 | `./protocol` | `ProtocolValidationError` | value | any |
 | `./protocol` | `ProtocolValidationIssue` | type | any |
+| `./protocol` | `TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1` | value | any |
+| `./protocol` | `TRIAGE_SINGLE_LINE_STRING_PATTERN_V1` | value | any |
+| `./protocol` | `TriageCollisionScopeV1ProtocolSchema` | value | any |
+| `./protocol` | `TriageEntryRefV1` | type | any |
+| `./protocol` | `TriageEntryRefV1JsonSchema` | value | any |
+| `./protocol` | `TriageEntryRefV1Schema` | value | any |
+| `./protocol` | `TriageIdentifierV1ProtocolSchema` | value | any |
 | `./protocol` | `createProtocolStoredReadSchema` | value | any |
 | `./protocol` | `defineProtocolArray` | value | any |
 | `./protocol` | `defineProtocolJsonValue` | value | any |
@@ -1757,6 +1766,8 @@
 | `./protocol` | `defineProtocolUnion` | value | any |
 | `./protocol` | `defineProtocolUniqueArray` | value | any |
 | `./protocol` | `defineProtocolUtf8String` | value | any |
+| `./protocol` | `defineTriageCompositeIdentifierStringV1` | value | any |
+| `./protocol` | `defineTriageSingleLineStringV1` | value | any |
 | `./protocol` | `pluginJsonValuesEqual` | value | any |
 | `./providers` | `AgentProviderRequirementsV1` | type | any |
 | `./providers` | `BundledProviderCatalogParserId` | type | any |

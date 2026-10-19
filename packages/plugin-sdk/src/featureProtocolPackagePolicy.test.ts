@@ -103,6 +103,17 @@ type FeatureProtocolProtocolAuthoringImportAudience =
  * documents its two public-but-not-feature-protocol symbols.
  */
 const FEATURE_PROTOCOL_PROTOCOL_AUTHORING_IMPORT_AUDIENCE = Object.freeze({
+    MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1: 'feature-protocol',
+    MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1: 'feature-protocol',
+    TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1: 'feature-protocol',
+    TRIAGE_SINGLE_LINE_STRING_PATTERN_V1: 'feature-protocol',
+    TriageCollisionScopeV1ProtocolSchema: 'feature-protocol',
+    TriageEntryRefV1: 'feature-protocol',
+    TriageEntryRefV1JsonSchema: 'feature-protocol',
+    TriageEntryRefV1Schema: 'feature-protocol',
+    TriageIdentifierV1ProtocolSchema: 'feature-protocol',
+    defineTriageCompositeIdentifierStringV1: 'feature-protocol',
+    defineTriageSingleLineStringV1: 'feature-protocol',
     PluginJsonSchema: 'feature-protocol',
     ProtocolArrayOptions: 'feature-protocol',
     ProtocolCollectionOpaqueCursorV1: 'feature-protocol',
@@ -184,7 +195,11 @@ const FEATURE_PROTOCOL_PROTOCOL_IMPORT_ALLOWLIST = new Set(
             audience === 'feature-protocol'
             && (symbol === 'PluginJsonSchema'
                 || symbol.startsWith('Protocol')
-                || symbol.startsWith('defineProtocol'))
+                || symbol.startsWith('defineProtocol')
+                || symbol.startsWith('Triage')
+                || symbol.startsWith('defineTriage')
+                || symbol.startsWith('MAX_TRIAGE_')
+                || symbol.startsWith('TRIAGE_'))
                 ? [symbol]
                 : []
         )),
@@ -1241,6 +1256,23 @@ describe('feature-protocol package policy', () => {
             'src/v1/provider/declarations.ts',
             'src/v1/provider/contributionPoint.ts',
         ]));
+    });
+
+    it('allows feature protocols to re-export the shared Task identity without importing Protocol', () => {
+        expect(() => assertFeatureProtocolPackageBoundary({
+            ...featureProtocolFixture,
+            sources: {
+                ...featureProtocolFixture.sources,
+                'src/v1/identity.ts': `export {
+                    TriageEntryRefV1Schema, TriageEntryRefV1JsonSchema,
+                    TriageIdentifierV1ProtocolSchema, TriageCollisionScopeV1ProtocolSchema,
+                    MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1, MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
+                    TRIAGE_SINGLE_LINE_STRING_PATTERN_V1, TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1,
+                    defineTriageSingleLineStringV1, defineTriageCompositeIdentifierStringV1,
+                } from '@happier-dev/plugin-sdk/protocol';
+                export type { TriageEntryRefV1 } from '@happier-dev/plugin-sdk/protocol';`,
+            },
+        })).not.toThrow();
     });
 
     it('requires explicit package exports plus matching public SDK peer and dev ranges', () => {
