@@ -105,6 +105,28 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
     });
 
+    it('uses the admitted Home row during refresh instead of the active display copy', async () => {
+        const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
+        await setActiveServerId(profileB.id);
+        const admitted = machine('machine-b', true);
+        storage.setState({
+            machines: { [admitted.id]: { ...admitted } },
+            machineListByServerId: { 'srv_server_b': [admitted] },
+            machineListStatusByServerId: { 'srv_server_b': 'loading' },
+        });
+        const target = { serverIdentityId: 'srv_server_b', machineId: admitted.id };
+        const accountScope = { serverId: profileB.id, accountId: 'account-b' };
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope })?.machine).toBe(admitted);
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, {
+            accountScope: { ...accountScope, serverId: profileA.id },
+        })).toBeNull();
+        // The display copy cannot confer membership or override content admission.
+        for (const rows of [[], [{ ...admitted, metadata: null }], [{ ...admitted, active: false, activeAt: 0 }]]) {
+            storage.setState({ machineListByServerId: { 'srv_server_b': rows } });
+            expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope })).toBeNull();
+        }
+    });
+
     it('does not revive a stale scoped row when the active inventory is authoritatively empty', async () => {
         const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
         await setActiveServerId(profileB.id);

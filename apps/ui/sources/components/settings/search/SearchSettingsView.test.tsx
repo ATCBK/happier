@@ -11,6 +11,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -267,6 +268,35 @@ async function decideClear(artifactId: string, decision: 'approve' | 'reject') {
 }
 
 describe('SearchSettingsView', () => {
+    it('reads the selected online machine while its scoped inventory refreshes and exposes the search controls', () => withPopoverWebGlobals(async () => {
+        const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
+        await account.selectMachine(serverId, null, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory);
+        // A refresh retains the admitted Home rows while socket presence has
+        // already replaced the active display objects for those same machines.
+        storage.setState((state) => ({
+            machines: Object.fromEntries(Object.values(state.machines).map(machine => [machine.id, { ...machine }])),
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverIdentityId]: 'loading' },
+        }));
+        const screen = await renderSearchSettings();
+        expect(screen.findHostByTestId('search-settings-standard')).toBeNull();
+
+        await screen.pressByTestIdAsync('search-settings-target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        const option = screen.findHostByTestId('search-settings-target.picker-option:m1');
+        expect(option).not.toBeNull();
+        expect(option!.props.disabled ?? option!.props.accessibilityState?.disabled ?? option!.props['aria-disabled']).not.toBe(true);
+        await screen.pressByTestIdAsync('search-settings-target.picker-option:m1');
+        expect(storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory])
+            .toEqual({ serverIdentityId, machineId: 'm1' });
+        expect((await renderedControl(screen, 'search-settings-standard')).props.value).toBe(true);
+        await enabledClearControl(screen);
+        expect(machineRpcSpy.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET)
+            .map(([request]) => request)).toContainEqual(expect.objectContaining({ machineId: 'm1', serverId }));
+        await toggle(screen, 'search-settings-standard');
+        expect(daemons.m1.settings.conversationSearch.standardSearch.enabled).toBe(false);
+        expect(daemons.m2.settings.conversationSearch.standardSearch.enabled).toBe(true);
+    }));
+
     it.each(['error', 'unsupported'] as const)('ends loading after a terminal %s Agent projection and offers recovery', async (projectionFailure) => {
         const held = createDeferred<void>();
         const options: { readProjectionAfter: PromiseLike<void>; projectionFailure?: 'error' | 'unsupported' } = { readProjectionAfter: held.promise, projectionFailure };

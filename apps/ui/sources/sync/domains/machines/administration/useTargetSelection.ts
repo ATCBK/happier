@@ -116,7 +116,9 @@ export function resolveFreshMachineAdministrationExecutionTarget(
     const activeMachines = Object.values(state.machines ?? {});
     const resolution = resolvePortableMachineAdministrationTarget({
         target,
-        activeServerId,
+        // Execution must resolve the scoped row admitted below. During refresh,
+        // the active display fallback can hold a different presence object.
+        activeServerId: '',
         activeMachines,
         machineListByServerId,
         machineListStatusByServerId: state.machineListStatusByServerId,
