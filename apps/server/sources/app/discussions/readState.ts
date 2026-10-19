@@ -34,7 +34,7 @@ export async function setDiscussionReadCursor(input: Readonly<{
     actorAccountId: string; discussionId: string; lastReadSeq: number; authentication: SessionAccessAuthentication;
 }>): Promise<DiscussionResult<DiscussionReadCursorV1>> {
     return inTx(async tx => {
-        await acquireDiscussionMutationAccountsInTx(tx, input);
+        await acquireDiscussionMutationAccountsInTx(tx, { ...input, includeDiscussionPublication: false });
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         // Tools may read but cannot silently acknowledge for a person.
