@@ -125,6 +125,12 @@ type ArtifactContentProjection = Omit<Artifact, 'ownerAccountId' | 'access' | 'e
 export type ArtifactDataKeyCacheEntry = Readonly<{
     envelope: string;
     dataKey: Uint8Array;
+    /**
+     * The opened list header beside the exact ciphertext it came from. Opening is a pure
+     * function of (data key, ciphertext), so a refresh whose header is byte-identical
+     * reuses it instead of opening every row of an unchanged inventory again.
+     */
+    header?: Readonly<{ ciphertext: string; raw: Readonly<Record<string, unknown>> }>;
     provenanceEnvelope?: string | null;
     provenanceDataKey?: Uint8Array;
 }>;
@@ -409,6 +415,21 @@ export async function decryptArtifactListItems(params: {
     }));
 }
 
+async function openArtifactListHeader(params: Readonly<{
+    artifact: Pick<Artifact, 'id' | 'header'>;
+    dataKey: Uint8Array;
+    artifactDataKeys: ArtifactDataKeyCache;
+}>): Promise<Readonly<Record<string, unknown>> | null> {
+    const { artifact, dataKey, artifactDataKeys } = params;
+    const entry = artifactDataKeys.get(artifact.id);
+    const retained = entry?.dataKey === dataKey ? entry.header : undefined;
+    if (retained?.ciphertext === artifact.header) return retained.raw;
+    const raw = await new ArtifactEncryption(dataKey).decryptHeaderRaw(artifact.header);
+    // The entry's key identity proves it still belongs to this envelope; a rotated envelope replaced it.
+    if (raw && entry?.dataKey === dataKey) artifactDataKeys.set(artifact.id, { ...entry, header: { ciphertext: artifact.header, raw } });
+    return raw;
+}
+
 async function buildDecryptedArtifactListItem(params: {
     artifact: Artifact;
     encryption: Encryption | null;
@@ -466,11 +487,7 @@ async function buildDecryptedArtifactListItem(params: {
             });
         }
 
-        // Create artifact encryption instance
-        const artifactEncryption = new ArtifactEncryption(dataKey);
-
-        // Decrypt header
-        const rawHeader = await artifactEncryption.decryptHeaderRaw(artifact.header);
+        const rawHeader = await openArtifactListHeader({ artifact, dataKey, artifactDataKeys: params.artifactDataKeys });
         const header = rawHeader ? projectArtifactHeaderForDisplay(rawHeader) : null;
 
         if (!header) {
