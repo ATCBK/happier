@@ -4,20 +4,20 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit';
 
 import { canDropSessionUnder, listPutUnderCandidates, resolvePutUnderEligibility } from './putUnderCandidates';
-import { createSessionReportsToEligibilitySnapshot, type SessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
-import { SessionReportsToOptionsV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { createSessionManagerEligibilitySnapshot, type SessionManagerEligibilitySnapshot } from '@/sync/ops/relations/sessionManagerEligibility';
+import { SessionManagerOptionsV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
     return createSessionFixture({ id, serverId: 'home', updatedAt: 1, createdAt: 1, archivedAt: null, ...overrides });
 }
 
-function facts(sessions: Readonly<Record<string, Session>>, sessionId: string): SessionReportsToEligibilitySnapshot {
+function facts(sessions: Readonly<Record<string, Session>>, sessionId: string): SessionManagerEligibilitySnapshot {
     // These fixture reports are descendants in the Home's current graph. Its read owns cycle
     // verdicts; a client must not rebuild that graph from a partial retained list.
     const cycleIds = new Set(['child', 'grandchild']);
-    return createSessionReportsToEligibilitySnapshot({ ...SessionReportsToOptionsV1Schema.parse({ sessionId,
-        currentLeadSessionId: sessions[sessionId]?.reportsTo?.sessionId ?? null,
+    return createSessionManagerEligibilitySnapshot({ ...SessionManagerOptionsV1Schema.parse({ sessionId,
+        currentManagerSessionId: sessions[sessionId]?.manager?.sessionId ?? null,
         candidates: Object.keys(sessions).map((sessionId) => cycleIds.has(sessionId)
             ? { sessionId, allowed: false, reason: 'cycle' } : { sessionId, allowed: true }),
     }), serverId: 'home', accountId: 'account',
@@ -29,8 +29,8 @@ describe('listPutUnderCandidates', () => {
     it('offers Sessions on the same Home, never itself, its reports, archived or other-Home Sessions', () => {
         const sessions = Object.fromEntries([
             session('self'),
-            session('child', { reportsTo: { sessionId: 'self' } }),
-            session('grandchild', { reportsTo: { sessionId: 'child' } }),
+            session('child', { manager: { sessionId: 'self' } }),
+            session('grandchild', { manager: { sessionId: 'child' } }),
             session('lead', { updatedAt: 5 }),
             session('peer', { updatedAt: 9 }),
             session('old', { archivedAt: 3 }),
@@ -47,22 +47,22 @@ describe('canDropSessionUnder', () => {
         expect(await setServerProfileIdentityForUrl(profile.serverUrl, 'srv_put_under_home')).not.toBeNull();
         const records = { source: session('source', { serverId: profile.id }),
             candidate: session('candidate', { serverId: 'srv_put_under_home' }) };
-        const evidence = createSessionReportsToEligibilitySnapshot({ serverId: 'srv_put_under_home', accountId: 'account',
-            sessionId: 'source', currentLeadSessionId: null, candidates: [{ sessionId: 'candidate', allowed: true }],
+        const evidence = createSessionManagerEligibilitySnapshot({ serverId: 'srv_put_under_home', accountId: 'account',
+            sessionId: 'source', currentManagerSessionId: null, candidates: [{ sessionId: 'candidate', allowed: true }],
             isCurrent: () => true, dispose: () => {} });
         expect(resolvePutUnderEligibility(records, 'source', 'candidate', evidence, { serverId: profile.id, accountId: 'account' }))
-            .toEqual({ allowed: true, expectedLeadSessionId: null });
+            .toEqual({ allowed: true, expectedManagerSessionId: null });
         expect(resolvePutUnderEligibility({ ...records, candidate: session('candidate', { serverId: profile.id }) },
             'source', 'candidate', evidence, { serverId: profile.id, accountId: 'account' }))
-            .toEqual({ allowed: true, expectedLeadSessionId: null });
+            .toEqual({ allowed: true, expectedManagerSessionId: null });
         expect(resolvePutUnderEligibility(records, 'source', 'candidate', evidence, { serverId: 'unrelated-home', accountId: 'account' }))
             .toEqual({ allowed: false, reason: 'different_home' });
     });
     const canInput = { access: createSessionAccessFixture() } satisfies Partial<Session>;
     const sessions = Object.fromEntries([
-        session('self', { ...canInput, reportsTo: { sessionId: 'lead' } }),
-        session('child', { reportsTo: { sessionId: 'self' } }),
-        session('grandchild', { reportsTo: { sessionId: 'child' } }),
+        session('self', { ...canInput, manager: { sessionId: 'lead' } }),
+        session('child', { manager: { sessionId: 'self' } }),
+        session('grandchild', { manager: { sessionId: 'child' } }),
         session('lead'),
         session('peer'),
         session('old', { archivedAt: 3 }),
@@ -75,19 +75,19 @@ describe('canDropSessionUnder', () => {
     });
 
     it('uses the Home eligibility read as the relation CAS basis when the unopened list relation is older', () => {
-        const evidence = createSessionReportsToEligibilitySnapshot({ serverId: 'home', accountId: 'account',
-            sessionId: 'self', currentLeadSessionId: null, candidates: [{ sessionId: 'peer', allowed: true }, { sessionId: 'lead', allowed: true }],
+        const evidence = createSessionManagerEligibilitySnapshot({ serverId: 'home', accountId: 'account',
+            sessionId: 'self', currentManagerSessionId: null, candidates: [{ sessionId: 'peer', allowed: true }, { sessionId: 'lead', allowed: true }],
             isCurrent: () => true, dispose: () => {},
         });
         // The Home has detached self; the retained list still says it reports to lead.
         // That stale projection cannot invalidate a current server admission or choose the CAS basis.
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer', evidence, { serverId: 'home', accountId: 'account' }))
-            .toEqual({ allowed: true, expectedLeadSessionId: null });
+            .toEqual({ allowed: true, expectedManagerSessionId: null });
         expect(resolvePutUnderEligibility(sessions, 'self', 'lead', evidence))
-            .toEqual({ allowed: true, expectedLeadSessionId: null });
-        const staleAncestor = { ...sessions, peer: session('peer', { reportsTo: { sessionId: 'self' } }) };
+            .toEqual({ allowed: true, expectedManagerSessionId: null });
+        const staleAncestor = { ...sessions, peer: session('peer', { manager: { sessionId: 'self' } }) };
         expect(resolvePutUnderEligibility(staleAncestor, 'self', 'peer', evidence))
-            .toEqual({ allowed: true, expectedLeadSessionId: null });
+            .toEqual({ allowed: true, expectedManagerSessionId: null });
         evidence.dispose();
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer', evidence)).toEqual({ allowed: false, reason: 'unavailable' });
     });
@@ -111,12 +111,12 @@ describe('canDropSessionUnder', () => {
     it('refuses unknown, retired, mismatched Account/Home and pairwise facts while preserving the current lead menu option', () => {
         const evidence = facts(sessions, 'self');
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer')).toEqual({ allowed: false, reason: 'unavailable' });
-        expect(resolvePutUnderEligibility({ ...sessions, self: session('self', { serverId: null }), peer: session('peer', { serverId: null }) },
+        expect(resolvePutUnderEligibility({ ...sessions, self: session('self', { serverId: undefined }), peer: session('peer', { serverId: undefined }) },
             'self', 'peer')).toEqual({ allowed: false, reason: 'unavailable' });
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer', { ...evidence, isCurrent: () => false })).toEqual({ allowed: false, reason: 'unavailable' });
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer', evidence, { accountId: 'other' })).toEqual({ allowed: false, reason: 'unavailable' });
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer', evidence, { serverId: 'other' })).toEqual({ allowed: false, reason: 'different_home' });
-        const denied = createSessionReportsToEligibilitySnapshot({ ...evidence,
+        const denied = createSessionManagerEligibilitySnapshot({ ...evidence,
             candidates: [{ sessionId: 'peer', allowed: false, reason: 'pairwise' }] });
         expect(resolvePutUnderEligibility(sessions, 'self', 'peer', denied)).toEqual({ allowed: false, reason: 'pairwise' });
         expect(listPutUnderCandidates(sessions, sessions.self!, denied).map((item) => item.id)).not.toContain('peer');

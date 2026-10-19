@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import type { GetSessionFollowResponse } from '@happier-dev/protocol';
+import type { GetSessionFollowResponse, SetSessionFollowRequest } from '@happier-dev/protocol';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
@@ -9,9 +9,24 @@ import { t } from '@/text';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 
 import { AccountSessionFollowEditor } from './AccountSessionFollowEditor';
-import { createAccountSessionFollowController, type AccountSessionFollowTransport } from './accountSessionFollowController';
+import { createAccountSessionFollowController, type AccountSessionFollowEditorSnapshot, type AccountSessionFollowTransport } from './accountSessionFollowController';
 
 installSettingsViewCommonModuleMocks();
+
+function legacyEditorPreferences(input: SetSessionFollowRequest) {
+    const { notificationLevel, includeInVoice } = input;
+    if (notificationLevel === undefined || includeInVoice === undefined) {
+        throw new Error('This legacy editor fixture requires both preference fields');
+    }
+    return { notificationLevel, includeInVoice };
+}
+
+type Screen = Awaited<ReturnType<typeof renderSettingsView>>;
+/** The shared editor's preset segment (the pressable radio), by preset id. */
+function presetSegment(screen: Screen, preset: string) {
+    return screen.tree.root.findAll((node) => node.props.testID === `session-follow-policy.preset.${preset}`
+        && typeof node.props.onPress === 'function')[0];
+}
 
 describe('Account Follow editor', () => {
     it('presents a scope refusal with the existing denial notice and disabled controls', async () => {
@@ -19,9 +34,21 @@ describe('Account Follow editor', () => {
             projection: null, draft: null, loading: false, saving: false, online: true,
             error: 'credential_scope_denied', voiceInitialSnapshotPending: false,
         }} voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}}
-            onRetry={() => {}} onOpenNotificationSettings={() => {}} />);
+            onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}} />);
         expect(screen.getTextContent()).toContain(t('errors.permissionDenied'));
         expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(true);
+        await screen.unmount();
+    });
+    it('claims no Follow state while the first read is pending', async () => {
+        const screen = await renderSettingsView(<AccountSessionFollowEditor state={{
+            projection: null, draft: null, loading: true, saving: false, online: true,
+            error: null, voiceInitialSnapshotPending: false,
+        }} voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}}
+            onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}} />);
+        // An owner is tracked; a disabled Off switch before the read would say the opposite.
+        expect(screen.findByTestId('session-follow-enabled')).toBeNull();
+        expect(screen.findByTestId('session-follow-owner-row')).toBeNull();
+        expect(screen.getTextContent()).toContain(t('common.loading'));
         await screen.unmount();
     });
     it('creates, updates, unfollows, and refollows through the mounted editor', async () => {
@@ -36,12 +63,19 @@ describe('Account Follow editor', () => {
                 voiceInitialSnapshotPending: stored?.following === true && stored.includeInVoice,
             } }),
             set: async (target, preferences) => {
+                if (preferences.policy) {
+                    // A policy edit keeps the row's level ingress and stores the chosen policy beside it.
+                    writes.push(`policy:${preferences.policy.preset}`);
+                    stored = { sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, policy: preferences.policy };
+                    return { kind: 'ok', value: { changed: true, follow: stored, voiceInitialSnapshotPending: false } };
+                }
+                const legacy = legacyEditorPreferences(preferences);
                 writes.push(`set:${preferences.notificationLevel}`);
-                stored = { sessionId: target.sessionId, following: true, ...preferences };
+                stored = { sessionId: target.sessionId, following: true, ...preferences, ...legacy };
                 return { kind: 'ok', value: {
                     changed: true,
                     follow: stored,
-                    voiceInitialSnapshotPending: preferences.includeInVoice,
+                    voiceInitialSnapshotPending: legacy.includeInVoice,
                 } };
             },
             remove: async (target) => {
@@ -61,78 +95,37 @@ describe('Account Follow editor', () => {
             const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
             return <AccountSessionFollowEditor state={state} voiceReadiness="eligible" archived={false}
                 onSet={(next) => { void controller.set(next); }} onRemove={() => { void controller.remove(); }}
-                onRetry={() => { void controller.retry(); }} onOpenNotificationSettings={() => {}} />;
+                onRetry={() => { void controller.retry(); }} onOpenNotificationSettings={() => {}}
+                onEditPolicy={(edit) => { void controller.editPolicy(edit); }} />;
         }
         const screen = await renderSettingsView(<Editor />);
 
         await act(async () => { screen.findByTestId('session-follow-enabled')?.props.onValueChange(true); });
-        expect(screen.findByTestId('session-follow-level-important')?.props.accessibilityState?.checked).toBe(true);
-        await act(async () => { screen.findByTestId('session-follow-level-all_messages')?.props.onPress(); });
-        expect(screen.findByTestId('session-follow-level-all_messages')?.props.accessibilityState?.checked).toBe(true);
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
+        await act(async () => { presetSegment(screen, 'everything')?.props.onPress(); });
+        expect(presetSegment(screen, 'everything')?.props.checked).toBe(true);
         await act(async () => { screen.findByTestId('session-follow-enabled')?.props.onValueChange(false); });
         expect(screen.findByTestId('session-follow-enabled')?.props.value).toBe(false);
         await act(async () => { screen.findByTestId('session-follow-enabled')?.props.onValueChange(true); });
-        expect(screen.findByTestId('session-follow-level-important')?.props.accessibilityState?.checked).toBe(true);
-        expect(writes).toEqual(['set:important', 'set:all_messages', 'remove', 'set:important']);
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
+        expect(writes).toEqual(['set:important', 'policy:everything', 'remove', 'set:important']);
         await screen.unmount();
     });
 
-    it('chooses the notification level with a segmented control on a page', async () => {
-        const onSet = vi.fn();
-        const screen = await renderSettingsView(
-            <ListPresentationProvider value="page">
-                <AccountSessionFollowEditor state={{
-                    projection: { follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: true }, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
-                    draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
-                }} voiceReadiness="eligible" archived={false} onSet={onSet}
-                onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} />
-            </ListPresentationProvider>,
-        );
-
-        expect(screen.findByTestId('session-follow-level-important')).toBeNull();
-        await screen.pressByTestIdAsync('session-follow-level:all_messages');
-        expect(onSet).toHaveBeenCalledWith({ notificationLevel: 'all_messages', includeInVoice: true });
-        await screen.unmount();
-    });
-
-    it('moves keyboard focus and the selected notification option together without changing Voice inclusion', async () => {
-        const focused = vi.fn();
-        function Editor() {
-            const [notificationLevel, setLevel] = React.useState<'none' | 'important' | 'all_messages'>('important');
-            return <AccountSessionFollowEditor state={{
-                projection: { follow: { sessionId: 'session-a', following: true, notificationLevel, includeInVoice: true }, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
-                draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
-            }} voiceReadiness="eligible" archived={false} onSet={(next) => {
-                expect(next.includeInVoice).toBe(true);
-                setLevel(next.notificationLevel);
-            }} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} />;
-        }
-        const screen = await renderSettingsView(<Editor />, {
-            createNodeMock: (element) => ({
-                focus: () => focused((element.props as { testID?: string }).testID),
-            }),
-        });
-        const current = screen.findByTestId('session-follow-level-important');
-        const event = { key: 'ArrowDown', nativeEvent: { key: 'ArrowDown' }, preventDefault: vi.fn(), stopPropagation: vi.fn() };
-        await act(async () => { current?.props.onKeyDown?.(event); });
-        expect(event.preventDefault).toHaveBeenCalled();
-        expect(screen.findByTestId('session-follow-level-all_messages')?.props['aria-checked']).toBe(true);
-        expect(screen.findByTestId('session-follow-level-important')?.props['aria-checked']).toBe(false);
-        expect(focused).toHaveBeenCalledWith('session-follow-level-all_messages');
-        await screen.unmount();
-    });
-    it('keeps a selected notification level when Voice is enabled and exposes one radio selection', async () => {
+    it('turns Voice on as a policy edit and keeps the chosen preset', async () => {
         const address = { serverId: 'home-a', sessionId: 'session-a' };
         const transport: AccountSessionFollowTransport = {
             get: async () => ({ kind: 'ok', value: {
-                follow: { sessionId: address.sessionId, following: true, notificationLevel: 'none', includeInVoice: false },
+                follow: { sessionId: address.sessionId, following: true, notificationLevel: 'important', includeInVoice: false },
                 isSessionOwner: false,
                 capabilities: { manageFollow: true },
                 voiceInitialSnapshotPending: false,
             } }),
             set: async (target, preferences) => ({ kind: 'ok', value: {
-                changed: true, follow: { sessionId: target.sessionId, following: true, ...preferences },
-                voiceInitialSnapshotPending: preferences.includeInVoice,
+                changed: true,
+                // The server's modern writer retires the legacy bit; policy is authoritative.
+                follow: { sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false, ...(preferences.policy ? { policy: preferences.policy } : {}) },
+                voiceInitialSnapshotPending: true,
             } }),
             remove: async () => ({ kind: 'ok', value: { changed: true } }),
         };
@@ -140,28 +133,63 @@ describe('Account Follow editor', () => {
         await controller.refresh();
         function Editor() {
             const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-            // `AccountSessionFollowControl` derives readiness from this same snapshot
-            // field, so hard-coding `eligible` here would assert a state the Home has
-            // just contradicted by reporting the initial snapshot as pending.
             return <AccountSessionFollowEditor state={state}
                 voiceReadiness={state.voiceInitialSnapshotPending ? 'pending' : 'eligible'} archived={false}
                 onSet={(next) => { void controller.set(next); }} onRemove={() => { void controller.remove(); }}
-                onRetry={() => { void controller.retry(); }} onOpenNotificationSettings={() => {}} />;
+                onRetry={() => { void controller.retry(); }} onOpenNotificationSettings={() => {}}
+                onEditPolicy={(edit) => { void controller.editPolicy(edit); }} />;
         }
         const screen = await renderSettingsView(<Editor />);
-        expect(screen.findByTestId('session-follow-level-none')?.props.accessibilityState?.checked).toBe(true);
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         await act(async () => { screen.findByTestId('session-follow-voice')?.props.onValueChange(true); });
-        // The first flush commits the optimistic draft; the settled Home projection
-        // arrives on the following one, and only it carries the pending-snapshot fact.
         await act(async () => {});
-        expect(controller.getSnapshot().projection?.follow).toMatchObject({ notificationLevel: 'none', includeInVoice: true });
-        expect(screen.findByTestId('session-follow-voice-delivery')).not.toBeNull();
+        expect(controller.getSnapshot().projection?.follow).toMatchObject({ policy: { preset: 'important', voice: true } });
+        expect(screen.findByTestId('session-follow-voice')?.props.value).toBe(true);
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
         expect(screen.getTextContent()).toContain(t('session.follow.voice.initialSnapshotPending'));
+        await screen.unmount();
+    });
+    it('arms and clears a one-shot "Notify me once" through the Follow controller', async () => {
+        const address = { serverId: 'home-a', sessionId: 'session-a' };
+        const writes: unknown[] = [];
+        let once: unknown;
+        const transport: AccountSessionFollowTransport = {
+            get: async () => ({ kind: 'ok', value: {
+                follow: null, isSessionOwner: true, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
+            } }),
+            set: async (target, preferences) => {
+                writes.push(preferences);
+                once = preferences.once ?? undefined;
+                return { kind: 'ok', value: { changed: true, voiceInitialSnapshotPending: false, follow: {
+                    sessionId: target.sessionId, following: true, notificationLevel: 'important', includeInVoice: false,
+                    ...(once ? { once } : {}),
+                } as never } };
+            },
+            remove: async () => { throw new Error('A one-shot change must not Unfollow'); },
+        };
+        const controller = createAccountSessionFollowController(address, transport);
+        await controller.refresh();
+        function Editor() {
+            const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+            return <AccountSessionFollowEditor state={state} voiceReadiness="eligible" archived={false}
+                notifyOnce={{ sourceTurnId: 'turn-1', onOnce: controller.setOnce }}
+                onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+                onEditPolicy={() => {}} />;
+        }
+        const screen = await renderSettingsView(<Editor />);
+        const select = () => screen.tree.root.findAll((node) => node.props.testID === 'session-follow-once'
+            && typeof node.props.onSelect === 'function')[0];
+        expect(select()?.props.selectedId).toBe('off');
+        await act(async () => { select()?.props.onSelect('turn'); });
+        expect(select()?.props.selectedId).toBe('turn');
+        await act(async () => { select()?.props.onSelect('off'); });
+        expect(writes).toEqual([{ once: { kind: 'turn_finished', sourceTurnId: 'turn-1' } }, { once: null }]);
+        expect(select()?.props.selectedId).toBe('off');
         await screen.unmount();
     });
 
     it('projects the Session owner as tracked with the Important default and no interest toggle', async () => {
-        const onSet = vi.fn();
+        const onEditPolicy = vi.fn();
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={{
                 // No stored row: the Home still tracks the owner and treats them as
@@ -169,15 +197,15 @@ describe('Account Follow editor', () => {
                 projection: { follow: null, isSessionOwner: true, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
-            voiceReadiness="eligible" archived={false} onSet={onSet} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={onEditPolicy}
         />);
         expect(screen.findByTestId('session-follow-enabled')).toBeNull();
         expect(screen.findByTestId('session-follow-owner-row')).not.toBeNull();
-        expect(screen.findByTestId('session-follow-level-important')?.props.accessibilityState?.checked).toBe(true);
-        // The selector is the owner's override, and it writes a real preference row.
-        expect(screen.findByTestId('session-follow-level-none')?.props.disabled).not.toBe(true);
-        await act(async () => { screen.findByTestId('session-follow-level-none')?.props.onPress(); });
-        expect(onSet).toHaveBeenCalledWith({ notificationLevel: 'none', includeInVoice: false });
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
+        // The editor is the owner's override, and it writes a real policy through the controller.
+        expect(presetSegment(screen, 'quiet')?.props.disabled).not.toBe(true);
+        await act(async () => { presetSegment(screen, 'quiet')?.props.onPress(); });
+        expect(onEditPolicy).toHaveBeenCalledWith({ kind: 'preset', preset: 'quiet' });
         await screen.unmount();
     });
 
@@ -187,10 +215,10 @@ describe('Account Follow editor', () => {
                 projection: { follow: null, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
-            voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.findByTestId('session-follow-enabled')?.props.value).toBe(false);
-        expect(screen.findByTestId('session-follow-level-important')).toBeNull();
+        expect(presetSegment(screen, 'important')).toBeUndefined();
         await screen.unmount();
     });
 
@@ -205,11 +233,11 @@ describe('Account Follow editor', () => {
                 },
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
-            voiceReadiness="eligible" archived onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            voiceReadiness="eligible" archived onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(false);
         expect(screen.findByTestId('session-follow-voice')?.props.disabled).toBe(true);
-        expect(screen.findByTestId('session-follow-level-important')?.props.disabled).toBe(true);
+        expect(presetSegment(screen, 'important')?.props.disabled).toBe(true);
         await screen.unmount();
     });
 
@@ -230,7 +258,7 @@ describe('Account Follow editor', () => {
             onSet={onSet}
             onRemove={() => {}}
             onRetry={() => {}}
-            onOpenNotificationSettings={() => {}}
+            onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
 
         const toggle = screen.findByTestId('session-follow-enabled');
@@ -252,10 +280,10 @@ describe('Account Follow editor', () => {
                 },
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
-            voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            voiceReadiness="eligible" archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.findByTestId('session-follow-enabled')?.props.disabled).toBe(true);
-        expect(screen.findByTestId('session-follow-level-important')?.props.disabled).toBe(true);
+        expect(presetSegment(screen, 'important')?.props.disabled).toBe(true);
         await screen.unmount();
     });
 
@@ -272,7 +300,7 @@ describe('Account Follow editor', () => {
         const screen = await renderSettingsView(<AccountSessionFollowEditor
             state={state}
             voiceReadiness="waiting_encrypted"
-            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.getTextContent()).toContain(t('session.follow.voice.waitingEncrypted'));
         await screen.unmount();
@@ -290,7 +318,7 @@ describe('Account Follow editor', () => {
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
             voiceReadiness="eligible"
-            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.getTextContent()).toContain(t('session.follow.voice.subtitle'));
         await screen.unmount();
@@ -308,7 +336,7 @@ describe('Account Follow editor', () => {
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
             voiceReadiness="eligible"
-            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         // The row subtitle already says what Voice inclusion does. A status row is
         // only worth its vertical space when it reports something the subtitle does
@@ -332,7 +360,7 @@ describe('Account Follow editor', () => {
                 draft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
             }}
             voiceReadiness="provider_withheld"
-            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.findByTestId('session-follow-voice')?.props.value).toBe(true);
         expect(screen.getTextContent()).toContain(t('session.follow.voice.providerWithheld'));
@@ -352,7 +380,7 @@ describe('Account Follow editor', () => {
         const quiet = await renderSettingsView(<AccountSessionFollowEditor
             state={state}
             voiceReadiness="eligible"
-            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         // A Session whose Background sync is on promises nothing extra, so the
         // explanation must not appear there.
@@ -363,14 +391,37 @@ describe('Account Follow editor', () => {
             state={state}
             voiceReadiness="eligible"
             externalBackgroundSyncOff
-            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}}
+            archived={false} onSet={() => {}} onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} onEditPolicy={() => {}}
         />);
         expect(screen.findByTestId('session-follow-external-attached-only')).not.toBeNull();
         expect(screen.getTextContent()).toContain(t('session.follow.editor.externalAttachedOnly'));
         // It explains a consequence of the external source's acquisition; it is
         // not a second Follow control and changes nothing the person chose.
         expect(screen.findByTestId('session-follow-enabled')?.props.value).toBe(true);
-        expect(screen.findByTestId('session-follow-level-important')?.props.accessibilityState?.checked).toBe(true);
+        expect(presetSegment(screen, 'important')?.props.checked).toBe(true);
+        await screen.unmount();
+    });
+
+    it('chooses how much you hear with the one shared Follow policy editor, not the old level form (C1 §4.3, lab P2)', async () => {
+        const onEditPolicy = vi.fn();
+        const state = {
+            projection: { follow: { sessionId: 'session-a', following: true, notificationLevel: 'important', includeInVoice: false }, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false },
+            draft: null, policyDraft: null, loading: false, saving: false, online: true, error: null, voiceInitialSnapshotPending: false,
+        } as unknown as AccountSessionFollowEditorSnapshot;
+        const screen = await renderSettingsView(
+            <ListPresentationProvider value="page">
+                <AccountSessionFollowEditor state={state} onEditPolicy={onEditPolicy} voiceReadiness="eligible" archived={false} onSet={() => {}}
+                    onRemove={() => {}} onRetry={() => {}} onOpenNotificationSettings={() => {}} />
+            </ListPresentationProvider>,
+        );
+        expect(screen.findByTestId('session-follow-level')).toBeNull();
+        expect(screen.findByTestId('session-follow-policy')).not.toBeNull();
+        // Important groups what interrupts you apart from what arrives quietly.
+        expect(screen.findByTestId('session-follow-policy.group.interrupt')).not.toBeNull();
+        const everything = screen.tree.root.find((node) => node.props.testID === 'session-follow-policy.preset.everything'
+            && typeof node.props.onPress === 'function');
+        await act(async () => { everything.props.onPress(); });
+        expect(onEditPolicy).toHaveBeenCalledWith({ kind: 'preset', preset: 'everything' });
         await screen.unmount();
     });
 });

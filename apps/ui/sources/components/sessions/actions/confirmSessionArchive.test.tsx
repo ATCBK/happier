@@ -19,11 +19,11 @@ afterEach(() => {
 
 describe('archiveSessionReports', () => {
     it('archives only unarchived direct reports in the lead Home, through the existing archive Action', async () => {
-        const child = createSessionFixture({ id: 'child', serverId: 'home-a', reportsTo: { sessionId: 'lead' } });
-        const otherHome = createSessionFixture({ id: 'other', serverId: 'home-b', reportsTo: { sessionId: 'lead' } });
-        const unqualified = createSessionFixture({ id: 'unqualified', reportsTo: { sessionId: 'lead' } });
-        const archived = createSessionFixture({ id: 'archived', serverId: 'home-a', reportsTo: { sessionId: 'lead' }, archivedAt: 4 });
-        const grandchild = createSessionFixture({ id: 'grandchild', serverId: 'home-a', reportsTo: { sessionId: 'child' } });
+        const child = createSessionFixture({ id: 'child', serverId: 'home-a', manager: { sessionId: 'lead' } });
+        const otherHome = createSessionFixture({ id: 'other', serverId: 'home-b', manager: { sessionId: 'lead' } });
+        const unqualified = createSessionFixture({ id: 'unqualified', manager: { sessionId: 'lead' } });
+        const archived = createSessionFixture({ id: 'archived', serverId: 'home-a', manager: { sessionId: 'lead' }, archivedAt: 4 });
+        const grandchild = createSessionFixture({ id: 'grandchild', serverId: 'home-a', manager: { sessionId: 'child' } });
         // The report was never opened: ordinary list hydration still has to make cascade reachable.
         getStorage().setState({ sessions: { otherHome, unqualified, archived, grandchild },
             sessionListRowsByServerId: { 'home-a': { child: buildSessionListRenderableFromSession(child) } } });

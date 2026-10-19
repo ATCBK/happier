@@ -20,6 +20,7 @@ const labels = {
     inactiveSessions: 'Inactive sessions', showInactive: 'Show', hideInactive: 'Hide', homes: 'Homes',
     sharedWith: 'Shared with', outsideTeams: 'Personal & direct', tags: 'Tags', source: 'Source',
     allSources: 'All', persistedSource: 'Saved in Happier', directSource: 'External', noOptions: 'No options',
+    onlyCoordinators: 'Only coordinators', onlyCoordinatorsDescription: 'Sessions that manage others or follow by a rule',
 } as const;
 
 describe('sessionListFilterEditorModel', () => {
@@ -197,6 +198,24 @@ describe('sessionListFilterEditorModel', () => {
         expect(build(false).rootStep.sections.find((section) => section.id === 'attention')).toBeUndefined();
         expect(build(true).rootStep.sections.find((section) => section.id === 'attention')?.kind).toBe('static');
         expect(build(undefined).rootStep.sections.find((section) => section.id === 'attention')?.kind).toBe('static');
+    });
+
+    it('offers Only coordinators as a toggle where the Home answers filtered listing', () => {
+        const build = (filters: ReturnType<typeof createSessionListViewFilterDefaults>, attentionAvailable: boolean) => buildSessionListFilterEditorModel({
+            filters, includeInactive: true, labels,
+            scopesAvailable: { my_work: true, assigned_to_me: true, following: true, involving_me: true, all_accessible: true },
+            homes: [{ serverId: 'home-a', label: 'Home A' }], audiences: [], tags: [], sourceAvailable: true, attentionAvailable,
+        });
+        const defaults = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'] });
+        expect(build(defaults, false).rootStep.sections.find((section) => section.id === 'coordinator')).toBeUndefined();
+        const section = build(defaults, true).rootStep.sections.find((candidate) => candidate.id === 'coordinator');
+        expect(section?.kind === 'static' ? section.options.map((option) => option.id) : null).toEqual(['coordinator:only']);
+        expect(build(defaults, true).selection.selectedIds.has('coordinator:only')).toBe(false);
+
+        const on = reduceSessionListFilterEditorSelection(defaults, 'coordinator:only');
+        expect(on.coordinator).toBe('coordinator');
+        expect(build(on, true).selection.selectedIds.has('coordinator:only')).toBe(true);
+        expect(reduceSessionListFilterEditorSelection(on, 'coordinator:only').coordinator).toBeUndefined();
     });
 
     it('applies radio facets and multi-select facets without changing unrelated state', () => {

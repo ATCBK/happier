@@ -1,7 +1,7 @@
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
-import { supportsMachineSessionFollowContextV1, supportsMachineSessionFollowWakeOnHumanChangeV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
+import { supportsMachineSessionFollowContextV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import type { SessionFollowSourceKeyPreparationWaitingReasonV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
-import type { SessionFollowSourceModeV1, SessionFollowSourceDeliveryStateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import type { SessionFollowSourceDeliveryStateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 
 import { t } from '@/text';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
@@ -52,16 +52,11 @@ export function resolveSessionFollowSourceRuntimeState(input: Readonly<{
     sourceEncryptionMode?: 'plain' | 'e2ee' | null;
     preparedInUiLifetime?: boolean;
     hasPendingUpdates?: boolean;
-    mode?: SessionFollowSourceModeV1;
     nowMs?: number;
 }>): SessionFollowSourceRuntimeState {
     if (input.deliveryState === 'paused_archived') return 'paused_archived';
     if (!input.machine || !isMachineReachable(input.accountScope, input.machine, input.nowMs)) return 'waiting_for_runtime';
     if (!supportsMachineSessionFollowContextV1(input.machine.operationProtocolCapabilities)) return 'runtime_unsupported';
-    if (input.mode === 'wake_on_human_change'
-        && !supportsMachineSessionFollowWakeOnHumanChangeV1(input.machine.operationProtocolCapabilities)) {
-        return 'runtime_unsupported';
-    }
     if (
         !isPersistentMachine(input.machine)
         && input.sourceEncryptionMode !== 'plain'

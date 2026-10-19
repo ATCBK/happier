@@ -8,7 +8,6 @@ import { createSessionActionTarget } from './sessionActionContext';
 import {
     SESSION_ACTION_ARCHIVE_ID,
     SESSION_ACTION_DELETE_ID,
-    SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
     SESSION_ACTION_MARK_UNREAD_ID,
     SESSION_ACTION_PUT_UNDER_ID,
@@ -17,6 +16,7 @@ import {
     SESSION_ACTION_STOP_ID,
 } from './sessionActionIds';
 import { listVisibleSessionActionIds } from './sessionActionAvailability';
+import { createSessionActionDropdownItem } from './sessionActionPresentation';
 
 function createOwnedRawSession(overrides: Partial<Session> = {}): Session {
     return {
@@ -45,10 +45,38 @@ function createOwnedRawSession(overrides: Partial<Session> = {}): Session {
 }
 
 describe('session action availability', () => {
+    it('offers Make coordinator on a plain session, and Edit/Stop greyed with reasons on one that only manages', () => {
+        const coordinatorIds = (session: Session) => listVisibleSessionActionIds({
+            target: createSessionActionTarget({ session, serverId: 'home', isConnected: true }), surface: 'rowMenu',
+        }).filter((id) => id.startsWith('ui.session.coordinator.'));
+        expect(coordinatorIds(createOwnedRawSession({ receivedRuleCount: 0, managedSessions: { total: 0 } } as Partial<Session>)))
+            .toEqual(['ui.session.coordinator.make']);
+        // Unknown relation counts never guess: no coordinator entries at all.
+        expect(coordinatorIds(createOwnedRawSession())).toEqual([]);
+
+        const managing = createSessionActionTarget({ session: createOwnedRawSession({ receivedRuleCount: 0, managedSessions: { total: 3 } } as Partial<Session>),
+            serverId: 'home', isConnected: true });
+        expect(listVisibleSessionActionIds({ target: managing, surface: 'sessionHeader' }).filter((id) => id.startsWith('ui.session.coordinator.')))
+            .toEqual(['ui.session.coordinator.make', 'ui.session.coordinator.edit', 'ui.session.coordinator.answers', 'ui.session.coordinator.stop']);
+        // "Answers its workers' questions" is the coordinator's one toggle, on unless the session turned it off.
+        expect(createSessionActionDropdownItem({ actionId: 'ui.session.coordinator.answers', target: managing, iconColor: '#000' }))
+            .toMatchObject({ checked: true });
+        const item = (actionId: 'ui.session.coordinator.make' | 'ui.session.coordinator.stop') =>
+            createSessionActionDropdownItem({ actionId, target: managing, iconColor: '#000' });
+        expect(item('ui.session.coordinator.make')).toMatchObject({ disabled: true });
+        expect(item('ui.session.coordinator.stop')).toMatchObject({ disabled: true });
+
+        const following = createSessionActionTarget({ session: createOwnedRawSession({ receivedRuleCount: 2, managedSessions: { total: 0 } } as Partial<Session>),
+            serverId: 'home', isConnected: true });
+        expect(createSessionActionDropdownItem({ actionId: 'ui.session.coordinator.stop', target: following, iconColor: '#000' })?.disabled).toBeUndefined();
+        expect(listVisibleSessionActionIds({ target: { ...following, isArchived: true }, surface: 'rowMenu' })
+            .filter((id) => id.startsWith('ui.session.coordinator.'))).toEqual([]);
+    });
+
     it('offers the existing Work pane to exact-Home Bot readers across single-session menus only', () => {
         const target = createSessionActionTarget({ session: createOwnedRawSession({
             owner: 'someone_else', access: createSessionAccessFixture('view'),
-            metadata: { path: '/shared', bot: { kind: 'bot' } },
+            metadata: { path: '/shared', host: 'shared', bot: { kind: 'bot' } },
         }), serverId: 'home', isConnected: false });
         for (const surface of ['rowMenu', 'nativeContextMenu', 'sessionHeader', 'sessionInfo'] as const) {
             expect(listVisibleSessionActionIds({ target, surface })).toContain('ui.session.work.open');
@@ -124,18 +152,12 @@ describe('session action availability', () => {
         expect(listVisibleSessionActionIds({ target: archived, surface: 'rowMenu' })).not.toContain(SESSION_ACTION_PUT_UNDER_ID);
     });
 
-    it('offers "Make this an orchestrator" in the Session header menu to whoever may rename it, never on an archived Session', () => {
+    it('offers one coordinator entry: the role-only "Make this an orchestrator" is retired for "Make coordinator…"', () => {
         const target = createSessionActionTarget({ session: createOwnedRawSession() });
-        expect(listVisibleSessionActionIds({ target, surface: 'sessionHeader' })).toContain(SESSION_ACTION_MAKE_ORCHESTRATOR_ID);
-        expect(listVisibleSessionActionIds({ target, surface: 'rowMenu' })).not.toContain(SESSION_ACTION_MAKE_ORCHESTRATOR_ID);
-
-        const viewer = createSessionActionTarget({ session: createOwnedRawSession({ access: createSessionAccessFixture('view') }) });
-        expect(listVisibleSessionActionIds({ target: viewer, surface: 'sessionHeader' })).not.toContain(SESSION_ACTION_MAKE_ORCHESTRATOR_ID);
-
-        const archived = createSessionActionTarget({ session: createOwnedRawSession({ archivedAt: 5 }) });
-        expect(listVisibleSessionActionIds({ target: archived, surface: 'sessionHeader' })).not.toContain(SESSION_ACTION_MAKE_ORCHESTRATOR_ID);
+        for (const surface of ['sessionHeader', 'rowMenu'] as const) {
+            expect(listVisibleSessionActionIds({ target, surface })).not.toContain('ui.session.make-orchestrator');
+        }
     });
-
     it('fails unavailable projections closed despite a matching legacy owner id', () => {
         const target = createSessionActionTarget({ session: createOwnedRawSession({ access: null }), currentUserId: 'current_user' });
         expect(target).toMatchObject({ isOwnedByCurrentUser: false, canUnarchive: false, canStop: false, canArchive: false, canRename: false, canResume: false, canDelete: false });
@@ -433,6 +455,43 @@ describe('session action availability', () => {
             currentUserId: 'current_user',
             isConnected: false,
         }).canDelete).toBe(false);
+    });
+
+    it('offers server-authoritative Delete for an archived locked owner shell', () => {
+        const session = createOwnedRawSession({
+            active: false,
+            archivedAt: 5,
+            metadata: null,
+            ownerMetadataView: null,
+            encryptedContentAvailability: 'encrypted_content_unavailable',
+        });
+        const target = createSessionActionTarget({
+            session,
+            serverId: 'home',
+            currentUserId: 'current_user',
+            isConnected: false,
+        });
+        expect(target.canDelete).toBe(true);
+        expect(listVisibleSessionActionIds({ target, surface: 'sessionInfo' }))
+            .toContain(SESSION_ACTION_DELETE_ID);
+        expect(createSessionActionTarget({
+            session: { ...session, archivedAt: null },
+            serverId: 'home',
+            currentUserId: 'current_user',
+            isConnected: false,
+        }).canDelete).toBe(false);
+    });
+
+    it('does not mistake unsettled encrypted owner content for a settled locked archive', () => {
+        for (const encryptedContentAvailability of [null, undefined]) {
+            const target = createSessionActionTarget({
+                session: createOwnedRawSession({ active: false, archivedAt: 5, metadata: null,
+                    ownerMetadataView: null, encryptionMode: 'e2ee', encryptedContentAvailability }),
+                serverId: 'home', currentUserId: 'current_user', isConnected: false,
+            });
+            expect(target.canDelete).toBe(false);
+            expect(listVisibleSessionActionIds({ target, surface: 'sessionInfo' })).not.toContain(SESSION_ACTION_DELETE_ID);
+        }
     });
 
     it('uses layout-v1 owner terminal lifecycle evidence and never falls back to shared metadata', () => {

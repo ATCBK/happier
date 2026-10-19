@@ -37,8 +37,11 @@ export type SessionActionId =
     | 'ui.session.move-to-folder'
     | 'ui.session.set-attention-standing'
     | 'ui.session.clear-attention-standing'
-    | 'ui.session.make-orchestrator'
-    | 'ui.session.put-under';
+    | 'ui.session.put-under'
+    | 'ui.session.coordinator.make'
+    | 'ui.session.coordinator.answers'
+    | 'ui.session.coordinator.edit'
+    | 'ui.session.coordinator.stop';
 
 /**
  * Whether this session can be kept in — or released from — Needs attention, and which way the
@@ -98,6 +101,10 @@ export type SessionActionOperationResult = Readonly<{
     recovery?: SessionStopRecovery;
 }>;
 
+export type SessionDeletePresentUserConfirmation = Readonly<{
+    actionId: 'session.delete';
+}>;
+
 export type SessionActionExecutionInput = Readonly<{
     title?: string;
     readState?: 'read' | 'unread';
@@ -122,11 +129,14 @@ export type SessionActionExecutionOperations = Readonly<{
     stopSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     archiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
     unarchiveSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
+    setSessionAnswersWorkerQuestions?: (sessionId: string, enabled: boolean, opts?: Readonly<{ serverId?: string | null }>) => Promise<Readonly<{ ok: boolean; error?: string }>>;
     renameSession?: (sessionId: string, title: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
-    setSessionRole?: (sessionId: string, roleId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<Readonly<{ ok: boolean; error?: string }>>;
     openPutUnderPicker?: (params: Readonly<{ sessionId: string; serverId: string | null }>) => void;
     resumeSession?: (sessionId: string) => void | Promise<void>;
-    deleteSession?: (sessionId: string, opts?: Readonly<{ serverId?: string | null }>) => Promise<SessionActionOperationResult>;
+    deleteSession?: (sessionId: string, opts?: Readonly<{
+        serverId?: string | null;
+        presentUserConfirmation?: SessionDeletePresentUserConfirmation;
+    }>) => Promise<SessionActionOperationResult>;
     setPinned?: (
         sessionId: string,
         pinned: boolean,
@@ -156,5 +166,6 @@ export type SessionActionExecutionOperations = Readonly<{
 
 export type SessionActionExecutionContext = Readonly<{
     hideInactiveSessions?: boolean;
+    presentUserConfirmation?: SessionDeletePresentUserConfirmation;
     operations?: SessionActionExecutionOperations;
 }>;

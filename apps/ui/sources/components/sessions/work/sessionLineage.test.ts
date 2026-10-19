@@ -10,19 +10,19 @@ function session(id: string, name: string, lead: string | null): Session {
     id,
     serverId: 'home-a',
     metadata: { path: '/repo', host: 'host', name },
-    reportsTo: lead ? { sessionId: lead } : null,
+    manager: lead ? { sessionId: lead } : null,
   });
 }
 
-describe('Session lineage (the reportsTo chain above a Session)', () => {
+describe('Session lineage (the manager chain above a Session)', () => {
   it('names an unopened lead from the qualified list rather than a same-id transcript from another Home', () => {
     const sessions = {
-      child: createSessionFixture({ id: 'child', serverId: 'home-a', reportsTo: { sessionId: 'lead' } }),
+      child: createSessionFixture({ id: 'child', serverId: 'home-a', manager: { sessionId: 'lead' } }),
       lead: createSessionFixture({ id: 'lead', serverId: 'home-b', metadata: { path: '/other', host: 'other', name: 'Wrong Home' } }),
     };
     const rows = {
       'home-a': {
-        child: createSessionListRenderableSessionFixture({ id: 'child', reportsTo: { sessionId: 'lead' } }),
+        child: createSessionListRenderableSessionFixture({ id: 'child', manager: { sessionId: 'lead' } }),
         lead: createSessionListRenderableSessionFixture({ id: 'lead', metadata: { path: '/repo', host: 'host', name: 'Unopened lead' } }),
       },
     };

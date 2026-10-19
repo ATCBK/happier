@@ -11,8 +11,8 @@ describe('Session-list verdicts through the one outcome presenter', () => {
         const outcome = describeEntityDropOutcome({
             phase: 'carrying',
             admission: { status: 'allowed', effect: {
-                actionId: 'session.reports_to.set',
-                input: { sessionId: 'a', leadSessionId: 'b', expectedLeadSessionId: null },
+                actionId: 'session.manager.set',
+                input: { sessionId: 'a', managerSessionId: 'b', expectedManagerSessionId: null },
                 preview: describeSessionListDropPreview({ kind: 'put-under', leadName: 'Fix settings modal remount' }),
             } },
         });
@@ -39,7 +39,7 @@ describe('Session-list verdicts through the one outcome presenter', () => {
         const outcome = describeEntityDropOutcome({
             phase: 'pending',
             admission: { status: 'allowed', effect: {
-                actionId: 'session.reports_to.set',
+                actionId: 'session.manager.set',
                 input: {},
                 preview: { verb: 'Put under Lead', target: 'Lead', consequence: 'Reports to it · both keep running' },
             } },
@@ -64,7 +64,7 @@ describe('Session-list verdicts through the one outcome presenter', () => {
     it.each(['before', 'after'] as const)('draws the same %s order mark for flat-list Action envelopes', placement => {
         const position = { anchorId: 'b', placement };
         for (const [actionId, input] of [
-            ['todos.reorder', { position }],
+            ['tasks.internal.reorder', { position }],
             ['session.pending.reorder', { position }],
             ['connectedServices.pools.reorder', { move: { position } }],
             ['home.hub.layout.update', { intent: { position } }],

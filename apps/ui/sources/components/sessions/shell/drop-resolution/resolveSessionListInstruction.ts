@@ -68,7 +68,7 @@ function isSessionSiblingReorder(params: Readonly<{
 }
 
 /**
- * The Session row a drop puts the source Session under (R-03 `reportsTo`), when the resolved
+ * The Session row a drop puts the source Session under (R-03 `manager`), when the resolved
  * instruction nests into a Session row rather than a folder.
  */
 export function resolveSessionListLeadTarget(
@@ -88,10 +88,10 @@ export function resolveSessionListInstruction(params: Readonly<{
     canReorderSessionSiblings?: boolean;
     maxDepth?: number;
     /**
-     * Whether the dragged Session may be put under the target Session (the `reportsTo` tree).
+     * Whether the dragged Session may be put under the target Session (the `manager` tree).
      * Omitted, a Session row is never a drop target — as before the tree existed.
      */
-    canPutSessionUnder?: (sessionId: string, leadSessionId: string) => boolean;
+    canPutSessionUnder?: (sessionId: string, managerSessionId: string) => boolean;
 }>): SessionListTreeDropResult {
     const resolved: TreeDropResult = resolveTreeInstruction({
         rows: params.tree.rows,

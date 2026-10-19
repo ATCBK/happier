@@ -69,7 +69,7 @@ function reasonMessage(code: string): string {
         case 'input': return t('entityDragDrop.reasons.input');
         case 'pairwise': return t('entityDragDrop.reasons.pairwise');
         case 'cycle':
-        case 'reports_to_cycle':
+        case 'manager_cycle':
             return t('entityDragDrop.reasons.cycle');
         case 'already_under': return t('entityDragDrop.reasons.alreadyUnder');
         case 'archived': return t('entityDragDrop.reasons.archived');

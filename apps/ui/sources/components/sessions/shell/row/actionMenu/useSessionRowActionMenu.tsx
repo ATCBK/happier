@@ -9,6 +9,10 @@ import {
     SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID,
     SESSION_ACTION_EDIT_TAGS_ID,
     SESSION_ACTION_PUT_UNDER_ID,
+    SESSION_ACTION_COORDINATOR_MAKE_ID,
+    SESSION_ACTION_COORDINATOR_EDIT_ID,
+    SESSION_ACTION_COORDINATOR_ANSWERS_ID,
+    SESSION_ACTION_COORDINATOR_STOP_ID,
     SESSION_ACTION_MARK_READ_ID,
     SESSION_ACTION_MARK_UNREAD_ID,
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
@@ -77,6 +81,10 @@ function resolveActionIdFromMenuItemId(itemId: string): SessionActionId | null {
         case SESSION_ACTION_MAKE_REGULAR_ID:
         case SESSION_ACTION_TOOL_CALLS_TOGGLE_ID:
         case SESSION_ACTION_TOOL_CALLS_USE_DEFAULT_ID:
+        case SESSION_ACTION_COORDINATOR_MAKE_ID:
+        case SESSION_ACTION_COORDINATOR_EDIT_ID:
+        case SESSION_ACTION_COORDINATOR_ANSWERS_ID:
+        case SESSION_ACTION_COORDINATOR_STOP_ID:
             return itemId;
         default:
             return null;
@@ -202,7 +210,7 @@ export function useSessionRowActionMenu(params: Readonly<{
         }
     });
 
-    const reportCount = target.session.reports?.total ?? 0;
+    const reportCount = target.session.managedSessions?.total ?? 0;
     const confirmArchiveSession = React.useCallback(async () => {
         const confirmation = await confirmSessionArchive({ reportCount });
         if (!confirmation.confirmed) return;
@@ -399,6 +407,10 @@ export function useSessionRowActionMenu(params: Readonly<{
             case SESSION_ACTION_MAKE_REGULAR_ID:
             case SESSION_ACTION_TOOL_CALLS_TOGGLE_ID:
             case SESSION_ACTION_TOOL_CALLS_USE_DEFAULT_ID:
+            case SESSION_ACTION_COORDINATOR_MAKE_ID:
+            case SESSION_ACTION_COORDINATOR_EDIT_ID:
+            case SESSION_ACTION_COORDINATOR_ANSWERS_ID:
+            case SESSION_ACTION_COORDINATOR_STOP_ID:
                 await executeSessionAction({ actionId, target }).catch(showActionError);
                 return;
             default:

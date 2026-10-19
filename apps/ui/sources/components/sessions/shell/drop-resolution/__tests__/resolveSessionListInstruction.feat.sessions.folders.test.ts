@@ -231,7 +231,7 @@ describe('resolveSessionListInstruction', () => {
             ]),
         });
         const source = buildSessionListDragSource({ tree, sourceRowId: treeRowId.session('server-a', 'worker-a') });
-        const resolve = (y: number, canPutSessionUnder?: (sessionId: string, leadSessionId: string) => boolean) => resolveSessionListInstruction({
+        const resolve = (y: number, canPutSessionUnder?: (sessionId: string, managerSessionId: string) => boolean) => resolveSessionListInstruction({
             tree,
             source,
             pointer: pointer(y),
@@ -239,7 +239,7 @@ describe('resolveSessionListInstruction', () => {
             canReorderSessionSiblings: false,
             ...(canPutSessionUnder ? { canPutSessionUnder } : {}),
         });
-        const onlyUnderLead = (sessionId: string, leadSessionId: string) => sessionId === 'worker-a' && leadSessionId === 'lead-a';
+        const onlyUnderLead = (sessionId: string, managerSessionId: string) => sessionId === 'worker-a' && managerSessionId === 'lead-a';
 
         const underLead = resolve(60, onlyUnderLead);
         expect(underLead.instruction).toMatchObject({
@@ -251,7 +251,7 @@ describe('resolveSessionListInstruction', () => {
 
         // The edges still mean reorder, which this layout does not allow.
         expect(resolve(42, onlyUnderLead).instruction.kind).toBe('blocked');
-        // Without the reportsTo rule a Session row is never a drop target.
+        // Without the manager rule a Session row is never a drop target.
         expect(resolve(60).instruction.kind).toBe('blocked');
         expect(resolve(60, () => false).instruction.kind).toBe('blocked');
     });

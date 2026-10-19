@@ -7,6 +7,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize, resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
+import { SelectionListFilterChip, type SelectionListFilter } from '@/components/ui/selectionList';
 import { Text } from '@/components/ui/text/Text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
@@ -28,6 +29,8 @@ type Focusable = Readonly<{ focus: () => void }>;
 export type SessionListSearchChromeProps = Readonly<{
     filterControl?: React.ReactNode;
     filterSummary?: Readonly<{ label: string; onReset(): void }>;
+    /** Facets that are on without showing in the title; each chip turns its own facet off. */
+    filterChips?: ReadonlyArray<SelectionListFilter>;
     /** A fixed Run window has a quiet summary, not a second Sessions scope title. */
     presentation?: 'sessions' | 'runs';
     searchQuery: string;
@@ -192,6 +195,11 @@ export const SessionListSearchChrome = React.memo(function SessionListSearchChro
                 <View testID="session-list-filter-summary" style={styles.searchChromeStatusRow}>
                     <Text style={styles.searchChromeStatusText}>{props.filterSummary.label}</Text>
                     {resetControl}
+                </View>
+            ) : null}
+            {props.filterChips && props.filterChips.length > 0 && props.presentation !== 'runs' ? (
+                <View testID="session-list-filter-chips" style={styles.searchChromeChipRow}>
+                    {props.filterChips.map((filter) => <SelectionListFilterChip key={filter.id} filter={filter} />)}
                 </View>
             ) : null}
             {searchIsOpen ? (

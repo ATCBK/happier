@@ -8,7 +8,7 @@ import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { readSessionReportsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readSessionManagedSessionsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { t } from '@/text';
 
 /**
@@ -54,20 +54,20 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-export function hasSessionRowReportsChip(reports: Session['reports'] | undefined): boolean {
+export function hasSessionRowReportsChip(reports: Session['managedSessions'] | undefined): boolean {
     if (!reports) return false;
-    return readSessionReportsPresentationV1(reports).count > 0;
+    return readSessionManagedSessionsPresentationV1(reports).count > 0;
 }
 
 export const SessionRowReportsChip = React.memo((props: Readonly<{
     sessionId: string;
-    reports: NonNullable<Session['reports']>;
+    reports: NonNullable<Session['managedSessions']>;
     /** Its reports are folded under the row: say how many, quietly, and keep any needs-you dot. */
     collapsed?: boolean;
 }>) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const status = readSessionReportsPresentationV1(props.reports);
+    const status = readSessionManagedSessionsPresentationV1(props.reports);
     const needsYou = status.bucket === 'needs_you' ? status.count : 0;
     if (props.collapsed && props.reports.total > 0) {
         return (

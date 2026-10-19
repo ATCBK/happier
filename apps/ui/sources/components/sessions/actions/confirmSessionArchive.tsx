@@ -1,4 +1,5 @@
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -142,7 +143,7 @@ export async function archiveSessionReports(params: Readonly<{
 }>): Promise<void> {
     const state = getStorage().getState();
     const reports = selectSessionReportSubtree(state.sessions, params.leadSessionId, params.serverId, state.sessionListRowsByServerId).filter((session) => (
-        session.reportsTo?.sessionId === params.leadSessionId && session.archivedAt == null
+        readSessionManagerSessionIdV1(session) === params.leadSessionId && session.archivedAt == null
     ));
     const notArchived: string[] = [];
     for (const report of reports) {

@@ -1,8 +1,9 @@
 import { resolveHappierDropChooserSections, type HappierDropChooserSection } from '@happier-dev/plugin-ui/presentation';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
 import { describeSessionListDropReason } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { SessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
+import type { SessionManagerEligibilitySnapshot } from '@/sync/ops/relations/sessionManagerEligibility';
 import { t } from '@/text';
 
 import { listPutUnderCandidateOptions } from './putUnderCandidates';
@@ -17,12 +18,12 @@ export const PUT_UNDER_TOP_LEVEL_OPTION_ID = '__top_level__';
 export function buildPutUnderChooserSections(input: Readonly<{
     sessions: Readonly<Record<string, Session>>;
     sessionId: string;
-    facts: SessionReportsToEligibilitySnapshot | null;
+    facts: SessionManagerEligibilitySnapshot | null;
     describeName: (session: Session) => string;
 }>): readonly HappierDropChooserSection[] {
     const self = input.sessions[input.sessionId];
     if (!self) return [];
-    const currentLeadId = self.reportsTo?.sessionId ?? null;
+    const currentLeadId = readSessionManagerSessionIdV1(self);
     const candidates = listPutUnderCandidateOptions(input.sessions, self, input.facts);
     return resolveHappierDropChooserSections({
         unavailableTitle: t('entityDragDrop.chooser.cantTakeReports'),

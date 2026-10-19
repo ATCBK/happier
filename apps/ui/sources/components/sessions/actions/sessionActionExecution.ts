@@ -1,5 +1,8 @@
-import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSessionModal';
 import { roleActions } from '@/sync/ops/roles/roleActions';
+import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSessionModal';
+import { showMakeCoordinatorDialog } from '@/components/sessions/coordinator/MakeCoordinatorDialog';
+import { sessionCoordinatorActions } from '@/sync/ops/sessions/sessionCoordinatorActions';
 import { sessionDisplayActions, undoSessionBotChange } from '@/sync/ops/sessions/sessionDisplayActions';
 import { readSessionBotV1, type SessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { announceBotMarkerAccepted } from '@/components/sessions/bots/botMarkerFeedback';
@@ -48,9 +51,11 @@ import {
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
     SESSION_ACTION_PIN_ID,
     SESSION_ACTION_RENAME_ID,
-    SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
-    ORCHESTRATOR_ROLE_ID,
     SESSION_ACTION_PUT_UNDER_ID,
+    SESSION_ACTION_COORDINATOR_MAKE_ID,
+    SESSION_ACTION_COORDINATOR_EDIT_ID,
+    SESSION_ACTION_COORDINATOR_ANSWERS_ID,
+    SESSION_ACTION_COORDINATOR_STOP_ID,
     SESSION_ACTION_RESUME_ID,
     SESSION_ACTION_SET_ATTENTION_STANDING_ID,
     SESSION_ACTION_STOP_ID,
@@ -65,6 +70,7 @@ import type {
     SessionActionId,
     SessionActionOperationResult,
     SessionActionTarget,
+    SessionDeletePresentUserConfirmation,
 } from './sessionActionTypes';
 
 const executeVoiceAction = createFrontDoorActionExecute();
@@ -72,11 +78,21 @@ const executeVoiceAction = createFrontDoorActionExecute();
 export async function executeSessionLifecycleAction(
     actionId: 'session.stop' | 'session.archive' | 'session.unarchive' | 'session.delete' | 'session.title.set',
     sessionId: string,
-    options?: Readonly<{ serverId?: string | null }>,
+    options?: Readonly<{
+        serverId?: string | null;
+        presentUserConfirmation?: SessionDeletePresentUserConfirmation;
+    }>,
     title?: string,
 ): Promise<SessionActionOperationResult> {
     const outcome = await executeVoiceAction(actionId, { sessionId, ...(title === undefined ? {} : { title }) }, {
-        surface: 'ui', defaultSessionId: sessionId, ...(options?.serverId ? { serverId: options.serverId } : {}),
+        surface: 'ui',
+        defaultSessionId: sessionId,
+        ...(options?.serverId ? { serverId: options.serverId } : {}),
+        ...(options?.presentUserConfirmation ? {
+            authority: 'present_user' as const,
+            actionCaller: { kind: 'host' as const },
+            presentUserConfirmation: options.presentUserConfirmation,
+        } : {}),
     });
     if (!outcome.ok) {
         const details = outcome.details;
@@ -141,6 +157,35 @@ function publishSessionBotChangeNotice(params: Readonly<{
     });
 }
 
+/**
+ * Stop coordinating's receipt (lab P3 L): the rules it removed come back with Undo, each through the
+ * version-bound Follow writer. A partial stop says so; nothing pretends the session still coordinates.
+ */
+function publishCoordinatorStopNotice(
+    target: SessionActionTarget,
+    address: SessionAddress,
+    stopped: Awaited<ReturnType<typeof sessionCoordinatorActions.stop>>,
+) {
+    const name = getSessionName(target.session, target.serverId);
+    const key = `session-coordinator-stop:${address.serverId}:${address.sessionId}`;
+    publishPresentationNotice({
+        key,
+        severity: stopped.status === 'partial' ? 'error' : 'info',
+        message: stopped.status === 'partial' ? t('sessionCoordinator.menu.stopPartial', { name }) : t('sessionCoordinator.menu.stopped', { name }),
+        emphasis: name,
+        ...(stopped.undo.removed.length > 0 ? { undo: {
+            label: t('bots.undo'),
+            run: () => {
+                retirePresentationNotice(key);
+                fireAndForget((async () => {
+                    const restored = await sessionCoordinatorActions.undoStop(stopped.undo);
+                    if (restored.status !== 'restored') publishPresentationNotice({ key, severity: 'error', message: t('sessionCoordinator.menu.undoStopFailed') });
+                })(), { tag: 'sessionActionExecution.undoCoordinatorStop' });
+            },
+        } } : {}),
+    });
+}
+
 function resolveStopArchiveFlow(context: SessionActionExecutionContext | undefined) {
     return context?.operations?.stopArchiveFlow ?? stopSessionAndMaybeArchive;
 }
@@ -159,10 +204,6 @@ function resolveUnarchiveSession(context: SessionActionExecutionContext | undefi
 
 function resolveRenameSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['renameSession']> {
     return context?.operations?.renameSession ?? ((sessionId, title, options) => executeSessionLifecycleAction('session.title.set', sessionId, options, title));
-}
-
-function resolveSetSessionRole(context: SessionActionExecutionContext | undefined) {
-    return context?.operations?.setSessionRole ?? roleActions.setSessionRole;
 }
 
 function resolveDeleteSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['deleteSession']> {
@@ -320,11 +361,6 @@ export async function executeSessionAction(params: Readonly<{
             );
             return;
         }
-        case SESSION_ACTION_MAKE_ORCHESTRATOR_ID: {
-            const result = await resolveSetSessionRole(params.context)(params.target.sessionId, ORCHESTRATOR_ROLE_ID, { serverId: params.target.serverId });
-            if (!result.ok) throw new HappyError(t('sessionWork.actions.makeOrchestratorFailed'), false);
-            return;
-        }
         case SESSION_ACTION_MAKE_BOT_ID:
         case SESSION_ACTION_MAKE_REGULAR_ID: {
             const accepted = params.actionId === SESSION_ACTION_MAKE_BOT_ID ? { kind: 'bot' as const } : null;
@@ -358,6 +394,32 @@ export async function executeSessionAction(params: Readonly<{
             openPicker({ sessionId: params.target.sessionId, serverId: params.target.serverId });
             return;
         }
+        case SESSION_ACTION_COORDINATOR_MAKE_ID:
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            showMakeCoordinatorDialog(targetAddress);
+            return;
+        case SESSION_ACTION_COORDINATOR_EDIT_ID:
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            // People, on what it follows (its Following section; coordination lab P1p).
+            router.push(buildScopedSessionRouteHref({ ...targetAddress,
+                query: { ...serializeSessionPaneUrlState({ rightTabId: 'collaboration' }), collaborationFocus: 'following' },
+            }) as Parameters<typeof router.push>[0]);
+            return;
+        case SESSION_ACTION_COORDINATOR_ANSWERS_ID: {
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            const setAnswers = params.context?.operations?.setSessionAnswersWorkerQuestions ?? roleActions.setSessionAnswersWorkerQuestions;
+            const enabled = !readSessionAnswersWorkerQuestionsV1(params.target.session.metadata);
+            const result = await setAnswers(targetAddress.sessionId, enabled, { serverId: targetAddress.serverId });
+            if (!result.ok) throw new HappyError(t('errors.unknownError'), false);
+            return;
+        }
+        case SESSION_ACTION_COORDINATOR_STOP_ID: {
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            const stopped = await sessionCoordinatorActions.stop(targetAddress.sessionId, { serverId: targetAddress.serverId });
+            if (stopped.status === 'unavailable') throw new HappyError(t('sessionCoordinator.menu.stopFailed'), false);
+            publishCoordinatorStopNotice(params.target, targetAddress, stopped);
+            return;
+        }
         case SESSION_ACTION_RESUME_ID: {
             const resumeSession = resolveResumeSession(params.context);
             if (!resumeSession) throwUnsupportedSingleTargetAction();
@@ -385,7 +447,12 @@ export async function executeSessionAction(params: Readonly<{
             return;
         case SESSION_ACTION_DELETE_ID:
             throwIfFailed(
-                await resolveDeleteSession(params.context)(params.target.sessionId, { serverId: params.target.serverId }),
+                await resolveDeleteSession(params.context)(params.target.sessionId, {
+                    serverId: params.target.serverId,
+                    ...(params.context?.presentUserConfirmation
+                        ? { presentUserConfirmation: params.context.presentUserConfirmation }
+                        : {}),
+                }),
                 t('sessionInfo.failedToDeleteSession'),
             );
             return;

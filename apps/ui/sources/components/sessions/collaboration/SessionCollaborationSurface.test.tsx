@@ -442,7 +442,8 @@ describe('SessionCollaborationSurface', () => {
         // name is how every other surface names it, so the Share panel says it too.
         const active = await upsertServerProfile({ name: 'collaboration-home-name.example.test', serverUrl: 'https://collaboration-home-name.example.test' });
         credentials.serverId = active.id;
-        homeFor(active.id).features.homePresentation = { v: 1, displayName: 'Northwind Studio' };
+        const home = homeFor(active.id);
+        home.features = { ...home.features, homePresentation: { v: 1, displayName: 'Northwind Studio' } };
         await publishFeatures(active.id, ['sharing.session', 'sharing.public'], ['sessions.conversations']);
         storage.setState((state) => ({
             profileScope: { serverId: active.id, accountId: credentials.accountId },

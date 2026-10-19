@@ -13,11 +13,14 @@ import {
     SESSION_ACTION_CLEAR_ATTENTION_STANDING_ID,
     SESSION_ACTION_DELETE_ID,
     SESSION_ACTION_FOLLOW_ID,
-    SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
     SESSION_ACTION_MARK_READ_ID,
     SESSION_ACTION_MARK_UNREAD_ID,
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
     SESSION_ACTION_PUT_UNDER_ID,
+    SESSION_ACTION_COORDINATOR_MAKE_ID,
+    SESSION_ACTION_COORDINATOR_EDIT_ID,
+    SESSION_ACTION_COORDINATOR_ANSWERS_ID,
+    SESSION_ACTION_COORDINATOR_STOP_ID,
     SESSION_ACTION_RENAME_ID,
     SESSION_ACTION_RESUME_ID,
     SESSION_ACTION_SET_ATTENTION_STANDING_ID,
@@ -25,6 +28,18 @@ import {
     SESSION_ACTION_UNARCHIVE_ID,
 } from './sessionActionIds';
 import type { SessionActionId, SessionActionSurface, SessionActionTarget } from './sessionActionTypes';
+import { deriveSessionCoordinatorControls, type SessionCoordinatorControls } from '@/sync/ops/sessions/sessionCoordinatorFollowControls';
+
+/** The one coordinator derivation (S6) read from the target's server-proved counts; unknown stays unknown. */
+export function resolveSessionCoordinatorMenuControls(target: SessionActionTarget): SessionCoordinatorControls | null {
+    if (target.serverId === null) return null;
+    const { managedSessions, receivedRuleCount } = target.session;
+    return deriveSessionCoordinatorControls({
+        address: { serverId: target.serverId, sessionId: target.sessionId },
+        managedSessions, receivedRuleCount,
+        receivedRuleCoverage: receivedRuleCount === undefined ? 'unavailable' : 'complete',
+    });
+}
 
 export function resolveSessionReadStateActionId(target: SessionActionTarget): SessionActionId | null {
     if (!target.readStateAction.visible) return null;
@@ -97,12 +112,6 @@ export function listVisibleSessionActionIds(params: Readonly<{
         ids.push(SESSION_ACTION_TOOL_CALLS_TOGGLE_ID, SESSION_ACTION_TOOL_CALLS_USE_DEFAULT_ID);
     }
 
-    // "Make this an orchestrator" lives in the Session's own ⋯ (ORC §3.8); choosing a Session's role
-    // needs the same authority as naming it.
-    if (surface === 'sessionHeader' && target.canRename && !target.isArchived) {
-        ids.push(SESSION_ACTION_MAKE_ORCHESTRATOR_ID);
-    }
-
     if (surface === 'sessionHeader' && target.canResume) {
         ids.push(SESSION_ACTION_RESUME_ID);
     }
@@ -114,6 +123,18 @@ export function listVisibleSessionActionIds(params: Readonly<{
         && target.session.access?.capabilities.submitAgentInput === true
     ) {
         ids.push(SESSION_ACTION_PUT_UNDER_ID);
+    }
+
+    // Make coordinator… / Edit what it follows / Stop coordinating (C1 §6, lab P3 L): the session menus only,
+    // with the authority to choose its role. Unknown relation counts hide them rather than guess.
+    if ((surface === 'rowMenu' || surface === 'nativeContextMenu' || surface === 'sessionHeader')
+        && !target.isArchived && target.canRename) {
+        const coordinator = resolveSessionCoordinatorMenuControls(target);
+        if (coordinator && coordinator.make !== 'unavailable') ids.push(SESSION_ACTION_COORDINATOR_MAKE_ID);
+        if (coordinator?.coordinator === true) {
+            ids.push(SESSION_ACTION_COORDINATOR_EDIT_ID, SESSION_ACTION_COORDINATOR_ANSWERS_ID);
+            if (coordinator.stop !== 'unavailable') ids.push(SESSION_ACTION_COORDINATOR_STOP_ID);
+        }
     }
 
     if (target.canStop && (target.isActive || target.hasRecoverableTerminalHost)) {

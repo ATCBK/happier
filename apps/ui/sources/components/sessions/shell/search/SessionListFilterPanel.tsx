@@ -271,6 +271,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
     }, [onSelect]);
 
     const attentionOptions = staticOptions(rootStep, 'attention');
+    const coordinatorOption = staticOptions(rootStep, 'coordinator')?.[0];
     const showOptions = staticOptions(rootStep, 'work-kind');
     const starterOptions = staticOptions(rootStep, 'started-by');
     const showTabs = React.useMemo(() => (showOptions ?? []).map((option) => ({ id: option.id, label: option.label })), [showOptions]);
@@ -285,6 +286,10 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
     const handleNeedsMeChange = React.useCallback((value: boolean) => {
         onSelect(value ? 'attention:needs_my_attention' : 'attention:any');
     }, [onSelect]);
+    const coordinatorsOnly = coordinatorOption ? selectedIds.has(coordinatorOption.id) : false;
+    const handleCoordinatorsOnlyChange = React.useCallback((value: boolean) => {
+        if (coordinatorOption && value !== coordinatorsOnly) onSelect(coordinatorOption.id);
+    }, [coordinatorOption, coordinatorsOnly, onSelect]);
 
     const inactiveTabs = React.useMemo(() => (inactiveOptions ?? []).map((option) => ({
         id: option.id,
@@ -379,6 +384,21 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                             accessibilityLabel={labels.needsMeOnly}
                             value={needsMe}
                             onValueChange={handleNeedsMeChange}
+                        />
+                    </View>
+                ) : null}
+
+                {coordinatorOption ? (
+                    <View style={styles.row}>
+                        <View style={styles.rowText}>
+                            <Text style={styles.rowTitle}>{coordinatorOption.label}</Text>
+                            {coordinatorOption.subtitle ? <Text style={styles.rowSubtitle}>{coordinatorOption.subtitle}</Text> : null}
+                        </View>
+                        <Switch
+                            testID="session-list-filter-coordinators"
+                            accessibilityLabel={coordinatorOption.label}
+                            value={coordinatorsOnly}
+                            onValueChange={handleCoordinatorsOnlyChange}
                         />
                     </View>
                 ) : null}

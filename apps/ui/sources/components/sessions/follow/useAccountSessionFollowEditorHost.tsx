@@ -81,5 +81,5 @@ export function useAccountSessionFollowEditorHost(params: Readonly<{
         </Popover>
     ) : null;
 
-    return { enabled, anchorRef, triggerRef, openEditor, editor };
+    return { enabled, open: openedTarget !== null, anchorRef, triggerRef, openEditor, editor };
 }
