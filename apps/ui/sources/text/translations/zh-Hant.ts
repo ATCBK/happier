@@ -4870,6 +4870,11 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 showBannerAction: '顯示橫幅',
                 hideBannerAction: '隱藏橫幅',
             },
+            runnerRestartBackgroundWork: {
+                title: '背景代理正在執行',
+                body: ({ count }: { count: number }) => `${count} 個背景代理正在執行。重新啟動將停止它們。`,
+                confirmAction: '停止並重新啟動',
+            },
             staleRunner: {
                 title: '工作階段仍在舊版 CLI 上執行',
                 body: '重新啟動此工作階段 runner，以繼續使用已更新的 daemon CLI。Happier 工作階段本身會保持不變。',

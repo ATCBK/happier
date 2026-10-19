@@ -5904,6 +5904,11 @@ export const it: TranslationStructure = {
             showBannerAction: 'Mostra banner',
             hideBannerAction: 'Nascondi banner',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Agenti in background in esecuzione',
+	        body: ({ count }: { count: number }) => `${count} agente/i in background in esecuzione. Il riavvio li interromperà.`,
+	        confirmAction: 'Interrompi e riavvia',
+	    },
 	    staleRunner: {
 	      title: "La sessione è ancora in esecuzione su una CLI precedente",
 	      body: "Riavvia il runner di questa sessione per continuare con la CLI del daemon aggiornata. La sessione Happier resta la stessa.",

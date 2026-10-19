@@ -5578,6 +5578,11 @@ export const pl: TranslationStructure = {
             showBannerAction: 'Pokaż baner',
             hideBannerAction: 'Ukryj baner',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Agenci w tle są uruchomieni',
+	        body: ({ count }: { count: number }) => `Uruchomieni agenci w tle: ${count}. Ponowne uruchomienie ich zatrzyma.`,
+	        confirmAction: 'Zatrzymaj i uruchom ponownie',
+	    },
 	    staleRunner: {
 	      title: "Sesja nadal działa na starszej CLI",
 	      body: "Uruchom ponownie runner tej sesji, aby kontynuować na zaktualizowanej CLI daemona. Sesja Happier pozostaje ta sama.",

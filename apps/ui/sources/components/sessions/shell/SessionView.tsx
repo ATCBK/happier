@@ -454,6 +454,7 @@ import { useSessionSurfaceActivation } from './view/useSessionSurfaceActivation'
 import { resolveSessionAuthSurfaceState, type SessionAuthSurfaceState } from './sessionAuthSurfaceState';
 import { useSessionRuntimeStatusSource } from './useSessionRuntimeStatusSource';
 import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { confirmRunnerRestartStopsBackgroundWork } from './confirmRunnerRestartStopsBackgroundWork';
 import { deriveSessionInputReadinessState } from '@/sync/domains/session/control/deriveSessionInputReadinessState';
 import {
     deriveLatestPendingRequestObservedAtFromSession,
@@ -3143,6 +3144,7 @@ function SessionViewLoaded({
         }
         if (!staleSessionRunnerStatus) return;
         if (staleSessionRunnerOperationStatus?.status === 'pending') return;
+        if (!(await confirmRunnerRestartStopsBackgroundWork(staleSessionRunnerStatus.sessionId))) return;
 
         const fingerprint = staleSessionRunnerStatus.fingerprint;
         setStaleSessionRunnerOperationStatus({ fingerprint, status: 'pending' });
@@ -3245,6 +3247,7 @@ function SessionViewLoaded({
             Modal.alert(t('session.mcpRestartRequired.errorTitle'), t('session.mcpRestartRequired.errorBody'));
             return;
         }
+        if (!(await confirmRunnerRestartStopsBackgroundWork(sessionId))) return;
 
         setMcpSelectionRestartOperation({ fingerprint: presentation.fingerprint, status: 'pending' });
         const result = await restartSessionRunnerForConfigurationWithObserve({

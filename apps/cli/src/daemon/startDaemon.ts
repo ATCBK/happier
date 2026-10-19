@@ -5111,6 +5111,18 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         ): SessionRunnerRestartDisabledReason | null => resolveSessionRunnerActivityDisabledReasonFromReaders(sessionId, {
           isTurnInProgress: (id) => connectedServiceTurnDeferralQueue.isTurnInFlight(id),
         });
+        const readSessionRunnerServerRuntimeActivity = async (sessionId: string) => {
+          try {
+            const effectiveCredentials = (await readCredentials().catch(() => null)) ?? credentials;
+            return await fetchSessionByIdCompat({ token: effectiveCredentials.token, sessionId });
+          } catch (error) {
+            logger.warn('[DAEMON RUN] Session runner restart skipped: server runtime activity unreadable', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
+        };
         const isDaemonShuttingDown = (): boolean => shutdownInitiated || connectedServiceQuotaProducersQuiesced;
 
         const normalizeSwitchTarget = (input: Readonly<{
@@ -6876,6 +6888,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             requestRestart: requestVersionRuntimeRefreshWithDeferral,
             resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
             refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,
+            readServerRuntimeActivity: readSessionRunnerServerRuntimeActivity,
           });
         return RestartSessionRunnerResultV1Schema.parse(result);
       },
@@ -6889,6 +6902,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           requestRestart: requestVersionRuntimeRefreshWithDeferral,
           resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
           refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,
+          readServerRuntimeActivity: readSessionRunnerServerRuntimeActivity,
         });
         return RestartAllSessionRunnersResultV1Schema.parse(result);
       },
@@ -9169,6 +9183,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       requestRestart: requestVersionRuntimeRefreshWithDeferral,
       resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
       refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,
+      readServerRuntimeActivity: readSessionRunnerServerRuntimeActivity,
       logDebug: (message, payload) => logger.debug(message, payload),
       logWarn: (message, payload) => logger.warn(message, payload),
     });

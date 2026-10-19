@@ -5223,6 +5223,11 @@ export const de: TranslationStructure = {
             showBannerAction: 'Banner zeigen',
             hideBannerAction: 'Banner ausblenden',
         },
+        runnerRestartBackgroundWork: {
+            title: 'Hintergrund-Agents laufen',
+            body: ({ count }: { count: number }) => `${count} Hintergrund-Agent(s) laufen. Ein Neustart beendet sie.`,
+            confirmAction: 'Beenden und neu starten',
+        },
         staleRunner: {
             title: 'Die Session läuft noch auf einer älteren CLI',
             body: 'Starte diesen Session-Runner neu, um mit der aktualisierten Daemon-CLI weiterzumachen. Die Happier-Session bleibt dieselbe.',
