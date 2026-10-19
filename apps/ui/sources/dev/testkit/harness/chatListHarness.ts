@@ -494,7 +494,7 @@ export function createChatListHarnessSyncModuleMock(
             loadOlderMessages: async () => ({ loaded: 0, hasMore: false, status: 'no_more' as const }),
             loadNewerMessages,
             hasDeferredNewerMessages,
-            getSessionTailDiscontinuityOlderAvailability: (_sessionId: string) => false,
+            getSessionOlderMessagesAvailability: (_sessionId: string) => null,
             getSyncTuning: () => chatListHarnessState.syncTuningState,
             // Stable identity: ChatList consumes this through useSyncExternalStore.
             getSessionTargetWindowState: () => inactiveSessionMessagesWindowState,
