@@ -3,8 +3,8 @@ import type { SystemTaskResult, SystemTaskSpec } from '@happier-dev/protocol';
 import { createSystemTaskRunner } from '@/components/systemTasks/createSystemTaskRunner';
 import type { SystemTaskBridgeListenerSet, SystemTaskRunner } from '@/components/systemTasks/types';
 
-/** Only the OS task bridge is simulated; snapshots, prompts and completion use the real runner. */
-export function createManualSystemTaskRunner(mode: SystemTaskRunner['mode'] = 'tauri') {
+/** Simulate only native process replies for a caller-owned real SystemTask runner. */
+export function createManualSystemTaskBridge() {
     let nextTaskId = 1;
     let nextTsMs = 1;
     const listeners = new Map<string, SystemTaskBridgeListenerSet>();
@@ -19,7 +19,6 @@ export function createManualSystemTaskRunner(mode: SystemTaskRunner['mode'] = 't
         respond: vi.fn(async () => undefined),
     };
     return {
-        runner: createSystemTaskRunner({ bridge, mode }),
         bridge,
         emitResult(taskId: string, result: SystemTaskResult) {
             listeners.get(taskId)?.onResult(result);
@@ -28,4 +27,10 @@ export function createManualSystemTaskRunner(mode: SystemTaskRunner['mode'] = 't
             listeners.get(taskId)?.onEvent({ protocolVersion: 1, taskId, tsMs: nextTsMs++, ...event });
         },
     };
+}
+
+/** Only the OS task bridge is simulated; snapshots, prompts and completion use the real runner. */
+export function createManualSystemTaskRunner(mode: SystemTaskRunner['mode'] = 'tauri') {
+    const manual = createManualSystemTaskBridge();
+    return { runner: createSystemTaskRunner({ bridge: manual.bridge, mode }), ...manual };
 }

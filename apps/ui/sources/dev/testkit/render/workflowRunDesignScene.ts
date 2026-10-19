@@ -72,6 +72,8 @@ export function createWorkflowRunReleaseScene(
     rootId: string;
     holdId: string;
     failed?: boolean;
+    /** Z16: source-reported reset; null deliberately means no reported reset. */
+    usageLimitResetAtMs?: number | null;
     /** The Changelog step finished and its published result waits for review (lab `run-A_hold`). */
     review?: boolean;
   }>,
@@ -379,7 +381,13 @@ export function createWorkflowRunReleaseScene(
     result: 'The notes, issue checks and test results agree. Ready to publish.',
   });
   lateRow(21, 3, 'publish', params.failed ? 'failed' : 'completed', params.failed
-    ? { reason: { code: 'step_failed', message: 'The release summary could not be published.' } }
+    ? { reason: params.usageLimitResetAtMs === undefined
+      ? { code: 'step_failed', message: 'The release summary could not be published.' }
+      : { code: 'session_input_failed', message: 'Current turn failed', runtimeIssueV1: {
+          v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit',
+          occurredAt: Date.parse('2026-10-19T10:28:00.000Z'), sanitizedPreview: 'Usage limit reached',
+          usageLimit: { v: 1, resetAtMs: params.usageLimitResetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+        } } }
     : { result: 'Published the 0.3 release summary to the team.' });
   if (params.failed) rows.push(...late);
   return {
