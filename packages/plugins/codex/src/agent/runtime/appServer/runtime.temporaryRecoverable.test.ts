@@ -54,6 +54,7 @@ const clientState = vi.hoisted(() => {
   let deferNextRateLimitsRead = false;
   let accountReadResult: unknown = { account: null };
   let threadReadResult: unknown = { thread: { id: 'thread-1', turns: [] } };
+  let readGoal: () => unknown = () => ({ goal: null });
   let threadTurnsListResults: unknown[] = [];
   let collaborationModesResult: unknown;
   let rejectNextThreadResume: Error | null = null;
@@ -121,6 +122,7 @@ const clientState = vi.hoisted(() => {
       deferNextRateLimitsRead = false;
       accountReadResult = { account: null };
       threadReadResult = { thread: { id: 'thread-1', turns: [] } };
+      readGoal = () => ({ goal: null });
       threadTurnsListResults = [];
       collaborationModesResult = {
         data: [{
@@ -138,6 +140,9 @@ const clientState = vi.hoisted(() => {
       deferNextLoginStart = false;
       rejectNextLoginStart = null;
       deferredLoginStart = null;
+    },
+    setGoalRead(read: () => unknown) {
+      readGoal = read;
     },
     failNextSteer() {
       failNextSteer = true;
@@ -234,6 +239,7 @@ const clientState = vi.hoisted(() => {
       options?: Readonly<{ timeoutMs?: number | null }>,
     ): Promise<unknown> {
       requests.push({ method, params, ...(options ? { options } : {}) });
+      if (method === 'thread/goal/get') return readGoal();
       if (method === 'account/rateLimits/read') {
         if (deferNextRateLimitsRead) {
           deferNextRateLimitsRead = false;
@@ -3018,12 +3024,57 @@ describe('Codex app-server temporary recoverable turn failures', () => {
       goal: { id: 'goal-1', objective: 'Ship it', status: 'active', updatedAt: 2 },
     });
     emitNotification('thread/goal/cleared', { threadId: 'thread-1' });
-    await Promise.resolve();
-
-    expect(observations).toEqual([
+    await vi.waitFor(() => expect(observations).toEqual([
       { kind: 'present', goal: { id: 'goal-1', objective: 'Ship it', status: 'active', updatedAt: 2 } },
       { kind: 'absent' },
-    ]);
+    ]));
+  });
+
+  it.each(['absent', 'malformed', 'unavailable'] as const)(
+    'reconciles initial Goal absence with the %s native read and retains later clears', async outcome => {
+      const observations: unknown[] = [];
+      let firstRead = true;
+      clientState.setGoalRead(() => {
+        if (firstRead) {
+          firstRead = false;
+          emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+        }
+        if (outcome === 'unavailable') throw new Error('Native read unavailable');
+        return outcome === 'absent' ? { goal: null } : {};
+      });
+      const runtime = createRuntime({ observeGoal: observation => { observations.push(observation); } });
+      try {
+        await startCodexAppServerRuntime(runtime, { resumeId: 'thread-existing' });
+        expect(observations).toEqual(outcome === 'absent' ? [{ kind: 'absent' }] : []);
+        emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(observations).toEqual(outcome === 'absent' ? [{ kind: 'absent' }, { kind: 'absent' }] : []);
+        clientState.setGoalRead(() => ({ goal: null }));
+        emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+        await vi.waitFor(() => expect(observations).toHaveLength(outcome === 'absent' ? 3 : 1));
+      } finally { await runtime.dispose(); }
+    },
+  );
+
+  it('accepts a genuine native clear while the initial Goal publication awaits the host', async () => {
+    const goal = { threadId: 'thread-existing', objective: 'Retained B', status: 'paused', updatedAt: 2 };
+    clientState.setGoalRead(() => ({ goal }));
+    const observations: unknown[] = [];
+    let release!: () => void;
+    let entered!: () => void;
+    const pendingPublication = new Promise<void>(resolve => { release = resolve; });
+    const publishing = new Promise<void>(resolve => { entered = resolve; });
+    const runtime = createRuntime({ observeGoal: async observation => {
+      observations.push(observation);
+      if (observations.length === 1) { entered(); await pendingPublication; }
+    } });
+    const starting = startCodexAppServerRuntime(runtime, { resumeId: 'thread-existing' });
+    try {
+      await publishing;
+      clientState.setGoalRead(() => ({ goal: null }));
+      emitNotification('thread/goal/cleared', { threadId: 'thread-existing' });
+      await vi.waitFor(() => expect(observations).toEqual([{ kind: 'present', goal }, { kind: 'absent' }]));
+    } finally { release(); await starting; await runtime.dispose(); }
   });
 
   it('keeps a provider-bound non-reasoning model authoritative over later reasoning requests', async () => {

@@ -40,6 +40,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   modelListResponse?: unknown;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
   beforeTurnStartResponse?: () => Promise<void>;
+  beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
   turnIdForStart?: (occurrence: number) => string;
   nativeToolMode?: 'code_mode_only' | 'direct';
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
@@ -83,6 +84,10 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   const nativeServers = new Set([ws]);
   const turns: Array<{ id: string; status: string }> = [];
   const emitNotification = (method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/goal/cleared') goal = null;
+    if (method === 'thread/goal/updated' && params.goal && typeof params.goal === 'object') {
+      goal = params.goal as Record<string, unknown>;
+    }
     if (method === 'turn/completed' && params.turn && typeof params.turn === 'object') {
       const observed = params.turn as { id?: unknown; status?: unknown };
       const turn = turns.find((entry) => entry.id === observed.id);
@@ -165,6 +170,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     } else if (message.method === 'skills/extraRoots/set' && options.rejectExtraRootsSet) {
       error = { code: -32601, message: 'Method not found' };
     }
+    if (message.method === 'thread/resume') await options.beforeThreadResumeResponse?.({ socket, params });
     if (message.method === 'turn/start') await options.beforeTurnStartResponse?.();
     socket.send(JSON.stringify({ id: message.id, ...(error ? { error } : { result }) }));
     if (message.method === 'turn/start') await options.onTurnStart?.({ socket, params, turnId });

@@ -32,6 +32,10 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
 import { PushNotificationClient } from '@/api/pushNotifications';
+import { createCodexAgentRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/engine';
+import { createCodexNativeSessionControls } from '../../../../../packages/plugins/codex/src/agent/runtime/controls';
+import { withCodexNativeAttachFixture } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
+import type { AgentSessionGoalControlContext, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.
@@ -48,6 +52,11 @@ vi.mock('expo-server-sdk', () => ({ Expo: class {
   chunkPushNotifications(messages: unknown[]) { return [messages]; }
   sendPushNotificationsAsync = expoSend;
 } }));
+// Keep the native startup file lock real, isolated from live agents at the OS boundary.
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, userInfo: () => ({ ...actual.userInfo(), homedir: process.env.TMPDIR || actual.userInfo().homedir }) };
+});
 
 const ownerCredentials = { token: 'tok', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(4) } };
 const serverUrl = 'https://socket-readiness.example.test';
@@ -344,6 +353,86 @@ describe('ApiSessionClient socket write readiness', () => {
     await otherGoals.publish({ sourceSequence: 2, observedAtMs: 3, items: [] });
     await vi.waitFor(() => expect(originals).toHaveLength(4));
     expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())?.items).toMatchObject([{ kind: 'task' }]);
+  });
+
+  it.skipIf(process.platform === 'win32')('retains paused Codex Goal B through native reopen, then publishes only C and genuine Clear', async () => {
+    const session = createPlainSessionFixture({ id: 's-codex-goal-source-reopen' });
+    const row = createSessionRecordFixture({ id: session.id, encryptionMode: 'plain', metadataLayoutVersion: 0,
+      metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion, share: null });
+    serveSession(row);
+    const socket = createSocket();
+    const client = createClient(session, [socket]);
+    const workState = (occurrenceId: string) => createNativeAgentSessionWorkStateService({
+      session: client, pluginId: 'happier.agent.codex', contributionId: 'codex', agentId: 'codex', occurrenceId,
+      isCurrent: () => true, declarations: [{ id: 'goals', itemKinds: ['goal'] }],
+    });
+    const originals = () => socket.emitWithAck.mock.calls.flatMap(([event, payload]) =>
+      event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1 ? [SessionTranscriptObservationInputSchema.parse(payload)] : []);
+    let initialClearSent = false;
+    await withCodexNativeAttachFixture(async ({ openConfiguredSession, exec, directory, requests, emitNotification }) => {
+      const initial = await openConfiguredSession();
+      await initial.dispose();
+      const initialControls = createCodexNativeSessionControls();
+      const base = { signal: new AbortController().signal, services: { exec }, session: {
+        id: session.id, cwd: directory, activity: 'inactive' as const, providerSessionId: 'fresh-thread', connectedAccounts: [],
+      } };
+      await expect(initialControls.goals.set({ objective: 'Retained B', status: 'paused' }, {
+        ...base, goalSource: workState('inactive-before-reopen').publisher('goals'),
+      } as AgentSessionGoalControlContext)).resolves.toMatchObject({ status: 'applied' });
+      await client.flush();
+      expect(originals()).toHaveLength(1);
+      const retained = readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot());
+      expect(retained?.items).toMatchObject([{ title: 'Retained B', status: 'paused' }]);
+      const runtime = await createCodexAgentRuntime({ plugin: { id: 'happier.agent.codex', version: '1.0.0' },
+        agent: { id: 'codex' }, signal: base.signal });
+      if (!runtime.sessions) throw new Error('Expected the native Session factory');
+      const reopenedState = workState('reopened-native');
+      const opened = await runtime.sessions.open({ kind: 'resume', providerSessionId: 'fresh-thread', sessionId: session.id,
+        cwd: directory, launchEnvironment: { values: { CODEX_HOME: directory } },
+        configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
+          permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} },
+      }, { signal: base.signal, workState: reopenedState, services: { exec, sessions: {}, logger: {
+        debug() {}, info() {}, warn() {}, error() {},
+      } }, session: { id: session.id, services: {} }, ui: { title: { set: async () => undefined } },
+      } as unknown as AgentSessionRuntimeContext);
+      try {
+        expect(requests.some(request => request.method === 'thread/goal/get')).toBe(true);
+        expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())).toEqual(retained);
+        expect(originals()).toHaveLength(1);
+        const goalContext = { ...base, session: { ...base.session, activity: 'active' as const },
+          goalSource: reopenedState.publisher('goals') } as AgentSessionGoalControlContext;
+        if (!runtime.sessions.goals) throw new Error('Expected native Goal controls');
+        await expect(runtime.sessions.goals.get(goalContext)).resolves.toMatchObject({ status: 'applied' });
+        await client.flush();
+        expect(initialClearSent).toBe(true);
+        expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())).toEqual(retained);
+        expect(originals()).toHaveLength(1);
+        await expect(runtime.sessions.goals.set({ objective: 'Changed C', status: 'paused' }, goalContext))
+          .resolves.toMatchObject({ status: 'applied' });
+        await client.flush();
+        expect(originals()).toHaveLength(2);
+        emitNotification('thread/goal/cleared', { threadId: 'fresh-thread' });
+        await vi.waitFor(() => expect(readSessionWorkStateV1FromMetadata(client.getMetadataSnapshot())?.items).toEqual([]));
+        await client.flush();
+        expect(originals()).toHaveLength(3);
+        await expect(runtime.sessions.goals.clear(goalContext)).resolves.toMatchObject({ status: 'applied' });
+        await client.flush();
+        expect(originals()).toHaveLength(3);
+        for (const original of originals()) {
+          const content = SessionStoredMessageContentSchema.parse(original.content);
+          if (content.t !== 'plain') throw new Error('Expected keyless plain original');
+          expect(TranscriptRawRecordV1Schema.parse(content.v)).toMatchObject({ role: 'agent',
+            content: { type: 'event', data: { type: 'goal-changed' } } });
+        }
+        expect(JSON.stringify(originals())).not.toContain('Retained B');
+        expect(JSON.stringify(originals())).not.toContain('Changed C');
+      } finally { await opened.dispose(); }
+    }, { beforeThreadResumeResponse: ({ socket: nativeSocket, params }) => {
+      initialClearSent = true;
+      // CONT5: initial source absence precedes native Goal hydration. The
+      // resumed thread's explicit Goal read still returns retained paused B.
+      nativeSocket.send(JSON.stringify({ method: 'thread/goal/cleared', params: { threadId: params.threadId } }));
+    } });
   });
 
   it.each([

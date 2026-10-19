@@ -18,9 +18,10 @@ export function readCodexGoalPayload(value: unknown): CodexGoalPayload {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'malformed' };
   const root = value as RecordLike;
   if (typeof root.objective === 'string') return { kind: 'present', goal: root };
-  if (!Object.prototype.hasOwnProperty.call(root, 'goal') || root.goal === null || root.goal === undefined) {
-    return { kind: 'absent' };
-  }
+  // The native Goal read contract requires an explicit nullable goal. A
+  // missing field (including a ThreadResumeResponse) is not evidence of Clear.
+  if (!Object.prototype.hasOwnProperty.call(root, 'goal')) return { kind: 'malformed' };
+  if (root.goal === null) return { kind: 'absent' };
   return root.goal && typeof root.goal === 'object' && !Array.isArray(root.goal)
     ? { kind: 'present', goal: root.goal as RecordLike }
     : { kind: 'malformed' };
