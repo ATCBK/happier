@@ -388,6 +388,20 @@ describe('ProjectScriptsBody setup affordance', () => {
     expect(screen.findByTestId('scripts.setup')).toBeTruthy();
   });
 
+  it('says an empty checkout once: the Scripts page hero, not a second empty card under it', async () => {
+    shared.inspection = {
+      definition: { basis: { kind: 'absent' }, document: null },
+      detection: { ...detection, entries: [] },
+      importCandidates: [],
+    };
+    const page = await render('page', 'scripts.noProjectFile');
+    expect(page.findByTestId('scripts.setup')).toBeTruthy();
+    expect(page.getTextContent()).not.toContain('projects.widgets.scriptsEmpty');
+    // A widget has no hero above it: the empty card is its one line.
+    const widget = await render('widget', 'scripts.empty');
+    expect(widget.getTextContent()).toContain('projects.widgets.scriptsEmpty');
+  });
+
   it('keeps setup quiet once a project file declares the scripts', async () => {
     shared.inspection = {
       definition: presentDefinition(declared),

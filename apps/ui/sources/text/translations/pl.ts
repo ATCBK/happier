@@ -15681,7 +15681,7 @@ settingsSession: {
         scriptsPartial: "Nie udało się sprawdzić niektórych definicji skryptów",
         scriptsUnavailable: "Nie udało się odczytać skryptów",
         noProjectFile: "Brak pliku projektu",
-        noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier znalazł w plikach 1 rzecz, którą ten checkout może uruchomić. Nic nie uruchomi się, dopóki nie wybierzesz, albo pozwól agentowi skonfigurować cały projekt.` : `Happier znalazł w plikach ${count} rzeczy, które ten checkout może uruchomić. Nic nie uruchomi się, dopóki nie wybierzesz, albo pozwól agentowi skonfigurować cały projekt.`),
+        noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier nie znalazł niczego, co ten checkout może uruchomić. Utwórz plik projektu albo pozwól agentowi skonfigurować cały projekt.` : count === 1 ? `Happier znalazł w plikach 1 rzecz, którą ten checkout może uruchomić. Nic nie uruchomi się, dopóki nie wybierzesz, albo pozwól agentowi skonfigurować cały projekt.` : `Happier znalazł w plikach ${count} rzeczy, które ten checkout może uruchomić. Nic nie uruchomi się, dopóki nie wybierzesz, albo pozwól agentowi skonfigurować cały projekt.`),
         scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `Znaleziono 1 skrypt w ${files}. Nic nie uruchomi się, dopóki nie wybierzesz.` : `Znaleziono skrypty (${count}) w ${files}. Nic nie uruchomi się, dopóki nie wybierzesz.`),
         scriptsFoundBy: ({ files }: { files: string }) => `Znalezione podczas czytania ${files}. Nic nie zostało uruchomione.`,
         add: "Dodaj widżet",

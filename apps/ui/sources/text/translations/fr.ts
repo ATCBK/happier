@@ -16515,7 +16515,7 @@ settingsSession: {
         scriptsPartial: "Certaines définitions de scripts n’ont pas pu être inspectées",
         scriptsUnavailable: "Impossible de lire les scripts",
         noProjectFile: "Pas encore de fichier de projet",
-        noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier a trouvé 1 élément exécutable dans ce checkout en lisant ses fichiers. Rien ne s’exécute tant que tu ne choisis pas, ou laisse un agent configurer tout le projet.` : `Happier a trouvé ${count} éléments exécutables dans ce checkout en lisant ses fichiers. Rien ne s’exécute tant que tu ne choisis pas, ou laisse un agent configurer tout le projet.`),
+        noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier n’a rien trouvé d’exécutable dans ce checkout. Crée un fichier de projet, ou laisse un agent configurer tout le projet.` : count === 1 ? `Happier a trouvé 1 élément exécutable dans ce checkout en lisant ses fichiers. Rien ne s’exécute tant que tu ne choisis pas, ou laisse un agent configurer tout le projet.` : `Happier a trouvé ${count} éléments exécutables dans ce checkout en lisant ses fichiers. Rien ne s’exécute tant que tu ne choisis pas, ou laisse un agent configurer tout le projet.`),
         scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `1 script trouvé dans ${files}. Rien ne s’exécute tant que tu ne choisis pas.` : `${count} scripts trouvés dans ${files}. Rien ne s’exécute tant que tu ne choisis pas.`),
         scriptsFoundBy: ({ files }: { files: string }) => `Trouvé en lisant ${files}. Rien n’a été exécuté.`,
         add: "Ajouter un widget",

@@ -1066,10 +1066,14 @@ function FirstRun(
         </View>
       ) : null}
       {detected.length === 0 ? (
-        <SurfaceStateCard
-          kind="empty"
-          title={t('projects.widgets.scriptsEmpty')}
-        />
+        // On the page the hero above already says nothing was found and offers the next step.
+        props.page ? null : (
+          <SurfaceStateCard
+            testID={`${props.testID}.empty`}
+            kind="empty"
+            title={t('projects.widgets.scriptsEmpty')}
+          />
+        )
       ) : (
         <DetectedGroups
           {...props}

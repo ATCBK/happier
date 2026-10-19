@@ -303,6 +303,21 @@ describe('Project setup through ordinary authoring', () => {
         expect(draft?.input).not.toContain(t('projects.scripts.foundIn', { files: '' }));
         expect(draft?.input).not.toContain('undefined');
     });
+    it('seeds an empty checkout with the request alone, never a zero count', async () => {
+        const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
+        machineTransport.mockResolvedValue(ProjectDefinitionInspectOutputSchema.parse({
+            definition: { basis: { kind: 'absent' }, document: null },
+            detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+        }));
+        const result = await openProjectSetupAuthoring({ workspace });
+        if (!result.ok) throw new Error(result.errorCode);
+        const opened = SessionAuthoringOpenResultV1Schema.parse(result.result);
+        if (opened.kind !== 'opened') throw new Error('Draft refused');
+        const draft = readNewSessionDraftProjectionFromRepository({ scope: { serverId, accountId: 'account-a' }, draftId: opened.draftId })?.draft;
+        expect(draft?.input).toContain(t('projects.authoring.prompt'));
+        expect(draft?.input).not.toContain(t('projects.authoring.scriptsCount', { count: 0 }));
+        expect(draft?.input.trimEnd()).toBe(draft?.input);
+    });
     it('returns the typed inspection failure without writing a draft or navigating', async () => {
         const scope = { serverId, accountId: 'account-a' };
         const before = listNewSessionDraftProjections(scope).length;

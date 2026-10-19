@@ -130,14 +130,14 @@ function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance): strin
         .map(source => describeProjectCommandSource(source).file)
         .filter(file => file !== null));
     return [
-        [t('projects.authoring.scriptsCount', { count: scriptSources.length }),
-            // A zero count is not an observation the agent needs.
+        // A zero count is not an observation the agent needs; an empty checkout seeds the request alone.
+        [...(scriptSources.length > 0 ? [t('projects.authoring.scriptsCount', { count: scriptSources.length })] : []),
             ...(services.length > 0 ? [t('projects.authoring.servicesCount', { count: services.length })] : []),
             ...(files ? [t('projects.scripts.foundIn', { files })] : [])].join(' · '),
         ...(guidance.detection?.coverage === 'partial' ? [t('projects.scripts.definition.partial')] : []),
         ...('status' in guidance.workerPreferences && guidance.workerPreferences.status === 'ready'
             ? [] : [t('projectWorkers.policyUnavailable')]),
-    ].join('\n');
+    ].filter(line => line.length > 0).join('\n');
 }
 
 /** GUIDE disclosure and ordinary authoring consume this same read-only factual owner. */
@@ -167,7 +167,7 @@ export async function openProjectSetupAuthoring(input: ProjectSetupAuthoringInpu
         }
         const request: SessionAuthoringOpenV1 = { seed: {
             sessionName: t('projects.authoring.draftTitle', { project: resolveWorkspaceRefDisplayName(destination.workspaceRef) }),
-            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance)}`,
+            prompt: [t('projects.authoring.prompt'), describeSetupAuthoringFacts(observed.guidance)].filter(Boolean).join('\n\n'),
             placement: { kind: 'exactTarget', serverId: input.workspace.serverId,
                 machineId: input.workspace.machineId, directory: input.workspace.rootPath },
             origin,

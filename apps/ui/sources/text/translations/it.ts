@@ -16647,7 +16647,7 @@ settingsSession: {
         scriptsPartial: "Non è stato possibile ispezionare alcune definizioni di script",
         scriptsUnavailable: "Impossibile leggere gli script",
         noProjectFile: "Ancora nessun file di progetto",
-        noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier ha trovato 1 cosa che questo checkout può eseguire leggendone i file. Niente viene eseguito finché non scegli, oppure lascia che un agente configuri l’intero progetto.` : `Happier ha trovato ${count} cose che questo checkout può eseguire leggendone i file. Niente viene eseguito finché non scegli, oppure lascia che un agente configuri l’intero progetto.`),
+        noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier non ha trovato nulla che questo checkout possa eseguire. Crea un file di progetto, oppure lascia che un agente configuri l’intero progetto.` : count === 1 ? `Happier ha trovato 1 cosa che questo checkout può eseguire leggendone i file. Niente viene eseguito finché non scegli, oppure lascia che un agente configuri l’intero progetto.` : `Happier ha trovato ${count} cose che questo checkout può eseguire leggendone i file. Niente viene eseguito finché non scegli, oppure lascia che un agente configuri l’intero progetto.`),
         scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `1 script trovato in ${files}. Niente viene eseguito finché non scegli.` : `${count} script trovati in ${files}. Niente viene eseguito finché non scegli.`),
         scriptsFoundBy: ({ files }: { files: string }) => `Trovato leggendo ${files}. Non è stato eseguito nulla.`,
         add: "Aggiungi widget",

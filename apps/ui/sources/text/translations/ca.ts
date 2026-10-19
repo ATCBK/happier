@@ -14593,7 +14593,7 @@ settingsSession: {
             scriptsPartial: "No s’han pogut inspeccionar algunes definicions de scripts",
             scriptsUnavailable: "No s’han pogut llegir els scripts",
             noProjectFile: "Encara no hi ha fitxer de projecte",
-            noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier ha trobat 1 cosa que aquest checkout pot executar llegint-ne els fitxers. Res no s’executa fins que ho triïs, o deixa que un agent configuri tot el projecte.` : `Happier ha trobat ${count} coses que aquest checkout pot executar llegint-ne els fitxers. Res no s’executa fins que ho triïs, o deixa que un agent configuri tot el projecte.`),
+            noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier no ha trobat res que aquest checkout pugui executar. Crea un fitxer de projecte, o deixa que un agent configuri tot el projecte.` : count === 1 ? `Happier ha trobat 1 cosa que aquest checkout pot executar llegint-ne els fitxers. Res no s’executa fins que ho triïs, o deixa que un agent configuri tot el projecte.` : `Happier ha trobat ${count} coses que aquest checkout pot executar llegint-ne els fitxers. Res no s’executa fins que ho triïs, o deixa que un agent configuri tot el projecte.`),
             scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `1 script trobat a ${files}. Res no s’executa fins que ho triïs.` : `${count} scripts trobats a ${files}. Res no s’executa fins que ho triïs.`),
             scriptsFoundBy: ({ files }: { files: string }) => `Trobat llegint ${files}. Encara no s’ha executat res.`,
             add: "Afegeix un giny",

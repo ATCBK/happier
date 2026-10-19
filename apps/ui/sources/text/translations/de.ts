@@ -16733,7 +16733,7 @@ settingsSession: {
             scriptsPartial: "Einige Skriptdefinitionen konnten nicht geprüft werden",
             scriptsUnavailable: "Skripte konnten nicht gelesen werden",
             noProjectFile: "Noch keine Projektdatei",
-            noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier hat beim Lesen der Dateien 1 Sache gefunden, die dieser Checkout ausführen kann. Nichts läuft, bis du es auswählst – oder lass einen Agenten das ganze Projekt einrichten.` : `Happier hat beim Lesen der Dateien ${count} Dinge gefunden, die dieser Checkout ausführen kann. Nichts läuft, bis du es auswählst – oder lass einen Agenten das ganze Projekt einrichten.`),
+            noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier hat nichts gefunden, was dieser Checkout ausführen kann. Erstelle eine Projektdatei – oder lass einen Agenten das ganze Projekt einrichten.` : count === 1 ? `Happier hat beim Lesen der Dateien 1 Sache gefunden, die dieser Checkout ausführen kann. Nichts läuft, bis du es auswählst – oder lass einen Agenten das ganze Projekt einrichten.` : `Happier hat beim Lesen der Dateien ${count} Dinge gefunden, die dieser Checkout ausführen kann. Nichts läuft, bis du es auswählst – oder lass einen Agenten das ganze Projekt einrichten.`),
             scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `1 Skript in ${files} gefunden. Nichts läuft, bis du es auswählst.` : `${count} Skripte in ${files} gefunden. Nichts läuft, bis du es auswählst.`),
             scriptsFoundBy: ({ files }: { files: string }) => `Gefunden durch Lesen von ${files}. Nichts wurde ausgeführt.`,
             about: "Über das Projekt",

@@ -20254,7 +20254,7 @@ const enProjects = {
   },
   widgets: {
       noProjectFile: "No project file yet",
-      noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier found 1 thing this checkout can run by reading its files. Nothing runs until you choose, or let an agent set up the whole project.` : `Happier found ${count} things this checkout can run by reading its files. Nothing runs until you choose, or let an agent set up the whole project.`),
+      noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier didn’t find anything this checkout can run. Create a project file, or let an agent set up the whole project.` : count === 1 ? `Happier found 1 thing this checkout can run by reading its files. Nothing runs until you choose, or let an agent set up the whole project.` : `Happier found ${count} things this checkout can run by reading its files. Nothing runs until you choose, or let an agent set up the whole project.`),
       scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `1 script found in ${files}. Nothing runs until you choose.` : `${count} scripts found in ${files}. Nothing runs until you choose.`),
       scriptsFoundBy: ({ files }: { files: string }) => `Found by reading ${files}. Nothing has run.`,
       add: "Add widget",

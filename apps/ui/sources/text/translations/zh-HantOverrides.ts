@@ -12791,7 +12791,7 @@ settingsSession: {
             scriptsPartial: "部分指令碼定義無法檢查",
             scriptsUnavailable: "無法讀取指令碼",
             noProjectFile: "還沒有專案檔案",
-            noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier 讀取檔案後找到 1 項此簽出可以執行的內容。在你選擇之前不會執行任何內容，也可以讓代理設定整個專案。` : `Happier 讀取檔案後找到 ${count} 項此簽出可以執行的內容。在你選擇之前不會執行任何內容，也可以讓代理設定整個專案。`),
+            noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier 沒有找到此簽出可以執行的內容。建立專案檔案，或讓代理設定整個專案。` : count === 1 ? `Happier 讀取檔案後找到 1 項此簽出可以執行的內容。在你選擇之前不會執行任何內容，也可以讓代理設定整個專案。` : `Happier 讀取檔案後找到 ${count} 項此簽出可以執行的內容。在你選擇之前不會執行任何內容，也可以讓代理設定整個專案。`),
             scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `在 ${files} 中找到 1 個指令碼。在你選擇之前不會執行任何內容。` : `在 ${files} 中找到 ${count} 個指令碼。在你選擇之前不會執行任何內容。`),
             scriptsFoundBy: ({ files }: { files: string }) => `透過讀取 ${files} 找到。尚未執行任何內容。`,
             add: "新增小工具",

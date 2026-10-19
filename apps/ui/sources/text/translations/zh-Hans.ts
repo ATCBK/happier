@@ -16236,7 +16236,7 @@ settingsSession: {
         scriptsPartial: "部分脚本定义无法检查",
         scriptsUnavailable: "无法读取脚本",
         noProjectFile: "还没有项目文件",
-        noProjectFileBody: ({ count }: { count: number }) => (count === 1 ? `Happier 读取文件后找到 1 项此检出可以运行的内容。在你选择之前不会运行任何内容，也可以让智能体设置整个项目。` : `Happier 读取文件后找到 ${count} 项此检出可以运行的内容。在你选择之前不会运行任何内容，也可以让智能体设置整个项目。`),
+        noProjectFileBody: ({ count }: { count: number }) => (count === 0 ? `Happier 没有找到此检出可以运行的内容。创建项目文件，或让智能体设置整个项目。` : count === 1 ? `Happier 读取文件后找到 1 项此检出可以运行的内容。在你选择之前不会运行任何内容，也可以让智能体设置整个项目。` : `Happier 读取文件后找到 ${count} 项此检出可以运行的内容。在你选择之前不会运行任何内容，也可以让智能体设置整个项目。`),
         scriptsFound: ({ count, files }: { count: number; files: string }) => (count === 1 ? `在 ${files} 中找到 1 个脚本。在你选择之前不会运行任何内容。` : `在 ${files} 中找到 ${count} 个脚本。在你选择之前不会运行任何内容。`),
         scriptsFoundBy: ({ files }: { files: string }) => `通过读取 ${files} 找到。尚未运行任何内容。`,
         add: "添加小组件",
