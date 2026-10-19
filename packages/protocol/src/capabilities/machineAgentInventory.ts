@@ -33,7 +33,7 @@ export function projectAcpCatalogForMachineInventory(catalog: AcpCatalogSnapshot
   retainedDefinitions: readonly AcpBackendDefinitionV1[] = [],
 ): DefinitionInventoryInput {
   const observed = catalog?.status === 'ready' || catalog?.status === 'partial' ? catalog.record.definitions : retainedDefinitions;
-  const definitions = observed.filter(definition => definition.launch.kind !== 'command').map(definition => {
+  const definitions = observed.map(definition => {
     const launch = definition.launch.kind === 'archive'
       ? (({ envByPlatform: _environment, ...facts }) => facts)(definition.launch) : definition.launch;
     return MachineAcpInventoryDefinitionSchema.parse({ definitionId: definition.id, title: definition.title, launch });
