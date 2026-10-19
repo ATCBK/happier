@@ -16,8 +16,7 @@ import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/ma
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import { registerApprovalRpcHandlers } from '@/rpc/handlers/approvals';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
-import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
+import { handleActionsCommand } from '@/cli/commands/actions';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
 import { createDaemonApprovalExecutionOriginCurrentness } from './daemonExternalActionTargetResolver';
 
@@ -41,6 +40,7 @@ import {
   ActionsSettingsV1Schema,
   ApprovalExecutionOriginV1Schema,
   ExternalActionExecutionAuthorizationV1Schema,
+  FeaturesResponseSchema,
   accountSettingsParse,
   ApiTokenGrantV1Schema,
   buildQualifiedPluginContributionKey,
@@ -512,9 +512,14 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     const sockets = new Server<ClientToServerEvents, ServerToClientEvents>(app.server, { path: '/v1/updates' });
     const rows = new Map<string, Record<string, unknown>>();
     const calls: string[] = [];
-    const features = (await import('@happier-dev/protocol')).FeaturesResponseSchema.parse({ features: {},
+    const packets: unknown[] = [];
+    const features = FeaturesResponseSchema.parse({ features: {},
       capabilities: { serverIdentity: { serverIdentityId: mode === 'wrong-home' ? 'srv_wrong_fx45' : 'srv_fx45' } } });
     app.get('/v1/features', async () => features);
+    app.get('/v1/features/authenticated', async request => {
+      expect(request.headers.authorization).toBe(`Bearer ${token}`);
+      return features;
+    });
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
     app.get('/v1/account/profile', async () => ({ id: 'account-1' }));
     app.get('/v1/machines/machine-local', async () => ({ machine: { id: 'machine-local', active: true,
@@ -558,7 +563,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         // Installed Machine/Home observation is an OS boundary; the real origin,
         // target and Account admission logic below remains in the currentness owner.
         resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine-local',
-          serverIdentityId: mode === 'stale-source' ? 'srv_retired_fx45' : 'srv_fx45' }),
+          serverIdentityId: mode === 'wrong-home' ? 'srv_wrong_fx45'
+            : mode === 'stale-source' ? 'srv_retired_fx45' : 'srv_fx45' }),
         resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl }),
         isAccountCurrent: async () => (await axios.get<{ id: string }>(`${serverApiUrl}/v1/account/profile`)).data.id === 'account-1',
         listAccountApiTokens: async () => { throw new Error('Ordinary CLI source has no PAT'); },
@@ -572,14 +578,16 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       expect(socket.handshake.auth.token).toBe(token);
       socket.on(SOCKET_RPC_EVENTS.CALL, async (packet, acknowledge) => {
         calls.push(packet.method);
+        packets.push(packet.params);
         const method = packet.method.replace('machine-local:', '');
         const handler = handlers.get(method);
         if (!handler) return acknowledge({ ok: false, error: 'method_not_found' });
-        const result = await handler(packet.params, { callerAuthority: 'present_user' });
+        const result = await runWithServerHttpBaseUrl(serverApiUrl,
+          () => handler(packet.params, { callerAuthority: 'present_user' }));
         acknowledge({ ok: true, result });
       });
     });
-    try {
+    try { await runWithServerHttpBaseUrl(serverApiUrl, async () => {
       const invoke = createDaemonExternalActionContributedInvoker({ acquireRuntimeRegistryLease: async () => lease,
         requestCurrentIntent: createTargetActionCurrentIntentAdapter({
           create: request => store.targetActionApprovalsCreate({ request }),
@@ -590,7 +598,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         approvalExecutionOrigin: { ...ordinaryOrigin, serverIdentityId: 'srv_fx45',
           surface: 'cli', authority: 'present_user' }, context: { surface: 'cli', authority: 'present_user',
           actionCaller: { kind: 'host' } } });
-      expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
       const artifactId = [...rows.keys()][0]!;
       expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ status: 'open' });
       const standalone = createCliActionExecutorFromCredentials({ credentials, serverId: 'deciding-device', serverApiUrl,
@@ -602,26 +610,29 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       }
       expect(calls).toEqual([]);
       expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ status: 'open' });
-      const command = listCompiledActionCliCommands().find(row => row.actionId === 'approval.request.decide')!;
       const output = captureConsoleJsonOutput();
       try {
-        await runWithServerHttpBaseUrl(serverApiUrl, () => runCompiledActionCliCommand({ command,
-          argv: [...command.path, '--input-json', JSON.stringify({ artifactId, decision: 'approve' }), '--json'],
-          deps: { readCredentialsFn: async () => credentials, getServerProfileFn: async () => { throw new Error('No ambient profile'); },
+        await runWithServerHttpBaseUrl(serverApiUrl, () => handleActionsCommand(
+          ['invoke', 'approval.request.decide', '--input-json', JSON.stringify({ artifactId, decision: 'approve' }), '--json'],
+          { readCredentialsFn: async () => credentials, getServerProfileFn: async () => { throw new Error('No ambient profile'); },
             createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params,
               serverId: 'deciding-device', serverApiUrl,
               actionsSettingsProvider: createActionSettingsProvider(),
             }) },
-        }));
-        expect(output.json()).toMatchObject(mode === 'wrong-home'
+        ));
+        const result = output.json();
+        expect(result, JSON.stringify(result)).toMatchObject(mode !== 'current'
           ? { ok: false, error: { code: 'approval_stale' } }
-          : { ok: true, data: { status: mode === 'stale-source' ? 'failed' : 'executed' } });
+          : { ok: true, data: { status: 'executed' } });
       } finally { output.restore(); process.exitCode = 0; }
       const settled = await store.targetActionApprovalsGet({ artifactId });
       expect(settled).toMatchObject({ status: mode === 'wrong-home' ? 'open' : mode === 'stale-source' ? 'failed' : 'executed' });
       expect(effects).toBe(mode === 'current' ? 1 : 0);
       expect(calls).toEqual(mode === 'wrong-home' ? [] : [`machine-local:${RPC_METHODS.APPROVAL_REQUEST_DECIDE}`]);
+      expect(packets).toEqual(mode === 'wrong-home' ? [] : [{ artifactId, decision: 'approve',
+        serverIdentityId: 'srv_fx45', originServerId: 'server-external' }]);
       if (mode === 'current') expect(JSON.parse(await readFile(effectPath, 'utf8'))).toEqual({ applied: true });
+    });
     } finally {
       await runtime.dispose();
       await new Promise<void>(resolve => sockets.close(() => resolve()));
