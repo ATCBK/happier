@@ -1,0 +1,207 @@
+diff --git a/node_modules/socket.io-adapter/dist/cluster-adapter.d.ts b/node_modules/socket.io-adapter/dist/cluster-adapter.d.ts
+index 5bab992..fef677f 100644
+--- a/node_modules/socket.io-adapter/dist/cluster-adapter.d.ts
++++ b/node_modules/socket.io-adapter/dist/cluster-adapter.d.ts
+@@ -88,6 +88,13 @@ export type ClusterMessage = {
+         requestId?: string;
+         packet: any[];
+     };
++} | {
++    type: MessageType.BROADCAST_ACK;
++    data: {
++        requestId: string;
++        cancel: true;
++        opts: { rooms: string[]; except: string[]; flags: BroadcastFlags };
++    };
+ });
+ export type ClusterResponse = {
+     uid: ServerId;
+@@ -115,6 +122,7 @@ export type ClusterResponse = {
+     data: {
+         requestId: string;
+         packet: unknown;
++        error?: { code: "SOCKET_DISCONNECTED" };
+     };
+ });
+ /**
+@@ -154,7 +162,7 @@ export declare abstract class ClusterAdapter extends Adapter {
+      * @private
+      */
+     private addOffsetIfNecessary;
+-    broadcastWithAck(packet: any, opts: BroadcastOptions, clientCountCallback: (clientCount: number) => void, ack: (...args: any[]) => void): void;
++    broadcastWithAck(packet: any, opts: BroadcastOptions, clientCountCallback: (clientCount: number) => void, ack: (...args: any[]) => void): void | (() => void);
+     addSockets(opts: BroadcastOptions, rooms: Room[]): Promise<void>;
+     delSockets(opts: BroadcastOptions, rooms: Room[]): Promise<void>;
+     disconnectSockets(opts: BroadcastOptions, close: boolean): Promise<void>;
+diff --git a/node_modules/socket.io-adapter/dist/cluster-adapter.js b/node_modules/socket.io-adapter/dist/cluster-adapter.js
+index 73e4c97..4f140a0 100644
+--- a/node_modules/socket.io-adapter/dist/cluster-adapter.js
++++ b/node_modules/socket.io-adapter/dist/cluster-adapter.js
+@@ -38,10 +38,15 @@ var MessageType;
+     MessageType[MessageType["ADAPTER_CLOSE"] = 13] = "ADAPTER_CLOSE";
+ })(MessageType || (exports.MessageType = MessageType = {}));
+ function encodeOptions(opts) {
++    const flags = { ...opts.flags };
++    if (flags.ackLifetime) {
++        // AbortSignal is origin-local custody, never cluster wire data.
++        flags.ackLifetime = { rejectOnDisconnect: flags.ackLifetime.rejectOnDisconnect };
++    }
+     return {
+         rooms: [...opts.rooms],
+         except: [...opts.except],
+-        flags: opts.flags,
++        flags,
+     };
+ }
+ function decodeOptions(opts) {
+@@ -83,7 +88,11 @@ class ClusterAdapter extends in_memory_adapter_1.Adapter {
+             case MessageType.BROADCAST: {
+                 const withAck = message.data.requestId !== undefined;
+                 if (withAck) {
+-                    super.broadcastWithAck(message.data.packet, decodeOptions(message.data.opts), (clientCount) => {
++                    const opts = decodeOptions(message.data.opts);
++                    if (opts.flags?.ackLifetime) {
++                        opts.flags.ackLifetime = { ...opts.flags.ackLifetime, requestId: message.data.requestId, requesterUid: message.uid };
++                    }
++                    super.broadcastWithAck(message.data.packet, opts, (clientCount) => {
+                         debug("[%s] waiting for %d client acknowledgements", this.uid, clientCount);
+                         this.publishResponse(message.uid, {
+                             type: MessageType.BROADCAST_CLIENT_COUNT,
+@@ -92,13 +101,14 @@ class ClusterAdapter extends in_memory_adapter_1.Adapter {
+                                 clientCount,
+                             },
+                         });
+-                    }, (arg) => {
++                    }, (arg, error) => {
+                         debug("[%s] received acknowledgement with value %j", this.uid, arg);
+                         this.publishResponse(message.uid, {
+                             type: MessageType.BROADCAST_ACK,
+                             data: {
+                                 requestId: message.data.requestId,
+                                 packet: arg,
++                                ...(error ? { error } : {}),
+                             },
+                         });
+                     });
+@@ -174,6 +184,18 @@ class ClusterAdapter extends in_memory_adapter_1.Adapter {
+             case MessageType.BROADCAST_CLIENT_COUNT:
+             // @ts-ignore
+             case MessageType.BROADCAST_ACK:
++                if (message.data.cancel === true) {
++                    // Release only callbacks installed by this exact origin's
++                    // opt-in request. Existing Socket.acks remains the owner.
++                    this.apply(decodeOptions(message.data.opts), (socket) => {
++                        for (const [id, ack] of socket.acks) {
++                            if (ack.clusterRequestId === message.data.requestId && ack.clusterRequesterUid === message.uid) {
++                                socket.acks.delete(id);
++                            }
++                        }
++                    });
++                    break;
++                }
+             // @ts-ignore
+             case MessageType.FETCH_SOCKETS_RESPONSE:
+             // @ts-ignore
+@@ -203,7 +225,7 @@ class ClusterAdapter extends in_memory_adapter_1.Adapter {
+                 break;
+             }
+             case MessageType.BROADCAST_ACK: {
+-                (_b = this.ackRequests.get(requestId)) === null || _b === void 0 ? void 0 : _b.ack(response.data.packet);
++                (_b = this.ackRequests.get(requestId)) === null || _b === void 0 ? void 0 : _b.ack(response.data.packet, response.data.error);
+                 break;
+             }
+             case MessageType.FETCH_SOCKETS_RESPONSE: {
+@@ -285,8 +307,10 @@ class ClusterAdapter extends in_memory_adapter_1.Adapter {
+     broadcastWithAck(packet, opts, clientCountCallback, ack) {
+         var _a;
+         const onlyLocal = (_a = opts === null || opts === void 0 ? void 0 : opts.flags) === null || _a === void 0 ? void 0 : _a.local;
++        let requestId;
++        let timer;
+         if (!onlyLocal) {
+-            const requestId = randomId();
++            requestId = randomId();
+             this.ackRequests.set(requestId, {
+                 clientCountCallback,
+                 ack,
+@@ -301,11 +325,26 @@ class ClusterAdapter extends in_memory_adapter_1.Adapter {
+             });
+             // we have no way to know at this level whether the server has received an acknowledgement from each client, so we
+             // will simply clean up the ackRequests map after the given delay
+-            setTimeout(() => {
++            timer = setTimeout(() => {
+                 this.ackRequests.delete(requestId);
+             }, opts.flags.timeout);
+         }
+-        super.broadcastWithAck(packet, opts, clientCountCallback, ack);
++        const disposeLocal = super.broadcastWithAck(packet, opts, clientCountCallback, ack);
++        if (opts.flags?.ackLifetime) {
++            let disposed = false;
++            return () => {
++                if (disposed) return;
++                disposed = true;
++                disposeLocal?.();
++                if (requestId) {
++                    clearTimeout(timer);
++                    this.ackRequests.delete(requestId);
++                    this.publish({ type: MessageType.BROADCAST_ACK, data: {
++                        requestId, cancel: true, opts: encodeOptions(opts),
++                    } });
++                }
++            };
++        }
+     }
+     async addSockets(opts, rooms) {
+         var _a;
+diff --git a/node_modules/socket.io-adapter/dist/in-memory-adapter.d.ts b/node_modules/socket.io-adapter/dist/in-memory-adapter.d.ts
+index 0c9499d..962ea8d 100644
+--- a/node_modules/socket.io-adapter/dist/in-memory-adapter.d.ts
++++ b/node_modules/socket.io-adapter/dist/in-memory-adapter.d.ts
+@@ -16,6 +16,7 @@ export interface BroadcastFlags {
+     broadcast?: boolean;
+     binary?: boolean;
+     timeout?: number;
++    ackLifetime?: { rejectOnDisconnect?: boolean; signal?: AbortSignal };
+ }
+ export interface BroadcastOptions {
+     rooms: Set<Room>;
+@@ -106,7 +107,7 @@ export declare class Adapter extends EventEmitter {
+      *
+      * @public
+      */
+-    broadcastWithAck(packet: any, opts: BroadcastOptions, clientCountCallback: (clientCount: number) => void, ack: (...args: any[]) => void): void;
++    broadcastWithAck(packet: any, opts: BroadcastOptions, clientCountCallback: (clientCount: number) => void, ack: (...args: any[]) => void): void | (() => void);
+     private _encode;
+     /**
+      * Gets a list of sockets by sid.
+diff --git a/node_modules/socket.io-adapter/dist/in-memory-adapter.js b/node_modules/socket.io-adapter/dist/in-memory-adapter.js
+index c9494dc..df231d7 100644
+--- a/node_modules/socket.io-adapter/dist/in-memory-adapter.js
++++ b/node_modules/socket.io-adapter/dist/in-memory-adapter.js
+@@ -156,13 +156,26 @@ class Adapter extends events_1.EventEmitter {
+             // track the total number of acknowledgements that are expected
+             clientCount++;
+             // call the ack callback for each client response
+-            socket.acks.set(packet.id, ack);
++            if (flags.ackLifetime) {
++                const callback = (response) => ack(response);
++                callback.clusterRequestId = flags.ackLifetime.requestId;
++                callback.clusterRequesterUid = flags.ackLifetime.requesterUid;
++                if (flags.ackLifetime.rejectOnDisconnect) {
++                    callback.onDisconnect = () => ack(undefined, { code: "SOCKET_DISCONNECTED" });
++                }
++                socket.acks.set(packet.id, callback);
++            } else {
++                socket.acks.set(packet.id, ack);
++            }
+             if (typeof socket.notifyOutgoingListeners === "function") {
+                 socket.notifyOutgoingListeners(packet);
+             }
+             socket.client.writeToEngine(encodedPackets, packetOpts);
+         });
+         clientCountCallback(clientCount);
++        if (flags.ackLifetime) {
++            return () => this.apply(opts, (socket) => socket.acks.delete(packet.id));
++        }
+     }
+     _encode(packet, packetOpts) {
+         const encodedPackets = this.encoder.encode(packet);
