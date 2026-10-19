@@ -85,6 +85,10 @@ function enableStackDesktop(credentials: typeof runtime.bootCredentials = stackC
     runtime.window.__TAURI_INTERNALS__ = { invoke: runtime.invoke };
 }
 
+function enableStackWeb(): void {
+    runtime.window.__HAPPIER_WEB_RUNTIME_CONFIG__ = { serverUrl: stackUrl, serverContext: 'stack' };
+}
+
 async function saveHomeCredentials(serverUrl: string, credentials: AuthCredentials) {
     const profile = await upsertServerProfile({ serverUrl, source: 'manual' });
     expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: profile.id }, credentials)).toBe(true);
@@ -210,6 +214,25 @@ describe('resolveBootCredentials', () => {
         expect(getServerUrl()).toBe('https://other.example.test');
         expect(runtime.sessionStorage.getItem(TERMINAL_CONNECT_WEB_BOOTSTRAP_STORAGE_KEY)).toBeNull();
         expect(listServerProfiles().some((profile) => profile.serverUrl === 'http://localhost:24731')).toBe(false);
+    });
+
+    it('restores the runtime-configured Home on a direct stack web route instead of another retained Home', async () => {
+        stubWebRuntime('http://happier-agent-qa-embed.localhost:3021/dev/homes-journeys?only=continuation-choose');
+        enableStackWeb();
+        const retainedCredentials = { token: 'retained-home-token' };
+        const stackScopedCredentials = { token: 'stack-home-token' };
+        await retainHome('https://other.example.test', retainedCredentials);
+        const target = await saveHomeCredentials(stackUrl, stackScopedCredentials);
+        const deviceDefaultBefore = getDeviceDefaultServerId();
+
+        await expect(resolveBootCredentials('web')).resolves.toEqual(stackScopedCredentials);
+
+        expect(getActiveServerSnapshot()).toMatchObject({
+            serverId: target.id,
+            serverUrl: stackUrl,
+        });
+        expect(getDeviceDefaultServerId()).toBe(deviceDefaultBefore);
+        await expectStoredCredentials('https://other.example.test', retainedCredentials);
     });
 
     it('does not adopt the exact first-key bearer rejected before reload', async () => {

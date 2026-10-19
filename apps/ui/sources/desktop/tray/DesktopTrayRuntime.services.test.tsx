@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { MMKV } from 'react-native-mmkv';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +6,7 @@ import { renderScreen } from '@/dev/testkit';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { UPDATES_ROUTE } from '@/components/updates/updatesRoute';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
 
 installDisconnectedServerSocketBoundary();
 
@@ -85,10 +85,9 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-import { getActiveServerSnapshot, resetServerProfilesRuntimeForTests, resolveSavedServerProfileByUrl } from '@/sync/domains/server/serverProfiles';
-import { AuthProvider } from '@/auth/context/AuthContext';
-
-import { DesktopTrayRuntime } from './DesktopTrayRuntime';
+const { getActiveServerSnapshot, resolveSavedServerProfileByUrl } = await import('@/sync/domains/server/serverProfiles');
+const { AuthProvider } = await import('@/auth/context/AuthContext');
+const { DesktopTrayRuntime } = await import('./DesktopTrayRuntime');
 
 // The app entry loads this owner before tray events can switch the active Home.
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
@@ -97,9 +96,8 @@ await loadSyncSingletonForTests();
 const home = (id: string, serverUrl: string, extra: Record<string, unknown> = {}) =>
     ({ id, name: id, serverUrl, createdAt: 1, updatedAt: 1, lastUsedAt: 1, ...extra });
 
-function seedSavedHomes(servers: Record<string, Record<string, unknown>>, activeServerId: string) {
-    new MMKV().set('server-state-v1', JSON.stringify({ activeServerId, activeServerIdIsExplicit: true, servers }));
-    resetServerProfilesRuntimeForTests();
+async function seedSavedHomes(servers: Record<string, ReturnType<typeof home>>, activeServerId: string) {
+    await seedPersistedHomeProfilesForTests({ profiles: Object.values(servers), activeServerId });
 }
 
 const row = (relayUrl: string, extra: Record<string, unknown> = {}) => ({
@@ -118,8 +116,8 @@ async function mountTray() {
 }
 
 describe('DesktopTrayRuntime — this computer\'s services (R16 c)', () => {
-    beforeEach(() => {
-        seedSavedHomes({
+    beforeEach(async () => {
+        await seedSavedHomes({
             home: home('home', 'https://home.example.test'),
             work: home('work', 'https://work.example.test'),
             first: home('first', 'https://shared.example.test', { serverIdentityId: 'srv_first', canonicalServerUrl: 'https://shared.example.test' }),

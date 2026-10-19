@@ -215,56 +215,52 @@ export async function resolveBootCredentials(platformOs: string): Promise<AuthCr
         });
     }
 
-    if (canUseStackDesktopBootCredentials(stackRuntimeServerUrl)) {
+    if (stackRuntimeServerUrl) {
         if (
-            stackRuntimeServerUrl
-            && !await canAdoptBootServerCredentials(
+            !await canAdoptBootServerCredentials(
                 stackRuntimeServerUrl,
             )
         ) {
             return await readRetainedBootCredentials();
         }
-        const stackRuntimeServerProfile = await activateStackRuntimeServer({ scope: 'device' });
-        if (stackRuntimeServerUrl) {
-            const credentials = await TokenStorage.getCredentialsForServerUrl(stackRuntimeServerUrl, {
-                serverId: stackRuntimeServerProfile?.id,
-            });
-            if (credentials) {
-                return await resolveBootCredentialAdoption(
-                    credentials,
-                    {
-                        serverUrl:
-                            stackRuntimeServerUrl,
-                        ...(stackRuntimeServerProfile?.id
-                            ? {
-                                serverId:
-                                    stackRuntimeServerProfile.id,
-                            }
-                            : {}),
-                    },
-                );
-            }
-        }
-        return await resolveAndPersistStackDesktopBootCredentials(
-            stackRuntimeServerUrl
-                ? {
-                    serverUrl: stackRuntimeServerUrl,
+        const stackRuntimeServerProfile = await activateStackRuntimeServer({
+            scope: routineSelectionScope,
+        });
+        const credentials = await TokenStorage.getCredentialsForServerUrl(stackRuntimeServerUrl, {
+            serverId: stackRuntimeServerProfile?.id,
+        });
+        if (credentials) {
+            return await resolveBootCredentialAdoption(
+                credentials,
+                {
+                    serverUrl:
+                        stackRuntimeServerUrl,
                     ...(stackRuntimeServerProfile?.id
                         ? {
                             serverId:
                                 stackRuntimeServerProfile.id,
                         }
                         : {}),
-                }
-                : undefined,
+                },
+            );
+        }
+        if (!canUseStackDesktopBootCredentials(stackRuntimeServerUrl)) return null;
+        return await resolveAndPersistStackDesktopBootCredentials(
+            {
+                serverUrl: stackRuntimeServerUrl,
+                ...(stackRuntimeServerProfile?.id
+                    ? {
+                        serverId:
+                            stackRuntimeServerProfile.id,
+                    }
+                    : {}),
+            },
         );
     }
 
     const credentials = await readRetainedBootCredentials();
     if (credentials) return credentials;
     return await resolveAndPersistStackDesktopBootCredentials(
-        stackRuntimeServerUrl
-            ? { serverUrl: stackRuntimeServerUrl }
-            : undefined,
+        undefined,
     );
 }

@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { useRouter } from 'expo-router';
 import { createEmbedEncryption } from '@/embed/encryption/createEmbedEncryption';
-import { getDefaultServerUrl } from '@/sync/domains/server/serverConfig';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { bootstrapActiveServerFromWebLocation } from '@/sync/domains/server/url/bootstrapActiveServerFromWebLocation';
 import { createEmbedSessionRuntime } from './createEmbedSessionRuntime';
 import { EmbedRuntimeStateSurface } from '@/embed/state/EmbedRuntimeStateSurface';
 import type { EmbedSessionRuntime, EmbedSessionRuntimeSnapshot } from './createEmbedSessionRuntime';
-import { resolveEmbedEndpointUrl } from './resolveEmbedEndpointUrl';
 
 const Context = React.createContext<Readonly<{ runtime: EmbedSessionRuntime; snapshot: EmbedSessionRuntimeSnapshot }> | null>(null);
 
@@ -14,10 +14,6 @@ export function EmbedSessionRuntimeProvider(props: Readonly<{ children: React.Re
     const router = useRouter();
     const routerRef = React.useRef(router);
     routerRef.current = router;
-    const endpointUrl = props.endpointUrl ?? resolveEmbedEndpointUrl(
-        typeof window === 'undefined' ? '' : window.location.search,
-        getDefaultServerUrl(),
-    );
     const [runtime, setRuntime] = React.useState<EmbedSessionRuntime | null>(null);
     const [pageActive, setPageActive] = React.useState(true);
     const pageActiveRef = React.useRef(true);
@@ -60,7 +56,13 @@ export function EmbedSessionRuntimeProvider(props: Readonly<{ children: React.Re
                 ? { pathname: '/embed/new', params: identity }
                 : { pathname: '/embed/session/[id]', params: { ...identity, id: sessionId } });
         };
-        void createEmbedEncryption().then((encryption) => {
+        void (async () => {
+            if (!props.endpointUrl) {
+                await bootstrapActiveServerFromWebLocation({ scope: 'device', activateUnknownInIsolatedRealm: true });
+            }
+            const endpointUrl = props.endpointUrl ?? getActiveServerSnapshot().serverUrl;
+            return { encryption: await createEmbedEncryption(), endpointUrl };
+        })().then(({ encryption, endpointUrl }) => {
             if (canceled || !pageActiveRef.current) { encryption.dispose(); return; }
             root = createEmbedSessionRuntime({ encryption, endpointUrl, navigate });
             rootRef.current = root;
@@ -73,7 +75,7 @@ export function EmbedSessionRuntimeProvider(props: Readonly<{ children: React.Re
             root?.dispose();
             if (rootRef.current === root) rootRef.current = null;
         };
-    }, [endpointUrl, pageActive]);
+    }, [pageActive, props.endpointUrl]);
     return runtime ? <MountedRuntime runtime={runtime}>{props.children}</MountedRuntime>
         : bootError ? <EmbedRuntimeStateSurface phase="error" error="credential_unavailable" /> : null;
 }
