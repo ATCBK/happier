@@ -34,11 +34,15 @@ import {
 import type { SelectionListSectionDescriptor } from '@/components/ui/selectionList';
 import { createDiscussionClient } from '@/sync/api/discussions/discussionActions';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import {
-  DiscussionParticipantOperationLine,
-  DiscussionSheetHeader,
-  type DiscussionParticipantManagement,
-} from './DiscussionParticipantsPopover';
+import type { DiscussionParticipantManagement } from './DiscussionParticipantsPopover';
+import type { SharePrincipalPresentation } from '@/components/sharing/shareSheetTypes';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import type { IconName } from '@/components/ui/icons/Icon';
 import { useExecutableParticipantSections } from './useExecutableParticipantSections';
 import { t } from '@/text';
 
@@ -95,21 +99,35 @@ function useDiscussionInviteController(
   input: Readonly<{
     scope: ServerAccountScope;
     discussionId: string;
+    /**
+     * The Discussion's roster when the page already holds it: it is a superset of the grant list, so
+     * the sheet opens on it at once instead of a second read, and follows each roster refresh.
+     */
+    roster?: DiscussionParticipantsListResponseV1 | null;
     onChanged?: () => void;
   }>,
 ) {
   const { scope, discussionId } = input;
+  const seed = React.useMemo<DiscussionAccessGrantsListResponseV1 | null>(() => {
+    if (!input.roster || input.roster.discussionId !== discussionId) return null;
+    const { participants: _participants, ...grants } = input.roster;
+    return grants;
+  }, [discussionId, input.roster]);
   const viewerProfile = useShareViewerProfile(scope);
   const client = React.useMemo(
     () => createDiscussionClient({ scope, availability: 'available' }),
     [scope],
   );
   const identity = `${scope.serverId}:${scope.accountId}:${discussionId}`;
-  const [state, setState] = React.useState<State>({
-    phase: 'initial',
-    response: null,
+  const [state, setState] = React.useState<State>(() => ({
+    phase: seed ? 'ready' : 'initial',
+    response: seed,
     operations: {},
-  });
+  }));
+  React.useEffect(() => {
+    if (seed) setState((previous) => ({ ...previous, phase: 'ready', response: seed, issue: undefined }));
+  }, [seed]);
+  const seeded = seed !== null;
   const [query, setQuery] = React.useState('');
   const [notice, setNotice] = React.useState<ShareUiReason | undefined>();
   const [revision, setRevision] = React.useState(0);
@@ -140,8 +158,9 @@ function useDiscussionInviteController(
     );
   }, [client, discussionId, identity]);
   React.useEffect(() => {
-    void load();
-  }, [load]);
+    // A seeded sheet follows roster refreshes instead of reading the grants again.
+    if (!seeded) void load();
+  }, [load, seeded]);
 
   const mutate = React.useCallback(
     async (mutation: Mutation) => {
@@ -320,11 +339,21 @@ function createDiscussionInviteAdapter(
     retry(): void;
     /** Sessions, bots and models that can join and answer (lab T2-I), after the people. */
     agentSections?: readonly SelectionListSectionDescriptor[];
+    /** Who already answers here (lab T2-S), right under the people who can read it. */
+    afterAccess?: readonly SelectionListSectionDescriptor[];
+    /** Live words under a person's name ("Here now"). */
+    principalTags?: (principal: SharePrincipalPresentation) => readonly string[];
+    /** Who can read it, said once under the list; the private note by default. */
+    notes?: readonly string[];
+    namespace?: string;
   }>,
 ): ShareSheetAdapter {
   return {
-    namespace: 'discussion-invite',
+    namespace: input.namespace ?? 'discussion-invite',
     title: input.title,
+    ...(input.principalTags ? { principalTags: input.principalTags } : {}),
+    // The participants panel's roster is its content; its search is how to add.
+    ...(input.namespace ? { browseOnlyWhileAdding: true } : {}),
     ...(input.agentSections
       ? { searchPlaceholder: t('session.collaboration.discussion.manage.invitePlaceholder') }
       : {}),
@@ -337,8 +366,8 @@ function createDiscussionInviteAdapter(
       },
       admin: { label: t('session.collaboration.discussion.invite.canManage') },
     },
-    notes: [t('session.collaboration.discussion.participants.privateNote')],
-    sections: () => {
+    notes: input.notes ?? [t('session.collaboration.discussion.participants.privateNote')],
+    sections: (context) => {
       const notices = [];
       if (input.loading)
         notices.push({
@@ -361,16 +390,27 @@ function createDiscussionInviteAdapter(
           label: input.notice.message,
           disabled: true,
         });
+      // Agents to add appear with the people to add: once someone starts adding.
       const trailing: SelectionListSectionDescriptor[] = [
-        ...(input.agentSections ?? []),
+        ...(context.revealSuggestions !== false ? input.agentSections ?? [] : []),
         ...(notices.length
           ? [{ kind: 'static' as const, id: 'status', options: notices }]
           : []),
       ];
-      return trailing.length ? { trailing } : {};
+      return {
+        ...(input.afterAccess?.length ? { afterAccess: input.afterAccess } : {}),
+        ...(trailing.length ? { trailing } : {}),
+      };
     },
   };
 }
+
+/** What the participants panel adds to the one share sheet: who answers here and live presence. */
+type DiscussionRosterComposition = Readonly<{
+  afterAccess?: readonly SelectionListSectionDescriptor[];
+  notes?: readonly string[];
+  principalTags?: (principal: SharePrincipalPresentation) => readonly string[];
+}>;
 
 function DiscussionInviteSheet(
   props: Readonly<{
@@ -382,43 +422,53 @@ function DiscussionInviteSheet(
     management?: DiscussionParticipantManagement | null;
     onChanged?: () => void;
     onRequestClose: () => void;
+    /** `compact` is the header's Invite; `inline` is the participants panel, whose search invites. */
+    presentation?: 'compact' | 'inline';
+    composition?: DiscussionRosterComposition;
   }>,
 ) {
   const controller = useDiscussionInviteController({
     scope: props.scope,
     discussionId: props.discussionId,
+    roster: props.roster ?? null,
     onChanged: props.onChanged,
   });
+  const shared = {
+    controller,
+    discussionTitle: props.discussionTitle,
+    onRequestClose: props.onRequestClose,
+    presentation: props.presentation ?? 'compact',
+    ...(props.composition ? { composition: props.composition } : {}),
+  } as const;
   return (
-    <View testID="discussion-invite-panel" style={inviteStyles.panel}>
+    <View testID={props.presentation === 'inline' ? 'discussion-participants-sheet' : 'discussion-invite-panel'} style={inviteStyles.panel}>
       {props.accountLifetime && props.management ? (
         <DiscussionInviteSheetWithAgents
-          controller={controller}
+          {...shared}
           accountLifetime={props.accountLifetime}
           management={props.management}
           roster={props.roster ?? null}
-          discussionTitle={props.discussionTitle}
-          onRequestClose={props.onRequestClose}
         />
       ) : (
-        <DiscussionInviteShareSheet
-          controller={controller}
-          discussionTitle={props.discussionTitle}
-          onRequestClose={props.onRequestClose}
-        />
+        <DiscussionInviteShareSheet {...shared} />
       )}
     </View>
   );
 }
 
+type DiscussionShareSheetShared = Readonly<{
+  controller: ReturnType<typeof useDiscussionInviteController>;
+  discussionTitle: string;
+  onRequestClose: () => void;
+  presentation: 'compact' | 'inline';
+  composition?: DiscussionRosterComposition;
+}>;
+
 function DiscussionInviteSheetWithAgents(
-  props: Readonly<{
-    controller: ReturnType<typeof useDiscussionInviteController>;
+  props: DiscussionShareSheetShared & Readonly<{
     accountLifetime: ServerAccountScopeLifetime;
     management: DiscussionParticipantManagement;
     roster: DiscussionParticipantsListResponseV1 | null;
-    discussionTitle: string;
-    onRequestClose: () => void;
   }>,
 ) {
   const { inviteExecutable, operation } = props.management;
@@ -435,49 +485,165 @@ function DiscussionInviteSheetWithAgents(
     enabled: props.controller.model.editable,
     query: props.controller.model.directory.query,
   });
-  return (
-    <DiscussionInviteShareSheet
-      controller={props.controller}
-      discussionTitle={props.discussionTitle}
-      agentSections={agentSections}
-      onRequestClose={props.onRequestClose}
-    />
-  );
+  const { accountLifetime: _lifetime, management: _management, roster: _roster, ...shared } = props;
+  return <DiscussionInviteShareSheet {...shared} agentSections={agentSections} />;
 }
 
 function DiscussionInviteShareSheet(
-  props: Readonly<{
-    controller: ReturnType<typeof useDiscussionInviteController>;
-    discussionTitle: string;
+  props: DiscussionShareSheetShared & Readonly<{
     agentSections?: readonly SelectionListSectionDescriptor[];
-    onRequestClose: () => void;
   }>,
 ) {
   const { controller } = props;
+  const inline = props.presentation === 'inline';
   const adapter = createDiscussionInviteAdapter({
-    title: t('session.collaboration.discussion.invite.title', {
-      title: props.discussionTitle,
-    }),
+    title: inline
+      ? t('session.collaboration.discussion.participants.title')
+      : t('session.collaboration.discussion.invite.title', { title: props.discussionTitle }),
     loading: controller.loading,
     ...(controller.issue ? { issue: controller.issue } : {}),
     ...(controller.notice ? { notice: controller.notice } : {}),
     retry: controller.retry,
     ...(props.agentSections ? { agentSections: props.agentSections } : {}),
+    ...(props.composition?.afterAccess ? { afterAccess: props.composition.afterAccess } : {}),
+    ...(props.composition?.principalTags ? { principalTags: props.composition.principalTags } : {}),
+    ...(props.composition?.notes ? { notes: props.composition.notes } : {}),
+    ...(inline ? { namespace: 'discussion-participants' } : {}),
   });
   return (
     <ShareSheet
       model={controller.model}
       actions={controller.actions}
       adapter={adapter}
-      presentation="compact"
+      presentation={props.presentation}
       onRequestClose={props.onRequestClose}
-      testID="discussion-invite-sheet"
+      testID={inline ? 'discussion-participants-share' : 'discussion-invite-sheet'}
+    />
+  );
+}
+
+/** The participants panel's body (lab T2-S): the one share sheet, its search inviting anyone, the roster below. */
+export function DiscussionParticipantsSheet(
+  props: Readonly<{
+    scope: ServerAccountScope;
+    accountLifetime?: ServerAccountScopeLifetime;
+    discussionId: string;
+    discussionTitle: string;
+    roster: DiscussionParticipantsListResponseV1 | null;
+    management: DiscussionParticipantManagement | null;
+    afterAccess: readonly SelectionListSectionDescriptor[];
+    principalTags: (principal: SharePrincipalPresentation) => readonly string[];
+    notes: readonly string[];
+    onChanged?: () => void;
+    onRequestClose: () => void;
+  }>,
+) {
+  const noteKey = props.notes.join('\n');
+  const composition = React.useMemo(
+    () => ({ afterAccess: props.afterAccess, principalTags: props.principalTags, notes: noteKey.split('\n') }),
+    [noteKey, props.afterAccess, props.principalTags],
+  );
+  return (
+    <DiscussionInviteSheet
+      scope={props.scope}
+      {...(props.accountLifetime ? { accountLifetime: props.accountLifetime } : {})}
+      discussionId={props.discussionId}
+      discussionTitle={props.discussionTitle}
+      roster={props.roster}
+      management={props.management}
+      {...(props.onChanged ? { onChanged: props.onChanged } : {})}
+      onRequestClose={props.onRequestClose}
+      presentation="inline"
+      composition={composition}
+    />
+  );
+}
+
+/**
+ * The heading of a Discussion's floating sheets (Participants, Invite): a quiet mark, the sheet's
+ * title and one line saying which Discussion and who is in it.
+ */
+export function DiscussionSheetHeader(
+  props: Readonly<{ icon: IconName; title: string; subtitle: string }>,
+) {
+  const { theme } = useUnistyles();
+  return (
+    <View style={inviteStyles.sheetHeader}>
+      <Icon name={props.icon} size={ICON_SIZE.md} color={theme.colors.text.secondary} />
+      <View style={inviteStyles.sheetHeaderText}>
+        <Text style={inviteStyles.sheetTitle} numberOfLines={1}>{props.title}</Text>
+        <Text style={inviteStyles.sheetSubtitle} numberOfLines={1}>{props.subtitle}</Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * Where a participant change stands, one line under the roster: saving, waiting for an approval
+ * (with its request), still checking, or failed with Try again. Done and idle say nothing.
+ */
+export function DiscussionParticipantOperationLine(
+  props: Readonly<{
+    management: DiscussionParticipantManagement;
+    serverId: string;
+  }>,
+) {
+  const router = useRouter();
+  const { operation, retry } = props.management;
+  if (operation.kind === 'idle' || operation.kind === 'succeeded') return null;
+  if (operation.kind === 'approval_pending') {
+    return (
+      <ActionApprovalPendingNotice
+        presentation="line"
+        testID="discussion-participants-approval"
+        message={t('approvals.status.open')}
+        onOpenApproval={() => router.push(buildApprovalHref(operation.artifactId, props.serverId))}
+      />
+    );
+  }
+  if (operation.kind === 'working') {
+    return (
+      <EmptyState
+        testID="discussion-participants-operation"
+        layout="line"
+        lineDensity="menu"
+        lineLoading
+        title={t('session.collaboration.discussion.manage.working')}
+      />
+    );
+  }
+  return (
+    <EmptyState
+      testID="discussion-participants-operation"
+      layout="line"
+      lineDensity="menu"
+      title={
+        operation.kind === 'checking'
+          ? t('session.collaboration.discussion.manage.checking')
+          : t('session.collaboration.discussion.manage.failed')
+      }
+      primaryAction={{
+        label: t('session.collaboration.discussion.retry'),
+        onPress: () => retry(),
+        testID: 'discussion-participants-retry',
+      }}
     />
   );
 }
 
 const inviteStyles = StyleSheet.create((theme) => ({
   panel: { minWidth: 0, minHeight: 0 },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.space.s10,
+    paddingHorizontal: theme.space.s12,
+    paddingTop: theme.space.s4,
+    paddingBottom: theme.space.s8,
+  },
+  sheetHeaderText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
+  sheetTitle: { ...Typography.variant('heading', 'semiBold'), color: theme.colors.text.primary },
+  sheetSubtitle: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
   header: { paddingTop: theme.space.s8 },
 }));
 

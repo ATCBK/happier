@@ -14,6 +14,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
 import { t } from '@/text';
 
@@ -80,8 +81,7 @@ export function useExecutableParticipantSections(
     const sessions = candidates.candidates.flatMap((candidate) =>
       candidate.kind === 'session' &&
       matches(
-        candidate.label ??
-          t('session.collaboration.discussion.participants.session'),
+        [candidate.label ?? t('session.collaboration.discussion.participants.session'), candidate.contextLabel].filter(Boolean).join(' '),
       )
         ? [
             {
@@ -90,7 +90,8 @@ export function useExecutableParticipantSections(
               label:
                 candidate.label ??
                 t('session.collaboration.discussion.participants.session'),
-              subtitle: sessionSubtitle,
+              subtitle: [candidate.contextLabel ?? (candidate.lastActivityAt == null ? null : formatAsOfTime(candidate.lastActivityAt)),
+                sessionSubtitle].filter(Boolean).join(' · '),
               icon: sessionMark,
               disabled: busy,
               onSelect: () => onChoose(candidate.selection),

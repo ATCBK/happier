@@ -19,6 +19,10 @@ export type DiscussionInviteCandidate =
         kind: 'session'; key: string;
         selection: Extract<ExecutableParticipantSelectionV1, { kind: 'session' }>;
         label: string | null;
+        /** Agent and Machine/workspace identity from the shared Session display owner. */
+        contextLabel?: string | null;
+        /** The list owner's public recency remains available when private identity is locked. */
+        lastActivityAt?: number | null;
         /** Invitation is not a claim that this Session is currently able to answer. */
         availability: Readonly<{ kind: 'existing_session' }>;
     }>
@@ -34,7 +38,7 @@ export type DiscussionInviteCandidate =
 export type DiscussionInviteCandidatesInput = Readonly<{
     scope: ServerAccountScope;
     people: readonly SessionAccessCandidateRowModel[];
-    sessions: readonly Readonly<{ address: SessionAddress; label: string | null;
+    sessions: readonly Readonly<{ address: SessionAddress; label: string | null; contextLabel?: string | null; lastActivityAt?: number | null;
         access: Pick<SessionEffectiveAccessV1, 'capabilities'> | null }>[];
     modelOptions: readonly ExecutableParticipantPickerOption[];
     roster?: DiscussionParticipantsListResponseV1 | null;
@@ -52,7 +56,9 @@ export function buildDiscussionInviteCandidates(input: DiscussionInviteCandidate
     }
     for (const row of input.sessions) {
         candidates.push({ kind: 'session',
-            selection: { kind: 'session', session: row.address }, label: row.label, availability: { kind: 'existing_session' } });
+            selection: { kind: 'session', session: row.address }, label: row.label, contextLabel: row.contextLabel ?? null,
+            lastActivityAt: row.lastActivityAt ?? null,
+            availability: { kind: 'existing_session' } });
     }
     for (const option of input.modelOptions) {
         const selection = option.value;

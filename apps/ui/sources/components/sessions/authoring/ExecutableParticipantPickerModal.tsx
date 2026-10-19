@@ -99,7 +99,7 @@ function ExecutableParticipantPicker(
     <View testID="executable-participant-picker" style={styles.body}>
       <SelectionList
         rootStep={rootStep}
-        heightBehavior="content"
+        fillAvailableSpace
         autoFocusInputOnWeb
         selection={
           multiple
@@ -163,8 +163,14 @@ export function presentExecutableParticipantPicker(
       chrome: {
         kind: 'card',
         title: t('workflows.start.participantTitle'),
-        scrollHost: 'bounded',
-        dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.default },
+        // One fixed frame, like the other session pickers: the list inside is the scroll owner, so
+        // rows never clip and the card keeps its height while a search narrows the results.
+        scrollHost: 'body',
+        bodyScroll: 'none',
+        dimensions: {
+          width: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
+          maxHeightRatio: 0.7,
+        },
         phonePresentation: 'sheet',
       },
     });
@@ -173,6 +179,6 @@ export function presentExecutableParticipantPicker(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: theme.space.s12, flexShrink: 1 },
+  body: { gap: theme.space.s12, flex: 1, minHeight: 0 },
   footer: { flexDirection: 'row', justifyContent: 'flex-end' },
 }));

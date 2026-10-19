@@ -7,6 +7,7 @@ import { DiscussionRow, DiscussionRowSkeleton } from '@/components/discussions/D
 import { useDiscussionListRows } from '@/sync/ops/discussions/useDiscussionListRows';
 import { useOpenDiscussion } from './useOpenDiscussion';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
@@ -57,6 +58,7 @@ export type DiscussionsEmptyInvite = Readonly<{
 }>;
 
 const styles = StyleSheet.create((theme) => ({
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s2 },
     root: { flex: 1, minHeight: 0, minWidth: 0 },
     list: { flex: 1, minHeight: 0 },
     listContent: { flexGrow: 1, paddingBottom: theme.space.s8 },
@@ -86,7 +88,19 @@ const styles = StyleSheet.create((theme) => ({
 type DiscussionListItem = DiscussionActivityItem
     | Readonly<{ kind: 'archived_disclosure' }>
     | Readonly<{ kind: 'archived_discussion'; discussion: DiscussionOpenedSummaryV1 }>
-    | Readonly<{ kind: 'archived_loading' | 'archived_empty' | 'archived_error' | 'archived_load_more' }>;
+    | Readonly<{ kind: 'archived_loading' | 'archived_empty' | 'archived_error' | 'archived_load_more' | 'filter_empty' }>;
+
+/** What the Discussions column shows (lab T2-A filter): everything, or only what needs you, unread or archived. */
+type DiscussionColumnFilter = 'all' | 'needs_you' | 'unread' | 'archived';
+const COLUMN_FILTERS: readonly DiscussionColumnFilter[] = ['all', 'needs_you', 'unread', 'archived'];
+function columnFilterLabel(filter: DiscussionColumnFilter): string {
+    switch (filter) {
+        case 'all': return t('session.collaboration.discussion.home.filterAll');
+        case 'needs_you': return t('session.collaboration.discussion.home.needsYou');
+        case 'unread': return t('session.collaboration.discussion.home.filterUnread');
+        case 'archived': return t('session.collaboration.discussion.archived');
+    }
+}
 
 function discussionListItemKey(item: DiscussionListItem): string {
     switch (item.kind) {
@@ -95,7 +109,8 @@ function discussionListItemKey(item: DiscussionListItem): string {
         case 'archived_loading':
         case 'archived_empty':
         case 'archived_error':
-        case 'archived_load_more': return item.kind;
+        case 'archived_load_more':
+        case 'filter_empty': return item.kind;
         default: return discussionActivityItemKey(item);
     }
 }
@@ -220,6 +235,8 @@ function DiscussionsListReady(props: Readonly<{
         : repository.loadMoreList(state), [anchorSessionId, repository]);
     const { openDiscussion, openNewDiscussion, activeDiscussionKey } = useOpenDiscussion({ address: props.address, anchor: props.anchor, sourceSurface: props.anchor ? 'collaboration' : 'discussions' });
     const [archivedExpanded, setArchivedExpanded] = React.useState(false);
+    const [filter, setFilter] = React.useState<DiscussionColumnFilter>('all');
+    const [filterOpen, setFilterOpen] = React.useState(false);
     const active = React.useMemo(() => ({ ...collection.lists.active, items: selectDiscussionSummariesForAnchor(collection.lists.active.items, props.anchor) }), [props.anchor, collection.lists.active]);
     const archived = React.useMemo(() => ({ ...collection.lists.archived, items: selectDiscussionSummariesForAnchor(collection.lists.archived.items, props.anchor) }), [props.anchor, collection.lists.archived]);
     const viewerAccountId = props.scope.accountId;
@@ -235,10 +252,10 @@ function DiscussionsListReady(props: Readonly<{
     }, [anchorSessionId, refreshList, repository]);
 
     React.useEffect(() => {
-        if (archivedExpanded && repository.getListSnapshot(anchorSessionId).lists.archived.status === 'idle') {
+        if ((archivedExpanded || filter === 'archived') && repository.getListSnapshot(anchorSessionId).lists.archived.status === 'idle') {
             void refreshList('archived');
         }
-    }, [anchorSessionId, archivedExpanded, refreshList, repository]);
+    }, [anchorSessionId, archivedExpanded, filter, refreshList, repository]);
 
     const toggleArchived = React.useCallback(() => {
         setArchivedExpanded((current) => !current);
@@ -247,6 +264,21 @@ function DiscussionsListReady(props: Readonly<{
 
     const items = React.useMemo<readonly DiscussionListItem[]>(() => {
         const humanListPending = active.status === 'idle' || (active.status === 'loading' && active.items.length === 0);
+        if (column && filter === 'archived') {
+            if (archived.status === 'loading' && archived.items.length === 0) return [{ kind: 'archived_loading' }];
+            if (isUnreadable(archived.status) && archived.items.length === 0) return [{ kind: 'archived_error' }];
+            if (archived.items.length === 0) return [{ kind: 'archived_empty' }];
+            return [...archived.items.map((discussion) => ({ kind: 'archived_discussion' as const, discussion })),
+                ...(archived.nextCursor ? [{ kind: 'archived_load_more' as const }] : [])];
+        }
+        if (column && filter !== 'all') {
+            // Filtering narrows the loaded rows; reaching the end keeps loading pages until the list is whole.
+            const kept = active.items.filter((discussion) => filter === 'unread'
+                ? discussion.unreadCount > 0
+                : attention.get(discussion.id) != null || (discussion.unreadCount > 0 && discussion.unreadMentionCount > 0));
+            if (kept.length === 0 && !humanListPending) return [{ kind: 'filter_empty' }];
+            return [...buildDiscussionColumnItems({ discussions: kept, humanListPending, now: new Date(), attention })];
+        }
         const primary: DiscussionListItem[] = column
             ? [...buildDiscussionColumnItems({ discussions: active.items, humanListPending, now: new Date(), attention })]
             : [...buildDiscussionActivityItems({ discussions: active.items, humanListPending })];
@@ -268,7 +300,7 @@ function DiscussionsListReady(props: Readonly<{
             if (archived.nextCursor) archivedItems.push({ kind: 'archived_load_more' });
         }
         return [...primary, ...archivedItems];
-    }, [active.items, active.status, archived.items, archived.nextCursor, archived.status, archivedExpanded, attention, collection.archivedExistence, column]);
+    }, [active.items, active.status, archived.items, archived.nextCursor, archived.status, archivedExpanded, attention, collection.archivedExistence, column, filter]);
 
     const activeCount = active.nextCursor === null && active.items.length > 0 ? active.items.length : undefined;
     const renderItem = React.useCallback(({ item }: Readonly<{ item: DiscussionListItem }>) => {
@@ -386,6 +418,12 @@ function DiscussionsListReady(props: Readonly<{
                 return <DiscussionRow discussion={item.discussion} viewerAccountId={viewerAccountId} geometry={column ? 'column' : 'pane'} attentionReason={attention.get(item.discussion.id) ?? null} selected={activeDiscussionKey === item.discussion.id} onPress={() => openDiscussion(item.discussion.id, item.discussion.title)} />;
             case 'archived_loading':
                 return <View style={styles.center}><ActivitySpinner size="small" /></View>;
+            case 'filter_empty':
+                return (
+                    <View style={styles.stateLine}>
+                        <SurfaceStateCard size="line" kind="empty" title={t('session.collaboration.discussion.home.filterEmpty')} />
+                    </View>
+                );
             case 'archived_empty':
                 return (
                     <View style={styles.stateLine}>
@@ -456,15 +494,53 @@ function DiscussionsListReady(props: Readonly<{
                     text: `${homeLabel} · ${t('session.collaboration.discussion.home.audience')}`,
                     leading: <Icon name="house" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />,
                 }}
-                headerAction={<IconButton
-                    testID="session-discussion-new"
-                    iconName="plus"
-                    variant="plain"
-                    minimumInteractiveTargetSize={minimumInteractiveTargetSize}
-                    accessibilityLabel={t('session.collaboration.discussion.newDiscussion')}
-                    tooltip={t('session.collaboration.discussion.newDiscussion')}
-                    onPress={openNewDiscussion}
-                />}
+                headerAction={<View style={styles.headerActions}>
+                    {/* Narrow the column to what needs you, unread or archived (lab T2-A). */}
+                    <DropdownMenu
+                        testID="discussions-column-filter"
+                        open={filterOpen}
+                        onOpenChange={setFilterOpen}
+                        items={COLUMN_FILTERS.map((value) => ({ id: value, title: columnFilterLabel(value), checked: value === filter,
+                            testID: `discussions-column-filter:${value}` }))}
+                        selectedId={filter}
+                        placement="bottom"
+                        popoverAnchorAlign="end"
+                        variant="slim"
+                        matchTriggerWidth={false}
+                        maxWidthCap={240}
+                        onSelect={(id) => {
+                            setFilterOpen(false);
+                            const next = COLUMN_FILTERS.find((value) => value === id);
+                            if (next) setFilter(next);
+                        }}
+                        trigger={({ toggle }) => (
+                            <IconButton
+                                testID="discussions-column-filter.trigger"
+                                iconName="funnel-simple"
+                                variant="plain"
+                                selected={filter !== 'all'}
+                                expanded={filterOpen}
+                                hasPopup="menu"
+                                minimumInteractiveTargetSize={minimumInteractiveTargetSize}
+                                accessibilityLabel={filter === 'all'
+                                    ? t('session.collaboration.discussion.home.filter')
+                                    : `${t('session.collaboration.discussion.home.filter')}: ${columnFilterLabel(filter)}`}
+                                tooltip={t('session.collaboration.discussion.home.filter')}
+                                tooltipHidden={filterOpen}
+                                onPress={toggle}
+                            />
+                        )}
+                    />
+                    <IconButton
+                        testID="session-discussion-new"
+                        iconName="plus"
+                        variant="plain"
+                        minimumInteractiveTargetSize={minimumInteractiveTargetSize}
+                        accessibilityLabel={t('session.collaboration.discussion.newDiscussion')}
+                        tooltip={t('session.collaboration.discussion.newDiscussion')}
+                        onPress={openNewDiscussion}
+                    />
+                </View>}
                 scrollContent={whole ? <View style={collectionListStyles.stateLine}>{whole}</View> : (
                     <View style={styles.root} testID="session-discussion-activity-list">
                         {stale ? (

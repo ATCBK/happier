@@ -7,6 +7,12 @@ import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/us
 import { teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
 import type { DiscussionInviteCandidate } from './discussionInviteCandidates';
+import { useExecutableParticipantSections } from './useExecutableParticipantSections';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getSessionName, getSessionWorkContext } from '@/utils/sessions/sessionUtils';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -23,6 +29,48 @@ async function captureHome(serverId: string) {
 }
 
 describe('Discussion Invite source composition', () => {
+    it('carries the sidebar title and work context through the captured-Home participant presenter', async () => {
+        const home = boundary.serverIds[1]!;
+        const accountLifetime = await captureHome(home);
+        boundary.setRows(home, ['same-id']);
+        boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+        const choose = vi.fn();
+        const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
+            sessionSubtitle: 'Answers with its own setup', onChoose: choose }));
+        await vi.waitFor(() => expect(hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+            .some(option => option.id === 'session:same-id')).toBe(true));
+        const session = createSessionFixture({ id: 'same-id', serverId: home, encryptionMode: 'e2ee', metadataLayoutVersion: 1,
+            metadata: { path: '', host: '', agentPresentation: { agentId: 'codex' } },
+            ownerMetadataView: { name: 'Release review', host: 'review-box', path: '/release' } });
+        const row = buildSessionListRenderableFromSession(session);
+        await act(async () => { storage.setState(state => ({
+            sessions: { ...state.sessions, 'same-id': createSessionFixture({ id: 'same-id', serverId: boundary.serverIds[0],
+                metadata: { name: 'Wrong Home', host: 'other', path: '/wrong' } }) },
+            sessionListRowsByServerId: { ...state.sessionListRowsByServerId,
+                [home]: { ...state.sessionListRowsByServerId[home], 'same-id': row } },
+        })); });
+        const option = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+            .find(option => option.id === 'session:same-id')!;
+        expect(option.label).toBe(getSessionName(row, home));
+        expect(option.label).toBe('Release review');
+        expect(option.subtitle).toContain(getSessionWorkContext(row, home));
+        expect(option.subtitle).toContain('review-box');
+        option.onSelect?.();
+        expect(choose).toHaveBeenCalledWith({ kind: 'session', session: { serverId: home, sessionId: 'same-id' } });
+        // When no Agent/Machine identity is recorded, the list's public recency still distinguishes rows.
+        const activityAt = Date.parse('2026-10-19T03:42:00.000Z');
+        const unnamedRow = buildSessionListRenderableFromSession({ ...session,
+            metadata: { path: '', host: '' }, ownerMetadataView: { path: '', host: '' },
+            encryptedContentAvailability: 'ready', meaningfulActivityAt: activityAt });
+        expect(getSessionWorkContext(unnamedRow, home)).toBeNull();
+        await act(async () => { storage.setState(state => ({ sessionListRowsByServerId: {
+            ...state.sessionListRowsByServerId, [home]: { ...state.sessionListRowsByServerId[home], 'same-id': unnamedRow },
+        } })); });
+        const unnamedOption = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+            .find(option => option.id === 'session:same-id')!;
+        expect(unnamedOption.subtitle).toContain(formatAsOfTime(activityAt));
+        expect(unnamedOption.subtitle).not.toContain('review-box');
+    });
     it('uses captured-Home people paging and the real existing Session roster without borrowing the focused Home', async () => {
         const [homeA, homeB] = boundary.serverIds as [string, string, string];
         const accountLifetime = await captureHome(homeB);

@@ -96,7 +96,9 @@ export function shareSheetStepId(namespace: string, directoryKind?: ShareDirecto
 export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(input: ShareSheetStepInput<TRow>): SelectionListStep {
     const { model, actions, adapter, idPrefix } = input;
     const ns = adapter.namespace;
-    const context: ShareSheetSectionContext = { idPrefix, editable: model.editable, onExpand: input.onExpand,
+    // Collapsed, the Browse entries share one group instead of trailing three empty headings.
+    const suggestionsShown = input.directoryKind !== undefined || input.revealSuggestions !== false;
+    const context: ShareSheetSectionContext = { idPrefix, editable: model.editable, onExpand: input.onExpand, revealSuggestions: suggestionsShown,
         ...(input.directoryKind ? { directoryKind: input.directoryKind } : {}) };
     const adapterSections = input.directoryKind && !adapter.showLeadingOnDirectorySteps ? {} : adapter.sections?.(context) ?? {};
     const subtitle = (principal: SharePrincipalPresentation, row?: TRow, extra?: readonly (string | undefined)[]) =>
@@ -189,8 +191,6 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ...(publicLink.renderContent ? { expandedContentInset: 'row', expandedContent: () => publicLink.renderContent!(context) } : {}),
         }] });
     }
-    // Collapsed, the Browse entries share one group instead of trailing three empty headings.
-    const suggestionsShown = input.directoryKind !== undefined || input.revealSuggestions !== false;
     const collapsedControls: SelectionListOption[] = [];
     if (model.editable) for (const kind of SHARE_DIRECTORY_KINDS) {
         if (input.directoryKind && input.directoryKind !== kind) continue;
@@ -211,7 +211,7 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ...(source.status === 'loading' || source.status === 'refreshing' ? { subtitle: t('common.loading') } : {}),
             testID: `${idPrefix}${ns}-browse:${kind}`,
             openStep: buildShareSheetSelectionStep({ ...input, directoryKind: kind }) });
-        if (!suggestionsShown) collapsedControls.push(...controls);
+        if (!suggestionsShown) { if (!adapter.browseOnlyWhileAdding) collapsedControls.push(...controls); }
         else if (controls.length) sections.push({ kind: 'static', id: `directory-controls:${kind}`, options: controls });
     }
     if (collapsedControls.length) sections.push({ kind: 'static', id: 'directory-controls', options: collapsedControls });

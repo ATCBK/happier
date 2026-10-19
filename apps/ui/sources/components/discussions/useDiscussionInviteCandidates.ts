@@ -9,7 +9,9 @@ import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import { useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
-import { useSessionListRowsByServerId } from '@/sync/domains/state/storage';
+import { useSessionListRowsByServerId, useSessionDisplayNameProjections, type SessionDisplayNameSource } from '@/sync/domains/state/storage';
+import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
+import { resolveSessionListRenderableMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListRenderableSorting';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { buildDiscussionInviteCandidates } from './discussionInviteCandidates';
 
@@ -17,6 +19,7 @@ const NO_OPERATIONS: Readonly<Record<string, SessionAccessGrantOperationModel>> 
 const NO_TEAMS = Object.freeze([]);
 const ACCOUNT_ONLY = Object.freeze(['account'] as const);
 const NO_MODELS: readonly ExecutableParticipantPickerOption[] = Object.freeze([]);
+const sessionContextLabel = (source: SessionDisplayNameSource | null) => source ? getSessionWorkContext(source, source.serverId) : null;
 
 /**
  * Mount only while Invite/New participant selection is demanded. Home people search and optional
@@ -58,8 +61,13 @@ export function useDiscussionInviteCandidates(input: Readonly<{
     const addresses = React.useMemo(() => (source.byServerId[scope.serverId] ?? []).flatMap(item =>
         item.type === 'session' ? [{ serverId: scope.serverId, sessionId: item.sessionId }] : []), [scope.serverId, source.byServerId]);
     const labels = useSessionDisplayTitles(addresses);
-    const sessions = React.useMemo(() => addresses.map((address, index) => ({ address, label: labels[index] ?? null,
-        access: rows?.[address.sessionId]?.access ?? null })), [addresses, labels, rows]);
+    const contexts = useSessionDisplayNameProjections(addresses, sessionContextLabel);
+    const sessions = React.useMemo(() => addresses.map((address, index) => {
+        const row = rows?.[address.sessionId];
+        return { address, label: labels[index] ?? null, contextLabel: contexts[index] ?? null,
+            lastActivityAt: row ? resolveSessionListRenderableMeaningfulActivityAt(row) : null,
+            access: row?.access ?? null };
+    }), [addresses, contexts, labels, rows]);
     const modelOptions = input.modelOptions ?? NO_MODELS;
     const project = React.useCallback((people: readonly SessionAccessCandidateRowModel[]) => accountLifetime.isCurrent()
         ? buildDiscussionInviteCandidates({ scope, people, sessions, modelOptions, roster: input.roster }) : [],

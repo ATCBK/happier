@@ -942,6 +942,9 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     onChanged={refreshRoster}
                 /> : null}
                 <DiscussionParticipantsPopover
+                    scope={props.scope}
+                    accountLifetime={props.accountLifetime}
+                    onChanged={refreshRoster}
                     discussionId={props.target.discussionId}
                     discussionTitle={discussion.title ?? t('session.collaboration.discussion.encryptedTitle')}
                     serverId={props.target.address.serverId}

@@ -7,15 +7,15 @@ import type {
   DiscussionParticipantsListResponseV1,
 } from '@happier-dev/protocol/discussions/participants';
 
-import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
-import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { AvatarStack, type AvatarStackEntry } from '@/components/ui/avatar/AvatarStack';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
+import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
@@ -32,64 +32,37 @@ import { t } from '@/text';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
 import type { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
+import { ShareRowAction } from '@/components/sharing/ShareGrantRow';
+import type { SharePrincipalPresentation } from '@/components/sharing/shareSheetTypes';
+import type { SelectionListOption, SelectionListSectionDescriptor } from '@/components/ui/selectionList';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { readComposerSessionSuggestionDisplay } from '@/sync/domains/input/suggestionSession';
+import { useMachineListForServer } from '@/sync/domains/state/storage';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
+import {
+  DiscussionParticipantOperationLine,
+  DiscussionParticipantsSheet,
+  DiscussionSheetHeader,
+} from './DiscussionInviteSheet';
 
 const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(
   Platform.OS,
 );
 const AVATAR_PX = 28;
+const NO_MACHINES: readonly never[] = [];
 
 const styles = StyleSheet.create((theme) => ({
   body: { paddingBottom: theme.space.s4, minWidth: 0 },
   headerSlot: { paddingTop: theme.space.s8 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: theme.space.s10,
-    paddingHorizontal: theme.space.s12,
-    paddingTop: theme.space.s4,
-    paddingBottom: theme.space.s8,
-  },
-  headerText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
-  title: {
-    ...Typography.variant('heading', 'semiBold'),
-    color: theme.colors.text.primary,
-  },
-  subtitle: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.secondary,
-  },
-  groupRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.space.s8,
-    paddingRight: theme.space.s12,
-  },
   groupNote: {
     ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
     flexShrink: 1,
     textAlign: 'right',
   },
-  groupNoteBelow: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.tertiary,
-    paddingHorizontal: theme.space.s12,
-    paddingBottom: theme.space.s4,
-  },
-  note: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s6,
-    paddingHorizontal: theme.space.s12,
-    paddingTop: theme.space.s10,
-  },
-  noteText: {
-    ...Typography.variant('meta'),
-    color: theme.colors.text.secondary,
-    flex: 1,
-    minWidth: 0,
-  },
+  rowControls: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, flexShrink: 1, minWidth: 0 },
+  // The pill gives way before the agent's name does; its menu says each policy in full.
+  policyTrigger: { justifyContent: 'center', flexShrink: 1, minWidth: 0, maxWidth: 200 },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -238,88 +211,6 @@ type RosterParticipant =
   DiscussionParticipantsListResponseV1['participants'][number];
 
 /**
- * The heading of a Discussion's floating sheets (Participants, Invite): a quiet mark, the sheet's
- * title and one line saying which Discussion and who is in it.
- */
-export function DiscussionSheetHeader(
-  props: Readonly<{ icon: IconName; title: string; subtitle: string }>,
-) {
-  const { theme } = useUnistyles();
-  return (
-    <View style={styles.header}>
-      <Icon
-        name={props.icon}
-        size={ICON_SIZE.md}
-        color={theme.colors.text.secondary}
-      />
-      <View style={styles.headerText}>
-        <Text style={styles.title} numberOfLines={1}>
-          {props.title}
-        </Text>
-        <Text style={styles.subtitle} numberOfLines={1}>
-          {props.subtitle}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-/**
- * Where a participant change stands, one line under the roster: saving, waiting for an approval
- * (with its request), still checking, or failed with Try again. Done and idle say nothing.
- */
-export function DiscussionParticipantOperationLine(
-  props: Readonly<{
-    management: DiscussionParticipantManagement;
-    serverId: string;
-  }>,
-) {
-  const router = useRouter();
-  const { operation, retry } = props.management;
-  if (operation.kind === 'idle' || operation.kind === 'succeeded') return null;
-  if (operation.kind === 'approval_pending') {
-    return (
-      <ActionApprovalPendingNotice
-        presentation="line"
-        testID="discussion-participants-approval"
-        message={t('approvals.status.open')}
-        onOpenApproval={() =>
-          router.push(buildApprovalHref(operation.artifactId, props.serverId))
-        }
-      />
-    );
-  }
-  if (operation.kind === 'working') {
-    return (
-      <EmptyState
-        testID="discussion-participants-operation"
-        layout="line"
-        lineDensity="menu"
-        lineLoading
-        title={t('session.collaboration.discussion.manage.working')}
-      />
-    );
-  }
-  return (
-    <EmptyState
-      testID="discussion-participants-operation"
-      layout="line"
-      lineDensity="menu"
-      title={
-        operation.kind === 'checking'
-          ? t('session.collaboration.discussion.manage.checking')
-          : t('session.collaboration.discussion.manage.failed')
-      }
-      primaryAction={{
-        label: t('session.collaboration.discussion.retry'),
-        onPress: () => retry(),
-        testID: 'discussion-participants-retry',
-      }}
-    />
-  );
-}
-
-/**
  * Who is in a Discussion (lab T2-S): the people who can read it, then the agents and how each answers,
  * and what the audience means. Opened from the header's people control; the roster is the Discussion's
  * own grants, never the source Session's readers. A manager changes how an agent answers, opens its
@@ -328,11 +219,15 @@ export function DiscussionParticipantOperationLine(
 export const DiscussionParticipantsPopover = React.memo(
   function DiscussionParticipantsPopover(
     props: Readonly<{
+      scope: ServerAccountScope;
+      accountLifetime?: ServerAccountScopeLifetime;
       discussionId: string;
       discussionTitle: string;
       serverId: string;
       viewerAccountId: string;
       roster: DiscussionParticipantsListResponseV1 | null;
+      /** A roster write landed (an invitation from the search). */
+      onChanged?: () => void;
       /** Captured-Home display facts; composition uses the shared Account byline presentation owner. */
       accountActors: ReadonlyMap<string, TranscriptAccountActor>;
       /** Accounts present in the Discussion right now (live presence). */
@@ -387,8 +282,8 @@ export const DiscussionParticipantsPopover = React.memo(
             anchorRef={anchorRef}
             placement="bottom"
             gap={6}
-            maxHeightCap={640}
-            maxWidthCap={440}
+            maxHeightCap={720}
+            maxWidthCap={480}
             onRequestClose={close}
             backdrop={{ enabled: false }}
             portal={MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS}
@@ -469,10 +364,18 @@ export const DiscussionParticipantsPopover = React.memo(
                     />
                   ) : props.roster ? (
                     <DiscussionRoster
-                      {...props}
+                      scope={props.scope}
+                      {...(props.accountLifetime ? { accountLifetime: props.accountLifetime } : {})}
+                      discussionId={props.discussionId}
+                      discussionTitle={props.discussionTitle}
+                      serverId={props.serverId}
+                      viewerAccountId={props.viewerAccountId}
                       roster={props.roster}
+                      presentAccountIds={props.presentAccountIds}
                       management={management}
                       canManage={props.canManage === true && management !== null}
+                      {...(props.onChanged ? { onChanged: props.onChanged } : {})}
+                      onRequestClose={close}
                     />
                   ) : (
                     <EmptyState
@@ -582,91 +485,32 @@ function DiscussionOwnerLeaveResolution(
   );
 }
 
+/**
+ * The roster inside the one share sheet (lab T2-S): the search invites, "Who has access" lists the
+ * people with their live presence, then the agents that answer here, each with its answer policy as
+ * a pill, then the models started for this Discussion with where their session stands.
+ */
 function DiscussionRoster(
   props: Readonly<{
+    scope: ServerAccountScope;
+    accountLifetime?: ServerAccountScopeLifetime;
+    discussionId: string;
+    discussionTitle: string;
     serverId: string;
     viewerAccountId: string;
     roster: DiscussionParticipantsListResponseV1;
-    accountActors: ReadonlyMap<string, TranscriptAccountActor>;
     presentAccountIds: ReadonlySet<string>;
-    resolveAccountLabel: (accountId: string) => string | null;
     management: DiscussionParticipantManagement | null;
     canManage: boolean;
+    onChanged?: () => void;
+    onRequestClose: () => void;
   }>,
 ) {
   const { theme } = useUnistyles();
   const phone = useSurfaceStateSize() === 'phone';
-  const { roster } = props;
+  const { roster, management } = props;
   const facts = summarizeDiscussionRoster(roster);
-  const people = React.useMemo(() => {
-    const rows: Array<
-      Readonly<{
-        key: string;
-        accountId: string | null;
-        name: string;
-        state: string;
-      }>
-    > = [];
-    const describe = (accountId: string, owner: boolean, canPost: boolean) =>
-      accountId === props.viewerAccountId
-        ? owner
-          ? t('session.collaboration.discussion.participants.owner')
-          : t('session.collaboration.discussion.participants.you')
-        : props.presentAccountIds.has(accountId)
-          ? t('session.collaboration.discussion.participants.hereNow')
-          : owner
-            ? t('session.collaboration.discussion.participants.owner')
-            : canPost
-              ? t('session.collaboration.discussion.participants.canPost')
-              : t('session.collaboration.discussion.participants.canRead');
-    const nameOf = (accountId: string, display?: string | null) =>
-      accountId === props.viewerAccountId
-        ? t('session.collaboration.pane.you')
-        : (display ??
-          props.resolveAccountLabel(accountId) ??
-          t('session.collaboration.unnamed'));
-    rows.push({
-      key: `owner:${roster.ownerAccountId}`,
-      accountId: roster.ownerAccountId,
-      name: nameOf(roster.ownerAccountId),
-      state: describe(roster.ownerAccountId, true, true),
-    });
-    for (const grant of roster.grants) {
-      if (grant.principal.kind === 'account') {
-        if (grant.principal.accountId === roster.ownerAccountId) continue;
-        rows.push({
-          key: `account:${grant.principal.accountId}`,
-          accountId: grant.principal.accountId,
-          name: nameOf(
-            grant.principal.accountId,
-            grant.display.name ?? grant.display.username ?? null,
-          ),
-          state: describe(
-            grant.principal.accountId,
-            false,
-            grant.accessLevel !== 'view',
-          ),
-        });
-      } else {
-        rows.push({
-          key: `${grant.principal.kind}:${JSON.stringify(grant.principal)}`,
-          accountId: null,
-          name: grant.display.name ?? t('session.collaboration.unnamed'),
-          state: t('session.collaboration.discussion.participants.teamAccess'),
-        });
-      }
-    }
-    // The viewer reads last, as in the lab: the others are who you came to see.
-    return [
-      ...rows.filter((row) => row.accountId !== props.viewerAccountId),
-      ...rows.filter((row) => row.accountId === props.viewerAccountId),
-    ];
-  }, [
-    props.presentAccountIds,
-    props.resolveAccountLabel,
-    props.viewerAccountId,
-    roster,
-  ]);
+  const manager = props.canManage ? management : null;
   const agentSessions = React.useMemo(
     () =>
       roster.participants.map((participant) => ({
@@ -679,91 +523,152 @@ function DiscussionRoster(
     [props.serverId, roster.participants],
   );
   const agentTitles = useSessionDisplayTitles(agentSessions);
-  return (
-    <View>
-      <CollectionListGroupLabel
-        title={t('session.collaboration.discussion.participants.peopleGroup')}
-        count={facts.peopleCount}
-        presentation="menu"
-      />
-      {people.map((row) => (
-        <Item
-          key={row.key}
-          testID={`discussion-participant-${row.key}`}
-          mode="info"
-          density="compact"
-          showChevron={false}
-          showDivider={false}
-          leftElement={
-            row.accountId ? (
-              <Avatar id={row.accountId} size={AVATAR_PX} />
-            ) : (
-              <Icon
-                name="users"
-                size={ICON_SIZE.md}
-                color={theme.colors.text.secondary}
-              />
-            )
-          }
-          title={row.name}
-          subtitle={row.state}
-        />
-      ))}
-      {/* A phone has no room beside the label: the note moves beneath it rather than truncating. */}
-      <View style={phone ? undefined : styles.groupRow}>
-        <CollectionListGroupLabel
-          title={t('session.collaboration.discussion.participants.agentsGroup')}
-          presentation="menu"
-        />
-        <Text style={phone ? styles.groupNoteBelow : styles.groupNote} numberOfLines={phone ? undefined : 1}>
-          {t('session.collaboration.discussion.participants.agentsNote')}
-        </Text>
-      </View>
-      {roster.participants.length === 0 ? (
-        <EmptyState
-          layout="line"
-          lineDensity="menu"
-          title={t('session.collaboration.discussion.participants.noAgents')}
-        />
-      ) : (
-        roster.participants.map((participant, index) => {
-          const model = participant.participant.kind === 'model';
-          const sessionId = agentSessions[index]?.sessionId || null;
-          return (
-            <DiscussionAgentRow
-              key={
-                participant.participant.kind === 'model'
-                  ? `model:${participant.participant.participantSlotId}`
-                  : `session:${sessionId}`
-              }
-              testID={`discussion-agent-participant-${index}`}
-              participant={participant}
-              title={
-                agentTitles[index] ??
-                (model
-                  ? t('session.collaboration.discussion.participants.modelStarting')
-                  : t('session.collaboration.discussion.heldParticipant'))
-              }
-              sessionId={sessionId}
-              serverId={props.serverId}
-              management={props.canManage ? props.management : null}
-            />
+  const machines = useMachineListForServer(props.serverId) ?? NO_MACHINES;
+  const modelViews = management?.modelParticipants;
+  const principalTags = React.useCallback(
+    (principal: SharePrincipalPresentation) =>
+      principal.ref.kind === 'account' &&
+      principal.ref.accountId !== props.viewerAccountId &&
+      props.presentAccountIds.has(principal.ref.accountId)
+        ? [t('session.collaboration.discussion.participants.hereNow')]
+        : [],
+    [props.presentAccountIds, props.viewerAccountId],
+  );
+  const afterAccess = React.useMemo<readonly SelectionListSectionDescriptor[]>(() => {
+    const agents: SelectionListOption[] = [];
+    const started: SelectionListOption[] = [];
+    roster.participants.forEach((participant, index) => {
+      const testID = `discussion-agent-participant-${index}`;
+      const sessionId = agentSessions[index]?.sessionId || null;
+      const policy = answerPolicyLabel(participant.answerPolicy);
+      if (participant.participant.kind === 'model' && 'launch' in participant) {
+        const slotId = participant.participant.participantSlotId;
+        const view = modelViews?.find((row) => row.participantSlotId === slotId) ?? null;
+        const machineId = participant.launch.executionTarget.machineId;
+        // Said inside a sentence: a machine still loading reads "this machine", never "Loading…".
+        const shownMachine = view?.display.machineLabel;
+        const machine = shownMachine && shownMachine !== t('common.loading')
+          ? shownMachine
+          : getMachineSentenceName(machines.find((entry) => entry.id === machineId) ?? { id: machineId, absence: 'unlisted' });
+        // A model left at its agent's own settings is named by its agent (lab T2-S names the model).
+        const namedModel = view !== null && view.display.modelLabel !== t('agentInput.model.useCliSettings');
+        const name = namedModel ? view?.display.modelLabel : view?.display.agentLabel;
+        const birth = sessionId ? 'started' : view?.birth.kind ?? 'unknown';
+        const state =
+          birth === 'started'
+            ? t('session.collaboration.discussion.manage.modelSessionOn', { machine })
+            : birth === 'starting'
+              ? t('session.collaboration.discussion.manage.modelStartingOn', { machine })
+              : birth === 'failed'
+                ? t('session.collaboration.discussion.manage.modelFailedOn', { machine })
+                : t('session.collaboration.discussion.manage.modelNotStartedOn', { machine });
+        // Try again leads only after a failure seen here; an unstarted slot starts again from its menu.
+        const canRetry = manager !== null && !sessionId && birth === 'failed' && view?.canRetry === true;
+        const retry = () => {
+          void manager?.inviteExecutable(
+            { kind: 'model', launch: participant.launch },
+            { participantSlotId: slotId, answerPolicy: participant.answerPolicy },
           );
-        })
-      )}
-      <View style={styles.note}>
-        <Icon
-          name="lock"
-          size={ICON_SIZE.sm}
-          color={theme.colors.text.tertiary}
-        />
-        <Text style={styles.noteText}>
-          {facts.inherited
-            ? t('session.collaboration.discussion.participants.inheritedNote')
-            : t('session.collaboration.discussion.participants.privateNote')}
-        </Text>
-      </View>
-    </View>
+        };
+        started.push({
+          id: `model:${slotId}`,
+          testID,
+          label: name ?? agentTitles[index] ?? t('session.collaboration.discussion.participants.model'),
+          subtitle: [namedModel ? view?.display.agentLabel : t('session.collaboration.discussion.participants.model'), state, manager ? null : policy]
+            .filter(Boolean).join(' · '),
+          loading: birth === 'starting',
+          icon: () => <Icon name="sparkle" size={ICON_SIZE.md} color={theme.colors.text.secondary} />,
+          ...(manager
+            ? {
+                rightAccessoryOutsidePressable: true,
+                rightAccessory: () => (
+                  <View style={styles.rowControls}>
+                    {canRetry ? (
+                      <ShareRowAction
+                        testID={`${testID}:retry`}
+                        label={t('session.collaboration.discussion.retry')}
+                        onPress={retry}
+                        disabled={manager.operation.kind === 'working'}
+                      />
+                    ) : null}
+                    <DiscussionAgentMenu
+                      testID={testID}
+                      participant={participant}
+                      title={name ?? t('session.collaboration.discussion.participants.model')}
+                      sessionId={sessionId}
+                      serverId={props.serverId}
+                      management={manager}
+                    />
+                  </View>
+                ),
+              }
+            : {}),
+        });
+        return;
+      }
+      const display = sessionId ? readComposerSessionSuggestionDisplay({ serverId: props.serverId, sessionId }) : null;
+      const title = agentTitles[index] ?? display?.title ?? t('session.collaboration.discussion.heldParticipant');
+      agents.push({
+        id: `session:${sessionId ?? index}`,
+        testID,
+        label: title,
+        subtitle: [t('session.collaboration.discussion.participants.session'), display?.agentLabel, display?.workspaceLabel, manager ? null : policy]
+          .filter(Boolean).join(' · '),
+        icon: () => <Icon name="robot" size={ICON_SIZE.md} color={theme.colors.text.secondary} />,
+        ...(manager
+          ? {
+              rightAccessoryOutsidePressable: true,
+              rightAccessory: () => (
+                <DiscussionAgentMenu
+                  testID={testID}
+                  participant={participant}
+                  title={title}
+                  sessionId={sessionId}
+                  serverId={props.serverId}
+                  management={manager}
+                />
+              ),
+            }
+          : {}),
+      });
+    });
+    const sections: SelectionListSectionDescriptor[] = [];
+    if (agents.length > 0 || started.length === 0)
+      sections.push({
+        kind: 'static',
+        id: 'agents',
+        title: t('session.collaboration.discussion.participants.agentsGroup'),
+        ...(agents.length ? { count: agents.length } : {}),
+        // A phone has no room beside the heading; the note is a desktop aside.
+        ...(phone ? {} : { rightAccessory: () => <Text style={styles.groupNote} numberOfLines={1}>{t('session.collaboration.discussion.participants.agentsNote')}</Text> }),
+        options: agents,
+        ...(agents.length === 0 ? { resultHint: t('session.collaboration.discussion.participants.noAgents') } : {}),
+      });
+    if (started.length > 0)
+      sections.push({
+        kind: 'static',
+        id: 'started',
+        title: t('session.collaboration.discussion.manage.startedGroup'),
+        options: started,
+      });
+    return sections;
+  }, [agentSessions, agentTitles, machines, manager, modelViews, phone, props.serverId, roster.participants, theme.colors.text.secondary]);
+  return (
+    <DiscussionParticipantsSheet
+      scope={props.scope}
+      {...(props.accountLifetime ? { accountLifetime: props.accountLifetime } : {})}
+      discussionId={props.discussionId}
+      discussionTitle={props.discussionTitle}
+      roster={roster}
+      management={manager}
+      afterAccess={afterAccess}
+      principalTags={principalTags}
+      notes={[facts.inherited
+        ? t('session.collaboration.discussion.participants.inheritedNote')
+        : t('session.collaboration.discussion.participants.privateNote')]}
+      {...(props.onChanged ? { onChanged: props.onChanged } : {})}
+      onRequestClose={props.onRequestClose}
+    />
   );
 }
 
@@ -772,18 +677,18 @@ const OPEN_ID = 'open';
 const RESTART_ID = 'restart';
 
 /**
- * One agent here: what it is and how it answers. For a manager the row opens one menu: the four
- * answer policies (each saying what it does), then Open its session and Remove. Removing a model
- * started for this Discussion archives that session; removing an existing session only detaches it.
+ * One agent's answer policy as a pill (lab T2-S). It opens one menu: the four answer policies (each
+ * saying what it does), then Open its session, Start it again and Remove. Removing a model started
+ * for this Discussion archives that session; removing an existing session only detaches it.
  */
-function DiscussionAgentRow(
+function DiscussionAgentMenu(
   props: Readonly<{
     testID: string;
     participant: RosterParticipant;
     title: string;
     sessionId: string | null;
     serverId: string;
-    management: DiscussionParticipantManagement | null;
+    management: DiscussionParticipantManagement;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -791,64 +696,38 @@ function DiscussionAgentRow(
   const [open, setOpen] = React.useState(false);
   const { participant, management } = props;
   const model = participant.participant.kind === 'model';
-  const kind = model
-    ? t('session.collaboration.discussion.participants.model')
-    : t('session.collaboration.discussion.participants.session');
-  const subtitle = `${kind} · ${answerPolicyLabel(participant.answerPolicy)}`;
-  const mark = (
-    <Icon
-      name={model ? 'sparkle' : 'robot'}
-      size={ICON_SIZE.md}
-      color={theme.colors.text.secondary}
-    />
-  );
-  const busy = management?.operation.kind === 'working';
+  const policy = answerPolicyLabel(participant.answerPolicy);
+  const busy = management.operation.kind === 'working';
   const items = React.useMemo(() => {
-    const policies = ANSWER_POLICIES.map((policy) => ({
-      id: policy,
-      testID: `${props.testID}:policy:${policy}`,
-      title: answerPolicyLabel(policy),
-      subtitle: answerPolicyDescription(policy),
-      checked: policy === participant.answerPolicy,
+    const policies = ANSWER_POLICIES.map((value) => ({
+      id: value,
+      testID: `${props.testID}:policy:${value}`,
+      title: answerPolicyLabel(value),
+      subtitle: answerPolicyDescription(value),
+      checked: value === participant.answerPolicy,
       category: t('session.collaboration.discussion.manage.answersGroup'),
     }));
     // A model whose session never started keeps its slot; starting again reuses that slot.
-    const unstarted = participant.participant.kind === 'model' && !props.sessionId;
+    const unstarted = model && !props.sessionId;
     const operations = [
       ...(unstarted
-        ? [
-            {
-              id: RESTART_ID,
-              testID: `${props.testID}:restart`,
-              title: t('session.collaboration.discussion.manage.startAgain'),
-              subtitle: t('session.collaboration.discussion.manage.startAgainBody'),
-              icon: (
-                <Icon
-                  name="arrow-clockwise"
-                  size={ICON_SIZE.sm}
-                  color={theme.colors.text.secondary}
-                />
-              ),
-              category: t('session.collaboration.discussion.manage.operationsGroup'),
-            },
-          ]
+        ? [{
+            id: RESTART_ID,
+            testID: `${props.testID}:restart`,
+            title: t('session.collaboration.discussion.manage.startAgain'),
+            subtitle: t('session.collaboration.discussion.manage.startAgainBody'),
+            icon: <Icon name="arrow-clockwise" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
+            category: t('session.collaboration.discussion.manage.operationsGroup'),
+          }]
         : []),
       ...(props.sessionId
-        ? [
-            {
-              id: OPEN_ID,
-              testID: `${props.testID}:open`,
-              title: t('session.collaboration.discussion.manage.openSession'),
-              icon: (
-                <Icon
-                  name="arrow-square-out"
-                  size={ICON_SIZE.sm}
-                  color={theme.colors.text.secondary}
-                />
-              ),
-              category: t('session.collaboration.discussion.manage.operationsGroup'),
-            },
-          ]
+        ? [{
+            id: OPEN_ID,
+            testID: `${props.testID}:open`,
+            title: t('session.collaboration.discussion.manage.openSession'),
+            icon: <Icon name="arrow-square-out" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
+            category: t('session.collaboration.discussion.manage.operationsGroup'),
+          }]
         : []),
       {
         id: REMOVE_ID,
@@ -859,31 +738,15 @@ function DiscussionAgentRow(
           : t('session.collaboration.discussion.manage.removeSession'),
         ...(unstarted
           ? {}
-          : {
-              subtitle: model
-                ? t('session.collaboration.discussion.manage.removeModelBody')
-                : t('session.collaboration.discussion.manage.removeSessionBody'),
-            }),
+          : { subtitle: model
+              ? t('session.collaboration.discussion.manage.removeModelBody')
+              : t('session.collaboration.discussion.manage.removeSessionBody') }),
         destructive: true,
         category: t('session.collaboration.discussion.manage.operationsGroup'),
       },
     ];
     return [...policies, ...operations];
-  }, [model, participant.answerPolicy, participant.participant.kind, props.sessionId, props.testID, theme.colors.text.secondary]);
-  if (!management) {
-    return (
-      <Item
-        testID={props.testID}
-        mode="info"
-        density="compact"
-        showChevron={false}
-        showDivider={false}
-        leftElement={mark}
-        title={props.title}
-        subtitle={subtitle}
-      />
-    );
-  }
+  }, [model, participant.answerPolicy, props.sessionId, props.testID, theme.colors.text.secondary]);
   return (
     <DropdownMenu
       testID={`${props.testID}:menu`}
@@ -893,12 +756,13 @@ function DiscussionAgentRow(
       selectedId={participant.answerPolicy}
       separateCategories
       placement="bottom"
+      popoverAnchorAlign="end"
       gap={4}
       maxWidthCap={360}
       matchTriggerWidth={false}
       popoverPhonePresentation="sheet"
       popoverAccessibilityLabel={props.title}
-      popoverSheetSubtitle={subtitle}
+      popoverSheetSubtitle={policy}
       onSelect={(id) => {
         setOpen(false);
         if (id === OPEN_ID) {
@@ -918,31 +782,31 @@ function DiscussionAgentRow(
             );
           return;
         }
-        const policy = ANSWER_POLICIES.find((value) => value === id);
-        if (policy && policy !== participant.answerPolicy)
-          void management.setPolicy(participant.participant, policy);
+        const next = ANSWER_POLICIES.find((value) => value === id);
+        if (next && next !== participant.answerPolicy) void management.setPolicy(participant.participant, next);
       }}
       trigger={({ toggle }) => (
-        <Item
+        <HappierPressable
           testID={props.testID}
-          density="compact"
-          showChevron={false}
-          showDivider={false}
-          disabled={busy}
-          leftElement={mark}
-          title={props.title}
-          subtitle={subtitle}
-          accessibilityHint={t('session.collaboration.discussion.manage.rowHint')}
-          accessibilityExpanded={open}
           onPress={toggle}
-          rightElement={
-            <Icon
-              name="caret-down"
-              size={ICON_SIZE.xs}
-              color={theme.colors.text.tertiary}
-            />
-          }
-        />
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={`${props.title}: ${policy}`}
+          accessibilityHint={t('session.collaboration.discussion.manage.rowHint')}
+          expanded={open}
+          hasPopup="menu"
+          style={styles.policyTrigger}
+        >
+          {renderDropdownItemTriggerRightElement({
+            detail: policy,
+            open,
+            detailColor: theme.colors.text.secondary,
+            chevronColor: theme.colors.text.secondary,
+            field: resolveFieldBoxColors(theme),
+            fieldSpan: 'intrinsic',
+            detailDensity: 'compact',
+          })}
+        </HappierPressable>
       )}
     />
   );
