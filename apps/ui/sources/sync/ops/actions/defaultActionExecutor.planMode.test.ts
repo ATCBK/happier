@@ -1013,6 +1013,48 @@ describe('default Action executor mode and catalog contracts', () => {
     daemonAnswer = () => ({ v: 1, ok: false, error: 'conflict' });
     expect(await invoke({ kind: 'pass' })).toMatchObject({ ok: true, result: { v: 1, ok: false, error: 'conflict' } });
   });
+  it.each((['generic', 'question'] as const).flatMap(entry => [
+    { entry, response: 'answer' as const }, { entry, response: 'reject' as const },
+  ]))('requires person approval before a $entry Voice question $response reaches the sole answer RPC', async ({ entry, response }) => {
+    installSession('question-worker', { machineId: 'machine-a', flavor: 'claude' });
+    storage.setState({ sessions: { ...storage.getState().sessions, 'question-worker': createSessionFixture({
+      ...storage.getState().sessions['question-worker'], agentState: { requests: {
+        'question-1': { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [{ question: 'Which revision?' }] } },
+      } },
+    }) } });
+    const { ApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+    const tools = (await import('@/voice/tools/handlers')).createVoiceToolHandlers({ resolveSessionId: () => 'question-worker' });
+    const input = { sessionId: 'question-worker', requestId: 'question-1', ...(response === 'answer'
+      ? { answers: [{ question: 'Which revision?', values: ['42'] }] } : { decision: 'reject' as const }) };
+    daemonAnswer = () => ({ ok: true });
+    const result = JSON.parse(await (entry === 'generic'
+      ? tools.action_execute!({ actionId: 'session.user_action.answer', input }, { serverId, effectId: `voice-answer-${entry}` })
+      : tools.answerUserActionRequest!(input, { serverId, effectId: `voice-answer-${entry}` })));
+    expect(result, JSON.stringify(result)).toMatchObject(entry === 'generic'
+      ? { ok: true, result: { kind: 'approval_request_created' } }
+      : { ok: true, kind: 'approval_request_created' });
+    expect(outgoing).toEqual([]);
+    const approval = homes.artifacts(serverId).list().find(row => {
+      const body = homes.artifacts(serverId).readPlainBody(row.id);
+      return body !== null && ApprovalRequestSchema.safeParse(JSON.parse(body)).success;
+    });
+    if (!approval) throw new Error('Voice answer did not create an approval');
+    expect(ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.id) ?? 'null')))
+      .toMatchObject({ status: 'open', actionId: 'session.user_action.answer', actionArgs: input,
+        executionOriginV1: { authority: 'account_automation', surface: 'voice', accountId: 'alice' } });
+    // Voice cannot decide its own proposal or gain authority from a settings waiver.
+    expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId: approval.id, decision: 'approve' },
+      { surface: 'voice', serverId })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(outgoing).toEqual([]);
+    const approved = await createDefaultActionExecutor().execute('approval.request.decide',
+      { artifactId: approval.id, decision: 'approve' }, context());
+    expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(outgoing).toEqual([{ method: `question-worker:${RPC_METHODS.SESSION_USER_ACTION_ANSWER}`,
+      params: { id: 'question-1', approved: response === 'answer',
+        ...(response === 'answer' ? { answers: { 'Which revision?': ['42'] } } : {}), answeringClientCategory: 'web' } }]);
+    expect(ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.id) ?? 'null')))
+      .toMatchObject({ status: 'executed', decision: { kind: 'approve', authority: 'present_user' } });
+  });
   it('keeps permission feedback and title state unchanged while explicit UI approval is pending', async () => {
     const read = installSession('approval-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     storage.getState().updateSessionPermissionMode('approval-session', 'read-only');

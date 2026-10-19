@@ -1922,6 +1922,13 @@ describe('voice tool handlers', () => {
     }
   });
 
+  describe('question answers and person approval', () => {
+  beforeEach(() => {
+    // A prompt waiver must never turn spoken content into person authority.
+    // The default approval/replay path is composed in defaultActionExecutor.planMode.test.ts.
+    state.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { 'session.user_action.answer': ['voice'] } };
+  });
+
   it('does not answer a covered user-action request', async () => {
     const questionPayload = { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] };
     state.sessions.s1.agentState.requests = {
@@ -1975,7 +1982,7 @@ describe('voice tool handlers', () => {
     expect(daemonRpc).not.toHaveBeenCalled();
   });
 
-  it('does not turn an approval-required setting into present-user authority for a spoken answer', async () => {
+  it('requests person approval without executing an approval-required spoken answer', async () => {
     state.settings.actionsSettingsV1 = {
       v: 1,
       actions: {
@@ -1997,13 +2004,13 @@ describe('voice tool handlers', () => {
     ));
 
     expect(result, JSON.stringify(result)).toMatchObject({
-      ok: false,
-      errorCode: 'present_user_required',
+      ok: true,
+      kind: 'approval_request_created',
       actionId: 'session.user_action.answer',
     });
     expect(pendingEnqueue).not.toHaveBeenCalled();
     expect(daemonRpc).not.toHaveBeenCalled();
-    expect(artifactCreateRequests).not.toHaveBeenCalled();
+    expect(artifactCreateRequests).toHaveBeenCalled();
   });
 
   it('does not grant present-user authority to a spoken reject decision for a permission-labelled question', async () => {
@@ -2152,6 +2159,8 @@ describe('voice tool handlers', () => {
     expect(sessionDetailReads).toContain('s1');
     expect(JSON.parse(result)).toMatchObject({ ok: false, errorCode: 'present_user_required', sessionId: 's1', requestId: 'req_question_after_force_refresh' });
     expect(daemonRpc).not.toHaveBeenCalled();
+  });
+
   });
 
   it('routes sendSessionMessage to an explicit sessionId through canonical Voice admission', async () => {
