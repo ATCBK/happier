@@ -1,23 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
-import { DiscussionFollowUpdateNotificationV1Schema, RunFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { RunFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 
 
 import { createInboxItemRoute, isFocusedInboxWorkItem, readInboxItemFocus, resolveInboxItemPageRoute } from './inboxItemFocus';
 
 describe('Home-qualified Inbox focus', () => {
-    it('opens a Discussion Follow notice at its exact committed message on the original Home', () => {
-        const notice = DiscussionFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: {
-            original: { kind: 'discussion', discussion: { serverId: 'saved-home', discussionId: 'thread/7' }, messageId: 'message/3' },
-            event: { kind: 'person_wrote' },
-        } });
-        const header = AccountNoticeArtifactHeaderV1Schema.parse({ v: 1, kind: 'account_notice.v1',
-            source: { kind: 'host', topic: 'follow_update' }, type: 'update', resolved: false,
-            title: 'Discussion update', status: 'open', notice,
-        });
-        expect(resolveInboxItemPageRoute({ kind: 'notice', serverId: 'different-home', id: 'notice-1' }, { notice: header }))
-            .toBe('/discussions/thread%2F7?serverId=saved-home&messageId=message%2F3');
-    });
     it.each([
         { original: { source: { kind: 'execution_run', sessionId: 'source-session', runId: 'run/7' }, terminalEventId: 'terminal-1' },
             route: '/session/source-session/runs/run%2F7?serverId=home-b' },

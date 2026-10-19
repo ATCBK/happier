@@ -55,12 +55,7 @@ export function resolveInboxNoticePageRoute(id: string, notice?: InboxItemDetail
     if (notice?.notice?.topic === 'connected_service_usage') return '/settings/usage';
     if (notice?.notice?.topic === 'resource_limit') return machineVitalsNoticeHref(notice.notice, serverId);
     if (notice?.notice?.topic === 'follow_update') {
-        const original = notice.notice.follow.original;
-        if ('kind' in original) return buildDiscussionRouteHref({ target: {
-            kind: 'discussion', address: { serverId: original.discussion.serverId },
-            discussionId: original.discussion.discussionId, messageId: original.messageId,
-        } });
-        const source = original.source;
+        const source = notice.notice.follow.original.source;
         const route = source.kind === 'execution_run'
             ? buildSessionExecutionRunRouteHref({ sessionId: source.sessionId, runId: source.runId, serverId })
             : createWorkflowRunRoute(source.runId, serverId);
