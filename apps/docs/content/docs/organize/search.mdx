@@ -160,8 +160,10 @@ Agent being installed does not guarantee readable history. Older daemons show
 an update hint. Partial coverage or an unsupported source is not a claim that
 no conversation matched. A standard scan creates no persistent content index.
 
-The standalone **Browse Existing Sessions** conversation view currently runs
-its own explicit source-local scan; it does not yet select indexed results.
+In this development channel, the **Browse Existing Sessions** conversation view
+also reads eligible indexes as you type. Choose **Search** to include an explicit
+scan of sources whose indexes are not ready, when Search on demand is enabled.
+Results retain the same partial-coverage and **Search more conversations** states.
 
 Choose **Open in Happier** to link and open a result, with Find on the query
 at the mapped message when available. **Show in External sessions** keeps the
@@ -189,9 +191,9 @@ If someone answers while you are opening the request, the settled state lets
 you continue to the next one. Unread messages and failed delivery belong to
 the Inbox, rather than this pending-request order.
 
-Some Action approvals in sessions hosted by a shared editor only surface
-after you open the session; Next cannot discover those approvals from a cold
-session summary yet.
+In this development channel, Next also discovers Action approvals in sessions
+hosted by a shared editor before you open them. They appear only for viewers
+who have permission to approve them.
 
 ## Let an Agent use Search and Find
 
