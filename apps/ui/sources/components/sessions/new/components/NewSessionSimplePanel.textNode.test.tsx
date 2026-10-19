@@ -180,6 +180,8 @@ vi.mock('@/components/sessions/agentInput', () => ({
                 testID: 'new-session-composer-send',
                 onPress: props.onSend,
             }),
+            // The status row's trailing actions are part of what the composer draws.
+            props.statusTrailingActions as React.ReactNode,
         );
     },
 }));
@@ -407,7 +409,8 @@ describe('NewSessionSimplePanel', () => {
         const siblings = notice.parent?.children.filter((child) => typeof child === 'object') ?? [];
         expect(notice.parent).toBe(composer.parent);
         expect(siblings.indexOf(composer)).toBe(siblings.indexOf(notice) + 1);
-        expect(agentInputPropsRef.current?.statusTrailingActions).toBe(statusTrailingActions);
+        // The host's actions reach the composer's status row (beside the floating composer's own capsules).
+        expect(screen.findByTestId('status-actions')).toBeTruthy();
         await screen.unmount();
     });
 

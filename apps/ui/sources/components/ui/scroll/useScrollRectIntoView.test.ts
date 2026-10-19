@@ -54,6 +54,24 @@ describe('resolveScrollOffsetForVisibleRect', () => {
         })).toBe(2408);
     });
 
+    it('rests a nearest scroll on a whole row when the rows start at known offsets', () => {
+        // Rows 66 tall, 8 apart, in a 244 viewport with a 32 margin: nearest alone would leave the row
+        // above cut mid-text (offset 232); the list instead moves on to the next row start that still
+        // keeps the target clear of the margin.
+        const rowStarts = [8, 82, 156, 230, 304, 378, 452];
+        const listMetrics = { offsetY: 0, viewportHeight: 244, contentHeight: 752 };
+        expect(resolveScrollOffsetForVisibleRect({ rect: { y: 378, height: 66 }, metrics: listMetrics, padding: 32, alignment: 'nearest' })).toBe(232);
+        expect(resolveScrollOffsetForVisibleRect({ rect: { y: 378, height: 66 }, metrics: listMetrics, padding: 32, alignment: 'nearest', rowStarts })).toBe(304);
+        expect(resolveScrollOffsetForVisibleRect({ rect: { y: 452, height: 66 }, metrics: listMetrics, padding: 32, alignment: 'nearest', rowStarts })).toBe(378);
+    });
+
+    it('keeps the end of the list flush and a row that is already visible where it is', () => {
+        const rowStarts = [8, 82, 156, 230, 304, 378, 452];
+        const listMetrics = { offsetY: 0, viewportHeight: 244, contentHeight: 520 };
+        expect(resolveScrollOffsetForVisibleRect({ rect: { y: 452, height: 66 }, metrics: listMetrics, padding: 32, alignment: 'nearest', rowStarts })).toBe(276);
+        expect(resolveScrollOffsetForVisibleRect({ rect: { y: 82, height: 66 }, metrics: listMetrics, padding: 32, alignment: 'nearest', rowStarts })).toBeNull();
+    });
+
     it('reports no scroll when the target is already fully visible', () => {
         expect(resolveScrollOffsetForVisibleRect({
             rect: { y: 100, height: 100 },

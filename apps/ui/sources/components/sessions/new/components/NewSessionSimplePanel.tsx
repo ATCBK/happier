@@ -180,18 +180,19 @@ export type NewSessionSimplePanelProps = Readonly<{
 }>;
 
 /**
- * The capsule row above the floating composer card.
+ * The capsules at the end of the floating composer's status row: leave, and retract the keyboard
+ * while it is up. They sit with the status line and the draft actions so the composer, its status
+ * and its way out read as one cluster, not as a control floating above it.
  *
  * Its own component because the keyboard subscription has to run INSIDE the scaffold's layout
  * provider; read from the panel body it would resolve to a null context and the dismiss control
  * would never appear.
  */
-const NewSessionFloatingComposerCapsuleRow = React.memo(
-    function NewSessionFloatingComposerCapsuleRow(
+const NewSessionFloatingComposerCapsules = React.memo(
+    function NewSessionFloatingComposerCapsules(
         props: Readonly<{
             onClose: () => void;
             onDismissKeyboard: () => void;
-            sidePadding: number;
         }>,
     ): React.ReactElement {
         const layout = useComposerKeyboardLayoutContext();
@@ -208,20 +209,7 @@ const NewSessionFloatingComposerCapsuleRow = React.memo(
         }, [layout]);
 
         return (
-            <View
-                style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'flex-end',
-                    gap: NEW_SESSION_CLOSE_BUTTON_GAP,
-                    paddingHorizontal: props.sidePadding,
-                    paddingBottom: NEW_SESSION_CLOSE_BUTTON_GAP,
-                    // The scrim is a later sibling and its ramp reaches up over this row, so without
-                    // an explicit stacking order the capsules paint underneath it and disappear.
-                    zIndex: 1,
-                    elevation: 1,
-                }}
-            >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: NEW_SESSION_CLOSE_BUTTON_GAP }}>
                 {isKeyboardOpen ? (
                     <NewSessionComposerKeyboardDismissButton onPress={props.onDismissKeyboard} />
                 ) : null}
@@ -386,12 +374,28 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
 
     const composerReservedHeight = props.newSessionBottomPadding
         + (shouldBottomAnchor
-            // The floating composer is bottom-anchored but still runs under the status bar and draws
-            // its own capsule row above the card. Neither is subtracted anywhere else, so without
-            // reserving them a long draft grows up through the status bar and carries the only
-            // visible dismiss control off screen with it.
+            // The floating composer is bottom-anchored but still runs under the status bar and keeps
+            // a capsule-high status row (leave, keyboard) above its input. Neither is subtracted
+            // anywhere else, so without reserving them a long draft grows up through the status bar
+            // and carries the only visible dismiss control off screen with it.
             ? (isFloatingComposer ? props.safeAreaTop + NEW_SESSION_CLOSE_ROW_HEIGHT : 0)
             : props.safeAreaTop + props.newSessionTopPadding);
+    // A centred desktop composer closes from its frosted ground and Escape; the capsules belong to the
+    // bottom-anchored (touch) composition and ride the status row the card already draws.
+    const cardPanelProps = isFloatingComposer && shouldBottomAnchor
+        ? {
+            ...props,
+            statusTrailingActions: (
+                <>
+                    {props.statusTrailingActions}
+                    <NewSessionFloatingComposerCapsules
+                        onClose={handleDismissScreen}
+                        onDismissKeyboard={handleDismissKeyboard}
+                    />
+                </>
+            ),
+        }
+        : props;
     const showPendingLaunchPreview = props.launchPendingPreviewVisible === true
         && props.pendingLaunchAttempt != null;
     const shellStyle = [
@@ -471,15 +475,6 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                             isFloatingComposer ? composerEnterStyle : null,
                         ]}
                     >
-                        {/* A centred desktop composer closes from its frosted ground and Escape; the
-                            capsule row belongs to the bottom-anchored (touch) composition. */}
-                        {isFloatingComposer && shouldBottomAnchor ? (
-                            <NewSessionFloatingComposerCapsuleRow
-                                sidePadding={props.newSessionSidePadding}
-                                onClose={handleDismissScreen}
-                                onDismissKeyboard={handleDismissKeyboard}
-                            />
-                        ) : null}
                         {/*
                           * The scrim is anchored to the CARD, not to the slot. Anchoring it to the
                           * slot measured its ramp from the top of the close capsule, which put the
@@ -494,7 +489,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                             />
                         ) : null}
                         <NewSessionComposerCard
-                            panelProps={props}
+                            panelProps={cardPanelProps}
                             layout="screen"
                             reservedHeight={composerReservedHeight}
                         />

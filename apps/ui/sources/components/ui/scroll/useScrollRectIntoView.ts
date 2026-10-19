@@ -44,6 +44,11 @@ export function resolveScrollOffsetForVisibleRect(params: Readonly<{
     metrics: ScrollMetrics;
     padding?: number;
     alignment?: 'nearest' | 'center';
+    /**
+     * Offsets at which a row of the list starts. A `nearest` scroll then rests on one of them, so the
+     * first row in view is whole rather than cut mid-text; the end of the content stays flush.
+     */
+    rowStarts?: ReadonlyArray<number>;
 }>): number | null {
     const padding = Math.max(0, params.padding ?? 8);
     const alignment = params.alignment ?? 'nearest';
@@ -69,13 +74,22 @@ export function resolveScrollOffsetForVisibleRect(params: Readonly<{
             Math.min(maxOffset, rectTop + ((rectBottom - rectTop) / 2) - (viewportHeight / 2)),
         );
 
+    const rowStarts = params.rowStarts ?? [];
     if (rectTop < visibleTop) {
-        return alignment === 'center' ? centeredOffset : topAlignedOffset;
+        if (alignment === 'center') return centeredOffset;
+        // Scrolling up: the row above the target starts the view, the target stays whole beneath it.
+        const wholeRowOffset = Math.max(0, ...rowStarts.filter((start) => start <= topAlignedOffset && start >= 0));
+        return topAlignedOffset > 0 && rowStarts.length > 0 ? wholeRowOffset : topAlignedOffset;
     }
     if (rectBottom > visibleBottom) {
-        return alignment === 'center'
-            ? centeredOffset
-            : Math.max(0, Math.min(maxOffset, rectBottom - viewportHeight + padding));
+        if (alignment === 'center') return centeredOffset;
+        const nearestOffset = Math.max(0, Math.min(maxOffset, rectBottom - viewportHeight + padding));
+        if (nearestOffset >= maxOffset) return nearestOffset;
+        // Scrolling down: move on to the next row start that still leaves the target clear of the margin.
+        const wholeRowStart = rowStarts
+            .filter((start) => start >= nearestOffset && start <= rectTop - padding && start <= maxOffset)
+            .sort((a, b) => a - b)[0];
+        return wholeRowStart ?? nearestOffset;
     }
     return null;
 }
@@ -94,6 +108,8 @@ export function useScrollRectIntoViewRegistry(params: Readonly<{
     alignment?: 'nearest' | 'center';
     animated?: boolean;
     once?: boolean;
+    /** Rest on a whole row (`resolveScrollOffsetForVisibleRect`'s `rowStarts`, taken from the registered items). */
+    snapToRowStarts?: boolean;
 }>): ScrollRectIntoViewRegistry {
     const scrollRef = React.useRef<ScrollView | null>(null);
     const itemLayoutsRef = React.useRef(new Map<string, ScrollRect>());
@@ -122,6 +138,7 @@ export function useScrollRectIntoViewRegistry(params: Readonly<{
             metrics: metricsRef.current,
             padding: params.padding,
             alignment: params.alignment,
+            ...(params.snapToRowStarts ? { rowStarts: Array.from(itemLayoutsRef.current.values(), (item) => item.y) } : {}),
         });
         if (nextOffset === null) return;
         const scrollView = scrollRef.current;
@@ -133,7 +150,7 @@ export function useScrollRectIntoViewRegistry(params: Readonly<{
         if (params.once === true) {
             settledActiveKeyRef.current = activeKey;
         }
-    }, [params.alignment, params.animated, params.once, params.padding]);
+    }, [params.alignment, params.animated, params.once, params.padding, params.snapToRowStarts]);
 
     const registerItemLayout = React.useCallback((key: string): ScrollItemLayoutHandler => {
         return (event) => {
