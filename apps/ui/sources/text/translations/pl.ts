@@ -1723,6 +1723,7 @@ const plValues = {
     failureFileOther: 'Nie udało się zakończyć operacji na plikach',
     technicalDetails: "Szczegóły techniczne",
     confidentialSupplied: "Podano i ukryto",
+    linkRemoved: "To łącze już nie istnieje",
     unsafeDetailsTitle: "Tych szczegółów nie można bezpiecznie wyświetlić",
     unsafeDetailsBody: "Happier nie mógł wyświetlić tego żądania dokładnie tak, jak zostało wysłane, więc nie można go zatwierdzić. Odrzuć je lub poproś o ponowne wysłanie.",
     approveUnavailableHint: "Zatwierdzenie jest niedostępne, dopóki tych szczegółów nie można bezpiecznie wyświetlić.",

@@ -1621,6 +1621,7 @@ const enApprovals = {
   failureFileOther: "Couldn't finish the file operation",
   technicalDetails: 'Technical details',
   confidentialSupplied: 'Supplied and kept hidden',
+  linkRemoved: 'This link no longer exists',
   unsafeDetailsTitle: 'These details cannot be shown safely',
   unsafeDetailsBody:
     'Happier could not display this request exactly as it was sent, so it cannot be approved. Reject it, or ask for it to be sent again.',

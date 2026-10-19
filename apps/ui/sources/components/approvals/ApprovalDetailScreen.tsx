@@ -463,6 +463,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
 
   const requestTitle = useApprovalRequestTitle({
     storedTitle: parsed?.request.summary,
+    ...(parsed?.kind === 'built_in' ? { previewSummary: readApprovalPreviewSummary(parsed.request.preview, parsed.request) } : {}),
     actionId: parsed && parsed.kind !== 'target' ? String(parsed.request.actionId) : null,
     qualifiedActionId: parsed?.kind === 'target' ? parsed.request.qualifiedActionId : null,
     ...(parsed?.kind === 'built_in' ? { actionArgs: parsed.request.actionArgs, preview: parsed.request.preview } : {}),

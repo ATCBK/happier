@@ -132,6 +132,26 @@ it('reads a workspace-sync request by its machine and the two folders it links, 
     expect(screen.getTextContent()).toContain('relationship_9f2c');
 });
 
+it('says a workspace-sync link no longer exists instead of showing its id, keeping the id in Technical details', async () => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://workspace-sync-gone.test' });
+    profiles.push(home.id);
+    const scope = { serverId: home.id, accountId: 'sync-account' };
+    await act(async () => {
+        storage.setState({ settingsScope: scope, profileScope: scope,
+            projectAccountRows: { scope, status: 'ready', coverage: 'complete', organizations: [], revisionsByPhysicalKey: {},
+                workspaceRefs: [], relationships: [] } });
+    });
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" serverId={home.id}
+        presentation={describeApprovalActionFields({ actionId: 'workspace.sync.relationship.flush',
+            actionArgs: { controllerMachineId: 'machine-studio', relationshipId: 'relationship_gone42' } })} />);
+    const text = screen.getTextContent();
+    expect(text).toContain(t('approvals.linkRemoved'));
+    expect(text).not.toContain('relationship_gone42');
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain('relationship_gone42');
+});
+
 it('shows a declared confidential input as supplied under its declared title, beside the exact public JSON, in both anatomies', async () => {
     const presentation: ApprovalActionFieldsPresentation = { rows: [
         { kind: 'value', path: 'input.token', title: 'Release token', value: '', valueFormat: 'confidential' },

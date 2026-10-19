@@ -1879,6 +1879,7 @@ const jaValues = {
     failureFileOther: 'ファイル操作を完了できませんでした',
     technicalDetails: "技術的な詳細",
     confidentialSupplied: "指定済み（非表示）",
+    linkRemoved: "このリンクはもう存在しません",
     unsafeDetailsTitle: "この内容は安全に表示できません",
     unsafeDetailsBody: "送信されたとおりに表示できなかったため、このリクエストは承認できません。拒否するか、再送を依頼してください。",
     approveUnavailableHint: "この内容を安全に表示できない間は承認できません。",

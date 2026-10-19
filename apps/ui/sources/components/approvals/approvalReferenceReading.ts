@@ -125,7 +125,10 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
         // The link reads as the two folders it joins, each with its machine: "repo · Studio → repo-copy · Laptop".
         return link ? { text: formatWorkspaceSyncRelationshipTitle({
             alphaLabel: describeApprovalWorkspaceEndpoint(link.alpha), betaLabel: describeApprovalWorkspaceEndpoint(link.beta),
-            mode: link.relationship.mode }), named: true } : { text: literal, named: false };
+            mode: link.relationship.mode }), named: true }
+            // A link the complete census no longer lists is gone; until it is read, the id is not copy either.
+            : projects?.status === 'ready' && projects.coverage === 'complete' ? { text: t('approvals.linkRemoved'), named: true }
+            : { text: t('common.loading'), named: true, resolving: true };
     }
     if (reference?.kind === 'workspace') {
         const endpoint = sources.workspace;

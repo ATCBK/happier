@@ -20,6 +20,8 @@ import { useApprovalReferenceReading } from './approvalReferenceReading';
 export function resolveApprovalRequestTitle(
   input: Readonly<{
     storedTitle: string | null | undefined;
+    /** The request's own generated summary: a first line that only restates it is not a title the person chose. */
+    previewSummary?: string | null;
     actionId?: string | null;
     qualifiedActionId?: string | null;
     actionArgs?: unknown;
@@ -52,7 +54,8 @@ export function resolveApprovalRequestTitle(
   let isSpecCopy = false;
   try {
     const spec = getActionSpec(actionId as ActionId);
-    isSpecCopy = firstLine === spec.title || firstLine === buildApprovalPreviewSummary(spec, input.actionArgs);
+    isSpecCopy = firstLine === spec.title || firstLine === buildApprovalPreviewSummary(spec, input.actionArgs)
+      || (firstLine !== '' && firstLine === input.previewSummary?.trim());
   } catch { /* Authored/plugin requests retain their copy. */ }
   const subjectName = actionId === 'plugins.install'
     ? readPluginInstallApprovalPendingReview(input.preview)?.review.displayName.trim() || null

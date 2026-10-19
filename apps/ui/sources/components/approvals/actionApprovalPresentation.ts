@@ -28,6 +28,8 @@ export function readActionApprovalRoleId(input: ActionApprovalPresentationInput)
 
 /** The existing Protocol reference projection owns subject identity, never a caller's id guess. */
 export function readActionApprovalSubject(input: ActionApprovalPresentationInput): ApprovalActionReference | undefined {
+    // A workspace-sync request is titled by its Action; its controller machine and linked folders read in Details.
+    if (input.actionId.startsWith('workspace.sync.')) return undefined;
     return describeApprovalActionFields({ ...input, actionArgs: input.actionArgs }).rows.flatMap(row => row.kind === 'value'
         ? [...(row.reference ? [row.reference] : []), ...(row.entries?.flatMap(entry => entry.reference ? [entry.reference] : []) ?? [])]
         : [])[0];

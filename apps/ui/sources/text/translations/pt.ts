@@ -1935,6 +1935,7 @@ const ptValues = {
     failureFileOther: 'Não foi possível concluir a operação de ficheiros',
     technicalDetails: "Detalhes técnicos",
     confidentialSupplied: "Fornecido e mantido oculto",
+    linkRemoved: "Esta ligação já não existe",
     unsafeDetailsTitle: "Estes detalhes não podem ser mostrados com segurança",
     unsafeDetailsBody: "O Happier não conseguiu mostrar este pedido exatamente como foi enviado, por isso não pode ser aprovado. Recuse-o ou peça que seja enviado novamente.",
     approveUnavailableHint: "A aprovação fica indisponível enquanto estes detalhes não puderem ser mostrados com segurança.",

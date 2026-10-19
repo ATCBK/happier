@@ -90,6 +90,12 @@ describe('the shared Action approval presentation owner', () => {
             .toBe(t('commandPalette.pets.chooseSubtitle'));
     });
 
+    it('leaves a workspace-sync request titled by its Action; its machine and folders read in Details', async () => {
+        const actionArgs = { controllerMachineId: 'machine-1', relationshipId: 'relationship_1' };
+        expect(readActionApprovalSubject({ actionId: 'workspace.sync.relationship.flush', actionArgs })).toBeUndefined();
+        expect(presentActionApproval({ actionId: 'workspace.sync.relationship.flush', actionArgs }).title).toBe('Sync workspace now');
+    });
+
     it('keeps authored plugin titles and summaries, even when they match first-party English copy', async () => {
         await preloadTranslations('fr');
         setPreferredLanguageFromSettings('fr');

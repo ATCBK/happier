@@ -1896,6 +1896,7 @@ const esValues = {
     failureFileOther: 'No se pudo completar la operación con archivos',
     technicalDetails: "Detalles técnicos",
     confidentialSupplied: "Proporcionado y mantenido oculto",
+    linkRemoved: "Este vínculo ya no existe",
     unsafeDetailsTitle: "Estos detalles no se pueden mostrar de forma segura",
     unsafeDetailsBody: "Happier no pudo mostrar esta solicitud exactamente como se envió, por lo que no se puede aprobar. Recházala o pide que se envíe de nuevo.",
     approveUnavailableHint: "La aprobación no está disponible mientras estos detalles no se puedan mostrar de forma segura.",
