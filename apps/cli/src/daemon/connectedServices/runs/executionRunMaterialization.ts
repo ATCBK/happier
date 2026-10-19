@@ -209,7 +209,7 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
     }>>;
     purposeBindingOwner: Readonly<{
         activatePurposeBindings(input: Parameters<ConnectedAccountPurposeBindingOwner['activatePurposeBindings']>[0],
-            context: Readonly<{ parentSessionId: string | null }>): RunPurposeBindingActivation | Promise<RunPurposeBindingActivation>;
+            context: Readonly<{ parentSessionId: string | null; signal?: AbortSignal }>): RunPurposeBindingActivation | Promise<RunPurposeBindingActivation>;
     }>;
     requestAuthRegistry: Pick<
         ConnectedAccountRequestAuthSubjectRegistry,
@@ -507,6 +507,7 @@ export function createExecutionRunConnectedServicesBridge(
         cleanupOnFailure: (() => void | Promise<void>) | null;
         cleanupOnExit: (() => void | Promise<void>) | null;
         releaseMaterializationAccountContext?: (() => Promise<void>) | null;
+        signal?: AbortSignal;
         contributionLease?: Awaited<
             ReturnType<
                 CreateExecutionRunConnectedServicesBridgeDeps[
@@ -574,7 +575,7 @@ export function createExecutionRunConnectedServicesBridge(
                         ...(purposeSnapshot.directMaterialOrigins
                             ? { directMaterialOrigins: purposeSnapshot.directMaterialOrigins }
                             : {}),
-                    }, { parentSessionId: input.runner.parentSessionId });
+                    }, { parentSessionId: input.runner.parentSessionId, ...(input.signal ? { signal: input.signal } : {}) });
                 purposeBindingLease = activation.lease;
                 releasePurposeBindingAccountContext = activation.releaseAccountContext ?? null;
             }
@@ -1040,7 +1041,7 @@ export function createExecutionRunConnectedServicesBridge(
                                 ...(snapshot.directMaterialOrigins
                                     ? { directMaterialOrigins: snapshot.directMaterialOrigins }
                                     : {}),
-                            }, { parentSessionId: runner.parentSessionId });
+                            }, { parentSessionId: runner.parentSessionId, ...(signal ? { signal } : {}) });
                             return {
                                 subjectId: activation.lease.subjectId,
                                 async dispose() {
@@ -1150,6 +1151,7 @@ export function createExecutionRunConnectedServicesBridge(
                         cleanupOnFailure,
                         cleanupOnExit,
                         releaseMaterializationAccountContext: resolved.releaseAccountContext ?? null,
+                        signal,
                         contributionLease,
                     });
                     if (recoveryEntry?.releaseMaterializationAccountContext) {
@@ -1189,7 +1191,7 @@ export function createExecutionRunConnectedServicesBridge(
                         ...(entry.purposeBindingLease ? { exactPurposeBindingSubjectId: entry.purposeBindingLease.subjectId } : {}),
                         sessionId: runner.parentSessionId,
                         sessionDirectory: input.cwd,
-                    }, signal);
+                    }, ...(signal ? [signal] as const : []));
                     signal?.throwIfAborted();
                     if (!entry.isCurrent()) throw new Error('execution_run_runner_retired');
 
