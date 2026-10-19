@@ -4,6 +4,7 @@ import { ConnectedServiceBindingsV1Schema, PersistedConnectedServiceBindingsV1Sc
 import type { PluginSettingFieldV2 } from '../../plugins/contributions/settings.js';
 import type { VoiceProviderSettings, VoiceProviderSettingsPresentation } from '../../plugins/contributions/voiceProviders.js';
 import type { VoiceProviderSettingsJsonValueV1 } from '../realtime/providerSettings.js';
+import type { VoiceProviderSettingsProjection } from './providerRegistry.js';
 
 export type ExternalVoiceProviderSettingsDescriptor = Readonly<{
   schemaVersion: 1 | 2;
@@ -50,7 +51,9 @@ export function projectExternalVoiceProviderSettings(
   envelope: Readonly<{ schemaVersion: number; config: unknown }> | null,
   settings: ExternalVoiceProviderSettingsDescriptor,
   modeId = 'default',
-) {
+  projectConfig?: (config: VoiceProviderSettingsJsonValueV1,
+    projection: VoiceProviderSettingsProjection & Readonly<{ status: 'ready' | 'missing_required_setting' }>) => VoiceProviderSettingsProjection,
+): VoiceProviderSettingsProjection {
   if (!envelope) return { status: 'needs_migration' as const, modeId: null };
   if (envelope.schemaVersion !== settings.schemaVersion) {
     return { status: 'unsupported_version' as const, modeId: null };
@@ -59,10 +62,9 @@ export function projectExternalVoiceProviderSettings(
   if (config === null) {
     return { status: 'invalid' as const, modeId: null };
   }
-  if (!hasRequiredConnectedServicesBinding(config, settings)) {
-    return { status: 'missing_required_setting' as const, modeId };
-  }
-  return { status: 'ready' as const, modeId };
+  const projection = { status: hasRequiredConnectedServicesBinding(config, settings)
+    ? 'ready' as const : 'missing_required_setting' as const, modeId };
+  return projectConfig ? projectConfig(config, projection) : projection;
 }
 
 function cloneJson(value: unknown): VoiceProviderSettingsJsonValueV1 {

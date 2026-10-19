@@ -13,6 +13,27 @@ import { VoiceLocalConversationSchema } from './localConversation.js';
 describe('shared Voice settings owner', () => {
   const owner = createVoiceSettingsOwner({ bundledContributions: [] });
 
+  it('defaults both neural speech roles to June Zipformer while retaining explicit pack choices', () => {
+    const june = 'sherpa-onnx-streaming-zipformer-en-2023-06-26';
+    const fresh = owner.voiceSettingsParse({});
+    expect(owner.readLocalConversationVoiceSettings(fresh).stt.localNeural.assetId).toBe(june);
+    expect(fresh.dictation.stt.localNeural.assetId).toBe(june);
+    for (const assetId of ['sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
+      'sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8', null]) {
+      const stored = owner.voiceSettingsParse({
+        providers: { local_conversation: { schemaVersion: 1, config: {
+          stt: { provider: 'local_neural', localNeural: { assetId } },
+        } } },
+        dictation: { sttBinding: 'same_as_local', stt: {
+          provider: 'local_neural', localNeural: { assetId },
+        } },
+      });
+      expect(owner.readLocalConversationVoiceSettings(stored).stt.localNeural.assetId).toBe(assetId);
+      expect(stored.dictation.stt.localNeural.assetId).toBe(assetId);
+      expect(stored.dictation.sttBinding).toBe('same_as_local');
+    }
+  });
+
   it('validates declaration-selected config patches strictly after reading stored preferences', () => {
     const descriptor = createExternalVoiceProviderSettingsDescriptor(VoiceProviderSettingsSchema.parse({
       schemaVersion: 1, fields: [{ id: 'voice', title: 'Voice', schema: { type: 'string', maxLength: 32 }, default: 'default', presentation: { control: 'text' } }],

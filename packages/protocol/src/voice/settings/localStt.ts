@@ -1,5 +1,6 @@
 import { z } from 'zod/mini';
 import { LocalNeuralExecutionSchema } from '../../daemon/voiceInference.js';
+import { getDefaultModelPackId } from '../modelPacks/catalog.js';
 
 import {
   migrateLegacyGoogleSttSettings,
@@ -12,7 +13,7 @@ export type VoiceLocalSttProvider = z.infer<typeof VoiceLocalSttProviderSchema>;
 
 const VoiceLocalSttLocalNeuralSchema = z.prefault(z
   .object({
-    assetId: z._default(z.nullable(z.string()), 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17'),
+    assetId: z._default(z.nullable(z.string()), getDefaultModelPackId('stt_sherpa')),
     language: z._default(z.nullable(z.string()), null),
     execution: z._default(LocalNeuralExecutionSchema, 'auto'),
   }), {});
@@ -29,11 +30,11 @@ function migrateLegacyLocalStt(input: Record<string, unknown>): VoiceLocalSttV3 
 
   return {
     provider: useDeviceStt ? 'device' : 'happier.voice.openai-compat/stt',
-    localNeural: { assetId: 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17', language: null, execution: 'auto' },
+    localNeural: { assetId: getDefaultModelPackId('stt_sherpa'), language: null, execution: 'auto' },
   };
 }
 
-export const VoiceLocalSttSchema = z.pipe(z.transform((raw) => {
+export const VoiceLocalSttSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => {
   if (!raw || typeof raw !== 'object') return raw;
   const obj = migrateLegacyGoogleSttSettings(raw as Record<string, unknown>);
 
