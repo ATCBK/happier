@@ -2789,6 +2789,12 @@ without editing the Artifact. Both use the existing Discussion create/post/reply
 operations and content codec. Plaintext passage routing contains only Doc ref and
 revision; quote and proposal text belong to the content envelope.
 
+These three Actions are also available through the existing Voice Action binding.
+Voice reads use the same source admission, and comments and proposals retain
+their exact passage and edit fields through the normal approval preview and
+execution path. Accept and Decline remain unavailable to Voice and require the
+authenticated person.
+
 `POST /v1/artifacts/doc-edit-proposals/accept` accepts the qualified proposal
 reference, full expected Doc revision and optional host-prepared body encoded
 with the existing Artifact codec. `POST /v1/artifacts/doc-edit-proposals/decline`
