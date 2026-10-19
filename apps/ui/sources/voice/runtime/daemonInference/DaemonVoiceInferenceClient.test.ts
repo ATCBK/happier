@@ -12,6 +12,11 @@ const { storage } = await import("@/sync/domains/state/storage");
 const { getActiveServerSnapshot } = await import("@/sync/domains/server/serverRuntime");
 const { resetVoiceDiagnosticsSessionPolicyForTests } = await import("@/voice/diagnostics/capturePolicy");
 import { VoiceSpeechDiagnosticsSettingsV1Schema } from '@happier-dev/protocol/voice/diagnostics';
+import {
+  DaemonVoiceInferenceSttStreamChunkRequestSchema,
+  DaemonVoiceInferenceSttStreamFinishRequestSchema,
+  DaemonVoiceInferenceSttStreamStartRequestSchema,
+} from '@happier-dev/protocol/daemon/voiceInference';
 const { createTransferRecipientKeyPair } = await import("@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption");
 
 const machineRpcWithServerScopeMock = vi.fn();
@@ -832,6 +837,50 @@ describe('DaemonVoiceInferenceClient', () => {
         finalSeq: 0,
       }),
     }));
+  });
+
+  it('preserves queued capture PCM through JSON compatibility while RPC acknowledgements are held', async () => {
+    const acknowledgement = createDeferred<void>();
+    const receivedPcm: Uint8Array[] = [];
+    machineRpcWithServerScopeMock.mockImplementation(async (input: Readonly<{ method: string; payload: unknown }>) => {
+      if (input.method === 'daemon.voiceInference.stt.stream.start') {
+        const request = DaemonVoiceInferenceSttStreamStartRequestSchema.parse(input.payload);
+        return { ok: true, requestId: request.requestId, streamId: 'compat-stream', generation: 0, ackSeq: -1,
+          format: request.format };
+      }
+      if (input.method === 'daemon.voiceInference.stt.stream.chunk') {
+        const request = DaemonVoiceInferenceSttStreamChunkRequestSchema.parse(input.payload);
+        receivedPcm.push(new Uint8Array(Buffer.from(request.pcm16Base64, 'base64')));
+        await acknowledgement.promise;
+        return { ok: true, streamId: request.streamId, generation: request.generation, ackSeq: request.seq, events: [] };
+      }
+      if (input.method === 'daemon.voiceInference.stt.stream.finish') {
+        const request = DaemonVoiceInferenceSttStreamFinishRequestSchema.parse(input.payload);
+        return { ok: true, streamId: request.streamId, generation: request.generation, ackSeq: request.finalSeq,
+          finalText: 'complete capture', language: 'en', modelPackId: 'stt-pack-1', events: [] };
+      }
+      if (input.method === 'daemon.voiceInference.stt.stream.cancel') {
+        return { ok: true, streamId: 'compat-stream', generation: 0 };
+      }
+      throw new Error(`unexpected method: ${input.method}`);
+    });
+    const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
+    const sender = await new DaemonVoiceInferenceClient({ createRequestId: () => 'compat-held-ack' })
+      .createStreamingSttSender({ packId: 'stt-pack-1', language: 'en' });
+    expect(sender.transportKind).toBe('json_rpc_compat');
+    try {
+      await sender.start();
+      const capture = Array.from({ length: 120 }, (_, frame) => new Uint8Array(640).fill(frame));
+      const outcomes = Promise.allSettled(capture.map(pcm => sender.pushChunk(pcm)));
+      acknowledgement.resolve();
+      expect((await outcomes).filter(outcome => outcome.status === 'rejected')).toEqual([]);
+      await expect(sender.finish()).resolves.toMatchObject({ ok: true, finalText: 'complete capture' });
+      expect(Buffer.concat(receivedPcm)).toEqual(Buffer.concat(capture));
+      expect(receivedPcm.some(pcm => pcm.byteLength > 640)).toBe(true);
+    } finally {
+      acknowledgement.resolve();
+      await sender.cancel();
+    }
   });
 
   it('reports JSON compatibility selection and can forbid it without sending stream RPCs', async () => {

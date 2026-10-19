@@ -1,4 +1,5 @@
 import {
+    DAEMON_VOICE_INFERENCE_STT_STREAM_CHUNK_BASE64_MAX_LENGTH,
     DaemonVoiceInferenceModelsInstallResponseSchema,
     DaemonVoiceInferenceModelLicenseAcceptResponseSchema,
     DaemonVoiceInferenceModelsListResponseSchema,
@@ -777,6 +778,9 @@ export class DaemonVoiceInferenceClient {
             : undefined;
         const callChunk = createOrderedMachineRpcCaller(this.deps.machineRpcWithServerScope);
         const compatibilityTransport: DaemonSpeechStreamTransport = {
+            // Reuse packet coalescing under the compatibility consumer's existing
+            // Base64 schema bound; capture callbacks need not each occupy a packet.
+            maxPcm16ChunkBytes: Math.floor(DAEMON_VOICE_INFERENCE_STT_STREAM_CHUNK_BASE64_MAX_LENGTH / 4) * 3,
             start: async (payload) =>
                 parseSchema(
                     DaemonVoiceInferenceSttStreamStartResponseSchema,

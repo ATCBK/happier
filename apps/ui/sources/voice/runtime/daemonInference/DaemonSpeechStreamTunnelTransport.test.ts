@@ -107,6 +107,9 @@ describe('negotiated PCM packet budget', () => {
     expect(budget % 2).toBe(0);
     expect(frameLength(budget)).toBeLessThanOrEqual(1024);
     expect(frameLength(budget + 2)).toBeGreaterThan(1024);
+    for (const pcmBytes of [0, 2, 4, budget]) {
+      expect(transport.measureInFlightChunkBytes?.(pcmBytes)).toBe(frameLength(pcmBytes));
+    }
   });
 });
 
@@ -204,11 +207,8 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
     }));
   });
 
-  it('installs relay encryption before PCM and exposes only authenticated ciphertext on the carrier', async () => {
-    const transportMod = await loadModule('./DaemonSpeechStreamTunnelTransport');
-    const createTransport = transportMod.createDaemonSpeechStreamTunnelTransport;
-    expect(createTransport).toBeTypeOf('function');
-    if (typeof createTransport !== 'function') return;
+  it.each(['healthy', 'send', 'open', 'parse'] as const)('installs real relay envelopes and retains private %s failures', async failureStage => {
+    const { createDaemonSpeechStreamTunnelTransport: createTransport } = await import('./DaemonSpeechStreamTunnelTransport');
     const binding = {
       v: 1 as const,
       suite: 'aes-256-gcm' as const,
@@ -232,12 +232,14 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
     let installedKey: Uint8Array | null = null;
     let sendError: unknown = null;
     const sentPayloads: Uint8Array[] = [];
+    const networkFailure = new Error('network boundary refused data');
     const onRelayAuthenticatedEvidence = vi.fn();
     const sendSubstreamDataFrame = vi.fn(async (substreamId: string, outbound: any) => {
       try {
       sentPayloads.push(new Uint8Array(outbound.payloadBytes));
       const encrypted = decodePeerApplicationEncryptedFrameV1(outbound.payloadBytes);
       if (!encrypted) throw new Error('expected encrypted frame');
+      if (encrypted.kind === 'data' && failureStage === 'send') throw networkFailure;
       if (encrypted.kind === 'install') {
         installedKey = openEncryptedDataKeyEnvelopeV1({
           envelope: decodeProtocolBase64(encrypted.encryptedDataKeyEnvelopeBase64Url!, 'base64url'),
@@ -266,7 +268,9 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
         ciphertext: decodeProtocolBase64(encrypted.ciphertextBase64Url, 'base64url'),
       });
       if (encrypted.kind === 'data') expect([...requestPlaintext]).toEqual([0, 0, 1, 0]);
-      const responsePlaintext = encrypted.kind === 'install'
+      const responsePlaintext = encrypted.kind === 'data' && failureStage === 'parse'
+        ? new TextEncoder().encode(JSON.stringify({ ok: true, unexpected: true }))
+        : encrypted.kind === 'install'
         ? new TextEncoder().encode(PEER_APPLICATION_ENCRYPTION_INSTALL_CONFIRMATION_V1)
         : encrypted.kind === 'finish'
           ? new TextEncoder().encode(JSON.stringify({
@@ -296,6 +300,7 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
         }),
         plaintext: responsePlaintext,
       });
+      if (encrypted.kind === 'data' && failureStage === 'open') responseCiphertext[0] ^= 1;
       handler?.({
         substreamId,
         frame: {
@@ -329,7 +334,7 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
           peerApplicationEncryption: { v: 1 as const, suite: 'aes-256-gcm' as const, recipientPublicKeyBase64Url },
         })),
         finish: vi.fn(),
-        cancel: vi.fn(async () => ({ ok: true as const })),
+        cancel: vi.fn(async () => ({ ok: true as const, streamId: 'stream-1', generation: 3 })),
       },
     });
     const startResult = await transport.start({
@@ -344,9 +349,22 @@ describe('DaemonSpeechStreamTunnelTransport', () => {
     expect(onRelayAuthenticatedEvidence).toHaveBeenLastCalledWith({ phase: 'install' });
     const carrierFrame = createDaemonSpeechStreamCarrierAdapter({ routeKind: 'server_relay', binaryCapable: true })
       .encodeInputAppendFrame({ streamId: 'stream-1', generation: 3, seq: 0, pcm16Bytes: new Uint8Array([0, 0, 1, 0]) });
-    await expect(transport.chunk({
+    const chunk = await transport.chunk({
       streamId: 'stream-1', generation: 3, seq: 0, carrierFrame, compatibilityTransport: null,
-    })).resolves.toMatchObject({ ok: true, ackSeq: 0 });
+    });
+    if (failureStage !== 'healthy') {
+      expect(chunk).toMatchObject({ ok: false, error: 'daemon_voice_inference_relay_encryption_failed', errorCode: 'internal_error' });
+      const cause = Object.getOwnPropertyDescriptor(chunk, 'cause');
+      expect(cause?.enumerable).toBe(false);
+      expect(cause?.value).toBeInstanceOf(Error);
+      expect(cause?.value.message).toBe(`daemon_voice_inference_relay_${failureStage}_failed`);
+      expect(cause?.value.cause).toBeInstanceOf(Error);
+      if (failureStage === 'send') expect(cause?.value.cause).toBe(networkFailure);
+      expect(JSON.stringify(chunk)).not.toContain('cause');
+      await transport.cancel({ streamId: 'stream-1', generation: 3 });
+      return;
+    }
+    expect(chunk).toMatchObject({ ok: true, ackSeq: 0 });
     expect(onRelayAuthenticatedEvidence).toHaveBeenLastCalledWith({ phase: 'data', ackSeq: 0 });
     expect(sentPayloads).toHaveLength(2);
     expect([...sentPayloads[1]!]).not.toEqual([0, 0, 1, 0]);

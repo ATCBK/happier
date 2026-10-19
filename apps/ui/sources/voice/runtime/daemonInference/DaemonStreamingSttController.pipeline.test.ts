@@ -9,6 +9,7 @@ import {
   DaemonVoiceInferenceSttStreamCancelRequestSchema, DaemonVoiceInferenceSttStreamCancelResponseSchema,
 } from '@happier-dev/protocol/daemon/voiceInference';
 import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import type { HappierAudioStreamNativeModule } from '../../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
 import type { MicSession } from '@/voice/runtime/mic/MicSession';
 
@@ -19,10 +20,13 @@ vi.mock('expo-modules-core', async original => ({
   requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative' ? nativeBoundary.module : null,
 }));
 
+// The native module has one process identity; install it before Sync can
+// resolve the shared registry, whose missing-module decision is cached.
+const nativeAudio = createNativeVoicePcmCaptureHarness(false);
+nativeBoundary.module = nativeAudio.nativeModule;
 const network = await installSessionOpsNetworkBoundary();
 const { createMachineFixture } = await import('@/dev/testkit');
 const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
-const { createNativeVoicePcmCaptureHarness } = await import('@/dev/testkit/harness/nativeVoicePcmCapture');
 const { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } = await import('@/dev/testkit/harness/voiceWebRtcHarness');
 const { storage } = await import('@/sync/domains/state/storage');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
@@ -115,12 +119,14 @@ afterEach(async () => {
   resetServerFeaturesClientForTests();
   vi.useRealTimers();
 });
-afterAll(() => network.dispose());
+afterAll(async () => {
+  await nativeAudio.coordinator.dispose();
+  await network.dispose();
+});
 
 describe('daemon STT capture pipeline through the default client', () => {
   it('reports native source finalization failure instead of returning a successful transcript', async () => {
-    const harness = createNativeVoicePcmCaptureHarness(false);
-    nativeBoundary.module = harness.nativeModule;
+    const harness = nativeAudio;
     expect(resolveDaemonSpeechPcmCaptureAvailability()).toBe('available');
     harness.nativeModule.stop.mockRejectedValueOnce(new Error('native_stop_failed'));
     nativeMic = createNativeMicSession();
