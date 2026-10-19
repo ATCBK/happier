@@ -46,6 +46,12 @@ const CELL_MIN_WIDTH_PX = 92;
 /** Beside other widgets a segment of the one pooled bar keeps this much room for its label beneath it. */
 const POOLED_SEGMENT_MIN_WIDTH_PX = 64;
 /**
+ * Under the pooled bar each account's label takes its segment's column. Below this much width per account (a
+ * phone with four accounts) a column cannot hold a name, its figure and a note, so the bar stays one bar and
+ * the accounts are listed one row each beneath it.
+ */
+const POOLED_COLUMN_LABEL_MIN_WIDTH_PX = 120;
+/**
  * Beside other widgets (Overview, Settings › Overview, a Home tile) Capacity is one pooled bar with each
  * account's figure under its segment (lab `d2top-A`, `wgusage-CD`); at full width (Plans) each account
  * keeps its own cell in the per-account grid.
@@ -263,7 +269,8 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
         <CapacityHeroReading count={pendingAccounts} testID={`${props.testID}.reading`} />
       ) : null}
       {pooled && runs.length > 0 ? (
-        <CapacityPooledBar runs={runs} nameOf={nameOf} nowMs={nowMs} staleSaidOnce={everyStale} testID={props.testID} />
+        <CapacityPooledBar runs={runs} nameOf={nameOf} nowMs={nowMs} staleSaidOnce={everyStale} testID={props.testID}
+          listed={width !== null && width / Math.max(1, cellCount) < POOLED_COLUMN_LABEL_MIN_WIDTH_PX} />
       ) : runs.length > 0 ? (
       <View style={styles.bar} accessibilityRole="list">
         {runs.map((run) => (
@@ -341,33 +348,41 @@ function CapacityPooledBar(props: Readonly<{
   runs: readonly Run[]; nameOf: (account: UsagePlanAccount) => UsagePlanAccountName; nowMs: number;
   /** Every reading is old and the headline says so once; no segment repeats "last read". */
   staleSaidOnce: boolean; testID: string;
+  /** Too narrow for a label under each segment: the accounts are listed beneath the one bar, a row each. */
+  listed: boolean;
 }>) {
+  const label = (cell: Cell, listed: boolean) => (
+    <CapacityCell key={cell.account.key} cell={cell} name={props.nameOf(cell.account)} nowMs={props.nowMs}
+      pooled staleSaidOnce={props.staleSaidOnce} {...(listed ? { listed } : {})} testID={`${props.testID}.cell.${cell.account.accountId}`} />
+  );
   return (
-    <View style={styles.pooledBar} accessibilityRole="list" testID={`${props.testID}.pooled`}>
-      {props.runs.map((run) => (
-        <View key={run.pool?.key ?? run.cells[0]!.account.key}
-          testID={isFramedRun(run) ? `${props.testID}.pool.${run.pool!.groupId}` : undefined}
-          style={[styles.pooledRun, { flexGrow: run.cells.length, minWidth: run.cells.length * POOLED_SEGMENT_MIN_WIDTH_PX }]}>
-          <View style={[styles.pooledTrack, isFramedRun(run) ? styles.pooledTrackPool : null]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-            {run.cells.map((cell) => {
-              const window = cell.account.headline;
-              return (
-                <View key={cell.account.key} style={styles.pooledSegment}>
-                  <MeterBar height={8} tone={window && window.tone !== 'success' ? window.tone : 'neutral'}
-                    fillFraction={window?.remainingFraction ?? 0} {...(cell.account.stale ? { fillOpacity: 0.45 } : {})} />
-                </View>
-              );
-            })}
+    <>
+      <View style={styles.pooledBar} accessibilityRole="list" testID={`${props.testID}.pooled`}>
+        {props.runs.map((run) => (
+          <View key={run.pool?.key ?? run.cells[0]!.account.key}
+            testID={isFramedRun(run) ? `${props.testID}.pool.${run.pool!.groupId}` : undefined}
+            style={[styles.pooledRun, { flexGrow: run.cells.length, minWidth: run.cells.length * POOLED_SEGMENT_MIN_WIDTH_PX }]}>
+            <View style={[styles.pooledTrack, isFramedRun(run) ? styles.pooledTrackPool : null]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              {run.cells.map((cell) => {
+                const window = cell.account.headline;
+                return (
+                  <View key={cell.account.key} style={styles.pooledSegment}>
+                    <MeterBar height={8} tone={window && window.tone !== 'success' ? window.tone : 'neutral'}
+                      fillFraction={window?.remainingFraction ?? 0} {...(cell.account.stale ? { fillOpacity: 0.45 } : {})} />
+                  </View>
+                );
+              })}
+            </View>
+            {props.listed ? null : <View style={styles.pooledLabels}>{run.cells.map((cell) => label(cell, false))}</View>}
           </View>
-          <View style={styles.pooledLabels}>
-            {run.cells.map((cell) => (
-              <CapacityCell key={cell.account.key} cell={cell} name={props.nameOf(cell.account)} nowMs={props.nowMs}
-                pooled staleSaidOnce={props.staleSaidOnce} testID={`${props.testID}.cell.${cell.account.accountId}`} />
-            ))}
-          </View>
+        ))}
+      </View>
+      {props.listed ? (
+        <View style={styles.pooledList} accessibilityRole="list" testID={`${props.testID}.accounts`}>
+          {props.runs.flatMap((run) => run.cells.map((cell) => label(cell, true)))}
         </View>
-      ))}
-    </View>
+      ) : null}
+    </>
   );
 }
 
@@ -404,6 +419,8 @@ function CapacityCell(
     basis?: `${number}%`;
     /** Under a segment of the pooled bar: the bar is drawn above it by the pooled track. */
     pooled?: boolean;
+    /** One row of the list under a narrow pooled bar: the account and its note at the start, its figure at the end. */
+    listed?: boolean;
     staleSaidOnce?: boolean;
     testID: string;
   }>,
@@ -445,6 +462,37 @@ function CapacityCell(
     remaining === null
       ? '—'
       : formatPlanPercent(remaining);
+  const valueText = (
+    <Text
+      style={[
+        styles.cellValue,
+        text.title,
+        remaining === null ? styles.cellValueUnknown : null,
+        window?.tone === 'warning'
+          ? styles.warning
+          : window?.tone === 'danger'
+            ? styles.danger
+            : null,
+      ]}
+      numberOfLines={1}
+    >
+      {value}
+    </Text>
+  );
+  const detailLine = detail === null && props.listed ? null : (
+    <Text
+      style={[
+        styles.cellDetail,
+        text.detail,
+        props.pooled ? null : { minHeight: text.detail.lineHeight },
+        usedUpDetail !== null ? styles.danger : null,
+      ]}
+      // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
+      numberOfLines={2}
+    >
+      {detail}
+    </Text>
+  );
   return (
     <View
       testID={props.testID}
@@ -475,45 +523,33 @@ function CapacityCell(
         fillFraction={remaining ?? 0}
         {...(cell.account.stale ? { fillOpacity: 0.45 } : {})}
       />}
-      <View style={styles.cellHead}>
-        <Text
-          style={[
-            styles.cellValue,
-            text.title,
-            remaining === null ? styles.cellValueUnknown : null,
-            window?.tone === 'warning'
-              ? styles.warning
-              : window?.tone === 'danger'
-                ? styles.danger
-                : null,
-          ]}
-          numberOfLines={1}
-        >
-          {value}
-        </Text>
-      </View>
-      <View style={styles.cellHead}>
-        <View style={styles.cellIdentity}><UsagePlanIdentity name={props.name} compact /></View>
-        {cell.rank !== null || cell.excluded !== null ? (
-          <UsagePlanRank rank={cell.rank} selected={cell.selected} />
-        ) : null}
-      </View>
-      {/* The caption's line is held for every account from the first frame, the one that never answers
-          included: "last read" or "used up" arrives into it, and settling never resizes the bar. Under the
-          pooled bar a label is its figure and plan (lab `d2top-A`); only a state that changes what the viewer
-          can do takes a line there. */}
-      {props.pooled && detail === null ? null : <Text
-        style={[
-          styles.cellDetail,
-          text.detail,
-          props.pooled ? null : { minHeight: text.detail.lineHeight },
-          usedUpDetail !== null ? styles.danger : null,
-        ]}
-        // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
-        numberOfLines={2}
-      >
-        {detail}
-      </Text>}
+      {props.listed ? (
+        <View style={styles.listedRow}>
+          <View style={styles.listedIdentity}>
+            <View style={styles.cellHead}>
+              <View style={styles.cellIdentity}><UsagePlanIdentity name={props.name} compact /></View>
+              {cell.rank !== null || cell.excluded !== null ? <UsagePlanRank rank={cell.rank} selected={cell.selected} /> : null}
+            </View>
+            {detailLine}
+          </View>
+          {valueText}
+        </View>
+      ) : (
+        <>
+          <View style={styles.cellHead}>{valueText}</View>
+          <View style={styles.cellHead}>
+            <View style={styles.cellIdentity}><UsagePlanIdentity name={props.name} compact /></View>
+            {cell.rank !== null || cell.excluded !== null ? (
+              <UsagePlanRank rank={cell.rank} selected={cell.selected} />
+            ) : null}
+          </View>
+          {/* The caption's line is held for every account from the first frame, the one that never answers
+              included: "last read" or "used up" arrives into it, and settling never resizes the bar. Under the
+              pooled bar a label is its figure and plan (lab `d2top-A`); only a state that changes what the viewer
+              can do takes a line there. */}
+          {props.pooled && detail === null ? null : detailLine}
+        </>
+      )}
     </View>
   );
 }
@@ -558,6 +594,10 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
   },
   cellIdentity: { flexShrink: 1, minWidth: 0 },
+  // The phone's list under the pooled bar: a row per account, its figure at the end in a column of its own.
+  pooledList: { gap: theme.space.s12 },
+  listedRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', columnGap: theme.space.s12 },
+  listedIdentity: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   cellValue: {
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
