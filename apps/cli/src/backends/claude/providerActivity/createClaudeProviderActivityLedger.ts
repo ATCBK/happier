@@ -23,8 +23,14 @@ export type ClaudeProviderTaskActivity =
         admission?: 'known-only';
         source?: ClaudeProviderTaskActivitySource;
         confirmsActivity?: false;
+        /** The task (an Agent) that owns this one, from the typed SDK row. */
+        parentTaskId?: string;
     }>)
-    | (ClaudeProviderTaskIdentity & Readonly<{ type: 'progress'; confirmsActivity?: false }>)
+    | (ClaudeProviderTaskIdentity & Readonly<{
+        type: 'progress';
+        confirmsActivity?: false;
+        source?: 'system-task-progress';
+    }>)
     | (ClaudeProviderTaskIdentity & Readonly<{
         type: 'terminal';
         terminalStatus?: 'completed' | 'failed' | 'stopped';
@@ -144,6 +150,7 @@ export function normalizeClaudeProviderTaskEvent(value: unknown, contextualSessi
             normalizedString(row.task_type ?? row.taskType),
             row.is_backgrounded === true,
         );
+        const parentTaskId = normalizeClaudeAgentSdkProviderTaskId(row.parent_task_id);
         return {
             activity: {
                 type: 'started',
@@ -152,6 +159,7 @@ export function normalizeClaudeProviderTaskEvent(value: unknown, contextualSessi
                 ...(admission === 'known-only'
                     ? { admission: 'known-only' as const }
                     : {}),
+                ...(parentTaskId ? { parentTaskId } : {}),
             },
             interruptTarget,
             backgroundTask,
@@ -159,7 +167,7 @@ export function normalizeClaudeProviderTaskEvent(value: unknown, contextualSessi
     }
     if (row.subtype === 'task_progress') {
         return {
-            activity: { type: 'progress', sessionId, taskId },
+            activity: { type: 'progress', sessionId, taskId, source: 'system-task-progress' },
             interruptTarget,
             backgroundTask,
         };
@@ -271,6 +279,10 @@ export function readClaudeSessionHookProviderTaskActivity(
     return { type: 'terminal', sessionId, taskId: requestedTaskId };
 }
 
+function withParent(parentTaskId: string | undefined): { parentTaskId?: string } {
+    return parentTaskId ? { parentTaskId } : {};
+}
+
 function keyOf(identity: ClaudeProviderTaskIdentity): string {
     return JSON.stringify([identity.sessionId, identity.taskId]);
 }
@@ -282,11 +294,20 @@ export function createClaudeProviderActivityLedger() {
             identity: ClaudeProviderTaskIdentity;
             sources: Set<ClaudeProviderTaskActivitySource>;
             observed: boolean;
+            parentTaskId?: string;
         }>
         | Readonly<{
             phase: 'terminal-before-confirmation';
             identity: ClaudeProviderTaskIdentity;
             backgroundConfirmed: boolean;
+            /**
+             * Claude reports an Agent `completed` each time it stops, including when it stops to
+             * wait on background children it still owns; it wakes when they settle. Only the
+             * Agent's own typed progress may then reactivate it, so an Agent that never wakes
+             * cannot hold the count open.
+             */
+            awaitingChildren?: true;
+            parentTaskId?: string;
         }>;
     const tasks = new Map<string, ProviderTaskRecord>();
     /**
@@ -307,10 +328,23 @@ export function createClaudeProviderActivityLedger() {
         ownedSessionIds.size > 0 && !ownedSessionIds.has(sessionId)
     );
 
+    /** A child still owns live work while active or while it waits on its own children. */
+    const hasActiveChild = (identity: ClaudeProviderTaskIdentity): boolean => {
+        for (const entry of tasks.values()) {
+            if (
+                entry.parentTaskId === identity.taskId
+                && entry.identity.sessionId === identity.sessionId
+                && (entry.phase === 'active' || entry.awaitingChildren === true)
+            ) return true;
+        }
+        return false;
+    };
+
     const noteActive = (
         identity: ClaudeProviderTaskIdentity,
         source: ClaudeProviderTaskActivitySource,
         confirmsActivity = true,
+        parentTaskId?: string,
     ): boolean => {
         const key = keyOf(identity);
         const current = tasks.get(key);
@@ -320,16 +354,33 @@ export function createClaudeProviderActivityLedger() {
                 if (!current.backgroundConfirmed) tasks.set(key, { ...current, backgroundConfirmed: true });
                 return false;
             }
-            tasks.set(key, { phase: 'active', identity, sources: new Set([source]), observed: confirmsActivity });
+            tasks.set(key, {
+                phase: 'active',
+                identity,
+                sources: new Set([source]),
+                observed: confirmsActivity,
+                ...withParent(current.parentTaskId),
+            });
             return true;
         }
         if (current?.phase === 'active') {
             current.sources.add(source);
-            if (current.observed || !confirmsActivity) return false;
-            tasks.set(key, { ...current, observed: true });
+            // Hook and typed launches race; only the typed row carries the owning Agent.
+            const parent = withParent(current.parentTaskId ?? parentTaskId);
+            if (current.observed || !confirmsActivity) {
+                if (parent.parentTaskId !== current.parentTaskId) tasks.set(key, { ...current, ...parent });
+                return false;
+            }
+            tasks.set(key, { ...current, ...parent, observed: true });
             return true;
         }
-        tasks.set(key, { phase: 'active', identity, sources: new Set([source]), observed: confirmsActivity });
+        tasks.set(key, {
+            phase: 'active',
+            identity,
+            sources: new Set([source]),
+            observed: confirmsActivity,
+            ...withParent(parentTaskId),
+        });
         return true;
     };
 
@@ -357,10 +408,13 @@ export function createClaudeProviderActivityLedger() {
             const current = tasks.get(key);
             if (activity.type === 'terminal') {
                 if (current?.phase === 'active') {
+                    const identity = { sessionId: activity.sessionId, taskId: activity.taskId };
                     tasks.set(key, {
                         phase: 'terminal-before-confirmation',
-                        identity: { sessionId: activity.sessionId, taskId: activity.taskId },
+                        identity,
                         backgroundConfirmed: true,
+                        ...(hasActiveChild(identity) ? { awaitingChildren: true as const } : {}),
+                        ...withParent(current.parentTaskId),
                     });
                     return true;
                 }
@@ -375,6 +429,21 @@ export function createClaudeProviderActivityLedger() {
             }
             if (activity.type === 'progress' || activity.admission === 'known-only') {
                 if (activity.type === 'progress' && activity.confirmsActivity === false) return false;
+                if (
+                    activity.type === 'progress'
+                    && activity.source === 'system-task-progress'
+                    && current?.phase === 'terminal-before-confirmation'
+                    && current.awaitingChildren === true
+                ) {
+                    tasks.set(key, {
+                        phase: 'active',
+                        identity: current.identity,
+                        sources: new Set(['system-task-progress']),
+                        observed: true,
+                        ...withParent(current.parentTaskId),
+                    });
+                    return true;
+                }
                 if (activity.type === 'started' && current && activity.source === 'hook-agent-resume') {
                     if (current.phase === 'terminal-before-confirmation' && !current.backgroundConfirmed) return false;
                     return noteActive({ sessionId: activity.sessionId, taskId: activity.taskId }, activity.source, activity.confirmsActivity !== false);
@@ -386,6 +455,7 @@ export function createClaudeProviderActivityLedger() {
                 { sessionId: activity.sessionId, taskId: activity.taskId },
                 activity.source ?? 'system-task-started',
                 activity.confirmsActivity !== false,
+                activity.parentTaskId,
             );
         },
         /**
