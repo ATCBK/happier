@@ -492,6 +492,13 @@ describe('skill library Actions', () => {
     expect(await h.execute('skills.delete', { skillId: 'skill-1', expectedRevision: '1:1' }, { surface: 'ui' })).toEqual({ deleted: true });
     expect(h.artifacts.has('skill-1')).toBe(false); expect(h.rules()).toEqual([]);
   });
+  it('upload preview names relative files the bundle will not contain, and stays advisory', async () => {
+    const h = harness(); const withLink = (text: string) => [{ ...files[0]!, contentBase64: encodeBase64(new TextEncoder().encode(markdown + text), 'base64') }];
+    const source = { kind: 'upload', files: withLink('\nFollow [the checklist](../../shared/checklist.md).\n') };
+    expect(await h.execute('skills.install', { source, dryRun: true }, { surface: 'ui' })).toMatchObject({ items: [{ outsideReferences: ['../../shared/checklist.md'] }] });
+    expect(await h.execute('skills.install', { source: { kind: 'upload', files }, dryRun: true }, { surface: 'ui' })).not.toHaveProperty('items.0.outsideReferences');
+    expect(await h.execute('skills.install', { source }, { surface: 'ui' })).toMatchObject({ skillIds: ['skill-1'] });
+  });
   it('upload preview is inert, reports modes, and commit Off writes no enabled rule', async () => {
     const h = harness(); const source = { kind: 'upload', files: [...files, { path: 'scripts/run.sh', contentBase64: 'eA==', contentKind: 'utf8', unixMode: 0o755 }] };
     expect(await h.execute('skills.install', { source: { kind: 'upload', files: [...files, { path: 'a:b', contentBase64: 'eA==', contentKind: 'utf8' }] } }, { surface: 'ui' }))

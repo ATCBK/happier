@@ -247,6 +247,8 @@ export type SkillAddTranslation = Readonly<{
   addToLibrary: string;
   pinnedTo: (params: Readonly<{ ref: string }>) => string;
   via: (params: Readonly<{ source: string }>) => string;
+  outsideReferences: (params: Count) => string;
+  outsideReferencesMore: (params: Count) => string;
   detail: Readonly<{
     whereTitle: string;
     whereBody: string;
@@ -324,6 +326,9 @@ const enSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Add to library',
   pinnedTo: ({ ref }) => `Pinned to ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Refers to one file that won’t be included.' : `Refers to ${count} files that won’t be included.`,
+  outsideReferencesMore: ({ count }) => `and ${count} more`,
   detail: {
     whereTitle: 'Where it’s on',
     whereBody: 'Every machine and agent, unless you narrow it now.',
@@ -598,6 +603,9 @@ const caSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Afegeix a la biblioteca',
   pinnedTo: ({ ref }) => `Fixada a ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Fa referència a un fitxer que no s’inclourà.' : `Fa referència a ${count} fitxers que no s’inclouran.`,
+  outsideReferencesMore: ({ count }) => `i ${count} més`,
   detail: {
     whereTitle: 'On està activada',
     whereBody:
@@ -817,6 +825,9 @@ const deSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Zur Bibliothek hinzufügen',
   pinnedTo: ({ ref }) => `Angeheftet an ${ref}`,
   via: ({ source }) => `über ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Verweist auf eine Datei, die nicht enthalten ist.' : `Verweist auf ${count} Dateien, die nicht enthalten sind.`,
+  outsideReferencesMore: ({ count }) => `und ${count} weitere`,
   detail: {
     whereTitle: 'Wo er an ist',
     whereBody:
@@ -1030,6 +1041,9 @@ const esSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Añadir a la biblioteca',
   pinnedTo: ({ ref }) => `Fijada a ${ref}`,
   via: ({ source }) => `vía ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Hace referencia a un archivo que no se incluirá.' : `Hace referencia a ${count} archivos que no se incluirán.`,
+  outsideReferencesMore: ({ count }) => `y ${count} más`,
   detail: {
     whereTitle: 'Dónde está activada',
     whereBody:
@@ -1247,6 +1261,9 @@ const frSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Ajouter à la bibliothèque',
   pinnedTo: ({ ref }) => `Épinglé sur ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Renvoie à un fichier qui ne sera pas inclus.' : `Renvoie à ${count} fichiers qui ne seront pas inclus.`,
+  outsideReferencesMore: ({ count }) => `et ${count} de plus`,
   detail: {
     whereTitle: 'Où il est activé',
     whereBody:
@@ -1457,6 +1474,9 @@ const itSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Aggiungi alla libreria',
   pinnedTo: ({ ref }) => `Bloccata su ${ref}`,
   via: ({ source }) => `tramite ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Rimanda a un file che non sarà incluso.' : `Rimanda a ${count} file che non saranno inclusi.`,
+  outsideReferencesMore: ({ count }) => `e altri ${count}`,
   detail: {
     whereTitle: 'Dove è attiva',
     whereBody:
@@ -1670,6 +1690,9 @@ const jaSkillAdd: SkillAddTranslation = {
   addToLibrary: 'ライブラリに追加',
   pinnedTo: ({ ref }) => `${ref} に固定`,
   via: ({ source }) => `${source} 経由`,
+  outsideReferences: ({ count }) =>
+    `含まれない ${count} 件のファイルを参照しています。`,
+  outsideReferencesMore: ({ count }) => `ほか ${count} 件`,
   detail: {
     whereTitle: 'オンになっている場所',
     whereBody:
@@ -1906,6 +1929,9 @@ const plSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Dodaj do biblioteki',
   pinnedTo: ({ ref }) => `Przypięta do ${ref}`,
   via: ({ source }) => `przez ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Odwołuje się do jednego pliku, który nie zostanie dołączony.' : `Odwołuje się do ${count} plików, które nie zostaną dołączone.`,
+  outsideReferencesMore: ({ count }) => `i ${count} więcej`,
   detail: {
     whereTitle: 'Gdzie jest włączona',
     whereBody:
@@ -2123,6 +2149,9 @@ const ptSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Adicionar à biblioteca',
   pinnedTo: ({ ref }) => `Fixada em ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Faz referência a um arquivo que não será incluído.' : `Faz referência a ${count} arquivos que não serão incluídos.`,
+  outsideReferencesMore: ({ count }) => `e mais ${count}`,
   detail: {
     whereTitle: 'Onde está ativada',
     whereBody:
@@ -2364,6 +2393,9 @@ const ruSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Добавить в библиотеку',
   pinnedTo: ({ ref }) => `Закреплён на ${ref}`,
   via: ({ source }) => `через ${source}`,
+  outsideReferences: ({ count }) =>
+    `Не включены файлы, на которые есть ссылки: ${count}.`,
+  outsideReferencesMore: ({ count }) => `и ещё ${count}`,
   detail: {
     whereTitle: 'Где включён',
     whereBody:
@@ -2588,6 +2620,9 @@ const zhHansSkillAdd: SkillAddTranslation = {
   addToLibrary: '添加到资料库',
   pinnedTo: ({ ref }) => `固定到 ${ref}`,
   via: ({ source }) => `经由 ${source}`,
+  outsideReferences: ({ count }) =>
+    `引用了 ${count} 个不会被包含的文件。`,
+  outsideReferencesMore: ({ count }) => `另外 ${count} 个`,
   detail: {
     whereTitle: '在哪里开启',
     whereBody: '所有机器和智能体，除非你现在就限定范围。',
@@ -2790,6 +2825,9 @@ const zhHantSkillAdd: SkillAddTranslation = {
   addToLibrary: '新增到資料庫',
   pinnedTo: ({ ref }) => `固定在 ${ref}`,
   via: ({ source }) => `經由 ${source}`,
+  outsideReferences: ({ count }) =>
+    `參照了 ${count} 個不會被包含的檔案。`,
+  outsideReferencesMore: ({ count }) => `另有 ${count} 個`,
   detail: {
     whereTitle: '在哪裡開啟',
     whereBody: '所有機器和代理，除非你現在就限定範圍。',

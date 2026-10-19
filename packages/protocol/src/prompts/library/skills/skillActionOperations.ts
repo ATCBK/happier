@@ -17,6 +17,7 @@ import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFro
   type SkillListItemV1, type SkillUnavailableItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
 import { deriveSkillTrustV1 } from './skillTrustV1.js';
 import { estimateSkillCostV1 } from './skillCostV1.js';
+import { readSkillOutsideReferencesV1 } from './skillReferencesV1.js';
 import { deriveSkillAccountStatusesV1 } from './skillStatusV1.js';
 import { readSkillUsageRowV1, skillUsageObservedSinceV1, type SkillUsageRowV1 } from './skillUsageV1.js';
 import { exportSkillBundlesAsZipV1, skillFileFromBytesV1 } from './skillZipV1.js';
@@ -77,6 +78,10 @@ function validateFiles(files: readonly SkillFileInputV1[], now: number): void {
     body: { v: 1, entries: [...files], createdAtMs: now, updatedAtMs: now } });
   if (!result.ok) fail(result.errorCode);
   if (!readSkillFrontmatterV1(skillMarkdown(files)).name) fail('invalid_skill_name');
+}
+function outsideReferences(markdown: string, files: readonly SkillFileInputV1[]): { outsideReferences?: string[] } {
+  const found = readSkillOutsideReferencesV1(markdown, files.map(file => file.path));
+  return found.length ? { outsideReferences: found } : {};
 }
 function renameMarkdown(files: readonly SkillFileInputV1[], name?: string, description?: string): SkillFileInputV1[] {
   if (name !== undefined && !SKILL_NAME_PATTERN_V1.test(name)) fail('invalid_skill_name');
@@ -262,7 +267,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     const normalized = fetched.map(file => skillFileFromBytesV1(file.path, file.bytes, file.unixMode));
     validateFiles(normalized, nowMs()); const md = skillMarkdown(normalized), fm = readSkillFrontmatterV1(md);
     return { path: item.payload.skill.ref.path, name: fm.name!, description: fm.description ?? null, files: normalized,
-      provenance, trust: deriveSkillTrustV1(normalized), cost: estimateSkillCostV1(md) };
+      provenance, trust: deriveSkillTrustV1(normalized), cost: estimateSkillCostV1(md), ...outsideReferences(md, normalized) };
   }
   async function upstream(opened: Awaited<ReturnType<typeof current>>) {
     const provenance = opened.lock.provenance;
@@ -384,7 +389,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
             previews = roots.map(path => {
               const files = uploaded.filter(file => !path || file.path.startsWith(path + '/')).map(file => ({ ...file, path: path ? file.path.slice(path.length + 1) : file.path }));
               validateFiles(files, nowMs()); const md = skillMarkdown(files), fm = readSkillFrontmatterV1(md);
-              return { path, name: fm.name!, description: fm.description ?? null, files, provenance: { kind: 'upload' as const, importedAt: nowMs() }, trust: deriveSkillTrustV1(files), cost: estimateSkillCostV1(md) };
+              return { path, name: fm.name!, description: fm.description ?? null, files, provenance: { kind: 'upload' as const, importedAt: nowMs() }, trust: deriveSkillTrustV1(files), cost: estimateSkillCostV1(md), ...outsideReferences(md, files) };
             });
           }
           else if (input.source.kind === 'registry') { if (!port.readRegistryItem || !port.readRegistrySource) return fail('unsupported_source'); const pointer = input.source;

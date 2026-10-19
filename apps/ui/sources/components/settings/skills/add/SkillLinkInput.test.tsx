@@ -99,3 +99,37 @@ describe('SkillLinkInput footer', () => {
     expect(footerDirection(await renderFailedAdd())).toBe('row');
   });
 });
+
+describe('SkillLinkInput outside references', () => {
+  async function renderFound(preview: Record<string, unknown>) {
+    const answer: MountedAuthoringActionExecute = async () => ({
+      ok: true,
+      result: { items: [preview] },
+    });
+    const { SkillLinkInput } = await import('./SkillLinkInput');
+    const screen = await renderScreen(
+      <SkillLinkInput execute={answer} onAdded={() => {}} testID="link" />,
+    );
+    await act(async () => {
+      screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
+    });
+    await screen.pressByTestIdAsync('link.find');
+    return screen;
+  }
+
+  it('says on the found row that referenced files will not come along, and still lets it be added', async () => {
+    const screen = await renderFound({
+      ...PREVIEW,
+      outsideReferences: ['../../shared/checklist.md', '../lint.sh'],
+    });
+    const note = screen.findByTestId('link.item.grill-me.outsideReferences');
+    expect(note).not.toBeNull();
+    expect(screen.getTextContent()).toContain('2 files');
+    expect(screen.findByTestId('link.add')?.props.disabled).not.toBe(true);
+  });
+
+  it('draws nothing for a skill whose references are all in its folder', async () => {
+    const screen = await renderFound({ ...PREVIEW });
+    expect(screen.findByTestId('link.item.grill-me.outsideReferences')).toBeNull();
+  });
+});

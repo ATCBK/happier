@@ -23,6 +23,7 @@ import { applyWebDirectoryInputAttributes } from '@/utils/files/applyWebDirector
 import { nativePickFiles } from '@/utils/files/nativePickFiles';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
+import { skillOutsideReferencesNote } from '../outsideReferences';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 function describeUploadError(error: SkillUploadError): string {
@@ -263,6 +264,7 @@ export function SkillUploadInput(
               trust: state.preview.trust,
               cost: { tokensWhenUsed: state.preview.cost.bodyTokens },
             }}
+            note={skillOutsideReferencesNote(state.preview.outsideReferences, `${props.testID}.preview.outsideReferences`)}
           />
         ) : null}
       </ScrollView>

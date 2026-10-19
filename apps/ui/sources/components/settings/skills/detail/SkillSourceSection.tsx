@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
 import type { SkillReadResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
 
 import { Switch } from '@/components/ui/forms/Switch';
@@ -11,6 +12,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import type { CapabilitySource } from '@/components/capabilities/facts/CapabilityFacts';
 
+import { SkillOutsideReferencesItem } from '../outsideReferences';
 import type { SkillChange, SkillChangeResult } from './useSkillDetail';
 
 function formatTime(ms: number): string {
@@ -123,6 +125,22 @@ export function SkillSourceSection(
   const tracked =
     read.provenance.kind === 'registry' || read.provenance.kind === 'link';
   const source = sourceRow(read, props.machineName, props.pluginSource);
+  // Imported bundles are copies of a folder; a skill written here or shipped with Happier has no outside to miss.
+  const importedCopy =
+    read.provenance.kind === 'registry' ||
+    read.provenance.kind === 'link' ||
+    read.provenance.kind === 'upload' ||
+    read.provenance.kind === 'machine';
+  const outsideReferences = React.useMemo(
+    () =>
+      importedCopy
+        ? readSkillOutsideReferencesV1(
+            read.skillMd,
+            read.files.map((file) => file.path),
+          )
+        : [],
+    [importedCopy, read.files, read.skillMd],
+  );
   const [policy, setPolicy] = React.useState(props.updatePolicy);
   React.useEffect(() => setPolicy(props.updatePolicy), [props.updatePolicy]);
   const setUpdatePolicy = React.useCallback(
@@ -186,6 +204,10 @@ export function SkillSourceSection(
         ) : undefined
         }
         showChevron={false}
+      />
+      <SkillOutsideReferencesItem
+        references={outsideReferences}
+        testID={`${props.testID}:outsideReferences`}
       />
       {tracked ? (
         <>

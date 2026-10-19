@@ -601,6 +601,7 @@ export type SkillsActionResultById = {
                 pluginId: string;
                 occurrenceId: string;
             };
+            outsideReferences?: string[] | undefined;
         }[];
     };
     readonly "skills.export": {

@@ -135,4 +135,26 @@ describe('SkillSourceSection', () => {
     expect(screen.findAllByTestId('src:checkNow').length).toBeGreaterThan(0);
     expect(screen.findAllByTestId('src:auto').length).toBeGreaterThan(0);
   });
+  it('notes the files an imported skill points at that its copy lacks, and says nothing for one written here', async () => {
+    const withLink = {
+      ...read({
+        kind: 'upload',
+        importedAt: 1,
+      }),
+      skillMd: '---\nname: code-review\n---\nFollow [the checklist](../../shared/checklist.md).',
+    };
+    const imported = await renderScreen(
+      <SkillSourceSection {...common} read={withLink} updatePolicy="manual" />,
+    );
+    expect(imported.findByTestId('src:outsideReferences')).not.toBeNull();
+    expect(imported.getTextContent()).toContain('../../shared/checklist.md');
+    const written = await renderScreen(
+      <SkillSourceSection
+        {...common}
+        read={{ ...withLink, provenance: { kind: 'written' } }}
+        updatePolicy="manual"
+      />,
+    );
+    expect(written.findByTestId('src:outsideReferences')).toBeNull();
+  });
 });

@@ -10,6 +10,7 @@ import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesC
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { deriveSkillTrustV1 } from '@happier-dev/protocol/prompts/library/skills/skillTrustV1';
 import { estimateSkillCostV1 } from '@happier-dev/protocol/prompts/library/skills/skillCostV1';
+import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -47,6 +48,7 @@ import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
+import { SkillOutsideReferencesItem } from '../outsideReferences';
 import { useSkillPlaces } from '../useSkillPlaces';
 import { installSkills, retrySkillRules } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
@@ -625,6 +627,16 @@ function SkillAddDetail(
     ? deriveSkillTrustV1(skill.files)
     : undefined;
   const cost = skill ? estimateSkillCostV1(skill.skillMarkdown) : null;
+  const outsideReferences = React.useMemo(
+    () =>
+      skill
+        ? readSkillOutsideReferencesV1(
+            skill.skillMarkdown,
+            skill.files.map((file) => file.path),
+          )
+        : [],
+    [skill],
+  );
   const ref = skill
     ? skill.ref.commit.slice(0, 7)
     : shortRef(read.item?.summary.version);
@@ -778,6 +790,10 @@ function SkillAddDetail(
                   })
                 : t('capabilities.skillAdd.detail.textOnlyBody')
           }
+        />
+        <SkillOutsideReferencesItem
+          references={outsideReferences}
+          testID={`${TEST_ID}.detail.outsideReferences`}
         />
         {cost ? (
           <Item

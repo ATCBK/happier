@@ -13,6 +13,7 @@ import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAu
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 import { t } from '@/text';
 
+import { skillOutsideReferencesNote } from '../outsideReferences';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 /** The preview's identity facts: where it was found, pinned. */
@@ -165,6 +166,7 @@ export function SkillLinkInput(
                   cost: { tokensWhenUsed: item.cost.bodyTokens },
                 }}
                 checked={ticked.has(item.path)}
+                note={skillOutsideReferencesNote(item.outsideReferences, `${props.testID}.item.${item.name}.outsideReferences`)}
                 onPress={() =>
                   setTicked((previous) => {
                     const next = new Set(previous);
