@@ -41,7 +41,6 @@ import {
   SETTLED_COACH_STRIP_BODY_PX,
   usagePeriodPhrase,
   useSettledBodyHeightFloor,
-  useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
@@ -242,7 +241,6 @@ function useUsageCoachController(
 export function UsageCoachWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const presentation = useWidgetPresentation();
-  const view = useUsageAnalyticsView(props.slice, props.query);
   const coach = props.slice.coach;
   const { refresh } = props.model;
   const { controller, snapshot } = useUsageCoachController(refresh);
@@ -308,7 +306,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   const summary = [
     { key: 'findings', label: t('usage.board.coach.summaryFindings'), value: visible.length,
       caption: t('usage.board.coach.summaryOfChecks', { count: checked }) },
-    ...(view ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: view.hero.sessions,
+    ...(props.slice.accounting ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: coach.sessionCoverage?.admitted ?? '—',
       caption: usagePeriodPhrase(props.query) }] : []),
     { key: 'insufficient', label: t('usage.board.coach.summaryNeedEvidence'), value: insufficient.length,
       caption: clear.length ? t('usage.board.coach.summaryClearCaption', { count: clear.length }) : undefined },
@@ -493,7 +491,7 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
   );
 }
 
-function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number; caption?: string }>[]; testID: string }>) {
+function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number | string; caption?: string }>[]; testID: string }>) {
   const chartTheme = useUsagePluginTheme();
   return (
     <View style={styles.band} testID={props.testID}>

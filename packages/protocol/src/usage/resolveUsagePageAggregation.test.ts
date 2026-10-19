@@ -16,6 +16,35 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('carries admitted Session coverage independently of accounting and interval facts through retry and retirement', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const project = (selected: number, admitted: number) => resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: accounting }],
+      howYouWork: [{ query, asOfMs: 200, sessionCoverage: { selected, admitted },
+        detail: { status: admitted < selected ? 'partial' : 'available', facts: [] } }],
+    });
+    const partial = project(5, 3);
+    for (const value of [partial.results[0]?.howYouWork, partial.results[0]?.coach]) {
+      expect(value?.sessionCoverage).toEqual({ selected: 5, admitted: 3 });
+    }
+    expect(partial.results[0]?.howYouWork?.detailStatus).toBe('partial');
+    expect(UsageQueryBatchResultSchema.safeParse(partial).success).toBe(true);
+    const pending = resolveUsagePageAggregation({ queries: [query], previous: partial,
+      sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(pending.results[0]?.coach?.sessionCoverage).toEqual({ selected: 5, admitted: 3 });
+    const recovered = project(5, 5);
+    expect(recovered.results[0]?.howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+    expect(recovered.results[0]?.coach?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+    expect(recovered.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(0);
+    expect(project(0, 0).results[0]?.coach?.sessionCoverage).toEqual({ selected: 0, admitted: 0 });
+    const refused = resolveUsagePageAggregation({ queries: [query], previous: recovered,
+      howYouWork: [{ query, detail: { status: 'unknown' } }] });
+    expect(refused.results[0]?.howYouWork?.sessionCoverage).toBeUndefined();
+    expect(refused.results[0]?.coach?.sessionCoverage).toBeUndefined();
+    expect(UsageQueryBatchResultSchema.safeParse({ ...partial, results: [{ ...partial.results[0],
+      howYouWork: { ...partial.results[0]!.howYouWork, sessionCoverage: { selected: 3, admitted: 5 } },
+    }] }).success).toBe(false);
+  });
   it('updates authorized source labels without reparsing admitted source facts on refresh', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeSessionEvidence: false, includeWorkEvidence: false });
     const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, coverage: { status: 'complete', reasons: [],

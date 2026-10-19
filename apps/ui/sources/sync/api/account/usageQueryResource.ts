@@ -3,7 +3,7 @@ import type { ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/pl
 import { createCanonicalJsonSigningInput } from '@happier-dev/plugin-sdk';
 import { getUsageQueryBatchKey, getUsageQueryKey, normalizeUsageQueryBatchInput, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest, type UsageQuery, type UsageQueryBatchInput } from '@happier-dev/protocol/inputs/usageQuery';
 import { collectUsageWorkSources } from '@happier-dev/protocol/usage/usageWorkSources';
-import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { resolveUsagePageAggregation, resolveUsageQuotaPageAggregation, projectUsageAccountingSnapshotPrices, resolveUsagePageAccountingReads, resolveUsageAccountingAsOfMs, retainUsageQueryResultReferences, UsageQueryBatchResultSchema, type UsageAccountingSourceSnapshot, type UsageHowYouWorkSourceSnapshot, type UsagePoolSourceSnapshot, type UsageQueryPoolSnapshot, type UsageQueryBatchResult, type UsageWorkSourceSnapshot, type UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { ConnectedServicePoolSelectionGetRequestV1Schema, type ConnectedServicePoolSelectionGetRequestV1, type ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { computePluginUiArtifactSha256Digest } from '@/sync/domains/plugins/ui/artifactIntegrity';
@@ -587,7 +587,11 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
             return session && session.access?.capabilities.readTranscript !== false
                 && isSessionContentReadable(readSessionContentAvailability(session));
         });
-        return { query, asOfMs: Date.now(), sessions, detail: completeIntervals ? detail : { ...detail, facts: undefined, activityAtMs: undefined } };
+        const sessionCoverage = { selected: (idsByQuery.get(getUsageQueryKey(query)) ?? []).length,
+            admitted: sessions.filter(session => session.access?.capabilities.readTranscript !== false
+                && isSessionContentReadable(readSessionContentAvailability(session))).length };
+        return { query, asOfMs: Date.now(), sessions, sessionCoverage,
+            detail: completeIntervals ? detail : { ...detail, facts: undefined, activityAtMs: undefined } };
     });
     const publish = () => {
         if (signal?.aborted || !context.accountLifetime.isCurrent()) return;
@@ -691,6 +695,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
 type HowYouWorkEvidenceSnapshot = Readonly<{
     query: UsageQuery; asOfMs: number;
     sessions: readonly SessionInputEvidence['session'][];
+    sessionCoverage: NonNullable<UsageHowYouWorkSourceSnapshot['sessionCoverage']>;
     detail: ReturnType<typeof projectUsageQueryWorkEvidence>;
 }>;
 

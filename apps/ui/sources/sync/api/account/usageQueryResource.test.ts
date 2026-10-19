@@ -136,21 +136,22 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 
 describe('usage query captured Resource adapter', () => {
   it.each(['recovery', 'empty-success'] as const)('admits only successfully acquired interval evidence: %s', async scenario => {
-    const ids = ['healthy-turns', 'retry-turns'];
+    const ids = ['healthy-turns', 'retry-turns', 'empty-turns', 'unread', 'healthy-second'];
     let failedTurns = scenario === 'recovery';
     const captured = await context(request => {
       if (request.path === '/v2/usage/query') return Response.json(value);
-      const detail = /^\/v2\/sessions\/(healthy-turns|retry-turns)$/.exec(request.path);
+      const detail = /^\/v2\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)$/.exec(request.path);
+      if (detail?.[1] === 'unread' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
       if (detail) return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
         createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
-      const turn = /^\/v1\/sessions\/(healthy-turns|retry-turns)\/turns$/.exec(request.path);
+      const turn = /^\/v1\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)\/turns$/.exec(request.path);
       if (turn) {
         const id = turn[1]!;
         if (id === 'retry-turns' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
         return Response.json({ v: 1, sessionId: id, updatedAt: 900,
-          turns: id === 'retry-turns' && scenario === 'empty-success' ? [] : [
+          turns: id === 'empty-turns' || id === 'unread' || id === 'retry-turns' && scenario === 'empty-success' ? [] : [
             { turnId: `${id}-turn`, agentId: 'codex', status: 'completed', startedAt: 100,
-              terminalAt: id === 'healthy-turns' ? 400 : 700, updatedAt: 900 },
+              terminalAt: id === 'retry-turns' ? 700 : 400, updatedAt: 900 },
           ] });
       }
       return undefined;
@@ -169,6 +170,8 @@ describe('usage query captured Resource adapter', () => {
     try {
       await entry.refresh();
       expect(slice().pending).toBe(false);
+      expect(slice().howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: scenario === 'recovery' ? 3 : 5 });
+      expect(slice().coach?.sessionCoverage).toEqual(slice().howYouWork?.sessionCoverage);
       if (scenario === 'recovery') {
         expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
         expect(slice().howYouWork?.intervals).toBeNull();
@@ -176,18 +179,20 @@ describe('usage query captured Resource adapter', () => {
         expect(observed.every(row => row.howYouWork?.intervals == null)).toBe(true);
       } else {
         expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
-        expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(300);
+        expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(600);
       }
       const attemptsBeforeRetry = sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns').length;
       failedTurns = false;
       // No Session/store marker changes: Retry must reacquire only failed evidence.
       await entry.refresh();
-      expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(scenario === 'recovery' ? 900 : 300);
+      expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(scenario === 'recovery' ? 1200 : 600);
+      expect(slice().howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+      expect(slice().coach?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
       expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
       expect(sessionRequests().filter(request => request.path === '/v1/sessions/healthy-turns/turns')).toHaveLength(1);
       expect(sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns'))
         .toHaveLength(attemptsBeforeRetry + (scenario === 'recovery' ? 1 : 0));
-      expect(home!.requests.filter(request => /^\/v[12]\/sessions\/(healthy-turns|retry-turns)(\/|$)/.test(request.path))).toEqual([]);
+      expect(home!.requests.filter(request => /^\/v[12]\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)(\/|$)/.test(request.path))).toEqual([]);
     } finally { release(); }
   });
 

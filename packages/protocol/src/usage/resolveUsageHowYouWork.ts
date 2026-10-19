@@ -36,8 +36,14 @@ const UsageAutopsyEventSchema = lazyZodSchema(() => z.strictObject({
 export type UsageAutopsyEvent = z.infer<typeof UsageAutopsyEventSchema>;
 const CountSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 const DurationSchema = lazyZodSchema(() => z.number().check(z.nonnegative()));
+/** Coverage of the exact Session evidence read, including admitted empty Sessions. */
+export const UsageSessionEvidenceCoverageSchema = lazyZodSchema(() => z.strictObject({
+    selected: CountSchema, admitted: CountSchema,
+}).check(z.refine(value => value.admitted <= value.selected)));
+export type UsageSessionEvidenceCoverage = z.infer<typeof UsageSessionEvidenceCoverageSchema>;
 export const UsageHowYouWorkSchema = lazyZodSchema(() => z.strictObject({
     detailStatus: z.enum(['available', 'partial', 'unknown']),
+    sessionCoverage: z.optional(UsageSessionEvidenceCoverageSchema),
     autopsy: z.optional(z.strictObject({ coverage: z.enum(['complete', 'partial']), events: z.array(UsageAutopsyEventSchema) })),
     intervals: z.nullable(UsageWorkIntervalsProjectionSchema),
     todayInParallel: z.nullable(z.strictObject({ date: z.string(), startMs: z.number().check(z.int()), endMs: z.number().check(z.int()),
@@ -73,6 +79,7 @@ export type UsageHowYouWork = z.infer<typeof UsageHowYouWorkSchema>;
 export function resolveUsageHowYouWork(input: Readonly<{
     period: UsageWorkIntervalsInput['period']; timeZoneOffsetMinutes: number; nowMs?: number;
     accounting?: UsageAnalyticsQueryResponse; detail?: UsageHowYouWorkDetailInput; nightHours?: UsageWorkIntervalsInput['nightHours'];
+    sessionCoverage?: UsageSessionEvidenceCoverage;
     /** Already admitted private projection for this exact query, only while its source is pending. */
     retained?: UsageHowYouWork;
 }>): UsageHowYouWork {
@@ -98,6 +105,9 @@ export function resolveUsageHowYouWork(input: Readonly<{
     const todayIntervals = detail?.facts !== undefined && todayPeriod && todayPeriod.startMs < todayPeriod.endMs
         ? projectUsageWorkIntervals({ period: todayPeriod, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, facts: detail.facts }) : null;
     const result: UsageHowYouWork = {
+        ...((input.sessionCoverage ?? retained?.sessionCoverage) === undefined ? {} : {
+            sessionCoverage: input.sessionCoverage ?? retained?.sessionCoverage,
+        }),
         ...(retained?.autopsy === undefined ? {} : { autopsy: retained.autopsy }),
         detailStatus: !detail ? retained?.detailStatus ?? 'unknown' : detail.status === 'partial' || intervals?.coverage === 'partial' ? 'partial' : 'available',
         intervals, todayInParallel: todayIntervals && today ? { date: today.date, ...todayIntervals.period,

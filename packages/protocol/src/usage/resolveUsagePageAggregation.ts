@@ -7,7 +7,7 @@ import { UsageQueryAccountingSchema, type UsageAnalyticsQueryResponse } from './
 import { UsageCostFactTotalSchema, projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import type { ScmBranchWorkEvidence } from '../scm/branches.js';
-import { resolveUsageHowYouWork, UsageHowYouWorkSchema, type UsageHowYouWorkDetailInput } from './resolveUsageHowYouWork.js';
+import { resolveUsageHowYouWork, UsageHowYouWorkSchema, type UsageHowYouWorkDetailInput, type UsageSessionEvidenceCoverage } from './resolveUsageHowYouWork.js';
 import type { UsageWorkIntervalsInput } from './usageWorkIntervals.js';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetResultV1 } from '../connect/providerAccountUsageHistorySchemasV1.js';
 import { evaluateUsageCoach } from './coach/evaluateUsageCoach.js';
@@ -282,6 +282,7 @@ export type UsageWorkSourceSnapshot = Readonly<{
 export type UsageHowYouWorkSourceSnapshot = Readonly<{
   query: UsageQuery;
   detail: UsageHowYouWorkDetailInput;
+  sessionCoverage?: UsageSessionEvidenceCoverage;
   asOfMs?: number;
   nightHours?: UsageWorkIntervalsInput['nightHours'];
 }>;
@@ -456,6 +457,7 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     const detailProjection = endMs === undefined || endMs < startMs ? undefined : resolveUsageHowYouWork({
       period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes,
       accounting: snapshot?.value, detail: detailSnapshot?.detail,
+      sessionCoverage: detailSnapshot?.sessionCoverage,
       retained: retainedDetail?.howYouWork,
       nowMs: input.nowMs ?? detailSnapshot?.asOfMs,
       nightHours: input.nightHours === undefined ? detailSnapshot?.nightHours ?? (retainedNightHours
@@ -524,6 +526,7 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
       ...quotaFields,
       ...(detailProjection === undefined ? {} : { howYouWork: detailProjection }),
       ...(coachProjection === undefined ? {} : { coach: { ...coachProjection,
+        ...(detailProjection?.sessionCoverage === undefined ? {} : { sessionCoverage: detailProjection.sessionCoverage }),
         ...(digestSuggestion === undefined ? {} : { digestSuggestion }),
       } }),
       ...(comparisonQuery ? { comparison: { query: comparisonQuery, source: comparisonSource,

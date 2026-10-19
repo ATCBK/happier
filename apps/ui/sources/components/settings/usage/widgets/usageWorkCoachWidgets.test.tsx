@@ -5,7 +5,7 @@ import { renderHook, renderScreen } from '@/dev/testkit';
 import { useUsageWork } from './useUsageWork';
 import { router } from 'expo-router';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
-import { HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataMetric, HappierDataRows, IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
 import { DEFAULT_USAGE_COACH_PREFERENCES_V1 } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import {
   getUsageQueryKey,
@@ -201,6 +201,26 @@ describe('Work and Coach widget bodies', () => {
     await screen.update(<UsageCoachWidget {...props} slice={settledSlice}
       model={{ ...model, slice: settledSlice }} id="usage_coach" testID="first-coach" />);
     expect(screen.findHostByTestId('first-coach.empty')).not.toBeNull();
+  });
+  it('shows admitted Sessions checked from the canonical result and recovers after retry', async () => {
+    const project = (admitted: number) => resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: slice.accounting!, asOfMs: 1000 }],
+      howYouWork: [{ query, asOfMs: 1000, sessionCoverage: { selected: 5, admitted },
+        detail: { status: admitted < 5 ? 'partial' : 'available', facts: [] } }], nowMs: 1000 }).results[0]!;
+    const partial = project(3);
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={partial} id="usage_coach" testID="coverage-coach" />);
+    const metric = (key: string) => screen.findAllByType(HappierDataMetric).find(node => node.props.testID === `coverage-coach.summary.${key}`)?.props.value;
+    expect(metric('sessions')).toBe(3);
+    expect(metric('insufficient')).toBeGreaterThan(0);
+    const recovered = project(5);
+    await screen.update(<UsageCoachWidget {...props} slice={recovered} id="usage_coach" testID="coverage-coach" />);
+    expect(metric('sessions')).toBe(5);
+    expect(screen.findHostByTestId('coverage-coach.summary.sessions')?.props.accessibilityLabel)
+      .toContain(`${t('usage.board.coach.summarySessions')}: 5`);
+    await screen.update(<UsageCoachWidget {...props} slice={slice} id="usage_coach" testID="coverage-coach" />);
+    expect(metric('sessions')).toBe('—');
+    expect(screen.findHostByTestId('coverage-coach.summary.sessions')?.props.accessibilityLabel)
+      .toContain(`${t('usage.board.coach.summarySessions')}: —`);
   });
   it('holds one finding row of room while a phone-width Coach reads, so its findings land without moving the page', async () => {
     const pendingSlice = resolveUsagePageAggregation({ queries: [query],

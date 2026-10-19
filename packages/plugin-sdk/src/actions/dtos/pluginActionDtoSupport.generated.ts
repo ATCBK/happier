@@ -1173,6 +1173,10 @@ export type UsageCoachEvaluation = {
             premiumUsd: number | null;
         }[] | undefined;
     }[];
+    sessionCoverage?: {
+        selected: number;
+        admitted: number;
+    } | undefined;
     digestSuggestion?: {
         kind: 'recurring_automation';
         queryKey: string;

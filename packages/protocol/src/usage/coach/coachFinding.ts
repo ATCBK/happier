@@ -4,6 +4,7 @@ import type { UsageAnalyticsQueryResponse } from '../usageAnalyticsContracts.js'
 import type { UsageModelPriceOverridesV1 } from '../usageModelPriceCatalog.js';
 import { UsageRequestAttributionSchema } from '../usageAnalyticsContracts.js';
 import type { UsageWorkPermissionFact } from '../usageWorkIntervals.js';
+import { UsageSessionEvidenceCoverageSchema } from '../resolveUsageHowYouWork.js';
 import { UsageCoachRemedySchema, type UsageCoachRemedy } from './coachRemedy.js';
 import type { UsagePromptComposition } from './usagePromptComposition.js';
 import type { UsageMcpBindingUsage } from './usageMcpBindingUsage.js';
@@ -165,6 +166,7 @@ export type UsageCoachConceptEvaluation = z.infer<typeof UsageCoachConceptEvalua
 export const UsageCoachEvaluationSchema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1), queryKey: Id, period: UsageCoachPeriodSchema, asOfMs: z.nullable(Time),
     currentness: UsageCoachCurrentnessSchema, evaluations: z.array(UsageCoachConceptEvaluationSchema),
+    sessionCoverage: z.optional(UsageSessionEvidenceCoverageSchema),
     findings: z.array(UsageCoachFindingSchema),
     digestSuggestion: z.optional(UsageCoachDigestSuggestionSchema),
     unavailableChecks: z.optional(z.array(z.strictObject({ check: z.enum(['fast_mode', 'scheduled_interval_vs_ttl']),

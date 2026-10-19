@@ -4565,6 +4565,10 @@ export type UsageActionResultById = {
                         estimatedTokenCount: 0;
                     };
                 } | null;
+                sessionCoverage?: {
+                    selected: number;
+                    admitted: number;
+                } | undefined;
                 autopsy?: {
                     coverage: 'complete' | 'partial';
                     events: {
@@ -5234,6 +5238,10 @@ export type UsageActionResultById = {
                         premiumUsd: number | null;
                     }[] | undefined;
                 }[];
+                sessionCoverage?: {
+                    selected: number;
+                    admitted: number;
+                } | undefined;
                 digestSuggestion?: {
                     kind: 'recurring_automation';
                     queryKey: string;
