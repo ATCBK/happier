@@ -8,7 +8,7 @@ import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "@/app/session/access/sessionRecipients";
 import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
-import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { acquireSessionAccountCursorLocksInTx, prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { reconcileAutonomousExchangeAcceptedTurnInTx } from "@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx";
 import { observeCreateSessionMessageStage } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { db } from "@/storage/db";
@@ -4779,16 +4779,23 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
         return { ok: false, error: "invalid-params" };
     }
 
+    // Transaction-composing callers retain their audience fence before the
+    // Account-first owner-metadata authority lock.
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
+    return updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(tx, params, preconditions);
+}
+
+async function updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(
+    tx: Tx,
+    params: UpdateSessionMetadataEnvelopeTupleInput,
+    preconditions?: SessionMetadataWritePreconditionsV1,
+): Promise<UpdateSessionMetadataEnvelopeTupleResult> {
     // Same metadata CAS, independent contribution: owner Agent-state refreshes
     // and shared-confirmation settlement cannot replace each other's counts.
     const sharedConfirmationSummary = "sharedActionConfirmationSummaryV1" in params && params.sharedActionConfirmationSummaryV1
         ? { pendingSharedActionConfirmationCount: params.sharedActionConfirmationSummaryV1.pendingPermissionRequestCount }
         : {};
 
-    // The owner-mode fence below can otherwise hold a higher owner Account
-    // before recipient publication discovers a lower one. Fence the complete
-    // Session audience before that Account-first authority lock.
-    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
     if (params.mode !== "shared_editor") {
         const preflightAccount = await tx.account.findUnique({
             where: { id: params.actorUserId },
@@ -5395,8 +5402,16 @@ export async function updateSessionMetadataEnvelopeTuple(
     params: UpdateSessionMetadataEnvelopeTupleInput,
 ): Promise<UpdateSessionMetadataEnvelopeTupleResult> {
     try {
+        if (!isValidSessionMetadataEnvelopeTupleInput(params)) {
+            return { ok: false, error: "invalid-params" };
+        }
         return await inTx(async (tx) =>
-            updateSessionMetadataEnvelopeTupleInTx(tx, params));
+            updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(tx, params), {
+                // Discovery does not consume the mutation's execution budget.
+                // The prepared fence still verifies the current audience before
+                // the shared mutation body admits authority and writes its CAS.
+                prepare: () => prepareSessionAccountCursorLocks([params.sessionId], [params.actorUserId]),
+            });
     } catch (error) {
         if (error instanceof SessionTeamCredentialBindingMutationError) {
             return {

@@ -58,6 +58,68 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
     });
     afterAll(async () => { await db.$disconnect(); });
 
+    it("preserves both delivery-mute scopes when different Accounts edit one Session", async () => {
+        const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+        const editor = await db.account.create({ data: { encryptionMode: "plain" } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain" } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: editor.id, accessLevel: "edit" } });
+        const captured = deferred(), release = deferred();
+        const transaction = db.$transaction;
+        let paused = false;
+        // Schedule only the Prisma boundary: both HTTP writers and their
+        // access decisions, scope merging, publication and persistence stay real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [(tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                if (property !== "session") return Reflect.get(inner, property, innerReceiver);
+                return new Proxy(inner.session, { get(model, method, modelReceiver) {
+                    if (method !== "findUnique") return Reflect.get(model, method, modelReceiver);
+                    return async (...queryArgs: unknown[]) => {
+                        const row = await Reflect.apply(model.findUnique, model, queryArgs);
+                        const query = queryArgs[0];
+                        if (!paused && typeof query === "object" && query !== null && "select" in query
+                            && typeof query.select === "object" && query.select !== null && "deliveryMutes" in query.select) {
+                            paused = true;
+                            captured.resolve();
+                            await release.promise;
+                        }
+                        return row;
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            await withAuthenticatedTestApp(registerSessionFollowRoutes, async app => {
+                const url = `/v2/sessions/${session.id}/delivery-mutes`;
+                const scopes = [{ kind: "sender_session", sessionId: session.id }, { kind: "sender_session", sessionId: randomUUID() }];
+                const first = app.inject({ method: "PUT", url, headers: { "x-test-user-id": owner.id }, payload: { scope: scopes[0] } });
+                await Promise.race([captured.promise, first.then(() => { throw new Error("First writer did not reach its receiver read"); })]);
+                let settled = false;
+                const second = app.inject({ method: "PUT", url, headers: { "x-test-user-id": editor.id }, payload: { scope: scopes[1] } });
+                void second.finally(() => { settled = true; }).catch(() => undefined);
+                try {
+                    while (!settled) {
+                        const [{ waiting }] = await db.$queryRawUnsafe<Array<{ waiting: boolean }>>(
+                            `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                                AND wait_event_type = 'Lock' AND query LIKE '%"Account"%') AS waiting`,
+                        );
+                        if (waiting) break;
+                    }
+                } finally { release.resolve(); }
+                const responses = await Promise.all([first, second]);
+                expect(responses.map(response => response.statusCode)).toEqual([200, 200]);
+                for (const response of responses) expect(ChangeDeliveryMuteResponseV1Schema.parse(response.json()))
+                    .toEqual({ changed: true, disposition: "muted" });
+                db.$transaction = transaction;
+                const read = await app.inject({ method: "GET", url, headers: { "x-test-user-id": owner.id } });
+                expect(read.statusCode).toBe(200);
+                expect(ListDeliveryMutesResponseV1Schema.parse(read.json()).scopes).toEqual(expect.arrayContaining(scopes));
+            });
+        } finally { release.resolve(); db.$transaction = transaction; }
+    });
+
     it("keeps the ACP row CAS authoritative for concurrent definition writes", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
         await withAuthenticatedTestApp(registerConfiguredAgentRowsRoutes, async app => {
@@ -216,7 +278,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
 
     it.each(["configuration", "mode-change", "archive", "archive-active", "unarchive", "credential", "credential-mode-change", "group", "acp", "acp-mode-change", "acp-reference", "prompt", "prompt-mode-change",
         "manager", "manager-cas", "manager-inactive", "follow", "follow-remove", "voice", "follow-preferences", "follow-source", "follow-source-remove", "read-mark-read", "read-mark-unread", "read-advance",
-        "delivery-mute", "delivery-mute-remove", "delivery-mute-inactive", "draft-account", "draft-session", "draft-session-inactive", "draft-session-mode-change", "draft-session-shared-revoked",
+        "delivery-mute", "delivery-mute-remove", "delivery-mute-inactive",
+        "delivery-mute-session", "delivery-mute-session-remove", "delivery-mute-session-inactive",
+        "delivery-mute-session-shared-revoked", "delivery-mute-session-shared-downgraded",
+        "draft-account", "draft-session", "draft-session-inactive", "draft-session-mode-change", "draft-session-shared-revoked",
         "notification", "notification-mode-change", "remote-host", "remote-host-mode-change", "kv", "pet-remove", "profile", "profile-mode-change", "profile-conversion",
         "directory-upsert", "directory-remove", "directory-preferred"] as const)(
         "settles %s after a held Account writer commits", async operation => {
@@ -234,14 +299,16 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                 data: { preferredHomeServerIdentityId: descriptor.homeServerIdentityId } });
             const relationOperation = operation.startsWith("manager") || operation.startsWith("follow")
                 || operation === "voice" || operation.startsWith("read-") || operation.startsWith("delivery-mute");
-            const draftOwner = operation === "draft-session-shared-revoked" ? await db.account.create({ data: { encryptionMode: "plain" } }) : account;
+            const sharedMute = operation === "delivery-mute-session-shared-revoked" || operation === "delivery-mute-session-shared-downgraded";
+            const draftOwner = operation === "draft-session-shared-revoked" || sharedMute
+                ? await db.account.create({ data: { encryptionMode: "plain" } }) : account;
             const session = operation === "archive" || operation === "archive-active" || operation === "unarchive"
                 || relationOperation || operation.startsWith("draft-session")
                 ? await db.session.create({ data: { accountId: draftOwner.id, tag: randomUUID(), metadata: "{}",
                     encryptionMode: "plain", active: false, seq: 10, archivedAt: operation === "unarchive" ? new Date(123) : null } })
                 : null;
-            if (operation === "draft-session-shared-revoked" && session) await db.sessionShare.create({ data: {
-                sessionId: session.id, sharedWithUserId: account.id, sharedByUserId: draftOwner.id, accessLevel: "view",
+            if ((operation === "draft-session-shared-revoked" || sharedMute) && session) await db.sessionShare.create({ data: {
+                sessionId: session.id, sharedWithUserId: account.id, sharedByUserId: draftOwner.id, accessLevel: sharedMute ? "edit" : "view",
             } });
             const lead = relationOperation ? await db.session.create({ data: { accountId: account.id,
                 tag: randomUUID(), metadata: "{}", encryptionMode: "plain", active: false } }) : null;
@@ -267,6 +334,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
             if (session && operation === "delivery-mute-remove") await db.account.update({
                 where: { id: account.id }, data: { deliveryMutes: JSON.stringify([{ kind: "sender_session", sessionId: session.id }]) },
             });
+            if (session && operation === "delivery-mute-session-remove") await db.session.update({
+                where: { id: session.id }, data: { deliveryMutes: JSON.stringify([{ kind: "sender_session", sessionId: session.id }]) },
+            });
             // Only the Prisma transport is scheduled. HTTP, mode admission,
             // Account fences, lifecycle effects and publication execute unchanged.
             db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
@@ -282,7 +352,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         const peer = Reflect.apply(transaction, db, [async (peerTx: Tx) => {
                             await peerTx.account.update({ where: { id: account.id }, data: (operation === "mode-change" || operation.endsWith("-mode-change")) && operation !== "draft-session-mode-change"
                                 ? { encryptionMode: "e2ee", ...createSignedAccountContentBinding() }
-                                : operation === "manager-inactive" || operation === "delivery-mute-inactive" ? { status: "disabled", seq: { increment: 1 } }
+                                : operation === "manager-inactive" || operation === "delivery-mute-inactive" || operation === "delivery-mute-session-inactive"
+                                    ? { status: "disabled", seq: { increment: 1 } }
                                 : { seq: { increment: 1 } } });
                             if (operation === "archive-active" && session) {
                                 await peerTx.session.update({ where: { id: session.id }, data: { active: true } });
@@ -295,6 +366,13 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                             }
                             if (operation === "draft-session-shared-revoked" && session) {
                                 await peerTx.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: account.id } });
+                            }
+                            if (sharedMute && session) {
+                                if (operation === "delivery-mute-session-shared-revoked") {
+                                    await peerTx.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: account.id } });
+                                } else {
+                                    await peerTx.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: account.id }, data: { accessLevel: "view" } });
+                                }
                             }
                             locked.resolve();
                             await release.promise;
@@ -480,27 +558,30 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                     }
                     if (operation.startsWith("delivery-mute") && session) {
                         const scope = { kind: "sender_session", sessionId: session.id };
-                        const removing = operation === "delivery-mute-remove";
-                        const inactive = operation === "delivery-mute-inactive";
+                        const sessionReceiver = operation.startsWith("delivery-mute-session");
+                        const url = sessionReceiver ? `/v2/sessions/${session.id}/delivery-mutes` : "/v2/account/session-delivery-mutes";
+                        const removing = operation.endsWith("-remove");
+                        const inactive = operation.endsWith("-inactive");
                         const response = await app.inject({ method: removing ? "DELETE" : "PUT",
-                            url: "/v2/account/session-delivery-mutes",
+                            url,
                             headers: { "x-test-user-id": account.id }, payload: { scope },
                         });
                         console.info("B4_DELIVERY_MUTE_PUBLICATION", { operation, attempts, waits, failures, status: response.statusCode });
-                        expect(response.statusCode).toBe(inactive ? 403 : 200);
-                        if (inactive) {
-                            expect(response.json()).toEqual({ error: "account_inactive" });
+                        expect(response.statusCode).toBe(inactive ? 403 : sharedMute ? 404 : 200);
+                        if (inactive || sharedMute) {
+                            expect(response.json()).toEqual({ error: inactive ? "account_inactive" : "session_not_found" });
                             expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).deliveryMutes).toBeNull();
+                            expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).deliveryMutes).toBeNull();
                         } else {
                             expect(ChangeDeliveryMuteResponseV1Schema.parse(response.json())).toEqual({
                                 changed: true, disposition: removing ? "unmuted" : "muted",
                             });
-                            const read = await app.inject({ method: "GET", url: "/v2/account/session-delivery-mutes",
+                            const read = await app.inject({ method: "GET", url,
                                 headers: { "x-test-user-id": account.id } });
                             expect(read.statusCode).toBe(200);
                             expect(ListDeliveryMutesResponseV1Schema.parse(read.json())).toEqual({ scopes: removing ? [] : [scope] });
                         }
-                        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(inactive ? 1 : 2);
+                        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(inactive || sharedMute ? 1 : 2);
                         expect(waits).toBeGreaterThan(0);
                         expect(failures).toEqual([]);
                         expect(attempts).toBe(1);

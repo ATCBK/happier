@@ -12,6 +12,7 @@ import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance
 import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { markSessionFollowsChangedInTx } from './changes';
 import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 
@@ -104,6 +105,10 @@ export async function changeDeliveryMute(input: Readonly<{
     return await inTx(async tx => {
         if (input.receiver.kind === 'account') {
             await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+        } else {
+            // Share/access transitions and other receiver editors use the same
+            // audience fence. Re-admit only after their queued writes commit.
+            await acquireSessionAccountCursorLocksInTx(tx, [input.receiver.sessionId], [input.accountId]);
         }
         const receiver = await readAdmittedReceiverInTx(tx, input);
         if (!receiver.ok) return receiver;
@@ -125,5 +130,5 @@ export async function changeDeliveryMute(input: Readonly<{
         }
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed: true, disposition } } as const;
-    }, input.receiver.kind === 'session' ? { isolationLevel: 'Serializable' } : undefined);
+    });
 }
