@@ -41,12 +41,19 @@ function ModelPackProgressBar(props: Readonly<{ progress: number; accessibilityL
         progressAccessibilityLabel={props.accessibilityLabel} />;
 }
 
-function progressSubtitle(fraction: number, accessibilityLabel: string, line: string): React.ReactNode {
+function progressSubtitle(
+    phase: 'download' | 'verify',
+    fraction: number,
+    accessibilityLabel: string,
+    line: string,
+): React.ReactNode {
     // Item renders the string with its own subtitle typography below the bar.
     return (
         <>
             <View style={styles.bar}>
-                <ModelPackProgressBar progress={fraction} accessibilityLabel={accessibilityLabel} />
+                {/* The bar's meaning changes between phases; a fresh bar starts at the new value instead of
+                    gliding backward from a full download bar to the verification still in progress. */}
+                <ModelPackProgressBar key={phase} progress={fraction} accessibilityLabel={accessibilityLabel} />
             </View>
             {line}
         </>
@@ -64,6 +71,7 @@ function describeDownloading(progress: unknown): ModelPackRowPresentation {
         return {
             detail: t('settingsVoice.local.modelPackDownload.verifyingDetail'),
             subtitle: progressSubtitle(
+                'verify',
                 info.verifiedBytes / info.bytes.total,
                 t('settingsVoice.local.modelPackDownload.verifyingAccessibilityLabel'),
                 t('settingsVoice.local.modelPackDownload.verifyingProgress', {
@@ -79,6 +87,7 @@ function describeDownloading(progress: unknown): ModelPackRowPresentation {
     return {
         detail,
         subtitle: progressSubtitle(
+            'download',
             info.bytes.loaded / info.bytes.total,
             t('settingsVoice.local.modelPackDownload.progressAccessibilityLabel'),
             line,
