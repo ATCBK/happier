@@ -236,7 +236,9 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
 
     // Compact popovers disclose help; full and inline sheets show it directly in the body footer.
     if (input.presentation === 'compact' && (Object.values(adapter.levels).some(level => level.help) || adapter.notes?.length)) {
+        // A disclosure row, not a heading: it carries its mark so it reads as something to open.
         sections.push({ kind: 'static', id: 'help', options: [{ id: 'access-help', testID: `${idPrefix}${ns}-help`, label: t('common.details'),
+            icon: () => <ShareHelpIcon />,
             onSelect: () => input.onExpand('access-help'), expandedContentInset: 'none',
             expandedContent: () => <ShareHelp adapter={adapter} testID={`${idPrefix}${ns}-help-content`} /> }] });
     }
@@ -259,6 +261,11 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
 export function ShareHandoffIcon(props: Readonly<{ name: 'link' | 'copy' }>): React.ReactElement {
     const { theme } = useUnistyles();
     return <Icon name={props.name} size={ICON_SIZE.sm} color={theme.colors.text.secondary} />;
+}
+
+function ShareHelpIcon(): React.ReactElement {
+    const { theme } = useUnistyles();
+    return <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />;
 }
 
 function ShareDirectoryIcon(): React.ReactElement {

@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { findTestInstanceByTypeContainingText, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionOwnerViewerFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
@@ -184,6 +184,16 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     seedRelations();
     homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
     const { screen, writes, closes } = await renderPicker();
+    // The canonical preview decides "My work" from the viewer's own facts: answer as the owner from here on.
+    const owned = ['lead', 'api', 'ui'].map((id) => {
+      const { viewer: _viewer, ...session } = getStorage().getState().sessions[id]!;
+      return { ...session, access: createSessionAccessFixture('owner') };
+    });
+    homes.answer(serverId, '/v2/sessions/query', { body: {
+      sessions: owned.map((session) => ({ ...createPlainSessionByIdResponseFixture(session).session,
+        viewer: createSessionOwnerViewerFixture(session) })),
+      hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null,
+    } });
     await act(async () => screen.pressByTestId('session-talk-target:matching'));
     // An inline step of the same picker: the list gives way to the shared editor, with Back.
     expect(screen.findByTestId('session-talk-target:manager')).toBeNull();
@@ -191,7 +201,8 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     expect(screen.findByTestId('session-talk-matching-back')).not.toBeNull();
     // "Use these" waits for the Action's own preview to prove who the filter reaches.
     await vi.waitFor(() => {
-      expect(screen.findByTestId('session-list-filter-done')?.props.disabled).not.toBe(true);
+      const summary = screen.findByTestId('session-list-filter-result-count')?.props.children;
+      expect(screen.findByTestId('session-list-filter-done')?.props.disabled, String(summary)).not.toBe(true);
     });
     await act(async () => screen.pressByTestId('session-list-filter-done'));
     expect(writes).toHaveLength(1);
@@ -199,7 +210,8 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     if (!written || written.kind !== 'ask' || typeof written.target === 'string' || written.target.selector !== 'matching') {
       throw new Error(`expected a Matching ask, got ${JSON.stringify(written)}`);
     }
-    expect(written.target.filter).toMatchObject({ show: 'sessions', homeServerIds: [serverId] });
+    // A hidden "Started by" never narrows Matching; the selector names this session's Home.
+    expect(written.target.filter).toMatchObject({ show: 'sessions', startedBy: ['you', 'agents', 'triggers'], homeServerIds: [serverId] });
     expect(closes).toHaveLength(1);
   });
 

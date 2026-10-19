@@ -296,7 +296,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     const { height: windowHeight } = useWindowDimensions();
     const maxHeightCap = props.maxHeightCap ?? windowHeight;
     const placementMinSpace = props.maxHeightCap ?? POPOVER_PREFERRED_ROOM_PX;
-    const emptyLabel = props.emptyLabel === undefined ? t('commandPalette.noCommandsFound') : props.emptyLabel;
+    const emptyLabel = props.emptyLabel === undefined ? t('common.noMatches') : props.emptyLabel;
     const contentPadding = rowVariant === 'slim' ? 12 : 16;
     const resultsPaddingBottom = typeof props.resultsPaddingBottom === 'number'
         ? props.resultsPaddingBottom

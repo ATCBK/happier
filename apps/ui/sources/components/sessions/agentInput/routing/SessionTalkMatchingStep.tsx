@@ -24,12 +24,14 @@ import { t } from '@/text';
 
 import { AGENT_INPUT_MENU_ICON_SIZE_PX } from '../definitions/agentInputChipIconMetrics';
 
-/** Matching reads one Home's Sessions: the preview resolves on this session's Home, never Runs. */
-export function createSessionTalkMatchingFilter(
-  serverId: string,
-): SessionListFilterV1 {
+/**
+ * Matching reads one Home's Sessions: the preview resolves on this session's Home (an empty Home list
+ * matches nothing), never Runs. The editor hides "Started by" for Sessions, so it must not narrow either.
+ */
+export function createSessionTalkMatchingFilter(serverId: string): SessionListFilterV1 {
   return normalizeSessionListFilterV1({
     show: 'sessions',
+    startedBy: ['you', 'agents', 'triggers'],
     homeServerIds: [serverId],
   });
 }
