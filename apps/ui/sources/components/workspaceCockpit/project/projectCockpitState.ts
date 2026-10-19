@@ -1,4 +1,4 @@
-export const PROJECT_PAGES = ['overview', 'code', 'changes', 'scripts', 'services', 'context'] as const;
+export const PROJECT_PAGES = ['overview', 'code', 'changes', 'scripts', 'services', 'context', 'memory'] as const;
 export type ProjectPageV1 = typeof PROJECT_PAGES[number];
 /** Companion ids are retained registry selections, never alternate Project page routes. */
 export type ProjectMobileSurface = ProjectPageV1 | 'browse' | 'git' | 'tabs' | 'terminal' | 'browser';
@@ -107,7 +107,7 @@ export function resolveProjectCockpitRouteFromPathname(
 ): Readonly<{ workspaceRefId: string; page: ProjectPageV1; surface: ProjectMobileSurface }> | null {
     let url: URL;
     try { url = new URL(pathname ?? '', 'https://happier.invalid'); } catch { return null; }
-    const match = /^\/projects\/([^/]+)(?:\/(overview|code|changes|scripts|services|context|terminal))?\/?$/.exec(url.pathname);
+    const match = /^\/projects\/([^/]+)(?:\/(overview|code|changes|scripts|services|context|memory|terminal))?\/?$/.exec(url.pathname);
     if (!match) return null;
     let workspaceRefId: string;
     try { workspaceRefId = decodeURIComponent(match[1]!); } catch { return null; }

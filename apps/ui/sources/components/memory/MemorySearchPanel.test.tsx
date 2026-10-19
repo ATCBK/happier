@@ -261,6 +261,32 @@ describe('MemorySearchPanel corpus coverage', () => {
         expect(screen.getTextContent()).toContain('1 facts');
         expect(screen.getTextContent()).not.toContain('2 facts');
     });
+    it('reports the selected unavailable Machine for counts while the document remains readable', async () => {
+        const serverId = administration.serverIds[0]!;
+        const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({
+            v: 1, index: [{ id: 'key', text: 'Keep the saved fact readable.', createdAtMs: 1, sourceSessionRef: null }], topics: [],
+        }));
+        homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
+        const ref = { kind: 'doc' as const, serverId, artifactId };
+        const machineId = administration.targets[0]!.machineId;
+        const machine = storage.getState().machines[machineId]!;
+        const lastSeenAt = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(lastSeenAt + readMachineOnlineGraceMsFromEnv() + 1);
+        homes.answer(serverId, '/v1/machines', { body: [{ ...createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }), active: false }] });
+        await act(async () => storage.getState().applyMachines([{ ...machine, active: false, activeAt: lastSeenAt }], false, { sourceServerId: serverId }));
+        const hook = await renderHook(() => {
+            const source = useMemoryDocument({ ref, serverId });
+            return { source, summary: useMemoryDocumentSummary({ source, serverId }) };
+        }, { wrapper: ({ children }) => <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
+        try {
+            await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().source.status).toBe('ready'); });
+            expect(hook.getCurrent().source.view?.facts[0]?.text).toBe('Keep the saved fact readable.');
+            expect(hook.getCurrent().summary).toMatchObject({ state: 'unavailable', cause: {
+                reason: 'machine_unavailable', target: { serverId: administration.targets[0]!.serverIdentityId, machineId },
+            } });
+            expect(machineRpc).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); clock.mockRestore(); }
+    });
     it('keeps a fresh summary stable and refuses late scoped status after its context changes', async () => {
         const serverId = administration.serverIds[0]!;
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }, JSON.stringify({

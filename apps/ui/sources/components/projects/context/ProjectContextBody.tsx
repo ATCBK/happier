@@ -9,7 +9,6 @@ import { ContextMemorySection } from '@/components/settings/prompts/context/Cont
 import { PromptStackDocumentMenu } from '@/components/settings/prompts/stacks/PromptStackDocumentMenu';
 import { PromptStackEntryRow } from '@/components/settings/prompts/stacks/PromptStackEntryRow';
 import {
-  isMemoryStackEntry,
   promptStackEntryHref,
   promptStackEntryTitle,
   usePromptStackEntryPresentations,
@@ -35,6 +34,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { CheckoutReachabilityLine } from '@/components/workspaces/reachability/checkoutReachability';
 import { resolveWorkspaceRefDisplayName } from '../resolveWorkspaceRefDisplayName';
 import { ProjectCapabilitiesSection } from './ProjectCapabilitiesSection';
+import { selectProjectMemoryEntry } from './projectMemoryEntry';
 import {
   useProjectContext,
   type ProjectContextOutcome,
@@ -78,24 +78,10 @@ export const ProjectContextBody = React.memo(function ProjectContextBody(
   const personalAddRef = React.useRef<View>(null);
 
   const hasSource = shared.status !== 'none';
-  // Project memory follows the Action's owner: Source-bound Projects use the Source,
-  // even before it has memory or while it cannot be read. Other Projects use the viewer's row.
-  const sharedMemory = React.useMemo(
-    () =>
-      shared.entries.find((entry) =>
-        isMemoryStackEntry(entry, presentations),
-      ) ?? null,
-    [presentations, shared.entries],
+  const { entry: memory, layer: memoryLayer } = React.useMemo(
+    () => selectProjectMemoryEntry({ hasSource, sharedEntries: shared.entries, personalEntries: personal.entries, presentations }),
+    [hasSource, personal.entries, presentations, shared.entries],
   );
-  const personalMemory = React.useMemo(
-    () =>
-      personal.entries.find((entry) =>
-        isMemoryStackEntry(entry, presentations),
-      ) ?? null,
-    [presentations, personal.entries],
-  );
-  const memory = hasSource ? sharedMemory : personalMemory;
-  const memoryLayer: Layer = hasSource ? 'shared' : 'personal';
   const sharedDocuments = React.useMemo(
     () => shared.entries.filter((entry) => entry.id !== memory?.id),
     [memory?.id, shared.entries],

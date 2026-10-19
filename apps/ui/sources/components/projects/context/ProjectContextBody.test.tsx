@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installPromptStacksCommonModuleMocks } from '@/components/settings/prompts/stacks/promptStacksScreenTestHelpers';
@@ -21,6 +22,7 @@ const { storage } = await import('@/sync/domains/state/storageStore');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { ProjectContextBody } = await import('./ProjectContextBody');
+const { ProjectMemoryBody } = await import('../memory/ProjectMemoryBody');
 const baseline = storage.getState();
 
 const scope = { serverId: 'project-context-home', accountId: 'project-context-account' };
@@ -51,6 +53,45 @@ describe('ProjectContextBody', () => {
         expect(screen.findByTestId('project-context.memory.remember')).toBeTruthy();
         await screen.pressByTestIdAsync('project-context.memory.remember');
         expect(screen.findByTestId('project-context.memory.draft')).toBeTruthy();
+    });
+
+    describe.each([
+        ['Context', ProjectContextBody, 'project-context.memory'],
+        ['Memory', ProjectMemoryBody, 'project-memory.memory'],
+    ] as const)('%s Project read status', (_name, Body, memoryTestID) => {
+        it('keeps unknown memory loading until a complete Project read establishes absence', async () => {
+            storage.getState().clearProjectAccountRowsScope();
+            storage.getState().activateProjectAccountRowsScope(scope);
+            const screen = await renderScreen(<Body workspaceRef={workspaceRef} />);
+            expect(screen.findByTestId(`${memoryTestID}.none`)).toBeNull();
+            expect(screen.findByTestId(`${memoryTestID}.remember`)).toBeNull();
+            expect(screen.findByTestId(`${memoryTestID}.loading`)).toBeTruthy();
+
+            await act(async () => {
+                storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'partial',
+                    workspaceRefs: [workspaceRef], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+            });
+            expect(screen.findByTestId(`${memoryTestID}.none`)).toBeNull();
+            expect(screen.findByTestId(`${memoryTestID}.loading`)).toBeTruthy();
+
+            await act(async () => {
+                storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
+                    workspaceRefs: [workspaceRef], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+            });
+            expect(screen.findByTestId(`${memoryTestID}.loading`)).toBeNull();
+            expect(screen.findByTestId(`${memoryTestID}.none`)).toBeTruthy();
+            expect(screen.findByTestId(`${memoryTestID}.remember`)).toBeTruthy();
+        });
+
+        it.each(['error', 'locked', 'refused'] as const)('does not report a failed %s Project read as empty memory', async (status) => {
+            storage.getState().clearProjectAccountRowsScope();
+            storage.getState().activateProjectAccountRowsScope(scope);
+            storage.getState().setProjectAccountRowsStatusForScope(scope, status);
+            const screen = await renderScreen(<Body workspaceRef={workspaceRef} />);
+            expect(screen.findByTestId(`${memoryTestID}.none`)).toBeNull();
+            expect(screen.findByTestId(`${memoryTestID}.remember`)).toBeNull();
+            expect(screen.findByTestId(`${memoryTestID}.unavailable`)).toBeTruthy();
+        });
     });
 
     it('draws the personal Project layer: memory in its own section, documents as rows, an unreadable one without its title', async () => {

@@ -17,6 +17,8 @@ import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Icon } from '@/components/ui/icons/Icon';
 import { reanimatedDisclosureMotion } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ManagedSectionCount } from '@/components/settings/machines/managed/ManagedSectionCount';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -67,6 +69,10 @@ type CollapsingFact = Readonly<{ fact: MemoryFactV1; index: number; settled: boo
 
 const NO_FACT_IDS: ReadonlySet<string> = new Set();
 const NO_FACTS: readonly MemoryFactV1[] = [];
+
+function isExpiredFact(fact: MemoryFactV1, nowMs: number): boolean {
+  return fact.expiresAtMs !== undefined && fact.expiresAtMs <= nowMs;
+}
 
 function orderDecisionsFirst(facts: readonly MemoryFactV1[] | undefined): readonly MemoryFactV1[] {
   if (!facts || facts.length === 0) return NO_FACTS;
@@ -163,6 +169,14 @@ export type MemoryDocumentBodyProps = Readonly<{
   selectedFactId?: string | null;
   /** The signed-in Account, so its own approvals read "you" even while no write target is admitted. */
   viewerAccountId?: string | null;
+  /**
+   * The document's own index page (lab K2 `A`): decisions and notes are their own counted sections,
+   * and expired facts fold into one line (kept in history, out of context) that shows them on demand.
+   * The body then draws its own sections, so the caller does not wrap it in one.
+   */
+  grouped?: boolean;
+  /** Opens this fact's edit form on arrival (a fact page's Edit returns to the list to edit it). */
+  editFactId?: string;
 }>;
 
 /**
@@ -234,6 +248,8 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
   // Decisions lead, then notes, each in their saved order (lab K2): one list, not a second destination.
   const orderedFacts = React.useMemo(() => orderDecisionsFirst(view?.facts), [view?.facts]);
   factsRef.current = orderedFacts;
+  const [showExpired, setShowExpired] = React.useState(false);
+  const now = Date.now();
 
   const refresh = source.refresh;
   const settle = React.useCallback(
@@ -473,6 +489,15 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     },
     [onComposingChange, source.draftCustody],
   );
+  // A fact page's Edit lands here once its fact and an admitted version are on screen.
+  const requestedEdit = React.useRef<string | null>(null);
+  const editFact = props.editFactId ? orderedFacts.find((fact) => fact.id === props.editFactId) ?? null : null;
+  const canEdit = writable && target !== null && Boolean(source.draftCustody?.isCurrent());
+  React.useEffect(() => {
+    if (!editFact || !canEdit || requestedEdit.current === editFact.id) return;
+    requestedEdit.current = editFact.id;
+    startEdit(editFact);
+  }, [canEdit, editFact, startEdit]);
 
   const openTopic = React.useCallback(
     (title: string) => {
@@ -585,7 +610,36 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
     </InlineAddExpander>
   ) : null;
 
-  return (
+  const factRow = ({ fact, leaving }: Readonly<{ fact: MemoryFactV1; leaving: boolean }>) =>
+        editingId === fact.id ? (
+          <React.Fragment key={fact.id}>{draftForm}</React.Fragment>
+        ) : (
+          <MemoryFactSlot
+            key={fact.id}
+            testID={`${testID}.fact.${fact.id}.slot`}
+            factId={fact.id}
+            leaving={leaving}
+            reducedMotion={reducedMotion}
+            onCollapsed={settleCollapse}
+          >
+            <MemoryFactRow
+              testID={`${testID}.fact.${fact.id}`}
+              fact={fact}
+              serverId={serverId}
+              archived={archive}
+              writable={writable && target !== null && !leaving}
+              disabled={busy}
+              arrived={arrivedFactIds.has(fact.id)}
+              viewerAccountId={target?.accountId ?? props.viewerAccountId ?? null}
+              onEdit={startEdit}
+              onForget={forget}
+              onOpenSession={props.onOpenSession}
+              onOpenFact={props.onOpenFact}
+              selected={props.selectedFactId === fact.id}
+            />
+          </MemoryFactSlot>
+        );
+  const leading = (
     <>
       {notice === 'pending' ? (
         <SurfaceFreshnessLine
@@ -667,47 +721,10 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
       {restoreForm}
       {props.composing && !editingId && !restoring && writable && (target || canCreate) ? draftForm : null}
       {editingId && view && !rows.some(({ fact }) => fact.id === editingId) ? draftForm : null}
-      {rows.map(({ fact, leaving }) =>
-        editingId === fact.id ? (
-          <React.Fragment key={fact.id}>{draftForm}</React.Fragment>
-        ) : (
-          <MemoryFactSlot
-            key={fact.id}
-            testID={`${testID}.fact.${fact.id}.slot`}
-            factId={fact.id}
-            leaving={leaving}
-            reducedMotion={reducedMotion}
-            onCollapsed={settleCollapse}
-          >
-            <MemoryFactRow
-              testID={`${testID}.fact.${fact.id}`}
-              fact={fact}
-              serverId={serverId}
-              archived={archive}
-              writable={writable && target !== null && !leaving}
-              disabled={busy}
-              arrived={arrivedFactIds.has(fact.id)}
-              viewerAccountId={target?.accountId ?? props.viewerAccountId ?? null}
-              onEdit={startEdit}
-              onForget={forget}
-              onOpenSession={props.onOpenSession}
-              onOpenFact={props.onOpenFact}
-              selected={props.selectedFactId === fact.id}
-            />
-          </MemoryFactSlot>
-        ),
-      )}
-      {hiddenCount > 0 ? (
-        <Item
-          testID={`${testID}.showAll`}
-          density="compact"
-          showChevron={false}
-          showDivider={false}
-          title={t('memoryContext.memory.showAll', { count: facts.length })}
-          titleStyle={styles.showAll}
-          onPress={openAll}
-        />
-      ) : null}
+    </>
+  );
+  const trailing = (
+    <>
       {view && facts.length === 0 && !props.composing ? (
         props.renderEmpty ? props.renderEmpty({
           testID: `${testID}.empty`,
@@ -788,6 +805,89 @@ export const MemoryDocumentBody = React.memo(function MemoryDocumentBody(
           titleStyle={styles.footer}
         />
       ) : null}
+    </>
+  );
+  if (!props.grouped || topic) {
+    return (
+      <>
+        {leading}
+        {rows.map(factRow)}
+      {hiddenCount > 0 ? (
+        <Item
+          testID={`${testID}.showAll`}
+          density="compact"
+          showChevron={false}
+          showDivider={false}
+          title={t('memoryContext.memory.showAll', { count: facts.length })}
+          titleStyle={styles.showAll}
+          onPress={openAll}
+        />
+      ) : null}
+        {trailing}
+      </>
+    );
+  }
+  // The index page: decisions, then notes, each its own counted section; expired facts fold away.
+  const leadingForm = (props.composing && !editingId && !restoring && writable && Boolean(target || canCreate))
+    || (restoring !== null && review !== null)
+    || (editingId !== null && view !== null && !rows.some(({ fact }) => fact.id === editingId));
+  const live = rows.filter(({ fact, leaving }) => leaving || !isExpiredFact(fact, now) || showExpired);
+  const expiredFacts = facts.filter((fact) => isExpiredFact(fact, now));
+  const decisionRows = live.filter(({ fact }) => fact.decision !== undefined);
+  const noteRows = live.filter(({ fact }) => fact.decision === undefined);
+  return (
+    <>
+      {/* A form opened here is a sheet of its own; the lines above the facts stay flat. */}
+      <ItemGroup header="none" surface={leadingForm ? undefined : 'none'}>{leading}</ItemGroup>
+      {decisionRows.length > 0 ? (
+        <ItemGroup
+          testID={`${testID}.decisions`}
+          title={t('memoryContext.memory.decisionsTitle')}
+          titleAccessory={<ManagedSectionCount count={decisionRows.length} />}
+          // Selection spans both sections: one fact of the page is open at a time.
+          selectableItemCountOverride={live.length}
+        >
+          {decisionRows.map(factRow)}
+        </ItemGroup>
+      ) : null}
+      {noteRows.length > 0 ? (
+        <ItemGroup
+          testID={`${testID}.notes`}
+          title={t('memoryContext.memory.notesTitle')}
+          titleAccessory={<ManagedSectionCount count={noteRows.length} />}
+          selectableItemCountOverride={live.length}
+        >
+          {noteRows.map(factRow)}
+        </ItemGroup>
+      ) : null}
+      <ItemGroup header="none" surface="none">
+        {expiredFacts.length > 0 ? (
+          <Item
+            testID={`${testID}.expired`}
+            mode="info"
+            density="compact"
+            showChevron={false}
+            showDivider={false}
+            icon={<Icon name="clock-counter-clockwise" />}
+            title={expiredFacts.every((fact) => fact.decision !== undefined)
+              ? t('memoryContext.memory.expiredDecisions', { count: expiredFacts.length })
+              : t('memoryContext.memory.expiredFacts', { count: expiredFacts.length })}
+            titleStyle={styles.footer}
+            rightElement={(
+              <Pressable
+                testID={`${testID}.expired.toggle`}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showExpired }}
+                onPress={() => setShowExpired((open) => !open)}
+                hitSlop={8}
+              >
+                <Text style={styles.showAll}>{showExpired ? t('memoryContext.memory.hideExpired') : t('memoryContext.memory.showExpired')}</Text>
+              </Pressable>
+            )}
+          />
+        ) : null}
+        {trailing}
+      </ItemGroup>
     </>
   );
 });

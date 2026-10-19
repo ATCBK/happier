@@ -20,7 +20,7 @@ import {
 } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { getRightSidebarTabLabel, resolveProjectRightSidebarTabs } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import { resolveRightSidebarMobileProjection, resolveRightSidebarMobileSurface } from '@/components/appShell/rightSidebar/rightSidebarMobileProjection';
-import { projectPageLabel } from '@/components/projects/shell/ProjectShellHeader';
+import { projectPageGlyph, projectPageLabel } from '@/components/projects/shell/ProjectShellHeader';
 import {
   CockpitTabBar,
   CockpitTabBarAction,
@@ -41,14 +41,6 @@ type ProjectCockpitDestination = Readonly<{
   icon: IconName;
 }>;
 
-const PAGE_ICONS: Readonly<Record<(typeof PROJECT_PAGES)[number], IconName>> = {
-  overview: 'list-bullets',
-  code: 'code',
-  changes: 'git-branch',
-  scripts: 'play',
-  services: 'hard-drives',
-  context: 'stack',
-};
 
 /**
  * The phone's Project bar (12s1, lab `p-overview` HOMEp): the six pages in order, as many as the
@@ -72,7 +64,7 @@ export const ProjectCockpitTabBar = React.memo(
       (page) => ({
         id: page,
         label: projectPageLabel(page),
-        icon: PAGE_ICONS[page],
+        icon: projectPageGlyph(page),
       }),
     );
     const registry = resolveProjectRightSidebarTabs({ presentation: 'mobile',

@@ -6,9 +6,10 @@ import {
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -42,6 +43,8 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
     onOpenSession?: (
       ref: Readonly<{ serverId: string; sessionId: string }>,
     ) => void;
+    /** Present when this reader may change the fact: its edit form opens in the list. */
+    onEdit?: () => void;
   }>,
 ) {
   const { fact, onOpenSession } = props;
@@ -89,6 +92,8 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
   const agentLine = props.archived
     ? ''
     : renderMemoryDocV1({ body: { v: 1, index: [fact], topics: [] }, nowMs: now }).markdown.trim();
+  const agentEntry = React.useMemo(() => readAgentLine(agentLine), [agentLine]);
+  const [exactLine, setExactLine] = React.useState(false);
   const approval = !decision
     ? null
     : decision.approvedBy === null
@@ -115,6 +120,16 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
     <ItemList testID={props.testID}>
       <PageHeader
         title={fact.text}
+        actions={props.onEdit ? (
+          <RoundButton
+            testID={`${props.testID}.edit`}
+            size="small"
+            display="secondary"
+            title={t('common.edit')}
+            onPress={props.onEdit}
+          />
+        ) : undefined}
+        actionsPlacement="page"
         meta={[
           {
             key: 'kind',
@@ -186,6 +201,20 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
       </ItemGroup>
       <ItemGroup
         title={t('memoryContext.memory.whatAgentsSee')}
+        actionLayout="trailing"
+        action={agentLine && agentEntry ? (
+          <Pressable
+            testID={`${props.testID}.exactLine`}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: exactLine }}
+            hitSlop={8}
+            onPress={() => setExactLine((open) => !open)}
+          >
+            <Text style={styles.toggle}>
+              {exactLine ? t('memoryContext.memory.readableLine') : t('memoryContext.memory.exactLine')}
+            </Text>
+          </Pressable>
+        ) : undefined}
         description={
           agentLine
             ? t('memoryContext.memory.whatAgentsSeeLoaded')
@@ -194,9 +223,18 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
       >
         {agentLine ? (
           <View testID={`${props.testID}.agentLine`} style={styles.agentLine}>
-            <Text selectable style={styles.agentLineText}>
-              {agentLine}
-            </Text>
+            {exactLine || !agentEntry ? (
+              <Text selectable style={styles.agentLineText}>
+                {agentLine}
+              </Text>
+            ) : (
+              <>
+                <Text selectable variant="body" style={styles.value}>{agentEntry.text}</Text>
+                {agentEntry.facts.length > 0 ? (
+                  <Text style={styles.agentLineMeta}>{agentEntry.facts.join(' · ')}</Text>
+                ) : null}
+              </>
+            )}
           </View>
         ) : null}
       </ItemGroup>
@@ -231,7 +269,46 @@ export const MemoryFactDetail = React.memo(function MemoryFactDetail(
   );
 });
 
+/**
+ * The index line agents load, read back for people: its words, then the facts it carries in plain
+ * terms ("added Oct 19", "expires …"). The id stays in the exact line. Null when the line is not the
+ * renderer's `- text [k: v; …]` shape, so the exact line is shown instead.
+ */
+function readAgentLine(line: string): Readonly<{ text: string; facts: readonly string[] }> | null {
+  const match = /^- (.*) \[([^\]]*)\]$/.exec(line);
+  if (!match) return null;
+  const facts: string[] = [];
+  for (const part of match[2]!.split('; ')) {
+    const separator = part.indexOf(': ');
+    if (separator < 0) continue;
+    const key = part.slice(0, separator);
+    const value = part.slice(separator + 2);
+    if (key === 'added') facts.push(t('memoryContext.memory.agentLineAdded', { date: formatAgentLineDate(value) }));
+    else if (key === 'expires') facts.push(t('memoryContext.memory.agentLineExpires', { date: formatAgentLineDate(value) }));
+    else if (key === 'source') facts.push(t('memoryContext.memory.agentLineSource'));
+    else if (key === 'supersedes') facts.push(t('memoryContext.memory.agentLineReplaces'));
+  }
+  return { text: match[1]!, facts };
+}
+
+/** The line's dates are whole days (`YYYY-MM-DD`); people read them the way the rest of Memory does. */
+function formatAgentLineDate(value: string): string {
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(ms) ? value : formatMemoryDate(ms);
+}
+
 const styles = StyleSheet.create((theme) => ({
+  agentLineMeta: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+    marginTop: theme.space.s4,
+  },
+  toggle: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+  },
   value: {
     color: theme.colors.text.primary,
   },

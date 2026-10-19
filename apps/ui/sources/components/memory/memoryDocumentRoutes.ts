@@ -15,6 +15,8 @@ export function memoryDocumentHref(
     serverId?: string | null;
     topic?: string;
     factId?: string;
+    /** Opens that fact's edit form on the list (a fact page's Edit). */
+    editFactId?: string;
   }>,
 ): string {
   const query: string[] = [];
@@ -22,6 +24,7 @@ export function memoryDocumentHref(
   if (serverId) query.push(`serverId=${encodeURIComponent(serverId)}`);
   if (options?.topic) query.push(`topic=${encodeURIComponent(options.topic)}`);
   if (options?.factId) query.push(`fact=${encodeURIComponent(options.factId)}`);
+  if (options?.editFactId) query.push(`edit=${encodeURIComponent(options.editFactId)}`);
   const destination = `${MEMORY_ROOT}/${encodeURIComponent(ref.artifactId)}`;
   return query.length > 0 ? `${destination}?${query.join('&')}` : destination;
 }

@@ -3,10 +3,53 @@ import { MemoryDocBodyV1Schema } from '@happier-dev/protocol/prompts/library/mem
 import { encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { ProjectSourcesUpdateInputV1Schema, type ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 
 import { memoryDocumentActions, readMemoryActionOutcome, readMemoryDuplicateReview } from './memoryDocuments';
 
 describe('memory Action receipts', () => {
+  it('attaches the first Source-bound Project memory through the real Account host without its Machine', async () => {
+    let source: ProjectSourceV1 = { id: 'qa-memory-source', revision: 3, name: 'QA Memory Source', createdByAccountId: 'artifact-account', audience: [],
+      repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+        repository: { nameWithOwner: 'qa/memory', visibility: 'private' }, protocol: 'https' }, attachments: [] };
+    let homeId = '';
+    const fixture = await createPlainArtifactHomeFixture('https://source-first-memory.test', { currentAccount: true,
+      handleRequest: async (path, init) => {
+        if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {
+          actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'memory.remember': ['ui'] } },
+        } } });
+        if (path === PROJECT_ACCOUNT_ROWS_ROUTE_V1 + '/list') return Response.json(createPlainProjectAccountRowListFixture({
+          workspaceRefs: [{ id: 'qa-checkout', serverId: homeId, projectKey: 'qa-project', machineId: 'offline-machine',
+            rootPath: '/qa/memory', createdAtMs: 1, source: { sourceId: source.id, revision: 3 } }],
+        }));
+        if (path.startsWith('/v1/projects/sources/' + source.id)) {
+          if (init?.method === 'PATCH') {
+            const input = ProjectSourcesUpdateInputV1Schema.parse(JSON.parse(String(init.body)));
+            if (input.expectedRevision !== source.revision) return Response.json({ ok: false, error: 'source_conflict', current: source }, { status: 409 });
+            if (input.patch.attachment?.kind !== 'attach') throw new Error('Expected attachment');
+            source = { ...source, revision: source.revision + 1, attachments: [...(source.attachments ?? []), input.patch.attachment.attachment] };
+          }
+          return Response.json({ ok: true, source, canManage: true });
+        }
+        if (path.startsWith('/v1/public-shares?')) return Response.json({ publicShares: [] });
+        return null;
+      },
+    });
+    homeId = fixture.home.id;
+    try {
+      await fixture.hydrateAccountSettings();
+      const result = await memoryDocumentActions.rememberInScope({ scope: 'project', projectRef: { serverId: homeId, projectKey: 'qa-project' } },
+        { text: 'QA use the canonical context attachment.' }, homeId);
+      expect(result).toMatchObject({ ok: true, result: { attachment: 'attached', ref: { kind: 'doc', serverId: homeId } } });
+      const saved = fixture.boundary.list().filter(row => fixture.boundary.readPlainBody(row.id)?.includes('QA use the canonical context attachment.'));
+      expect(saved).toHaveLength(1);
+      expect(source.attachments).toEqual([{ purpose: 'context', entry: { id: 'project.memory', ref: {
+        kind: 'doc', artifactId: saved[0]!.id, serverId: homeId }, enabled: true, placement: 'system_append' } }]);
+      expect(fixture.requests.some(request => request.path.includes('/machines/'))).toBe(false);
+    } finally { await fixture.dispose(); }
+  });
   it('replays an explicit restore choice through the real UI Action and captured Artifact CAS', async () => {
     const body = MemoryDocBodyV1Schema.parse({ v: 1, index: [
       { id: 'existing', text: 'Use PostgreSQL', createdAtMs: 1, sourceSessionRef: null },
