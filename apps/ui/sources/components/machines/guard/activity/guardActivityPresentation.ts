@@ -95,11 +95,14 @@ function reason(entry: MachineGuardActivityRowV1): string | null {
     return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+/** Freed disk receipts and stopped-process memory use the same classification in every projection. */
+function freedQuantityKind(entry: MachineGuardActivityRowV1): 'storage' | 'memory' {
+    return entry.kind === 'housekeeping' || entry.kind === 'trash_emptied' || entry.kind === 'trash_moved' ? 'storage' : 'memory';
+}
+
 function figure(entry: MachineGuardActivityRowV1): string | null {
     if (entry.freedBytes !== undefined && entry.freedBytes > 0) {
-        // Trash and disk figures are storage; everything the guard stops frees memory.
-        const kind = entry.kind === 'trash_emptied' ? 'storage' : 'memory';
-        return t('machineGuard.activity.freed', { amount: formatMachineBytes(entry.freedBytes, kind) });
+        return t('machineGuard.activity.freed', { amount: formatMachineBytes(entry.freedBytes, freedQuantityKind(entry)) });
     }
     if (entry.inTrashBytes !== undefined && entry.inTrashBytes > 0) return t('machineGuard.activity.inTrash', { amount: formatMachineBytes(entry.inTrashBytes, 'storage') });
     return null;
@@ -147,7 +150,7 @@ export function groupGuardActivityByDay(entries: readonly MachineGuardActivityRo
     }
     return [...groups.entries()].sort((a, b) => b[0] - a[0]).map(([dayStart, dayEntries]) => ({
         dayStart, entries: dayEntries,
-        freedMemoryBytes: dayEntries.reduce((sum, entry) => sum + (entry.undoneAt === undefined && entry.kind !== 'trash_emptied' ? entry.freedBytes ?? 0 : 0), 0),
+        freedMemoryBytes: dayEntries.reduce((sum, entry) => sum + (entry.undoneAt === undefined && freedQuantityKind(entry) === 'memory' ? entry.freedBytes ?? 0 : 0), 0),
         inTrashBytes: dayEntries.reduce((sum, entry) => sum + (entry.undoneAt === undefined ? entry.inTrashBytes ?? 0 : 0), 0),
     }));
 }
@@ -167,7 +170,7 @@ export function summarizeGuardActivity(entries: readonly MachineGuardActivityRow
     let trashItems = 0;
     for (const entry of entries) {
         if (entry.undoneAt !== undefined) continue;
-        if (entry.kind !== 'trash_emptied') freedBytes += entry.freedBytes ?? 0;
+        if (freedQuantityKind(entry) === 'memory') freedBytes += entry.freedBytes ?? 0;
         if (entry.kind !== 'trash_moved' || (entry.inTrashBytes ?? 0) <= 0) continue;
         inTrashBytes += entry.inTrashBytes ?? 0;
         trashItems += entry.subject?.kind === 'trash' ? entry.subject.items : 0;
