@@ -31,7 +31,11 @@ import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { BrowserUrlField } from '../BrowserUrlField';
+import { useBrowserSessionAgentIdentity, type BrowserShellAgentPresence } from '../copresence/BrowserShellPresence';
+import type { BrowserStreamedSurfaceRuntime } from '../adapters/BrowserStreamedTarget';
+import type { BrowserSandboxInstallOutcome } from '@/sync/domains/browser/firstUse/browserFirstUse';
 import { bindServicesOpenInBrowser } from '../surfaces/openBrowserTargetInWorkspace';
+import { describeBrowserSandboxAllowance, useBrowserSandboxAllowance } from '../streamed/useBrowserSandboxAllowance';
 
 export type BrowserLaunchpadOpenTargetOptions = Readonly<{
     platform: BrowserPlatformV1;
@@ -45,6 +49,32 @@ type ResolvedBrowserLaunchpadRow = BrowserLaunchpadRow & Readonly<{
     targetPolicyDecision?: BrowserTargetPolicyDecisionV1 | null;
     desktopWebViewAvailability?: DesktopWebViewNativeAvailability | null;
 }>;
+
+/**
+ * What keeps the agent's own browser from opening, as a typed prerequisite of its Machine. The
+ * in-app browser below still works, so this explains the agent's side and never blocks the page.
+ */
+export type BrowserLaunchpadAgentBrowser = Readonly<{
+    reasonCode: 'managed_package_missing' | 'browser_runtime_provisioning_failed' | 'sandbox_unavailable';
+    agent: BrowserShellAgentPresence | null;
+    onRetry?: () => void;
+    /** Allow the sandbox on the Machine; resolves to its outcome, or null when the person declined. */
+    onAllowSandbox?: () => Promise<BrowserSandboxInstallOutcome | null>;
+}>;
+
+/** The first-use state wins over the discovery prerequisite: it is the more specific, newer fact. */
+export function resolveAgentBrowserPrerequisite(
+    runtime: Pick<BrowserStreamedSurfaceRuntime, 'firstUse' | 'unavailableReason' | 'onRetry'> | null | undefined,
+    agent: BrowserShellAgentPresence | null,
+    onAllowSandbox: BrowserLaunchpadAgentBrowser['onAllowSandbox'],
+): BrowserLaunchpadAgentBrowser | undefined {
+    if (!runtime) return undefined;
+    if (runtime.firstUse === 'installFailed') return { reasonCode: 'browser_runtime_provisioning_failed', agent };
+    if (runtime.firstUse === 'sandboxUnavailable') return { reasonCode: 'sandbox_unavailable', agent, onAllowSandbox, onRetry: runtime.onRetry };
+    return runtime.unavailableReason === 'managed_package_missing'
+        ? { reasonCode: runtime.unavailableReason, agent, onRetry: runtime.onRetry }
+        : undefined;
+}
 
 const SECTION_ORDER: readonly BrowserLaunchpadSection[] = [
     'running',
@@ -194,6 +224,11 @@ export function BrowserLaunchpad(props: Readonly<{
     refreshStatus: 'idle' | 'refreshing' | 'error';
     refreshError?: string | null;
     localServicePreviewServerId?: string | null;
+    /**
+     * The agent's own browser cannot open yet because its machine lacks the managed Chromium. The
+     * in-app browser below still works, so this explains the agent's side and never blocks the page.
+     */
+    agentBrowser?: BrowserLaunchpadAgentBrowser;
     onOpenTarget?: (target: BrowserViewTargetV1, options?: BrowserLaunchpadOpenTargetOptions) => void;
     /**
      * OWNER-NAV (DV-NAV): the current-tab in-place navigation seam used by the URL entry box. A
@@ -316,9 +351,15 @@ export function BrowserLaunchpad(props: Readonly<{
                     />
                 </View>
 
+                {props.agentBrowser && hasRows ? (
+                    <AgentBrowserPrerequisite testID={`${testID}-agent-browser`} {...props.agentBrowser} />
+                ) : null}
+
                 {!hasRows ? (
                     <View style={stylesheet.terminalState}>
-                        {props.refreshStatus === 'refreshing' ? (
+                        {props.agentBrowser ? (
+                            <AgentBrowserPrerequisite testID={`${testID}-agent-browser`} {...props.agentBrowser} />
+                        ) : props.refreshStatus === 'refreshing' ? (
                             <SurfaceStateCard
                                 testID={`${testID}-refreshing`}
                                 kind="loading"
@@ -411,6 +452,82 @@ export function BrowserLaunchpad(props: Readonly<{
                 )}
             </ConstrainedScreenContent>
         </ItemList>
+    );
+}
+
+/**
+ * Why the agent's browser has nothing to show: a prerequisite state, in the same card anatomy as the
+ * other unavailable browser states. The cause is the shared reason copy; the code stays behind Details.
+ */
+function AgentBrowserPrerequisite(props: BrowserLaunchpadAgentBrowser & Readonly<{ testID: string }>): React.ReactElement {
+    const identity = useBrowserSessionAgentIdentity(props.agent);
+    const reason = resolveReasonCopy({ reasonCode: props.reasonCode, kind: 'browserLaunchpad' });
+    if (props.reasonCode === 'sandbox_unavailable') {
+        return (
+            <BrowserSandboxPrerequisite
+                testID={props.testID}
+                agentName={identity.name}
+                reason={reason}
+                onAllowSandbox={props.onAllowSandbox}
+            />
+        );
+    }
+    // A failed install is not a prerequisite to re-check: the retry is a new explicit open.
+    const installFailed = props.reasonCode === 'browser_runtime_provisioning_failed';
+    return (
+        <SurfaceStateCard
+            testID={props.testID}
+            kind={installFailed ? 'error' : 'unavailable'}
+            iconName={installFailed ? undefined : 'browsers'}
+            title={installFailed ? t('browserPresence.stream.installFailedTitle') : t('browserPresence.stream.setupTitle', { agent: identity.name })}
+            reason={reason.body}
+            diagnosticCode={reason.diagnosticCode}
+            action={!installFailed && props.onRetry ? { label: t('browserPresence.stream.tryAgain'), onPress: props.onRetry } : undefined}
+            accessibilitySemantics={installFailed ? 'alert' : 'status'}
+        />
+    );
+}
+
+/**
+ * The managed Chromium is installed but this Machine's security policy blocks its sandbox. One primary
+ * action asks the Machine to allow it (never to run without one); the card then tells what happened.
+ */
+function BrowserSandboxPrerequisite(props: Readonly<{
+    testID: string;
+    agentName: string;
+    reason: ReturnType<typeof resolveReasonCopy>;
+    onAllowSandbox?: () => Promise<BrowserSandboxInstallOutcome | null>;
+}>): React.ReactElement {
+    const { allowance, allow } = useBrowserSandboxAllowance(props.onAllowSandbox);
+    const action = allow
+        ? { label: t('browserPresence.stream.sandboxAllow'), onPress: allow, busy: allowance.kind === 'working',
+            testID: `${props.testID}-allow-sandbox` }
+        : undefined;
+    if (allowance.kind === 'settled') {
+        const settled = describeBrowserSandboxAllowance(allowance.outcome, props.agentName);
+        return (
+            <SurfaceStateCard
+                testID={props.testID}
+                kind={settled.kind}
+                title={settled.title}
+                reason={settled.reason}
+                diagnosticCode={settled.code || undefined}
+                action={settled.kind === 'success' ? undefined : action}
+                accessibilitySemantics={settled.kind === 'success' ? 'status' : 'alert'}
+            />
+        );
+    }
+    return (
+        <SurfaceStateCard
+            testID={props.testID}
+            kind="unavailable"
+            iconName="shield"
+            title={t('browserPresence.stream.setupTitle', { agent: props.agentName })}
+            reason={props.reason.body}
+            diagnosticCode={props.reason.diagnosticCode}
+            action={action}
+            accessibilitySemantics="status"
+        />
     );
 }
 

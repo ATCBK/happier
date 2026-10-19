@@ -144,6 +144,8 @@ describe('mounted shared live-stream socket (real reconnect)', () => {
             const previous = hook.getCurrent();
             await frame(previous.streamId);
             await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().player?.phase).toBe('playing'); });
+            const heldFrame = hook.getCurrent().player?.lastFrameUrl;
+            expect(heldFrame).toBeTruthy();
             const physical = io.sockets.sockets.get(previous.socketId);
             if (!physical) throw new Error('Expected actual viewer connection');
             const client = physicalClients.find(socket => socket.id === previous.socketId);
@@ -154,6 +156,8 @@ describe('mounted shared live-stream socket (real reconnect)', () => {
                 await disconnected;
             });
             await vi.waitFor(() => expect(live.has(previous.streamId)).toBe(false));
+            await flushHookEffects();
+            expect(hook.getCurrent().player?.lastFrameUrl).toBe(heldFrame);
             // Drive the same real pooled client's network reconnect. Observing the
             // SDK factory above does not replace connect/events or rerender React.
             await act(async () => {
@@ -165,7 +169,8 @@ describe('mounted shared live-stream socket (real reconnect)', () => {
             const replacement = hook.getCurrent();
             expect(replacement.socketId).not.toBe(previous.socketId);
             expect(replacement.streamId).not.toBe(previous.streamId);
-            expect(replacement.player?.phase).toBe('opening');
+            expect(replacement.player?.phase).toBe('reconnecting');
+            expect(replacement.player?.lastFrameUrl).toBe(heldFrame);
             expect(live.get(replacement.streamId)).toBe(replacement.socketId);
             await frame(replacement.streamId);
             await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().player?.phase).toBe('playing'); });

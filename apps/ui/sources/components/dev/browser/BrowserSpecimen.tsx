@@ -17,6 +17,8 @@ import { createBrowserRecordingState } from '@/sync/domains/browser/recording';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { getStorage } from '@/sync/domains/state/storage';
 import type { BrowserShellAgentPresence } from '@/components/browser/copresence/BrowserShellPresence';
+import type { BrowserStreamedSurfaceRuntime } from '@/components/browser/adapters/BrowserStreamedTarget';
+import type { BrowserSandboxInstallOutcome } from '@/sync/domains/browser/firstUse/browserFirstUse';
 
 import { LUMEN_LOGIN_FRAME_DARK, LUMEN_LOGIN_FRAME_LIGHT } from './lumenLoginFrame';
 
@@ -154,6 +156,7 @@ const LAUNCHPAD_ROWS = [
     { id: 'docs', section: 'recent', sourceKind: 'recent', title: 'Docs · Sessions', subtitle: 'localhost:3000/docs/sessions', detail: '', target: { kind: 'externalUrl', targetId: 'docs', url: 'http://localhost:3000/docs/sessions' }, disabledReason: null, lastSeenAt: 1 },
     { id: 'settings', section: 'recent', sourceKind: 'recent', title: 'Settings · Appearance', subtitle: 'localhost:5173/settings/appearance', detail: '', target: { kind: 'externalUrl', targetId: 'settings', url: 'http://localhost:5173/settings/appearance' }, disabledReason: null, lastSeenAt: 0 },
 ] as unknown as readonly BrowserLaunchpadRow[];
+const NO_LAUNCHPAD_ROWS: readonly BrowserLaunchpadRow[] = [];
 
 const DAEMON_CONTROL = { sendCommand: async () => ({ ok: false, reason: 'unavailable' } as const) };
 
@@ -204,6 +207,11 @@ function SpecimenShell(props: Readonly<{
     controller: Controller;
     stream?: StreamFixture;
     target?: 'signIn' | 'email';
+    /** The machine has no managed Chromium yet; `rows: false` is a launchpad with nothing detected. */
+    prerequisite?: Readonly<{ rows: boolean }>;
+    /** The typed first-use state of the agent's open, with what allowing the sandbox answers. */
+    firstUse?: NonNullable<BrowserStreamedSurfaceRuntime['firstUse']>;
+    sandboxAnswer?: BrowserSandboxInstallOutcome;
 }>) {
     const { theme } = useUnistyles();
     const frameUrl = theme.dark ? LUMEN_LOGIN_FRAME_DARK : LUMEN_LOGIN_FRAME_LIGHT;
@@ -225,7 +233,7 @@ function SpecimenShell(props: Readonly<{
                 nowMs: () => 10_000,
                 daemonControl: DAEMON_CONTROL,
             }}
-            launchpadRows={LAUNCHPAD_ROWS}
+            launchpadRows={props.prerequisite?.rows === false ? NO_LAUNCHPAD_ROWS : LAUNCHPAD_ROWS}
             browserFeatureDecision={BROWSER_ENABLED}
             allowExternalUrlBrowsing
             onOpenTarget={NOOP}
@@ -240,7 +248,13 @@ function SpecimenShell(props: Readonly<{
             }}
             browserAutomation={{ controlService, enabled: true }}
             agent={agent}
-            streamedBrowserRuntime={props.kind === 'streamed' ? streamRuntime(props.stream ?? 'live', frameUrl) : null}
+            onAllowBrowserSandbox={props.sandboxAnswer ? () => Promise.resolve(props.sandboxAnswer ?? null) : undefined}
+            streamedBrowserRuntime={props.firstUse
+                ? { machineName: 'MacBook Pro', playerState: null, firstUse: props.firstUse, onRetry: NOOP,
+                    ...(props.firstUse === 'preparing' || props.firstUse === 'opening' ? { firstUseTargetUrl: 'http://localhost:5173/login' } : {}) }
+                : props.prerequisite
+                ? { machineName: 'MacBook Pro', playerState: null, unavailableReason: 'managed_package_missing' as const, onRetry: NOOP }
+                : props.kind === 'streamed' ? streamRuntime(props.stream ?? 'live', frameUrl) : null}
             testID={`browser-specimen-shell`}
         />
     );
@@ -297,6 +311,14 @@ const FRAMES: readonly Frame[] = [
     { id: 'H', title: 'H · you have control', render: () => <SpecimenShell kind="streamed" controller="human" /> },
     { id: 'U', title: 'U · last action uncertain', render: () => <SpecimenShell kind="streamed" controller="unsure" /> },
     { id: 'W', title: 'W · launchpad', render: () => <SpecimenShell kind="none" controller="idle" /> },
+    { id: 'WM', title: 'W · launchpad, Chromium not installed', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: true }} /> },
+    { id: 'WN', title: 'W · empty launchpad, Chromium not installed', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} /> },
+    { id: 'FUp', title: 'First use · preparing the browser', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} firstUse="preparing" /> },
+    { id: 'FUo', title: 'First use · waiting for the page', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} firstUse="opening" /> },
+    { id: 'FUf', title: 'First use · install failed', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} firstUse="installFailed" /> },
+    { id: 'FUs', title: 'First use · sandbox unavailable', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} firstUse="sandboxUnavailable" sandboxAnswer={{ status: 'installed' }} /> },
+    { id: 'FUq', title: 'First use · sandbox, system permission needed', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} firstUse="sandboxUnavailable" sandboxAnswer={{ status: 'failed', code: 'os_authorization_required' }} /> },
+    { id: 'FUx', title: 'First use · sandbox, install failed', render: () => <SpecimenShell kind="none" controller="idle" prerequisite={{ rows: false }} firstUse="sandboxUnavailable" sandboxAnswer={{ status: 'failed', code: 'sandbox_install_failed' }} /> },
     { id: 'STc', title: 'ST · connecting', render: () => <SpecimenShell kind="streamed" controller="agent" stream="connecting" /> },
     { id: 'STs', title: 'ST · stalled', render: () => <SpecimenShell kind="streamed" controller="agent" stream="stalled" /> },
     { id: 'STe', title: 'ST · ended', render: () => <SpecimenShell kind="streamed" controller="idle" stream="ended" /> },

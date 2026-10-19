@@ -396,18 +396,13 @@ export function useBrowserAnnotationController(input: Readonly<{
         return resolveBrowserAnnotationCaptureCapability({
             adapterKind: activeView.adapterKind,
             primaryEngine: activeView.engineKind,
-            desktopCaptureSupported,
-            managedCaptureGateEnabled: browserContext?.managedAnnotationCaptureProvider === true
-                && effectiveCaptureProvider?.available === true,
+            captureSourceAvailable: draftAvailable,
         });
     }, [
         activeView,
-        desktopCaptureSupported,
-        effectiveCaptureProvider?.available,
-        browserContext?.managedAnnotationCaptureProvider,
+        draftAvailable,
     ]);
-    const captureProducerUnavailable = captureCapability.available === false
-        && effectiveCaptureProvider?.available !== true;
+    const captureProducerUnavailable = captureCapability.available === false;
     const contextDisabledReason = React.useMemo(() => {
         const disabledReason = browserContext?.disabledReason;
         if (typeof disabledReason === 'string' && disabledReason.length > 0) {

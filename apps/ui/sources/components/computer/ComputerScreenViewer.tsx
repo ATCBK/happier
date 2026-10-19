@@ -1,15 +1,16 @@
 import * as React from 'react';
-import { View, type LayoutChangeEvent } from 'react-native';
+import { PixelRatio, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ComputerGrantStatusV1, MachineLiveStreamInputControlKindV1 } from '@happier-dev/protocol';
+import { resolveComputerAccess } from '@happier-dev/protocol/computer/v1';
 
 import {
-    buildBrowserStreamSidebandControl,
     containRect,
     resolveBrowserStreamedSurfaceState,
     useFirstFrameSize,
     type BrowserStreamedSurfaceRuntime,
 } from '@/components/browser/adapters/BrowserStreamedTarget';
+import { buildBrowserStreamSidebandControl } from '@/components/browser/adapters/browserStreamSidebandControl';
 import { BrowserPresenceCapsule, type BrowserPresenceAgent, type BrowserPresenceCapsuleProps } from '@/components/browser/copresence/BrowserPresenceCapsule';
 import { BrowserAgentCursor } from '@/components/browser/copresence/BrowserAgentCursor';
 import { BrowserFrameStatusCapsule } from '@/components/browser/frame/BrowserFrameStatusCapsule';
@@ -17,6 +18,7 @@ import { LiveStreamInputLayer } from '@/components/stream/LiveStreamInputLayer';
 import { LiveStreamPlayer } from '@/components/stream/LiveStreamPlayer';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
@@ -99,12 +101,18 @@ export type ComputerScreenViewerProps = Readonly<{
     machineName: string | null;
     /** The Session has a shared target. */
     shared: boolean;
+    /** The owner has not answered the initial share-selection read yet. */
+    selectionPending?: boolean;
     stream: BrowserStreamedSurfaceRuntime | null;
     presence: BrowserCopresence;
     /** The agent's action is in flight ("is using"), not merely allowed ("can use"). */
     agentActing: boolean;
     checking?: boolean;
+    /** The person's Stop sharing is in flight. */
+    stopping?: boolean;
     failure?: string | null;
+    /** `failure` came from the person's Stop sharing: the share is still on and the press can be retried. */
+    stopFailed?: boolean;
     repairingDriver?: boolean;
     onRepairDriver?: () => void;
     onTakeControl: NonNullable<BrowserPresenceCapsuleProps['onTakeControl']>;
@@ -112,6 +120,8 @@ export type ComputerScreenViewerProps = Readonly<{
     onCheckAgain: () => void;
     onChooseWindow: () => void;
     onStopSharing: () => void;
+    /** The docked desktop pane's way back to the floating frame, offered only while that frame fits. */
+    onFloat?: () => void;
     /** Phone and narrow panes: the capsule spans the frame in thumb reach. */
     compact?: boolean;
     /**
@@ -172,9 +182,11 @@ export function resolveComputerPresenceCapsule(
         presence: props.presence,
         agent: props.agent,
         agentTitle: resolveComputerAgentTitle(props),
-        agentNote: props.inputDenied ? t('computerUse.presentation.controlNotAllowed') : undefined,
+        agentNote: props.inputDenied ? t('computerUse.presentation.controlNotAllowed')
+            : props.access === 'see' ? t('computerUse.presentation.seeOnly') : undefined,
         checking: props.checking,
-        onTakeControl: props.inputDenied ? undefined : props.onTakeControl,
+        // A see-only share gives the agent no mouse or keyboard, so there is no control to take from it.
+        onTakeControl: props.inputDenied || props.access === 'see' ? undefined : props.onTakeControl,
         onHandBack: props.onHandBack,
         onCheckAgain: props.onCheckAgain,
     };
@@ -227,7 +239,10 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const testID = props.testID ?? 'computer-screen-viewer';
     const playerState = props.stream?.playerState ?? null;
-    const surfaceState = props.shared ? resolveBrowserStreamedSurfaceState(playerState) : 'unavailable';
+    const streamSurfaceState = props.shared ? resolveBrowserStreamedSurfaceState(playerState) : 'unavailable';
+    // A stream that stopped on a failure (it carries a reason) did not end because the window closed:
+    // say it is unavailable, with its code and Retry, never "closed" (the source may still be shared).
+    const surfaceState = streamSurfaceState === 'ended' && playerState?.diagnostic?.reasonCode ? 'unavailable' : streamSurfaceState;
     const pictureUp = surfaceState === 'live' || surfaceState === 'stalled';
     const [viewport, setViewport] = React.useState<Readonly<{ width: number; height: number }> | null>(null);
     const onLayout = React.useCallback((event: LayoutChangeEvent) => {
@@ -235,36 +250,49 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         if (width > 0 && height > 0) setViewport((current) => (current && current.width === width && current.height === height ? current : { width, height }));
     }, []);
     const frameSize = useFirstFrameSize(pictureUp ? playerState?.lastFrameUrl : null, playerState?.phase);
-    const pageRect = pictureUp && viewport ? containRect(viewport, frameSize) : null;
+    // A shared window is a small picture: it fits down to the stage but is never drawn past its own
+    // pixels, so a small window stays sharp, centred on the neutral stage, instead of being blown up.
+    const pageRect = pictureUp && viewport ? containRect(viewport, frameSize, 1 / PixelRatio.get()) : null;
     const failure = props.failure ?? playerState?.diagnostic?.reasonCode;
-    const recovery = failure ? resolveComputerRecovery({ kind: 'failed', code: failure }, props.access ?? 'use') : null;
+    const recovery = failure ? resolveComputerRecovery({ kind: 'failed', code: failure }, resolveComputerAccess(props.access)) : null;
     const needsCapture = recovery?.action === 'capture';
     const needsDriverRepair = recovery?.action === 'repair_driver';
-    const hasRecovery = recovery != null && (props.failure != null || recovery.cause !== 'failed');
+    // A failed Stop sharing is told as that press, whatever its code: the share is still on.
+    const stopFailed = props.stopFailed === true && props.failure != null;
+    const hasRecovery = stopFailed || (recovery != null && (props.failure != null || recovery.cause !== 'failed'));
     const target = props.targetTitle ?? t('computerUse.presentation.tabFallback');
     const machine = props.machineName ?? '';
+    // A sentence that must name where the Computer is never leaves a blank while the Machine's name is unreadable.
+    const machineInSentence = machine || t('computerUse.presentation.tabFallback');
     const agentName = props.agent.name;
-    const recoveryTitle = recovery?.cause === 'driver_missing' ? t('computerUse.presentation.driverMissing')
+    const recoveryTitle = stopFailed ? t('computerUse.presentation.stopFailed')
+        : recovery?.cause === 'driver_missing' ? t('computerUse.presentation.driverMissing')
         : recovery?.cause === 'driver_invalid' ? t('computerUse.presentation.driverInvalid')
         : recovery?.cause === 'geometry_changed' ? t('computerUse.presentation.geometryChanged')
         : recovery?.cause === 'input_unknown' ? t('computerUse.presentation.inputUnknown')
         : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenTitle', { machine })
         : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedTitle', { machine })
         : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineTitle', { machine })
-        : recovery?.cause === 'offline' ? t('computerUse.presentation.offlineTitle', { machine })
+        // Before any window is known to be shared, a failed call can only say which Machine didn't answer.
+        : recovery?.cause === 'offline' || (recovery?.cause === 'failed' && !props.shared) ? t('computerUse.presentation.offlineTitle', { machine: machineInSentence })
         : recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? t('errors.permissionDenied')
         : recovery?.cause === 'source_lost' ? t('computerUse.presentation.endedTitle', { target })
         : t('computerUse.presentation.unavailableTitle');
-    const recoveryReason = needsDriverRepair ? t('computerUse.presentation.driverRepairBody')
+    const recoveryReason = stopFailed ? recoveryTitle
+        : needsDriverRepair ? t('computerUse.presentation.driverRepairBody')
         : recovery?.cause === 'headless' ? t('computerUse.picker.noScreenBody')
         : recovery?.cause === 'unsupported' ? t('computerUse.picker.unsupportedBody')
         : recovery?.cause === 'machine_mismatch' ? t('computerUse.picker.otherMachineBody')
         : recovery?.cause === 'offline' ? t('computerUse.presentation.offlineBody')
         : recovery?.cause === 'source_lost' ? t('computerUse.presentation.endedBody', { agent: agentName })
         : recoveryTitle;
+    // "You can still stop {agent} here" only holds while the capsule offers Take control on a shared window.
+    const unavailableReason = !props.shared || props.access === 'see' || props.inputDenied ? undefined : t('computerUse.presentation.unavailableBody', { agent: agentName });
     const recoveryPermission = recovery?.permission;
     const checkAgain = (onPress: () => void) => ({ label: t('computerUse.permission.checkAgain'), onPress, busy: props.checking, disabled: props.checking });
-    const recoveryAction = needsDriverRepair
+    const recoveryAction = stopFailed
+        ? { label: t('common.retry'), onPress: props.onStopSharing, busy: props.stopping, disabled: props.stopping }
+        : needsDriverRepair
         ? props.onRepairDriver ? { label: t('computerUse.presentation.repairDriver'), onPress: props.onRepairDriver, busy: props.repairingDriver, disabled: props.repairingDriver } : undefined
         : recovery?.action === 'choose_source' ? { label: t('computerUse.request.choose'), onPress: props.onChooseWindow }
         : recovery?.action === 'open_settings' ? props.onOpenSettings && recoveryPermission
@@ -300,12 +328,18 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         <View style={stylesheet.centered}>
             <SurfaceStateCard
                 testID={`${testID}-recovery`}
-                kind={recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? 'denied'
-                    : recovery?.action === null || recovery?.cause === 'offline' ? 'unavailable' : 'error'}
+                // A call that failed while (re)opening the share is the same state as a lost stream: one
+                // calm unavailable card, its code under Details; only a refusal reads as denied.
+                kind={stopFailed ? 'error'
+                    : recovery?.cause === 'access_removed' || recovery?.cause === 'permission_denied' ? 'denied'
+                    : recovery?.action === null || recovery?.cause === 'offline' || recovery?.cause === 'failed' ? 'unavailable' : 'error'}
+                iconName={recovery?.cause === 'failed' && props.shared && !stopFailed ? 'eye-slash' : undefined}
                 title={recoveryTitle}
-                reason={recoveryTitle !== recoveryReason ? recoveryReason : undefined}
+                reason={stopFailed ? undefined
+                    : recovery?.cause === 'failed' ? unavailableReason
+                    : recoveryTitle !== recoveryReason ? recoveryReason : undefined}
                 // A machine that isn't answering is not a fault: its title says it and the code adds nothing to look up.
-                diagnosticCode={recovery?.cause === 'offline' ? undefined : failure}
+                diagnosticCode={recovery?.cause === 'offline' && !stopFailed ? undefined : failure}
                 action={recoveryAction}
             />
         </View>
@@ -314,12 +348,12 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
         <View style={stylesheet.centered} testID={`${testID}-offline`}>
             <SurfaceStateCard
                 kind="unavailable"
-                title={t('computerUse.presentation.offlineTitle', { machine })}
+                title={t('computerUse.presentation.offlineTitle', { machine: machineInSentence })}
                 reason={t('computerUse.presentation.offlineBody')}
                 action={checkAgain(props.onRefresh ?? props.onCheckAgain)}
             />
         </View>
-    ) : !props.shared ? (
+    ) : !props.shared && !props.selectionPending ? (
         <View style={stylesheet.centered} testID={`${testID}-not-shared`}>
             <SurfaceStateCard
                 kind="empty"
@@ -329,13 +363,14 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 action={{ label: t('computerUse.request.choose'), onPress: props.onChooseWindow }}
             />
         </View>
-    ) : surfaceState === 'connecting' || (props.stream?.connecting && surfaceState === 'unavailable') ? (
+    ) : props.selectionPending || surfaceState === 'connecting' || (props.stream?.connecting && surfaceState === 'unavailable') ? (
         <View style={stylesheet.centered} testID={`${testID}-connecting`}>
             <SurfaceStateCard
                 kind="loading"
                 title={machine
                     ? t('computerUse.presentation.openingTitle', { target, machine })
                     : t('computerUse.presentation.connectingTitle', { target })}
+                reason={t('computerUse.presentation.openingBody')}
             />
         </View>
     ) : surfaceState === 'ended' ? (
@@ -351,16 +386,25 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     ) : surfaceState === 'unavailable' || !playerState ? (
         <View style={stylesheet.centered} testID={`${testID}-unavailable`}>
             <SurfaceStateCard
+                testID={`${testID}-unavailable-card`}
                 kind="unavailable"
                 iconName="eye-slash"
                 title={t('computerUse.presentation.unavailableTitle')}
-                reason={t('computerUse.presentation.unavailableBody', { agent: agentName })}
+                reason={unavailableReason}
                 diagnosticCode={playerState?.diagnostic?.reasonCode}
+                action={onRetryStream && playerState ? { label: t('common.retry'), onPress: onRetryStream } : undefined}
             />
         </View>
     ) : (
         <View style={stylesheet.fill} testID={`${testID}-${surfaceState}`}>
-            <LiveStreamPlayer testID={`${testID}-player`} state={playerState} statusOwnedByHost />
+            <View
+                testID={`${testID}-picture`}
+                style={pageRect
+                    ? { position: 'absolute', left: pageRect.x, top: pageRect.y, width: pageRect.width, height: pageRect.height }
+                    : stylesheet.fill}
+            >
+                <LiveStreamPlayer testID={`${testID}-player`} state={playerState} statusOwnedByHost />
+            </View>
             {props.stream?.input && viewport && pageRect && inputOpen ? (
                 <ViewerStreamInput
                     input={props.stream.input}
@@ -370,8 +414,14 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     testID={`${testID}-input`}
                 />
             ) : null}
-            {surfaceState === 'stalled' ? <View style={stylesheet.pausedScrim} testID={`${testID}-paused-scrim`} /> : null}
-            {surfaceState === 'stalled' && !hasRecovery ? (
+            {surfaceState === 'stalled' ? (
+                // Only the held picture dims: the empty stage around a small window keeps its paint.
+                <View
+                    style={[stylesheet.pausedScrim, pageRect ? { left: pageRect.x, top: pageRect.y, width: pageRect.width, height: pageRect.height } : null]}
+                    testID={`${testID}-paused-scrim`}
+                />
+            ) : null}
+            {surfaceState === 'stalled' && !hasRecovery && !props.stopping ? (
                 <BrowserFrameStatusCapsule
                     testID={`${testID}-stalled`}
                     text={pausedAtMs
@@ -387,6 +437,8 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
     );
 
     return (
+        // Its menus, capsules and lines float over the live picture: they take the picture-safe coat.
+        <GlassLivePictureBackdropContext.Provider value>
         <View style={[stylesheet.root, props.chrome === 'none' ? null : { paddingBottom: bottomChromeHeight }]} testID={testID}>
             {props.chrome === 'none' ? null : <View style={stylesheet.bar}>
                 <Icon
@@ -396,7 +448,7 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 />
                 <View style={stylesheet.barText}>
                     <Text style={stylesheet.barTitle} numberOfLines={1} testID={`${testID}-title`}>
-                        {props.shared ? target : t('computerUse.presentation.notSharedTitle')}
+                        {target}
                     </Text>
                     {machine ? <Text style={stylesheet.barMeta} numberOfLines={1}>{t('computerUse.presentation.onMachine', { machine })}</Text> : null}
                 </View>
@@ -406,11 +458,13 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                         onOpenChange={setMenuOpen}
                         items={[
                             { id: 'change', title: t('computerUse.request.change'), testID: `${testID}-change-window` },
+                            ...(props.onFloat ? [{ id: 'float', title: t('computerUse.presentation.floatView'), testID: `${testID}-float` }] : []),
                             { id: 'stop', title: t('computerUse.picker.stopSharing'), destructive: true, testID: `${testID}-stop-sharing` },
                         ]}
                         onSelect={(id) => {
                             setMenuOpen(false);
                             if (id === 'change') props.onChooseWindow();
+                            else if (id === 'float') props.onFloat?.();
                             else props.onStopSharing();
                         }}
                         matchTriggerWidth={false}
@@ -429,8 +483,22 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                 ) : null}
             </View>}
             {pictureUp && hasRecovery ? (
-                <SurfaceFreshnessLine testID={`${testID}-recovery`} reason={recoveryReason} asOf={pausedAtMs}
-                    busy={needsDriverRepair ? props.repairingDriver : props.checking} tone="warning" action={recoveryAction} />
+                <SurfaceFreshnessLine testID={`${testID}-recovery`} reason={recoveryReason} asOf={stopFailed ? undefined : pausedAtMs}
+                    busy={stopFailed ? props.stopping : needsDriverRepair ? props.repairingDriver : props.checking} tone="warning" action={recoveryAction} />
+            ) : pictureUp && props.stopping ? (
+                // Release waits for the Machine to drain and confirm; until it answers, say the press is under way.
+                <SurfaceFreshnessLine testID={`${testID}-stopping`} reason={t('computerUse.presentation.stopping')} busy />
+            ) : pictureUp && props.presence.kind === 'unconfirmed' ? (
+                // The stop isn't proved: one quiet warning over the picture says what it means (nobody can
+                // use the window from Happier) and the one physical thing that helps. Check again stays on
+                // the capsule, so the line carries no second control.
+                <SurfaceFreshnessLine
+                    testID={`${testID}-unconfirmed`}
+                    tone="warning"
+                    reason={props.compact
+                        ? t('computerUse.presentation.unconfirmedWarningCompact', { agent: agentName, machine: machine || target })
+                        : `${t('computerUse.presentation.unconfirmedWarning', { agent: agentName, target: props.appName ?? target, machine: machine || target })} ${t('computerUse.presentation.unconfirmedStuckHint', { machine: machine || target })}`}
+                />
             ) : null}
             <View style={stylesheet.stage} onLayout={onLayout}>
                 {/* The viewer's frame is a small floating window: its states take the pane step, not the unsized page-width column. */}
@@ -444,13 +512,22 @@ export function ComputerScreenViewer(props: ComputerScreenViewerProps): React.Re
                     />
                 ) : null}
                 {props.shared && props.chrome !== 'none' && !needsPermission ? (
-                    <BrowserPresenceCapsule
-                        testID={`${testID}-presence`}
-                        {...resolveComputerPresenceCapsule(props)}
-                        compact={props.compact}
-                    />
+                    // The capsule docks to the bottom of its frame: when the picture is smaller than the
+                    // stage, the frame is the picture's own rect, so the capsule hugs the picture.
+                    <View
+                        style={pageRect ? { position: 'absolute', left: pageRect.x, top: pageRect.y, width: pageRect.width, height: pageRect.height } : stylesheet.fill}
+                        pointerEvents="box-none"
+                        testID={`${testID}-presence-frame`}
+                    >
+                        <BrowserPresenceCapsule
+                            testID={`${testID}-presence`}
+                            {...resolveComputerPresenceCapsule(props)}
+                            compact={props.compact}
+                        />
+                    </View>
                 ) : null}
             </View>
         </View>
+        </GlassLivePictureBackdropContext.Provider>
     );
 }

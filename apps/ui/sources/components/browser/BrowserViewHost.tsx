@@ -4,6 +4,7 @@ import type {
 } from '@happier-dev/protocol';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import * as React from 'react';
+import { useBrowserStreamedPicture } from '@/components/browser/streamed/BrowserStreamedSurfaceScope';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -266,7 +267,8 @@ function StreamedBrowserView(props: Readonly<{
     testID: string;
 }>): React.ReactElement {
     const identity = useBrowserSessionAgentIdentity(props.agent);
-    return <BrowserStreamedTarget runtime={props.runtime} agentName={identity.name} onPageRectChange={props.onPageRectChange}
+    const runtime = useBrowserStreamedPicture(props.runtime);
+    return <BrowserStreamedTarget runtime={runtime} agentName={identity.name} onPageRectChange={props.onPageRectChange}
         onOpenPageHere={props.onOpenPageHere} onClosePage={props.onClosePage} testID={props.testID} />;
 }
 

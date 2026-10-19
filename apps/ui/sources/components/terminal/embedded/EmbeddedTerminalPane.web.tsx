@@ -8,7 +8,7 @@ import type { XtermTerminalHandle } from '@/components/terminal/xterm/XtermTermi
 import { SessionPaneLazyLoader } from '@/components/sessions/panes/SessionPaneLazyLoader';
 import type { EmbeddedTerminalRendererHandle, EmbeddedTerminalCursorRow } from './embeddedTerminalRendererHandle';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { EmbeddedTerminalPaneFrame } from './EmbeddedTerminalPaneFrame';
+import { EmbeddedTerminalPaneFrame, terminalStatusAcceptsKeys } from './EmbeddedTerminalPaneFrame';
 import { TerminalKeyRail } from './keys/TerminalKeyRail';
 import { TerminalKeysSurface } from './keys/TerminalKeysSurface';
 import { useTerminalKeys } from './keys/useTerminalKeys';
@@ -41,6 +41,7 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneWeb(
     const deviceType = useDeviceType();
     const showKeys = props.showQuickKeys ?? deviceType === 'phone';
     const find = useTerminalFind(props, showKeys);
+    const keysOffered = showKeys && terminalStatusAcceptsKeys(props.controller.status);
     const [cursorRow, setCursorRow] = React.useState<EmbeddedTerminalCursorRow | null>(null);
     const onCursorRowChange = React.useCallback((next: EmbeddedTerminalCursorRow | null) => {
         setCursorRow((current) => current?.top === next?.top && current?.height === next?.height ? current : next);
@@ -62,9 +63,9 @@ export const EmbeddedTerminalPane = React.memo(function EmbeddedTerminalPaneWeb(
             toolbarActionsStart={props.toolbarActionsStart}
             testIdPrefix={props.testIdPrefix}
             platformOS="web"
-            footer={showKeys ? find.open ? find.bar : <TerminalKeyRail modifiers={keys.modifiers} onPressKey={keys.pressRailKey} testIdPrefix={props.testIdPrefix} /> : null}
+            footer={showKeys ? find.open ? find.bar : keysOffered ? <TerminalKeyRail modifiers={keys.modifiers} onPressKey={keys.pressRailKey} testIdPrefix={props.testIdPrefix} /> : null : null}
             surface={(
-                <TerminalKeysSurface showArrowPad={showKeys && !find.open} cursorRow={cursorRow} onArrow={keys.pressArrow} testIdPrefix={props.testIdPrefix}>
+                <TerminalKeysSurface showArrowPad={keysOffered && !find.open} cursorRow={cursorRow} onArrow={keys.pressArrow} testIdPrefix={props.testIdPrefix}>
                     <SessionPaneLazyLoader
                         testID={props.testIdPrefix ? `${props.testIdPrefix}-renderer-loading` : 'terminal-renderer-loading'}
                         load={loadXtermTerminalView}

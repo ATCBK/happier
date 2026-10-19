@@ -10,7 +10,7 @@ import { DaemonComputerActionExecuteRequestV1Schema } from '@happier-dev/protoco
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { invokeTestInstanceHandler, renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
@@ -19,24 +19,32 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import type { SessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
 import { sealMachineLiveStreamEnvelopeV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
 
+const viewport = vi.hoisted(() => ({ width: 1440, height: 900, scale: 1, fontScale: 1 }));
+
 vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    const { createReactNativeWebMock, createMeasuredImageMock } = await import('@/dev/testkit/mocks/reactNative');
     // Image measurement is native/browser-owned; the actual stream and picture remain real.
-    return createReactNativeWebMock({ Image: Object.assign(
-        (props: Record<string, unknown>) => React.createElement('Image', props),
-        { getSize: (_url: string, ready: (width: number, height: number) => void) => ready(800, 600) },
-    ) });
+    return createReactNativeWebMock({ Image: createMeasuredImageMock({ width: 800, height: 600 }),
+        useWindowDimensions: () => viewport });
 });
 
 // Resolve the genuine cold graph only after its external network boundary is
 // installed. Collection cost is not a Computer owner readiness deadline.
 const network = await installSessionOpsNetworkBoundary();
+const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
+const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+const { hrefForDestinationRef } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+const { resolveSessionRoutePathForSurface } = await import('@/components/workspaceCockpit/session/sessionCockpitState');
+const { serializeSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+const { useDeviceType } = await import('@/utils/platform/responsive');
 await import('@/sync/ops/actions/defaultActionExecutor');
 await import('./SessionComputerScreenPane');
 await import('./ComputerScreenViewer');
 await import('@/components/appShell/workspace/DestinationInstanceHost');
 await import('@/components/ui/presentation/retainedPresentationSlots');
 await import('@/components/sessions/viewer/SessionViewerSourceAccountScope');
+await import('@/components/sessions/viewer/SessionViewerHost');
+await import('@/components/sessions/viewer/SessionViewerStickySlot');
 
 describe('SessionComputerScreenPane retained source', () => {
     let failedOwnerDiagnostic: (() => unknown) | null = null;
@@ -57,6 +65,11 @@ describe('SessionComputerScreenPane retained source', () => {
         const { SessionViewerSourceAccountScopeProvider } = await import('@/components/sessions/viewer/SessionViewerSourceAccountScope');
         const { SessionViewerControllerProvider } = await import('@/components/sessions/viewer/SessionViewerControllerProvider');
         const { useOptionalSessionViewerController } = await import('@/components/sessions/viewer/SessionViewerController');
+        const { SessionViewerHost } = await import('@/components/sessions/viewer/SessionViewerHost');
+        const { SessionViewerStickySlot } = await import('@/components/sessions/viewer/SessionViewerStickySlot');
+        const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+        const { useSessionDestinationAccountBinding } = await import('@/components/sessions/viewer/SessionViewerDestinationScope');
+        const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
         const executorModule = await loadVitestModuleForNodeRequire(
             new URL('../../sync/ops/actions/defaultActionExecutor.ts', import.meta.url),
@@ -76,10 +89,24 @@ describe('SessionComputerScreenPane retained source', () => {
         const target = { kind: 'window', displayId: ':77', pid: 123, windowId: 456 } as const;
         const sourceId = 'computer:retained';
         const initialStatus = createDeferred<void>();
+        let selectionRead: ReturnType<typeof createDeferred<void>> | null = null;
         const activeStreams = new Set<string>();
+        let streamStarts = 0;
         let delayStart: ReturnType<typeof createDeferred<void>> | null = null;
         let pendingStart: ReturnType<typeof createDeferred<void>> | null = null;
+        let allowSocketReconnect = true;
         network.setSocketConfigurator(({ socket }) => {
+            const connect = socket.connect.getMockImplementation();
+            let connectedOnce = false;
+            socket.connect.mockImplementation(() => {
+                if (socket.connected) return;
+                if (connectedOnce && !allowSocketReconnect) return;
+                // Socket.IO assigns its replacement id before publishing connect.
+                // Keep that ordering even when the real supervisor dials first.
+                socket.id = connectedOnce ? 'socket-reconnected' : 'socket-test';
+                connectedOnce = true;
+                connect?.();
+            });
             socket.emit.mockImplementation((event, payload) => {
                 if (event !== MACHINE_LIVE_STREAM_SOCKET_EVENT) return;
                 const envelope = MachineLiveStreamRelayEnvelopeV1Schema.parse(payload);
@@ -111,7 +138,8 @@ describe('SessionComputerScreenPane retained source', () => {
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (path === '/v1/machines/peer/mediation/route-grants') {
-                const raw: unknown = JSON.parse(String(init?.body));
+                const body = init && typeof init === 'object' && 'body' in init ? init.body : undefined;
+                const raw: unknown = JSON.parse(String(body));
                 if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Expected a relay grant request');
                 const request = raw as Readonly<Record<string, unknown>>;
                 const scope = DirectRouteGrantScopeV1Schema.parse(request.scope);
@@ -138,6 +166,7 @@ describe('SessionComputerScreenPane retained source', () => {
                 if (activeStreams.has(startRequest.streamId)) return { protocolVersion: 1,
                     result: { ok: false, reasonCode: 'duplicate_stream_id' } };
                 activeStreams.add(startRequest.streamId);
+                streamStarts += 1;
                 return { protocolVersion: 1, result: { ok: true, streamId: startRequest.streamId } };
             }
             if (request.method !== RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE) throw new Error(`Unexpected Computer RPC: ${request.method}`);
@@ -147,10 +176,12 @@ describe('SessionComputerScreenPane retained source', () => {
             if (payload.actionId === 'computer.targets.list') return { protocolVersion: 1, result: {
                 targets: [{ target }], grants: { capture: 'granted', input: 'granted' },
             } };
-            if (payload.actionId === 'computer.target.get') return { protocolVersion: 1, result: {
+            if (payload.actionId === 'computer.target.get') {
+                await selectionRead?.promise;
+                return { protocolVersion: 1, result: {
                 consentGranted: true, selectedTarget: target, sourceId,
                 approvalDisplay: { machineDisplayName: 'Retained computer', requiresTargetSelection: false, target: { kind: 'window', title: 'Retained window' } },
-            } };
+            } }; }
             if (payload.actionId === 'computer.control.status') {
                 initialStatus.resolve();
                 return { protocolVersion: 1, result: {
@@ -162,7 +193,7 @@ describe('SessionComputerScreenPane retained source', () => {
         await setActiveServer({ serverId: home.id });
         storage.getState().activateProfileScope({ serverId: home.id, accountId: home.accountId });
         storage.getState().applyProfile({ ...storage.getState().profile, id: home.accountId });
-        storage.getState().applyMachines([createMachineFixture({ id: machineId, storageMode: 'plain' })], false, { sourceServerId: home.id });
+        storage.getState().applyMachines([createMachineFixture({ id: machineId, storageMode: 'plain', activeAt: Date.now() })], false, { sourceServerId: home.id });
         const sessionFixture = createSessionFixture({ id: sessionId, serverId: home.id, thinking: false });
         const session = { ...sessionFixture, metadata: { ...sessionFixture.metadata!, machineId } };
         storage.getState().applySessions([session]);
@@ -192,6 +223,19 @@ describe('SessionComputerScreenPane retained source', () => {
         const { useRouter } = await import('expo-router');
         const store = createRetainedPresentationSlotsStore();
         const destinationId = 'computer-destination';
+        const routeParams = { id: sessionId, serverId: home.id,
+            ...serializeSessionPaneUrlState({ details: { kind: 'computerScreen', machineId } }) };
+        let workspace = createWorkspaceState({ id: destinationId, target: { kind: 'session', params: routeParams }, pinned: false, preview: false });
+        const routeListeners = new Set<() => void>();
+        const route = createWorkspaceNavigationAdapter({ getState: () => workspace, getCatalog: () => [],
+            getScope: () => ({ serverId: home.id, accountId: home.accountId }),
+            dispatch: action => { workspace = reduceWorkspaceState(workspace, action); },
+            transport: { commit: () => {} }, createId: () => 'unexpected-computer-destination',
+            onChange: () => { for (const listener of routeListeners) listener(); } });
+        route.initialize(resolveSessionRoutePathForSurface(sessionId, 'chat', { serverId: home.id, query: routeParams }));
+        const subscribeRoute = (listener: () => void) => { routeListeners.add(listener); return () => { routeListeners.delete(listener); }; };
+        const readRoute = () => workspace;
+        let recordContinuity: (() => void) | null = null;
         const slotId = `${createSessionPaneScopeId(sessionId, home.id, destinationId)}:viewer:computer`;
         let viewerController: SessionViewerController | null = null;
         function PresenceOwner() {
@@ -200,25 +244,87 @@ describe('SessionComputerScreenPane retained source', () => {
         }
         const canPresentSource = () => true;
         const openDocked = () => undefined;
-        function Harness(props: Readonly<{ shell: 'pane' | 'floating' | 'closed' }>) {
+        function SourceAccount(props: React.PropsWithChildren<{ borrowDestination: boolean }>) {
+            const binding = useSessionDestinationAccountBinding(sessionId, home.id);
+            // Responsive shells borrow the real destination. The distinct-viewer late-start
+            // cases below retain their original still-live Account authority across mounts.
+            return <SessionViewerSourceAccountScopeProvider accountLifetime={props.borrowDestination ? binding ?? null : accountLifetime}>
+                {props.children}
+            </SessionViewerSourceAccountScopeProvider>;
+        }
+        function DetailsAccount(props: React.PropsWithChildren) {
+            // Standalone Details currently supplies its panel runtime's credential lifetime.
+            // Unmounting that panel retires it, even though the destination remains alive.
+            const { binding } = useServerCredentialAccountScopeBinding(home.id);
+            return <SessionViewerSourceAccountScopeProvider accountLifetime={binding}>
+                {props.children}
+            </SessionViewerSourceAccountScopeProvider>;
+        }
+        type Shell = 'pane' | 'floating' | 'closed' | 'phone' | 'wide' | 'routed';
+        function Harness(props: Readonly<{ shell: Shell }>) {
             // The existing Expo test boundary supplies the destination's platform navigation.
             // Keep the real retained destination and approval owners beneath it.
             const navigation = useRouter();
-            const pane = props.shell === 'pane' ? <SessionComputerScreenPane key="desktop"
-                sessionId={sessionId} serverId={home.id} machineId={machineId} />
+            const device = useDeviceType();
+            const currentWorkspace = React.useSyncExternalStore(subscribeRoute, readRoute, readRoute);
+            const destination = currentWorkspace.tabs[currentWorkspace.groups[currentWorkspace.focusedGroupId].activeTabId];
+            const routed = props.shell === 'routed';
+            const details = routed && destination.target.kind === 'sessionDetails';
+            React.useEffect(() => {
+                if (!routed) return;
+                // The real phone chrome's route producer feeds the real workspace URL consumer.
+                // Only window dimensions and Expo delivery are platform boundaries here.
+                route.acceptUrl(resolveSessionRoutePathForSurface(sessionId, device === 'phone' ? 'tabs' : 'chat', {
+                    serverId: home.id, query: routeParams,
+                }));
+            }, [device, routed]);
+            const pane = props.shell === 'pane' ? <>
+                <SessionComputerScreenPane key="desktop" sessionId={sessionId} serverId={home.id} machineId={machineId} />
+                <SessionViewerStickySlot sessionId={sessionId} serverId={home.id} />
+                <SessionViewerHost sessionId={sessionId} serverId={home.id} />
+            </>
                 : props.shell === 'floating' ? <SessionComputerScreenPane key="phone"
-                    sessionId={sessionId} serverId={home.id} machineId={machineId} presentationSlotId={slotId} presentation="viewer" /> : null;
-            return <SessionViewerControllerProvider sessionId={sessionId} serverId={home.id}
-                phone={props.shell === 'floating'} canPresentSource={canPresentSource} openDocked={openDocked}>
+                    sessionId={sessionId} serverId={home.id} machineId={machineId} presentationSlotId={slotId} presentation="viewer" />
+                : props.shell === 'phone' || props.shell === 'wide' ? <>
+                    <SessionViewerStickySlot sessionId={sessionId} serverId={home.id} />
+                    <SessionViewerHost sessionId={sessionId} serverId={home.id} />
+                </> : routed ? <React.Fragment key={destination.target.kind}>
+                    {destination.target.kind === 'session' ? <>
+                        <SessionViewerStickySlot sessionId={sessionId} serverId={home.id} />
+                        <SessionViewerHost sessionId={sessionId} serverId={home.id} />
+                    </> : null}
+                    <PluginSurfaceFocusEligibilityProvider active={details || device !== 'phone'}>
+                        <SessionComputerScreenPane sessionId={sessionId} serverId={home.id} machineId={machineId} />
+                    </PluginSurfaceFocusEligibilityProvider>
+                </React.Fragment> : null;
+            const viewerPresentation = <SessionViewerControllerProvider
+                key={props.shell === 'phone' || props.shell === 'wide' ? props.shell : 'ordinary-shell'}
+                sessionId={sessionId} serverId={home.id}
+                phone={props.shell === 'floating' || props.shell === 'phone' || (routed && device === 'phone')}
+                canPresentSource={canPresentSource} openDocked={openDocked}>
                 <PresenceOwner />
-                <SessionViewerSourceAccountScopeProvider accountLifetime={accountLifetime}><RetainedPresentationSlotsProvider store={store}>
-                {props.shell !== 'closed' ? <DestinationInstanceHost tabId={destinationId}
-                    ref={{ kind: 'session', params: { id: sessionId } }} pathname={`/session/${sessionId}`} focused visible navigation={navigation}>
-                    {pane}
-                </DestinationInstanceHost> : pane}
-            </RetainedPresentationSlotsProvider></SessionViewerSourceAccountScopeProvider></SessionViewerControllerProvider>;
+                {pane}
+            </SessionViewerControllerProvider>;
+            // Details renders inside the real Session chrome too: its pane sees
+            // the destination's open viewer state, not an absent controller.
+            const presentation = details ? <DetailsAccount>{viewerPresentation}</DetailsAccount> : viewerPresentation;
+            // Match production: retention and destination authority outlive responsive shells.
+            return <React.Profiler id="computer-route-continuity" onRender={() => recordContinuity?.()}><RetainedPresentationSlotsProvider store={store}>
+                <DestinationInstanceHost tabId={routed ? destination.id : destinationId}
+                    ref={routed ? destination.target : { kind: 'session', params: { id: sessionId, serverId: home.id } }}
+                    pathname={routed ? hrefForDestinationRef([], destination.target)!.split('?')[0] : `/session/${sessionId}`} focused visible navigation={navigation}>
+                <SourceAccount borrowDestination={routed || props.shell === 'phone' || props.shell === 'wide'}>
+                    {presentation}
+                </SourceAccount>
+                </DestinationInstanceHost>
+            </RetainedPresentationSlotsProvider></React.Profiler>;
         }
-        const screen = await renderScreen(<Harness shell="pane" />);
+        // Window measurement is the native boundary; real phone/wide binders own placement.
+        let placeholderSize = { width: 358, height: 224 };
+        selectionRead = createDeferred<void>();
+        const screen = await renderScreen(<Harness shell="pane" />, {
+            createNodeMock: () => ({ measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(16, 120, placeholderSize.width, placeholderSize.height) }),
+        });
         async function waitForMountedStream(): Promise<string> {
             let mountedStreamId = '';
             await vi.waitFor(async () => {
@@ -239,11 +345,26 @@ describe('SessionComputerScreenPane retained source', () => {
                     presence: body.props.presence, stream: body.props.stream !== null,
                     streamDiagnostic: body.props.stream?.playerState?.diagnostic,
                     player: body.props.stream?.playerState,
+                    input: body.props.stream?.input?.streamId ?? null,
+                    socketId: apiSocket.getSocketId(),
+                    sockets: network.socketBoundaries.map(boundary => ({ id: boundary.socket.id, connected: boundary.socket.connected })),
+                    slots: store.getPortalSnapshot().map(entry => ({ visible: entry.visible, geometry: entry.geometry })),
+                    slotVisible: store.getPortalSnapshot()[0]?.visible,
+                    slotWidth: store.getPortalSnapshot()[0]?.geometry?.width,
                     accountScope: accountLifetime?.scope, accountCurrent: accountLifetime?.isCurrent() };
             } catch { /* Preserve the last mounted observation after genuine teardown. */ }
             return lastBody;
         };
         try {
+            phase = 'waiting for share selection without asserting that consent ended';
+            expect(screen.root.findByType(ComputerScreenViewer).props.selectionPending).toBe(true);
+            expect(screen.root.findByType(ComputerScreenViewer).props.machineOnline).toBe(true);
+            expect(screen.findByTestId('computer-screen-viewer-not-shared')).toBeNull();
+            expect(screen.findByTestId('computer-screen-viewer-connecting')).not.toBeNull();
+            await act(async () => {
+                invokeTestInstanceHandler(screen.findByTestId(`browser-keepalive-placeholder-${slotId}`)!, 'onLayout', {});
+            });
+            await act(async () => { selectionRead!.resolve(); });
             // Physical status completion follows the initial get/list phases;
             // microtask count alone is not an owner readiness predicate.
             phase = 'waiting for mounted get/list/status completion';
@@ -263,35 +384,226 @@ describe('SessionComputerScreenPane retained source', () => {
                 JSON.stringify({ stream: body.props.stream?.playerState, http: network.httpRequests.map(request => request.url) })).toBe(1)); });
             await flushHookEffects();
             expect(activeStreams.size).toBe(1);
+            const streamId = await waitForMountedStream();
+            const firstFrame = await sealMachineLiveStreamEnvelopeV1({
+                v: 1, sourceMachineId: machineId, targetMachineId: machineId, viewerSocketId: apiSocket.getSocketId(),
+                message: { kind: 'frame', frame: { v: 1, streamId, sequence: 1,
+                    timestampMs: 1000, codecId: 'image.frame.v1', payloadKind: 'image_keyframe',
+                    payloadEncoding: 'binary_base64', payloadBase64: 'AQID', payloadSizeBytes: 3 } },
+            }, { mode: 'plain' });
+            if (!firstFrame.ok) throw new Error(firstFrame.code);
+            await act(async () => {
+                for (const socket of network.socketBoundaries) socket.trigger(MACHINE_LIVE_STREAM_SOCKET_EVENT, firstFrame.value);
+            });
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(body.props.stream?.playerState?.lastFrameAtMs).toBe(1000);
+            });
+            const picture = () => screen.root.findAllByType('Image')
+                .filter(image => image.props.testID?.includes('player'))
+                .map(image => image.props.source?.uri);
+            const lastPicture = picture();
+            expect(lastPicture).toHaveLength(1);
+            const reflowSamples: Array<{ placement: string; durationMs: number; pictures: number; starts: number; live: number }> = [];
+            const reflow = async (shell: Shell) => {
+                const startedAt = performance.now();
+                await screen.update(<Harness shell={shell} />);
+                await flushHookEffects();
+                reflowSamples.push({ placement: shell, durationMs: performance.now() - startedAt,
+                    pictures: picture().length, starts: streamStarts, live: activeStreams.size });
+            };
             phase = 'checking the retained source slot';
             expect(store.getPortalSnapshot().map(entry => entry.slotId)).toEqual([slotId]);
-            await screen.update(<Harness shell="floating" />);
+            phase = 'projecting the actual phone breakpoint through the Computer Details route';
+            await act(async () => {
+                viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' });
+                viewerController!.apply({ kind: 'viewer.dock' });
+            });
+            const transitionPictures: Array<{ pictures: number; visible: boolean; placed: boolean; streamId: string | null; starts: number }> = [];
+            recordContinuity = () => {
+                const entry = store.getPortalSnapshot().find(entry => entry.slotId === slotId);
+                transitionPictures.push({ pictures: picture().length, visible: entry?.visible === true,
+                    placed: Boolean(entry?.geometry && entry.geometry.width > 0 && entry.geometry.height > 0),
+                    streamId: screen.root.findByType(ComputerScreenViewer).props.stream?.input?.streamId ?? null,
+                    starts: streamStarts });
+            };
+            await reflow('routed');
+            const startsBeforePhone = streamStarts;
+            expect(startsBeforePhone).toBe(1);
+            viewport.width = 390;
+            viewport.height = 844;
+            await reflow('routed');
+            expect(workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId].target.kind).toBe('sessionDetails');
+            expect(store.getPortalSnapshot().find(entry => entry.slotId === slotId)?.visible).toBe(true);
+            expect(Object.keys(workspace.tabs)).toEqual([destinationId]);
+            expect(store.getPortalSnapshot().map(entry => entry.slotId)).toEqual([slotId]);
+            expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
+            expect(picture()).toEqual(lastPicture);
+            expect(body.props.stream?.input?.streamId).toBe(streamId);
+            expect(streamStarts).toBe(startsBeforePhone);
+            phase = 'returning from phone Details through the actual Chat route';
+            await act(async () => {
+                route.acceptUrl(resolveSessionRoutePathForSurface(sessionId, 'chat', { serverId: home.id, query: routeParams }));
+            });
+            await reflow('routed');
+            expect(workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId].target.kind).toBe('session');
+            expect(screen.findByTestId('session-viewer-sticky')).not.toBeNull();
+            expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
+            expect(body.props.stream?.input?.streamId).toBe(streamId);
+            expect(streamStarts).toBe(startsBeforePhone);
+            expect(picture()).toEqual(lastPicture);
+            viewport.width = 1440;
+            viewport.height = 900;
+            await reflow('routed');
+            expect(Object.keys(workspace.tabs)).toEqual([destinationId]);
+            expect(picture()).toEqual(lastPicture);
+            recordContinuity = null;
+            expect(transitionPictures.length).toBeGreaterThan(0);
+            expect(transitionPictures).toEqual(transitionPictures.map(() => ({
+                pictures: 1, visible: true, placed: true, streamId, starts: 1,
+            })));
+            await act(async () => { viewerController!.port.apply({ kind: 'viewer.close' }); });
+            await reflow('floating');
             expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
             expect(viewerController!.presence.get('computer')?.presence.kind).toBe('agent');
-            await screen.update(<Harness shell="closed" />);
+            // A newly mounted wide frame has no body binder until its first measurement.
+            // Exercise that real parking gap, then return without supplying another image.
+            await reflow('closed');
             expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
-            expect(body.props.stream).toBeNull();
             expect(activeStreams.size).toBe(0);
+            const parkedPicture = picture();
+            const parkedInput = body.props.stream?.input;
             const parkedReads = network.requests.length;
             await act(async () => { storage.getState().applySessions([{ ...session, thinking: true }]); });
             await flushHookEffects();
             expect(network.requests).toHaveLength(parkedReads);
-            await screen.update(<Harness shell="pane" />);
-            await flushHookEffects();
+            await reflow('pane');
+            await waitForMountedStream();
+            console.info('Computer retained reflow measurement', JSON.stringify(reflowSamples));
+            expect(parkedPicture).toEqual(lastPicture);
+            expect(parkedInput).toBeNull();
+            expect(picture()).toEqual(lastPicture);
+            expect(body.props.stream?.input?.streamId).toBe(streamId);
+            expect(body.props.stream?.playerState?.lastFrameAtMs).toBe(1000);
             expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
             expect(body.props.targetTitle).toBe('Retained window');
             expect(store.getPortalSnapshot().map(entry => entry.slotId)).toEqual([slotId]);
             expect(activeStreams.size).toBe(1);
-            phase = 'remounting the responsive shell while stream admission is pending';
+            phase = 'streaming through the actual 390-to-1440 viewer placements';
+            const startsBeforeViewports = streamStarts;
+            await act(async () => { viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' }); });
+            await reflow('phone');
+            expect(screen.findByTestId('session-viewer-sticky')).not.toBeNull();
+            expect(picture()).toEqual(lastPicture);
+            const measurePicture = async () => { await act(async () => {
+                invokeTestInstanceHandler(screen.findByTestId(`browser-keepalive-placeholder-${slotId}`)!, 'onLayout', {});
+            }); };
+            await measurePicture();
+            const placedPicture = () => {
+                const entry = store.getPortalSnapshot().find(entry => entry.slotId === slotId);
+                expect(entry?.visible).toBe(true);
+                expect(entry?.geometry?.width ?? 0).toBeGreaterThan(0);
+                expect(entry?.geometry?.height ?? 0).toBeGreaterThan(0);
+            };
+            placedPicture();
+            await reflow('wide');
+            expect(screen.findByTestId('session-viewer-host')).not.toBeNull();
+            expect(picture()).toEqual(lastPicture);
+            placedPicture();
+            // The wide frame deliberately waits for layout before it binds its body.
+            await act(async () => {
+                invokeTestInstanceHandler(screen.findByTestId('session-viewer-host')!, 'onLayout', {
+                    nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: 900 } },
+                });
+            });
+            await waitForMountedStream();
+            expect(picture()).toEqual(lastPicture);
+            expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
+            await reflow('phone');
+            placeholderSize = { width: 0, height: 0 };
+            await measurePicture();
+            placedPicture();
+            await waitForMountedStream();
+            expect(picture()).toEqual(lastPicture);
+            expect(body.props.stream?.input?.streamId).toBe(streamId);
+            expect(activeStreams.size).toBe(1);
+            expect(streamStarts).toBe(startsBeforeViewports);
+            console.info('Computer viewer placement measurement', JSON.stringify(reflowSamples));
+            expect(body.props.targetTitle).toBe('Retained window');
+            phase = 'retaining the dock and Chat picture across a real transport identity replacement';
+            // Reuse the ordinary controller for both routed presentations, just as
+            // the earlier Details/Chat journey; the explicit phone fixture has its own.
+            placeholderSize = { width: 358, height: 224 };
+            await reflow('pane');
+            await measurePicture();
+            await act(async () => {
+                viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' });
+                viewerController!.apply({ kind: 'viewer.dock' });
+            });
+            viewport.width = 390;
+            viewport.height = 844;
+            await reflow('routed');
+            const startsBeforeReconnect = streamStarts;
+            const recoveryPictures: number[] = [];
+            recordContinuity = () => { recoveryPictures.push(picture().length); };
+            // Engine.IO disconnect/reconnect is the external transport boundary. The
+            // Account, retained body, grant, RPC and ingestion owners all stay real.
+            await act(async () => {
+                allowSocketReconnect = false;
+                activeStreams.clear();
+                for (const boundary of network.socketBoundaries) {
+                    boundary.socket.id = '';
+                    boundary.trigger('disconnect', 'transport close');
+                }
+            });
+            await flushHookEffects();
+            expect(picture()).toEqual(lastPicture);
+            await act(async () => {
+                route.acceptUrl(resolveSessionRoutePathForSurface(sessionId, 'chat', { serverId: home.id, query: routeParams }));
+            });
+            await reflow('routed');
+            expect(picture()).toEqual(lastPicture);
+            await measurePicture();
+            const connectionRestored = createDeferred<void>();
+            const stopReconnectStatus = apiSocket.onStatusChange(status => {
+                if (status === 'connected' && apiSocket.getSocketId() === 'socket-reconnected') connectionRestored.resolve();
+            });
+            try {
+                await act(async () => {
+                    allowSocketReconnect = true;
+                    for (const boundary of network.socketBoundaries) {
+                        boundary.socket.connect();
+                    }
+                    // The active API's managed transport owns readiness; merely
+                    // assigning its SDK id does not admit the new connection.
+                    await connectionRestored.promise;
+                });
+            } finally { stopReconnectStatus(); }
+            const reconnectedStreamId = await waitForMountedStream();
+            expect(reconnectedStreamId).not.toBe(streamId);
+            expect(streamStarts).toBe(startsBeforeReconnect + 1);
+            expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
+            expect(body.props.stream?.playerState?.phase).toBe('reconnecting');
+            expect(picture()).toEqual(lastPicture);
+            recordContinuity = null;
+            expect(recoveryPictures.length).toBeGreaterThan(0);
+            expect(recoveryPictures.every(count => count === 1)).toBe(true);
+            await act(async () => { viewerController!.port.apply({ kind: 'viewer.close' }); });
+            phase = 'replacing a stream subscriber while its daemon admission is pending';
             await screen.update(<Harness shell="closed" />);
             delayStart = createDeferred<void>();
             pendingStart = createDeferred<void>();
             await screen.update(<Harness shell="pane" />);
             await act(async () => { await pendingStart!.promise; });
-            await screen.update(<Harness key="phone-layout" shell="floating" />);
+            // A genuinely new subscriber gets a new id under the same live Account. Destroy its
+            // retained source explicitly, rather than retiring destination custody by keying the
+            // entire app root (retired authority correctly cannot send a late network Stop).
+            await act(async () => { store.removePortalEntry(slotId); });
+            await screen.update(<Harness shell="floating" />);
             await act(async () => { delayStart!.resolve(); });
             await flushHookEffects();
             const mountedStreamId = await waitForMountedStream();
+            expect(mountedStreamId).not.toBe(streamId);
             expect(screen.root.findByType(ComputerScreenViewer).props.stream?.playerState?.phase).not.toBe('error');
             expect(viewerController!.presence.get('computer')?.presence.kind).toBe('agent');
             const frame = await sealMachineLiveStreamEnvelopeV1({
@@ -311,7 +623,7 @@ describe('SessionComputerScreenPane retained source', () => {
                 expect(player?.lastFrameAtMs, JSON.stringify(player)).toBe(1234);
             });
             expect(viewerController!.presence.get('computer')?.presence.kind).toBe('agent');
-            await screen.update(<Harness key="phone-layout" shell="closed" />);
+            await screen.update(<Harness shell="closed" />);
             await flushHookEffects();
             delayStart = null;
             await screen.update(<Harness shell="pane" />);
@@ -331,6 +643,11 @@ describe('SessionComputerScreenPane retained source', () => {
             await flushHookEffects();
             expect(activeStreams.size).toBe(0);
         } finally {
+            recordContinuity = null;
+            allowSocketReconnect = true;
+            selectionRead?.resolve();
+            viewport.width = 1440;
+            viewport.height = 900;
             delayStart?.resolve();
             readBody();
             await screen.unmount();

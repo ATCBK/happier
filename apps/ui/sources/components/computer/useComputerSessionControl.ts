@@ -17,7 +17,7 @@ import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
@@ -38,10 +38,12 @@ export type ComputerSessionControl = Readonly<{
     targetTitle: string | null;
     appName: string | null;
     machineName: string | null;
-    /** A person's press is in flight (hand back or a fresh look). */
-    busy: 'handBack' | 'check' | null;
+    /** A person's press is in flight (hand back, a fresh look, or Stop sharing). */
+    busy: 'handBack' | 'check' | 'stop' | null;
     /** The last refusal code from the owner, for the one line that says what happened. */
     failure: string | null;
+    /** `failure` came from the person's Stop sharing: the share is still on and the press can be retried. */
+    stopFailed: boolean;
     /** Current owner facts, independent of whether the settings page was opened. */
     canRead: boolean;
     canInput: boolean;
@@ -63,8 +65,8 @@ export type ComputerSessionControl = Readonly<{
     /** The picker's answer, applied without another read. */
     applySelection: (selection: ComputerSelectedTargetResponseV1) => void;
 }>;
-const EMPTY_LOCAL_PRESENTATION: Readonly<{ stopRequested: boolean; busy: ComputerSessionControl['busy']; failure: string | null; openSettings: ComputerSessionControl['openSettings'] }> = {
-    stopRequested: false, busy: null, failure: null, openSettings: 'idle',
+const EMPTY_LOCAL_PRESENTATION: Readonly<{ stopRequested: boolean; busy: ComputerSessionControl['busy']; failure: string | null; stopFailed: boolean; openSettings: ComputerSessionControl['openSettings'] }> = {
+    stopRequested: false, busy: null, failure: null, stopFailed: false, openSettings: 'idle',
 };
 
 /**
@@ -101,7 +103,9 @@ export function useComputerSessionControl(input: Readonly<{
         if (!machineId || !accountLifetime?.isCurrent()
             || !areServerAccountScopesEqual(state.profileScope, accountLifetime.scope)
             || !selectActiveServerAccountScopeForServer(accountLifetime.scope, serverId)) return null;
-        return getMachineDisplayName(resolveServerScopedMachine(state, serverId, machineId));
+        // The viewer puts this name in sentences ("Opening … on {machine}"), so a Machine this device
+        // cannot read yet has no name rather than the "Locked machine" / "Loading…" title placeholder.
+        return readMachineName(resolveServerScopedMachine(state, serverId, machineId));
     }, [accountLifetime, machineId, serverId, store]);
     const subscribeCachedMachineName = React.useCallback((listener: () => void) =>
         enabled && accountLifetime && machineId ? store.subscribe(listener) : () => {},
@@ -128,10 +132,12 @@ export function useComputerSessionControl(input: Readonly<{
     const [localPresentation, setLocalPresentation] = React.useState(() => ({ owner: client, ...EMPTY_LOCAL_PRESENTATION }));
     // Press feedback belongs to the exact invoking owner, just like its source
     // facts. Withdraw it during retirement/new binding, before any cleanup effect.
-    const { stopRequested, busy, failure, openSettings } = localPresentation.owner === client && client?.isCurrent()
+    const { stopRequested, busy, failure, stopFailed, openSettings } = localPresentation.owner === client && client?.isCurrent()
         ? localPresentation : EMPTY_LOCAL_PRESENTATION;
     const updateLocalPresentation = React.useCallback((next: Partial<typeof EMPTY_LOCAL_PRESENTATION>) => {
-        setLocalPresentation(previous => ({ ...(previous.owner === client ? previous : EMPTY_LOCAL_PRESENTATION), owner: client, ...next }));
+        // A new failure (or its clearing) belongs to whichever press wrote it; only Stop sharing marks its own.
+        const owned = 'failure' in next && !('stopFailed' in next) ? { ...next, stopFailed: false } : next;
+        setLocalPresentation(previous => ({ ...(previous.owner === client ? previous : EMPTY_LOCAL_PRESENTATION), owner: client, ...owned }));
     }, [client]);
     const clientRef = React.useRef(client);
     clientRef.current = client?.isCurrent() ? client : null;
@@ -195,7 +201,13 @@ export function useComputerSessionControl(input: Readonly<{
                 }
                 // Only the existing selection owner can retire the uncertain
                 // native process. A fresh observation cannot clear that quarantine.
-                const recovered = await owner.selectTarget(selected.selectedTarget, selected.access ?? 'use');
+                const access = selected.access ?? selected.approvalDisplay.access;
+                if (!access) {
+                    // Optional wire facts are not permission to widen an existing selection.
+                    updateLocalPresentation({ busy: null, failure: 'invalid_action_output' });
+                    return;
+                }
+                const recovered = await owner.selectTarget(selected.selectedTarget, access);
                 if (clientRef.current !== owner || !owner.isCurrent()) return;
                 if (!recovered.ok || !recovered.value.selectedTarget || !recovered.value.sourceId) {
                     updateLocalPresentation({ failure: recovered.ok ? 'invalid_action_output' : recovered.code });
@@ -221,12 +233,13 @@ export function useComputerSessionControl(input: Readonly<{
     const stopSharing = React.useCallback(() => {
         const owner = client;
         if (!owner?.isCurrent()) return;
-        updateLocalPresentation({ busy: 'handBack', failure: null });
+        updateLocalPresentation({ busy: 'stop', failure: null });
         void (async () => {
             const result = await owner.stopSharing();
             if (clientRef.current !== owner || !owner.isCurrent()) return;
-            if (!result.ok) updateLocalPresentation({ failure: result.code });
-            else if (result.value.status !== 'dispatched') updateLocalPresentation({ failure: result.value.status === 'failed' ? result.value.code : 'control_not_drained' });
+            // The answer ends the press: Retry is offered at once, not after the follow-up read settles.
+            if (!result.ok) updateLocalPresentation({ failure: result.code, stopFailed: true, busy: null });
+            else if (result.value.status !== 'dispatched') updateLocalPresentation({ failure: result.value.status === 'failed' ? result.value.code : 'control_not_drained', stopFailed: true, busy: null });
             await refreshStatus();
             if (clientRef.current !== owner || !owner.isCurrent()) return;
             updateLocalPresentation({ busy: null });
@@ -258,7 +271,9 @@ export function useComputerSessionControl(input: Readonly<{
     const appName = selection?.approvalDisplay.appName ?? null;
     const machineName = selection?.approvalDisplay.machineDisplayName ?? cachedMachineName;
     const canRead = Boolean(selection?.sourceId && grants?.capture === 'granted');
-    const currentFailure = ownerFailure ?? failure;
+    // A failed Stop sharing is what the person just did; a read failing alongside it does not replace it.
+    const stopFailedNow = stopFailed && failure !== null;
+    const currentFailure = stopFailedNow ? failure : ownerFailure ?? failure;
     const recoveryAction = currentFailure === null ? null : resolveComputerRecovery({ kind: 'failed', code: currentFailure }, 'use')?.action;
     // See/use constrains the Agent, not the person's native stream controls.
     const canInput = canRead && recoveryAction !== 'capture' && recoveryAction !== 'repair_driver'
@@ -266,8 +281,8 @@ export function useComputerSessionControl(input: Readonly<{
     const inputDenied = canRead && grants?.input === 'denied';
 
     return React.useMemo(() => ({
-        selection, presence, agentActing, targetTitle, appName, machineName, busy, failure: currentFailure, canRead, canInput, inputDenied,
+        selection, presence, agentActing, targetTitle, appName, machineName, busy, failure: currentFailure, stopFailed: stopFailedNow, canRead, canInput, inputDenied,
         grants, openSettings, requestSettings,
         takeControl, handBack, checkAgain, stopSharing, refresh, applySelection,
-    }), [agentActing, appName, applySelection, busy, canInput, canRead, inputDenied, checkAgain, currentFailure, grants, handBack, machineName, openSettings, presence, refresh, requestSettings, selection, stopSharing, takeControl, targetTitle]);
+    }), [agentActing, appName, applySelection, busy, canInput, canRead, inputDenied, checkAgain, currentFailure, grants, handBack, machineName, openSettings, presence, refresh, requestSettings, selection, stopFailedNow, stopSharing, takeControl, targetTitle]);
 }

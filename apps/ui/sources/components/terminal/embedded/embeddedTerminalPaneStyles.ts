@@ -76,6 +76,17 @@ export const embeddedTerminalPaneStyles = StyleSheet.create((theme) => ({
         minWidth: 0,
         padding: theme.space.s8,
     },
+    renderer: {
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+    },
+    rendererCovered: {
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        opacity: 0,
+    },
     overlay: {
         ...StyleSheet.absoluteFillObject,
         alignItems: 'center',

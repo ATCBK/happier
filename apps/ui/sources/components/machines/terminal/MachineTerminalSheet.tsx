@@ -1,0 +1,124 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+
+import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
+import { EmbeddedTerminalPane } from '@/components/terminal/embedded/EmbeddedTerminalPane';
+import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
+import { useTerminalApprovalOpener } from '@/components/terminal/embedded/useTerminalApprovalOpener';
+import { useMachineTerminalSession } from '@/hooks/machine/useMachineTerminalSession';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Modal } from '@/modal';
+import { randomUUID } from '@/platform/randomUUID';
+import { useMachine } from '@/sync/domains/state/storage';
+import { t } from '@/text';
+
+export type MachineTerminalSheetTarget = Readonly<{
+  serverId: string;
+  machineId: string;
+  machineName: string;
+}>;
+
+/**
+ * "Open terminal" on a machine's page: a shell on that machine in a card (a sheet on phones). The terminal is
+ * opened through the same `machines.terminal.open` Action every other terminal uses (the session controller's
+ * admission), so approval policy and agent parity stay with that owner; the shell ends with the card.
+ */
+export function showMachineTerminalSheet(
+  target: MachineTerminalSheetTarget,
+): void {
+  Modal.show({
+    component: MachineTerminalModal,
+    props: target,
+    chrome: {
+      kind: 'card',
+      phonePresentation: 'sheet',
+      testID: 'machine-terminal-modal',
+      title: t('machineDetailPage.terminalSheetTitle', {
+        machine: target.machineName,
+      }),
+      scrollHost: 'body',
+      bodyScroll: 'none',
+      dimensions: { size: 'lg' },
+    },
+    closeOnBackdrop: false,
+  });
+}
+
+/** The shell opens in the machine's home folder, read from its decrypted details (`readMachineTerminalHomeDir`). */
+export function readMachineTerminalHomeDir(
+  machine: Readonly<{ metadata?: Readonly<{ homeDir?: string | null }> | null }> | null | undefined,
+): string | null {
+  return machine?.metadata?.homeDir?.trim() || null;
+}
+
+const MachineTerminalModal = React.memo(function MachineTerminalModal(
+  props: MachineTerminalSheetTarget,
+) {
+  const machine = useMachine(props.machineId);
+  const homeDir = readMachineTerminalHomeDir(machine);
+  // Until this device can read the machine's details there is no folder to open in: the card says so and the
+  // shell starts by itself once they arrive (no fallback folder, no request that can only be refused).
+  if (homeDir === null) {
+    return (
+      <View style={[styles.frame, styles.waiting]}>
+        <SurfaceStateCard
+          testID="machine-terminal-waiting"
+          kind="loading"
+          title={t('machineDetailPage.terminalSheetWaitingTitle', { machine: props.machineName })}
+          reason={t('machineDetailPage.terminalSheetWaitingBody')}
+        />
+      </View>
+    );
+  }
+  return <MachineTerminalShell {...props} homeDir={homeDir} />;
+});
+
+const MachineTerminalShell = React.memo(function MachineTerminalShell(
+  props: MachineTerminalSheetTarget & Readonly<{ homeDir: string }>,
+) {
+  const presence = useMachinePresenceSummary(props.serverId, props.machineId);
+  const terminalRef = React.useRef<EmbeddedTerminalRendererHandle | null>(null);
+  // One shell per opening: a second opening is a second terminal, never the first one's screen.
+  const terminalKey = React.useMemo(
+    () => `machine-shell:${props.machineId}:${randomUUID()}`,
+    [props.machineId],
+  );
+  const controller = useMachineTerminalSession({
+    machineId: props.machineId,
+    serverId: props.serverId,
+    cwd: props.homeDir,
+    machineReachable: presence.reachability !== 'unreachable',
+    machineRpcTargetAvailable: true,
+    terminalKey,
+    terminalRef,
+    closeOnUnmount: true,
+  });
+  const onOpenApproval = useTerminalApprovalOpener(controller);
+  return (
+    <View style={styles.frame}>
+      <EmbeddedTerminalPane
+        title={t('machineDetailPage.terminalSheetTitle', {
+          machine: props.machineName,
+        })}
+        controller={{ ...controller, onOpenApproval }}
+        terminalRef={terminalRef}
+        chrome="none"
+        machineName={props.machineName}
+        testIdPrefix="machine-terminal"
+        nativeSurfaceKey={terminalKey}
+      />
+    </View>
+  );
+});
+
+const styles = StyleSheet.create(() => ({
+  waiting: {
+    justifyContent: 'center',
+  },
+  frame: {
+    flex: 1,
+    minHeight: 360,
+    minWidth: 0,
+  },
+}));

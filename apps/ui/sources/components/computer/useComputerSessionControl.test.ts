@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
-import type { ComputerControlStatusResponseV1 } from '@happier-dev/protocol/computer/v1';
+import type { ComputerControlStatusResponseV1, ComputerSelectedTargetResponseV1 } from '@happier-dev/protocol/computer/v1';
 import type { MachineLiveStreamFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -21,10 +21,11 @@ const identity = { target, sourceId: 'computer:1' };
 const targetList = { targets: [{ target }], grants: { capture: 'granted', input: 'granted' } } as const;
 const selection = {
     consentGranted: true,
+    access: 'use',
     selectedTarget: target,
     sourceId: 'computer:1',
     approvalDisplay: { machineDisplayName: 'Studio laptop', requiresTargetSelection: false, target: { kind: 'window', title: 'Sign in to Lumen' } },
-};
+} satisfies ComputerSelectedTargetResponseV1;
 const status = (controller: 'agent' | 'human' | 'idle', extra: Partial<{ stopping: boolean; uncertain: boolean; controlEpoch: number }> = {}) => ({
     ...identity, controller, controlEpoch: extra.controlEpoch ?? 1, stopping: extra.stopping ?? false, uncertain: extra.uncertain ?? false,
 });
@@ -110,6 +111,139 @@ async function renderControl(machine: ComputerMachineRpc) {
 }
 
 describe('useComputerSessionControl', () => {
+    it.each(['computer.target.get', 'computer.targets.list', 'computer.control.status'] as const)(
+        'keeps a known share available for release after a failed %s read', async failedAction => {
+            let failing = false;
+            let shared = true;
+            const machine: ComputerMachineRpc = async ({ actionId }) => {
+                if (failing && actionId === failedAction) return { ok: false, errorCode: 'MACHINE_RPC_TIMEOUT', error: 'MACHINE_RPC_TIMEOUT' };
+                if (actionId === 'computer.target.get') return shared ? selection : {
+                    consentGranted: false, approvalDisplay: { machineDisplayName: 'Studio laptop', requiresTargetSelection: true },
+                };
+                if (actionId === 'computer.targets.list') return targetList;
+                if (actionId === 'computer.control.status') return status('human');
+                throw new Error(`Unexpected Computer RPC: ${actionId}`);
+            };
+            const hook = await renderControl(machine);
+            try {
+                expect(hook.getCurrent().selection?.sourceId).toBe(selection.sourceId);
+                failing = true;
+                await act(async () => hook.getCurrent().refresh());
+                expect(hook.getCurrent().failure).toBe('MACHINE_RPC_TIMEOUT');
+                expect(hook.getCurrent().stopFailed).toBe(false);
+                expect(hook.getCurrent().selection?.sourceId).toBe(selection.sourceId);
+                expect(hook.getCurrent().canInput).toBe(false);
+                failing = false;
+                shared = false;
+                await act(async () => hook.getCurrent().refresh());
+                expect(hook.getCurrent().selection?.sourceId).toBeUndefined();
+                expect(hook.getCurrent().failure).toBeNull();
+            } finally { await hook.unmount(); }
+        },
+    );
+
+    it('reports an unconfirmed release and keeps Stop sharing available until the owner confirms closure', async () => {
+        let closes = 0;
+        let shared = true;
+        const machine: ComputerMachineRpc = async ({ actionId }) => {
+            if (actionId === 'computer.target.close') {
+                if (++closes === 2) shared = false;
+                return { ...identity, status: 'dispatched' };
+            }
+            if (actionId === 'computer.target.get') return shared ? selection : {
+                consentGranted: false, approvalDisplay: { machineDisplayName: 'Studio laptop', requiresTargetSelection: true },
+            };
+            if (actionId === 'computer.targets.list') return targetList;
+            if (actionId === 'computer.control.status') return status('human');
+            throw new Error(`Unexpected Computer RPC: ${actionId}`);
+        };
+        const hook = await renderControl(machine);
+        try {
+            await act(async () => hook.getCurrent().stopSharing());
+            expect(hook.getCurrent().selection?.sourceId).toBe(selection.sourceId);
+            expect(hook.getCurrent().failure).toBe('control_not_drained');
+            // The failure belongs to the person's Stop sharing, so the viewer can say so.
+            expect(hook.getCurrent().stopFailed).toBe(true);
+            expect(hook.getCurrent().busy).toBeNull();
+            await act(async () => hook.getCurrent().stopSharing());
+            expect(hook.getCurrent().selection?.sourceId).toBeUndefined();
+            expect(hook.getCurrent().failure).toBeNull();
+            expect(hook.getCurrent().stopFailed).toBe(false);
+            expect(hook.getCurrent().busy).toBeNull();
+        } finally { await hook.unmount(); }
+    });
+
+    it('does not report release success when the canonical confirmation read is unavailable', async () => {
+        let closed = false;
+        const executor = executorWith(async ({ actionId }) => {
+            if (actionId === 'computer.target.close') { closed = true; return { ...identity, status: 'dispatched' }; }
+            if (actionId === 'computer.target.get') return closed
+                ? { ok: false, errorCode: 'MACHINE_RPC_TIMEOUT', error: 'MACHINE_RPC_TIMEOUT' } : selection;
+            throw new Error(`Unexpected Computer RPC: ${actionId}`);
+        });
+        const client = createComputerControlClient({ sessionId: 'release-confirmation', machineId: 'machine_1' }, executor.execute);
+        expect(await client.stopSharing()).toEqual({ ok: false, code: 'MACHINE_RPC_TIMEOUT' });
+    });
+
+    it('reads control status while grants are pending and admits the picture only after capture permission', async () => {
+        const targets = createDeferred<typeof targetList>();
+        const controller = createDeferred<ComputerControlStatusResponseV1>();
+        const calls: string[] = [];
+        const machine: ComputerMachineRpc = async ({ actionId }) => {
+            calls.push(actionId);
+            if (actionId === 'computer.target.get') return selection;
+            if (actionId === 'computer.targets.list') return await targets.promise;
+            if (actionId === 'computer.control.status') return await controller.promise;
+            throw new Error(`Unexpected Computer RPC: ${actionId}`);
+        };
+        const hook = await renderControl(machine);
+        try {
+            expect(hook.getCurrent().canRead).toBe(false);
+            expect(calls).toContain('computer.control.status');
+            await act(async () => { targets.resolve(targetList); });
+            expect(hook.getCurrent().canRead).toBe(true);
+            expect(hook.getCurrent().presence.kind).toBe('idle');
+            await act(async () => { controller.resolve(status('human')); });
+            expect(hook.getCurrent().presence.kind).toBe('human');
+        } finally {
+            targets.resolve(targetList);
+            controller.resolve(status('human'));
+            await hook.unmount();
+        }
+    });
+
+    it.each([
+        { access: 'see', displayAccess: undefined, expected: 'see' },
+        { access: 'use', displayAccess: undefined, expected: 'use' },
+        { access: undefined, displayAccess: 'see', expected: 'see' },
+        { access: undefined, displayAccess: undefined, expected: null },
+    ] as const)('never widens access when recovering an uncertain selection ($access, $displayAccess)', async ({ access, displayAccess, expected }) => {
+        const currentSelection = { ...selection, access, approvalDisplay: { ...selection.approvalDisplay, access: displayAccess } };
+        const selections: unknown[] = [];
+        let captures = 0;
+        const machine: ComputerMachineRpc = async ({ actionId, input }) => {
+            if (actionId === 'computer.target.get') return currentSelection;
+            if (actionId === 'computer.targets.list') return targetList;
+            if (actionId === 'computer.control.status') return status('human', { uncertain: true });
+            if (actionId === 'computer.target.select') { selections.push(input); return currentSelection; }
+            if (actionId === 'computer.capture') { captures += 1; return capture; }
+            throw new Error(`Unexpected recovery RPC: ${actionId}`);
+        };
+        const hook = await renderControl(machine);
+        try {
+            await act(async () => hook.getCurrent().checkAgain());
+            if (expected) {
+                expect(selections).toEqual([{ machineId: 'machine_1', target, access: expected }]);
+                expect(captures).toBe(1);
+            } else {
+                expect(selections).toEqual([]);
+                expect(captures).toBe(0);
+                expect(hook.getCurrent().failure).toBe('invalid_action_output');
+                expect(hook.getCurrent().canInput).toBe(false);
+            }
+        } finally { await hook.unmount(); }
+    });
+
     it('keeps the admitted cached Machine identity when Computer discovery fails and withdraws it on Account retirement', async () => {
         const { storage } = await import('@/sync/domains/state/storageStore');
         const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
@@ -144,14 +278,18 @@ describe('useComputerSessionControl', () => {
             expect(hook.getCurrent().failure).toBe('machine_unreachable');
             expect(hook.getCurrent().selection).toBeNull();
             expect(hook.getCurrent().machineName).toBe('Cached studio');
+            // A Machine this device cannot read yet has no name to put in a sentence: not "Locked machine".
             await act(async () => storage.setState({ machineListByServerId: { ...previousLists,
-                [accountScope.serverId]: [{ ...cachedMachine, metadata: { ...cachedMachine.metadata, displayName: 'Renamed studio' } }] } }));
+                [accountScope.serverId]: [{ ...cachedMachine, availability: { kind: 'locked', reason: 'recipient_key_pending' } }] } }));
+            expect(hook.getCurrent().machineName).toBeNull();
+            await act(async () => storage.setState({ machineListByServerId: { ...previousLists,
+                [accountScope.serverId]: [{ ...cachedMachine, metadata: { ...cachedMachine.metadata!, displayName: 'Renamed studio' } }] } }));
             expect(hook.getCurrent().machineName).toBe('Renamed studio');
             enabled = false;
             await hook.rerender();
             const parkedRenders = renders;
             await act(async () => storage.setState({ machineListByServerId: { ...previousLists,
-                [accountScope.serverId]: [{ ...cachedMachine, metadata: { ...cachedMachine.metadata, displayName: 'Resumed studio' } }] } }));
+                [accountScope.serverId]: [{ ...cachedMachine, metadata: { ...cachedMachine.metadata!, displayName: 'Resumed studio' } }] } }));
             expect(renders).toBe(parkedRenders);
             expect(hook.getCurrent().machineName).toBe('Renamed studio');
             enabled = true;
@@ -305,7 +443,7 @@ describe('useComputerSessionControl', () => {
         const callbacks = { onSelected: vi.fn(), onClose: vi.fn() };
         const hook = await renderHook(() => ({
             control: useComputerSessionControl({ scope, execute: executor.execute }),
-            picker: useComputerTargetPicker({ scope, execute: executor.execute, currentTargetKey: computerTargetKeyV1(target), ...callbacks }),
+            picker: useComputerTargetPicker({ scope, execute: executor.execute, currentTargetKey: computerTargetKeyV1(target), access: 'use', ...callbacks }),
         }));
         await act(async () => { hook.getCurrent().picker.requestSettings('input'); });
         expect(hook.getCurrent().picker.openSettings).toBe('opened');

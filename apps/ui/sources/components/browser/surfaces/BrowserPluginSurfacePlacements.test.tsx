@@ -227,9 +227,9 @@ async function withBrowserPanelHarness(
     (globalThis as { window: unknown }).window = new EventTarget();
     storage.getState().applyLocalSettings({ appPaneScopesV1: options.panelOpen === false ? {} : {
         'browser-panels:browser-test': {
-            right: { isOpen: false, activeTabId: null, tabState: { [browserPanelPlacement.id]: { isOpen: true } } },
+            right: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: { [browserPanelPlacement.id]: { isOpen: true } } },
             details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
-            bottom: { isOpen: false, activeTabId: null, tabState: {} },
+            bottom: { isOpen: false, activeTabId: null, selectedDestination: null, tabState: {} },
         },
     } });
 
@@ -361,6 +361,12 @@ describe('BrowserPluginSurfacePlacements', () => {
         await withBrowserPanelHarness(
             () => ({ ok: true, result: { state: 'available' } }),
             async ({ screen, iframeSource, executeAction, nonce, sessionId }) => {
+                // A retained surface must first have loaded while its endpoint was reachable.
+                await act(async () => { screen.findByType('iframe').props.onLoad?.(); });
+                await act(async () => storage.getState().setEndpointConnectivity({ status: 'offline',
+                    reason: null, attempt: 0, nextRetryAt: null, lastConnectedAt: Date.now(),
+                    lastDisconnectedAt: Date.now(), lastErrorMessage: null }));
+                await flushHookEffects({ cycles: 3 });
                 expect(screen.findByTestId('plugin-hosted-web-frame')).toBeTruthy();
                 expect(nonce.length).toBeGreaterThan(0);
                 // `inert`/`aria-hidden` are owned by the snapshot node inside the
@@ -384,7 +390,6 @@ describe('BrowserPluginSurfacePlacements', () => {
                 expect(executeAction).not.toHaveBeenCalled();
                 expect(iframeSource.postMessage).not.toHaveBeenCalled();
             },
-            { endpointStatus: 'offline' },
         );
     });
 

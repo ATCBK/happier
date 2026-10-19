@@ -6,8 +6,9 @@ import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/action
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 
 const boundary = vi.hoisted(() => ({ rpc: vi.fn() }));
 // The native renderer, network and daemon RPC are boundaries; Account admission,
@@ -24,21 +25,23 @@ const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { createComputerRuntimeActionExecutor } = await import('@/sync/domains/computer/actions/runtimeActionExecutor');
 
 describe('mounted Computer recovery through configurable Action approval', () => {
-    beforeEach(() => { harness.reset(); boundary.rpc.mockReset(); });
+    beforeEach(async () => { await harness.reset(); boundary.rpc.mockReset(); });
     afterEach(() => standardCleanup());
 
     it('keeps rejected unknown input quarantined, then resumes an approved retry in the captured Session', async () => {
-        const serverId = await harness.addHome({ name: 'Computer Home', serverUrl: 'https://computer-recovery.test', accountId: 'alice' });
-        const accountScope = { serverId, accountId: 'alice' };
-        const settings = { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {},
-            approvalWaivedSurfaces: { 'computer.target.select': ['ui'], 'computer.capture': ['ui'] } }) };
+        const serverId = await harness.addHome({ name: 'Computer Home', serverUrl: 'https://computer-recovery.test',
+            serverIdentityId: 'srv_computer_recovery', accountId: 'alice', currentAccount: true });
+        const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'alice' };
+        const settings = { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+            actions: { 'computer.target.select': { approvalRequiredSurfaces: ['ui'] } },
+            approvalWaivedSurfaces: { 'computer.capture': ['ui'] } }) };
         storage.setState({ settingsScope: accountScope, profileScope: accountScope, settings: { ...storage.getState().settings, ...settings } });
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
-        await harness.requireUiApproval(serverId, 'computer.target.select');
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Expected admitted Computer Account');
@@ -46,7 +49,7 @@ describe('mounted Computer recovery through configurable Action approval', () =>
         let sourceId = 'computer:uncertain';
         let uncertain = true;
         const calls: Array<{ actionId: string; sessionId: string; input: unknown }> = [];
-        const selected = () => ({ consentGranted: true, selectedTarget: target, sourceId,
+        const selected = () => ({ consentGranted: true, selectedTarget: target, sourceId, access: 'use' as const,
             approvalDisplay: { machineDisplayName: 'Studio', requiresTargetSelection: false, target: { kind: 'window', title: 'Editor' } } });
         boundary.rpc.mockImplementation(async (request: { method: string; payload: { actionId: string; sessionId: string; input: unknown } }) => {
             expect(request.method).toBe(RPC_METHODS.DAEMON_COMPUTER_ACTION_EXECUTE);
@@ -67,19 +70,26 @@ describe('mounted Computer recovery through configurable Action approval', () =>
             } else throw new Error(`Unexpected Computer effect: ${actionId}`);
             return { protocolVersion: 1, result };
         });
+        await installOwnMachineApprovalReplayBoundary({ harness, serverId, accountId: 'alice', machineId: 'machine',
+            runtimeActionExecute: createComputerRuntimeActionExecutor({ fallback: createUnavailableRuntimeActionExecutor(), accountLifetime: lifetime }) });
         const hook = await renderHook(() => ({ binding: useServerCredentialAccountScopeBinding(serverId), control: useComputerSessionControl({
             scope: { serverId, sessionId: 'captured-session', machineId: 'machine' }, accountLifetime: lifetime,
         }) }));
         try {
-            await waitForHomeGovernance(() => { expect(hook.getCurrent().binding.binding?.isCurrent()).toBe(true); expect(hook.getCurrent().control.presence.kind).toBe('unconfirmed'); });
+            await waitForHomeGovernance(async () => {
+                await flushHookEffects();
+                expect(hook.getCurrent().binding.binding?.isCurrent()).toBe(true);
+                expect(hook.getCurrent().control.selection?.sourceId).toBe('computer:uncertain');
+                expect(hook.getCurrent().control.presence.kind).toBe('unconfirmed');
+            });
             await act(async () => hook.getCurrent().control.checkAgain());
+            expect({ busy: hook.getCurrent().control.busy, failure: hook.getCurrent().control.failure }).toEqual({ busy: 'check', failure: null });
+            expect(calls.some(call => call.actionId === 'computer.capture' || call.actionId === 'computer.target.select')).toBe(false);
             const first = await waitForHomeGovernance(() => {
                 const artifact = harness.artifacts(serverId).list()[0]; expect(artifact).toBeDefined(); return artifact!;
             });
             const request = ApprovalRequestSchema.parse(JSON.parse(harness.artifacts(serverId).readPlainBody(first.id) ?? 'null'));
             expect(request).toMatchObject({ actionId: 'computer.target.select', status: 'open', actionArgs: { machineId: 'machine', target, access: 'use' } });
-            expect(hook.getCurrent().control.busy).toBe('check');
-            expect(calls.some(call => call.actionId === 'computer.capture' || call.actionId === 'computer.target.select')).toBe(false);
             expect(await decideApprovalAsInbox(serverId, first.id, 'reject')).toMatchObject({ ok: true });
             await waitForHomeGovernance(() => expect(hook.getCurrent().control.busy).toBeNull());
             expect(hook.getCurrent().control.canInput).toBe(false);
@@ -91,9 +101,9 @@ describe('mounted Computer recovery through configurable Action approval', () =>
             const retry = await waitForHomeGovernance(() => {
                 const artifact = harness.artifacts(serverId).list().find(artifact => artifact.id !== first.id); expect(artifact).toBeDefined(); return artifact!;
             });
-            expect(await decideApprovalAsInbox(serverId, retry.id, 'approve')).toMatchObject({ ok: true });
-            expect(await replayApprovedAsDaemon({ serverId, machineId: 'machine', artifactId: retry.id,
-                runtimeActionExecute: createComputerRuntimeActionExecutor({ fallback: createUnavailableRuntimeActionExecutor(), accountLifetime: lifetime }) })).toMatchObject({ ok: true });
+            expect(await decideApprovalAsInbox(serverId, retry.id, 'approve')).toMatchObject({
+                ok: true, result: { status: 'executed', execution: { ok: true } },
+            });
             await waitForHomeGovernance(() => { expect(hook.getCurrent().control.busy).toBeNull(); expect(hook.getCurrent().control.canInput).toBe(true); });
             expect(hook.getCurrent().control.selection?.sourceId).toBe('computer:fresh');
             expect(calls.filter(call => call.actionId === 'computer.target.select' || call.actionId === 'computer.capture').map(call => call.actionId)).toEqual(['computer.target.select', 'computer.capture']);

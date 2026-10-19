@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Image as ReactNativeImage, type ImageURISource, type ImageProps as ReactNativeImageProps } from 'react-native';
+import { Image as ReactNativeImage, Platform, type ImageURISource, type ImageProps as ReactNativeImageProps } from 'react-native';
 import { Image as ExpoImageImport } from 'expo-image';
 
 import { isRenderableElementType } from '@/components/ui/icons/isRenderableElementType';
@@ -68,11 +68,36 @@ function normalizeReactNativeSource(source: SafeExpoImageProps['source']): React
     return source;
 }
 
+/**
+ * expo-image flattens its `style` with React Native's `StyleSheet.flatten`, which keeps enumerable own
+ * properties. On web a Unistyles `StyleSheet.create` entry holds its values as NON-enumerable properties
+ * (only a hidden `unistyles_<id>` marker is enumerable; Unistyles turns it into a class name for the
+ * views it wraps, and expo-image is not one of them), so the flatten dropped every value and the
+ * picture fell back to its intrinsic size (live: 56x36 leading-media thumbnails measured 54x0).
+ * Reading the own property names resolves the entry (and arrays of entries and inline styles, in
+ * order) into the plain style expo-image applies.
+ */
+function resolveWebImageStyle(style: unknown): unknown {
+    if (Array.isArray(style)) {
+        return Object.assign({}, ...style.map(resolveWebImageStyle));
+    }
+    if (!style || typeof style !== 'object') {
+        return style;
+    }
+    const resolved: Record<string, unknown> = {};
+    for (const key of Object.getOwnPropertyNames(style)) {
+        if (!key.startsWith('unistyles_')) {
+            resolved[key] = (style as Record<string, unknown>)[key];
+        }
+    }
+    return resolved;
+}
+
 export const SafeExpoImage = React.memo(function SafeExpoImage(props: SafeExpoImageProps) {
     if (isRenderableElementType(ExpoImageImport)) {
         return React.createElement(
             ExpoImageImport as React.ElementType<SafeExpoImageProps>,
-            props,
+            Platform.OS === 'web' && props.style ? { ...props, style: resolveWebImageStyle(props.style) as SafeExpoImageProps['style'] } : props,
         );
     }
 

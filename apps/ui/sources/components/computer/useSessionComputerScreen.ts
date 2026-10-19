@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 
 import { useBrowserSessionAgentIdentity } from '@/components/browser/copresence/BrowserShellPresence';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
@@ -13,24 +12,7 @@ import type { ComputerTargetPickerRequest } from './showComputerTargetPicker';
 import { useComputerScreenStream } from './useComputerScreenStream';
 import { useComputerSessionControl } from './useComputerSessionControl';
 import { useComputerDriverRepair } from './useComputerDriverRepair';
-
-/** Esc requests takeover while the Agent owns input; after takeover the target handles it. */
-function useEscapeTakesControl(active: boolean, takeControl: () => void): void {
-    React.useEffect(() => {
-        if (!active || Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key !== 'Escape' || event.defaultPrevented) return;
-            // Escape inside a floating frame's own chrome is the frame's (it restores an expanded view).
-            const target = event.target as Element | null;
-            if (target?.closest?.('[data-happier-floating-frame="true"]')) return;
-            event.preventDefault();
-            event.stopPropagation();
-            takeControl();
-        };
-        window.addEventListener('keydown', onKeyDown, true);
-        return () => window.removeEventListener('keydown', onKeyDown, true);
-    }, [active, takeControl]);
-}
+import { useEscapeTakesControl } from './useEscapeTakesControl';
 
 /**
  * The controlled Computer body model, currently consumed by the Details pane. A shared
@@ -70,7 +52,9 @@ export function useSessionComputerScreen(props: Readonly<{
     // Source availability changes are meaningful; changing image URLs are not status invalidations.
     React.useEffect(() => { if (enabled) refreshControl(); }, [enabled, refreshControl, streamStatus]);
 
-    useEscapeTakesControl(enabled && control.presence.kind === 'agent', control.takeControl);
+    // Only while the capsule offers Take control: a see-only share or a machine denying input has none.
+    const access = control.selection?.access ?? control.selection?.approvalDisplay.access;
+    useEscapeTakesControl(enabled && control.presence.kind === 'agent' && access !== 'see' && control.inputDenied !== true, control.takeControl);
     React.useEffect(() => {
         noteSessionComputerMachine({ sessionId: props.sessionId, machineId: props.machineId, machineName: control.machineName });
     }, [control.machineName, props.machineId, props.sessionId]);
@@ -103,6 +87,7 @@ export function useSessionComputerScreen(props: Readonly<{
         targetKind: control.selection?.approvalDisplay.target?.kind ?? null,
         machineName: control.machineName,
         shared: Boolean(control.selection?.sourceId),
+        selectionPending: control.selection === null && control.failure === null,
         inputDenied: control.inputDenied,
         machineOnline,
         grants: control.grants,
@@ -113,7 +98,9 @@ export function useSessionComputerScreen(props: Readonly<{
         presence: control.presence,
         agentActing: control.agentActing,
         checking: control.busy === 'check',
+        stopping: control.busy === 'stop',
         failure: control.failure,
+        stopFailed: control.stopFailed,
         onRepairDriver: driverRepair.repair,
         repairingDriver: driverRepair.repairing,
         onTakeControl: control.takeControl,

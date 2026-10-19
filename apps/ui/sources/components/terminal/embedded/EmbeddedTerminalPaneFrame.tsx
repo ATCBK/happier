@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { PrimaryCircleIconButton } from '@/components/ui/buttons/PrimaryCircleIconButton';
@@ -41,6 +42,7 @@ const MACHINE_UNREACHABLE_ERROR = 'terminal_machine_unreachable';
 
 type TerminalFrameState =
     | Readonly<{ kind: 'live' }>
+    | Readonly<{ kind: 'not-open' }>
     | Readonly<{ kind: 'line'; reason: string; busy?: boolean; tone?: 'neutral' | 'warning'; action?: Readonly<{ label: string; onPress: () => void }> }>
     | Readonly<{ kind: 'failed'; title: string; reason: string; code: string | null }>;
 
@@ -51,17 +53,21 @@ type TerminalFrameState =
  */
 function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): TerminalFrameState {
     const { controller } = props;
-    if (controller.approvalPending && controller.onOpenApproval && (controller.status === 'idle' || controller.status === 'connecting')) {
-        return { kind: 'line', reason: t('approvals.status.open'),
-            action: { label: t('approvals.title'), onPress: controller.onOpenApproval } };
+    // Consent is asked before any PTY exists: the shell is `not-open` (or just starting), and the line
+    // says it is waiting on the person. Only the Approvals shortcut needs the owner's callback.
+    if (controller.approvalPending && (controller.status === 'not-open' || controller.status === 'idle' || controller.status === 'connecting')) {
+        return { kind: 'line', reason: t('approvals.waitingForYou'),
+            ...(controller.onOpenApproval ? { action: { label: t('approvals.title'), onPress: controller.onOpenApproval } } : {}) };
     }
     switch (controller.status) {
         case 'connected': return { kind: 'live' };
+        case 'not-open': return { kind: 'not-open' };
         case 'idle':
         case 'connecting': return { kind: 'line', reason: t('terminalWorkspace.states.connecting'), busy: true };
         case 'exited': return {
             kind: 'line',
-            reason: t('terminalWorkspace.states.exited', { title: props.title }),
+            reason: joinHappierFacts(t('terminalWorkspace.states.exited', { title: props.title }),
+                controller.exitCode == null ? null : `${t('tools.structuredResult.exit')}: ${controller.exitCode}`),
             // A borrowed view cannot restart a process it does not own.
             ...(controller.readOnly ? {} : { action: { label: t('terminalWorkspace.states.restart'), onPress: () => controller.requestRestart() } }),
         };
@@ -77,6 +83,17 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
                 };
             }
             const copy = resolveTerminalErrorCopy(controller.error);
+            // An attached terminal already exists even if this view's first read
+            // failed. Keep its surface and retry only the attachment.
+            if (controller.connectionLost || controller.readOnly) {
+                return {
+                    kind: 'line',
+                    tone: 'warning',
+                    reason: copy ? t(copy.bodyKey) : controller.readOnly ? t('machines.terminals.unavailable')
+                        : t('terminalWorkspace.states.connectionLost', { title: props.title }),
+                    action: { label: t('terminalWorkspace.states.reconnect'), onPress: controller.retryConnect },
+                };
+            }
             return {
                 kind: 'failed',
                 title: t('terminalWorkspace.states.failedTitle', { title: props.title }),
@@ -85,6 +102,14 @@ function resolveTerminalFrameState(props: EmbeddedTerminalPaneFrameProps): Termi
             };
         }
     }
+}
+
+/**
+ * Typing keys belong to a terminal that is live or on its way; not-open, exited and failed terminals
+ * have no process to receive them, so the phone key rail and arrow pad stay away.
+ */
+export function terminalStatusAcceptsKeys(status: EmbeddedTerminalPaneController['status']): boolean {
+    return status === 'idle' || status === 'connecting' || status === 'connected';
 }
 
 function resolveKeyboardBottomInset(value: number | undefined): number {
@@ -123,6 +148,9 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
     }, [props.controller.detectedUrl?.url, props.platformOS]);
 
     const frameState = resolveTerminalFrameState(props);
+    // A state card that covers the body leaves nothing to read: the renderer stays mounted (it sizes the
+    // terminal) but is not seen, so its cursor never shows through a clear content coat.
+    const surfaceCovered = frameState.kind === 'failed' || frameState.kind === 'not-open';
     const showsOwnChrome = props.chrome !== 'none';
     const readOnly = props.controller.readOnly === true;
 
@@ -250,16 +278,21 @@ export const EmbeddedTerminalPaneFrame = React.memo(function EmbeddedTerminalPan
             ) : null}
 
             <View testID={testId('surface')} style={terminalSurfaceStyle}>
-                {props.surface}
-                {frameState.kind === 'failed' ? (
+                <View testID={testId('renderer')} pointerEvents={surfaceCovered ? 'none' : 'auto'}
+                    accessibilityElementsHidden={surfaceCovered} importantForAccessibility={surfaceCovered ? 'no-hide-descendants' : 'auto'}
+                    style={surfaceCovered ? styles.rendererCovered : styles.renderer}>
+                    {props.surface}
+                </View>
+                {surfaceCovered ? (
                     <View testID={testId('overlay')} style={styles.overlay} pointerEvents="auto">
                         <SurfaceStateCard
                             testID={testId('state-card')}
-                            kind="error"
-                            title={frameState.title}
-                            reason={frameState.reason}
-                            diagnosticCode={frameState.code}
-                            action={{ label: t('terminalWorkspace.states.tryAgain'), onPress: props.controller.retryConnect, testID: testId('retry') }}
+                            kind={frameState.kind === 'not-open' ? 'empty' : 'error'}
+                            scene={frameState.kind === 'not-open' ? 'noTerminal' : undefined}
+                            title={frameState.kind === 'not-open' ? t('terminalWorkspace.states.notOpen') : frameState.title}
+                            reason={frameState.kind === 'failed' ? frameState.reason : undefined}
+                            diagnosticCode={frameState.kind === 'failed' ? frameState.code : undefined}
+                            action={{ label: t(frameState.kind === 'not-open' ? 'common.open' : 'terminalWorkspace.states.tryAgain'), onPress: props.controller.retryConnect, testID: testId('retry') }}
                         />
                     </View>
                 ) : null}

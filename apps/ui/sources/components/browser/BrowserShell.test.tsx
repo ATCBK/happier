@@ -33,6 +33,7 @@ import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/acti
 import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actions/runtimeActionExecutor';
 import { browserControlActionId } from '@/sync/domains/browser/actions/controlActionId';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { readRegisteredBrowserContextAnnotationAdapter } from '@/sync/domains/browser/context/runtimeAnnotationRegistry';
 
 const testState = vi.hoisted(() => ({
     useLocalServicePreviewState: vi.fn(),
@@ -1007,6 +1008,74 @@ describe('BrowserShell', () => {
         expect(screen.findByTestId('browser-shell-view-unavailable')).toBeNull();
     });
 
+    it.each(['preparing', 'opening'] as const)('shows the Connecting state instead of the launchpad while the first open is %s', async (firstUse) => {
+        const { BrowserShell } = await import('./BrowserShell');
+        const reducer = await import('@/sync/domains/browser/control/reducer');
+
+        const screen = await renderScreen(
+            <BrowserShell
+                browserSessionId="browser_session_1"
+                platform="web"
+                state={reducer.createBrowserControlState()}
+                onCommand={vi.fn()}
+                launchpadRows={[]}
+                launchpadRefreshStatus="idle"
+                streamedBrowserRuntime={{ machineName: 'Remote', playerState: null, firstUse }}
+                testID="browser-shell"
+            />,
+        );
+
+        expect(screen.findByTestId('browser-shell-first-use')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-launchpad')).toBeNull();
+    });
+
+    it('shows the page the agent asked for in the chrome while its browser is preparing or opening', async () => {
+        const { BrowserShell } = await import('./BrowserShell');
+        const reducer = await import('@/sync/domains/browser/control/reducer');
+        const render = (runtime: Parameters<typeof BrowserShell>[0]['streamedBrowserRuntime']) => renderScreen(
+            <BrowserShell
+                browserSessionId="browser_session_1"
+                platform="web"
+                state={reducer.createBrowserControlState()}
+                onCommand={vi.fn()}
+                launchpadRows={[]}
+                launchpadRefreshStatus="idle"
+                streamedBrowserRuntime={runtime}
+                testID="browser-shell"
+            />,
+        );
+        const opening = await render({ machineName: 'Remote', playerState: null, firstUse: 'opening', firstUseTargetUrl: 'http://localhost:5173/login' });
+        expect(opening.findByTestId('browser-shell-address')?.props.value).toBe('localhost:5173/login');
+        // Without a first-use open the empty chrome stays empty.
+        const idle = await render({ machineName: 'Remote', playerState: null });
+        expect(idle.findByTestId('browser-shell-address')?.props.value).toBe('');
+    });
+
+    it('keeps the launchpad beside a failed first open and hands the sandbox action to its card', async () => {
+        const { BrowserShell } = await import('./BrowserShell');
+        const reducer = await import('@/sync/domains/browser/control/reducer');
+        const onAllowBrowserSandbox = vi.fn(async () => ({ status: 'installed' as const }));
+
+        const screen = await renderScreen(
+            <BrowserShell
+                browserSessionId="browser_session_1"
+                platform="web"
+                state={reducer.createBrowserControlState()}
+                onCommand={vi.fn()}
+                launchpadRows={[]}
+                launchpadRefreshStatus="idle"
+                onAllowBrowserSandbox={onAllowBrowserSandbox}
+                streamedBrowserRuntime={{ machineName: 'Remote', playerState: null, firstUse: 'sandboxUnavailable' }}
+                testID="browser-shell"
+            />,
+        );
+
+        expect(screen.findByTestId('browser-shell-first-use')).toBeNull();
+        expect(screen.findByTestId('browser-shell-launchpad-url-entry')).toBeTruthy();
+        await act(async () => { screen.pressByTestId('browser-shell-launchpad-agent-browser-allow-sandbox'); });
+        expect(onAllowBrowserSandbox).toHaveBeenCalledTimes(1);
+    });
+
     it('disables launchpad target rows when no open-target handler is available', async () => {
         const { BrowserShell } = await import('./BrowserShell');
         const reducer = await import('@/sync/domains/browser/control/reducer');
@@ -1797,7 +1866,7 @@ describe('BrowserShell', () => {
         expect(onContextStateChange).not.toHaveBeenCalled();
     });
 
-    it('disables annotation start when the active browser engine cannot capture annotations', async () => {
+    it('refuses iframe Markup through both the chrome and the registered agent Action with the capture-specific reason', async () => {
         const { BrowserShell } = await import('./BrowserShell');
         const state = await createAnnotationCapableShellState();
         const onContextStateChange = vi.fn<(state: BrowserContextState) => void>();
@@ -1827,10 +1896,23 @@ describe('BrowserShell', () => {
             />,
         );
 
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            runtimeActionExecute: createBrowserRuntimeActionExecutor({
+                resolveAnnotation: readRegisteredBrowserContextAnnotationAdapter,
+            }),
+        }));
+        const result = await executor.execute('browser.context.annotation.start', {
+            browserSessionId: 'browser_session_1', viewId: 'view_1',
+        }, { surface: 'agent' });
+        expect(result).toMatchObject({
+            ok: false,
+            error: 'runtime_action_disabled:browser:browser_context_annotation_iframe_capture_unavailable',
+        });
         expect(screen.findByTestId('browser-shell-mark-up')?.props.accessibilityState).toMatchObject({
             disabled: true,
         });
-        expect(screen.findByTestId('browser-shell-mark-up')?.props.accessibilityHint).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-mark-up')?.props.accessibilityHint)
+            .toBe('browserShell.unavailable.annotationIframeCaptureUnavailable');
         await screen.pressByTestIdAsync('browser-shell-mark-up');
 
         expect(onContextStateChange).not.toHaveBeenCalled();

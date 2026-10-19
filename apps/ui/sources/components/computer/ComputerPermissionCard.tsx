@@ -4,6 +4,9 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ComputerGrantStatusV1 } from '@happier-dev/protocol';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -27,6 +30,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
         maxWidth: 420,
     },
+    grants: {
+        alignSelf: 'stretch',
+        width: '100%',
+        maxWidth: 380,
+        marginHorizontal: 'auto',
+    },
+    grantState: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
+    },
+    grantStateText: {
+        ...Typography.variant('meta'),
+    },
     liveText: {
         ...Typography.variant('meta'),
         flexShrink: 1,
@@ -34,6 +51,31 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'center',
     },
 }));
+
+function ComputerGrantRow(props: Readonly<{ title: string; purpose: string; state: ComputerGrantStatusV1['capture']; testID: string }>) {
+    const { theme } = useUnistyles();
+    const granted = props.state === 'granted';
+    const unknown = props.state === 'unknown';
+    const color = granted ? theme.colors.state.success.foreground
+        : unknown ? theme.colors.text.secondary : theme.colors.state.warning.foreground;
+    return (
+        <Item
+            testID={props.testID}
+            title={props.title}
+            subtitle={props.purpose}
+            showChevron={false}
+            rightElement={(
+                <View style={stylesheet.grantState} testID={`${props.testID}-${props.state}`}>
+                    <Icon name={granted ? 'check' : unknown ? 'question' : 'warning'} size={ICON_SIZE.xs} color={color} />
+                    <Text style={[stylesheet.grantStateText, { color }]}>
+                        {granted ? t('computerUse.permission.granted')
+                            : unknown ? t('computerUse.permission.unknown') : t('computerUse.permission.denied')}
+                    </Text>
+                </View>
+            )}
+        />
+    );
+}
 
 /**
  * The OS permission the machine needs first (lab `b-mac` P): which one is missing, said as what it
@@ -76,6 +118,18 @@ export function ComputerPermissionCard(props: Readonly<{
                     onPress: props.onCheckAgain,
                     testID: `${testID}-check-again`,
                 }}
+                // The two permissions with their real state on the machine, so the person sees which
+                // one is missing and what each unlocks (lab `computer` OG).
+                body={(
+                    <View style={stylesheet.grants}>
+                        <ItemGroup testID={`${testID}-grants`}>
+                            <ComputerGrantRow testID={`${testID}-grant-capture`} title={t('computerUse.permission.capture')}
+                                purpose={t('computerUse.permission.captureFor')} state={props.grants.capture} />
+                            <ComputerGrantRow testID={`${testID}-grant-input`} title={t('computerUse.permission.input')}
+                                purpose={t('computerUse.permission.inputFor')} state={props.grants.input} />
+                        </ItemGroup>
+                    </View>
+                )}
             />
             {live || props.openSettings === 'failed' ? (
                 <View style={stylesheet.liveLine}>

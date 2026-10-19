@@ -62,6 +62,7 @@ export function SessionComputerScreenPane(
 ): React.ReactElement {
   const accountLifetime = useSessionViewerSourceAccountLifetime();
   const viewer = useOptionalSessionViewerController();
+  const panePresented = useRetainedPresentationSlotVisible();
   const serverId = props.serverId ?? accountLifetime?.scope.serverId ?? null;
   const defaultSlotId = useSessionComputerScreenSlotId(
     props.sessionId,
@@ -86,7 +87,7 @@ export function SessionComputerScreenPane(
   );
   if (
     presentation === 'pane' &&
-    isSessionViewerPresenting(viewer, 'computer')
+    isSessionViewerPresenting(viewer, 'computer', panePresented)
   ) {
     return (
       <SessionViewerPresentedElsewhere
@@ -97,6 +98,7 @@ export function SessionComputerScreenPane(
   }
   return (
     <RetainedSessionViewerSource
+      sessionId={sessionId}
       slotId={slotId}
       serverId={serverId}
       accountLifetime={accountLifetime}
@@ -143,6 +145,7 @@ function SessionComputerScreenBody(
       model.presence.kind === 'unconfirmed');
   usePublishSessionViewerSourceFacts('computer', {
     machineName: model.machineName,
+    targetTitle: model.targetTitle,
     personInControl,
     watching,
     aspectRatio: picture?.size
@@ -192,11 +195,18 @@ function SessionComputerScreenBody(
   usePublishSessionViewerPresence('computer', presence);
 
   const { resolveChooseWindow: _anchoredPicker, ...viewerModel } = model;
+  // Docked in the desktop pane: float it again while the frame fits beside the composer.
+  const viewerController = useOptionalSessionViewerController();
+  const applyViewer = viewerController?.apply;
+  const canFloat = !viewer && viewerController !== null && !viewerController.phone
+    && viewerController.state.source === 'computer' && viewerController.state.mode === 'docked' && viewerController.floatFits;
+  const onFloat = React.useCallback(() => { applyViewer?.({ kind: 'viewer.float' }); }, [applyViewer]);
   const screen = (
     <ComputerScreenViewer
       testID={props.testID}
       {...viewerModel}
       chrome={viewer ? 'none' : 'bar'}
+      onFloat={canFloat ? onFloat : undefined}
       compact={compact}
       onPictureChange={viewer ? onPictureChange : undefined}
     />

@@ -7,6 +7,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import type { BoundPluginSurfaceBinding } from '@/components/plugins/surfaces/boundPluginSurfaceController';
@@ -34,7 +35,8 @@ const stylesheet = StyleSheet.create(() => ({
     },
 }));
 
-export function BrowserPluginSurfacePlacements(props: Readonly<{
+type BrowserPluginSurfacePlacementsProps = Readonly<{
+    browserSessionId: string;
     focusedTarget?: BrowserViewTargetV1 | null;
     platform: BrowserPlatformV1;
     channel?: PluginUiChannelV1;
@@ -57,7 +59,9 @@ export function BrowserPluginSurfacePlacements(props: Readonly<{
     isFeatureEnabled?: (featureId: string) => boolean;
     nowMs?: () => number;
     testID?: string;
-}>): React.ReactElement | null {
+}>;
+
+export function BrowserPluginSurfacePlacements(props: BrowserPluginSurfacePlacementsProps): React.ReactElement | null {
     const channel = props.channel ?? 'internal';
     const browserPanelPlacements = React.useMemo(
         () => props.pluginUiProjection && props.focusedTarget
@@ -73,6 +77,20 @@ export function BrowserPluginSurfacePlacements(props: Readonly<{
         [channel, props.focusedTarget, props.isFeatureEnabled, props.platform, props.pluginUiProjection],
     );
 
+    if (browserPanelPlacements.length === 0) return null;
+    return <BrowserPanelPlacements {...props} placements={browserPanelPlacements} />;
+}
+
+function BrowserPanelPlacements(props: BrowserPluginSurfacePlacementsProps & Readonly<{
+    placements: ReturnType<typeof selectRenderablePluginSurfacePlacementsForBinding>;
+}>): React.ReactElement | null {
+    const channel = props.channel ?? 'internal';
+    const pane = useAppPaneScope(`browser-panels:${props.browserSessionId}`);
+    const openPlacements = props.placements.filter((placement) => {
+        const state = pane.scopeState?.right.tabState[placement.id];
+        return typeof state === 'object' && state !== null && 'isOpen' in state && state.isOpen === true;
+    });
+
     // §3.1: the panel supplies facts only. The host-ActionSpec front door, the
     // contributed-action branch, the resource snapshot authority, the surface
     // context and every method's lifetime belong to the bound controller inside
@@ -82,13 +100,13 @@ export function BrowserPluginSurfacePlacements(props: Readonly<{
         [props.executeAction],
     );
 
-    if (browserPanelPlacements.length === 0) {
+    if (openPlacements.length === 0) {
         return null;
     }
 
     return (
         <PluginSurfaceFocusEligibilityProvider active>
-            {browserPanelPlacements.map((placement) => (
+            {openPlacements.map((placement) => (
                 <View
                     key={placement.id}
                     style={stylesheet.region}

@@ -142,7 +142,7 @@ const PRESENCE = {
     human: { kind: 'human', controlEpoch: 2, interruptedCompletion: null },
 } as const satisfies Record<string, BrowserCopresence>;
 
-function ViewerFrame(props: Readonly<{ presence: keyof typeof PRESENCE; stream: StreamFixture; shared?: boolean; phone: boolean }>) {
+function ViewerFrame(props: Readonly<{ presence: keyof typeof PRESENCE; stream: StreamFixture; shared?: boolean; phone: boolean; floatable?: boolean; failure?: string }>) {
     const stream = useStream(props.stream);
     return (
         <ComputerScreenViewer
@@ -159,6 +159,9 @@ function ViewerFrame(props: Readonly<{ presence: keyof typeof PRESENCE; stream: 
             onCheckAgain={NOOP}
             onChooseWindow={NOOP}
             onStopSharing={NOOP}
+            onFloat={props.floatable ? NOOP : undefined}
+            failure={props.failure}
+            onRefresh={NOOP}
             compact={props.phone}
         />
     );
@@ -211,7 +214,7 @@ function WatchFrame(props: Readonly<{ presence: keyof typeof PRESENCE; phone: bo
                     controlsAlwaysVisible
                     accessibilityLabel={t('computerUse.presentation.watchingA11y', { source: t('computerUse.presentation.sourceComputer'), machine: MACHINE })}
                     controls={<SessionViewerControls sessionId="specimen-session" serverId={null} source="computer" />}
-                    footer={<SessionViewerPresenceFooter source="computer" compact={props.phone} />}
+                    footer={<SessionViewerPresenceFooter sessionId="specimen-session" serverId={null} source="computer" compact={props.phone} />}
                 >
                     <SessionViewerPicture framed source="computer">
                         <ComputerScreenViewer
@@ -307,12 +310,16 @@ const FRAMES: readonly Frame[] = [
     { id: 'OG', render: (phone) => <PickerFrame grants={DENIED} phone={phone} /> },
     { id: 'CS', render: () => <ConsentFrame /> },
     { id: 'LV', render: (phone) => <ViewerFrame presence="agent" stream="live" phone={phone} /> },
+    // Docked in the desktop pane while the floating frame would fit: its menu offers Float view.
+    { id: 'LVd', render: (phone) => <ViewerFrame presence="agent" stream="live" phone={phone} floatable={!phone} /> },
     { id: 'K', render: (phone) => <ViewerFrame presence="stopping" stream="live" phone={phone} /> },
     { id: 'UN', render: (phone) => <ViewerFrame presence="unconfirmed" stream="live" phone={phone} /> },
     { id: 'STh', render: (phone) => <ViewerFrame presence="human" stream="live" phone={phone} /> },
     { id: 'STc', render: (phone) => <ViewerFrame presence="agent" stream="connecting" phone={phone} /> },
     { id: 'STs', render: (phone) => <ViewerFrame presence="agent" stream="stalled" phone={phone} /> },
     { id: 'STe', render: (phone) => <ViewerFrame presence="human" stream="ended" phone={phone} /> },
+    // A Machine call that timed out while reopening the share (pass 70 after a reload): its code stays under Details.
+    { id: 'STf', render: (phone) => <ViewerFrame presence="agent" stream="connecting" failure="MACHINE_RPC_TIMEOUT" phone={phone} /> },
     { id: 'STn', render: (phone) => <ViewerFrame presence="agent" stream="live" shared={false} phone={phone} /> },
     { id: 'WA', render: (phone) => <WatchFrame presence="agent" phone={phone} /> },
     { id: 'WK', render: (phone) => <WatchFrame presence="human" phone={phone} /> },

@@ -85,6 +85,7 @@ const target = {
 } as const;
 
 const currentPluginProjection = {
+    accountLifetime: null,
     pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 17 },
     pluginBrowserProjection: { ...EMPTY_PLUGIN_BROWSER_PROJECTION, generation: 17 },
     phase: 'current',
@@ -167,17 +168,8 @@ describe('BrowserMobileSurfaceScreen (scoped workspace)', () => {
     it('threads the admitted projection, currentness, Browser target, and execution origin into the mobile Browser host', async () => {
         paneStub.current = paneWithBrowserView();
         const { BrowserMobileSurfaceScreen } = await import('./BrowserMobileSurfaceScreen');
-        // This forward contract deliberately keeps the RED at the mobile caller:
-        // existing source accepts the object at runtime but drops it before the
-        // browser renderer creates the real BrowserSurfaceHost.
-        const ScreenWithProjection = BrowserMobileSurfaceScreen as unknown as React.ComponentType<
-            React.ComponentProps<typeof BrowserMobileSurfaceScreen> & Readonly<{
-                pluginProjection: PluginUiProjectionCurrentness;
-            }>
-        >;
-
         const screen = await renderScreen(
-            <ScreenWithProjection
+            <BrowserMobileSurfaceScreen
                 sessionId="session_1"
                 scopeId="session:session_1:mobile-browser"
                 pluginProjection={currentPluginProjection}

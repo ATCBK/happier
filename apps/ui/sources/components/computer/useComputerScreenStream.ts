@@ -32,8 +32,10 @@ export function useComputerScreenStream(input: Readonly<{
 }>): BrowserStreamedSurfaceRuntime | null {
     const machineId = input.machineId?.trim() ?? '';
     const serverId = input.serverId?.trim() || input.accountLifetime?.scope.serverId || '';
-    const sourceId = input.enabled === false ? null : input.sourceId;
-    const inputEnabled = input.inputEnabled ?? true;
+    // Like the retained Browser, parking suspends ingestion, not source/socket identity.
+    // The shared player's existing last frame then survives the gap between responsive binders.
+    const sourceId = input.sourceId;
+    const inputEnabled = input.enabled !== false && (input.inputEnabled ?? true);
     const socket = useMachineLiveStreamRelaySocket({
         machineId,
         serverId,
@@ -48,7 +50,7 @@ export function useComputerScreenStream(input: Readonly<{
     // Viewer-specific: two devices watching one window get two logical streams over one capture source.
     const streamId = useMachineLiveStreamId(sourceId && socket && viewerSocketId ? `computer-live:${socket.machineId}:${sourceId}:${viewerSocketId}` : '');
     const ingestion = useSimulatorRelayIngestion({
-        enabled: Boolean(streamId && transport),
+        enabled: input.enabled !== false && Boolean(streamId && transport),
         transport,
         serverId,
         sourceMachineId: socket?.machineId ?? '',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildBrowserStreamSidebandControl } from './BrowserStreamedTarget';
+import { buildBrowserStreamSidebandControl } from './browserStreamSidebandControl';
 
 const ids = { sourceId: 'browser-view:s:v', streamId: 'browser-live:m:s:v:tab', eventId: 'event_1' } as const;
 // A 1000×500 viewer showing a 500×500 page `contain`-fitted: the page is drawn at x 250..750.
