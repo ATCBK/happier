@@ -2294,6 +2294,9 @@ test('a colliding generated reverse port is replaced before any remote runtime i
     // SSH is the boundary: another Stack holds 53871, its probe still accepts
     // connections, and the failed worker has not published any native runtime.
     runProcess: async ({ command, args }) => {
+      if (command === 'ssh' && String(args.at(-1)).includes('daemon.state.json')) {
+        return { code: tunnels.at(-1).exitCode == null ? 0 : 1 };
+      }
       if (command === 'ssh' && String(args.at(-1)).includes('sourceRuntimeIdentities')) return {
         code: 0, out: JSON.stringify({ sourceRuntimeIdentities: { daemon: { selected: 'current', loaded: 'current' } } }),
       };
@@ -2311,8 +2314,6 @@ test('a colliding generated reverse port is replaced before any remote runtime i
       return child;
     },
     stopProcess: async child => child.finish({ code: 0 }),
-    waitForServerReady: async () => {},
-    waitForDaemonReady: async () => tunnels.at(-1).exitCode == null ? undefined : new Promise(() => {}),
     waitForRetry: async () => { if (++retries > 1) await new Promise(() => {}); },
     logger: { error() {}, info() {} },
   });

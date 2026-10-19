@@ -925,7 +925,7 @@ export async function startStackDevTargets(
           preservedServerPort ?? (!services.server ? preservedDaemonForward?.listenPort : null) ?? target.remoteServerPort ?? retainedRemoteServerPort ?? resolveDefaultRemoteServerPort({
             localServerPort,
             targetIndex: index,
-            instanceId: instanceId + retryAttempt,
+            instanceId: Number(instanceId) + retryAttempt,
           });
         const remoteExpoPort = services.expo
           ? resolveDefaultRemoteExpoPort({ localExpoPort, targetIndex: index, instanceId })
