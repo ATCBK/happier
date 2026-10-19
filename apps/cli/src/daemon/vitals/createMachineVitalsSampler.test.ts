@@ -163,9 +163,11 @@ describe('createMachineVitalsSampler', () => {
         const readers = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile, readCpuTimes: () => [{ user: 1, system: 1, idle: 1 }] });
         const historyStore = await createMinuteHistoryStore({ directory: join(directory, 'darwin-history'), nowMs: Date.now });
         // A due scan is an enabled power-dependent policy even without a viewed tab.
+        const at = new Date(initialTime);
+        const scheduledTime = [at.getHours(), at.getMinutes()].map(value => String(value).padStart(2, '0')).join(':');
         let policy = MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { keepAwake: view === 'on_power' ? 'on_power' : 'off' },
             storage: { wholeDiskEnabled: view === 'scheduled_scan', scheduledScan: view === 'scheduled_scan' || view === 'scan_disabled'
-                ? { weekday: new Date(initialTime).getDay(), time: '00:00', onlyOnPower: true } : null } });
+                ? { weekday: at.getDay(), time: scheduledTime, onlyOnPower: true } : null } });
         const needsPolicyPower = view === 'on_power' || view === 'scheduled_scan';
         const sampler = createMachineVitalsSampler({ readers, historyStore, monotonicMs: () => Date.now() - initialTime, readPolicy: () => policy });
         const count = (command: string, arg?: string) => execFile.mock.calls.filter(([name, args]) => name === command && (arg === undefined || args[1] === arg)).length;

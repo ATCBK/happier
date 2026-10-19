@@ -6,6 +6,8 @@ export interface MachineVitalsReaderInput {
     intervalMs: number;
     /** Parked Overview demand: memory detail is read with each observation, not cached extras. */
     overview?: boolean;
+    /** AC facts needed by Overview or an enabled power-dependent policy; never changes cadence. */
+    power?: boolean;
     overviewExtras: boolean;
 }
 

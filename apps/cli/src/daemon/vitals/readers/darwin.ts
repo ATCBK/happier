@@ -30,15 +30,14 @@ export function createDarwinMachineVitalsReader(options: NativeMachineVitalsRead
                 if (composition) sample.memory.composition = composition;
             }
             const readExtras = input.overviewExtras && (input.monotonicMs < extrasAt || input.monotonicMs - extrasAt >= 15_000);
-            // Keep-awake and scheduled scans consume the always-on minute observation.
-            // Overview reuses the same reader at its existing extras boundary; live
-            // Processes/summary demand must not spawn a battery tool on every tick.
+            // Policy consumers share a minute power observation; Overview reuses
+            // this reader at its extras boundary. Cadence alone creates no demand.
             const minute = Math.floor(input.sampledAt / 60_000);
-            if (powerMinute !== minute || readExtras) {
+            if (input.power && powerMinute !== minute || readExtras) {
                 powerMinute = minute;
                 powerFacts = parseDarwinBatteryFacts(await tool('/usr/bin/pmset', ['-g', 'batt']));
             }
-            if (powerFacts.onAC !== undefined) sample.power = { onAC: powerFacts.onAC };
+            if ((input.power || readExtras) && powerFacts.onAC !== undefined) sample.power = { onAC: powerFacts.onAC };
             if (sample.network.reported) {
                 for (const iface of sample.network.interfaces ?? []) iface.label = hardwarePorts.get(iface.label) ?? iface.label;
                 if (sample.network.label) sample.network.label = hardwarePorts.get(sample.network.label) ?? sample.network.label;

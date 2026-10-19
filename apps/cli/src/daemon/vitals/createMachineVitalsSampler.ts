@@ -1,5 +1,6 @@
 import type { MachineVitalsHistoryV1, MachineVitalsHostFactsV1, MachineVitalsMinuteRecordV1, MachineVitalsSampleV1 } from '@happier-dev/protocol';
 import { effectiveMachineMemoryPressureV1 } from '@happier-dev/protocol/machines/vitals/effectiveMachineMemoryPressureV1';
+import type { MachineResourcesPolicyV1 } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 
 import { logger } from '@/ui/logger';
 
@@ -26,6 +27,7 @@ export interface MachineVitalsSamplerOptions {
     clearTimeoutFn?: (handle: TimerHandle) => void;
     onError?: (error: unknown) => void;
     onStateChange?: (state: MachineVitalsSamplerState) => void;
+    readPolicy?: () => MachineResourcesPolicyV1 | null;
     /** Completed reads, including repeated failures; consumers reuse the sampler clock. */
     onTick?: () => void;
 }
@@ -169,7 +171,12 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
             const readExtras = overviews > 0 && (nextExtrasAt === null || sampledAt >= nextExtrasAt);
             let result: MachineVitalsReaderResult;
             try {
-                result = await input.readers.read({ sampledAt, monotonicMs: monotonicMs(), intervalMs, overview: overviews > 0, overviewExtras: readExtras });
+                const policy = input.readPolicy?.();
+                // Enabled scheduled scans retain minute AC edges even when a due
+                // scan is waiting for power. The maintenance owner still decides due time.
+                const power = overviews > 0 || policy?.guard.keepAwake === 'on_power'
+                    || Boolean(policy?.storage.wholeDiskEnabled && policy.storage.scheduledScan);
+                result = await input.readers.read({ sampledAt, monotonicMs: monotonicMs(), intervalMs, overview: overviews > 0, power, overviewExtras: readExtras });
             } catch (error) {
                 onError(error);
                 result = { state: 'unavailable', reason: 'reader_failed' };

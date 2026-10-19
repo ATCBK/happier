@@ -21,13 +21,11 @@ async function main() {
     const timings: number[] = [];
     const cpuMicros: number[] = [];
     let last;
-    let powerMinute: number | undefined;
     for (const overviewExtras of [false, false, true, true, false]) {
         const start = performance.now();
         const cpuBefore = process.cpuUsage();
         const before = spawns.length;
         const sampledAt = Date.now();
-        const minute = Math.floor(sampledAt / 60_000);
         const result = await reader.read({ sampledAt, monotonicMs: start, intervalMs: 2000, overview: overviewExtras, overviewExtras });
         timings.push(performance.now() - start);
         const cpu = process.cpuUsage(cpuBefore);
@@ -44,11 +42,10 @@ async function main() {
         assert(result.sample.disk.reported && result.sample.disk.volumes.length > 0);
         if (!overviewExtras) {
             assert(!result.sample.battery && !result.sample.gpu && !result.sample.thermal);
-            // Static labels once, then only the minute AC observation beside the helper.
+            // Static labels once; no power-dependent policy means no battery tool.
             assert.equal(spawns.length - before, process.platform === 'darwin'
-                ? 1 + (last ? 0 : 1) + (powerMinute === minute ? 0 : 1) : 1);
+                ? 1 + (last ? 0 : 1) : 1);
         }
-        if (spawns.slice(before).some(({ command, args }) => command === '/usr/bin/pmset' && args[1] === 'batt')) powerMinute = minute;
         if (result.sample.memory.composition) {
             assert.equal(result.sample.memory.composition.reduce((sum, segment) => sum + segment.bytes, 0), result.sample.memory.usedBytes);
         }

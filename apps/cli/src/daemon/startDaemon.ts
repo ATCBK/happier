@@ -656,6 +656,10 @@ export async function startDaemon(
     machineVitals = createMachineVitalsSampler({
       readers: createMachineVitalsReader({ signal: homeTransportCancellation.signal }),
       historyStore: machineVitalsHistory,
+      readPolicy: () => {
+        const snapshot = machineResourcesPolicy?.read();
+        return snapshot?.status === 'ready' ? snapshot.policy : null;
+      },
       onTick: () => { machineResourceSummary?.refresh(); daemonGuard?.refreshOnTick(); projectWorkerAdmission?.notifyChanged(); },
     });
     await machineVitals.start();
