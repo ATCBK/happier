@@ -38,6 +38,7 @@ import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
+import { resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
@@ -88,9 +89,15 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
         machineListByServerId,
         machineListStatusByServerId,
     }) ?? [], [activeMachines, activeServer.serverId, machineListByServerId, machineListStatusByServerId, props.source.serverId]);
+    // The source's own Machine stays listed: Workspace Sync links distinct roots on one Machine too.
     const machines = React.useMemo(
-        () => allMachines.filter((machine: Machine) => machine.id !== hub?.machineId && !machine.revokedAt),
-        [allMachines, hub?.machineId],
+        () => allMachines.filter((machine: Machine) => !machine.revokedAt),
+        [allMachines],
+    );
+    const hubMachineId = hub?.machineId;
+    const describeMachine = React.useCallback(
+        (machine: Machine) => machine.id === hubMachineId ? t('workspaceSync.addMachine.thisMachine') : null,
+        [hubMachineId],
     );
     const hubMachine = allMachines.find((machine: Machine) => machine.id === hub?.machineId);
     const hubMachineLabel = hubMachine ? getMachineDisplayName(hubMachine) : undefined;
@@ -124,6 +131,8 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
         sourcePath: resolvedPath,
         sourceHomeDir: homeDir,
     });
+    const insideSource = Boolean(hub && selectedMachine?.id === hub.machineId
+        && resolvePathRelativeToRoot({ path: resolvedPath, root: hub.rootPath }) !== null);
     const targetKey = selectedMachine && resolvedPath
         ? tryBuildWorkspaceCacheKey({ serverId: props.source.serverId, machineId: selectedMachine.id, rootPath: resolvedPath })
         : null;
@@ -146,7 +155,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
         ? t('workspaceSync.start.blocked.targetMachine')
         : !canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId: machineId, scope })
             ? t('workspaceSync.start.blocked.targetMachineOffline')
-        : !targetPath.trim() || !pathSafety.allowed
+        : !targetPath.trim() || !pathSafety.allowed || insideSource
             ? t('workspaceSync.start.blocked.destinationFolder')
             : null;
     const busy = phase === 'submitting' || phase === 'approving';
@@ -328,7 +337,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             <WorkspaceActivationDestinationFields
                 machine={{
                     machines, selectedMachine, serverId: props.source.serverId, showSearch: true, presentation: 'dropdown',
-                    showCliGlyphs: false, autoDetectCliGlyphs: false, disableOfflineMachines: true,
+                    showCliGlyphs: false, autoDetectCliGlyphs: false, disableOfflineMachines: true, describeMachine,
                     testIdPrefix: 'workspace-sync-add-machine',
                     onSelect: (machine) => { setMachineId(machine.id); setTargetPath(''); invalidateDraft(); },
                 }}

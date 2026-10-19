@@ -13486,6 +13486,7 @@ const enWorkspaceSync = {
     replica: 'Replica',
     exactReplica: 'Exact replica',
     editableCopy: 'Editable copy',
+    thisMachine: 'This machine',
     editableCopyHint:
       'Changes on linked machines can become visible to agents on the others. Conflicting versions need review; use separate worktrees when you want isolation.',
   },

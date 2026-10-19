@@ -282,7 +282,7 @@ describe('Project Add machine modal', () => {
         it('lists the source Machine, labelled as this machine', async () => {
             owner.openWorkspaceSyncAddMachine(source(), vi.fn());
             const modal = await renderOpenedModal();
-            const items: Array<{ id: string; subtitle?: string }> = modal.screen.findByType(MachineSelector).findByType(DropdownMenu).props.items;
+            const items: ReadonlyArray<{ id: string; subtitle?: string }> = modal.screen.findByType(MachineSelector).findByType(DropdownMenu).props.items;
             expect(items.find(item => item.id === 'machine-a')?.subtitle).toContain('workspaceSync.addMachine.thisMachine');
             expect(items.find(item => item.id === 'machine-b')?.subtitle ?? '').not.toContain('workspaceSync.addMachine.thisMachine');
         });
