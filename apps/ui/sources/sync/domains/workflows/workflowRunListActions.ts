@@ -164,39 +164,6 @@ export async function summarizeWorkflowRuns(params: Readonly<{
     });
 }
 
-/**
- * One exact Run summary plus its sparse private metadata, through the lean
- * list projection.
- *
- * This is what background Account invalidation and transcript initial
- * materialization read: the Run display fields and the accepted private title
- * the Account row needs, without paging invocations or opening progress
- * envelopes to recompute usage. An empty page is the authoritative deleted
- * signal, so it raises `run_not_found` for the change materializer to remove
- * the row; any other failure is left rejected so the caller holds its cursor
- * and retries instead of losing the invalidation.
- */
-export async function getWorkflowRunSummary(runId: string, signal?: AbortSignal, invocationRecordIds?: readonly string[], accountLifetime?: ServerAccountScopeLifetime | null): Promise<Readonly<{
-    run: WorkflowRunSummaryV1;
-    /**
-     * Sparse private metadata: `null` is a readable Run whose accepted
-     * snapshot opened but carries no authored title (Untitled), while
-     * `unavailable` is content this host could not open.
-     */
-    metadata: WorkflowRunPrivateMetadataV1 | null;
-    invocationProvenance?: ReturnType<typeof WorkflowRunListResultV1Schema.parse>['invocationProvenance'];
-}>> {
-    const page = await listWorkflowRuns({ filter: { runId,
-        ...(invocationRecordIds?.length ? { invocationProvenance: [{ runId, invocationRecordIds }] } : {}) },
-        limit: 1, ...(signal === undefined ? {} : { signal }), ...(accountLifetime === undefined ? {} : { accountLifetime }) });
-    const run = page.runs.find((candidate) => candidate.id === runId);
-    if (!run) {
-        throw new WorkflowActionError({ message: 'Workflow Run not found', rawCode: 'run_not_found' });
-    }
-    return { run, metadata: page.metadataByRunId[run.id] ?? null,
-        ...(page.invocationProvenance ? { invocationProvenance: page.invocationProvenance } : {}) };
-}
-
 /** Shared read windows; starter membership belongs to SessionListFilterV1. */
 export const WORKFLOW_RUN_LIST_FILTERS = ['all', 'active', 'attention'] as const;
 export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number] | `automation:${string}` | `destination:${string}` | `under:${string}`;

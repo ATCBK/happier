@@ -67,7 +67,8 @@ export async function applyPlannedChangeActions(params: {
         pets?: () => Promise<void>;
         savedSecretResources?: () => Promise<void>;
     };
-    refreshWorkflowRun?: (runId: string) => Promise<void>;
+    /** One batched read for the page's Runs; a read per Run multiplies Account traffic by the Run count. */
+    refreshWorkflowRuns?: (runIds: readonly string[]) => Promise<void>;
     refreshSessionOrganization?: (plan: Exclude<PlannedChangeActions['sessionOrganization'], { mode: 'none' }>) => Promise<void>;
     applyAuthoritativeSessionOrganizationDeletions?: (
         plan: Exclude<PlannedChangeActions['sessionOrganization'], { mode: 'none' }>,
@@ -102,17 +103,15 @@ export async function applyPlannedChangeActions(params: {
     const tasks: Array<() => Promise<void>> = [];
     const completedWorkflowRunIds = new Set<string>();
     const failedWorkflowRunIds = new Set<string>();
-    for (const runId of planned.workflowRunIdsToRefresh) {
+    if (planned.workflowRunIdsToRefresh.length > 0) {
+        const runIds = [...planned.workflowRunIdsToRefresh];
         tasks.push(async () => {
             try {
-                if (!params.refreshWorkflowRun) {
-                    failedWorkflowRunIds.add(runId);
-                    return;
-                }
-                await params.refreshWorkflowRun(runId);
-                completedWorkflowRunIds.add(runId);
+                if (!params.refreshWorkflowRuns) throw new Error('workflow_run_refresh_unavailable');
+                await params.refreshWorkflowRuns(runIds);
+                for (const runId of runIds) completedWorkflowRunIds.add(runId);
             } catch {
-                failedWorkflowRunIds.add(runId);
+                for (const runId of runIds) failedWorkflowRunIds.add(runId);
             }
         });
     }

@@ -94,23 +94,25 @@ describe('changesApplier', () => {
 
         expect(result).toMatchObject({ status: 'complete', safeAdvanceCursor: '1', blockedChanges: 0 });
     });
-    it('refreshes the exact workflow Run before advancing its Account change', async () => {
-        const refreshWorkflowRun = vi.fn(async () => {});
-        const change = buildChange({ cursor: 1, kind: 'account', entityId: 'workflow-run:run-42' });
+    it('refreshes every workflow Run of a page with one batched read before advancing its Account changes', async () => {
+        const refreshWorkflowRuns = vi.fn(async () => {});
+        const changes = ['run-42', 'run-43', 'run-44'].map((runId, index) =>
+            buildChange({ cursor: index + 1, kind: 'account', entityId: `workflow-run:${runId}` }));
         const result = await applyPlannedChangeActions({
-            planned: planSyncActionsFromChanges([change]),
+            planned: planSyncActionsFromChanges(changes),
             credentials,
             isSessionMessagesLoaded: () => false,
             invalidate: {},
-            refreshWorkflowRun,
+            refreshWorkflowRuns,
             invalidateMessagesForSession: async () => {},
             invalidateScmStatusForSession: () => {},
             applyTodoSocketUpdates: async () => {},
             kvBulkGet: async () => ({ values: [] }),
         });
 
-        expect(refreshWorkflowRun).toHaveBeenCalledWith('run-42');
-        expect(result).toMatchObject({ status: 'complete', safeAdvanceCursor: '1' });
+        expect(refreshWorkflowRuns).toHaveBeenCalledTimes(1);
+        expect([...(refreshWorkflowRuns.mock.calls[0] as unknown as [readonly string[]])[0]].sort()).toEqual(['run-42', 'run-43', 'run-44']);
+        expect(result).toMatchObject({ status: 'complete', safeAdvanceCursor: '3' });
     });
 
     it('holds a workflow Run change cursor when its exact refresh owner is unavailable', async () => {
@@ -143,7 +145,7 @@ describe('changesApplier', () => {
             credentials,
             isSessionMessagesLoaded: () => false,
             invalidate: {},
-            refreshWorkflowRun: async () => { throw new Error('offline'); },
+            refreshWorkflowRuns: async () => { throw new Error('offline'); },
             invalidateMessagesForSession: async () => {},
             invalidateScmStatusForSession: () => {},
             applyTodoSocketUpdates: async () => {},

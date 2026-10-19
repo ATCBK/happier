@@ -14,7 +14,7 @@ import {
     subscribeHomeAccountChange,
     subscribeHomeCredentialChange,
 } from '@/sync/runtime/orchestration/homeAccountChange';
-import { refreshWorkflowRunById } from '@/sync/engine/workflows/refreshWorkflowRun';
+import { refreshWorkflowRunsByIds } from '@/sync/engine/workflows/refreshWorkflowRun';
 import { invalidateMachinePoolProjection } from '@/sync/engine/machines/machinePoolProjection';
 import { invalidateSavedSecretCatalogProjection } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { readSessionMetadataLayoutVersion } from './engine/sessions/parsePlainSessionPayload';
@@ -12177,7 +12177,7 @@ class Sync {
                                 this.pluginAvailabilitySync.invalidate();
                             }
                         },
-                        refreshWorkflowRun: (runId) => refreshWorkflowRunById(runId),
+                        refreshWorkflowRuns: (runIds) => refreshWorkflowRunsByIds(runIds),
                         invalidate: {
                             settings: () => this.settingsSync.invalidateAndAwait(),
                             profile: () => this.profileSync.invalidateAndAwait(),
