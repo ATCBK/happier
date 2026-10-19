@@ -1,9 +1,9 @@
-export type SessionDiscussionVisibleReadController = Readonly<{
+export type DiscussionVisibleReadController = Readonly<{
     updateEligibility(input: Readonly<{ activeAndVisible: boolean; lastReadSeq: number | null }>): void;
     observeVisibleMessageSeqs(seqs: readonly number[]): void;
 }>;
 
-export type SessionDiscussionVisibleReadWriteOutcome =
+export type DiscussionVisibleReadWriteOutcome =
     | Readonly<{ kind: 'succeeded'; lastReadSeq: number }>
     | Readonly<{ kind: 'retryable' }>
     | Readonly<{ kind: 'stopped' }>;
@@ -13,9 +13,9 @@ export type SessionDiscussionVisibleReadWriteOutcome =
  * decrypting a message never reaches this owner; only the actual list
  * viewability boundary supplies observed sequence numbers.
  */
-export function createSessionDiscussionVisibleReadController(input: Readonly<{
-    writeCursor(lastReadSeq: number): Promise<SessionDiscussionVisibleReadWriteOutcome>;
-}>): SessionDiscussionVisibleReadController {
+export function createDiscussionVisibleReadController(input: Readonly<{
+    writeCursor(lastReadSeq: number): Promise<DiscussionVisibleReadWriteOutcome>;
+}>): DiscussionVisibleReadController {
     let activeAndVisible = false;
     let tracked = false;
     let highestVisibleSeq = 0;

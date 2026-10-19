@@ -1,40 +1,39 @@
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerAccountScopesEqual, serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import {
-    createSessionDiscussionRepository,
-    type SessionDiscussionRepository,
-    type SessionDiscussionRepositoryClient,
-} from './sessionDiscussionRepository';
+    createDiscussionRepository,
+    type DiscussionRepository,
+    type DiscussionRepositoryClient,
+} from './discussionRepository';
 
 type RegisteredRepository = {
-    repository: SessionDiscussionRepository;
+    repository: DiscussionRepository;
     retirement?: Readonly<{ dispose(): void }>;
 };
 
 const repositories = new Map<string, RegisteredRepository>();
 const registrationListeners = new Map<string, Set<() => void>>();
 
-function repositoryKey(scope: ServerAccountScope, address: SessionAddress): string {
+function repositoryKey(scope: ServerAccountScope, address: Readonly<{ serverId: string }>): string {
     if (scope.serverId !== address.serverId) {
-        throw new Error('Session Discussion repository requires the exact Session Home');
+        throw new Error('Discussion repository requires the exact Home');
     }
-    return serverAccountScopedResourceKey(scope, 'session-discussions', address.sessionId);
+    return serverAccountScopedResourceKey(scope, 'discussions');
 }
 
 /**
- * Canonical in-memory owner for one Account + Home + Session Discussion projection.
+ * Canonical in-memory owner for one Account + Home Discussion projection.
  * List and detail surfaces share this instance so navigation cannot fork pagination,
  * optimistic identities, approval state, or outcome-unknown reconciliation.
  */
-export function getSessionDiscussionRepository(options: Readonly<{
+export function getDiscussionRepository(options: Readonly<{
     scope: ServerAccountScope;
-    address: SessionAddress;
-    client: SessionDiscussionRepositoryClient;
+    address: Readonly<{ serverId: string }>;
+    client: DiscussionRepositoryClient;
     accountLifetime?: ServerAccountScopeLifetime | null;
-}>): SessionDiscussionRepository {
+}>): DiscussionRepository {
     if (options.accountLifetime && !areServerAccountScopesEqual(options.accountLifetime.scope, options.scope)) {
         throw new Error('Session Discussion repository Account lifetime must match its exact Account scope');
     }
@@ -47,7 +46,7 @@ export function getSessionDiscussionRepository(options: Readonly<{
         }
         return existing.repository;
     }
-    const repository = createSessionDiscussionRepository({ address: options.address, client: options.client });
+    const repository = createDiscussionRepository({ scope: options.scope, address: options.address, client: options.client });
     const registered: RegisteredRepository = { repository };
     repositories.set(key, registered);
     for (const listener of [...registrationListeners.get(key) ?? []]) listener();
@@ -67,12 +66,12 @@ function retireRegisteredRepository(key: string): void {
 }
 
 /** Chrome reads the same repository as list/detail bodies without creating a client or mounting a watcher. */
-export function readRegisteredSessionDiscussionRepository(scope: ServerAccountScope, address: SessionAddress): SessionDiscussionRepository | null {
+export function readRegisteredDiscussionRepository(scope: ServerAccountScope, address: Readonly<{ serverId: string }>): DiscussionRepository | null {
     return repositories.get(repositoryKey(scope, address))?.repository ?? null;
 }
 
 /** Follow both an existing projection and a body that registers it after its chrome mounted. */
-export function subscribeRegisteredSessionDiscussionRepository(scope: ServerAccountScope, address: SessionAddress, listener: () => void): () => void {
+export function subscribeRegisteredDiscussionRepository(scope: ServerAccountScope, address: Readonly<{ serverId: string }>, listener: () => void): () => void {
     const key = repositoryKey(scope, address);
     let unsubscribe: (() => void) | undefined;
     const bind = () => {
@@ -92,14 +91,14 @@ export function subscribeRegisteredSessionDiscussionRepository(scope: ServerAcco
 }
 
 /** Explicit scope retirement hook for Account removal/sign-out. */
-export function retireSessionDiscussionRepository(options: Readonly<{
+export function retireDiscussionRepository(options: Readonly<{
     scope: ServerAccountScope;
-    address: SessionAddress;
+    address: Readonly<{ serverId: string }>;
 }>): void {
     const key = repositoryKey(options.scope, options.address);
     retireRegisteredRepository(key);
 }
 
-export function clearSessionDiscussionRepositoryRegistryForTests(): void {
+export function clearDiscussionRepositoryRegistryForTests(): void {
     for (const key of [...repositories.keys()]) retireRegisteredRepository(key);
 }

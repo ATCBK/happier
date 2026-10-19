@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createSessionDiscussionVisibleReadController } from './sessionDiscussionVisibleReadController';
+import { createDiscussionVisibleReadController } from './discussionVisibleReadController';
 
 async function flushWrites(): Promise<void> {
     await Promise.resolve();
@@ -10,7 +10,7 @@ async function flushWrites(): Promise<void> {
 describe('Session Discussion visible read controller', () => {
     it('ignores viewability observed before the tracked surface is active and advances only after foreground observation', async () => {
         const writeCursor = vi.fn(async (lastReadSeq: number) => ({ kind: 'succeeded' as const, lastReadSeq }));
-        const controller = createSessionDiscussionVisibleReadController({ writeCursor });
+        const controller = createDiscussionVisibleReadController({ writeCursor });
 
         controller.updateEligibility({ activeAndVisible: false, lastReadSeq: 0 });
         controller.observeVisibleMessageSeqs([2, 4]);
@@ -28,7 +28,7 @@ describe('Session Discussion visible read controller', () => {
 
     it('never creates tracking state from visible messages when the canonical cursor is null', async () => {
         const writeCursor = vi.fn(async (lastReadSeq: number) => ({ kind: 'succeeded' as const, lastReadSeq }));
-        const controller = createSessionDiscussionVisibleReadController({ writeCursor });
+        const controller = createDiscussionVisibleReadController({ writeCursor });
         controller.updateEligibility({ activeAndVisible: true, lastReadSeq: null });
         controller.observeVisibleMessageSeqs([10]);
         await flushWrites();
@@ -43,7 +43,7 @@ describe('Session Discussion visible read controller', () => {
             if (lastReadSeq === 2) resolveFirst = resolve;
             else resolve({ kind: 'succeeded', lastReadSeq });
         }));
-        const controller = createSessionDiscussionVisibleReadController({ writeCursor });
+        const controller = createDiscussionVisibleReadController({ writeCursor });
         controller.updateEligibility({ activeAndVisible: true, lastReadSeq: 0 });
         controller.observeVisibleMessageSeqs([2]);
         controller.observeVisibleMessageSeqs([3]);
@@ -57,7 +57,7 @@ describe('Session Discussion visible read controller', () => {
         const writeCursor = vi.fn()
             .mockResolvedValueOnce({ kind: 'retryable' as const })
             .mockResolvedValueOnce({ kind: 'succeeded' as const, lastReadSeq: 4 });
-        const controller = createSessionDiscussionVisibleReadController({ writeCursor });
+        const controller = createDiscussionVisibleReadController({ writeCursor });
         controller.updateEligibility({ activeAndVisible: true, lastReadSeq: 0 });
         controller.observeVisibleMessageSeqs([2, 4]);
         await flushWrites();
@@ -72,7 +72,7 @@ describe('Session Discussion visible read controller', () => {
         const writeCursor = vi.fn()
             .mockResolvedValueOnce({ kind: 'stopped' as const })
             .mockResolvedValueOnce({ kind: 'succeeded' as const, lastReadSeq: 2 });
-        const controller = createSessionDiscussionVisibleReadController({ writeCursor });
+        const controller = createDiscussionVisibleReadController({ writeCursor });
         controller.updateEligibility({ activeAndVisible: true, lastReadSeq: 0 });
         controller.observeVisibleMessageSeqs([2]);
         await flushWrites();
@@ -88,7 +88,7 @@ describe('Session Discussion visible read controller', () => {
 
     it('never adopts a server cursor beyond the exact locally observed sequence', async () => {
         const writeCursor = vi.fn(async () => ({ kind: 'succeeded' as const, lastReadSeq: 99 }));
-        const controller = createSessionDiscussionVisibleReadController({ writeCursor });
+        const controller = createDiscussionVisibleReadController({ writeCursor });
         controller.updateEligibility({ activeAndVisible: true, lastReadSeq: 0 });
         controller.observeVisibleMessageSeqs([2]);
         await flushWrites();

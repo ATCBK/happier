@@ -1,14 +1,16 @@
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
-export type MountedSessionDiscussionChangeWatch = Readonly<{
+export type MountedDiscussionChangeWatch = Readonly<{
     dispose(): void;
 }>;
 
 type ActiveWatch = Readonly<{
-    address: SessionAddress;
+    scope: ServerAccountScope;
+    address: Readonly<{ serverId: string }>;
     onInvalidated(): void;
+    includeDocSourceChanges?: () => boolean;
 }>;
 
 const activeWatches = new Set<ActiveWatch>();
@@ -18,13 +20,17 @@ const activeWatches = new Set<ActiveWatch>();
  * surface. This opens no socket and owns no cursor or cached data: it only asks
  * the mounted repository/controller to reread canonical HTTP state.
  */
-export function watchMountedSessionDiscussions(input: Readonly<{
-    address: SessionAddress;
+export function watchMountedDiscussions(input: Readonly<{
+    scope: ServerAccountScope;
+    address: Readonly<{ serverId: string }>;
     onInvalidated(): void;
-}>): MountedSessionDiscussionChangeWatch {
+    includeDocSourceChanges?: () => boolean;
+}>): MountedDiscussionChangeWatch {
     const watch: ActiveWatch = Object.freeze({
+        scope: Object.freeze({ ...input.scope }),
         address: Object.freeze({ ...input.address }),
         onInvalidated: input.onInvalidated,
+        includeDocSourceChanges: input.includeDocSourceChanges,
     });
     activeWatches.add(watch);
     let disposed = false;
@@ -39,28 +45,26 @@ export function watchMountedSessionDiscussions(input: Readonly<{
 
 /**
  * Called by the one changes-page application path before checkpointing. Hints
- * are deliberately ignored for correctness because Session AccountChange rows
- * coalesce and another Session mutation may replace a Discussion hint.
+ * are deliberately ignored for correctness because resource changes coalesce.
  */
-export function publishMountedSessionDiscussionChanges(input: Readonly<{
+export function publishMountedDiscussionChanges(input: Readonly<{
     serverId: string;
+    accountId: string;
     changes: readonly ApiChangeEntry[];
 }>): void {
     if (activeWatches.size === 0) return;
-    const changedSessionIds = new Set(
-        input.changes
-            .filter((change) => change.kind === 'session')
-            .map((change) => change.entityId),
-    );
-    if (changedSessionIds.size === 0) return;
+    const discussionChanged = input.changes.some(change => change.kind === 'discussion');
+    const docChanged = input.changes.some(change => change.kind === 'artifact');
+    if (!discussionChanged && !docChanged) return;
 
     for (const watch of [...activeWatches]) {
         if (
-            !changedSessionIds.has(watch.address.sessionId)
+            input.accountId !== watch.scope.accountId
             || !areServerProfileIdentifiersEquivalent(input.serverId, watch.address.serverId)
         ) {
             continue;
         }
+        if (!discussionChanged && !(docChanged && watch.includeDocSourceChanges?.())) continue;
         try {
             watch.onInvalidated();
         } catch {
