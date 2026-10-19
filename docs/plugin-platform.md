@@ -3731,6 +3731,15 @@ dependency preparation may reclaim an empty workspace file or one whose first
 line identifies Happier's transient configuration; author-owned configurations
 remain protected.
 
+In 0.3 development source, managed author installs select `@happier-dev/*`
+declarations from dependencies, dev dependencies, optional dependencies and peer
+dependencies when the bundled prepublication version (`0.0.0`) satisfies their
+semver specifier, including ranges such as `>=0.0.0 <1.0.0`. The shared package
+resolver owns this selection; scaffold output and SDK policy fixtures exercise
+the same rule. Other specifiers retain normal package-manager resolution, and an
+explicit SDK registry origin retains registry resolution. Selected packages must
+still satisfy the existing bundled public-author package classification.
+
 Prepublication dependency preparation uses a content-addressed file override
 for the complete SDK package closure. When the CLI runs from the source
 workspace, preparation first asks the canonical source-development publisher to
