@@ -1696,14 +1696,19 @@ describe('local voice engine agent behavior', () => {
                 }, 'retired-local-agent-tool'),
             ],
         }));
+        const onAccepted = vi.fn(async () => {});
         await expect(localAdapter.sendTextTurn({
             controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             conversationSessionId: 'voice-home-session',
             text: 'Run the retained tool.',
             localId: 'retired-local-agent-turn',
             deliveryCommand: 'interrupt_and_send',
-            onAccepted: async () => {},
-        })).rejects.toBeInstanceOf(Error);
+            onAccepted,
+        })).resolves.toBeUndefined();
+        // Account retirement already aborted this run. The existing turn
+        // boundary settles cancellation; acceptance and disclosure stay fenced.
+        expect(onAccepted).not.toHaveBeenCalled();
+        expect(startTurnRpc).toHaveBeenCalledTimes(wireTurnsBeforeLateEvents);
 
         await act(async () => {
             await Promise.resolve();
