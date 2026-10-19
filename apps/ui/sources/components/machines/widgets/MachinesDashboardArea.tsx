@@ -9,7 +9,7 @@ import {
 } from '@/components/widgets/area/useWidgetAreaLayout';
 import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { useMachineResourceFleetAttention } from '@/sync/domains/machines/resources/useMachineResourceFleetAttention';
+import type { collectMachineAttention } from '@/components/machines/attention/collectMachineAttention';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
@@ -25,22 +25,23 @@ import { useMachinesWidgetAreaBinding } from './useMachinesWidgetAreaBinding';
 export function MachinesDashboardArea(props: Readonly<{
   /** The fleet as the page lists it (its first online machine, its first machine): binds the preset's group. */
   fleet: Readonly<{ firstOnline: MachinesWidgetPresetMachine | null; first: MachinesWidgetPresetMachine | null; onlineKeys: readonly string[]; presenceLoaded: boolean }>;
+  /** The same visible Homes and attention census that the page presents. */
+  attention: Pick<ReturnType<typeof collectMachineAttention>, 'entries' | 'reportingMachineKeys'>;
 }>) {
   const language = usePreferredLanguage();
   const viewer = useActiveServerAccountScope();
   const { serverId } = useActiveServerSnapshot();
-  const attention = useMachineResourceFleetAttention();
   const thisComputer = useThisComputerMachineId();
   const pinnedMachine = React.useMemo(
     () => selectMachinesPresetMachine({
       serverId: serverId ?? null,
       presenceLoaded: props.fleet.presenceLoaded,
-      needsYou: attention.needsYou,
+      needsYou: props.attention.entries.filter(entry => entry.attention.level === 'needs_you'),
       thisComputerMachineId: thisComputer ?? null,
-      reportingMachineKeys: attention.reportingMachineKeys,
+      reportingMachineKeys: props.attention.reportingMachineKeys,
       fleet: props.fleet,
     }),
-    [attention.needsYou, attention.reportingMachineKeys, props.fleet, serverId, thisComputer],
+    [props.attention, props.fleet, serverId, thisComputer],
   );
   const names = React.useMemo(
     () => ({

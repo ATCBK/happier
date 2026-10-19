@@ -266,7 +266,7 @@ function AllMachinesIndexBody() {
             {items.length > 0 ? (
                 <MachineAttentionStatedAbove entries={view === 'list' ? attention.entries : NO_ATTENTION_ENTRIES}>
                     <ItemGroup header="none" surface="none" style={stylesheet.afterMachines}>
-                        <MachinesDashboardArea fleet={fleet} />
+                        <MachinesDashboardArea fleet={fleet} attention={attention} />
                     </ItemGroup>
                 </MachineAttentionStatedAbove>
             ) : null}

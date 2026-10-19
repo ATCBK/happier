@@ -133,6 +133,9 @@ const { AllMachinesIndex: MachinesSettingsView } =
   await import('@/components/machines/index/AllMachinesIndex');
 const { MachinesRelayDriftBanner } = await import('./MachinesRelayDriftBanner');
 const { storage } = await import('@/sync/domains/state/storage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
+  await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
 const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
@@ -274,13 +277,24 @@ describe('All machines (the Settings door index)', () => {
         { ...machine('machine-b1', 'Machine B1', 'b.local'), daemonState: { resources: needsAttention ? attention : calm } },
       ] },
     ]);
-    const tree = await renderPage();
-    const document = tree.find(node => Array.isArray(node.props.binding?.presets));
-    const presets: readonly WidgetAreaPresetV1[] = document.props.binding.presets;
-    const group = presets[0]!.items.find(item => item.kind === 'group');
-    expect(group?.kind === 'group' ? group.context?.machine : undefined).toEqual({ kind: 'value', value: needsAttention
-      ? { serverId: 'srv_b', machineId: 'machine-b1' } : { serverId: 'srv_a', machineId: 'machine-a1' } });
-    expect(tree.findAll(node => node.props.testID === 'machines.needs-you.srv_b.machine-b1').length > 0).toBe(needsAttention);
+    const previousScope = storage.getState().profileScope;
+    const previousApplied = getAppliedActiveServerSnapshot();
+    const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId: 'srv_a', accountId: 'account-a' } });
+    try {
+      const tree = await renderPage();
+      const document = tree.find(node => Array.isArray(node.props.binding?.presets));
+      const presets: readonly WidgetAreaPresetV1[] = document.props.binding.presets;
+      const group = presets[0]!.items.find(item => item.kind === 'group');
+      expect(group?.kind === 'group' ? group.context?.machine : undefined).toEqual({ kind: 'value', value: needsAttention
+        ? { serverId: 'srv_b', machineId: 'machine-b1' } : { serverId: 'srv_a', machineId: 'machine-a1' } });
+      expect(tree.findAll(node => node.props.testID === 'machines.needs-you.srv_b.machine-b1').length > 0).toBe(needsAttention);
+    } finally {
+      standardCleanup();
+      publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+      storage.setState({ profileScope: previousScope });
+    }
   });
 
   it('says the fleet in one sentence and lists the machine that needs you, with its one action, above the table', async () => {
