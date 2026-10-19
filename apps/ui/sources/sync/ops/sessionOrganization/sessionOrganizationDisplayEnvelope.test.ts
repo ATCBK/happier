@@ -81,6 +81,8 @@ describe('session organization display envelopes', () => {
                     sessionId: 'session-1',
                     sortKey: null,
                     pinnedAt: 1,
+                    listPinned: true,
+                    railPinned: false,
                 }],
                 folders: [{
                     folderId: 'folder-1',

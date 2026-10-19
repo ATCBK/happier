@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Metadata } from '@happier-dev/session-core/state';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSessionListRenderableFromSession } from './sessionListRenderable';
 
 import {
     areSessionListRenderableExternalSessionIdentitiesEqual,
@@ -17,8 +19,25 @@ const canonicalExternalSessionLink = {
 };
 
 describe('sessionListRenderableMetadataComparison', () => {
+    it('does not promote untyped metadata fields into Project and checkout membership', () => {
+        const row = buildSessionListRenderableFromSession(createSessionFixture({
+            metadata: { path: '/repo', host: 'host', projectId: { id: 'anchor' }, workspaceId: 42 },
+        }));
+        expect(row.metadata?.path).toBe('/repo');
+        expect(row.metadata?.projectId).toBeUndefined();
+        expect(row.metadata?.workspaceId).toBeUndefined();
+
+        const assigned = buildSessionListRenderableFromSession(createSessionFixture({
+            metadata: { path: '/repo', host: 'host', projectId: 'anchor', workspaceId: 'checkout' },
+        }), row);
+        const cleared = buildSessionListRenderableFromSession(createSessionFixture({
+            metadata: { path: '/repo', host: 'host', projectId: null, workspaceId: null },
+        }), assigned);
+        expect(cleared.metadata).toMatchObject({ projectId: null, workspaceId: null });
+    });
+
     it('preserves Project and checkout membership and invalidates only a changed association', () => {
-        const metadata: Metadata = { path: '/repo', projectId: 'anchor', workspaceId: 'checkout-a' };
+        const metadata: Metadata = { path: '/repo', host: 'host', projectId: 'anchor', workspaceId: 'checkout-a' };
         const first = buildSessionListRenderableMetadataComparison(metadata);
         expect(first).toMatchObject({ projectId: 'anchor', workspaceId: 'checkout-a' });
         expect(buildSessionListRenderableMetadataComparison(metadata, first)).toBe(first);

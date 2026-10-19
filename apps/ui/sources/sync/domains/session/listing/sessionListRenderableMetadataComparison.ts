@@ -23,6 +23,7 @@ export type SessionListRenderableExternalSessionIdentity = Readonly<{
     linkedAtMs?: number;
     source: ExternalSessionLink['source'];
     runtimeDescriptorV1?: ExternalSessionLink['runtimeDescriptorV1'];
+    qualifiedIdentity?: ExternalSessionLink['qualifiedIdentity'];
     linkData?: ExternalSessionLink['linkData'];
 }>;
 
@@ -87,6 +88,7 @@ function readExternalSessionRenderableMetadata(
             ? { linkedAtMs: candidate.linkedAtMs }
             : {}),
         source: candidate.source,
+        ...(candidate.qualifiedIdentity ? { qualifiedIdentity: candidate.qualifiedIdentity } : {}),
         ...(candidate.runtimeDescriptorV1 ? { runtimeDescriptorV1: candidate.runtimeDescriptorV1 } : {}),
         ...(candidate.linkData ? { linkData: candidate.linkData } : {}),
     };
@@ -109,6 +111,8 @@ export function areSessionListRenderableExternalSessionIdentitiesEqual(
         && previous.machineId === next.machineId
         && previous.remoteSessionId === next.remoteSessionId
         && previous.linkedAtMs === next.linkedAtMs
+        && serializeExternalSessionJsonForComparison(previous.qualifiedIdentity)
+            === serializeExternalSessionJsonForComparison(next.qualifiedIdentity)
         && serializeExternalSessionJsonForComparison(previous.runtimeDescriptorV1)
             === serializeExternalSessionJsonForComparison(next.runtimeDescriptorV1)
         && serializeExternalSessionJsonForComparison(previous.linkData)
@@ -293,8 +297,8 @@ export function readSessionListRenderableMetadataComparison(
     if (metadata.bot !== undefined && readSessionBotV1(metadata.bot) === null) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
-        projectId: metadata.projectId,
-        workspaceId: metadata.workspaceId,
+        projectId: typeof metadata.projectId === 'string' || metadata.projectId === null ? metadata.projectId : undefined,
+        workspaceId: typeof metadata.workspaceId === 'string' || metadata.workspaceId === null ? metadata.workspaceId : undefined,
         bot: metadata.bot,
         name: typeof metadata.name === 'string' ? metadata.name : undefined,
         summaryText: readRenderableSummaryText(metadata),

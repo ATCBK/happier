@@ -8,6 +8,7 @@ import {
     useMachineListStatusByServerId,
     useOrdinarySessionListMembershipByServerId,
     useSessionListQueryMembershipByKey,
+    useSessionListHomeObservations,
     useSessionListRowsByServerId,
     useSetting,
     useSocketStatus,
@@ -224,7 +225,9 @@ export function useSessionListQueryHomeSupportByServerId(
     return useSessionListFeatureHomeSupportByServerId('sessions.filteredListing', serverIds, enabled);
 }
 
-function normalizeHomes(homes: readonly SessionListQueryHomeInput[]): NormalizedQueryHome[] {
+const NO_QUERY_HOMES: readonly NormalizedQueryHome[] = Object.freeze([]);
+
+function normalizeHomes(homes: readonly SessionListQueryHomeInput[]): readonly NormalizedQueryHome[] {
     const normalized: NormalizedQueryHome[] = [];
     const seen = new Set<string>();
     for (const home of homes) {
@@ -239,7 +242,7 @@ function normalizeHomes(homes: readonly SessionListQueryHomeInput[]): Normalized
             ordinaryAdapter: home.ordinaryAdapter ?? null,
         });
     }
-    return normalized;
+    return normalized.length === 0 ? NO_QUERY_HOMES : normalized;
 }
 
 export function buildSessionListQueryHomeIndex(input: Readonly<{
@@ -373,6 +376,7 @@ function useSessionListQueryHomeStatesLayer(input: SessionListQueryInput): Sessi
         input.enabled && followingHomeServerIds.length > 0,
     );
     const ordinaryMembershipByServerId = useOrdinarySessionListMembershipByServerId();
+    const ordinaryObservationsByServerId = useSessionListHomeObservations();
     const queryMembershipByKey = useSessionListQueryMembershipByKey();
     const machineStatusesByServerId = useMachineListStatusByServerId();
     const socketStatus = useSocketStatus();
@@ -635,6 +639,7 @@ function useSessionListQueryHomeStatesLayer(input: SessionListQueryInput): Sessi
         loadNext,
         machineStatusesByServerId,
         ordinaryMembershipByServerId,
+        ordinaryObservationsByServerId,
         queryMembershipByKey,
         readHomeState,
         readRetainedRenderMembership,

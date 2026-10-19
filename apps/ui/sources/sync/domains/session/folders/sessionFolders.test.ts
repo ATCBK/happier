@@ -6,6 +6,7 @@ import {
     buildSessionFolderCollapseKey,
     buildSessionFolderTree,
     compareSessionFolderWorkspaceRefs,
+    acquireSessionFolderCreationAttempt,
     createSessionFolder,
     deleteSessionFolder,
     buildSessionFolderMoveTargets,
@@ -18,6 +19,7 @@ import {
     resolveSessionFolderFocusScope,
     sessionFolderAddressKey,
     SESSION_FOLDER_MAX_NAME_LENGTH,
+    settleSessionFolderCreationAttempt,
 } from './index';
 import type {
     SessionFolderList,
@@ -202,6 +204,55 @@ describe('session folder domain helpers', () => {
         expect(deleted.deletedFolderIds).toEqual(['child']);
         expect(deleted.replacementFolderId).toBe('parent');
         expect(deleted.next.folders.map((item) => item.id)).toEqual(['parent']);
+    });
+
+    it('retains one normalized creation identity only for a retry of the same folder attempt', () => {
+        let nextId = 0;
+        const createId = () => `folder-attempt-${++nextId}`;
+        const first = acquireSessionFolderCreationAttempt({
+            current: null,
+            workspace: { ...workspaceA, serverId: ' server-a ', rootPath: '/Users/lee/project/' },
+            parentId: ' parent ',
+            name: '  Leads\nToday  ',
+            createId,
+        });
+        const retryable = settleSessionFolderCreationAttempt(first, 'retryable-failure');
+        const retry = acquireSessionFolderCreationAttempt({
+            current: retryable,
+            workspace: workspaceA,
+            parentId: 'parent',
+            name: 'Leads Today',
+            createId,
+        });
+
+        expect(retry.id).toBe(first.id);
+        expect(nextId).toBe(1);
+        expect(acquireSessionFolderCreationAttempt({
+            current: retry,
+            workspace: workspaceA,
+            parentId: 'different-parent',
+            name: 'Leads Today',
+            createId,
+        }).id).not.toBe(first.id);
+        expect(acquireSessionFolderCreationAttempt({
+            current: retry,
+            workspace: workspaceA,
+            parentId: 'parent',
+            name: 'Edited name',
+            createId,
+        }).id).not.toBe(first.id);
+
+        for (const outcome of ['succeeded', 'non-retryable-failure', 'cancelled'] as const) {
+            const settled = settleSessionFolderCreationAttempt(retry, outcome);
+            expect(settled).toBeNull();
+            expect(acquireSessionFolderCreationAttempt({
+                current: settled,
+                workspace: workspaceA,
+                parentId: 'parent',
+                name: 'Leads Today',
+                createId,
+            }).id).not.toBe(first.id);
+        }
     });
 
     it('moves folders between workspace root and subfolders without cycles', () => {

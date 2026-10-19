@@ -185,10 +185,12 @@ export function buildSessionFromListRenderable(
         runtimeActivityRevision: renderable.runtimeActivityRevision ?? null,
         lastRuntimeIssue: renderable.lastRuntimeIssue ?? null,
         lastTurnCompletedAt: renderable.lastTurnCompletedAt ?? null,
-        reportsTo: renderable.reportsTo !== undefined ? renderable.reportsTo : options.baseSession?.reportsTo ?? null,
+        manager: renderable.manager !== undefined ? renderable.manager : options.baseSession?.manager ?? null,
         origin: renderable.origin ?? options.baseSession?.origin,
         workDepth: renderable.workDepth ?? options.baseSession?.workDepth,
-        reports: renderable.reports ?? options.baseSession?.reports ?? null,
+        ownerAccountId: renderable.ownerAccountId ?? options.baseSession?.ownerAccountId,
+        managedSessions: renderable.managedSessions ?? options.baseSession?.managedSessions ?? null,
+        receivedRuleCount: renderable.receivedRuleCount,
         metadata,
         // The row owns this ephemeral projection; a stale base must not revive a retired title.
         lockedDisplayTitle: metadataLayoutVersion === 1

@@ -16,7 +16,7 @@ function header(groupKey: string): SessionListIndexItem {
 function rows(leads: Record<string, string | null>) {
     return (_serverId: string | null, sessionId: string) => (
         sessionId in leads
-            ? ({ id: sessionId, reportsTo: leads[sessionId] ? { sessionId: leads[sessionId] } : null } as unknown as SessionListRenderableSession)
+            ? ({ id: sessionId, manager: leads[sessionId] ? { sessionId: leads[sessionId] } : null } as unknown as SessionListRenderableSession)
             : null
     );
 }
@@ -75,7 +75,7 @@ describe('nestSessionListReports', () => {
         expect(nested.map((item) => (item.type === 'session' ? item.sessionId : null)).sort()).toEqual(['a', 'b']);
     });
 
-    it('keeps a transient reportsTo cycle in its own group before the following header', () => {
+    it('keeps a transient manager cycle in its own group before the following header', () => {
         const nested = nestSessionListReports([header('g1'), session('a'), session('b'), header('g2'), session('solo', 'g2')],
             rows({ a: 'b', b: 'a', solo: null }));
         expect(shape(nested)).toEqual(['# g1', 'a:0', 'b:1', '# g2', 'solo:0']);

@@ -2,7 +2,8 @@ import * as React from 'react';
 import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { buildSessionListFilterQueryHomes, createSessionListViewFilterDefaults } from '@/components/sessions/shell/search/sessionListViewFilters';
-import { useActiveServerAccountScope, useSessionListRowsByServerId, useProjectAccountRows } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useSessionListRowsByServerId } from '@/sync/domains/state/storage';
+import { useProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projectAccountRows';
 import { readSessionListRowsForServerId } from './sessionListRowStateLookup';
 import { useSessionListQuerySourceState } from './useSessionListQuerySourceState';
 import { resolveSessionListQueryPresentation } from './sessionListIndexPresentation';
@@ -20,8 +21,7 @@ const NO_ROWS: Readonly<Record<string, SessionListRenderableSession>> = Object.f
 /** The ordinary Session list's paging, visibility and row contracts, narrowed to an accepted Project. */
 export function useProjectSessions(project: QualifiedProjectKeyV1 | null, filter: SessionListFilterV1 = DEFAULT_FILTER) {
     const activeViewer = useActiveServerAccountScope(project?.serverId ?? null);
-    const projectRows = useProjectAccountRows();
-    const refs = projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined;
+    const refs = useProjectAccountWorkspaceRefs(project !== null);
     const candidateHomes = React.useMemo(() => project && activeViewer ? [activeViewer.serverId] : [], [project?.serverId, activeViewer]);
     const bindings = useServerCredentialAccountScopes(candidateHomes);
     const binding = activeViewer ? bindings.get(activeViewer.serverId) : null;
@@ -41,9 +41,10 @@ export function useProjectSessions(project: QualifiedProjectKeyV1 | null, filter
     const source = React.useMemo(() => {
         const resolveSessionRow = (_serverId: string | null | undefined, sessionId: string) => rows[sessionId] ?? null;
         return computeVisibleSessionListIndex({ source: filterSessionListIndexByStorageKind(query.source, filters.source, resolveSessionRow),
-            resolveSessionRow, hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {}, workFilter: filters,
+            resolveSessionRow, hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {}, workFilter: filters, workspaceRefs: refs,
+            viewerAccountIdByServerId: viewer ? new Map([[viewer.serverId, viewer.accountId]]) : undefined,
             presentation: { enabled: true, presentation: 'flat-with-badge', selectedServerIds: homeIds } });
-    }, [query.source, filters, rows, homeIds]);
+    }, [query.source, filters, rows, homeIds, refs, viewer]);
     const roster = React.useMemo(() => project ? projectSessionList({ project, viewer, source, rows, workspaceRefs: refs })
         : { items: [], unavailableCount: 0 }, [project?.serverId, project?.projectKey, viewer, source, rows, refs]);
     // Account cursors describe candidates, not Project matches. Advance at the

@@ -1,4 +1,5 @@
 import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { SessionListRenderableSession } from './sessionListRenderable';
 
@@ -9,7 +10,7 @@ export function resolveWorkflowRunParentSessionId(summary: WorkflowRunSummaryV1 
     return summary?.startedBy === 'agent' ? summary.origin.originSessionId ?? null : null;
 }
 
-/** One parent-work tree: reportsTo stays group-local; workflow steps belong only to their Run. */
+/** One parent-work tree: manager stays group-local; workflow steps belong only to their Run. */
 export function nestSessionListReports(
     items: SessionListIndexItem[],
     resolveSessionRow: (serverId: string | null, sessionId: string) => SessionListRenderableSession | null,
@@ -40,7 +41,7 @@ export function nestSessionListReports(
                 })) : undefined;
                 if (!parent) orphanSteps.add(item);
             } else {
-                const lead = row?.reportsTo?.sessionId;
+                const lead = readSessionManagerSessionIdV1(row);
                 const candidate = lead ? byKey.get(sessionKey(item.serverId, lead)) : undefined;
                 if (candidate && candidate !== item && groups.get(candidate) === groups.get(item)) parent = candidate;
             }
@@ -59,7 +60,7 @@ export function nestSessionListReports(
             children.set(parent, siblings);
         }
     }
-    // Break a transient reportsTo cycle at its first observed member, before
+    // Break a transient manager cycle at its first observed member, before
     // walking the original groups. Appending it after the final header would
     // silently move the whole cycle into another group.
     const checkedParents = new Set<WorkItem>();

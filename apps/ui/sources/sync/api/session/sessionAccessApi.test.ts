@@ -742,6 +742,9 @@ describe('Session access exact Account transport', () => {
     it('publishes a public link through the declared Action transport at the exact Home', async () => {
         const env = await setup();
         const { createSessionAccessClient } = await import('./sessionAccessApi');
+        const { Modal } = await import('@/modal');
+        // The public-link Action asks this present user before publishing.
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
         const bodies: Array<Record<string, unknown>> = [];
         env.request.mockImplementation(async (url, init) => {
             const path = new URL(url).pathname;

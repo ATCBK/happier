@@ -1,4 +1,5 @@
 import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
 import type { SessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import {
@@ -28,6 +29,7 @@ import {
     deriveLatestPendingRequestObservedAtFromSession,
     derivePendingRequestFlagsFromAgentState,
     derivePendingRequestFlagsFromSession,
+    readPendingRequestFactsFromSession,
     type TranscriptRequestStatesCache,
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import {
@@ -160,11 +162,13 @@ export interface SessionListRenderableSession {
     runtimeActivityRevision?: number | null;
     lastTurnCompletedAt?: number | null;
     /** The Session this one reports to (ORC R-03), for the list tree. */
-    reportsTo?: Session['reportsTo'];
+    manager?: Session['manager'];
     origin?: Session['origin'];
+    ownerAccountId?: Session['ownerAccountId'];
     workDepth?: Session['workDepth'];
     /** Direct reports, counted by the server (the lead row's sub-session chip). */
-    reports?: Session['reports'];
+    managedSessions?: Session['managedSessions'];
+    receivedRuleCount?: Session['receivedRuleCount'];
     metadataLayoutVersion?: number;
     metadataVersion: number;
     agentStateVersion: number;
@@ -231,16 +235,20 @@ type SessionListRenderableStaleFieldSource = Readonly<{
     hasPendingUserActionRequests?: boolean;
 }>;
 
-const NO_PENDING_REQUEST_FLAGS = {
-    hasPendingPermissionRequests: false,
-    hasPendingUserActionRequests: false,
-} as const;
-
 export function summarizeSessionListReadableActivityFromMessageRecords(
     messageIds: ReadonlyArray<string> | undefined,
     messagesById: Readonly<Record<string, MessageReadableActivityFields | undefined>> | null | undefined,
+    aggregate?: Pick<TranscriptRenderableAggregate, 'latestCommittedMessageSeq' | 'latestCommittedMessageCreatedAt'> | null,
 ): SessionListReadableActivitySummary | undefined {
     if (!Array.isArray(messageIds)) return undefined;
+    if (aggregate) {
+        // The store updates or invalidates this aggregate with each message change.
+        // Copy primitives rather than retaining the mutable aggregate.
+        return {
+            latestCommittedMessageSeq: aggregate.latestCommittedMessageSeq,
+            latestCommittedMessageCreatedAt: aggregate.latestCommittedMessageCreatedAt,
+        };
+    }
 
     const accumulator = createSessionListReadableActivityAccumulator();
     for (const messageId of messageIds) {
@@ -485,7 +493,7 @@ export function buildSessionListRenderableFromSession(
         !layout1OwnerMetadataUnavailable
         // A settled layout-1 lock retains only the store's safe title, not old metadata fields.
         && (readSessionMetadataLayoutVersion(session.metadataLayoutVersion) !== 1 || metadataUndecided)
-        && renderableSourceMetadata == null
+        && (renderableSourceMetadata == null || (ownerProjection && metadataUndecided))
         && previous?.metadata != null
         && readSessionMetadataLayoutVersion(session.metadataLayoutVersion)
             === readSessionMetadataLayoutVersion(previous.metadataLayoutVersion);
@@ -499,7 +507,9 @@ export function buildSessionListRenderableFromSession(
         || aggregate !== null;
     const suppressPendingAttention = session.active !== true;
     const pending = (() => {
-        if (suppressPendingAttention) return NO_PENDING_REQUEST_FLAGS;
+        if (suppressPendingAttention) return derivePendingRequestFlagsFromAgentState(
+            readPendingRequestFactsFromSession(session).actionConfirmations,
+        );
         if (preservePendingFlags && previous) {
             return {
                 hasPendingPermissionRequests: previous.hasPendingPermissionRequests,
@@ -516,9 +526,14 @@ export function buildSessionListRenderableFromSession(
     const previousMetadata: ReturnType<typeof readSessionListRenderableMetadataComparisonFromRenderable> = previous?.metadata
         ? readSessionListRenderableMetadataComparisonFromRenderable(previous.metadata)
         : null;
+    const currentMetadata = readSessionListRenderableMetadataComparison(renderableSourceMetadata, previousMetadata);
+    // An undecided Session can still carry proved owner visibility. Preserve readable
+    // row details until shared content is demanded, while applying the current hidden bit.
     const nextMetadata: ReturnType<typeof readSessionListRenderableMetadataComparisonFromRenderable> = preserveMetadata
-        ? previousMetadata
-        : readSessionListRenderableMetadataComparison(renderableSourceMetadata, previousMetadata);
+        ? ownerProjection && metadataUndecided && currentMetadata && previousMetadata
+            ? { ...previousMetadata, hiddenSystemSession: currentMetadata.hiddenSystemSession }
+            : previousMetadata
+        : currentMetadata;
     const titleFallbackMessages = aggregate
         ? (aggregate.firstUserTextMessage ? [aggregate.firstUserTextMessage] : [])
         : messages;
@@ -530,11 +545,11 @@ export function buildSessionListRenderableFromSession(
     const displayTitle = readSessionDisplayTitleField({ metadata: nextMetadata }, {
         messages: titleFallbackMessages,
         // A metadata-only hydration can precede the transcript. Keep the
-        // already projected title without reviving unreadable metadata.
+        // already projected readable title without reviving a retired locked title.
         fallbackTitle: previous?.id === session.id
             && readSessionMetadataLayoutVersion(previous.metadataLayoutVersion)
                 === readSessionMetadataLayoutVersion(session.metadataLayoutVersion)
-            ? readSessionDisplayTitleField(previous).value
+            ? readSessionDisplayTitleField({ metadata: previous.metadata }).value
             : null,
     }).value;
     const projectedMetadata = nextMetadata && displayTitle && displayTitle !== nextMetadata.summaryText
@@ -619,12 +634,14 @@ export function buildSessionListRenderableFromSession(
         origin: previous?.origin?.kind === session.origin?.kind && previous?.origin?.runId === session.origin?.runId
             ? previous?.origin ?? session.origin : session.origin,
         workDepth: session.workDepth,
-        reportsTo: session.reportsTo?.sessionId === previous?.reportsTo?.sessionId
-            ? previous?.reportsTo ?? session.reportsTo ?? null
-            : session.reportsTo ?? null,
-        reports: JSON.stringify(previous?.reports ?? null) === JSON.stringify(session.reports ?? null)
-            ? previous?.reports ?? null
-            : session.reports ?? null,
+        ownerAccountId: session.ownerAccountId,
+        receivedRuleCount: session.receivedRuleCount,
+        manager: readSessionManagerSessionIdV1(session) === readSessionManagerSessionIdV1(previous)
+            ? previous?.manager ?? session.manager ?? null
+            : session.manager ?? null,
+        managedSessions: JSON.stringify(previous?.managedSessions ?? null) === JSON.stringify(session.managedSessions ?? null)
+            ? previous?.managedSessions ?? null
+            : session.managedSessions ?? null,
         metadataLayoutVersion: preserveMetadata && previous
             ? previous.metadataLayoutVersion
             : session.metadataLayoutVersion,
@@ -637,7 +654,9 @@ export function buildSessionListRenderableFromSession(
             : projectedMetadata,
         thinking: runtimePresence.thinking,
         thinkingAt: runtimePresence.thinkingAt,
-        presence: session.presence,
+        // Preserve omission through projection: the scoped store, rather than
+        // a cached metadata source, owns the current runtime observation.
+        ...(Object.prototype.hasOwnProperty.call(session, 'presence') ? { presence: session.presence } : {}),
         optimisticThinkingAt: session.optimisticThinkingAt ?? null,
         resumingAt: session.resumingAt ?? null,
         thinkingGraceUntil: session.thinkingGraceUntil ?? null,
@@ -665,11 +684,11 @@ export function buildSessionListRenderableFromSession(
             ...session,
             latestReadyEventSeq,
         }, readableActivity),
-        // An owner row states whether its owner view is readable; an undecided one states it only
-        // when it kept a previous projection, and otherwise leaves hydration to settle it.
+        // An undecided Session can carry a readable owner-only visibility view even
+        // before its Session key or shared metadata is demanded.
         metadataUnavailable: ownerProjection
             ? metadataUndecided
-                ? preserveMetadata ? false : undefined
+                ? preserveMetadata || renderableSourceMetadata != null ? false : undefined
                 : layout1OwnerMetadataUnavailable
             : undefined,
     };
@@ -707,6 +726,9 @@ export function preserveSessionListRenderableTransientState(
     next: SessionListRenderableSession,
     options?: Readonly<{ preserveResumingAt?: boolean }>,
 ): SessionListRenderableSession {
+    const presence = Object.prototype.hasOwnProperty.call(next, 'presence')
+        ? next.presence
+        : previous?.presence;
     const keepVisibleWhenInactive = previous?.keepVisibleWhenInactive === true
         ? true
         : next.keepVisibleWhenInactive;
@@ -716,12 +738,14 @@ export function preserveSessionListRenderableTransientState(
     if (
         next.keepVisibleWhenInactive === keepVisibleWhenInactive
         && (next.resumingAt ?? null) === resumingAt
+        && next.presence === presence
     ) {
         return next;
     }
 
     return {
         ...next,
+        presence,
         keepVisibleWhenInactive,
         resumingAt,
     };
@@ -914,11 +938,13 @@ export function areSessionListRenderablesEqual(
         && (previous.runtimeActivityObservedAt ?? null) === (next.runtimeActivityObservedAt ?? null)
         && (previous.runtimeActivityRevision ?? null) === (next.runtimeActivityRevision ?? null)
         && (previous.lastTurnCompletedAt ?? null) === (next.lastTurnCompletedAt ?? null)
-        && (previous.reportsTo?.sessionId ?? null) === (next.reportsTo?.sessionId ?? null)
+        && readSessionManagerSessionIdV1(previous) === readSessionManagerSessionIdV1(next)
         && previous.origin?.kind === next.origin?.kind
         && previous.origin?.runId === next.origin?.runId
         && previous.workDepth === next.workDepth
-        && JSON.stringify(previous.reports ?? null) === JSON.stringify(next.reports ?? null)
+        && previous.ownerAccountId === next.ownerAccountId
+        && previous.receivedRuleCount === next.receivedRuleCount
+        && JSON.stringify(previous.managedSessions ?? null) === JSON.stringify(next.managedSessions ?? null)
         && readSessionMetadataLayoutVersion(previous.metadataLayoutVersion)
             === readSessionMetadataLayoutVersion(next.metadataLayoutVersion)
         && previous.metadataVersion === next.metadataVersion

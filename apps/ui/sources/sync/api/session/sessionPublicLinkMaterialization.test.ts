@@ -9,6 +9,7 @@ import { encodeBase64 } from '@/encryption/base64';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { computeAccountEncryptionMigrateKeyFingerprintV1, type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol';
 import { encryptDataKeyForRecipientV0 } from '@/sync/encryption/directShareEncryption';
 import { decryptDataKeyFromPublicShare } from '@/sync/encryption/publicShareEncryption';
@@ -18,8 +19,9 @@ import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAcco
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { Encryption } from '@/sync/encryption/encryption';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 
 // Substitute native UI boundaries only; the default Action executor and its
 // account-scoped Session HTTP dependency remain real.
@@ -72,6 +74,13 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
                 contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(contentKeys.publicKey),
                 recipientEnvelopeReadiness: { status: 'available' },
             } satisfies AccountEncryptionCurrentnessResponse;
+        const { ownerMetadata: _ownerMetadata, ...currentSession } = createPlainSessionCurrentProjectionRecordFixture({ id: 'same', metadata });
+        const session = SessionCurrentProjectionRecordV1Schema.parse({
+            ...currentSession,
+            seq: 0, active: true, activeAt: 2, updatedAt: 2,
+            encryptionMode: mode, dataEncryptionKey: mode === 'e2ee' ? callerEnvelope : null,
+            metadataLayoutVersion: 0, metadata: wireMetadata,
+        });
         let body: Record<string, unknown> | null = null;
         let posts = 0;
         let legacyWrappedKey = 'existing-legacy-wrapped-key';
@@ -79,14 +88,12 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
         const physicalBodies: string[] = [];
         setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
-            if (path === '/v1/auth/ping') return new Response('{}');
+            if (path === '/health' || path === '/v1/auth/ping') return new Response('{}');
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v1/account/encryption') return Response.json({ mode, updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(accountCurrentness);
             if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
-            if (path === '/v2/sessions/same') return new Response(JSON.stringify({session:{
-                id:'same',createdAt:1,updatedAt:2,seq:0,active:true,activeAt:2,encryptionMode:mode,
-                dataEncryptionKey:mode === 'e2ee' ? callerEnvelope : null,metadata:wireMetadata,metadataVersion:1,agentState:null,agentStateVersion:1,share:null,
-            }}));
+            if (path === '/v2/sessions/same') return Response.json({ session });
             if (path.endsWith('/turns')) return new Response('{}',{status:404});
             if (path === '/v1/sessions/same/public-share') {
                 // The predecessor strips unknown fields and can update a

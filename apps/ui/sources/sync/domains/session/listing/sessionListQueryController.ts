@@ -89,6 +89,8 @@ export type SessionListQueryPageRequest = Readonly<{
  */
 export function canSessionListOrdinaryPageAnswerQuery(query: SessionListQueryV1): boolean {
     return query.audiences.length === 0
+        && query.underSessionId === undefined
+        && query.coordinator === undefined
         && query.tagIds.length === 0
         && query.attention === 'any'
         && query.scope === 'my_work';

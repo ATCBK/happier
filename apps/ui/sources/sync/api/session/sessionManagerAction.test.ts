@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol';
-import { SessionReportsToOptionsV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerOptionsV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { selectSessionRelationRecords } from '@/components/sessions/work/reportSubtree';
 import { resolvePutUnderEligibility } from '@/components/sessions/work/putUnderCandidates';
@@ -13,7 +13,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 
 // Load the real UI graph once during collection, not inside each test's runtime budget.
 // Persistence captures its adapter on first use, so give that adapter a test-only scope.
-vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `reports-to-bootstrap-${crypto.randomUUID()}`);
+vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `manager-bootstrap-${crypto.randomUUID()}`);
 const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
 const { upsertServerProfile, resetServerProfilesRuntimeForTests } = await import('@/sync/domains/server/serverProfiles');
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -21,9 +21,9 @@ const { getPersistenceStorage } = await import('@/sync/domains/state/persistence
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-const { createSessionReportsToAction } = await import('./sessionReportsToAction');
-const { loadSessionReportsToEligibility } = await import('@/sync/ops/relations/sessionReportsToEligibility');
-const { dispatchSessionSpawnNewWithReportsToPreparation } = await import('@/sync/ops/actions/sessionSpawnNewAction');
+const { createSessionManagerAction } = await import('./sessionManagerAction');
+const { loadSessionManagerEligibility } = await import('@/sync/ops/relations/sessionManagerEligibility');
+const { dispatchSessionSpawnNewWithManagerPreparation } = await import('@/sync/ops/actions/sessionSpawnNewAction');
 
 let testHomeId: string | null = null;
 
@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 async function setup() {
-    vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `reports-to-${crypto.randomUUID()}`);
+    vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `manager-${crypto.randomUUID()}`);
     // Reset only the owner caches; each case gets fresh scoped profile persistence.
     resetServerProfilesRuntimeForTests();
     const active = await upsertAndActivateServer({ serverUrl: 'https://active.example', name: 'Active' });
@@ -55,17 +55,17 @@ async function setup() {
     // Persistent credentials and HTTP are the only replaced system boundaries.
     vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
     const request = vi.fn(async (_url: string, _init?: RequestInit): Promise<Response> =>
-        new Response(JSON.stringify({ ok: true, sessionId: 'child/id', leadSessionId: 'lead', attachedAt: 1 }), { status: 200 }));
+        new Response(JSON.stringify({ ok: true, sessionId: 'child/id', managerSessionId: 'lead', attachedAt: 1 }), { status: 200 }));
     setRuntimeFetch(async (url, init) => new URL(String(url)).pathname === '/v1/auth/ping'
         ? new Response('{}', { status: 200 }) : request(String(url), init));
     const account = await captureLazyActionAccountContext(home.id);
-    return { home, account, request, TokenStorage, token, execute: createSessionReportsToAction(account) };
+    return { home, account, request, TokenStorage, token, execute: createSessionManagerAction(account) };
 }
 
-const input = { sessionId: 'child/id', leadSessionId: 'lead', expectedLeadSessionId: null };
+const input = { sessionId: 'child/id', managerSessionId: 'lead', expectedManagerSessionId: null };
 const context = { surface: 'ui', authority: 'present_user' } as const;
 
-describe('reportsTo captured Home Action transport', () => {
+describe('manager captured Home Action transport', () => {
     it.each([
         { payload: { error: 'credential_scope_denied' }, errorCode: 'credential_scope_denied' },
         { payload: { error: 'credential_scope_denied', details: { sessionId: 'private' } }, errorCode: 'invalid_action_output' },
@@ -82,31 +82,31 @@ describe('reportsTo captured Home Action transport', () => {
     it('admits an unopened list candidate from the current HTTP eligibility read despite an older local lead', async () => {
         const env = await setup();
         try {
-            env.request.mockResolvedValue(Response.json(SessionReportsToOptionsV1Schema.parse({
-                sessionId: input.sessionId, currentLeadSessionId: null, candidates: [{ sessionId: 'lead', allowed: true }],
+            env.request.mockResolvedValue(Response.json(SessionManagerOptionsV1Schema.parse({
+                sessionId: input.sessionId, currentManagerSessionId: null, candidates: [{ sessionId: 'lead', allowed: true }],
             })));
-            const evidence = await loadSessionReportsToEligibility({ serverId: env.home.id, sessionId: input.sessionId, candidateSessionIds: ['lead'] });
+            const evidence = await loadSessionManagerEligibility({ serverId: env.home.id, sessionId: input.sessionId, candidateSessionIds: ['lead'] });
             const sessions = selectSessionRelationRecords({}, env.home.id, { [env.home.id]: {
-                [input.sessionId]: createSessionListRenderableSessionFixture({ id: input.sessionId, reportsTo: { sessionId: 'lead' } }),
+                [input.sessionId]: createSessionListRenderableSessionFixture({ id: input.sessionId, manager: { sessionId: 'lead' } }),
                 lead: createSessionListRenderableSessionFixture({ id: 'lead' }),
             } });
             expect(resolvePutUnderEligibility(sessions, input.sessionId, 'lead', evidence, { serverId: env.home.id, accountId: 'account' }))
-                .toEqual({ allowed: true, expectedLeadSessionId: null });
+                .toEqual({ allowed: true, expectedManagerSessionId: null });
             evidence?.dispose();
         } finally { env.account.dispose(); }
     });
     it('loads one qualified read-only eligibility batch and retires it with the captured credential', async () => {
         const env = await setup();
         try {
-            const projection = { sessionId: input.sessionId, currentLeadSessionId: null, candidates: [
+            const projection = { sessionId: input.sessionId, currentManagerSessionId: null, candidates: [
                 { sessionId: 'lead', allowed: false, reason: 'pairwise' },
             ] };
             env.request.mockResolvedValue(new Response(JSON.stringify(projection), { status: 200 }));
-            const evidence = await loadSessionReportsToEligibility({ serverId: env.home.id, sessionId: input.sessionId,
+            const evidence = await loadSessionManagerEligibility({ serverId: env.home.id, sessionId: input.sessionId,
                 candidateSessionIds: ['lead', 'lead'] });
             expect(evidence).toMatchObject({ ...projection, serverId: env.home.id, accountId: 'account' });
             expect(evidence?.isCurrent()).toBe(true);
-            const call = env.request.mock.calls.find(([url]) => url.endsWith('/reports-to/options'));
+            const call = env.request.mock.calls.find(([url]) => url.endsWith('/manager/options'));
             expect(JSON.parse(String(call?.[1]?.body))).toEqual({ candidateSessionIds: ['lead'] });
             await TokenStorage.removeCredentialsForServerUrl('https://reports.example', { serverId: env.home.id });
             expect(evidence?.isCurrent()).toBe(false);
@@ -119,16 +119,16 @@ describe('reportsTo captured Home Action transport', () => {
         try {
             for (const response of [
                 new Response('{}', { status: 404 }),
-                new Response(JSON.stringify({ sessionId: 'foreign', currentLeadSessionId: null, candidates: [] }), { status: 200 }),
-                new Response(JSON.stringify({ sessionId: input.sessionId, currentLeadSessionId: null, candidates: [] }), { status: 200 }),
+                new Response(JSON.stringify({ sessionId: 'foreign', currentManagerSessionId: null, candidates: [] }), { status: 200 }),
+                new Response(JSON.stringify({ sessionId: input.sessionId, currentManagerSessionId: null, candidates: [] }), { status: 200 }),
             ]) {
                 env.request.mockResolvedValue(response);
-                expect(await loadSessionReportsToEligibility({ serverId: env.home.id, sessionId: input.sessionId,
+                expect(await loadSessionManagerEligibility({ serverId: env.home.id, sessionId: input.sessionId,
                     candidateSessionIds: ['lead'] })).toBeNull();
             }
         } finally { env.account.dispose(); }
     });
-    it.each(['plain', 'e2ee'] as const)('prepares a spawn-time reportsTo attachment from the real %s scoped source reader', async (encryptionMode) => {
+    it.each(['plain', 'e2ee'] as const)('prepares a spawn-time manager attachment from the real %s scoped source reader', async (encryptionMode) => {
         const env = await setup();
         const committed = { type: 'success', disposition: 'created', sessionId: input.sessionId,
             executionTarget: { serverId: env.home.id, machineId: 'creator-machine' },
@@ -140,9 +140,9 @@ describe('reportsTo captured Home Action transport', () => {
                 archivedAt: null, metadata: '{}', metadataVersion: 1, agentState: null,
                 agentStateVersion: 0, pendingCount: 0, pendingVersion: 0, dataEncryptionKey: null, encryptionMode,
             } }), { status: 200 }));
-            const result = await dispatchSessionSpawnNewWithReportsToPreparation({ payload: {
+            const result = await dispatchSessionSpawnNewWithManagerPreparation({ payload: {
                 creationKey: SessionCreationKeyV1Schema.parse('child-create'), executionTarget: committed.executionTarget,
-                directory: { kind: 'path', path: '/repo' }, reportsTo: { sessionId: input.leadSessionId },
+                directory: { kind: 'path', path: '/repo' }, manager: { sessionId: input.managerSessionId },
                 agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
             } });
             expect(result).toEqual(encryptionMode === 'plain' ? committed : {
@@ -157,10 +157,10 @@ describe('reportsTo captured Home Action transport', () => {
 
     it.each(['plain', 'e2ee'] as const)('prepares the committed attachment from the real %s source reader without inventing Account keys', async (encryptionMode) => {
         const env = await setup();
-        const committed = { ok: true, sessionId: input.sessionId, leadSessionId: input.leadSessionId, attachedAt: 1 };
+        const committed = { ok: true, sessionId: input.sessionId, managerSessionId: input.managerSessionId, attachedAt: 1 };
         try {
             env.request.mockImplementation(async (url) => new Response(JSON.stringify(
-                new URL(url).pathname.includes('/reports-to') ? committed : { session: {
+                new URL(url).pathname.includes('/manager') ? committed : { session: {
                     id: input.sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
                     archivedAt: null, metadata: '{}', metadataVersion: 1, agentState: null,
                     agentStateVersion: 0, pendingCount: 0, pendingVersion: 0, dataEncryptionKey: null,
@@ -178,11 +178,11 @@ describe('reportsTo captured Home Action transport', () => {
 
     it('detaches without requesting source material', async () => {
         const env = await setup();
-        const detached = { ok: true, sessionId: input.sessionId, leadSessionId: null, attachedAt: null };
+        const detached = { ok: true, sessionId: input.sessionId, managerSessionId: null, attachedAt: null };
         try {
             env.request.mockResolvedValue(new Response(JSON.stringify(detached), { status: 200 }));
-            await expect(env.execute({ ...input, leadSessionId: null, expectedLeadSessionId: input.leadSessionId, context, serverId: env.home.id })).resolves.toEqual(detached);
-            expect(env.request.mock.calls.every(([url]) => new URL(url).pathname.includes('/reports-to'))).toBe(true);
+            await expect(env.execute({ ...input, managerSessionId: null, expectedManagerSessionId: input.managerSessionId, context, serverId: env.home.id })).resolves.toEqual(detached);
+            expect(env.request.mock.calls.every(([url]) => new URL(url).pathname.includes('/manager'))).toBe(true);
         } finally { env.account.dispose(); }
     });
 
@@ -190,18 +190,18 @@ describe('reportsTo captured Home Action transport', () => {
         const env = await setup();
         try {
             await upsertAndActivateServer({ serverUrl: 'https://other.example', name: 'Other' });
-            env.request.mockResolvedValue(new Response(JSON.stringify({ ok: false, error: 'reports_to_cas_conflict' }), { status: 409 }));
-            await expect(env.execute({ ...input, context, serverId: env.home.id })).resolves.toEqual({ ok: false, error: 'reports_to_cas_conflict' });
-            const call = env.request.mock.calls.find(([url]) => url.includes('/reports-to'));
-            expect(call?.[0]).toBe('https://reports.example/v1/sessions/child%2Fid/reports-to');
-            expect(JSON.parse(String(call?.[1]?.body))).toEqual({ leadSessionId: 'lead', expectedLeadSessionId: null });
+            env.request.mockResolvedValue(new Response(JSON.stringify({ ok: false, error: 'manager_cas_conflict' }), { status: 409 }));
+            await expect(env.execute({ ...input, context, serverId: env.home.id })).resolves.toEqual({ ok: false, error: 'manager_cas_conflict' });
+            const call = env.request.mock.calls.find(([url]) => url.includes('/manager'));
+            expect(call?.[0]).toBe('https://reports.example/v1/sessions/child%2Fid/manager');
+            expect(JSON.parse(String(call?.[1]?.body))).toEqual({ managerSessionId: 'lead', expectedManagerSessionId: null });
         } finally { env.account.dispose(); }
     });
 
     it('rejects a foreign attachment response and a mismatched Home before dispatch', async () => {
         const env = await setup();
         try {
-            env.request.mockResolvedValue(new Response(JSON.stringify({ ok: true, sessionId: 'other', leadSessionId: 'lead', attachedAt: 1 }), { status: 200 }));
+            env.request.mockResolvedValue(new Response(JSON.stringify({ ok: true, sessionId: 'other', managerSessionId: 'lead', attachedAt: 1 }), { status: 200 }));
             await expect(env.execute({ ...input, context, serverId: env.home.id })).resolves.toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
             env.request.mockClear();
             await expect(env.execute({ ...input, context, serverId: 'different-home' })).resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
@@ -214,7 +214,7 @@ describe('reportsTo captured Home Action transport', () => {
         try {
             env.request.mockImplementation(async () => {
                 await env.TokenStorage.setCredentialsForServerUrl('https://reports.example', { serverId: env.home.id }, { token: `${env.token}-rotated` });
-                return new Response(JSON.stringify({ ok: true, sessionId: input.sessionId, leadSessionId: input.leadSessionId, attachedAt: 1 }), { status: 200 });
+                return new Response(JSON.stringify({ ok: true, sessionId: input.sessionId, managerSessionId: input.managerSessionId, attachedAt: 1 }), { status: 200 });
             });
             await expect(env.execute({ ...input, context, serverId: env.home.id })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
         } finally { env.account.dispose(); }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } from '@/sync/domains/session/attention/runtimePresentation';
 
 import {
     isSessionListRuntimePriorityRow,
@@ -75,13 +76,14 @@ describe('isSessionListRuntimePriorityRow', () => {
         expect(isSessionListRuntimePriorityRow(row, 1_000_000)).toBe(false);
     });
 
-    it('does not fabricate online presence to schedule thinking freshness', () => {
+    it('schedules loss of runtime observation without fabricating online thinking presence', () => {
         const nowMs = 1_000_000;
+        const activeAt = nowMs - 10_000;
         expect(resolveSessionListRuntimePriorityRowNextFreshnessAtMs({
             active: true,
-            activeAt: nowMs,
+            activeAt,
             thinking: true,
             thinkingAt: nowMs,
-        }, nowMs)).toBeNull();
+        }, nowMs)).toBe(activeAt + SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS);
     });
 });

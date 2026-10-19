@@ -94,7 +94,9 @@ describe('sessionOrganizationApi', () => {
         const { setSessionPin } = await import('./sessionOrganizationApi');
         mocks.serverFetch.mockResolvedValueOnce(jsonResponse({ pin: null }));
         const request = { pinned: true, surface: 'rail' as const, wholeMetadata: { bot: { kind: 'bot' } } };
-        await expect(setSessionPin({ credentials, sessionId: 'pinned', request })).rejects.toMatchObject({ name: 'ZodError' });
+        await expect(setSessionPin({ credentials, sessionId: 'pinned', request })).rejects.toMatchObject({
+            issues: [expect.objectContaining({ code: 'unrecognized_keys', keys: ['wholeMetadata'] })],
+        });
         expect(mocks.serverFetch).not.toHaveBeenCalled();
         expect(mocks.runtimeFetchWithServerReachability).not.toHaveBeenCalled();
     });

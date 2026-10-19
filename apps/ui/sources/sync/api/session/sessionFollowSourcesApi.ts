@@ -1,4 +1,4 @@
-import type { SessionFollowSourceModeV1 } from '@happier-dev/protocol';
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
@@ -7,20 +7,34 @@ import { executeSessionFollowAction, type SessionFollowApiResult } from './sessi
 export type SessionFollowSourcesResult<T> = SessionFollowApiResult<T>;
 export type SessionFollowSourcesFailure = Extract<SessionFollowApiResult<never>, { kind: 'failed' }>;
 
-export function listSessionFollowSources(destination: SessionAddress) {
-    return executeSessionFollowAction('session.follow.sources.list', {
-        destinationSessionId: destination.sessionId,
+/** Source-owned reverse read; personal rows are the caller's own, peopleCount is anonymous. */
+export function listSessionFollowers(source: SessionAddress, signal?: AbortSignal, expectedAccountId?: string) {
+    return executeSessionFollowAction('follow.list', {
+        direction: 'followers', source: { kind: 'session', sessionId: source.sessionId },
+    }, source.serverId, signal, expectedAccountId);
+}
+
+export async function listSessionFollowSources(destination: SessionAddress) {
+    const result = await executeSessionFollowAction('follow.list', {
+        direction: 'following',
+        receiver: { kind: 'session', sessionId: destination.sessionId },
     }, destination.serverId);
+    return result.kind === 'ok'
+        ? { kind: 'ok' as const, value: { sources: result.value.sources, coverage: result.value.coverage } }
+        : result;
 }
 
 export function setSessionFollowSource(input: Readonly<{
     serverId: string;
     destinationSessionId: string;
     sourceSessionId: string;
-    mode?: SessionFollowSourceModeV1;
+    policy: FollowPolicyV1;
 }>) {
-    const { serverId, ...request } = input;
-    return executeSessionFollowAction('session.follow.sources.set', request, serverId);
+    return executeSessionFollowAction('follow.set', {
+        receiver: { kind: 'session', sessionId: input.destinationSessionId },
+        source: { kind: 'session', sessionId: input.sourceSessionId },
+        policy: input.policy,
+    }, input.serverId);
 }
 
 export function removeSessionFollowSource(input: Readonly<{
@@ -28,6 +42,8 @@ export function removeSessionFollowSource(input: Readonly<{
     destinationSessionId: string;
     sourceSessionId: string;
 }>) {
-    const { serverId, ...request } = input;
-    return executeSessionFollowAction('session.follow.sources.remove', request, serverId);
+    return executeSessionFollowAction('follow.remove', {
+        receiver: { kind: 'session', sessionId: input.destinationSessionId },
+        source: { kind: 'session', sessionId: input.sourceSessionId },
+    }, input.serverId);
 }

@@ -71,16 +71,11 @@ export type SessionBoardItemUpsertInput = Readonly<
 export type SessionBoardItemRemoveInput = SessionBoardItemRemoveInputV1;
 export type SessionBoardLayoutUpdateInput = SessionBoardLayoutUpdateInputV1;
 export type SessionBoardMutationResult = SessionBoardMutationActionResultV1;
-export type SessionBoardRemovalApprovalDecision = Readonly<{
-    /** The canonical Board UI policy was resolved (confirmed or explicitly waived). */
-    approvalDecisionApplied: true;
-}>;
 
 export type SessionBoardActionsPort = Readonly<{
     upsertItem: (input: SessionBoardItemUpsertInput) => Promise<SessionBoardActionOutcome<SessionBoardMutationResult>>;
     removeItem: (
         input: SessionBoardItemRemoveInput,
-        approval?: SessionBoardRemovalApprovalDecision,
     ) => Promise<SessionBoardActionOutcome<SessionBoardMutationResult>>;
     updateLayout: (input: SessionBoardLayoutUpdateInput) => Promise<SessionBoardActionOutcome<SessionBoardMutationResult>>;
 }>;
@@ -135,7 +130,6 @@ export function createSessionBoardActionsPort(input: Readonly<{
     const run = async (
         actionId: 'session.board.item.upsert' | 'session.board.item.remove' | 'session.board.layout.update',
         actionInput: SessionBoardItemUpsertInput | SessionBoardItemRemoveInput | SessionBoardLayoutUpdateInput,
-        approval?: SessionBoardRemovalApprovalDecision,
     ): Promise<SessionBoardActionOutcome<SessionBoardMutationResult>> => {
         if (!serverId || !sessionId || actionInput.sessionId !== sessionId) {
             return { status: 'refused', error: { error: 'session_board_forbidden' } };
@@ -146,13 +140,6 @@ export function createSessionBoardActionsPort(input: Readonly<{
                 serverId,
                 defaultSessionId: sessionId,
                 surface: 'ui',
-                ...(actionId === 'session.board.item.remove' && approval?.approvalDecisionApplied === true
-                    ? {
-                        authority: 'present_user' as const,
-                        presentUserConfirmation: { actionId },
-                        bypassApprovals: true,
-                    }
-                    : {}),
             });
         } catch {
             return { status: 'unavailable', reason: 'offline' };
@@ -214,7 +201,7 @@ export function createSessionBoardActionsPort(input: Readonly<{
 
     return Object.freeze({
         upsertItem: async (actionInput) => await run('session.board.item.upsert', actionInput),
-        removeItem: async (actionInput, approval) => await run('session.board.item.remove', actionInput, approval),
+        removeItem: async (actionInput) => await run('session.board.item.remove', actionInput),
         updateLayout: async (actionInput) => await run('session.board.layout.update', actionInput),
     });
 }

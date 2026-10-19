@@ -1,19 +1,19 @@
-import { SessionReportsToOptionsV1Schema, type SessionReportsToOptionsV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerOptionsV1Schema, type SessionManagerOptionsV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 
-export type SessionReportsToEligibilitySnapshot = SessionReportsToOptionsV1 & Readonly<{
+export type SessionManagerEligibilitySnapshot = SessionManagerOptionsV1 & Readonly<{
     serverId: string;
     accountId: string;
     isCurrent: () => boolean;
     dispose: () => void;
-    readCandidate: (sessionId: string) => SessionReportsToOptionsV1['candidates'][number] | undefined;
+    readCandidate: (sessionId: string) => SessionManagerOptionsV1['candidates'][number] | undefined;
 }>;
 
 /** Index current evidence once; hover only reads the selected candidate, never scans the batch. */
-export function createSessionReportsToEligibilitySnapshot(input: SessionReportsToOptionsV1 & Readonly<{
+export function createSessionManagerEligibilitySnapshot(input: SessionManagerOptionsV1 & Readonly<{
     serverId: string; accountId: string; isCurrent: () => boolean; dispose: () => void;
-}>): SessionReportsToEligibilitySnapshot {
+}>): SessionManagerEligibilitySnapshot {
     const candidates = new Map(input.candidates.map((candidate) => [candidate.sessionId, candidate]));
     let disposed = false;
     return { ...input,
@@ -24,25 +24,25 @@ export function createSessionReportsToEligibilitySnapshot(input: SessionReportsT
 }
 
 /** One demand-driven batch per gesture/chooser; no pointer-frame reads or persisted verdict. */
-export async function loadSessionReportsToEligibility(input: Readonly<{
+export async function loadSessionManagerEligibility(input: Readonly<{
     serverId: string;
     sessionId: string;
     candidateSessionIds: readonly string[];
     signal?: AbortSignal;
-}>): Promise<SessionReportsToEligibilitySnapshot | null> {
+}>): Promise<SessionManagerEligibilitySnapshot | null> {
     let capturedAccount: LazyActionAccountContext | null = null;
     try {
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         const account = capturedAccount = await captureLazyActionAccountContext(input.serverId, input.signal);
         const candidateSessionIds = [...new Set(input.candidateSessionIds)];
-        const response = await account.request(`/v1/sessions/${encodeURIComponent(input.sessionId)}/reports-to/options`, {
+        const response = await account.request(`/v1/sessions/${encodeURIComponent(input.sessionId)}/manager/options`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ candidateSessionIds }),
             ...(input.signal ? { signal: input.signal } : {}),
         }, { includeAuth: true });
         account.assertCurrent();
         if (!response.ok) { account.dispose(); return null; }
-        const parsed = SessionReportsToOptionsV1Schema.safeParse(await response.json());
+        const parsed = SessionManagerOptionsV1Schema.safeParse(await response.json());
         account.assertCurrent();
         if (!parsed.success || parsed.data.sessionId !== input.sessionId
             || parsed.data.candidates.length !== candidateSessionIds.length
@@ -50,7 +50,7 @@ export async function loadSessionReportsToEligibility(input: Readonly<{
             account.dispose();
             return null;
         }
-        return createSessionReportsToEligibilitySnapshot({
+        return createSessionManagerEligibilitySnapshot({
             ...parsed.data, serverId: account.serverId, accountId: account.accountId,
             isCurrent: () => account.accountLifetime.isCurrent(), dispose: account.dispose,
         });

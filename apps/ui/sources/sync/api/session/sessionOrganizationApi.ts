@@ -6,7 +6,7 @@ import { CreateOrUpdateSessionOrganizationFolderResponseSchema, CreateOrUpdateSe
 import { SESSION_ORGANIZATION_CURRENT_PROJECTION_VERSION, SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS, SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 import { SessionOrganizationSnapshotRequestSchema, SessionOrganizationSnapshotResponseSchema, type SessionOrganizationSnapshotRequest, type SessionOrganizationSnapshotResponse } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SetSessionAttentionStandingResponseSchema, type SetSessionAttentionStandingRequest, type SetSessionAttentionStandingResponse } from '@happier-dev/protocol/sessions/organization/standings';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { SetSessionPinRequestSchema } from '@happier-dev/protocol/sessions/organization/mutations';
 import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
@@ -37,7 +37,7 @@ async function readJsonBody(response: Response): Promise<unknown> {
     }
 }
 
-function parseJsonBody<T>(raw: unknown, schema: z.ZodType<T>, fallbackMessage: string): T {
+function parseJsonBody<T>(raw: unknown, schema: z.ZodMiniType<T>, fallbackMessage: string): T {
     const parsed = schema.safeParse(raw);
     if (!parsed.success) {
         throw new HappyError(fallbackMessage, false);
@@ -52,7 +52,7 @@ function readErrorMessage(raw: unknown, fallbackMessage: string): string {
     return fallbackMessage;
 }
 
-async function parseJsonResponse<T>(response: Response, schema: z.ZodType<T>, fallbackMessage: string): Promise<T> {
+async function parseJsonResponse<T>(response: Response, schema: z.ZodMiniType<T>, fallbackMessage: string): Promise<T> {
     const raw = await readJsonBody(response);
     if (!response.ok) {
         const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, raw);
