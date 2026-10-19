@@ -67,7 +67,7 @@ async function markAutomationSourceStatusChangedTx(params: Readonly<{
         entityId: "automation-source-status",
     });
     afterTx(params.tx, () => {
-        emitAutomationSourceStatusUpdated({ accountId: params.accountId, cursor });
+        emitAutomationSourceStatusUpdated({ accountId: params.accountId, cursor: cursor.resolveCursor() });
     });
 }
 

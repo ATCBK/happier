@@ -121,7 +121,7 @@ export async function runAutomationScheduleWorkerPass(params: Readonly<{
                 await acquireWorkflowPublicationLocksInTx(tx, { accountId: candidate.automation.accountId, triggerIds: [candidate.id] });
                 const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
                     tx,
-                    candidate.automation.accountId,
+                    candidate.automation.accountId, "content",
                 );
                 if (accountFence.status !== "ready") return null;
                 return await admitDueAutomationScheduleTriggerTx({

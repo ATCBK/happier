@@ -1561,7 +1561,8 @@ describe("external Action execution authorization", () => {
         // Session publisher discovery is an external socket boundary. Persisted
         // source custody, issuance, both signatures and route admission stay real.
         let publisherCurrent = true;
-        const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null);
+        const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null,
+            undefined, false, routes => registerDiscussionRoutes(routes));
         const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
         const homeId = await getOrCreateServerIdentityId();
         const runId = crypto.randomUUID();
@@ -1603,6 +1604,29 @@ describe("external Action execution authorization", () => {
         };
         try {
             const start = await issue('workflow.run.start');
+            const createdDiscussion = await createDiscussion({ actorAccountId: fixture.account.id,
+                authentication: createPresentUserSessionAccessAuthentication(), request: {
+                    creationLocalId: crypto.randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Workflow question' } },
+                    firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                        parts: [{ t: 'text', text: 'Compare the proposed approach' }] } }, mentionedAccountIds: [] },
+                } });
+            if (!createdDiscussion.ok) throw new Error(createdDiscussion.error);
+            const discussionPath = `/v1/discussions/${createdDiscussion.value.discussion.id}/messages`;
+            const discussionDetailsPath = `/v1/discussions/${createdDiscussion.value.discussion.id}`;
+            const discussionDetails = await app.inject({ method: 'GET', url: discussionDetailsPath,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'discussion.read',
+                    method: 'GET', path: discussionDetailsPath, body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect(discussionDetails.statusCode, discussionDetails.body).toBe(200);
+            const discussionRead = await app.inject({ method: 'GET', url: discussionPath,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'discussion.read',
+                    method: 'GET', path: discussionPath, body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect(discussionRead.statusCode, discussionRead.body).toBe(200);
+            expect(discussionRead.json()).toMatchObject({ messages: [{ id: createdDiscussion.value.firstMessage.id }] });
+            const deniedPost = { localId: crypto.randomUUID(), content: { t: 'plain', v: { v: 1,
+                parts: [{ t: 'text', text: 'Not admitted by a preparatory read' }] } }, mentionedAccountIds: [] };
+            expect((await app.inject({ method: 'POST', url: discussionPath, payload: deniedPost,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'discussion.post',
+                    method: 'POST', path: discussionPath, body: deniedPost, privateKey: fixture.keyPair.secretKey }) })).statusCode).toBe(401);
             const read = { operation: 'get', publisherMachineId: fixture.machine.id, runId };
             // A missing Run is a domain 404, rather than a refused storage read.
             const missing = await post(start, read);

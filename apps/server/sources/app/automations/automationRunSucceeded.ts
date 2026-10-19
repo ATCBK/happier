@@ -116,7 +116,7 @@ export async function applyAutomationRunTerminalEffectsTx(params: Readonly<{
             accountId: params.accountId,
             run: run as AutomationRunItem,
             previousState: params.previousState,
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
     return run as AutomationRunItem;

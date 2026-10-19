@@ -424,7 +424,7 @@ export async function claimPluginWebhookDeliveryV1(params: Readonly<{
         }
         const candidate = selected.candidate;
         const target = selected.selectedTarget;
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
             if (fence.status !== "ready") {
                 return none(5_000);
             }
@@ -798,7 +798,7 @@ export async function renewPluginWebhookDeliveryV1(params: Readonly<{
         }))) {
             return PluginWebhookRenewResultV1Schema.parse({ kind: "leaseLost" });
         }
-        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (fence.status !== "ready") {
             return PluginWebhookRenewResultV1Schema.parse({ kind: "unavailable", code: "account_transition" });
         }

@@ -15,6 +15,7 @@ import {
     type ReservedAccountScopedKvRowFailure,
     type ReservedAccountScopedKvRowReadResult,
     type ReservedAccountScopedKvRowMutationResult,
+    type ReservedAccountScopedKvRowMutationInTxResult,
 } from "./reservedAccountScopedKvRow";
 
 const parseEnvelope = (value: unknown, schema: typeof AuthoringMemoryContentV1Schema): AuthoringMemoryContentV1 | null => {
@@ -53,7 +54,7 @@ function domainForKey(key: string): ReservedAccountScopedKvRowDomain<AuthoringMe
 export async function markAuthoringMemoryChangedInTx(
     tx: Tx,
     input: Readonly<{ accountId: string; key: string; revision: number }>,
-): Promise<number> {
+): ReturnType<typeof markAccountChanged> {
     const hint = AuthoringMemoryChangeHintV1Schema.parse({ authoringMemory: true, key: input.key, revision: input.revision });
     return await markAccountChanged(tx, {
         accountId: input.accountId, kind: "account",
@@ -95,7 +96,7 @@ export async function mutateAuthoringMemoryInTx(tx: Tx, input: Readonly<{
     key: string;
     expectedRevision: number | "absent";
     envelope: AuthoringMemoryContentV1 | null;
-}>): Promise<ReservedAccountScopedKvRowMutationResult> {
+}>): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     return await mutateReservedAccountScopedKvRowInTx(tx, {
         accountId: input.accountId, physicalKey: buildAuthoringMemoryPhysicalKey(input.key),
         expectedRevision: input.expectedRevision, envelope: input.envelope, domain: domainForKey(input.key),

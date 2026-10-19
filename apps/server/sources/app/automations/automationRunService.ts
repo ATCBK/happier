@@ -1,6 +1,6 @@
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { publishManagedRunWakeInTx } from '@/app/machines/managed/managedWake';
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { AUTOMATION_RUN_CANCELLED_AFTER_DISPATCH_PERMITTED_CAUSE_V1, AUTOMATION_RUN_CANCELLED_WHILE_RUNNING_CAUSE_V1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
 import { AutomationRunResultStoredV1Schema, validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1, type AutomationRunResultStoredV1 } from '@happier-dev/protocol/automations/event';
@@ -16,7 +16,7 @@ import { retireAutomationPendingInputInTx } from "@/app/session/pending/pendingM
 import { cancelWorkflowRunTx, WorkflowRunServiceError } from "@/app/workflows/workflowRunService";
 
 import { emitAutomationRunTransition } from "./automationChangePublisher";
-import { fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
+import { captureAutomationAccountCurrentnessAfterPublication, fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
 import { automationRunItemSelect } from "./automationPersistenceSelect";
 import {
     decodeAutomationRunCause,
@@ -324,7 +324,7 @@ export async function retainAutomationRunProducedSession(params: {
 
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         const run = await tx.automationRun.findFirst({
@@ -485,7 +485,7 @@ async function publishFailedAutomationRunTx(params: {
             accountId: params.accountId,
             run: terminalRun as AutomationRunItem,
             previousState: params.previousState,
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
 
@@ -551,7 +551,7 @@ async function settleSucceededAutomationRun(params: {
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         const now = new Date();
@@ -771,7 +771,7 @@ async function startAutomationRunInternal(params: {
 }): Promise<AutomationRunStartResult | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         if (await readMachineAvailabilityStateInTx({
@@ -924,22 +924,21 @@ async function startAutomationRunInternal(params: {
         });
 
         const cursor = await markRunAutomationChanged({ tx, accountId: params.accountId, automationId: run.automationId });
-        const accountCurrentness = await fetchAutomationAccountCurrentnessWitnessTx(tx, params.accountId);
-        if (!accountCurrentness) {
-            // The running transition and its S witness are one contract: do
-            // not commit a start a worker cannot safely settle.
-            throw new Error("Automation Account currentness became unavailable during start");
-        }
+        const terminalCurrentness = captureAutomationAccountCurrentnessAfterPublication(tx, params.accountId);
         afterTx(tx, () => {
             emitAutomationRunTransition({
                 accountId: params.accountId,
                 run: run as AutomationRunItem,
                 previousState: "claimed",
-                cursor,
+                cursor: cursor.resolveCursor(),
             });
         });
 
-        return { run: run as AutomationRunItem, accountCurrentness };
+        return transactionResult(() => {
+            const accountCurrentness = terminalCurrentness.resolveResult();
+            if (!accountCurrentness) throw new Error("Automation Account currentness became unavailable during start publication");
+            return { run: run as AutomationRunItem, accountCurrentness };
+        });
     }, { transactionClass: "automation-run-start" });
 }
 
@@ -1069,7 +1068,7 @@ async function retainSupersededExecutionDispatchIdentityTx(params: Readonly<{
             accountId: params.accountId,
             run: run as AutomationRunItem,
             previousState: "outcome_uncertain",
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
     return run as AutomationRunItem;
@@ -1090,7 +1089,7 @@ export async function settleAutomationExecutionDispatch(params: Readonly<{
 }>): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         // `started` and `outcomeUnknown` both report after the external start
         // effect may have happened. An unrelated Account write that moved only
@@ -1262,7 +1261,7 @@ export async function settleAutomationExecutionDispatch(params: Readonly<{
                 accountId: params.accountId,
                 run: run as AutomationRunItem,
                 previousState: "running",
-                cursor,
+                cursor: cursor.resolveCursor(),
             });
         });
         return run as AutomationRunItem;
@@ -1357,7 +1356,7 @@ export async function markAbandonedAutomationExecutionDispatchOutcomeUnknownTx(p
             accountId: params.accountId,
             run: run as AutomationRunItem,
             previousState: params.state,
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
     return run as AutomationRunItem;
@@ -1478,7 +1477,7 @@ async function failAutomationRunInternal(params: {
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         const now = new Date();
@@ -1597,7 +1596,7 @@ async function failAutomationRunInternal(params: {
                     accountId: params.accountId,
                     run: run as AutomationRunItem,
                     previousState: cancelledRun.state,
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                 });
             });
             return run as AutomationRunItem;
@@ -1873,7 +1872,7 @@ export async function publishCancelledAutomationRunsTx(params: Readonly<{
     results: readonly CancelledAutomationRunTxResult[];
 }>): Promise<void> {
     const automationIds = [...new Set(params.results.map((result) => result.run.automationId))];
-    const cursorByAutomationId = new Map<string, number>();
+    const cursorByAutomationId = new Map<string, AccountChangePublication>();
     for (const automationId of automationIds) {
         cursorByAutomationId.set(automationId, await markRunAutomationChanged({
             tx: params.tx,
@@ -1889,7 +1888,7 @@ export async function publishCancelledAutomationRunsTx(params: Readonly<{
                 accountId: params.accountId,
                 run: result.run,
                 previousState: result.previousState,
-                cursor,
+                cursor: cursor.resolveCursor(),
                 ...(result.transitionCause ? { transitionCause: result.transitionCause } : {}),
             });
         }
@@ -1903,7 +1902,7 @@ export async function cancelAutomationRun(params: {
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         const previousRun = await fetchRunForAccount({
             tx,

@@ -75,7 +75,7 @@ describe("cleanupPluginWebhooksForAccountDeletionTxV1", () => {
             sharedEndpointsScrubbed: 1,
         });
 
-        expect(acquireAccountFence).toHaveBeenCalledWith(fixture.tx, "account-1");
+        expect(acquireAccountFence).toHaveBeenCalledWith(fixture.tx, "account-1", "exclusive");
         expect(fixture.deliveryDeleteMany).toHaveBeenCalledWith({ where: { accountId: "account-1" } });
         expect(fixture.operationDeleteMany).toHaveBeenCalledWith({ where: { accountId: "account-1" } });
         expect(fixture.endpointDeleteMany).toHaveBeenCalledWith({

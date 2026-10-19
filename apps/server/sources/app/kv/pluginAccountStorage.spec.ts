@@ -1,13 +1,13 @@
 import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import tweetnacl from "tweetnacl";
+import { mutatePluginAccountStorage, readPluginAccountStorageInTx } from "./pluginAccountStorage";
 
-import { createInTxHarness } from "../api/testkit/txHarness";
+import { createPrismaTransactionBoundary } from "../api/testkit/txHarness";
 
-vi.mock("@/storage/inTx", () => {
-    const { inTx, afterTx } = createInTxHarness(() => ({}));
-    return { inTx, afterTx };
-});
+const transaction = vi.hoisted(() => vi.fn());
+
+vi.mock("@/storage/db", () => ({ db: { $transaction: transaction } }));
 
 type StoredRow = Readonly<{
     key: string;
@@ -94,6 +94,7 @@ function createTx(options: Readonly<{
             upsert: vi.fn(async () => ({})),
         },
     };
+    transaction.mockImplementation(createPrismaTransactionBoundary(() => tx));
     return { tx, rows };
 }
 
@@ -137,7 +138,6 @@ describe("plugin Account KV storage", () => {
 
     it("reads one bounded, mode-checked plugin row without exposing its physical key", async () => {
         const { buildPluginAccountStoragePhysicalKey } = await import("./accountScopedKv");
-        const { readPluginAccountStorageInTx } = await import("./pluginAccountStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginAccountStoragePhysicalKey("example.tasks"),
@@ -158,7 +158,6 @@ describe("plugin Account KV storage", () => {
 
     it("retains a logical tombstone as valid opaque Account-row content", async () => {
         const { buildPluginAccountStoragePhysicalKey } = await import("./accountScopedKv");
-        const { readPluginAccountStorageInTx } = await import("./pluginAccountStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginAccountStoragePhysicalKey("example.tasks"),
@@ -179,7 +178,6 @@ describe("plugin Account KV storage", () => {
 
     it("rejects malformed UTF-8 bytes instead of coercing them into a valid Account-KV envelope", async () => {
         const { buildPluginAccountStoragePhysicalKey } = await import("./accountScopedKv");
-        const { readPluginAccountStorageInTx } = await import("./pluginAccountStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginAccountStoragePhysicalKey("example.tasks"),
@@ -196,7 +194,6 @@ describe("plugin Account KV storage", () => {
 
     it("rejects a mode-mismatched row before a stale client can overwrite it", async () => {
         const { buildPluginAccountStoragePhysicalKey } = await import("./accountScopedKv");
-        const { mutatePluginAccountStorageInTx } = await import("./pluginAccountStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginAccountStoragePhysicalKey("example.tasks"),
@@ -205,7 +202,7 @@ describe("plugin Account KV storage", () => {
             },
         });
 
-        await expect(mutatePluginAccountStorageInTx(tx as never, {
+        await expect(mutatePluginAccountStorage({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: 4,
@@ -220,7 +217,6 @@ describe("plugin Account KV storage", () => {
             sealAccountScopedBlobCiphertext,
         } = await import("@happier-dev/protocol");
         const { buildPluginAccountStoragePhysicalKey } = await import("./accountScopedKv");
-        const { readPluginAccountStorageInTx } = await import("./pluginAccountStorage");
         const material = {
             type: "dataKey" as const,
             machineKey: new Uint8Array(32).fill(29),
@@ -247,7 +243,6 @@ describe("plugin Account KV storage", () => {
     });
 
     it("rejects an oversized E2EE ciphertext before it reaches the shared UserKV mutation", async () => {
-        const { mutatePluginAccountStorageInTx } = await import("./pluginAccountStorage");
         // 512 KiB plaintext row + 42 bytes of Account-scoped cipher framing encodes to 699,108 base64 bytes.
         // One additional decoded byte crosses the next padded-base64 block (699,112 bytes).
         const oversizedCiphertextBytes = Buffer.alloc(524_332);
@@ -255,7 +250,7 @@ describe("plugin Account KV storage", () => {
         oversizedCiphertextBytes[1] = 18;
         const { tx } = createTx({ mode: "e2ee" });
 
-        await expect(mutatePluginAccountStorageInTx(tx as never, {
+        await expect(mutatePluginAccountStorage({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -271,7 +266,6 @@ describe("plugin Account KV storage", () => {
 
     it("acquires Account transition admission before inspecting a mode-bound Account-KV row", async () => {
         const { buildPluginAccountStoragePhysicalKey } = await import("./accountScopedKv");
-        const { mutatePluginAccountStorageInTx } = await import("./pluginAccountStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginAccountStoragePhysicalKey("example.tasks"),
@@ -280,7 +274,7 @@ describe("plugin Account KV storage", () => {
             },
         });
 
-        await expect(mutatePluginAccountStorageInTx(tx as never, {
+        await expect(mutatePluginAccountStorage({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: 0,
@@ -298,13 +292,9 @@ describe("plugin Account KV storage", () => {
     });
 
     it("uses the shared row CAS tombstone primitive and emits one content-free data-KV invalidation", async () => {
-        const {
-            mutatePluginAccountStorageInTx,
-            readPluginAccountStorageInTx,
-        } = await import("./pluginAccountStorage");
         const { tx } = createTx();
 
-        await expect(mutatePluginAccountStorageInTx(tx as never, {
+        await expect(mutatePluginAccountStorage({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -328,7 +318,7 @@ describe("plugin Account KV storage", () => {
             }),
         }));
 
-        await expect(mutatePluginAccountStorageInTx(tx as never, {
+        await expect(mutatePluginAccountStorage({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: 0,
@@ -339,7 +329,7 @@ describe("plugin Account KV storage", () => {
             pluginId: "example.tasks",
         })).resolves.toEqual({ status: "deleted", revision: 1 });
 
-        await expect(mutatePluginAccountStorageInTx(tx as never, {
+        await expect(mutatePluginAccountStorage({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",

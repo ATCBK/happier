@@ -1,3 +1,4 @@
+import { inTx } from "@/storage/inTx";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
@@ -51,12 +52,12 @@ describe("materialized ephemeral Runner Session deletion (SQLite integration)", 
                 installationPublicKey: new Uint8Array(32).fill(7),
             },
         });
-        const accessKey = await createSessionMachineAccessKeyInTx(db, {
+        const accessKey = await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: account.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "runner-access-key",
-        });
+        }));
         expect(accessKey.ok).toBe(true);
         const activation = await db.ephemeralRunnerActivation.create({
             data: {
@@ -115,12 +116,12 @@ describe("materialized ephemeral Runner Session deletion (SQLite integration)", 
                 kind: "persistent",
             },
         });
-        const accessKey = await createSessionMachineAccessKeyInTx(db, {
+        const accessKey = await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
             accountId: account.id,
             machineId: machine.id,
             sessionId: session.id,
             data: "ordinary-access-key",
-        });
+        }));
         expect(accessKey.ok).toBe(true);
 
         await expect(deleteOwnedSession({

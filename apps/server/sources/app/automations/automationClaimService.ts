@@ -1,9 +1,9 @@
 import { persistentMachineWhere } from "@/app/machines/machineSelection";
 import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGuards";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
@@ -15,7 +15,7 @@ import { type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protoco
 import { emitAutomationRunTransition, emitAutomationRunUpdatedToMachineOnly } from "./automationChangePublisher";
 import { lockScopedAutomationTriggerInTx } from "./automationScopedTrigger";
 import { AUTOMATION_RUN_TERMINAL_STATES } from "./automationTypes";
-import { fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
+import { captureAutomationAccountCurrentnessAfterPublication, fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
 import { freezeAutomationRunInput } from "./automationRunAdmissionService";
 import {
     automationRunCauseSelect,
@@ -912,7 +912,7 @@ export async function claimAutomationRun(params: {
             }
         }
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: candidateRunIds });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status === "account_not_found") {
             return { run: null, accountCurrentness: null };
         }
@@ -1106,7 +1106,7 @@ export async function claimAutomationRun(params: {
             }
             const projectedRun = await projectClaimedRunWithTriggerCurrentness(tx, run);
 
-            let cursor: number;
+            let cursor: AccountChangePublication;
             if (run.originKind === "direct") {
                 cursor = await markAccountChanged(tx, {
                     accountId: params.accountId,
@@ -1135,7 +1135,7 @@ export async function claimAutomationRun(params: {
                     accountId: params.accountId,
                     machineId: params.machineId,
                     run: { ...run, state: "pause_requested" },
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                 }));
             } else if (run.originKind === "automation") {
                 const automationRun = projectAutomationOriginRun(projectedRun);
@@ -1146,18 +1146,24 @@ export async function claimAutomationRun(params: {
                         accountId: params.accountId,
                         run: automationRun,
                         previousState,
-                        cursor,
+                        cursor: cursor.resolveCursor(),
                     });
                 });
             }
 
-            return await settleClaimRequest({
+            const settled = await settleClaimRequest({
                 run: { ...projectedRun, recipeKind: recipeKindForClaimRun(projectedRun),
                     // The CAS consumed this request. Keep it only in this exact
                     // claim/receipt, never in the re-read mutable Run row.
                     workflowResumeRequestedRevision: candidate.workflowResumeRequestedRevision,
                     causeWorkDepth: causeWorkDepth.workDepth },
                 accountCurrentness,
+            });
+            const terminalCurrentness = captureAutomationAccountCurrentnessAfterPublication(tx, params.accountId);
+            return transactionResult(() => {
+                const accountCurrentness = terminalCurrentness.resolveResult();
+                if (!accountCurrentness) throw new Error("Automation Account currentness became unavailable during claim publication");
+                return { ...settled, accountCurrentness };
             });
         }
 
@@ -1205,7 +1211,7 @@ export async function heartbeatAutomationRun(params: {
 }): Promise<{ ok: boolean; leaseExpiresAt: Date | null }> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return { ok: false, leaseExpiresAt: null };
 
         const now = new Date();

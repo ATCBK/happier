@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
 import { db } from "@/storage/db";
 import { isPrismaErrorCode } from "@/storage/prisma";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
 import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
@@ -148,7 +148,7 @@ async function assertAutomationTemplateMatchesCurrentAccountModeTx(
         legacyTemplateEnvelopeAdmission?: AutomationLegacyTemplateEnvelopeAdmission;
     }>,
 ): Promise<"e2ee" | "plain"> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
     if (fence.status === "account_not_found") {
         throw new Error("Account not found");
     }
@@ -197,7 +197,7 @@ async function normalizeCurrentAutomationDefinitionWriteTx(params: Readonly<{
     executionRecipe: AutomationStoredWorkflowDefinitionRecipeV2;
     expectedTemplateVersion: number;
 }>): Promise<CurrentAutomationDefinitionWrite> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(params.tx, params.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(params.tx, params.accountId, "content");
     if (fence.status === "account_not_found") {
         throw new Error("Account not found");
     }
@@ -1022,7 +1022,7 @@ async function tryRejoinAutomationCreateTx(params: Readonly<{
     });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
-        params.accountId,
+        params.accountId, "content",
     );
     if (fence.status !== "ready") {
         throw new AutomationStoredContentReadError("contentInvalid");
@@ -1049,7 +1049,7 @@ async function tryRejoinAutomationTriggerCreateTx(params: Readonly<{
         runSourceTriggerWhere: { automationId: params.automationId } });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
-        params.accountId,
+        params.accountId, "content",
     );
     if (fence.status !== "ready") return null;
     const automation = await loadAutomationTx(params.tx, {
@@ -2247,7 +2247,7 @@ export async function applyAutomationAccountEncryptionTransitionStageInTx(
 ): Promise<AutomationAccountEncryptionTransitionStageApplyResult> {
     const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
-        params.accountId,
+        params.accountId, "exclusive",
     );
     if (
         accountFence.status !== "ready"
@@ -2309,7 +2309,7 @@ export async function applyAutomationAccountEncryptionTransitionStageInTx(
             emitAutomationUpsert({
                 accountId: params.accountId,
                 automation,
-                cursor,
+                cursor: cursor.resolveCursor(),
             });
         });
     }
@@ -2374,7 +2374,7 @@ export async function applyAutomationAccountEncryptionTransitionStageInTx(
                 emitAutomationRunUpdated({
                     accountId: params.accountId,
                     run: run as AutomationRunItem,
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                 });
             });
         }
@@ -2456,7 +2456,7 @@ export async function readAutomationAccountEncryptionMigrationInventoryInTx(para
     tx: Tx;
     accountId: string;
 }>): Promise<AccountEncryptionMigrateAutomationsInventoryResponse> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(params.tx, params.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(params.tx, params.accountId, "content");
     if (fence.status !== "ready") throw new AutomationAccountEncryptionMigrationConflictError();
     const rows = await loadAutomationAccountEncryptionMigrationRowsInTx(params.tx, params.accountId);
     const runs = (await loadAutomationAccountEncryptionMigrationRunsInTx(params.tx, params.accountId))
@@ -3368,13 +3368,13 @@ async function clearLoadedAutomationsForAccountInTx(params: Readonly<{
             emitAutomationDelete({
                 accountId: params.accountId,
                 automationId: automation.id,
-                cursor,
+                cursor: cursor.resolveCursor(),
                 deletedAt,
             });
             emitAssignmentUpdates({
                 accountId: params.accountId,
                 automationId: automation.id,
-                cursor,
+                cursor: cursor.resolveCursor(),
                 assignments: buildAssignmentUpdateRows({
                     previousAssignments: automation.assignments,
                     nextAssignments: [],
@@ -3398,7 +3398,7 @@ export async function migrateAutomationAccountEncryptionInTx(params: Readonly<{
     directive: AccountEncryptionMigrateAutomationsDirectiveInput;
     ownerContentPublicKeyFingerprint?: string;
 }>): Promise<AutomationAccountEncryptionMigrationResult> {
-    const accountFence = await acquireAccountEncryptionTransitionFenceInTx(params.tx, params.accountId);
+    const accountFence = await acquireAccountEncryptionTransitionFenceInTx(params.tx, params.accountId, "exclusive");
     if (accountFence.status !== "ready") return { status: "invalid_content" };
     const directive = AccountEncryptionMigrateAutomationsDirectiveSchema.parse(
         params.directive,
@@ -3667,7 +3667,7 @@ export async function migrateAutomationAccountEncryptionInTx(params: Readonly<{
             emitAutomationUpsert({
                 accountId: params.accountId,
                 automation,
-                cursor,
+                cursor: cursor.resolveCursor(),
             });
         });
     }
@@ -3760,7 +3760,7 @@ export async function migrateAutomationAccountEncryptionInTx(params: Readonly<{
                 emitAutomationRunUpdated({
                     accountId: params.accountId,
                     run: automationRun,
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                 });
             });
         }
@@ -3950,7 +3950,7 @@ export async function matchAutomationAccountEncryptionMigrationPostStateInTx(
     return { status: "matched" };
 }
 
-export async function markAutomationChangedTx(tx: Tx, params: { accountId: string; automationId: string }): Promise<number> {
+export async function markAutomationChangedTx(tx: Tx, params: { accountId: string; automationId: string }): Promise<AccountChangePublication> {
     await invalidateSessionReviewProjectionsForAutomationInTx(tx, params.automationId);
     return await markAccountChanged(tx, {
         accountId: params.accountId,
@@ -4014,7 +4014,7 @@ export async function clearAutomationRunHistory(params: {
             runWhere: { accountId: params.accountId, automationId: params.automationId } });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (accountFence.status !== "ready") {
             return { status: "not_found" };
@@ -4056,7 +4056,7 @@ export async function clearAutomationRunHistory(params: {
             afterTx(tx, () => emitAutomationUpsert({
                 accountId: params.accountId,
                 automation,
-                cursor,
+                cursor: cursor.resolveCursor(),
             }));
         }
         return { status: "cleared", clearedRuns };
@@ -4428,20 +4428,20 @@ export function emitAutomationMutationAfterTx(params: Readonly<{
     tx: Tx;
     accountId: string;
     automation: AutomationListItem;
-    cursor: number;
+    cursor: AccountChangePublication;
     previousAssignments?: AutomationListItem["assignments"];
 }>): void {
     afterTx(params.tx, () => {
         emitAutomationUpsert({
             accountId: params.accountId,
             automation: params.automation,
-            cursor: params.cursor,
+            cursor: params.cursor.resolveCursor(),
         });
         if (params.previousAssignments) {
             emitAssignmentUpdates({
                 accountId: params.accountId,
                 automationId: params.automation.id,
-                cursor: params.cursor,
+                cursor: params.cursor.resolveCursor(),
                 assignments: buildAssignmentUpdateRows({
                     previousAssignments: params.previousAssignments,
                     nextAssignments: params.automation.assignments,
@@ -4805,11 +4805,11 @@ export async function createAutomationInTx(tx: Tx, params: Readonly<{
     });
 
     afterTx(tx, () => {
-        emitAutomationUpsert({ accountId: params.accountId, automation, cursor });
+        emitAutomationUpsert({ accountId: params.accountId, automation, cursor: cursor.resolveCursor() });
         emitAssignmentUpdates({
             accountId: params.accountId,
             automationId: automation.id,
-            cursor,
+            cursor: cursor.resolveCursor(),
             assignments,
         });
     });
@@ -4893,7 +4893,7 @@ export async function updateAutomation(params: {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId],
             runSourceTriggerWhere: { automationId: params.automationId },
             machineIds: (params.input.assignments ?? []).map(assignment => assignment.machineId) });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         const existing = await loadAutomationTx(tx, {
             accountId: params.accountId,
@@ -5324,7 +5324,7 @@ export async function reconcileAutomationDefinition(params: Readonly<{
             machineIds: params.input.assignments.map(assignment => assignment.machineId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (accountFence.status !== "ready") return null;
         const existing = await loadAutomationTx(tx, {
@@ -5699,7 +5699,7 @@ export async function createAutomationTrigger(params: Readonly<{
         if (rejoined) return rejoined;
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (accountFence.status !== "ready") return null;
         const automation = await loadAutomationTx(tx, {
@@ -5819,7 +5819,7 @@ export async function updateAutomationTrigger(params: Readonly<{
             runSourceTriggerWhere: { automationId: params.automationId } });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (accountFence.status !== "ready") return null;
         const automation = await loadAutomationTx(tx, {
@@ -6028,7 +6028,7 @@ export async function deleteAutomationTrigger(params: Readonly<{
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (accountFence.status !== "ready") return null;
         const automation = await loadAutomationTx(tx, {
@@ -6115,7 +6115,7 @@ export async function deleteAutomationTx(tx: Tx, params: {
 }): Promise<Readonly<{ removedRevision: number }> | false> {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId],
             runWhere: { accountId: params.accountId, automationId: params.automationId } });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return false;
         const existing = await loadAutomationTx(tx, {
             accountId: params.accountId,
@@ -6178,13 +6178,13 @@ export async function deleteAutomationTx(tx: Tx, params: {
             emitAutomationDelete({
                 accountId: params.accountId,
                 automationId: existing.id,
-                cursor,
+                cursor: cursor.resolveCursor(),
                 deletedAt,
             });
             emitAssignmentUpdates({
                 accountId: params.accountId,
                 automationId: existing.id,
-                cursor,
+                cursor: cursor.resolveCursor(),
                 assignments: buildAssignmentUpdateRows({
                     previousAssignments: existing.assignments,
                     nextAssignments: [],
@@ -6217,7 +6217,7 @@ export async function finalizeDeletedAutomationsWithoutRetainedRunsTx(params: Re
 }>): Promise<number> {
     const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
-        params.accountId,
+        params.accountId, "content",
     );
     if (accountFence.status !== "ready") return 0;
     const candidates = await params.tx.automation.findMany({
@@ -6268,7 +6268,7 @@ export async function runAutomationNow(params: {
     }
     return await rejoinAutomationOccurrenceInsertRace(async () => await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
 

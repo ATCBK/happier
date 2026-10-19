@@ -123,7 +123,7 @@ export async function removeAutomationMachineAssignmentsTx(
     // definition-assignment presence and is not optional.
     const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
-        params.accountId,
+        params.accountId, "content",
     );
     if (accountFence.status !== "ready") {
         throw new AutomationMachineAssignmentRemovalFenceUnavailableError(

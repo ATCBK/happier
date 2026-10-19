@@ -10,6 +10,7 @@ import {
     readReservedAccountScopedKvRowInTx,
     type ReservedAccountScopedKvRowDomain,
     type ReservedAccountScopedKvRowMutationResult,
+    type ReservedAccountScopedKvRowMutationInTxResult,
     type ReservedAccountScopedKvRowReadResult,
 } from "./reservedAccountScopedKvRow";
 
@@ -80,7 +81,7 @@ export async function readPluginDeclarativeSettings(
 export async function mutatePluginDeclarativeSettingsInTx(
     tx: Tx,
     input: PluginDeclarativeSettingsMutation,
-): Promise<PluginDeclarativeSettingsMutationResult> {
+): Promise<ReservedAccountScopedKvRowMutationInTxResult> {
     return await mutateReservedAccountScopedKvRowInTx(tx, {
         accountId: input.accountId,
         physicalKey: buildPluginDeclarativeSettingsPhysicalKey(input.pluginId),

@@ -1,13 +1,13 @@
 import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import tweetnacl from "tweetnacl";
+import { mutatePluginDeclarativeSettings, readPluginDeclarativeSettingsInTx } from "./pluginDeclarativeSettingsStorage";
 
-import { createInTxHarness } from "../api/testkit/txHarness";
+import { createPrismaTransactionBoundary } from "../api/testkit/txHarness";
 
-vi.mock("@/storage/inTx", () => {
-    const { inTx, afterTx } = createInTxHarness(() => ({}));
-    return { inTx, afterTx };
-});
+const transaction = vi.hoisted(() => vi.fn());
+
+vi.mock("@/storage/db", () => ({ db: { $transaction: transaction } }));
 
 type StoredRow = Readonly<{
     key: string;
@@ -88,6 +88,7 @@ function createTx(options: Readonly<{
             upsert: vi.fn(async () => ({})),
         },
     };
+    transaction.mockImplementation(createPrismaTransactionBoundary(() => tx));
     return { tx, rows };
 }
 
@@ -110,7 +111,6 @@ describe("plugin declarative settings storage", () => {
 
     it("returns a mode-checked raw envelope and revision without server decryption", async () => {
         const { buildPluginDeclarativeSettingsPhysicalKey } = await import("./accountScopedKv");
-        const { readPluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const envelope = { t: "plain", v: { v: 1, values: { theme: "dark" } } } as const;
         const { tx } = createTx({
             row: {
@@ -132,7 +132,6 @@ describe("plugin declarative settings storage", () => {
 
     it("rejects malformed UTF-8 bytes instead of coercing them into a valid Settings envelope", async () => {
         const { buildPluginDeclarativeSettingsPhysicalKey } = await import("./accountScopedKv");
-        const { readPluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginDeclarativeSettingsPhysicalKey("example.tasks"),
@@ -148,10 +147,9 @@ describe("plugin declarative settings storage", () => {
     });
 
     it("rejects a mode-mismatched envelope before any CAS mutation", async () => {
-        const { mutatePluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const { tx } = createTx({ mode: "plain" });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -164,7 +162,6 @@ describe("plugin declarative settings storage", () => {
 
     it("accepts an E2EE Settings ciphertext only in the declarative Settings cipher domain", async () => {
         const { sealAccountScopedBlobCiphertext } = await import("@happier-dev/protocol");
-        const { mutatePluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const ciphertext = sealAccountScopedBlobCiphertext({
             kind: "plugin_declarative_settings",
             material: { type: "dataKey", machineKey: new Uint8Array(32).fill(41) },
@@ -173,7 +170,7 @@ describe("plugin declarative settings storage", () => {
         });
         const { tx } = createTx({ mode: "e2ee" });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -186,7 +183,6 @@ describe("plugin declarative settings storage", () => {
             PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1,
             sealAccountScopedBlobCiphertext,
         } = await import("@happier-dev/protocol");
-        const { mutatePluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const seedCiphertext = sealAccountScopedBlobCiphertext({
             kind: "plugin_declarative_settings",
             material: { type: "dataKey", machineKey: new Uint8Array(32).fill(51) },
@@ -205,7 +201,7 @@ describe("plugin declarative settings storage", () => {
             .toBeGreaterThan(PLUGIN_ACCOUNT_SETTINGS_LIMITS_V1.maximumEncryptedCiphertextUtf8Bytes);
         const { tx } = createTx({ mode: "e2ee" });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -217,7 +213,6 @@ describe("plugin declarative settings storage", () => {
 
     it("rejects an Account-KV ciphertext before an E2EE Settings candidate can mutate storage", async () => {
         const { sealAccountScopedBlobCiphertext } = await import("@happier-dev/protocol");
-        const { mutatePluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const ciphertext = sealAccountScopedBlobCiphertext({
             kind: "plugin_account_kv_private_payload",
             material: { type: "dataKey", machineKey: new Uint8Array(32).fill(43) },
@@ -226,7 +221,7 @@ describe("plugin declarative settings storage", () => {
         });
         const { tx } = createTx({ mode: "e2ee" });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -239,7 +234,6 @@ describe("plugin declarative settings storage", () => {
 
     it("acquires Account transition admission before inspecting a mode-bound Settings row", async () => {
         const { buildPluginDeclarativeSettingsPhysicalKey } = await import("./accountScopedKv");
-        const { mutatePluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const { tx } = createTx({
             mode: "plain",
             row: {
@@ -249,7 +243,7 @@ describe("plugin declarative settings storage", () => {
             },
         });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: 0,
@@ -268,7 +262,6 @@ describe("plugin declarative settings storage", () => {
 
     it("rejects a persisted plain envelope that is not the canonical bounded Settings values payload", async () => {
         const { buildPluginDeclarativeSettingsPhysicalKey } = await import("./accountScopedKv");
-        const { readPluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const { tx } = createTx({
             row: {
                 key: buildPluginDeclarativeSettingsPhysicalKey("example.tasks"),
@@ -288,7 +281,6 @@ describe("plugin declarative settings storage", () => {
     it("rejects a Collection ciphertext before an E2EE Settings read can disclose it", async () => {
         const { sealAccountScopedBlobCiphertext } = await import("@happier-dev/protocol");
         const { buildPluginDeclarativeSettingsPhysicalKey } = await import("./accountScopedKv");
-        const { readPluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const ciphertext = sealAccountScopedBlobCiphertext({
             kind: "plugin_collection_private_payload",
             material: { type: "dataKey", machineKey: new Uint8Array(32).fill(45) },
@@ -313,7 +305,6 @@ describe("plugin declarative settings storage", () => {
     it("rejects an existing other-purpose ciphertext before Settings CAS can replace it", async () => {
         const { sealAccountScopedBlobCiphertext } = await import("@happier-dev/protocol");
         const { buildPluginDeclarativeSettingsPhysicalKey } = await import("./accountScopedKv");
-        const { mutatePluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const material = { type: "dataKey" as const, machineKey: new Uint8Array(32).fill(47) };
         const existingCiphertext = sealAccountScopedBlobCiphertext({
             kind: "account_settings",
@@ -336,7 +327,7 @@ describe("plugin declarative settings storage", () => {
             },
         });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: 4,
@@ -347,10 +338,9 @@ describe("plugin declarative settings storage", () => {
     });
 
     it("uses the shared CAS tombstone primitive and emits one content-free settings invalidation", async () => {
-        const { mutatePluginDeclarativeSettingsInTx, readPluginDeclarativeSettingsInTx } = await import("./pluginDeclarativeSettingsStorage");
         const { tx } = createTx();
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",
@@ -375,7 +365,7 @@ describe("plugin declarative settings storage", () => {
             }),
         }));
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: 0,
@@ -386,7 +376,7 @@ describe("plugin declarative settings storage", () => {
             pluginId: "example.tasks",
         })).resolves.toEqual({ status: "deleted", revision: 1 });
 
-        await expect(mutatePluginDeclarativeSettingsInTx(tx as any, {
+        await expect(mutatePluginDeclarativeSettings({
             accountId: "account-1",
             pluginId: "example.tasks",
             expectedRevision: "absent",

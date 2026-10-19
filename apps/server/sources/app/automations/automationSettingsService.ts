@@ -85,7 +85,7 @@ export async function updateAutomationSettings(params: Readonly<{
                     machineId: assignment.machineId,
                     automationId: assignment.automationId,
                     enabled: assignment.enabled,
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                     updatedAt: assignment.updatedAt,
                 });
             }

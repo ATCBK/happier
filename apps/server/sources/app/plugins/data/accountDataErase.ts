@@ -4,7 +4,7 @@ import { type ManagedResourceDependencyV1, type ManagedResourceDispositionV1 } f
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from "@/app/machines/managed/managedRead";
 import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { eventRouter } from "@/app/events/eventRouter";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
@@ -14,7 +14,7 @@ import {
     authorizeHomeGovernanceMutationInTx,
     readHomeGovernanceAccountInTx,
 } from "@/app/home/governance/homeCapabilities";
-import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
+import { acquireAccountLifecycleAdmissionInTx, setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { publishHomeGovernanceChangedInTx } from "@/app/home/governance/governanceChanges";
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { admitAccountDataEraseThroughEncryptionTransitionInTx } from "@/app/encryption/accountEncryptionTransitionCoordinator";
@@ -180,7 +180,7 @@ export async function erasePluginAccountDataInTx(input: Readonly<{
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }>): Promise<PluginAccountDataEraseResult> {
     const pluginId = PluginIdSchema.parse(input.pluginId);
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(input.tx, input.accountId, "exclusive");
     if (fence.status === "account_not_found") return { status: "account-not-found" };
     if (fence.status === "account_inconsistent") {
         throw new Error("Plugin Account data erase requires a consistent Account encryption mode.");
@@ -612,16 +612,16 @@ export async function deleteAccountForErasure(input: Readonly<{
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }>): Promise<DeleteAccountForErasureResult> {
     const actor: AccountErasureActor = input.actor ?? { kind: "self" };
-    const fenceAccounts = (tx: Tx, erasureActor: AccountErasureActor) => acquireAccountChangePublicationLocksInTx(
-        tx,
-        [input.accountId, ...(erasureActor.kind === "home_administration" ? [erasureActor.actorAccountId] : [])],
-        { includeSingleAccount: true },
-    );
+    const fenceAccounts = (tx: Tx, erasureActor: AccountErasureActor) => acquireAccountLifecycleAdmissionInTx(tx, {
+        accountId: input.accountId,
+        additionalAccountIds: erasureActor.kind === "home_administration" ? [erasureActor.actorAccountId] : [],
+    });
     const capturePreflight = async (tx: Tx, serializable: boolean) => {
         await fenceAccounts(tx, actor);
         const fence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             input.accountId,
+            "exclusive",
         );
         if (fence.status === "account_not_found") {
             const actorRejection = await admitAccountErasureActorForAbsentTargetInTx(tx, actor);
@@ -775,6 +775,7 @@ export async function deleteAccountForErasure(input: Readonly<{
         const fence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             input.accountId,
+            "exclusive",
         );
         if (fence.status === "account_not_found") {
             const actorRejection = await admitAccountErasureActorForAbsentTargetInTx(tx, continuationActor);
