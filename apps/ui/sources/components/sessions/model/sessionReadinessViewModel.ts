@@ -2,46 +2,13 @@ import {
     composeSessionReadinessV1, isSessionReadinessNativeSelectionV1, type SessionCredentialReadinessV1, type SessionReadinessAgentV1,
     type SessionReadinessFactsV1, type SessionReadinessRepairV1, type SessionReadinessV1,
 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
-import { resolveConnectedAccountPurposeSelectedAccountV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
-import { isQualifiedConnectedAccountProfileUsableV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import type { TeamCredentialResourceCatalogEntryV1, TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol';
 import type { MachineAgent, MachineAgentSignInSession } from '@/agents/machineAgents/machineAgentTypes';
 import type { MachineAgentsSnapshot } from '@/agents/machineAgents/machineAgentInventoryStore';
 import { projectMachineAgentForCredential, type MachineAgentCredentialSelection } from '@/agents/machineAgents/machineAgentModel';
 import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { resolveSessionHandoffStartReadiness } from '@/sync/domains/sessionHandoff/resolveSessionHandoffStartReadiness';
-import { areTeamResourceConnectedServiceSelectionsEqual } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
-
-/** Exact catalog binding, preserving the owner's readiness and recovery vocabulary verbatim. */
-export function readSessionTeamCredentialReadiness(input: Readonly<{
-    teamId: string;
-    selection: TeamResourceConnectedServiceSelectionV2;
-    resource: TeamCredentialResourceCatalogEntryV1 | null;
-}>): SessionCredentialReadinessV1 {
-    const current = input.resource?.teamId === input.teamId && input.resource.id === input.selection.resourceId
-        && input.resource.connectedServiceSelections.some(selection => areTeamResourceConnectedServiceSelectionsEqual(selection, input.selection));
-    return { kind: 'team', resourceId: input.selection.resourceId, teamId: input.teamId,
-        readiness: current ? input.resource!.readiness : null,
-        recoveryAction: current ? input.resource!.recoveryAction : null };
-}
-
-/** The purpose/profile owner decides usability; the view model neither selects nor repairs an account. */
-export function readSessionPersonalCredentialReadiness(input: Parameters<typeof resolveConnectedAccountPurposeSelectedAccountV1>[0] & Readonly<{
-    /** Current purpose declaration and Account catalog, as admitted by the setup owner. */
-    current: boolean;
-    mayRepair: boolean;
-    repair: SessionReadinessRepairV1 | null;
-}>): SessionCredentialReadinessV1 {
-    if (!input.current) return { kind: 'personal', purpose: input.purpose, usable: null, repair: null };
-    const selected = resolveConnectedAccountPurposeSelectedAccountV1(input);
-    const authentication = selected ? input.readAuthentication?.(selected.ref.service) : null;
-    const usable = selected ? authentication ? isQualifiedConnectedAccountProfileUsableV4({
-        profile: selected, authentication, now: input.now,
-    }) : null : false;
-    return { kind: 'personal', purpose: input.purpose, usable,
-        repair: usable === false && input.mayRepair ? input.repair : null };
-}
+export { readSessionTeamCredentialReadiness, readSessionPersonalCredentialReadiness } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 
 /** Projects the existing entitled repair without re-deciding credential or Agent readiness. */
 export function readSessionReadinessRepair(readiness: SessionReadinessV1): SessionReadinessRepairV1 | null {

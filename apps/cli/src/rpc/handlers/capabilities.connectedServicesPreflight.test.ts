@@ -374,7 +374,7 @@ describe('capabilities.invoke connected-service preflight', () => {
         secrets: { admit: async () => undefined, has: async () => false, read: async () => null },
       },
     });
-    const purposeRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+    const createPurposeRuntime = () => createDaemonConnectedAccountPurposeBindingRuntime({
       reloadController: pluginReloadController, establishedRuntimeOwner: established,
       resolveQualifiedConnectedAccountV4Support: () => 'advertised',
       qualifiedApi: {
@@ -392,6 +392,7 @@ describe('capabilities.invoke connected-service preflight', () => {
         subscribe: () => ({ dispose() {} }),
       },
     });
+    const purposeRuntime = createPurposeRuntime();
     phase = 'admit plugin runtime';
     const selectedPluginIds = ['happier.agent.codex', 'happier.agent.opencode', ...(targetId === 'external' ? [SAMPLE_PLUGIN_ID] : [])];
     const lease = await pluginReloadController.acquireRuntimeRegistry({
@@ -553,9 +554,14 @@ describe('capabilities.invoke connected-service preflight', () => {
       invocationContext: { cwd: tempDir, environment: {}, providerBindingActive: false },
       trackedSession: { pid: 123, startedBy: 'daemon' as const, happySessionId: 'selected-codex-review' },
       isCurrent: async () => true };
+    const requesterPurposeRuntime = createPurposeRuntime();
     const snapshots = createRunnerExecutionRunSnapshots({ machineId: 'selected-machine', controller: pluginReloadController,
+      // A Session requester has its own Account runtime, even on the same Home.
+      // Activation and credential materialization must use that same owner.
       withNativeModelAccount: async (_context, read) => read({ accountSettings: {}, promptCredentials: credentials,
-        preflightDependencies: { createApiClient: async () => api, activatePurposeBindings: purposeRuntime.activatePurposeBindings } }),
+        preflightDependencies: { createApiClient: async () => api,
+          activatePurposeBindings: requesterPurposeRuntime.activatePurposeBindings,
+          connectedAccountsOwner: requesterPurposeRuntime.owner } }),
     });
     const dispatch = async (operation: unknown, snapshotId?: string) => AgentRuntimeDaemonServiceResponseV1Schema.parse(
       await snapshots.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,

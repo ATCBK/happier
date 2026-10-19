@@ -5,15 +5,25 @@ import { areServerAccountScopesEqual, serverAccountScopeKeySuffix, type ServerAc
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createUiSessionStatusGet } from '@/sync/ops/actions/sessionStatusAction';
 import { readSessionReadinessRepair } from './sessionReadinessViewModel';
+import type { QualifiedConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
+import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
 
 /** Opened Bot/People/picker detail only: the status owner assembles all facts, with explicit retry. */
 export function useSessionReadiness(input: Readonly<{
     accountLifetime: ServerAccountScopeLifetime;
     sessionId: string;
     enabled: boolean;
+    operation?: SessionReadinessV1['operation'];
+    credentialPurpose?: QualifiedConnectedAccountPurposeV1;
+    credentialTeamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1;
 }>) {
     const { accountLifetime, sessionId } = input;
-    const key = JSON.stringify([serverAccountScopeKeySuffix(accountLifetime.scope), sessionId]);
+    const operation = input.operation ?? 'conversation';
+    const credentialPurposeKey = JSON.stringify(input.credentialPurpose ?? null);
+    const credentialPurpose = React.useMemo(() => input.credentialPurpose, [credentialPurposeKey]);
+    const credentialTeamSelectionKey = JSON.stringify(input.credentialTeamSelection ?? null);
+    const credentialTeamSelection = React.useMemo(() => input.credentialTeamSelection, [credentialTeamSelectionKey]);
+    const key = JSON.stringify([serverAccountScopeKeySuffix(accountLifetime.scope), sessionId, operation, credentialPurposeKey, credentialTeamSelectionKey]);
     const [state, setState] = React.useState<Readonly<{
         key: string; readiness: SessionReadinessV1 | null; loading: boolean; unavailableReason: string | null;
     }>>({ key, readiness: null, loading: false, unavailableReason: null });
@@ -41,18 +51,21 @@ export function useSessionReadiness(input: Readonly<{
                 throw new Error('action_account_scope_changed');
             }
             const result = SessionStatusActionResultV1Schema.parse(await createUiSessionStatusGet(account, { refreshReadiness: force })({
-                sessionId, serverId: accountLifetime.scope.serverId, readiness: true, signal: controller.signal,
+                sessionId, serverId: accountLifetime.scope.serverId, readiness: true, operation,
+                ...(credentialPurpose ? { credentialPurpose } : {}), signal: controller.signal,
+                ...(credentialTeamSelection ? { credentialTeamSelection } : {}),
             }));
             if (!current()) return;
-            setState({ key, readiness: result.ok === false ? null : result.readiness ?? null, loading: false,
-                unavailableReason: result.ok === false ? result.code : null });
+            const requested = result.ok !== false && result.readiness?.operation === operation;
+            setState({ key, readiness: requested ? result.readiness ?? null : null, loading: false,
+                unavailableReason: result.ok === false ? result.code : requested ? null : 'unsupported' });
         } catch {
             if (current()) setState({ key, readiness: null, loading: false, unavailableReason: 'unavailable' });
         } finally {
             account?.dispose();
             if (request.current === controller) request.current = null;
         }
-    }, [accountLifetime, enabled, key, sessionId]);
+    }, [accountLifetime, enabled, key, sessionId, operation, credentialPurpose, credentialTeamSelection]);
     React.useEffect(() => {
         if (enabled) void read(false);
         return () => { request.current?.abort(); };

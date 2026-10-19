@@ -3,8 +3,8 @@ import {
 } from '@happier-dev/agents';
 import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
-import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { TeamCredentialResourceEntitledPageV1Schema, resolveTeamResourceConnectedServiceSelectionV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
+import { buildQualifiedPluginContributionKey, parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { projectAgentConnectedAccountPurposeDefaultsToSessionBindings, resolveAgentConnectedAccountPurposeDefaults } from '@happier-dev/protocol/account/settings/connected-services';
 import type { ActionExecutorDeps, AgentConnectedAccountPurposeDefault, QualifiedConnectedAccountPurposeV1, ConnectedServiceBindingSelectionV1, ConnectedServiceBindingSelectionV2, ConnectedServiceBindingsV2, TeamCredentialResourceCatalogEntryV1, TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol';
 import { SessionTeamCredentialBindingIntentsV1Schema, sessionTeamCredentialSlotKeyV1 } from '@happier-dev/protocol/teams/credentials/sessionBindingIntentV1';
@@ -319,27 +319,13 @@ function resolveCurrentTeamResourceDefault(params: Readonly<{
   if (!catalog) return null;
   const serviceIds = typeof params.serviceId === 'string' ? [params.serviceId] : params.serviceId;
 
-  const resource = catalog.resources.find((candidate) => (
-    candidate.id === selection.resourceId
-    && candidate.teamId === params.teamId
-    && candidate.readiness.kind === 'available'
-    && candidate.sourcePresentation?.kind === 'connected_service'
-    && serviceIds.includes(buildQualifiedPluginContributionKey(candidate.sourcePresentation.service))
-  ));
-  if (!resource) return null;
-
-  const offeredSelection = resource.connectedServiceSelections.find((offered) => {
-    if (
-      offered.resourceId !== selection.resourceId
-      || offered.deliveryMode !== selection.deliveryMode
-    ) return false;
-    if (offered.deliveryMode === 'brokered') return true;
-    if (selection.deliveryMode !== 'direct') return false;
-    return offered.disclosedMember.accountId === selection.disclosedMember.accountId
-      && offered.disclosedMember.service.pluginId === selection.disclosedMember.service.pluginId
-      && offered.disclosedMember.service.localId === selection.disclosedMember.service.localId;
-  });
-  return offeredSelection ? { resource, selection: offeredSelection } : null;
+  const services = serviceIds.map(parseQualifiedPluginContributionKey).filter(service => service !== null);
+  for (const resource of catalog.resources) {
+    if (resource.readiness.kind !== 'available') continue;
+    const offeredSelection = resolveTeamResourceConnectedServiceSelectionV1({ resource, teamId: params.teamId, selection, services });
+    if (offeredSelection) return { resource, selection: offeredSelection };
+  }
+  return null;
 }
 
 /**

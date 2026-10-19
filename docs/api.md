@@ -2813,11 +2813,18 @@ confirmation policy, not actor authority or execution credentials. See
 
 `session.status.get` accepts `{sessionId,readiness:true}`. The optional `readiness`
 result distinguishes saved configuration from `ready`, `unavailable` and `unknown`,
-with operation, Machine/Agent evidence, invocation access and cause. The current
-CLI reader reports conversation readiness only, with credential `not_required`;
-it does not certify an outward write or perform sign-in/repair. A result without
-readiness is not evidence of readiness. These are development contracts; the
-corresponding bylines and People/Bot presentation are still being integrated.
+with operation, Machine/Agent evidence, invocation access and cause. Omitted
+`operation` means conversation, with credential `not_required`. Requesting
+`operation:'credential'` and a qualified `credentialPurpose` reads the existing
+personal purpose binding. A Team operation also supplies the existing qualified
+`credentialTeamSelection` from its setup owner; the current declaration and
+entitled catalog must still offer that exact binding for the same purpose. Missing or
+inaccessible binding evidence stays unknown, including another Account's private
+setup; the viewer's credentials cannot stand in for it. A result without the
+requested readiness is not evidence of readiness. This diagnostic performs no
+sign-in/repair and grants no outward-write authority. These are development
+contracts; the corresponding bylines and People/Bot presentation are still being
+integrated.
 
 ## Implementation references
 - API routes: `apps/server/sources/app/api/routes`

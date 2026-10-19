@@ -25,3 +25,17 @@ it('reads configured versus denied invocation through the registered exact-Home 
   if (result.ok) expect(SessionStatusActionResultV1Schema.parse(result.result)).toEqual(result.result);
   expect(homes.requests.filter(request => request.path.startsWith('/v1/machines'))).toHaveLength(0);
 });
+
+it('retains the requested credential operation without borrowing the viewing Account setup', async () => {
+  const serverId = await homes.addHome({ name: 'Readiness', serverUrl: 'https://readiness.test', accountId: 'bob', currentAccount: true });
+  const session = createSessionFixture({ id: 'shared-bot', encryptionMode: 'plain', access: createSessionAccessFixture('view') });
+  homes.answer(serverId, `/v2/sessions/${session.id}`, { body: createPlainSessionByIdResponseFixture(session) });
+  const result = await createDefaultActionExecutor().execute('session.status.get', { sessionId: session.id, readiness: true,
+    operation: 'credential', credentialPurpose: { consumer: { pluginId: 'acme.external', localId: 'helper' }, purpose: 'outside-write' } },
+  { surface: 'ui', serverId, expectedAccountId: 'bob' });
+  expect(result).toMatchObject({ ok: true, result: { readiness: {
+    operation: 'credential', credential: { kind: 'unknown' }, status: 'unavailable', cause: 'invocation',
+  } } });
+  if (result.ok) expect(SessionStatusActionResultV1Schema.parse(result.result)).toEqual(result.result);
+  expect(homes.requests.filter(request => request.path === '/v1/account/profile')).toHaveLength(0);
+});

@@ -20,6 +20,8 @@ import { Text } from '@/components/ui/text/Text';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { useMachineDisplayNamesById, useSessionSelector } from '@/sync/store/hooks';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
 import { seedNewDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
@@ -32,7 +34,7 @@ const GLYPH_SIZE_PX = 14;
  * button opens the page that runs that exact Action with its continuation, rather than starting an
  * attempt nobody here could complete.
  */
-export function useOpenSessionReadinessRepair() {
+export function useOpenSessionReadinessRepair(scope: ServerAccountScope) {
   const router = useRouter();
   return React.useCallback(
     (repair: SessionReadinessRepairV1) => {
@@ -42,13 +44,19 @@ export function useOpenSessionReadinessRepair() {
           params: {
             agentId: repair.input.agentId,
             machineId: repair.input.machineId,
+            serverIdentityId: resolvePortableServerIdentityForRoutingId(scope.serverId) ?? undefined,
           },
         } as never);
         return;
       }
-      router.push({ pathname: '/(app)/settings/connected-services' } as never);
+      router.push({ pathname: '/(app)/settings/connected-services/connect', params: {
+        service: buildQualifiedPluginContributionKey(repair.input.account.service),
+        accountId: repair.input.account.accountId, machineId: repair.input.machineId,
+        serverIdentityId: resolvePortableServerIdentityForRoutingId(scope.serverId) ?? undefined,
+        expectedAccountId: scope.accountId,
+      } } as never);
     },
-    [router],
+    [router, scope.serverId, scope.accountId],
   );
 }
 
@@ -114,7 +122,7 @@ export const SessionReadinessChecklist = React.memo(function SessionReadinessChe
     return { accountId: profile?.id ?? null, name, botName: session ? getSessionName(session, props.scope.serverId) : null };
   }));
   const router = useRouter();
-  const openRepair = useOpenSessionReadinessRepair();
+  const openRepair = useOpenSessionReadinessRepair(props.scope);
   const { repair, guidance, cause } = props.presentation;
   // Someone else's Bot: name who can fix it, and offer to ask them in a Discussion about this Bot.
   const ownerName = owner.accountId && owner.accountId !== props.scope.accountId ? owner.name : null;

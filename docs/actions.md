@@ -73,11 +73,15 @@ In 0.3 development source, `session.status.get {sessionId, readiness: true}`
 adds an operation-scoped diagnostic to the ordinary readable status. It composes
 the existing qualified Machine reachability, Agent inventory/sign-in and invocation
 grant facts. Omitted, stale or unread prerequisites remain unknown; a configured
-Session is not proof that it can execute. The status read describes conversation
-readiness, not readiness for an outside write. People/picker data can additionally
-compose the selected credential owner's purpose usability or Team resource
-readiness for the corresponding operation; an optional integration does not veto
-ordinary conversation.
+Session is not proof that it can execute. The default operation is conversation.
+For a credential operation, callers additionally supply `operation: 'credential'`
+and its qualified `credentialPurpose`. Personal operations read their selected
+purpose binding. A Team operation also carries the setup owner's exact
+`credentialTeamSelection`; the status owner checks that selection against the
+current declaration and entitled resource catalog. It never substitutes the
+viewer's setup for another Account's binding;
+inaccessible or incomplete evidence stays unknown. An optional integration does
+not veto ordinary conversation, and a diagnostic never grants write authority.
 
 Detail reads are explicit, using the existing inventory owner, without a new
 poller or readiness cache. Entitled repair opens the existing exact Agent sign-in
@@ -5541,12 +5545,16 @@ and Waive remain surface-specific policy choices (currently **Ask first** and
 permission to accept a Doc proposal.
 
 `session.status.get` with `{sessionId,readiness:true}` adds an explicit diagnostic
-from the current Machine/Agent inventory and invocation access. The current CLI
-producer reports `operation:'conversation'`, `configured:true`, and
-`status:'ready'|'unavailable'|'unknown'` with a cause. Saved configuration alone
-does not prove readiness; incomplete evidence stays unknown. This read performs
-no repair and certifies neither credential use nor an outward write. Each effect
-still rechecks its own authority. People/Bot readiness rendering remains in progress.
+from the current Machine/Agent inventory and invocation access. It defaults to
+`operation:'conversation'`; `operation:'credential'` with a qualified
+`credentialPurpose` additionally reads the operation's actual selected credential
+through its personal purpose owner. A Team operation supplies the existing
+qualified `credentialTeamSelection` from its setup selection, checked against the
+same purpose, current declaration and entitled catalog. The result reports
+`configured:true` and `status:'ready'|'unavailable'|'unknown'` with a cause.
+Saved configuration alone does not prove readiness; inaccessible or incomplete
+evidence stays unknown. This read performs no repair. Each effect still rechecks
+its own authority and binding. People/Bot readiness rendering remains in progress.
 
 ## Related
 
