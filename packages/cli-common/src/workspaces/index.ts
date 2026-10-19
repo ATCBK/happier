@@ -971,9 +971,10 @@ function assertMaterializedPrepublicationWorkspaceClosure(params: Readonly<{
 }
 
 /**
- * Materialize marked, flattened prepublication packages into caller-selected
- * transient author roots. Their preserved package manifests declare the internal
- * closure; the host publisher never performs this nesting in its own tree.
+ * Materialize requested public prepublication packages and their satisfying
+ * public runtime dependencies/peers, returning the materialized root names.
+ * Explicit bundled dependencies retain their nested closure; the host publisher
+ * never performs this nesting in its own tree.
  */
 export function materializePrepublicationWorkspacePackageRoots(params: Readonly<{
   bundles: ReadonlyArray<WorkspacePackageBundle>;
