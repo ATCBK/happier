@@ -1192,6 +1192,7 @@ const pt: BoardsTranslations = {
         unavailable: 'Indisponível',
         unavailableBody: 'A Home dele não está conectada neste dispositivo. Ele continua no quadro.',
         notLoaded: 'Ainda não carregado',
+        readFailed: 'Não foi possível ler esta sessão. Continua no quadro.',
         remove: 'Remover do quadro',
         moveHint: 'As teclas de seta movem este cartão na grade.',
         moved: ({ x, y }) => `Movido para ${x}, ${y}`,

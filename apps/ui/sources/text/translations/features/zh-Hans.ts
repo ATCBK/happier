@@ -1187,6 +1187,7 @@ const zhHans: BoardsTranslations = {
         unavailable: '不可用',
         unavailableBody: '它的 Home 未在此设备上连接。它会保留在面板上。',
         notLoaded: '尚未加载',
+        readFailed: '无法读取此会话。它仍保留在看板上。',
         remove: '从面板移除',
         moveHint: '方向键可在网格上移动此卡片。',
         moved: ({ x, y }) => `已移动到 ${x}, ${y}`,

@@ -1192,6 +1192,7 @@ const es: BoardsTranslations = {
         unavailable: 'No disponible',
         unavailableBody: 'Su Home no está conectada en este dispositivo. Se queda en el tablero.',
         notLoaded: 'Aún no se ha cargado',
+        readFailed: 'No se pudo leer esta sesión. Sigue en el tablero.',
         remove: 'Quitar del tablero',
         moveHint: 'Las teclas de flecha mueven esta tarjeta por la cuadrícula.',
         moved: ({ x, y }) => `Movida a ${x}, ${y}`,

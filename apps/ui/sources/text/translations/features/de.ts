@@ -1186,6 +1186,7 @@ const de: BoardsTranslations = {
         unavailable: 'Nicht verfügbar',
         unavailableBody: 'Das zugehörige Home ist auf diesem Gerät nicht verbunden. Das Element bleibt auf dem Board.',
         notLoaded: 'Noch nicht geladen',
+        readFailed: 'Diese Sitzung konnte nicht gelesen werden. Sie bleibt auf dem Board.',
         remove: 'Vom Board entfernen',
         moveHint: 'Mit den Pfeiltasten verschiebst du diese Karte im Raster.',
         moved: ({ x, y }) => `Verschoben nach ${x}, ${y}`,

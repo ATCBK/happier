@@ -1192,6 +1192,7 @@ const it: BoardsTranslations = {
         unavailable: 'Non disponibile',
         unavailableBody: 'La sua Home non è connessa su questo dispositivo. Resta sulla bacheca.',
         notLoaded: 'Non ancora caricato',
+        readFailed: 'Non è stato possibile leggere questa sessione. Rimane sulla bacheca.',
         remove: 'Rimuovi dalla bacheca',
         moveHint: 'I tasti freccia spostano questa scheda sulla griglia.',
         moved: ({ x, y }) => `Spostata in ${x}, ${y}`,

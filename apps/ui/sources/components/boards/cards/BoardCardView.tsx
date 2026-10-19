@@ -167,8 +167,9 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
                     {card.status.word}
                 </Text>}
             </View>
-            {/* A settled unavailable card is already titled by its kind; the line would only repeat it. */}
-            {unavailable && !loading ? null : <View style={styles.metaRow}>
+            {/* A settled unavailable card, and an unreadable Session (its detail is the reason it cannot be named),
+                is already titled by its kind; the line would only repeat it. */}
+            {(unavailable && !loading) || (card.body.kind === 'session' && card.body.statusDetail !== undefined) ? null : <View style={styles.metaRow}>
                 {card.body.kind === 'session'
                     ? <SessionContext serverId={card.body.serverId} sessionId={card.body.sessionId} />
                     : <Text numberOfLines={1} style={styles.kind}>{t(`boards.kinds.${card.ref.kind}`)}</Text>}

@@ -41,6 +41,7 @@ export type BoardsTranslations = Readonly<{
         unavailable: string;
         unavailableBody: string;
         notLoaded: string;
+        readFailed: string;
         remove: string;
         moveHint: string;
         moved: (params: Readonly<{ x: number; y: number }>) => string;
@@ -177,6 +178,7 @@ export const en: BoardsTranslations = {
         unavailable: 'Unavailable',
         unavailableBody: 'Its Home is not connected on this device. It stays on the board.',
         notLoaded: 'Not loaded yet',
+        readFailed: 'This Session couldn’t be read. It stays on the board.',
         remove: 'Remove from board',
         moveHint: 'Arrow keys move this card on the grid.',
         moved: ({ x, y }) => `Moved to ${x}, ${y}`,

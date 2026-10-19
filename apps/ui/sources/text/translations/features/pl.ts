@@ -1202,6 +1202,7 @@ const pl: BoardsTranslations = {
         unavailable: 'Niedostępne',
         unavailableBody: 'Jego Home nie jest połączony na tym urządzeniu. Element zostaje na tablicy.',
         notLoaded: 'Jeszcze nie wczytano',
+        readFailed: 'Nie udało się odczytać tej sesji. Pozostaje na tablicy.',
         remove: 'Usuń z tablicy',
         moveHint: 'Klawisze strzałek przesuwają tę kartę po siatce.',
         moved: ({ x, y }) => `Przesunięto do ${x}, ${y}`,

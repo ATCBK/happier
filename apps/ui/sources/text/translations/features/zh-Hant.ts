@@ -1187,6 +1187,7 @@ const zhHant: BoardsTranslations = {
         unavailable: '無法使用',
         unavailableBody: '它的 Home 未在此裝置上連線。它會保留在面板上。',
         notLoaded: '尚未載入',
+        readFailed: '無法讀取此工作階段。它仍保留在看板上。',
         remove: '從面板移除',
         moveHint: '方向鍵可在格線上移動此卡片。',
         moved: ({ x, y }) => `已移動到 ${x}, ${y}`,

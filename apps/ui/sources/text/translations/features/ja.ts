@@ -1192,6 +1192,7 @@ const ja: BoardsTranslations = {
         unavailable: '利用できません',
         unavailableBody: 'この項目の Home はこのデバイスに接続されていません。ボードには残ります。',
         notLoaded: 'まだ読み込まれていません',
+        readFailed: 'このセッションを読み込めませんでした。ボードには残ります。',
         remove: 'ボードから外す',
         moveHint: '矢印キーでこのカードをグリッド上で動かせます。',
         moved: ({ x, y }) => `${x}, ${y} に移動しました`,

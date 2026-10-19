@@ -1192,6 +1192,7 @@ const fr: BoardsTranslations = {
         unavailable: 'Indisponible',
         unavailableBody: 'Son Home n\'est pas connecté sur cet appareil. Il reste sur le tableau.',
         notLoaded: 'Pas encore chargé',
+        readFailed: 'Cette session n’a pas pu être lue. Elle reste sur le tableau.',
         remove: 'Retirer du tableau',
         moveHint: 'Les touches fléchées déplacent cette carte sur la grille.',
         moved: ({ x, y }) => `Déplacée en ${x}, ${y}`,

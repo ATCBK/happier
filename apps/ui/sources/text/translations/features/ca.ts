@@ -1192,6 +1192,7 @@ const ca: BoardsTranslations = {
         unavailable: 'No disponible',
         unavailableBody: 'La seva Home no està connectada en aquest dispositiu. Es queda al tauler.',
         notLoaded: 'Encara no s\'ha carregat',
+        readFailed: 'No s’ha pogut llegir aquesta sessió. Es manté al tauler.',
         remove: 'Treu del tauler',
         moveHint: 'Les tecles de fletxa mouen aquesta targeta per la graella.',
         moved: ({ x, y }) => `Mogut a ${x}, ${y}`,

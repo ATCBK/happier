@@ -212,13 +212,16 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
             const sessionFacts = readSessionWorkStatusFacts(row, facts.nowMs);
             const readable = sessionFacts.awareness.encryption !== undefined
                 && isSessionAwarenessContentReadableV1(sessionFacts.awareness.encryption);
+            // An unreadable Session has no name to show: it is titled by its kind, like every other
+            // settled unavailable card, and gives one reason (its own, else that it cannot be read).
             return {
                 ...base,
-                title: getSessionName(row, serverId),
+                title: readable ? getSessionName(row, serverId) : t('boards.kinds.session'),
                 status: resolveWorkStatusTone({ kind: 'session', facts: { ...sessionFacts,
                     word: readable ? sessionFacts.word : t('boards.card.unavailable') } }),
                 body: { kind: 'session', serverId, sessionId: id,
-                    ...(!readable && sessionFacts.awareness.encryption !== 'unknown' ? { statusDetail: sessionFacts.word } : {}) },
+                    ...(readable ? {} : { statusDetail: sessionFacts.awareness.encryption === 'unknown'
+                        ? t('boards.card.readFailed') : sessionFacts.word }) },
             };
         }
         case 'workflow_run': {

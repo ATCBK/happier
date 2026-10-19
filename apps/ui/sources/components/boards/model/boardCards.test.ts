@@ -157,6 +157,19 @@ describe('board cards', () => {
         });
         expect(card?.status).toMatchObject({ bucket: 'idle', tone: 'neutral', word: 'boards.card.unavailable' });
         expect(card?.body).toMatchObject({ kind: 'session', statusDetail: 'session.access.unavailable' });
+        // No readable title exists, so the card is named by its kind rather than by a placeholder session name.
+        expect(card?.title).toBe('boards.kinds.session');
+    });
+    it('gives an unreadable Session of unknown state one reason instead of a bare Unavailable', () => {
+        const row = createSessionListRenderableSessionFixture({ ...permissionSession, metadata: null,
+            encryptionMode: 'e2ee', encryptedContentAvailability: null });
+        const [card] = buildBoardCards([member({ kind: 'session', qualifiedId: { serverId: 'home-a', id: row.id } })], {
+            nowMs: NOW, session: () => row, workflowRun: () => null, machine: () => null,
+            workflow: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+        });
+        expect(card?.title).toBe('boards.kinds.session');
+        expect(card?.status.word).toBe('boards.card.unavailable');
+        expect(card?.body).toMatchObject({ kind: 'session', statusDetail: 'boards.card.readFailed' });
     });
     it('reprojects unchanged Session sources when the canonical status freshness deadline passes', () => {
         const members = [member({ kind: 'session', qualifiedId: { serverId: 'home-a', id: permissionSession.id } })];

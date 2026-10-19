@@ -111,12 +111,6 @@ describe('Board body facts', () => {
         expect(count(groupedNeedsYou.getTextContent(), 'Interrupted')).toBe(1);
     });
 
-    it('in a status group, keeps what a needs-you card waits for and drops a healthy word the group already says', async () => {
-        const session = (word: string, tone: 'attention' | 'neutral', bucket: 'needs_you' | 'idle'): BoardCard => ({
-            key: `session:${word}`, ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: word } }, picked: true,
-            availability: 'ready', title: 'Checkout UI retry states', status: { bucket, tone, word },
-            body: { kind: 'session', serverId: 'home-a', sessionId: word } });
-        const screen = await renderScreen(<>
     it('says a settled unavailable item once: the kind as its title, one status word and one reason, with no placeholder or repeated kind', async () => {
         const card = buildBoardCards([{ key: 'gone', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-gone' } },
             picked: true, sourced: false, available: true }], {
@@ -132,6 +126,21 @@ describe('Board body facts', () => {
         expect(text).not.toContain('boards.card.untitled');
         expect(text).not.toContain('boards.card.notLoaded');
     });
+    it('says an unreadable Session once too: titled by its kind, one status word and one reason, no second kind line', async () => {
+        const card: BoardCard = { key: 'locked', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-locked' } }, picked: true,
+            availability: 'ready', title: 'boards.kinds.session', status: { bucket: 'idle', tone: 'neutral', word: 'boards.card.unavailable' },
+            body: { kind: 'session', serverId: 'home-a', sessionId: 's-locked', statusDetail: 'boards.card.readFailed' } };
+        const text = (await renderScreen(<BoardCardView card={card} />)).getTextContent();
+        expect(text.split('boards.kinds.session')).toHaveLength(2);
+        expect(text.split('boards.card.unavailable')).toHaveLength(2);
+        expect(text.split('boards.card.readFailed')).toHaveLength(2);
+    });
+    it('in a status group, keeps what a needs-you card waits for and drops a healthy word the group already says', async () => {
+        const session = (word: string, tone: 'attention' | 'neutral', bucket: 'needs_you' | 'idle'): BoardCard => ({
+            key: `session:${word}`, ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: word } }, picked: true,
+            availability: 'ready', title: 'Checkout UI retry states', status: { bucket, tone, word },
+            body: { kind: 'session', serverId: 'home-a', sessionId: word } });
+        const screen = await renderScreen(<>
             <BoardCardView card={session('Permission required', 'attention', 'needs_you')} showStatusWord={false} />
             <BoardCardView card={session('Idle', 'neutral', 'idle')} showStatusWord={false} />
         </>);
