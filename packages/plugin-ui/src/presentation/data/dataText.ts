@@ -86,7 +86,7 @@ export function useHappierDataTextStyles(theme: HappierUiTheme): HappierDataText
       strong: { ...semiBold(body), color: theme.colors.text },
       caption: { ...caption, color: theme.colors.mutedText },
       captionStrong: { ...semiBold(caption), color: theme.colors.text },
-      header: { ...label, color: theme.colors.mutedText },
+      header: { ...label, color: theme.colors.secondaryText },
       locale: localization?.locale,
     };
   }, [localization?.locale, theme, typography]);
