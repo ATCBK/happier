@@ -16,22 +16,23 @@ import { HappyError } from '@/utils/errors/errors';
 const NO_MESSAGES: never[] = [];
 const ANSWERING_METADATA = { path: '/dev', host: 'dev', flavor: 'claude' } as const;
 const ANSWERING_INTERACTION = { canSendMessages: true, canApprovePermissions: true } as const;
+const ANSWERING_AGENT_STATE = { requests: { 'perm-ask-1': { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 1 } } } as const;
 
 export default function Tools2Screen() {
     const [selectedExample, setSelectedExample] = useState<string>('all');
     const demoSource = useDemoMessages(NO_MESSAGES);
-    // `?answer=unknown` lets the pending permission cards answer, and every answer is lost: the unconfirmed state, specimen-only.
+    // `?answer=unknown` lets the pending permission and question cards answer, and every answer is lost: the unconfirmed state, specimen-only.
     const { answer } = useLocalSearchParams<{ answer?: string }>();
     const transcriptSource = useMemo(() => {
         if (answer !== 'unknown') return demoSource;
         const actions: SessionTranscriptActions = {
             respondToPermission: async () => { throw new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }); },
-            answerUserAction: async () => {},
+            answerUserAction: async () => { throw new HappyError('The outcome is unknown', false, { code: RPC_ERROR_CODES.OUTCOME_UNKNOWN }); },
             abort: async () => {},
             submitMessage: async () => {},
-            refreshRequests: () => new Promise((resolve) => { setTimeout(resolve, 600); }),
+            readRequestOutcome: () => new Promise((resolve) => { setTimeout(() => resolve('pending'), 600); }),
         };
-        return { ...demoSource, useInteraction: () => ANSWERING_INTERACTION, actions };
+        return { ...demoSource, useInteraction: () => ANSWERING_INTERACTION, useAgentState: () => ANSWERING_AGENT_STATE, actions };
     }, [answer, demoSource]);
 
     // Example tool calls data - matching ToolCall interface

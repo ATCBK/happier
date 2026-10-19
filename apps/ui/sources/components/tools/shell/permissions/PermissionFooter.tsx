@@ -1,6 +1,6 @@
 import { Typography } from '@/constants/Typography';
-import { log } from '@/log';
 import { McpAlwaysAllowDecision } from './McpAlwaysAllowDecision';
+import { PermissionAnswerUnconfirmedNotice } from './PermissionAnswerUnconfirmedNotice';
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { formatPermissionRequestSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { SessionPermissionDecisionActorV1 } from '@happier-dev/protocol/sessions/permissions/v1';
@@ -27,11 +27,11 @@ import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Icon } from '@/components/ui/icons/Icon';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import {
     clearPermissionAnswerUnconfirmed,
     isPermissionAnswerUnconfirmed,
     markPermissionAnswerUnconfirmed,
+    permissionAnswerRequestKey,
     readPermissionActionDisposition,
     recordPermissionActionFailure,
     usePermissionAnswerUnconfirmed,
@@ -255,31 +255,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 12,
         flexShrink: 1,
     },
-    answerUnconfirmed: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: theme.space.s6,
-        alignSelf: 'flex-start',
-        maxWidth: '100%',
-        paddingHorizontal: theme.space.s10,
-        paddingVertical: theme.space.s6,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: theme.colors.state.warning.border,
-        backgroundColor: theme.colors.state.warning.background,
-    },
-    answerUnconfirmedMessage: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: theme.space.s6,
-        flexShrink: 1,
-    },
-    answerUnconfirmedText: {
-        color: theme.colors.state.warning.textForeground,
-        fontSize: 12,
-        flexShrink: 1,
-    },
     iconApproved: {
         color: theme.colors.permissionButton.allow.text,
     },
@@ -354,9 +329,8 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const [storedActionFailure, setStoredActionFailure] = useState<PermissionActionFailureDisplay | null>(null);
     const permissionActionInFlight = useRef<PermissionActionInFlight | null>(null);
     const isMounted = useRef(true);
-    const requestKey = [requestIdentity.originId, requestIdentity.serverId ?? '', requestIdentity.permissionId, requestIdentity.turnId ?? ''].join('\u0000');
+    const requestKey = permissionAnswerRequestKey(requestIdentity);
     const answerUnconfirmedForRequest = usePermissionAnswerUnconfirmed(requestKey);
-    const [checkingRequest, setCheckingRequest] = useState(false);
     const isCurrentRequestLoading = isSamePermissionRequest(loadingRequestIdentity, requestIdentity);
     const loadingButton = isCurrentRequestLoading ? storedLoadingButton : null;
     const loadingAllEdits = isCurrentRequestLoading && storedLoadingAllEdits;
@@ -877,46 +851,13 @@ export const PermissionFooter: React.FC<PermissionFooterProps> = ({
     const isCodexApprovedForSession = isCodexDecision && isApproved && permission.decision === 'approved_for_session';
     const isCodexApprovedExecPolicy = isCodexDecision && isApproved && permission.decision === 'approved_execpolicy_amendment';
     const isCodexAborted = isCodexDecision && isDenied && permission.decision === 'abort';
-    const checkRequestAgain = async () => {
-        const refresh = actions?.refreshRequests;
-        if (!refresh || checkingRequest) return;
-        setCheckingRequest(true);
-        try {
-            await refresh();
-            // The re-read is the authority: a request it still lists as pending was not answered, so another
-            // answer is no longer blind. One it no longer lists settles through `permission.status`.
-            clearPermissionAnswerUnconfirmed(requestKey);
-        } catch {
-            // Stay unconfirmed: nothing new is known about the answer.
-            log.log('[PermissionFooter] permission re-read failed');
-        } finally {
-            if (isMounted.current) setCheckingRequest(false);
-        }
-    };
-    const canCheckRequestAgain = actions?.refreshRequests !== undefined;
     const actionFailureNode = answerUnconfirmed ? (
-        <View
-            testID="permission-footer.answer-unconfirmed"
-            accessibilityRole="alert"
-            style={styles.answerUnconfirmed}
-        >
-            <View style={styles.answerUnconfirmedMessage}>
-                <Icon name="clock" size={14} color={theme.colors.state.warning.foreground} />
-                <Text style={styles.answerUnconfirmedText}>
-                    {t('errors.permissionAnswerUnconfirmed')}
-                </Text>
-            </View>
-            {canCheckRequestAgain ? (
-                <RoundButton
-                    testID="permission-footer.check-again"
-                    size="mini"
-                    display="secondary"
-                    title={t('errors.permissionCheckAgain')}
-                    loading={checkingRequest}
-                    onPress={checkRequestAgain}
-                />
-            ) : null}
-        </View>
+        <PermissionAnswerUnconfirmedNotice
+            requestKey={requestKey}
+            requestId={permission.id}
+            actions={executionRun === undefined ? actions : null}
+            testIDPrefix="permission-footer"
+        />
     ) : actionFailure && isPending ? (
         <View
             testID="permission-footer.action-error"

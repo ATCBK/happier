@@ -74,6 +74,16 @@ export function recordPermissionActionFailure(
  * A request leaves the set when it settles or when a re-read confirms it is still pending.
  */
 const unconfirmedAnswers = new Set<string>();
+
+/** The key one request has in the unconfirmed set, however many cards show it. */
+export function permissionAnswerRequestKey(identity: Readonly<{
+    originId: string;
+    serverId?: string | null;
+    permissionId: string;
+    turnId?: string;
+}>): string {
+    return [identity.originId, identity.serverId ?? '', identity.permissionId, identity.turnId ?? ''].join('\u0000');
+}
 const unconfirmedListeners = new Set<() => void>();
 
 function setPermissionAnswerUnconfirmed(requestKey: string, unconfirmed: boolean): void {

@@ -15,8 +15,8 @@ const ops = vi.hoisted(() => ({
     deny: vi.fn(async (..._args: unknown[]) => {}),
     abort: vi.fn(async (..._args: unknown[]) => {}),
 }));
-const refreshRequests = vi.hoisted(() => vi.fn(async () => {}));
-const renderScreen = createPermissionShellRenderer({ ...ops, refreshRequests });
+const readRequestOutcome = vi.hoisted(() => vi.fn(async (_requestId: string): Promise<'pending' | 'settled'> => 'pending'));
+const renderScreen = createPermissionShellRenderer({ ...ops, readRequestOutcome });
 
 
 const logMock = vi.hoisted(() => ({
@@ -84,8 +84,8 @@ describe('PermissionFooter action error handling', () => {
         ops.deny.mockReset();
         ops.abort.mockReset();
         logMock.log.mockReset();
-        refreshRequests.mockReset();
-        refreshRequests.mockResolvedValue(undefined);
+        readRequestOutcome.mockReset();
+        readRequestOutcome.mockResolvedValue('pending');
     });
 
     it('shows retryable feedback and resets allow loading when approval fails', async () => {
@@ -190,19 +190,48 @@ describe('PermissionFooter action error handling', () => {
             expect(findButton(other, 'permission-footer.allow').props.disabled).toBe(false);
         });
 
-        it('checks the request again and offers answering only after the re-read confirms it is still pending', async () => {
+        async function renderUnknownFooter(permissionId: string) {
             ops.approve.mockRejectedValueOnce(makeUnknown()).mockResolvedValueOnce(undefined);
-            const screen = await renderPendingFooter('p-unknown-recheck');
+            const screen = await renderPendingFooter(permissionId);
             await pressTestInstanceAsync(findButton(screen, 'permission-footer.allow'), 'allow button');
+            return screen;
+        }
+        const unconfirmedNotices = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+            screen.tree.root.findAllByProps({ testID: 'permission-footer.answer-unconfirmed' });
 
-            refreshRequests.mockRejectedValueOnce(new Error('offline'));
-            await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again (offline)');
-            expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(true);
+        it('asks for the exact request and offers answering again once the read says it is still waiting', async () => {
+            const screen = await renderUnknownFooter('p-unknown-pending');
 
             await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again');
-            expect(refreshRequests).toHaveBeenCalledTimes(2);
-            expect(screen.tree.root.findAllByProps({ testID: 'permission-footer.answer-unconfirmed' })).toHaveLength(0);
+
+            expect(readRequestOutcome).toHaveBeenCalledExactlyOnceWith('p-unknown-pending');
+            expect(unconfirmedNotices(screen)).toHaveLength(0);
             expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(false);
+        });
+
+        it('clears the unconfirmed state when the read says the request has settled', async () => {
+            readRequestOutcome.mockResolvedValueOnce('settled');
+            const screen = await renderUnknownFooter('p-unknown-settled');
+
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again');
+
+            expect(unconfirmedNotices(screen)).toHaveLength(0);
+        });
+
+        it('keeps the answer withheld, and says the check failed, when the read fails or cannot tell', async () => {
+            const screen = await renderUnknownFooter('p-unknown-unreadable');
+            readRequestOutcome.mockRejectedValueOnce(new Error('The Session does not say whether the request is still waiting'));
+
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again (unreadable)');
+
+            expect(unconfirmedNotices(screen)).toHaveLength(1);
+            expect(screen.getTextContent()).toContain('errors.permissionCheckAgainFailed');
+            expect(findButton(screen, 'permission-footer.allow').props.disabled).toBe(true);
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.allow'), 'allow while unconfirmed');
+            expect(ops.approve).toHaveBeenCalledTimes(1);
+
+            await pressTestInstanceAsync(findButton(screen, 'permission-footer.check-again'), 'check again');
+            expect(unconfirmedNotices(screen)).toHaveLength(0);
         });
     });
 });

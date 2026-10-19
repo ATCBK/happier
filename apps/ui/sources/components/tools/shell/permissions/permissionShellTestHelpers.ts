@@ -11,7 +11,7 @@ export function createPermissionShellRenderer(observers: Readonly<{
     approveWithUpdates?: RespondToPermission;
     deny?: RespondToPermission;
     abort?: SessionTranscriptActions['abort'];
-    refreshRequests?: NonNullable<SessionTranscriptActions['refreshRequests']>;
+    readRequestOutcome?: NonNullable<SessionTranscriptActions['readRequestOutcome']>;
 }> = {}) {
     return async (element: React.ReactElement) => {
         const props = element.props as Readonly<{ sessionId?: unknown; serverId?: unknown }>;
@@ -27,7 +27,7 @@ export function createPermissionShellRenderer(observers: Readonly<{
                     await observer?.(params);
                 },
                 answerUserAction: async () => {}, abort: observers.abort ?? (async () => {}), submitMessage: async () => {},
-                ...(observers.refreshRequests ? { refreshRequests: observers.refreshRequests } : {}),
+                ...(observers.readRequestOutcome ? { readRequestOutcome: observers.readRequestOutcome } : {}),
             },
         });
         const screen = await renderScreen(wrapWithSessionTranscriptSource(element, source));

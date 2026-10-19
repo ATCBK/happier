@@ -1,4 +1,8 @@
 import { sync } from '@/sync/sync';
+import { serverFetch } from '@/sync/http/client';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { createFrontDoorActionExecute, requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { HappyError } from '@/utils/errors/errors';
@@ -7,7 +11,7 @@ import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions
 import { submitSessionUserMessage } from '@/sync/domains/session/input/submitSessionUserMessage';
 import type { SessionSubmitPort, SubmitSessionUserMessageOptions, SubmitSessionUserMessageResult } from '@/sync/domains/session/input/types';
 
-import type { SessionTranscriptActions } from './types';
+import type { SessionRequestReadOutcome, SessionTranscriptActions } from './types';
 
 function requireSendSuccess(result: ActionExecuteResult) {
     requireActionSuccess(result);
@@ -60,6 +64,21 @@ export async function submitAppSessionComposerMessage(port: SessionSubmitPort, o
         wake: { attempted: false, state: 'not_needed' } };
 }
 
+/**
+ * One exact read of the Session on the Home these Actions answer on: the request is still waiting when the
+ * Session lists it, settled when the Session lists it as completed. Anything else cannot be told, so it rejects.
+ */
+async function readSessionRequestOutcome(sessionId: string, serverId: string | null, requestId: string): Promise<SessionRequestReadOutcome> {
+    const homeId = serverId ?? getActiveServerSnapshot().serverId;
+    const { session } = await runWithServerRequestAuthorityForServerAccountScope(
+        { serverId: homeId, activeRequest: serverFetch },
+        (authority) => readSessionSnapshotForAuthority({ authority, sessionId }),
+    );
+    if (session.agentState?.requests?.[requestId]) return 'pending';
+    if (session.agentState?.completedRequests?.[requestId]) return 'settled';
+    throw new Error('The Session does not say whether the request is still waiting');
+}
+
 /** The app's Session actions, shared by transcript, Companion and linked plugin approvals. */
 export function createAppSessionTranscriptActions(sessionId: string, serverId: string | null): SessionTranscriptActions {
     const execute = createFrontDoorActionExecute();
@@ -77,7 +96,7 @@ export function createAppSessionTranscriptActions(sessionId: string, serverId: s
             }, context));
         },
         abort: async () => { requireActionSuccess(await execute('session.turn.cancel', { sessionId }, context)); },
-        refreshRequests: async () => { await sync.refreshSessions(); },
+        readRequestOutcome: (requestId) => readSessionRequestOutcome(sessionId, serverId, requestId),
         submitMessage: async (text, options) => {
             // Keep the app submit owner's message-mode, wake and option-chip
             // origin semantics. Its effect runs only after Action admission.
