@@ -29,6 +29,7 @@ import {
     validateCurrentMachineSocket,
 } from "@/app/machines/validateCurrentMachineSocket";
 import { readHappierSocketData } from "./socketData";
+import { markRelayedPublisherStopRequested } from "./publisherStopRequestRelay";
 import type {
     CaptureExplicitMachineStopResult,
     createSessionPublisherPresence,
@@ -471,22 +472,30 @@ export function rpcHandler(
             };
             // Explicit machine-stop lifecycle work is independent from whether the caller
             // supplied an acknowledgement callback, so every successful forward runs it.
-            // `localTargetSocket` is the in-process target that answered; a target relayed to another
-            // instance has no local Socket and keeps its released timeout-only settlement.
-            const forwardTargetResponse = async (targetResponse: unknown, localTargetSocket: Socket | null) => {
+            // `target` is the socket that answered: an in-process Socket, or the id of a socket reached
+            // through the cluster adapter whose publisher registration lives on its owning instance.
+            const forwardTargetResponse = async (
+                targetResponse: unknown,
+                target: Readonly<{ socket: Socket }> | Readonly<{ socketId: string }>,
+            ) => {
                 const envelope = explicitMachineStopRequest
                     ? SocketRpcTransportResponseEnvelopeV1Schema.safeParse(targetResponse)
                     : null;
                 const targetResult = envelope?.success ? envelope.data.result : targetResponse;
                 const forwarded = forwardedRpcTargetResponse({ method, targetResponse: targetResult });
+                const stopPresence = ctx.sessionPublisherPresence;
                 if (
-                    localTargetSocket
+                    stopPresence
                     && forwarded.ok
                     && isSessionStopRequestMethod(method)
                     && isAcceptedSessionStopAcknowledgement(forwarded.result)
                 ) {
                     // A runner cannot report its own exit; its next disconnect closes its publisher.
-                    ctx.sessionPublisherPresence?.markPublisherStopRequested({ socket: localTargetSocket });
+                    if ("socket" in target) {
+                        stopPresence.markPublisherStopRequested({ socket: target.socket });
+                    } else {
+                        markRelayedPublisherStopRequested({ io: ctx.io, presence: stopPresence, socketId: target.socketId });
+                    }
                 }
                 if (!explicitMachineStopRequest || explicitMachineStopCapture?.status !== "captured") {
                     return forwarded;
@@ -653,7 +662,7 @@ export function rpcHandler(
                         // Evaluated before the optional call: `callback?.(await ...)` would
                         // short-circuit its argument and skip the stop lifecycle entirely
                         // when the caller emitted without an acknowledgement.
-                        const forwardedResponse = await forwardTargetResponse(response, fallbackSocket);
+                        const forwardedResponse = await forwardTargetResponse(response, { socket: fallbackSocket });
                         callback?.(forwardedResponse);
                         return;
                     }
@@ -751,10 +760,9 @@ export function rpcHandler(
                     }
                     const response = Array.isArray(responses) ? responses[0] : responses;
 
-                    // Cross-instance target: its publisher registration and disconnect handler live
-                    // on the owning instance, so an accepted killSession here cannot mark it. That
-                    // runner's exit still settles through the presence timeout.
-                    const forwardedResponse = await forwardTargetResponse(response, null);
+                    // This branch only runs with the cluster adapter enabled, so a cross-instance
+                    // target's stop request can be marked on its owning instance.
+                    const forwardedResponse = await forwardTargetResponse(response, { socketId: targetSocketId });
                     callback?.(forwardedResponse);
                     return;
                 }
@@ -828,7 +836,7 @@ export function rpcHandler(
                     ),
                 });
 
-                const forwardedResponse = await forwardTargetResponse(response, activeTargetSocket);
+                const forwardedResponse = await forwardTargetResponse(response, { socket: activeTargetSocket });
                 callback?.(forwardedResponse);
 
             } catch (error) {

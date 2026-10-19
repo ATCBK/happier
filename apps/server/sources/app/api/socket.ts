@@ -36,6 +36,7 @@ import { registerSessionRuntimeActivitySnapshotSocketEvent } from "@/app/session
 import { publishSessionPublisherLifecycleUpdate } from "@/app/session/runtimeActivity/publishPublisherLifecycleUpdate";
 import { registerUiFocusSocketEvent } from "./socket/registerUiFocusSocketEvent";
 import { readHappierSocketData } from "./socket/socketData";
+import { registerPublisherStopRequestReceiver } from "./socket/publisherStopRequestRelay";
 import { registerReleasedUiV021SessionEndSocketEvent } from "@/app/session/compatibility/registerReleasedUiV021SessionEndSocketEvent";
 
 export const DEFAULT_SOCKET_MAX_HTTP_BUFFER_SIZE = 25_000_000;
@@ -117,6 +118,11 @@ export function startSocket(app: Fastify) {
         connectTimeout: 20000,
         serveClient: false // Don't serve the client files
     });
+
+    if (shouldEnableRedisAdapter) {
+        // Another instance may relay an accepted killSession to a runner socket owned by this instance.
+        registerPublisherStopRequestReceiver({ io, presence: sessionPublisherPresence });
+    }
 
     let plannedSocketShutdownStarted = false;
 
