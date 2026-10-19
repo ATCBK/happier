@@ -1901,8 +1901,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       // whole answer, and this line would be false and a second voice for one cause.
       // Over rows, a failed connection's notice already says whose list stopped and why; the line does not repeat it.
       ? rowCount === 0 || state.failure != null ? null : { tone: 'warning' as const, pulsing: false, indicator: true, label: text('plugins.triage.surface.lastKnown', 'Showing the last known list') }
-      // Healthy is said in words only, quietly: no dot for "fine" (DESIGN.md, status vocabulary).
-      : { tone: 'muted' as const, pulsing: false, indicator: false, label: text('plugins.triage.surface.upToDate', 'Up to date') };
+      // Healthy is quiet: at rest the toolbar says nothing. A window ages past the refresh interval with nothing on
+      // screen changing, so a resting "Up to date" soon stops being true; Refresh stays one press away.
+      : null;
   const moreLabel = text('plugins.triage.surface.more', 'More');
   const activeFilterCount = facets.reduce(
     (count, facet) => count + facet.options.filter((option) => option.selected).length,
@@ -2270,6 +2271,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           accessibilityLabel={pageTitle}
           title={pageTitle}
           presentation={taskAudience !== undefined ? 'list' : collectionView === 'board' ? 'board' : 'table'}
+          // The first run is a page to read, not a list to scan: it scrolls with the page, toolbar included, so the
+          // lower sources and the steps stay reachable on a phone. A populated list keeps its one scroller.
+          {...(state.kind === 'configureSources' ? { scroll: 'page' as const } : {})}
           sort={{
             key: surface.order,
             direction: surface.order === 'oldest' ? 'ascending' : 'descending',

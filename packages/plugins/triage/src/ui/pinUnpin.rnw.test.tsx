@@ -365,7 +365,7 @@ describe('the mounted Pin/Unpin affordance', () => {
             .resolves.toEqual({ content: 'Happier cannot reach your account right now, so pins and saved views cannot be changed.' });
         await expect(shell.getByText('Replace the duplicated normalizer'))
             .resolves.toEqual({ content: 'Replace the duplicated normalizer' });
-        await expect(shell.getByText('Up to date')).resolves.toEqual({ content: 'Up to date' });
+        await expect(shell.queryByText('Showing the last known list')).resolves.toBeUndefined();
     });
 
     it('says pins are unavailable when the WRITE is refused, not just the read', async () => {
