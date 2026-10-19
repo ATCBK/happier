@@ -181,6 +181,30 @@ off. An unknown setting leaves the item untouched; failures remain visible in
 the tray and retry on the next setting observation. This reuses the existing
 login-item migration rather than adding another startup preference or writer.
 
+## Linux desktop rendering runtime
+
+In development source, the desktop release pipeline prepares WebKitGTK 2.54.1
+for AppImage bundling. The trusted Linux finalizer opts into
+`.github/actions/install-tauri-linux-dependencies`; its checksum-pinned source
+recipe builds on Ubuntu 22.04 with Clang 18 and GCC 12's standard library.
+An exact Actions cache reuses the staged SDK. Missing helpers, unresolved native
+dependencies, the wrong engine version or a newer libc ABI fail validation rather
+than falling back to the distribution engine. The AppImage artifact audit repeats
+the runtime validation after bundling.
+
+Candidate compilation keeps Ubuntu's native WebKit headers. DEB and RPM packages
+continue to use the installed distribution runtime; the SDK and additional GPU
+helper are bundled only into AppImage. Direct Tauri development commands retain
+their system-runtime behavior; the pinned runtime contract belongs to the release
+pipeline. This source change does not establish availability in a published release.
+
+WebKit can migrate IndexedDB when opening an existing desktop profile. An older
+engine may then be unable to open that database; replacing the executable does
+not reverse the migration. Follow the downgrade warning on the
+[downloads page](../apps/docs/content/docs/getting-started/get-the-apps.mdx),
+preserve pending drafts and messages, and do not delete the profile to diagnose
+rendering performance. No second storage writer or profile migration is added.
+
 ## Native computer driver (0.3 development source)
 
 The built-in `computer-cua-driver` installable descriptor owns native driver
