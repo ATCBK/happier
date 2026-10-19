@@ -31,7 +31,7 @@ import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, updateArtifactWithHeaderViaApi,
     fetchArtifactBodyRevisionsFromApi, fetchArtifactBinaryFromApi, restoreArtifactBodyRevisionViaApi, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
-import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifacts as fetchArtifactsApi, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
+import { createArtifactAccessApi, deleteArtifact as deleteArtifactApi, fetchArtifactListPage, fetchArtifactStorageUsage, encodeArtifactListCursor } from '@/sync/api/artifacts/apiArtifacts';
 import { HappyError } from '@/utils/errors/errors';
 import type { ArtifactBodyInput, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
@@ -338,7 +338,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 assertCurrent();
                 const params = await artifactParams();
                 assertCurrent();
-                const artifacts = await fetchArtifactsApi(credentials, { request, ...options });
+                const page = await fetchArtifactListPage(credentials, { request, ...options, serverId });
+                const artifacts = page.items;
                 assertCurrent();
                 // Header inventories classify content without consuming private attribution.
                 // Exact/body reads retain its validation and disclosure boundary.
@@ -365,7 +366,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const last = artifacts.at(-1);
                 const nextCursor = options.limit !== undefined && artifacts.length === options.limit && last
                     ? encodeArtifactListCursor({ artifactId: last.id, updatedAt: last.updatedAt }) : undefined;
-                return { items, coverage, ...(nextCursor ? { nextCursor } : {}) };
+                return { items, coverage, ...(page.hasUnclassified === undefined ? {} : { hasUnclassified: page.hasUnclassified }),
+                    ...(nextCursor ? { nextCursor } : {}) };
         };
         const createArtifactDocument = async ({ artifactId, header, body, savedBy, source, memoryDecisionSource, signal: operationSignal }: ArtifactCreateOperation) => {
             assertCurrent();

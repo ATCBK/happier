@@ -8582,10 +8582,16 @@ class Sync {
         if (!this.credentials) return;
         const shouldContinue = this.createServerScopeGuard();
         const inventoryScope = getActiveServerAccountScope();
-        const inventoryReadStartedWith = storage.getState().artifacts;
+        let inventoryReadStartedWith = storage.getState().artifacts;
         await this.withArtifactReadAuthority(undefined, params => fetchAndApplyArtifactsList({
             ...params,
             inventoryScope,
+            inventoryReadStartedWith,
+            changesPageLimit: this.syncTuning.changesPageLimit,
+            hydrateArtifacts: artifacts => {
+                storage.getState().applyArtifacts(artifacts);
+                inventoryReadStartedWith = storage.getState().artifacts;
+            },
             includeProvenance: this.artifactProvenanceConsumers > 0,
             shouldContinue: () => shouldContinue() && !params.signal?.aborted,
             applyArtifacts: (artifacts, source) => storage.getState().applyArtifacts(artifacts,
@@ -8882,11 +8888,14 @@ class Sync {
     }
 
     private applyTodoSocketUpdates = async (changes: any[]) => {
-        if (!this.credentials) return;
+        const target = this.getAppliedTransportTarget();
+        if (!this.credentials || !target) return;
         await applyTodoSocketUpdatesEngine({
             changes,
             credentials: this.credentials,
             encryption: this.encryption,
+            request: this.createAppliedTransportRequest(target),
+            shouldContinue: this.createAppliedTransportScopeGuard(target),
             invalidateTodosSync: () => this.todosSync.invalidate(),
         });
     }

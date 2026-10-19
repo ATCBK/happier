@@ -50,6 +50,10 @@ describe('Artifact selected HTTP read contract', () => {
       header: 'opaque', headerVersion: 1, body: 'opaque', bodyVersion: 1, publicAudience: 'none',
       dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, seq: 1, createdAt: 1, updatedAt: 1 };
     const item = { artifactId: artifact.id, ok: true, artifact, recipientCensus: null };
+    const classified = { ...item, artifact: { ...artifact, kind: 'skill' } };
+    expect(ArtifactReadBatchResponseV1Schema.parse({ items: [classified] })).toEqual({ items: [classified] });
+    expect(ArtifactReadBatchResponseV1Schema.safeParse({ items: [{ ...item, artifact: { ...artifact, kind: null } }] }).success).toBe(true);
+    expect(ArtifactReadBatchResponseV1Schema.safeParse({ items: [{ ...item, artifact: { ...artifact, kind: 'private-name' } }] }).success).toBe(false);
     expect(ArtifactReadBatchResponseV1Schema.safeParse({ items: [item] }).success).toBe(true);
     expect(ArtifactReadBatchResponseV1Schema.safeParse({ items: [{ ...item, artifactId: 'other' }] }).success).toBe(false);
     expect(ArtifactReadBatchResponseV1Schema.safeParse({ items: [{ ...item,
