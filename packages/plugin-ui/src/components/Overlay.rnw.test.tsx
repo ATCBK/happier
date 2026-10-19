@@ -62,11 +62,20 @@ function mountWithPresentationHost(children: ReactNode, renderPopover: RenderPop
   );
 }
 
+/** The scroller that keeps a long menu inside the host's height cap (its own cap within the host's). */
 function findBoundedScrollableAncestor(target: HTMLElement | undefined, maxHeight: number): HTMLElement | null {
-  const expectedMaxHeight = `${maxHeight}px`;
   for (let current = target?.parentElement ?? null; current; current = current.parentElement) {
     const style = getComputedStyle(current);
-    if (style.maxHeight === expectedMaxHeight && style.overflowY !== 'visible') return current;
+    const bound = Number.parseFloat(style.maxHeight);
+    if (Number.isFinite(bound) && bound <= maxHeight && style.overflowY !== 'visible') return current;
+  }
+  return null;
+}
+
+/** The floating Surface draws the menu's whole edge: it holds the scroller rather than scrolling inside it. */
+function findRimmedAncestor(target: HTMLElement | null): HTMLElement | null {
+  for (let current = target?.parentElement ?? null; current; current = current.parentElement) {
+    if (getComputedStyle(current).borderTopWidth === '1px') return current;
   }
   return null;
 }
@@ -167,6 +176,30 @@ describe('controlled overlay presentation', () => {
       const style = getComputedStyle(element);
       return style.outlineStyle === 'solid' && style.outlineColor === ring && style.outlineOffset === '2px';
     })).toBe(true);
+    mount.unmount();
+  });
+
+  it('draws a well icon trigger as a round resting fill, and a plain one without a fill', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Menu open={false} onOpenChange={() => undefined} trigger="More" triggerIcon="more"
+          triggerAccessibilityLabel="More" testID="plain" items={[{ id: 'a', label: 'A' }]} onSelect={() => undefined} />
+        <Menu open={false} onOpenChange={() => undefined} trigger="More" triggerIcon="more" triggerAppearance="well"
+          triggerAccessibilityLabel="More" testID="well" items={[{ id: 'a', label: 'A' }]} onSelect={() => undefined} />
+      </PluginUiProvider>,
+    );
+    const drawn = (testId: string) => {
+      const trigger = mount.container.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!;
+      return Array.from(trigger.querySelectorAll<HTMLElement>('*')).find((node) => getComputedStyle(node).borderTopLeftRadius !== '0px')!;
+    };
+    const plain = getComputedStyle(drawn('plain'));
+    const well = getComputedStyle(drawn('well'));
+    expect(plain.backgroundColor).toMatch(/^(rgba\(0, 0, 0, 0\)|transparent)$/);
+    expect(well.backgroundColor).toBe(resolveRenderedColor('backgroundColor', context.theme.colors.control));
+    // A well is a circle with no outline: the fill is its own edge.
+    expect(parseFloat(well.borderTopLeftRadius)).toBe(parseFloat(well.width) / 2);
+    expect(well.borderTopWidth).toBe('0px');
     mount.unmount();
   });
 
@@ -408,6 +441,30 @@ describe('controlled overlay presentation', () => {
     const dialog = mount.container.querySelector<HTMLElement>('[role="dialog"]');
     expect(hasProjectedSurfaceChrome(dialog)).toBe(true);
     mount.unmount();
+  });
+
+  it('asks the host material for a panel coat only when a Popover declares itself a panel, and never for a Menu', () => {
+    const floatingRoles: Array<string | undefined> = [];
+    const host: PluginUiPresentationHost = {
+      ...createPresentationHost((input) => input.content),
+      renderMaterialSurface: (input) => {
+        if (input.role === 'floating') floatingRoles.push(input.floatingRole);
+        return input.children;
+      },
+    };
+    const context = createSurfaceContext();
+    const mountOverlay = (overlay: ReactNode) => {
+      const mount = mountThroughReactNativeWeb(
+        <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+          <PluginUiPresentationHostProviderInternal host={host}>{overlay}</PluginUiPresentationHostProviderInternal>
+        </PluginUiProvider>,
+      );
+      mount.unmount();
+    };
+    mountOverlay(<Popover open onOpenChange={() => undefined} trigger="Options" triggerAccessibilityLabel="Open options" floatingRole="panel"><Text value="Panel" /></Popover>);
+    mountOverlay(<Popover open onOpenChange={() => undefined} trigger="Options" triggerAccessibilityLabel="Open options"><Text value="Small popover" /></Popover>);
+    mountOverlay(<Menu open onOpenChange={() => undefined} trigger="Options" triggerAccessibilityLabel="Open options" items={[{ id: 'one', label: 'One' }]} onSelect={() => undefined} />);
+    expect(floatingRoles).toEqual(['panel', undefined, undefined]);
   });
 
   it('uses a named controlled radio group to keep menuitemradio checks exclusive', async () => {
@@ -667,7 +724,11 @@ describe('controlled overlay presentation', () => {
 
     const rows = Array.from(mount.container.querySelectorAll<HTMLElement>('[role="menuitem"]'));
     const finalRow = rows.at(-1);
-    expect(findBoundedScrollableAncestor(finalRow, hostMaxHeight)).not.toBeNull();
+    const scroller = findBoundedScrollableAncestor(finalRow, hostMaxHeight);
+    expect(scroller).not.toBeNull();
+    // A long menu scrolls inside its rimmed Surface, so its first view ends on the Surface's own bottom
+    // edge instead of a flat cut through the content (UI1, 2026-10-16).
+    expect(findRimmedAncestor(scroller)).not.toBeNull();
 
     await act(async () => {
       rows[0]?.focus();

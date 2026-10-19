@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { SURFACE_CONTEXT_THEME_FIXTURE } from '../../../../plugin-sdk/src/ui/surfaceContext.fixture.js';
-import { IntervalTimeline } from './IntervalTimeline.js';
+import { HappierUiPlatformProvider } from '../../environment/context.js';
+import { IntervalTimeline, selectIntervalTrackRun, stepIntervalTrackRun } from './IntervalTimeline.js';
 import { OutcomeScatter } from './OutcomeScatter.js';
 
 const query = (root: HTMLElement, id: string) => root.querySelector<HTMLElement>(`[data-testid="${id}"]`);
@@ -77,6 +78,127 @@ describe('neutral intervals and outcomes', () => {
       expect(query(mount.container, 'clock-plot')!.textContent).toContain('24:00');
       act(() => query(mount.container, 'clock-select-run')!.click());
       expect(query(mount.container, 'clock-readout')!.textContent).toContain('02:40');
+    } finally { mount.unmount(); }
+  });
+
+  it('packs a lanes timeline into the fewest tracks per lane, keeping one track per run and one shared axis', () => {
+    const clock = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:00`;
+    const mount = mountThroughReactNativeWeb(<IntervalTimeline theme={SURFACE_CONTEXT_THEME_FIXTURE} testID="lanes"
+      label="Runs today" layout="lanes" laneLabel="Machine" domain={{ start: 0, end: 600 }} geometry={{ width: 800, height: 400 }}
+      formatValue={clock} ticks={[180, 360]}
+      intervals={[
+        { id: 'a1', label: 'Audit', lane: 'devbox', track: 'audit', start: 0, end: 100 },
+        { id: 'a2', label: 'Audit · waiting', lane: 'devbox', track: 'audit', start: 100, end: 140, pattern: 'hatched' },
+        { id: 'b', label: 'Refactor', lane: 'devbox', track: 'refactor', start: 200, end: 300 },
+        { id: 'c', label: 'Docs', lane: 'devbox', track: 'docs', start: 250, end: 400 },
+        { id: 'd', label: 'Probe', lane: 'laptop', track: 'probe', start: 50, end: 60 },
+      ]} />);
+    try {
+      // Two machines, each named once; ten rows of one-run-per-line would be the failure.
+      expect(query(mount.container, 'lanes-lane-0')!.textContent).toContain('devbox');
+      expect(query(mount.container, 'lanes-lane-1')!.textContent).toContain('laptop');
+      expect(query(mount.container, 'lanes-lane-2')).toBeNull();
+      // Audit (and its wait) and Refactor do not overlap and share one track; Docs overlaps Refactor.
+      expect(mount.container.querySelectorAll('[data-testid^="lanes-lane-0-track-"]')).toHaveLength(2);
+      expect(query(mount.container, 'lanes-lane-0-track-0')!.querySelector('[data-testid="lanes-interval-a2"]')).not.toBeNull();
+      expect(query(mount.container, 'lanes-lane-0-track-0')!.querySelector('[data-testid="lanes-interval-b"]')).not.toBeNull();
+      expect(query(mount.container, 'lanes-lane-0-track-1')!.querySelector('[data-testid="lanes-interval-c"]')).not.toBeNull();
+      expect(mount.container.querySelectorAll('[data-testid^="lanes-lane-1-track-"]')).toHaveLength(1);
+      expect(query(mount.container, 'lanes-axis')!.textContent).toBe('00:0003:0006:0010:00');
+      act(() => query(mount.container, 'lanes-select-c')!.click());
+      expect(query(mount.container, 'lanes-readout')!.textContent).toContain('Docs');
+      act(() => query(mount.container, 'lanes-values-toggle')!.click());
+      expect(query(mount.container, 'lanes-values-row-4')!.textContent).toContain('laptop');
+    } finally { mount.unmount(); }
+  });
+
+  it.each(['ios', 'android', 'web'] as const)('%s lanes keep honest targets: one platform-height track per line on touch, a target per run on web', platform => {
+    const intervals = [
+      { id: 'a', label: 'Run A', lane: 'devbox', start: 1, end: 7 },
+      { id: 'b', label: 'Run B', lane: 'devbox', start: 2, end: 8 },
+      { id: 'c', label: 'Run C', lane: 'devbox', start: 7.4, end: 9 },
+    ];
+    const mount = mountThroughReactNativeWeb(<HappierUiPlatformProvider platform={{ platform, colorScheme: 'light' }}>
+      <IntervalTimeline theme={SURFACE_CONTEXT_THEME_FIXTURE} testID="touch" label="Parallel work" layout="lanes"
+        domain={{ start: 0, end: 10 }} geometry={{ width: 390, height: 400 }} intervals={intervals} />
+    </HappierUiPlatformProvider>);
+    try {
+      // Packing stays by drawn marks on every platform: A and C share a track, B overlaps A.
+      const tracks = [...mount.container.querySelectorAll<HTMLElement>('[data-testid^="touch-lane-0-track-"]')];
+      expect(tracks).toHaveLength(2);
+      const trackHeight = Number.parseFloat(getComputedStyle(tracks[0]!).height);
+      const parent = getComputedStyle(tracks[0]!.parentElement!);
+      const gap = Number.parseFloat(parent.rowGap || parent.gap) || 0;
+      const bar = query(mount.container, 'touch-interval-a')!;
+      const barHeight = Number.parseFloat(getComputedStyle(bar).height);
+      const barTop = Number.parseFloat(getComputedStyle(bar).top) || 0;
+      if (platform === 'web') {
+        // A precise pointer keeps the dense track and a target per run: no touch floor is invented on web.
+        const target = query(mount.container, 'touch-select-a')!;
+        expect(Number.parseFloat(getComputedStyle(target).minHeight) || 0).toBe(0);
+        expect(trackHeight + gap).toBeLessThan(24);
+        expect(tracks[0]!.contains(target)).toBe(true);
+      } else {
+        const floor = platform === 'android' ? 48 : 44;
+        // The whole track is the one press target (press and drag along it); runs never overlap targets.
+        expect(query(mount.container, 'touch-select-a')).toBeNull();
+        expect(trackHeight).toBe(floor);
+        expect(tracks[0]!.getAttribute('role')).toBe('slider');
+        expect(tracks[0]!.getAttribute('aria-label')).toContain('devbox');
+        // A thicker visible bar, about half the track, carries the run's label where it fits.
+        expect(barHeight).toBeGreaterThanOrEqual(floor / 2 - 1);
+        expect(bar.textContent).toContain('Run A');
+      }
+      expect(barTop + barHeight).toBeLessThanOrEqual(trackHeight);
+      expect(Number.parseFloat(bar.style.left)).toBeCloseTo(10);
+      expect(Number.parseFloat(bar.style.width)).toBeCloseTo(60);
+    } finally { mount.unmount(); }
+  });
+
+  it('picks the run nearest the finger along a track and steps through runs for assistive technology', () => {
+    const track = [
+      { id: 'a', label: 'A', start: 1, end: 3 },
+      { id: 'wait', label: 'Wait', start: 3, end: 4, pattern: 'hatched' as const },
+      { id: 'c', label: 'C', start: 6, end: 9 },
+    ];
+    const domain = { start: 0, end: 10 };
+    // Inside a run selects it; between runs the nearer edge wins; a wait is part of the line, not a stop.
+    expect(selectIntervalTrackRun(track, domain, 0.2)).toBe('a');
+    expect(selectIntervalTrackRun(track, domain, 0.52)).toBe('c');
+    expect(selectIntervalTrackRun(track, domain, 0.44)).toBe('a');
+    expect(stepIntervalTrackRun(track, null, 1)).toBe('a');
+    expect(stepIntervalTrackRun(track, 'a', 1)).toBe('c');
+    expect(stepIntervalTrackRun(track, 'c', 1)).toBe('c');
+    expect(stepIntervalTrackRun(track, 'c', -1)).toBe('a');
+  });
+
+  it.each(['rows', 'lanes'] as const)('%s draw the witnessed part of a span crossing either or both domain boundaries', layout => {
+    const mount = mountThroughReactNativeWeb(<IntervalTimeline theme={SURFACE_CONTEXT_THEME_FIXTURE} testID="clip" label="Work"
+      layout={layout} domain={{ start: 0, end: 10 }} geometry={{ width: 800, height: 600 }}
+      intervals={[
+        { id: 'overnight', label: 'Night run', lane: 'devbox', start: -2, end: 5 },
+        { id: 'late', label: 'Late run', lane: 'devbox', start: 6, end: 14 },
+        { id: 'all-day', label: 'All-day run', lane: 'laptop', start: -1, end: 11 },
+        { id: 'outside', label: 'Yesterday', lane: 'laptop', start: -5, end: -2 },
+        { id: 'open-before', label: 'Open since yesterday', lane: 'laptop', start: -3, end: null },
+        { id: 'reverse', label: 'Invalid observation', lane: 'laptop', start: 7, end: 3 },
+      ]} />);
+    try {
+      const span = (id: string) => {
+        const bar = query(mount.container, `clip-interval-${id}`);
+        return bar ? [Number.parseFloat(bar.style.left || '0'), Number.parseFloat(bar.style.width)] : null;
+      };
+      expect(span('overnight')).toEqual([0, 50]);
+      expect(span('late')![0]).toBeCloseTo(60);
+      expect(span('late')![1]).toBeCloseTo(40);
+      expect(span('all-day')).toEqual([0, 100]);
+      // Nothing witnessed inside the domain: no mark, while the exact rows keep every value.
+      expect(query(mount.container, 'clip-interval-outside')).toBeNull();
+      expect(query(mount.container, 'clip-interval-open-before')).toBeNull();
+      act(() => query(mount.container, 'clip-values-toggle')!.click());
+      expect(query(mount.container, 'clip-values-row-0')!.getAttribute('aria-label')).toContain('-2');
+      expect(query(mount.container, 'clip-values-row-4')!.getAttribute('aria-label')).toContain('Unknown');
+      expect(query(mount.container, 'clip-values-row-5')!.getAttribute('aria-label')).toContain('Start: 7, End: 3');
     } finally { mount.unmount(); }
   });
 

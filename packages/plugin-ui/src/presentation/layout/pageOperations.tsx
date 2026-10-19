@@ -6,6 +6,8 @@ export type HappierPageOperation = Readonly<{
   title: string;
   testID?: string;
   destructive?: boolean;
+  /** The page's one filled action (Save, Review changes): on a phone it stays in the header, unfolded. */
+  primary?: boolean;
   disabled?: boolean;
   pending?: boolean;
   onPress: () => unknown;
@@ -51,4 +53,28 @@ export function normalizeHappierPageOperations(
     return element.props.children === undefined ? node
       : React.cloneElement(element, undefined, normalizeHappierPageOperations(element.props.children, resolveText));
   });
+}
+
+/**
+ * Takes a page's one primary operation out of its actions, so phone chrome can keep it on the header's
+ * trailing side while the remaining actions fold into the overflow. Only the first primary is taken.
+ */
+export function splitHappierPagePrimaryOperation(
+  nodes: React.ReactNode,
+  resolveText?: HappierPageOperationTextResolver,
+): Readonly<{ primary: HappierPageOperation | null; rest: React.ReactNode }> {
+  let primary: HappierPageOperation | null = null;
+  const take = (current: React.ReactNode): React.ReactNode => React.Children.map(current, node => {
+    if (primary !== null || !React.isValidElement(node)) return node;
+    const operation = readHappierPageOperation(node, resolveText);
+    if (operation) {
+      if (operation.primary !== true) return node;
+      primary = operation;
+      return null;
+    }
+    const element = node as React.ReactElement<{ children?: React.ReactNode }>;
+    return element.props.children === undefined ? node : React.cloneElement(element, undefined, take(element.props.children));
+  });
+  const rest = take(nodes);
+  return { primary, rest };
 }

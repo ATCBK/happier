@@ -1,5 +1,4 @@
 import * as React from 'react';
-import type { View } from 'react-native';
 
 import { COMPANION_DRAG_THRESHOLD_PX, COMPANION_VELOCITY_SAMPLE_WINDOW_MS } from './companionPointerDragConfig.js';
 import {
@@ -216,7 +215,7 @@ export type UseCompanionPointerDragSessionParams<TDragState> = Readonly<{
 
 export function useCompanionPointerDragSession<TDragState = never>(input: UseCompanionPointerDragSessionParams<TDragState>): {
     dragState: TDragState | null;
-    dragTargetRef: React.RefCallback<View>;
+    dragTargetRef: React.RefCallback<unknown>;
     pointerHandlers: Readonly<{ onPointerDown?: (event: unknown) => void }>;
     shouldSuppressPress: () => boolean;
 } {
@@ -391,7 +390,7 @@ export function useCompanionPointerDragSession<TDragState = never>(input: UseCom
         });
     }, [cleanupActiveDrag, endActiveDrag, handleMove]);
 
-    const dragTargetRef = React.useCallback((node: View | null) => {
+    const dragTargetRef = React.useCallback((node: unknown) => {
         attachedStartCleanupRef.current?.();
         const next = node != null && typeof node === 'object' ? node : null;
         attachedTargetRef.current = next;

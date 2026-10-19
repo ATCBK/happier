@@ -168,7 +168,7 @@ describe('plugin-ui semantic layout', () => {
       measure(700 + context.theme.spacing.small - 1);
       expect(layouts.at(-1)).toEqual({ mode: 'stacked' });
       measure(700 + context.theme.spacing.small);
-      expect(layouts.at(-1)).toEqual({ mode: 'split', listRatio: 300 / 700 });
+      expect(layouts.at(-1)).toEqual({ mode: 'split', listRatio: 300 / 700, detailWidthPx: 400 });
     } finally {
       mount.unmount();
     }

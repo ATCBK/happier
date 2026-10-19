@@ -7,6 +7,8 @@ export type HappierSurfaceGradient = Readonly<{
   locations?: readonly [number, number, ...number[]];
   start?: Readonly<{ x: number; y: number }>;
   end?: Readonly<{ x: number; y: number }>;
+  /** Paints the stops only in a fixed-height strip along one edge, so a tall surface keeps a flat middle. */
+  band?: Readonly<{ edge: 'top' | 'bottom'; height: number }>;
 }>;
 
 /** The single role/state policy. Gradients are ink overlays, never replacement fills. */
@@ -29,7 +31,8 @@ export function happierSurfaceGradientWebStyle(gradient: HappierSurfaceGradient 
   const end = gradient.end ?? { x: 0.5, y: 1 };
   const angle = Math.atan2(end.x - start.x, start.y - end.y) * 180 / Math.PI;
   const stops = gradient.colors.map((color, index) => `${color} ${(gradient.locations?.[index] ?? index / (gradient.colors.length - 1)) * 100}%`);
-  return { backgroundImage: `linear-gradient(${angle < 0 ? angle + 360 : angle}deg, ${stops.join(', ')})`, ...(clipToPaddingBox ? { backgroundClip: 'padding-box' as const } : {}) };
+  return { backgroundImage: `linear-gradient(${angle < 0 ? angle + 360 : angle}deg, ${stops.join(', ')})`, ...(clipToPaddingBox ? { backgroundClip: 'padding-box' as const } : {}),
+    ...(gradient.band ? { backgroundSize: `100% ${gradient.band.height}px`, backgroundPosition: gradient.band.edge, backgroundRepeat: 'no-repeat' as const } : {}) };
 }
 
 /** Material G's one extra grounding step for in-flow cards. Flat retains the incumbent elevation. */

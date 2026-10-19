@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildHappierSeriesPath,
   estimateHappierDataColumnWidths,
   describeHappierDataChart,
   formatHappierDataBytes,
@@ -51,6 +52,21 @@ describe('shared data presentation rules', () => {
     expect(orders).toBeGreaterThan(Math.ceil(bodyEstimate * 1.05));
   });
 
+  it('takes the measured header width when the estimate falls short, and never narrows below the estimate', () => {
+    // Live: a header of wide glyphs ("Copper" over short counts) drew as "Cop…" under a character-count estimate.
+    const input = { columns: [{ label: 'Channel' }, { label: 'Copper' }, { label: 'Iron' }], rows: [['Day', 1, 2]], characterWidth: 7.2 };
+    const estimated = estimateHappierDataColumnWidths(input);
+    const measured = estimateHappierDataColumnWidths({ ...input, measuredLabelWidths: [undefined, estimated[1]! + 20, 1] });
+    expect(measured[1]).toBe(estimated[1]! + 20);
+    expect(measured[2]).toBe(estimated[2]);
+    // The table keeps a column only if its true width fits, so measuring also narrows what a card keeps.
+    const wide = { ...input, characterWidth: 7.2, gap: 8 };
+    const fits = resolveHappierDataTableColumns({ ...wide, availableWidth: estimated[0]! + estimated[1]! + estimated[2]! + 16 });
+    expect(fits).toEqual([0, 1, 2]);
+    expect(resolveHappierDataTableColumns({ ...wide, measuredLabelWidths: [undefined, estimated[1]! + 20, undefined],
+      availableWidth: estimated[0]! + estimated[1]! + estimated[2]! + 16 })).not.toEqual([0, 1, 2]);
+  });
+
   it('names every point through the retained public chart-description helper', () => {
     expect(describeHappierDataChart('Signups per day', [{ x: 'Tue', y: 236 }, { x: 'Wed', y: 1183 }], 'en-US'))
       .toBe('Signups per day: Tue 236, Wed 1,183');
@@ -88,5 +104,34 @@ describe('shared data presentation rules', () => {
     expect([0, 1, 2].map((index) => resolveHappierSeriesRampStep(index, 3))).toEqual([0, 2, 4]);
     // Many series use every step in order, never wrapping.
     expect(Array.from({ length: 8 }, (_, index) => resolveHappierSeriesRampStep(index, 8))).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+});
+
+describe('smoothed series path', () => {
+  const segments = (path: string) => [...path.matchAll(/C([^A-Z]+)/gu)].map(match => match[1]!.trim().split(/[ ,]+/u).map(Number));
+  it('passes through every sample without overshooting and without a kink where samples join', () => {
+    // A steep rise, a near-flat step, then another rise: a clamped spline flattens one side of the middle sample.
+    const points = [{ x: 0, y: 100 }, { x: 10, y: 50 }, { x: 20, y: 48 }, { x: 30, y: 0 }, { x: 40, y: 60 }];
+    const curves = segments(buildHappierSeriesPath(points, 1));
+    expect(curves).toHaveLength(points.length - 1);
+    curves.forEach(([, c1y, , c2y, x, y], index) => {
+      const from = points[index]!; const to = points[index + 1]!;
+      expect([x, y]).toEqual([to.x, to.y]);
+      for (const control of [c1y!, c2y!]) {
+        expect(control).toBeGreaterThanOrEqual(Math.min(from.y, to.y) - 0.01);
+        expect(control).toBeLessThanOrEqual(Math.max(from.y, to.y) + 0.01);
+      }
+    });
+    for (let index = 1; index < curves.length; index += 1) {
+      const [, , c2x, c2y] = curves[index - 1]!; const [c1x, c1y] = curves[index]!; const joint = points[index]!;
+      const incoming = (joint.y - c2y!) / (joint.x - c2x!); const outgoing = (c1y! - joint.y) / (c1x! - joint.x);
+      expect(outgoing).toBeCloseTo(incoming, 2);
+    }
+  });
+  it('draws the same curve backwards for a ribbon lower edge', () => {
+    const points = [{ x: 0, y: 100 }, { x: 10, y: 50 }, { x: 20, y: 48 }, { x: 30, y: 0 }];
+    const reversed = segments(buildHappierSeriesPath([...points].reverse(), 1));
+    const forward = segments(buildHappierSeriesPath(points, 1));
+    expect(reversed[0]!.slice(0, 2)).toEqual(forward.at(-1)!.slice(2, 4));
   });
 });

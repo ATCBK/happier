@@ -16,6 +16,8 @@ import { describeHappierDropAnnouncement, describeHappierDropOutcome, resolveHap
 import { HappierText } from '../presentation/text/Text.js';
 import { resolveHappierMinimumInteractiveTargetSize } from '../environment/interactiveTarget.js';
 import { HostedAnchoredMenu } from './Overlay.js';
+import { ListItemSelectionContext } from './List.js';
+import { HappierRowOperationContext } from '../presentation/collection/rowOperation.js';
 
 const HostedPreviewText: HappierReleasePreviewHost['Text'] = props => <HappierText {...props} />;
 // A hosted realm has no host icon pack: the outcome's words carry it, never a stand-in mark.
@@ -43,6 +45,8 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
   const grip = useRef<HTMLElement | null>(null);
   const mount = useRef<PluginHostedEntityDragSourceMount | null>(null);
   const staged = useRef(false);
+  // The row owns pickup keys during the hosted round trip; Escape must also retire its continuation.
+  const pendingPickup = useRef<AbortController | null>(null);
   const chosenIndex = useRef(0);
   const [destinations, setDestinations] = useState<readonly PluginUiEntityDropDestinationV1[]>([]);
   const destinationsRef = useRef(destinations);
@@ -61,6 +65,7 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
       onState: state => {
         setDestinations(state.destinations); destinationsRef.current = state.destinations;
         if (!state.current || (staged.current && (state.phase === 'idle' || state.phase === 'settled'))) {
+          pendingPickup.current?.abort(); pendingPickup.current = null;
           staged.current = false; setChosen(null); setChooser(false);
         } else if (state.admission === null) setChosen(null);
         else { const admission = state.admission; setChosen(previous => previous ? { ...previous, admission } : previous); }
@@ -68,21 +73,28 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
       onError: () => { element.current?.setAttribute('draggable', 'false'); } });
     mount.current = binding;
     void binding.ready.catch(() => undefined);
-    return () => { staged.current = false; mount.current = null; setChosen(null); setChooser(false); binding.dispose(); };
+    return () => { pendingPickup.current?.abort(); pendingPickup.current = null; staged.current = false; mount.current = null; setChosen(null); setChooser(false); binding.dispose(); };
   }, [hostApi, mountId, props.sourceId, referenceKey, props.disabled, props.organizing]);
-  const reset = () => { staged.current = false; setChosen(null); setChooser(false); };
+  const reset = () => { pendingPickup.current?.abort(); pendingPickup.current = null; staged.current = false; setChosen(null); setChooser(false); };
   const pickUp = async () => {
     const binding = mount.current;
-    if (!binding || !await binding.ready) return;
-    const places = await binding.destinations();
-    if (mount.current !== binding || !places.accepted) return;
-    const values = places.destinations ?? [];
-    setDestinations(values); destinationsRef.current = values;
-    const started = await binding.beginKeyboard();
-    if (mount.current !== binding || !started.accepted) return;
-    staged.current = true; chosenIndex.current = 0;
-    const first = values[0];
-    if (first) { await binding.choose(first); if (mount.current === binding) setChosen(first); }
+    if (!binding || pendingPickup.current !== null || staged.current) return;
+    const pickup = new AbortController();
+    pendingPickup.current = pickup;
+    try {
+      if (!await binding.ready || pickup.signal.aborted || mount.current !== binding) return;
+      const places = await binding.destinations();
+      if (pickup.signal.aborted || mount.current !== binding || !places.accepted) return;
+      const values = places.destinations ?? [];
+      setDestinations(values); destinationsRef.current = values;
+      const started = await binding.beginKeyboard();
+      if (pickup.signal.aborted || mount.current !== binding || !started.accepted) return;
+      staged.current = true; chosenIndex.current = 0;
+      const first = values[0];
+      if (first) { await binding.choose(first); if (!pickup.signal.aborted && mount.current === binding) setChosen(first); }
+    } finally {
+      if (pendingPickup.current === pickup) pendingPickup.current = null;
+    }
   };
   const selected = chosen?.admission;
   const vocabulary = hostedDropVocabulary(translate);
@@ -98,6 +110,12 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
     ...(destination.admission.status === 'refused' ? { refusedReason: destination.admission.reason.message } : {}),
   })) });
   const handleKeyDown = (key: string, repeat: boolean): boolean => {
+    if (pendingPickup.current !== null) {
+      const intent = resolveHappierStagedMoveKey({ key, staged: true, repeat, rtl: element.current?.ownerDocument.dir === 'rtl' });
+      if (intent === null) return false;
+      if (intent === 'cancel') { void mount.current?.cancel(); reset(); }
+      return true;
+    }
     const intent = resolveHappierStagedMoveKey({ key, staged: staged.current, repeat, rtl: element.current?.ownerDocument.dir === 'rtl' });
     if (!intent || !mount.current) return false;
     if (intent === 'pickUp') { void pickUp(); return true; }
@@ -110,7 +128,16 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
     if (destination) { setChosen(destination); void mount.current.choose(destination); }
     return true;
   };
-  return <div ref={element} data-testid={props.testID} role="group" aria-label={translate('entityDrag.move', 'Move item')} tabIndex={props.disabled ? undefined : 0} onKeyDown={event => {
+  const rowOperation = {
+    id: 'entity.move', label: translate('entityDrag.move', 'Move item'), disabled: props.disabled === true,
+    onSelect: () => { if (!staged.current) void pickUp(); },
+    onKeyDown: (key: string, event: unknown) => {
+      if (props.disabled) return false;
+      const input = event as Readonly<{ repeat?: boolean }>;
+      return (staged.current || pendingPickup.current !== null) && handleKeyDown(key, input.repeat === true);
+    },
+  };
+  return <HappierRowOperationContext.Provider value={rowOperation}><div ref={element} data-testid={props.testID} role="group" aria-label={translate('entityDrag.move', 'Move item')} tabIndex={props.disabled ? undefined : props.tabIndex ?? 0} onKeyDown={event => {
     if (event.target !== event.currentTarget || !handleKeyDown(event.key, event.repeat)) return;
     event.preventDefault(); event.stopPropagation();
   }}>{props.children}<div role="status" aria-live="polite" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }}>{announcement ?? ''}</div>
@@ -118,6 +145,7 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
       controlRef={node => { grip.current = node instanceof HTMLElement ? node : null; }}
       testID={props.testID ? `${props.testID}-grip` : undefined} accessibilityLabel={translate('entityDrag.move', 'Move item')}
       expanded={chooser} density="touch" minimumTargetSize={resolveHappierMinimumInteractiveTargetSize(Platform.OS)}
+      tabIndex={props.tabIndex}
       colors={{ glyph: theme.colors.secondaryText, activeGlyph: theme.colors.accent, activeFill: theme.colors.control, hoverFill: theme.colors.control, focusRing: theme.colors.focus }}
       onKeyDown={(key, event) => handleKeyDown(key, typeof event === 'object' && event !== null && 'repeat' in event && event.repeat === true)}
       renderGlyph={gripGlyph} onPress={() => {
@@ -133,7 +161,7 @@ function HostedDragSource(props: DragSourceProps): ReactElement {
         const destination = destinationsRef.current.find(value => destinationKey(value) === id); const binding = mount.current;
         if (destination && binding) void binding.perform(destination).then(() => { if (mount.current === binding) reset(); });
       }} /> : null}
-  </div>;
+  </div></HappierRowOperationContext.Provider>;
 }
 function HostedDropTarget(props: DropTargetProps): ReactElement {
   const hostApi = usePluginHostApi();
@@ -167,6 +195,8 @@ export type DragSourceProps = Readonly<{
   disabled?: boolean;
   /** Touch dragging is offered only while the surrounding list is intentionally organizing. */
   organizing?: boolean;
+  /** Sequential keyboard access; composite rows expose Move through their own menu and shortcut. */
+  tabIndex?: -1 | 0;
   testID?: string;
 }>;
 
@@ -182,7 +212,9 @@ export type DropTargetProps = Readonly<{
 /** Physical input, reference validation and retirement belong to the mounted host. */
 export function DragSource(props: DragSourceProps): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
-  return <>{host?.renderDragSource ? host.renderDragSource(props) : Platform.OS === 'web' ? <HostedDragSource {...props} /> : props.children}</>;
+  const row = useContext(ListItemSelectionContext);
+  const input = row === null ? props : { ...props, tabIndex: -1 as const };
+  return <>{host?.renderDragSource ? host.renderDragSource(input) : Platform.OS === 'web' ? <HostedDragSource {...input} /> : props.children}</>;
 }
 
 /** Every presentation realm rejoins the same target registry and Action admission owner. */

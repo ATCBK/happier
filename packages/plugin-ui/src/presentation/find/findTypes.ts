@@ -35,5 +35,7 @@ export interface FindController {
   setOptions(options: FindOptions): void;
   step(direction: 1 | -1): void;
   stop(): void;
+  /** Refold context temporarily revealed by Find. Omission means this surface cannot fold. */
+  refold?(): 'refolded' | 'unsupported' | 'noRevealedFold';
   close(): void;
 }

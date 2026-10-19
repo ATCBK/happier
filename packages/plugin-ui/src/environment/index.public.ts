@@ -50,3 +50,5 @@ export {
   type HappierRadiusScale,
   type HappierRadiusStep,
 } from './radius.js';
+export { HAPPIER_SKELETON_INK_ALPHA, resolveHappierSkeletonInk } from './skeletonInk.js';
+export { HAPPIER_SPACE_STEPS } from './spacing.js';

@@ -1,11 +1,11 @@
 import { useCallback, useMemo, type ReactElement, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 
 import { resolveHappierUiPalette, useOptionalHappierUiPalette, useOptionalHappierUiTypography } from '../environment/context.js';
 import type { IconName } from './Icon.js';
 import {
-  HAPPIER_SELECTION_TILE_TEXT,
   HappierSelectionTiles,
+  resolveHappierSelectionTileText,
   type HappierSelectionTileOption,
   type HappierSelectionTilesColors,
   type HappierSelectionTilesGlyphRenderer,
@@ -13,6 +13,7 @@ import {
 } from '../presentation/form/SelectionTiles.js';
 import { resolveHappierTextStepStyle } from '../presentation/layout/pageText.js';
 import { HappierText } from '../presentation/text/Text.js';
+import { resolveHappierTypeScale } from '../presentation/text/typeScale.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { usePluginTheme, usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
@@ -122,8 +123,7 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>):
   // The tiles' type scale is the shared owner's; this adapter adds the host's face per weight
   // and the theme's colours, exactly as Happier core's tile adapter does.
   const renderText = useCallback<HappierSelectionTilesTextRenderer>(({ role, text, selected, compact, numberOfLines, alignment }) => {
-    const step = HAPPIER_SELECTION_TILE_TEXT[role];
-    const weight = selected && step.selectedWeight ? step.selectedWeight : step.weight;
+    const tileText = resolveHappierSelectionTileText(role, { selected, compact });
     const color = role === 'visualSublabel'
       ? theme.colors.mutedText
       : role === 'cardTitle' || role === 'actionTitle' || (role === 'visualLabel' && selected)
@@ -133,8 +133,7 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>):
       <HappierText
         numberOfLines={numberOfLines}
         style={[
-          resolveHappierTextStepStyle({ ...step, weight }, typography),
-          compact && step.compactFontSize !== undefined ? { fontSize: step.compactFontSize } : null,
+          resolveHappierTextStepStyle(resolveHappierTypeScale(tileText.role, Platform.OS, tileText.emphasis), typography),
           role === 'visualLabel' || role === 'visualSublabel' ? { textAlign: alignment ?? 'center' } : null,
           role === 'visualSublabel' ? { marginTop: -4 } : null,
           { color },

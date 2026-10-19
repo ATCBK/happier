@@ -11,7 +11,7 @@ export type ItemAddRowProps = HappierItemAddRowContentProps;
 export function ItemAddRow(props: ItemAddRowProps): ReactElement {
   const theme = usePluginTheme();
   return <HappierItemAddRow {...props}
-    renderIcon={(icon) => <PluginUiIconGlyph {...icon} color={theme.colors.secondaryText} />}
+    renderIcon={({ size }) => <PluginUiIconGlyph name="add" size={size} color={theme.colors.secondaryText} />}
     renderRow={({ showChevron: _showChevron, ...row }) => <Item {...row} />}
   />;
 }

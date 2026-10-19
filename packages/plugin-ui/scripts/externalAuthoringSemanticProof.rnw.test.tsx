@@ -554,6 +554,10 @@ describe('external author semantic proof', () => {
 
     try {
       await expect(fixture.getByRole('form')).resolves.toMatchObject({ role: 'form' });
+      await fixture.press(await fixture.getByRole('button', { name: 'Submit external review form' }));
+      await expect(fixture.getByRole('status', {
+        name: 'External review form submitted: {"enabled":false,"note":"","name":"Release review","count":0}',
+      })).resolves.toBeDefined();
       await expect(fixture.getByRole('button', { name: 'External review filter: Current review' })).resolves.toEqual({
         role: 'button',
         name: 'External review filter: Current review',

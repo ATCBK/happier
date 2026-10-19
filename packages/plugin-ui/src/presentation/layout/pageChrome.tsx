@@ -23,6 +23,16 @@ export type HappierPageChrome = Readonly<{
 /** Same-realm host binding only; not part of the public page-chrome contract. */
 export type HappierPageChromeInternal = HappierPageChrome & Readonly<{
   renderNavigationActions?: (actions: ReactNode) => ReactNode;
+  /**
+   * The navigation's own Back is showing and would return the page to a step it declared rather than leave it,
+   * so a pushed detail draws no Back of its own beside it.
+   */
+  navigationBackSpendsStep?: boolean;
+  /**
+   * Hands the page title to navigation chrome that shows it (a phone's stack header), as Happier's own
+   * `PageHeader` does; the page header then omits its title. `undefined` withdraws it.
+   */
+  publishTitle?: (title: string | undefined) => void;
 }>;
 
 const HappierPageChromeContext = createContext<HappierPageChromeInternal | null>(null);

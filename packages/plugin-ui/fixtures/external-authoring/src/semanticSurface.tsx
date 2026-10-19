@@ -138,6 +138,8 @@ function ExternalAuthoringSemanticSurface() {
   const composerView = useComposerView(composerHandle);
   const hostApi = usePluginHostApi();
   const [savedLocale, setSavedLocale] = useState<string | undefined>();
+  const [reviewInput, setReviewInput] = useState<Record<string, unknown>>({ enabled: false, note: '' });
+  const [reviewFormReceipt, setReviewFormReceipt] = useState<string | null>(null);
   const [authoringStatus, setAuthoringStatus] = useState<string | undefined>();
   const [composerAttachmentStatus, setComposerAttachmentStatus] = useState<string | undefined>();
   const [composerDecorationStatus, setComposerDecorationStatus] = useState<string | undefined>();
@@ -303,12 +305,19 @@ function ExternalAuthoringSemanticSurface() {
       <Form
         hints={{
           title: 'External review form',
-          fields: [],
+          submitLabel: 'Submit external review form',
+          fields: [
+            { path: 'name', title: 'Review name', widget: 'text', defaultValue: 'Release review' },
+            { path: 'enabled', title: 'Review enabled', widget: 'boolean', defaultValue: true },
+            { path: 'note', title: 'Review note', widget: 'text', defaultValue: 'Suggested note' },
+            { path: 'count', title: 'Review count', widget: 'integer', defaultValue: 0 },
+          ],
         }}
-        value={{}}
-        onChange={() => undefined}
-        onSubmit={() => undefined}
+        value={reviewInput}
+        onChange={setReviewInput}
+        onSubmit={(input) => setReviewFormReceipt(JSON.stringify(input))}
       />
+      {reviewFormReceipt === null ? null : <Status tone="info" label={`External review form submitted: ${reviewFormReceipt}`} />}
       <ItemGroup title="External review scope">
         <ItemAddRow title="Add review scope" onPress={() => setReviewScope('all')} testID="external-add-review-scope" />
         <Item

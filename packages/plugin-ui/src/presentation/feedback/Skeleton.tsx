@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react';
-import { Animated, Platform, View, type DimensionValue, type ViewStyle } from 'react-native';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { Animated, Platform, View, type ViewStyle } from 'react-native';
 
 import { useOptionalHappierUiAccessibility, useOptionalHappierUiPalette } from '../../environment/context.js';
 import type { HappierUiTheme } from '../../environment/types.js';
-import type { HappierStyleProp } from '../portableTypes.js';
+import type { HappierDimension, HappierStyleProp } from '../portableTypes.js';
 
 /**
  * The single implementation owner for Happier's loading skeleton (UI-T27).
@@ -27,12 +27,21 @@ export const HAPPIER_SKELETON_PULSE_V1 = Object.freeze({
 
 export type HappierSkeletonBlockProps = Readonly<{
   color: string;
-  width: DimensionValue;
+  width: HappierDimension;
   height: number;
   radius?: number;
   /** Stops the pulse while the owning surface is hidden or inactive. */
   animationEnabled?: boolean;
   /** Resolved reduced-motion preference; defaults to the environment value. */
+  reducedMotion?: boolean;
+  style?: HappierStyleProp;
+  testID?: string;
+}>;
+
+/** A loading shape's motion, shared by individual bars and composed placeholders. */
+export type HappierSkeletonPulseProps = Readonly<{
+  children?: ReactNode;
+  animationEnabled?: boolean;
   reducedMotion?: boolean;
   style?: HappierStyleProp;
   testID?: string;
@@ -54,7 +63,7 @@ const webPulseStyle: WebPulseStyle = {
   animationTimingFunction: 'ease-in-out',
 };
 
-function blockStyle(props: HappierSkeletonBlockProps): ViewStyle {
+function blockStyle(props: HappierSkeletonBlockProps) {
   return {
     width: props.width,
     height: props.height,
@@ -65,6 +74,16 @@ function blockStyle(props: HappierSkeletonBlockProps): ViewStyle {
 
 /** One pulsing placeholder bar. Always hidden from assistive technology. */
 export function HappierSkeletonBlock(props: HappierSkeletonBlockProps) {
+  return <HappierSkeletonPulse
+    animationEnabled={props.animationEnabled}
+    reducedMotion={props.reducedMotion}
+    testID={props.testID}
+    style={[blockStyle(props), props.style]}
+  />;
+}
+
+/** Pulse an existing loading shape without scheduling React work on each web frame. */
+export function HappierSkeletonPulse(props: HappierSkeletonPulseProps) {
   const environmentAccessibility = useOptionalHappierUiAccessibility();
   const reducedMotion = props.reducedMotion ?? environmentAccessibility?.reducedMotion ?? false;
   const animate = props.animationEnabled !== false && !reducedMotion;
@@ -75,8 +94,8 @@ export function HappierSkeletonBlock(props: HappierSkeletonBlockProps) {
         aria-hidden
         accessibilityElementsHidden
         importantForAccessibility="no-hide-descendants"
-        style={[blockStyle(props), { opacity: HAPPIER_SKELETON_PULSE_V1.opacityLow }, props.style]}
-      />
+        style={[{ opacity: HAPPIER_SKELETON_PULSE_V1.opacityLow }, props.style]}
+      >{props.children}</View>
     );
   }
   if (Platform.OS === 'web') {
@@ -84,14 +103,14 @@ export function HappierSkeletonBlock(props: HappierSkeletonBlockProps) {
       <View
         testID={props.testID}
         aria-hidden
-        style={[blockStyle(props), { opacity: HAPPIER_SKELETON_PULSE_V1.opacityHigh }, webPulseStyle, props.style]}
-      />
+        style={[{ opacity: HAPPIER_SKELETON_PULSE_V1.opacityHigh }, webPulseStyle, props.style]}
+      >{props.children}</View>
     );
   }
-  return <NativePulsingBlock {...props} />;
+  return <NativeSkeletonPulse {...props} />;
 }
 
-function NativePulsingBlock(props: HappierSkeletonBlockProps) {
+function NativeSkeletonPulse(props: HappierSkeletonPulseProps) {
   const opacity = useRef(new Animated.Value(HAPPIER_SKELETON_PULSE_V1.opacityLow)).current;
   useEffect(() => {
     const animation = Animated.loop(
@@ -118,15 +137,15 @@ function NativePulsingBlock(props: HappierSkeletonBlockProps) {
       testID={props.testID}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={[blockStyle(props), { opacity }, props.style]}
-    />
+      style={[{ opacity }, props.style]}
+    >{props.children}</Animated.View>
   );
 }
 
 /** Consecutive rows read as real content of different lengths, not a uniform bar. */
-const SKELETON_TITLE_WIDTHS: readonly DimensionValue[] = ['62%', '48%', '71%', '55%', '66%', '44%'];
+const SKELETON_TITLE_WIDTHS: readonly HappierDimension[] = ['62%', '48%', '71%', '55%', '66%', '44%'];
 /** The meta line under a two-line row's title. */
-const SKELETON_META_WIDTH: DimensionValue = '34%';
+const SKELETON_META_WIDTH: HappierDimension = '34%';
 /** One quiet bar: the lab's thin line (8 px, radius 4), the same for title and meta. */
 const SKELETON_BAR = Object.freeze({ height: 8, radius: 4 });
 /** The glyph placeholder: the small glyph step, on the one small radius. */

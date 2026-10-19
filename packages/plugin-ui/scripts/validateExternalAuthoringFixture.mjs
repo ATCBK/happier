@@ -18,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { resolveNpmCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryRoot = resolve(packageRoot, '../..');
@@ -1151,9 +1152,10 @@ async function runExternalAuthoringFixtureInRoot({ mode = TARBALL_MODE, tarballP
   // The packed-author/packed-host tail is release-representation evidence. In
   // the current-source mode the framework-owned semantic proof mounts the
   // same staged consumer directly, and no pack/install identity is claimed.
+  const vitestCommand = resolveVitestNodeCommand(packageRoot);
   if (mode === CURRENT_SOURCE_MODE) {
-    runCommand(process.execPath, [
-      requireFromPluginUi.resolve('vitest/vitest.mjs'),
+    runCommand(vitestCommand.command, [
+      ...vitestCommand.argsPrefix,
       'run',
       '--config',
       join(packageRoot, 'scripts/externalAuthoringSemanticProof.vitest.config.ts'),
@@ -1247,8 +1249,8 @@ async function runExternalAuthoringFixtureInRoot({ mode = TARBALL_MODE, tarballP
   // The external author contributes an actual packed public surface. The
   // host-owned RNW semantic environment must mount that installed artifact,
   // never the author source tree used to prepare it.
-  runCommand(process.execPath, [
-    requireFromPluginUi.resolve('vitest/vitest.mjs'),
+  runCommand(vitestCommand.command, [
+    ...vitestCommand.argsPrefix,
     'run',
     '--config',
     join(packageRoot, 'scripts/externalAuthoringSemanticProof.vitest.config.ts'),

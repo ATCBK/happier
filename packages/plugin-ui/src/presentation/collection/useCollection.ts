@@ -92,7 +92,11 @@ export type HappierCollectionActions = Readonly<{
     key: string;
     from: string;
     presentation: 'table' | 'list' | 'board' | 'grid';
+    /** This rendered row offers the table's Space peek. */
+    peek?: boolean;
     columns?: number;
+    /** The grid's drawn rows of keys, when they break before `columns` (compact tiles). */
+    gridRows?: readonly (readonly string[])[];
     event?: unknown;
     store?: HappierListMultiSelectionStore | null;
     eligibleKeys?: readonly string[];
@@ -282,6 +286,14 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
     const selectionSnapshot = store?.getSnapshot();
     const selectionKeys = selectionSnapshot === undefined ? null : new Set(selectionSnapshot.visibleOrderedKeys);
     const modifiers = readHappierPointerModifiers(input.event);
+    // A mounted selection capability does not enter bulk selection on idle
+    // table Space. The presentation supplies whether this row can really peek.
+    if (input.peek === true && (input.key === ' ' || input.key === 'Spacebar')
+      && !modifiers.shiftKey && !modifiers.ctrlKey && !modifiers.metaKey
+      && selectionSnapshot?.isSelectionMode !== true && input.onValueChange === undefined) {
+      toggleExpanded(from);
+      return true;
+    }
     const intent = store === null ? null : resolveHappierListMultiSelectionKeyboardIntent({
       key: input.key, ...modifiers, platform: resolveHappierPointerPlatform(Platform.OS),
       entries: allKeys.map(key => ({ disabled: (eligible !== null && !eligible.has(key))
@@ -293,7 +305,7 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
       else if (intent.kind === 'toggleFocused') store?.toggle(from);
       return true;
     }
-    // After selection declines them, activation belongs to the row (or table Space peek), not navigation.
+    // After peek and selection decline them, activation belongs to the row.
     if (input.key === 'Enter' || input.key === ' ' || input.key === 'Spacebar') {
       if (input.onValueChange === undefined || !navigationKeys.includes(from)) return false;
       input.onValueChange(from);
@@ -302,6 +314,7 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
     const next = intent?.kind === 'extendRange' ? allKeys[intent.toIndex] ?? null
       : resolveHappierCollectionSpatialFocus({ key: input.key, from, sections: sectionKeys,
         presentation: input.presentation, ...(input.columns === undefined ? {} : { columns: input.columns }),
+        ...(input.gridRows === undefined ? {} : { gridRows: input.gridRows }),
         ...(eligible === null ? {} : { eligibleKeys: eligible }), listNavigationKeys: input.onValueChange === undefined, rtl });
     if (next === null) return false;
     input.onValueChange?.(next);
@@ -315,7 +328,7 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
     store?.setFocusedKey(next);
     setFocusRequest({ key: next });
     return true;
-  }, [focus, keyOf, rtl, sections, selectionStore]);
+  }, [focus, keyOf, rtl, sections, selectionStore, toggleExpanded]);
   const actions = useMemo<HappierCollectionActions>(
     () => ({ focus, requestFocus, consumeFocusRequest, toggleExpanded, setBranchOpen, open, close, handleKey, navigate, showColumn }),
     [close, consumeFocusRequest, focus, handleKey, navigate, open, requestFocus, setBranchOpen, toggleExpanded],

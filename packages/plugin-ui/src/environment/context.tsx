@@ -1,6 +1,8 @@
 import { createContext, useContext, useMemo, type Context, type ReactNode } from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
 
+import { resolveHappierSkeletonInk } from './skeletonInk.js';
+
 import type {
   HappierUiAccessibility,
   HappierUiEnvironment,
@@ -279,6 +281,7 @@ export function HappierUiPaletteProvider({
  */
 export function resolveHappierUiPalette(theme: PluginUiThemeV1): HappierUiPalette {
   const colors = theme.colors;
+  const skeleton = resolveHappierSkeletonInk(colors.text);
   return {
     page: colors.surface,
     sheet: colors.surface,
@@ -299,6 +302,7 @@ export function resolveHappierUiPalette(theme: PluginUiThemeV1): HappierUiPalett
     segmentThumb: colors.surface,
     navigationSelected: colors.elevatedSurface,
     navigationHover: colors.control,
+    ...(skeleton === null ? {} : { skeleton }),
   };
 }
 

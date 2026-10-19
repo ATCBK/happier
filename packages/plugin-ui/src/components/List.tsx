@@ -84,6 +84,7 @@ import { ContextMenu } from './Overlay.js';
 import { usePluginTheme, usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
 import { ListCollectionControlContext } from './listCollectionControl.js';
+import { HappierRowOperationContext } from '../presentation/collection/rowOperation.js';
 import {
   ListCollectionHeader,
   useListCollectionSearch,
@@ -1679,6 +1680,8 @@ function VirtualizedList<Item>(
   const pageTracker = useOptionalPluginUiScrollActivityTracker();
   const pageGeometry = collectionControl?.pageVirtualization;
   const pageSheet = pageScroll ? collectionControl?.pageSheet : undefined;
+  // Rows exist to sit on it: an empty or still-reading list keeps its own empty state on the page.
+  const flatPageSheet = pageSheet !== undefined && visibleSections === undefined && (visibleItems?.length ?? 0) > 0;
   const previousPageGeometryRef = useRef(pageGeometry);
   useLayoutEffect(() => {
     const previous = previousPageGeometryRef.current;
@@ -1914,6 +1917,23 @@ function VirtualizedList<Item>(
                 </Fragment>
               );
             })
+          : flatPageSheet && pageSheet !== undefined ? (
+              // An ungrouped page list is one page section: its bar, rows and totals on one sheet (the enclosing
+              // section's own sheet when it already sits on one).
+              <HappierPageSheet colors={pageSheet.colors} rowDividers={false}
+                surface={pageSheet.flatSheet === false ? 'none' : 'sheet'}
+                {...(pageSheet.flatSheet === false ? {} : { style: flatPageSheetStyle })}>
+                <View>
+                  {pageSheet.header}
+                  {(visibleItems ?? []).map((item, index) => (
+                    <Fragment key={keyForItem(item, index)}>
+                      {renderFlatRow({ item, index })}
+                    </Fragment>
+                  ))}
+                  {props.footer}
+                </View>
+              </HappierPageSheet>
+            )
           : (visibleItems ?? []).map((item, index) => (
               <Fragment key={keyForItem(item, index)}>
                 {renderFlatRow({ item, index })}
@@ -1946,11 +1966,14 @@ function VirtualizedList<Item>(
           emptyContent
         )}
         {scrollsEndContent ? null : props.endContent}
-        {props.footer}
+        {flatPageSheet ? null : props.footer}
       </View>
     </ListMultiSelectionProvider>
   );
 }
+
+// The header gap down to its sheet, as a page section's title sits above its own (the search or toolbar above it).
+const flatPageSheetStyle = { marginTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx } as const;
 
 function ListRoot<Item>(props: ListProps<Item>): ReactElement {
   const { accessibilityLabel, accessibilityLabelKey, ...rest } = props;
@@ -2172,6 +2195,7 @@ function ListItem(props: ListItemProps): ReactElement {
 function ListItemRow(props: ListItemProps): ReactElement {
   const translate = usePluginTranslation();
   const selection = useContext(ListItemSelectionContext);
+  const operation = useContext(HappierRowOperationContext);
   const multiStore = useOptionalListMultiSelectionStore();
   const [secondaryActionsOpen, setSecondaryActionsOpen] = useState(false);
   const rowFocusRef = useRef<HappierFocusable | null>(null);
@@ -2183,8 +2207,19 @@ function ListItemRow(props: ListItemProps): ReactElement {
   const canSelectRow =
     selection?.activatable === true && selection.multiSelectable;
   const selectActionId = 'selection.select';
+  const operationActions = selection !== null && operation !== null ? [{ id: operation.id, label: operation.label, disabled: operation.disabled }] : [];
+  const rowProps = operationActions.length === 0 ? props : {
+    ...props,
+    secondaryActions: [...(props.secondaryActions ?? []), ...operationActions],
+    onSecondaryAction: (id: string) => {
+      if (id === operation?.id) operation.onSelect();
+      else props.onSecondaryAction?.(id);
+    },
+  };
   const resolvedProps = {
     ...authorProps,
+    secondaryActions: rowProps.secondaryActions,
+    onSecondaryAction: rowProps.onSecondaryAction,
     accessibilityLabel: resolveAuthorText(
       translate,
       props.accessibilityLabel,
@@ -2197,12 +2232,12 @@ function ListItemRow(props: ListItemProps): ReactElement {
     ),
     ...(canSelectRow
       ? {
-          secondaryActions: props.secondaryActions?.some(
+          secondaryActions: rowProps.secondaryActions?.some(
             (action) => action.id === selectActionId,
           )
-            ? props.secondaryActions
+            ? rowProps.secondaryActions
             : [
-                ...(props.secondaryActions ?? []),
+                ...(rowProps.secondaryActions ?? []),
                 {
                   id: selectActionId,
                   label: translate(
@@ -2214,7 +2249,7 @@ function ListItemRow(props: ListItemProps): ReactElement {
           onSecondaryAction: (id: string) => {
             if (id === selectActionId)
               multiStore?.replaceWith(selection.itemKey);
-            else props.onSecondaryAction?.(id);
+            else rowProps.onSecondaryAction?.(id);
           },
         }
       : {}),
@@ -2271,6 +2306,13 @@ function ListItemRow(props: ListItemProps): ReactElement {
       selection.roving.register(target);
     },
     onKeyDown: (key, event) => {
+      const modifiers = readHappierPointerModifiers(event);
+      const keyboardEvent = event as Readonly<{ altKey?: boolean; repeat?: boolean }>;
+      if (operation !== null && !operation.disabled && keyboardEvent.altKey && !modifiers.ctrlKey && !modifiers.metaKey && key.toLowerCase() === 'm') {
+        if (keyboardEvent.repeat !== true) operation.onSelect();
+        return true;
+      }
+      if (operation?.onKeyDown(key, event)) return true;
       const opensSecondaryActions =
         key === 'ContextMenu' ||
         (key === 'F10' && readHappierPointerModifiers(event).shiftKey);

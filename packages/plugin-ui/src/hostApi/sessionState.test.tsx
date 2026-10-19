@@ -14,6 +14,46 @@ const WORKING: SessionStateV1 = {
 };
 
 describe('useSessionStates', () => {
+  it('publishes only selected facts while preserving unchanged Sessions and following real work transitions', async () => {
+    const watchers = new Map<string, Parameters<PluginUiHostApi['watchSession']>[1]>();
+    const ids = ['first', 'second', ...Array.from({ length: 1998 }, (_, index) => `session-${index}`)];
+    const snapshots = new Map<string, SessionStateV1>(ids.map(sessionId => [sessionId, { ...WORKING, sessionId }]));
+    const base = createHostApiStub();
+    const hostApi = createHostApiStub(undefined, {
+      version: () => ({ ...base.version(), methods: ['readSession', 'watchSession'] }),
+      readSession: async (id) => snapshots.get(id) ?? null,
+      watchSession: async (id, listener) => {
+        watchers.set(id, listener);
+        return { dispose: () => { watchers.delete(id); } };
+      },
+    });
+    const select = (state: SessionStateV1) => ({ lifecycle: state.lifecycle, workStatus: state.workStatus });
+    let current: SessionStatesReadV1<ReturnType<typeof select>> | undefined;
+    let renders = 0;
+    function Probe() {
+      renders += 1;
+      current = useSessionStates(ids, { select });
+      return null;
+    }
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      await act(async () => { tree = renderer.create(<PluginHostApiProvider hostApi={hostApi}><Probe /></PluginHostApiProvider>); });
+      const settled = current!.sessions;
+      const rendersBefore = renders;
+      snapshots.set('first', { ...WORKING, title: 'Renamed workspace Session' });
+      await act(async () => { watchers.get('first')!({ version: 1, subscriptionId: 'first', kind: 'invalidated', digest: 'title' }); });
+      expect({ extraRenders: renders - rendersBefore, sameSnapshot: current!.sessions === settled }).toEqual({
+        extraRenders: 0, sameSnapshot: true,
+      });
+      snapshots.set('first', { ...WORKING, workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' } });
+      await act(async () => { watchers.get('first')!({ version: 1, subscriptionId: 'first', kind: 'invalidated', digest: 'work' }); });
+      expect(current!.sessions.get('first')?.state?.workStatus.bucket).toBe('idle');
+      expect(current!.sessions.get('second')).toBe(settled.get('second'));
+    } finally {
+      act(() => tree?.unmount());
+    }
+  });
+
   it('withdraws inactive watches, retains the snapshot, ignores late reads and callbacks, and rereads on reactivation', async () => {
     const watchers = new Map<string, Parameters<PluginUiHostApi['watchSession']>[1]>();
     const base = createHostApiStub();

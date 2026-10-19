@@ -13,6 +13,7 @@ import { HappierSegmentedChoice } from '../presentation/form/SegmentedChoice.js'
 import { HappierBadge, HappierBanner } from '../presentation/content/Foundation.js';
 import { HappierSelect } from '../presentation/form/Fields.js';
 import { HappierSelectionTiles } from '../presentation/form/SelectionTiles.js';
+import { resolveHappierButtonChrome } from '../presentation/interaction/buttonChrome.js';
 
 function mountSurface(
   children: React.ReactElement,
@@ -82,7 +83,8 @@ describe('Surface and Card', () => {
     // Equal colour values do not make a field into a solid primary control.
     expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-field-content"]')!.parentElement!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', 'rgba(235, 230, 225, 0.1)'));
     expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-primary"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', context.theme.colors.accent));
-    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-disabled"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', context.theme.colors.controlDisabled));
+    const disabledFill = resolveHappierButtonChrome({ theme: context.theme, variant: 'primary', disabled: true, focused: false }).style.backgroundColor;
+    expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-disabled"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', disabledFill ?? 'transparent'));
     expect(getComputedStyle(mount.container.querySelector<HTMLElement>('[data-testid="inner-segments"] [role="radio"]')!).backgroundColor).toBe(resolveRenderedColor('backgroundColor', '#ffffff'));
     mount.unmount();
   });

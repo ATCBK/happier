@@ -24,7 +24,8 @@ import { HappierText } from '../text/Text.js';
 import { useHappierTypeRoleStyle } from '../text/typeRole.js';
 
 /** The declared field, input type and choice constraints needed by its picker. */
-export type HappierInputPickerField = Pick<HappierActionInputField, 'inputType' | 'options' | 'optionsSourceId' | 'connectedAccountOptions'> & Readonly<{
+export type HappierInputPickerField = Pick<HappierActionInputField, 'inputType' | 'options' | 'optionsSourceId' | 'connectedAccountOptions'>
+  & Partial<Pick<HappierActionInputField, 'widget'>> & Readonly<{
   path: string;
   title: string;
 }>;

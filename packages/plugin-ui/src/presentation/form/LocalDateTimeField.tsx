@@ -30,7 +30,7 @@ export type HappierLocalDateTimePickerMode = 'date' | 'time';
 export type HappierLocalDateTimePickerRequest = Readonly<{
   mode: HappierLocalDateTimePickerMode;
   /** The field the picker hangs from. */
-  anchorRef: RefObject<View | null>;
+  anchorRef: RefObject<unknown>;
   /** The reading the picker starts from: the typed moment when it parses, otherwise now. */
   value: Date;
   /** The earliest day the picker offers. */

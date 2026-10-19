@@ -9,6 +9,34 @@ import type { HappierWorkStatusTone } from '../work/workStatus.js';
  */
 export type HappierCollectionKey = string;
 
+/**
+ * The grid's rows, per section: up to `columns` items each, and a new row wherever an item's band
+ * shape changes (`compact`: a tile with no description or footer), so a compact tile never stretches
+ * to its described neighbours' height. The grid draws these rows and keyboard movement walks them.
+ */
+export function resolveHappierCollectionGridRows<Item>(input: Readonly<{
+  sections: readonly (readonly Item[])[];
+  columns: number;
+  compact?: (item: Item) => boolean;
+}>): Item[][][] {
+  const columns = Math.max(1, input.columns);
+  return input.sections.map((section) => {
+    const rows: Item[][] = [];
+    let rowCompact: boolean | null = null;
+    for (const item of section) {
+      const compact = input.compact?.(item) ?? false;
+      const current = rows[rows.length - 1];
+      if (current === undefined || current.length >= columns || compact !== rowCompact) {
+        rows.push([item]);
+        rowCompact = compact;
+      } else {
+        current.push(item);
+      }
+    }
+    return rows;
+  });
+}
+
 /** Spatial movement belongs to the keyed model, not to mounted columns or card cells. */
 export function resolveHappierCollectionSpatialFocus(input: Readonly<{
   key: string;
@@ -16,6 +44,8 @@ export function resolveHappierCollectionSpatialFocus(input: Readonly<{
   sections: readonly (readonly string[])[];
   presentation: 'table' | 'list' | 'board' | 'grid';
   columns?: number;
+  /** The grid's drawn rows ({@link resolveHappierCollectionGridRows}); else rows of `columns`. */
+  gridRows?: readonly (readonly string[])[];
   eligibleKeys?: ReadonlySet<string>;
   /** Navigation collections admit j/k; radio choices leave ordinary characters unclaimed. */
   listNavigationKeys?: boolean;
@@ -48,14 +78,8 @@ export function resolveHappierCollectionSpatialFocus(input: Readonly<{
     return next === null ? null : section[next] ?? input.from;
   }
   if (input.presentation === 'grid' && (input.key === 'ArrowUp' || input.key === 'ArrowDown')) {
-    const rows: string[][] = [];
-    const columns = input.columns ?? 1;
-    for (const section of input.sections) {
-      section.forEach((key, offset) => {
-        if (offset % columns === 0) rows.push([]);
-        rows[rows.length - 1]!.push(key);
-      });
-    }
+    const rows = input.gridRows
+      ?? resolveHappierCollectionGridRows({ sections: input.sections, columns: input.columns ?? 1 }).flat();
     const row = rows.findIndex(candidate => candidate.includes(input.from));
     const column = rows[row]!.indexOf(input.from);
     const direction = input.key === 'ArrowDown' ? 1 : -1;

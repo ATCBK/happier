@@ -1,4 +1,4 @@
-import { useContext, type ReactNode } from 'react';
+import { useCallback, useContext, type ReactNode } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
@@ -69,6 +69,20 @@ export const HAPPIER_FIELD_BOX_METRICS = Object.freeze({
   triggerMaxWidthPx: 280,
   /** Between the leading mark, the value and the trailing chevron. */
   triggerGapPx: 8,
+  /** The chip density: a select that sits among a row's quiet facts (a role's engine) as a soft pill. */
+  chipHeightPx: 28,
+  chipPaddingLeftPx: 10,
+  chipPaddingRightPx: 8,
+  chipGapPx: 6,
+});
+
+/** The chip density's own shape: a pill with no border; the caller supplies a soft fill. */
+const HAPPIER_FIELD_BOX_CHIP_SHAPE: HappierPortableStyle = Object.freeze({
+  minHeight: HAPPIER_FIELD_BOX_METRICS.chipHeightPx,
+  borderRadius: HAPPIER_FIELD_BOX_METRICS.chipHeightPx / 2,
+  borderWidth: 0,
+  paddingLeft: HAPPIER_FIELD_BOX_METRICS.chipPaddingLeftPx,
+  paddingRight: HAPPIER_FIELD_BOX_METRICS.chipPaddingRightPx,
 });
 
 export type HappierFieldBoxColors = Readonly<{
@@ -142,6 +156,11 @@ export type HappierFieldBoxTriggerProps = Readonly<{
    * `intrinsic`: toolbar choices omit the configuration-field width floor.
    */
   span?: 'content' | 'column' | 'row' | 'intrinsic';
+  /**
+   * `field` (default): the bordered configuration field. `chip`: a compact borderless pill that
+   * sizes to its choice (never held to the field's width floor); pair it with a soft fill.
+   */
+  density?: 'field' | 'chip';
 }>;
 
 /**
@@ -150,19 +169,32 @@ export type HappierFieldBoxTriggerProps = Readonly<{
  * pressable — the row or trigger around it owns the interaction and focus; that
  * trigger takes `HAPPIER_FOCUS_RING_DELEGATED_STYLE` when the box draws the ring.
  */
-export function HappierFieldBoxTrigger({ colors, leading, children, trailing, span }: HappierFieldBoxTriggerProps) {
+export function HappierFieldBoxTrigger({ colors, leading, children, trailing, span, density }: HappierFieldBoxTriggerProps) {
   const paintColor = useHappierMaterialColorResolver();
   const rowLayout = useContext(HappierPageRowFieldLayoutContext);
-  const resolvedSpan = span === 'column' && rowLayout
+  const chip = density === 'chip';
+  const resolvedSpan = chip ? 'intrinsic' : span === 'column' && rowLayout
     ? rowLayout.stacked ? 'row' : rowLayout.maxWidthPx === null ? 'column' : 'content'
     : span;
-  const maxWidthPx = span === 'column' ? rowLayout?.maxWidthPx : null;
+  const maxWidthPx = span === 'column' || chip ? rowLayout?.maxWidthPx : null;
+  // Beside a label the box is held to the row's room; a box that fills it is cutting its value.
+  // React Native Web starts observing a view's size only when it mounts with an `onLayout`, and the
+  // room is unknown on the first render, so every box in a field row observes from its first render
+  // and the handler decides whether the room it was given is the one it filled.
+  const onFieldSaturated = rowLayout?.onFieldSaturated;
+  const observesSaturation = !chip && span === 'column' && onFieldSaturated !== undefined;
+  const reportsSaturation = observesSaturation && !rowLayout?.stacked && typeof maxWidthPx === 'number';
+  const handleLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    if (!reportsSaturation || typeof maxWidthPx !== 'number') return;
+    if (event.nativeEvent.layout.width >= maxWidthPx - 0.5) onFieldSaturated?.(maxWidthPx);
+  }, [maxWidthPx, onFieldSaturated, reportsSaturation]);
   return (
     <View
-      style={[HAPPIER_FIELD_BOX_SHAPE, {
+      {...(observesSaturation ? { onLayout: handleLayout } : {})}
+      style={[chip ? HAPPIER_FIELD_BOX_CHIP_SHAPE : HAPPIER_FIELD_BOX_SHAPE, {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: HAPPIER_FIELD_BOX_METRICS.triggerGapPx,
+        gap: chip ? HAPPIER_FIELD_BOX_METRICS.chipGapPx : HAPPIER_FIELD_BOX_METRICS.triggerGapPx,
         minWidth: resolvedSpan === 'intrinsic' ? 0 : HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx,
         ...(resolvedSpan === 'column' ? { width: HAPPIER_FIELD_BOX_METRICS.inlineMinWidthPx } : {}),
         ...(resolvedSpan === 'row' ? { alignSelf: 'stretch' as const } : { maxWidth: maxWidthPx ?? HAPPIER_FIELD_BOX_METRICS.triggerMaxWidthPx }),

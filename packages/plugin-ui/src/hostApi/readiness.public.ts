@@ -36,9 +36,11 @@ export function PluginUiHostReadinessProviderInternal(props: Readonly<{
 /**
  * Shared read lifecycle. Defer Machine reads while pending and re-acquire on
  * revision changes. A settled outage does not advance the revision: Retry stays
- * caller-owned. Account-local reads keep their independent availability.
+ * caller-owned. Account-local reads are never held behind Machine readiness,
+ * but share re-acquisition when the mounted host's prerequisites settle.
  */
 export function usePluginHostReadiness(machineBound = true): PluginUiHostReadiness {
   const readiness = useContext(ReadinessContext);
-  return machineBound ? readiness : UNSPECIFIED;
+  const pending = machineBound && readiness.pending;
+  return useMemo(() => Object.freeze({ pending, revision: readiness.revision }), [pending, readiness.revision]);
 }

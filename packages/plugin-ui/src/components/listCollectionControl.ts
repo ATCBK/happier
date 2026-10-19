@@ -33,7 +33,7 @@ export type ListCollectionControl = Readonly<{
   }>;
   /** Group headers at the presentation's exact height, and the type role their words take. */
   sectionHeaderStyle?: HappierStyleProp;
-  sectionHeaderTitleRole?: 'label' | 'micro' | 'section';
+  sectionHeaderTitleRole?: 'label' | 'micro' | 'group' | 'section';
   /** Wraps a group header cell (the shared-element travel moves headers with their rows). */
   wrapSectionHeader?: (sectionKey: string, header: ReactNode) => ReactNode;
   /** One control at the end of a group header ("See all"), by the group's author key; `null` for none. */
@@ -55,7 +55,16 @@ export type ListCollectionControl = Readonly<{
    * A page-scrolling list's groups are page sections: each group's rows sit on one page sheet under its header
    * (the page anatomy every other section of the page uses), in these colours.
    */
-  pageSheet?: Readonly<{ colors: Readonly<{ sheet: string; sheetBorder: string; rowDivider: string; groupDivider: string }> }>;
+  pageSheet?: Readonly<{
+    colors: Readonly<{ sheet: string; sheetBorder: string; rowDivider: string; groupDivider: string }>;
+    /**
+     * An ungrouped list is one page section: its rows, then its footer (totals), sit on one sheet, led by this bar
+     * (the table's column header recomposed: what the rows are, and the order they are in).
+     */
+    header?: ReactNode;
+    /** `false` inside a sheet that already encloses the collection (a page section's sheet): no second sheet. */
+    flatSheet?: boolean;
+  }>;
 }>;
 
 export const ListCollectionControlContext = createContext<ListCollectionControl | null>(null);

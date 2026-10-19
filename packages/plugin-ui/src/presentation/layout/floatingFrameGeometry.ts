@@ -8,28 +8,6 @@ export function resolveFloatingFrameAspectRatio(aspectRatio: number): number {
     return aspectRatio > 0 && Number.isFinite(aspectRatio) ? aspectRatio : 16 / 10;
 }
 
-/** Leading-bottom grip resize; the opposite edge stays anchored and the body keeps its aspect. */
-export function resolveFloatingFrameResizeRect(input: Readonly<{
-    rect: FrameRect;
-    availableRect: FrameRect;
-    translationX: number;
-    aspectRatio: number;
-    chromeHeight: number;
-    minWidth: number;
-}>): FrameRect {
-    'worklet';
-    const right = input.rect.x + input.rect.width;
-    const aspect = resolveFloatingFrameAspectRatio(input.aspectRatio);
-    const width = Math.max(input.minWidth, Math.min(right - input.availableRect.x, input.rect.width - input.translationX));
-    const fitted = resolveFloatingFrameRect({
-        rect: { x: right - width, y: input.rect.y, width, height: input.chromeHeight + width / aspect },
-        availableRect: input.availableRect, aspectRatio: aspect, chromeHeight: input.chromeHeight,
-    }).rect;
-    // Height fitting may shrink the body; preserve the grip's opposite edge after that fit too.
-    return { ...fitted, x: clamp(right - fitted.width, input.availableRect.x,
-        input.availableRect.x + input.availableRect.width - fitted.width) };
-}
-
 export function resolveFloatingFrameCorner(
     point: Readonly<{ x: number; y: number }>,
     availableRect: FrameRect,
@@ -111,7 +89,9 @@ export function resolveFloatingFrameRect(input: Readonly<{
         y: clamp(desired.y, available.y, maxY),
         width, height,
     };
-    if (width <= 0 || height - chrome <= 0 || width < (input.minWidth ?? 0)) return { rect, fits: false };
+    // A host measures its minimum rounded up to whole pixels, while the room's height limits the
+    // width by a fractional amount: a shortfall below one pixel is that rounding, not an unusable frame.
+    if (width <= 0 || height - chrome <= 0 || Math.ceil(width) < (input.minWidth ?? 0)) return { rect, fits: false };
     const obstacles = input.avoidRects ?? [];
     if (!obstacles.some((obstacle) => frameRectsOverlap(rect, obstacle))) return { rect, fits: true };
 
@@ -138,4 +118,26 @@ export function resolveFloatingFrameRect(input: Readonly<{
         }
     }
     return closest ? { rect: closest, fits: true } : { rect, fits: false };
+}
+
+/** Leading-bottom grip resize; the opposite edge stays anchored and the body keeps its aspect. */
+export function resolveFloatingFrameResizeRect(input: Readonly<{
+    rect: FrameRect;
+    availableRect: FrameRect;
+    translationX: number;
+    aspectRatio: number;
+    chromeHeight: number;
+    minWidth: number;
+}>): FrameRect {
+    'worklet';
+    const right = input.rect.x + input.rect.width;
+    const aspect = resolveFloatingFrameAspectRatio(input.aspectRatio);
+    const width = Math.max(input.minWidth, Math.min(right - input.availableRect.x, input.rect.width - input.translationX));
+    const fitted = resolveFloatingFrameRect({
+        rect: { x: right - width, y: input.rect.y, width, height: input.chromeHeight + width / aspect },
+        availableRect: input.availableRect, aspectRatio: aspect, chromeHeight: input.chromeHeight,
+    }).rect;
+    // Height fitting may shrink the body; preserve the grip's opposite edge after that fit too.
+    return { ...fitted, x: clamp(right - fitted.width, input.availableRect.x,
+        input.availableRect.x + input.availableRect.width - fitted.width) };
 }

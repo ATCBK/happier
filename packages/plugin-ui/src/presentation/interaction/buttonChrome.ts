@@ -9,6 +9,7 @@ import { happierMaterialBackgroundColor } from '../layout/material.js';
 import { useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '../layout/Surface.js';
 import { useOptionalHappierUiPlatform } from '../../environment/context.js';
 import { useOptionalPluginUiPresentationHost } from '../../presentationHost/context.js';
+import { mixHappierColorOverPaper } from '../data/dataModel.js';
 
 /** Material facts are resolved at the host boundary; this does not own glass policy. */
 export function useHappierButtonMaterial(theme: HappierUiTheme) {
@@ -42,6 +43,18 @@ const BUTTON_PADDING_VERTICAL = 8;
 /** The button's edge: transparent, it carries the primary fill's gloss line on its top side. */
 const BUTTON_EDGE_WIDTH = 2;
 export const HAPPIER_BUTTON_DISABLED_OPACITY = 0.35;
+/**
+ * How much of the primary shows while it cannot act. A disabled primary is still the view's one action:
+ * its own fill and words recede into the page as solid colours, exactly as the host's primary does
+ * (unified-work lab `.uwr-dis`), instead of a generic slab dimmed a second time by opacity.
+ */
+const DISABLED_PRIMARY_PRESENCE = 0.38;
+
+function recedeHappierPrimary(theme: HappierUiTheme): Readonly<{ background: string; foreground: string }> | null {
+  const background = mixHappierColorOverPaper(theme.colors.accent, theme.colors.surface, DISABLED_PRIMARY_PRESENCE);
+  const foreground = mixHappierColorOverPaper(theme.colors.onAccent, theme.colors.surface, DISABLED_PRIMARY_PRESENCE);
+  return background === null || foreground === null ? null : { background, foreground };
+}
 
 /**
  * The one chrome of a button-shaped control: geometry, fill, focus ring and
@@ -65,23 +78,31 @@ export function resolveHappierButtonChrome(input: Readonly<{
   dark?: boolean;
   secondaryFill?: string;
   resolveColor?: (color: string, translucentColor?: string, paintRole?: 'surface' | 'solidControl') => string;
-}>): Readonly<{ style: HappierPortableStyle; foreground: string; gradient: HappierSurfaceGradient | null }> {
+}>): Readonly<{
+  style: HappierPortableStyle;
+  foreground: string;
+  gradient: HappierSurfaceGradient | null;
+  /** The opacity the control takes while disabled: a receded primary already says it, so it is not dimmed again. */
+  disabledOpacity: number;
+}> {
   const { theme, variant } = input;
   const small = input.size === 'small';
-  const foreground = variant === 'primary' ? theme.colors.onAccent
-    : variant === 'destructive' ? theme.colors.danger : theme.colors.text;
+  const receded = variant === 'primary' && input.disabled ? recedeHappierPrimary(theme) : null;
+  const foreground = receded?.foreground ?? (variant === 'primary' ? theme.colors.onAccent
+    : variant === 'destructive' ? theme.colors.danger : theme.colors.text);
   const background = variant === 'plain'
     ? 'transparent'
-    : input.disabled
+    : receded?.background ?? (input.disabled
       ? theme.colors.controlDisabled
-      : (variant === 'primary' ? theme.colors.accent : input.secondaryFill ?? theme.colors.control);
+      : (variant === 'primary' ? theme.colors.accent : input.secondaryFill ?? theme.colors.control));
   const gradient = variant === 'plain' ? null : resolveHappierSurfaceFinish({
     role: variant === 'primary' ? 'primaryButton' : 'secondaryButton', gradients: theme.surfaceFinish ?? {},
     state: { disabled: input.disabled, focused: input.focused, pressed: input.pressed },
   });
   return {
-    foreground: variant === 'primary' ? input.resolveColor?.(foreground, theme.colors.text, 'solidControl') ?? foreground : foreground,
+    foreground: variant === 'primary' && receded === null ? input.resolveColor?.(foreground, theme.colors.text, 'solidControl') ?? foreground : foreground,
     gradient,
+    disabledOpacity: receded === null ? HAPPIER_BUTTON_DISABLED_OPACITY : 1,
     style: {
       minHeight: small
         ? Math.max(HAPPIER_SMALL_BUTTON_HEIGHT, input.nativeMinimumTarget ?? 0)

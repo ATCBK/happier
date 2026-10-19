@@ -2,13 +2,22 @@ import type { HappierPortableStyle } from '../portableTypes.js';
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle } from './focusVisible.js';
 
 export const HAPPIER_ICON_BUTTON_SIZE = 28;
+/** A `well` is the object on its row (the phone toolbar's Filters and ⋯ beside the search), not a glyph in a rail. */
+export const HAPPIER_ICON_BUTTON_WELL_SIZE = 34;
+
+/**
+ * `plain` is a rounded square with no resting fill (toolbars, rails, headers, menus); `outlined` is a round
+ * bordered well; `well` is a round resting fill whose fill is its own edge (a call's Mute · End, a phone
+ * toolbar's Filters and ⋯).
+ */
+export type HappierIconButtonVariant = 'plain' | 'outlined' | 'well';
 
 /**
  * An icon button's corner: a `plain` button (toolbars, rails, headers, menus) is a rounded square whose
- * radius grows with its size (labs app-surfaces xrail, glass W1, lane12-final: 28→8, 36→10); an
- * `outlined` well stays round.
+ * radius grows with its size (labs app-surfaces xrail, glass W1, lane12-final: 28→8, 36→10); the
+ * other variants stay round.
  */
-export function resolveHappierIconButtonRadius(size: number, variant: 'plain' | 'outlined'): number {
+export function resolveHappierIconButtonRadius(size: number, variant: HappierIconButtonVariant): number {
   return variant === 'plain' ? Math.round(size * 0.28) : size / 2;
 }
 
@@ -21,7 +30,7 @@ export function resolveHappierIconButtonRadius(size: number, variant: 'plain' | 
  */
 export function resolveHappierIconButtonChrome(input: Readonly<{
   size: number;
-  variant: 'plain' | 'outlined';
+  variant: HappierIconButtonVariant;
   selected: boolean;
   selectedBackground?: boolean;
   hovered: boolean;
@@ -54,7 +63,7 @@ export function resolveHappierIconButtonChrome(input: Readonly<{
       backgroundColor: input.pressed ? input.colors.pressed
         : input.hovered ? input.colors.hover
           : input.selected && input.selectedBackground !== false ? input.colors.selected
-            : input.variant === 'outlined' ? input.colors.background : undefined,
+            : input.variant === 'plain' ? undefined : input.colors.background,
       ...(input.variant === 'outlined' ? { borderWidth: 1, borderColor: input.colors.border } : {}),
       ...happierFocusRingStyle({ visible: input.focused, color: input.colors.focus }),
     },

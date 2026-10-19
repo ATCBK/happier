@@ -507,6 +507,11 @@ export function resolveHappierPageRowFieldMaxWidth(input: Readonly<{
   titleAccessoryGapPx?: number;
   /** Width of sibling controls sharing the accessory slot with the field (a role's runs-as glyph and its gap). */
   siblingPx?: number;
+  /**
+   * The widest room beside the label in which the field's value filled its box (it was being cut).
+   * Room that is no wider moves the field beneath its label, where the value reads in full.
+   */
+  fieldSaturatedAtPx?: number | null;
 }>): number | null {
   const width = input.rowWidthPx;
   if (!isHappierPageRowNarrow(width) || width === null) return null;
@@ -520,7 +525,9 @@ export function resolveHappierPageRowFieldMaxWidth(input: Readonly<{
     : Math.min(HAPPIER_PAGE_METRICS.sectionTextMinWidthPx, naturalLabelPx);
   const available = width - 2 * (input.rowInsetPx ?? HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx)
     - HAPPIER_PAGE_METRICS.rowLeadingGapPx - labelColumnPx - (input.siblingPx ?? 0);
-  return available >= HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx ? available : null;
+  if (available < HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx) return null;
+  if (input.fieldSaturatedAtPx != null && available <= input.fieldSaturatedAtPx + 0.5) return null;
+  return available;
 }
 
 /**
@@ -629,14 +636,20 @@ export function HappierListItem({
   // A field beside a short name needs only that name's room (see `resolveHappierPageRowFieldMaxWidth`).
   const measuresFieldLabel = pageSection !== null && fieldAccessory === true && isHappierPageRowNarrow(pageRowWidthPx);
   const measuresTitle = (measuresDetail || measuresFieldLabel) && Boolean(title);
+  // The room at which the field's value last filled its box (see `resolveHappierPageRowFieldMaxWidth`).
+  const [fieldSaturatedAtPx, setFieldSaturatedAtPx] = useState<number | null>(null);
+  const handleFieldSaturated = useCallback((maxWidthPx: number) => {
+    setFieldSaturatedAtPx((current) => (current !== null && current >= maxWidthPx ? current : maxWidthPx));
+  }, []);
   const fieldMaxWidthPx = useMemo(() => (pageRowInsetPx !== undefined && fieldAccessory === true
     ? resolveHappierPageRowFieldMaxWidth({
       rowWidthPx: pageRowWidthPx,
       rowInsetPx: pageRowInsetPx,
       titleNaturalWidthPx: measuresFieldLabel ? titleNaturalWidthPx : null,
       ...(fieldAccessorySiblingPx === undefined ? {} : { siblingPx: fieldAccessorySiblingPx }),
+      fieldSaturatedAtPx,
     })
-    : null), [fieldAccessory, fieldAccessorySiblingPx, measuresFieldLabel, pageRowInsetPx, pageRowWidthPx, titleNaturalWidthPx]);
+    : null), [fieldAccessory, fieldAccessorySiblingPx, fieldSaturatedAtPx, measuresFieldLabel, pageRowInsetPx, pageRowWidthPx, titleNaturalWidthPx]);
   const handleDetailLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
     const width = event.nativeEvent.layout.width;
     if (Number.isFinite(width) && width > 0) setDetailWidthPx(current => current === width ? current : width);
@@ -687,7 +700,11 @@ export function HappierListItem({
       nativeEvent: { layout: { width: event.nativeEvent.layout.width - pageSection.rowInsetPx } },
     })
     : undefined;
-  const fieldLayout = useMemo(() => ({ maxWidthPx: fieldMaxWidthPx, stacked: stackPageAccessory }), [fieldMaxWidthPx, stackPageAccessory]);
+  const fieldLayout = useMemo(() => ({
+    maxWidthPx: fieldMaxWidthPx,
+    stacked: stackPageAccessory,
+    onFieldSaturated: handleFieldSaturated,
+  }), [fieldMaxWidthPx, handleFieldSaturated, stackPageAccessory]);
   const pageAccessory = pageSection !== null
     ? <HappierPageRowFieldLayoutContext.Provider value={fieldLayout}>{accessory}</HappierPageRowFieldLayoutContext.Provider>
     : accessory;
@@ -787,9 +804,11 @@ export function HappierListItem({
           paddingRight: resolveHappierCollectionListRowPadding(0).paddingRight - NAVIGATION_ROW_FOCUS_RING_WIDTH,
           paddingVertical: NAVIGATION_ROW_TEXT_FLOOR_PX,
         } : pageSection ? {
-          flexDirection: stackPageAccessory && includeAccessory ? 'column' : 'row',
-          alignItems: stackPageAccessory && includeAccessory ? 'stretch' : 'center',
-          flexWrap: 'nowrap',
+          // A stacked control moves beneath the row's text. With a leading glyph the glyph and the text stay
+          // together on the first line and the control wraps to its own, so the glyph is never alone above them.
+          flexDirection: stackPageAccessory && includeAccessory && !icon ? 'column' : 'row',
+          alignItems: stackPageAccessory && includeAccessory ? (icon ? 'flex-start' : 'stretch') : 'center',
+          flexWrap: stackPageAccessory && includeAccessory && icon ? 'wrap' : 'nowrap',
           columnGap: HAPPIER_PAGE_METRICS.rowLeadingGapPx,
           rowGap: 10,
           minHeight: Math.max(
@@ -828,7 +847,7 @@ export function HappierListItem({
         <View
           style={pageSection ? {
             // A page row decides placement by measurement, not by wrapping.
-            ...(stackPageAccessory && includeAccessory ? { flexGrow: 0, flexShrink: 0 } : { flex: 1 }),
+            ...(stackPageAccessory && includeAccessory && !icon ? { flexGrow: 0, flexShrink: 0 } : { flex: 1 }),
             minWidth: 0,
             gap: 0,
           } : {
@@ -915,7 +934,17 @@ export function HappierListItem({
         ) : null}
         {includeAccessory
           ? (pageSection && accessory !== undefined && accessory !== null
-            ? <View onLayout={onPageAccessoryLayout} style={stackPageAccessory ? { alignSelf: 'stretch', alignItems: 'stretch' } : null}>{pageAccessory}</View>
+            ? <View
+              onLayout={onPageAccessoryLayout}
+              style={stackPageAccessory
+                ? {
+                  alignSelf: 'stretch',
+                  alignItems: 'stretch',
+                  // Beneath the text, on its edge: past the glyph column and the gap after it.
+                  ...(icon ? { flexBasis: '100%', paddingLeft: HAPPIER_PAGE_METRICS.rowLeadingColumnPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx } : {}),
+                }
+                : null}
+            >{pageAccessory}</View>
             : accessory)
           : null}
         {busyIndicator}
@@ -1114,8 +1143,10 @@ export function HappierListItem({
         {pageAccessory}
       </View>
     </View>
-  ) : behavior.accessoryPlacement === 'outside' ? (
-    <View style={{
+  ) : behavior.accessoryPlacement === 'outside' || collectionRow ? (
+    // Keep the collection's press target at the same depth when responsive
+    // composition adds or removes its trailing controls, preserving focus.
+    <View style={includeAccessory ? undefined : {
       flexDirection: stackPageAccessory ? 'column' : 'row',
       alignItems: stackPageAccessory ? 'stretch' : 'center',
       flexWrap: accessoryWraps ? 'wrap' : 'nowrap',
@@ -1123,8 +1154,8 @@ export function HappierListItem({
       // The control keeps the row's trailing inset, as its text keeps the leading one.
       ...(accessory && !overlayRowActions && !stackPageAccessory ? { paddingEnd: resolvedTheme?.spacing.medium ?? 0 } : {}),
     }}>
-      <View style={stackPageAccessory ? null : { flex: 1, minWidth: accessoryWraps ? '50%' : 0 }}>{row}</View>
-      {rowAccessory}
+      <View style={includeAccessory || stackPageAccessory ? null : { flex: 1, minWidth: accessoryWraps ? '50%' : 0 }}>{row}</View>
+      {includeAccessory ? null : rowAccessory}
     </View>
   ) : row;
 

@@ -94,6 +94,12 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   rowIconGlyphPx: 20,
   rowLeadingColumnPx: 20,
   rowLeadingGapPx: 12,
+  /**
+   * A row whose leading element is a picture of the thing itself (a window's or a screen's thumbnail,
+   * a file's preview) rather than a glyph: a landscape box, so the picture reads at a glance. Computer
+   * lab `.cu-prow .th` and the anchored switcher's rows.
+   */
+  rowLeadingMediaPx: Object.freeze({ width: 56, height: 36 }),
   /** A compact page row: one line in a long index-style list. */
   compactRowPaddingVerticalPx: 9,
   compactRowMinHeightPx: 40,
@@ -196,6 +202,11 @@ export function isHappierSectionActionStacked(input: Readonly<{
   actionLayout?: 'inline' | 'adaptive' | 'trailing';
   gapPx: number;
   hasDescription?: boolean;
+  /**
+   * A title-only heading's measured title width (capped at the room it was laid out in). A short title
+   * that fits beside the action keeps the action on its line even below the shared label column.
+   */
+  titleWidthPx?: number | null;
 }>): boolean {
   const { headerWidthPx, actionWidthPx } = input;
   // A trailing icon cluster needs no text column of its own: the title beside it shrinks instead.
@@ -205,7 +216,12 @@ export function isHappierSectionActionStacked(input: Readonly<{
   if (typeof actionWidthPx !== 'number' || !Number.isFinite(actionWidthPx) || actionWidthPx <= 0) {
     return isHappierPageRowNarrow(headerWidthPx);
   }
-  return headerWidthPx - actionWidthPx - input.gapPx < HAPPIER_PAGE_METRICS.sectionTextMinWidthPx;
+  const roomBesideActionPx = headerWidthPx - actionWidthPx - input.gapPx;
+  if (roomBesideActionPx >= HAPPIER_PAGE_METRICS.sectionTextMinWidthPx) return false;
+  // A title that already fills the room beside the action is wrapping there: it keeps the rule above.
+  const titleWidthPx = input.titleWidthPx;
+  return !(input.hasDescription !== true && typeof titleWidthPx === 'number' && titleWidthPx > 0
+    && titleWidthPx < roomBesideActionPx - 0.5);
 }
 
 /**

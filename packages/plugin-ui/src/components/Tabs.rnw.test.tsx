@@ -341,3 +341,36 @@ describe('a tabbed region that fills its parent', () => {
     content.unmount();
   });
 });
+
+describe('tab labels', () => {
+  it('shows glyph-only tabs when labels are hidden and every tab has a glyph, keeping each accessible name', () => {
+    const glyph = (name: string) => <NativeText testID={`glyph-${name}`}>{name[0]}</NativeText>;
+    const mount = mountTabs(
+      <Tabs testID="views" value="chat" onValueChange={() => undefined} ariaLabel="Views" labels="none">
+        <Tabs.Item value="chat" title="Chat" icon={glyph('chat')} marker="Unread" />
+        <Tabs.Item value="files" title="Files" icon={glyph('files')} />
+      </Tabs>,
+    );
+    try {
+      const chat = mount.container.querySelector('[data-testid="views:chat"]');
+      const files = mount.container.querySelector('[data-testid="views:files"]');
+      expect(chat?.getAttribute('aria-label')).toBe('Chat Unread');
+      expect(files?.getAttribute('aria-label')).toBe('Files');
+      expect(chat?.textContent).toBe('c');
+      expect(files?.textContent).toBe('f');
+    } finally { mount.unmount(); }
+  });
+
+  it('keeps every label when one tab lacks a glyph, so a half-iconic strip never reads as broken', () => {
+    const mount = mountTabs(
+      <Tabs testID="mixed" value="chat" onValueChange={() => undefined} ariaLabel="Views" labels="none">
+        <Tabs.Item value="chat" title="Chat" icon={<NativeText>c</NativeText>} />
+        <Tabs.Item value="files" title="Files" />
+      </Tabs>,
+    );
+    try {
+      expect(mount.container.querySelector('[data-testid="mixed:chat"]')?.textContent).toBe('cChat');
+      expect(mount.container.querySelector('[data-testid="mixed:files"]')?.textContent).toBe('Files');
+    } finally { mount.unmount(); }
+  });
+});

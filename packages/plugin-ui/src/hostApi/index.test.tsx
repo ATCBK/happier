@@ -29,7 +29,8 @@ import {
   usePluginSurfaceActivity,
 } from './context.js';
 import { useHappierUiAnimationActivityInternal } from '../environment/context.js';
-import { createSurfaceContext } from '../surfaceFixture.testSupport.js';
+import { createHostApiStub as createSharedHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
+import { PluginUiHostReadinessProviderInternal, usePluginHostReadiness } from './readiness.public.js';
 
 const resourceRef = { pluginId: 'acme.preview', localId: 'review-summary' } as const;
 const mountedTrees = new Set<renderer.ReactTestRenderer>();
@@ -74,12 +75,10 @@ function createHostApiStub(overrides: Partial<PluginUiHostApi> = {}) {
     bytes: new TextEncoder().encode('{"status":"ready"}'),
   };
 
-  const api: PluginUiHostApi = {
-    version: () => ({ apiVersion: '1.0.0', wireVersion: 1, methods: [] }),
+  const api = createSharedHostApiStub(surfaceContextFixture, {
     context: vi.fn(async () => surfaceContextFixture),
     widgetArea: async () => { throw new Error('unsupported_host_method'); },
     watchContext: vi.fn(async (): Promise<Disposable> => ({ dispose: vi.fn() })),
-    executeAction: vi.fn(async () => null),
     readResource: vi.fn(async () => resource),
     statOpenableContent: vi.fn(async () => { throw new Error('unsupported_host_method'); }),
     readOpenableContent: vi.fn(async () => { throw new Error('unsupported_host_method'); }),
@@ -92,7 +91,7 @@ function createHostApiStub(overrides: Partial<PluginUiHostApi> = {}) {
     writeClipboard: vi.fn(async () => undefined),
     openExternalLink: vi.fn(async () => undefined),
     ...overrides,
-  } as PluginUiHostApi;
+  });
 
   return {
     api,
@@ -133,6 +132,25 @@ function deferred<T>() {
 }
 
 describe('plugin host API hooks', () => {
+  it('reacquires Account reads on host readmission without holding them behind Machine readiness', async () => {
+    const host = createHostApiStub();
+    let answer: Readonly<{ pending: boolean; revision: number }> | undefined;
+    function Probe() { answer = usePluginHostReadiness(false); return null; }
+    const render = (pending: boolean, ready: boolean) => (
+      <PluginUiHostReadinessProviderInternal hostApi={host.api} context={createSurfaceContext({
+        machineConnectionPending: pending, machineExecutionReady: ready,
+      })}><Probe /></PluginUiHostReadinessProviderInternal>
+    );
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = createRenderer(render(true, false)); });
+    expect(answer).toEqual({ pending: false, revision: 0 });
+    await act(async () => { tree.update(render(false, true)); });
+    expect(answer).toEqual({ pending: false, revision: 1 });
+    // A settled daemon outage never hides or defers direct Account state.
+    await act(async () => { tree.update(render(false, false)); });
+    expect(answer).toEqual({ pending: false, revision: 1 });
+  });
+
   it('shares an injected Resource owner across mounts without disposing it on one unmount', async () => {
     const host = createHostApiStub();
     let digest = `sha256:${'a'.repeat(64)}`;

@@ -42,6 +42,12 @@ export const HAPPIER_DATA_METRICS = Object.freeze({
   areaSeamPx: 1.5,
   barSeamPx: 1,
   axisGapPx: 4,
+  /** A lanes timeline: one bar per run, packed into tracks under one lane label (a machine, an agent). */
+  laneBarHeightPx: 10,
+  laneTrackGapPx: 4,
+  laneLabelWidthPx: 112,
+  /** Below this body width a lane's label sits above its tracks instead of beside them. */
+  laneSideLabelMinWidthPx: 480,
   /** Opacity of the text colour for resting bars, a proportion's track and its fill. */
   barRestOpacity: 0.16,
   trackOpacity: 0.08,

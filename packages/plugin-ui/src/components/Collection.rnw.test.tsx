@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { DragSource } from './EntityDragDrop.js';
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -453,13 +454,14 @@ function mount(
     pane?: ReturnType<typeof createPaneHost>;
     scrollTracker?: PluginUiScrollActivityTracker;
     pageChrome?: Readonly<{ showsTitle: boolean; columnMaxWidthPx?: number }>;
+    hostApiOverrides?: Parameters<typeof createHostApiStub>[1];
   }> &
     HarnessOptions = {},
 ) {
   const context = createSurfaceContext({
     reducedMotion: options.reducedMotion ?? false,
   });
-  const hostApi = createHostApiStub(context);
+  const hostApi = createHostApiStub(context, options.hostApiOverrides);
   const openChanges: Array<string | null> = [];
   const host = {
     ...presentationHost(options.motion, options.pane?.binding),
@@ -1048,7 +1050,7 @@ describe('Collection table', () => {
     },
   );
 
-  it('lets the canonical selection command take precedence over a table peek', async () => {
+  it('peeks with idle table Space and selects with X and selection-mode Space', async () => {
     const store = createListMultiSelectionStore({
       scopeKey: 'entries',
       visibleOrderedKeys: [],
@@ -1066,12 +1068,59 @@ describe('Collection table', () => {
           }),
         );
       });
+      expect([...store.getSnapshot().selectedKeys]).toEqual([]);
+      expect(view.query('peek-content:a')).not.toBeNull();
+      expect(view.container.textContent).toContain('peek');
+      expect(view.container.textContent).not.toContain('select');
+      await act(async () => {
+        view.query('row:a')!.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'x', bubbles: true, cancelable: true,
+        }));
+      });
       expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
-      expect(view.query('peek-content:a')).toBeNull();
+      expect(view.container.textContent).toContain('select');
+      await act(async () => {
+        view.query('row:b')!.focus();
+        view.query('row:b')!.dispatchEvent(new KeyboardEvent('keydown', {
+          key: ' ', bubbles: true, cancelable: true,
+        }));
+      });
+      expect([...store.getSnapshot().selectedKeys]).toEqual(['a', 'b']);
+      expect(view.query('peek-content:b')).toBeNull();
       expect(view.openChanges).toEqual([]);
     } finally {
       view.unmount();
     }
+  });
+
+  it.each(['list', 'board', 'phone'] as const)('keeps Space selection without table peek in %s', async (mode) => {
+    const store = createListMultiSelectionStore({ scopeKey: 'entries', visibleOrderedKeys: [] });
+    const view = mount({ presentation: mode === 'phone' ? 'table' : mode, selection: { multiple: { store } } });
+    try {
+      view.measure(mode === 'phone' ? 390 : 1440);
+      await act(async () => {
+        view.query('row:a')!.focus();
+        view.query('row:a')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+      });
+      expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
+      expect(view.query('peek-content:a')).toBeNull();
+    } finally { view.unmount(); }
+  });
+
+  it('selects a table row with no peek instead of expanding an empty body', async () => {
+    const store = createListMultiSelectionStore({ scopeKey: 'entries', visibleOrderedKeys: [] });
+    const view = mount({ anatomy: { ...anatomy, peek: () => null }, selection: { multiple: { store } } });
+    try {
+      view.measure(1440);
+      expect(view.query('collection:footer')?.textContent).toContain('select');
+      expect(view.query('collection:footer')?.textContent).not.toContain('peek');
+      await act(async () => {
+        view.query('row:a')!.focus();
+        view.query('row:a')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+      });
+      expect([...store.getSnapshot().selectedKeys]).toEqual(['a']);
+      expect(view.query('row:a:peek-cell')).toBeNull();
+    } finally { view.unmount(); }
   });
 
   it('keeps grid positions when a primary item is inactive', async () => {
@@ -1491,6 +1540,92 @@ describe('Collection table', () => {
     view.unmount();
   });
 
+  it('keeps one sequential stop while the roving row reaches Peek and staged Move by shortcut and menu', async () => {
+    const requests: import('@happier-dev/plugin-sdk/ui').PluginUiUpdateEntityDragDropRequestV1[] = [];
+    let delayedPickupPhase: 'destinations' | 'begin' | null = null;
+    let completePickupPhase: (() => void) | null = null;
+    const view = mount({
+      detail: 'auto',
+      renderPopover: input => input.open ? input.content({ requestClose: input.onRequestClose, maxHeight: 10_000 }) : null,
+      hostApiOverrides: {
+        watchEntityDragDrop: async () => ({ dispose() {} }),
+        updateEntityDragDrop: async request => {
+          requests.push(request);
+          if (request.kind === delayedPickupPhase) {
+            delayedPickupPhase = null;
+            await new Promise<void>(resolve => { completePickupPhase = resolve; });
+          }
+          return request.kind === 'destinations' ? { accepted: true, destinations: [{ targetId: 'review', label: 'Review', admission: { status: 'allowed', effect: { actionId: 'example.move', input: {}, preview: { verb: 'Move', target: 'Review' } } } }] } : { accepted: true };
+        },
+      },
+      anatomy: {
+        ...anatomy,
+        wrapItem: (entry, children) => <DragSource sourceId="entry" reference={entry.id} organizing testID={`move:${entry.id}`}>{children}</DragSource>,
+      },
+    });
+    try {
+      view.measure(1440);
+      const stops = () => ['a', 'b', 'c'].map(key => ({
+        key, row: view.query(`row:${key}`)!.tabIndex,
+        peek: view.query(`row:${key}:peek`)!.tabIndex,
+        move: view.query(`move:${key}`)!.tabIndex,
+      }));
+      const sequentialTargets = () => ['a', 'b', 'c'].flatMap(key => [
+        ...view.query(`row:${key}:cell`)!.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]'),
+      ]).filter(element => element.tabIndex >= 0 && !element.matches(':disabled'));
+      expect(sequentialTargets()).toEqual([view.query('row:a')]);
+      expect(stops()).toEqual([
+        { key: 'a', row: 0, peek: -1, move: -1 },
+        { key: 'b', row: -1, peek: -1, move: -1 },
+        { key: 'c', row: -1, peek: -1, move: -1 },
+      ]);
+      act(() => { view.query('row:b')!.focus(); });
+      expect(stops().filter(row => row.row === 0).map(row => row.key)).toEqual(['b']);
+      expect(stops().every(row => row.peek === -1 && row.move === -1)).toBe(true);
+      expect(sequentialTargets()).toEqual([view.query('row:b')]);
+      expect(view.query('row:b:peek')!.getAttribute('aria-label')).toContain(entries[1]!.title);
+      expect(view.query('move:b')!.getAttribute('aria-label')).toBe('Move item');
+      act(() => { view.query('row:b:peek')!.click(); });
+      expect(view.query('peek-content:b')).not.toBeNull();
+      expect(view.openChanges).toEqual([]);
+      const row = view.query('row:b')!;
+      const key = async (value: string, init: KeyboardEventInit = {}) => {
+        await act(async () => {
+          row.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true, ...init }));
+          row.dispatchEvent(new KeyboardEvent('keyup', { key: value, bubbles: true, cancelable: true, ...init }));
+        });
+      };
+      await key('m', { altKey: true });
+      expect(requests.some(request => request.kind === 'begin' && request.input === 'keyboard')).toBe(true);
+      await key('Enter');
+      expect(requests.filter(request => request.kind === 'commit')).toHaveLength(1);
+      expect(view.openChanges).toEqual([]);
+      await key('F10', { shiftKey: true });
+      const menuItem = (name: string) => [...view.container.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes(name));
+      expect(menuItem('Peek')).toBeDefined();
+      const move = menuItem('Move item');
+      expect(move).toBeDefined();
+      await act(async () => { move!.click(); });
+      expect(requests.filter(request => request.kind === 'begin')).toHaveLength(2);
+      await key('Escape');
+      expect(requests.some(request => request.kind === 'cancel')).toBe(true);
+      for (const phase of ['destinations', 'begin'] as const) {
+        delayedPickupPhase = phase;
+        completePickupPhase = null;
+        await key('m', { altKey: true });
+        expect(completePickupPhase).not.toBeNull();
+        await key('Enter');
+        expect(view.openChanges).toEqual([]);
+        await key('Escape');
+        const beginsAfterCancel = requests.filter(request => request.kind === 'begin').length;
+        const choicesAfterCancel = requests.filter(request => request.kind === 'choose').length;
+        await act(async () => { (completePickupPhase as (() => void) | null)?.(); });
+        expect(requests.filter(request => request.kind === 'begin')).toHaveLength(beginsAfterCancel);
+        expect(requests.filter(request => request.kind === 'choose')).toHaveLength(choicesAfterCancel);
+      }
+    } finally { view.unmount(); }
+  });
+
   it('has one board tab stop and retains the logical cursor across presentations and phone pages', async () => {
     const view = mount({ presentation: 'board', detail: 'none' });
     view.measure(1440);
@@ -1669,6 +1804,30 @@ describe('Collection table', () => {
     view.unmount();
   });
 
+  it("lets a row's field cell stand across the following field columns, drawing nothing in them", () => {
+    const view = mount({
+      anatomy: {
+        ...anatomy,
+        where: undefined,
+        reason: undefined,
+        age: undefined,
+        fields: [
+          { key: 'cpu', title: 'CPU', minWidth: 120, priority: 1, render: (entry) => entry.id === 'a' ? 'Offline · last seen yesterday 23:14' : `cpu ${entry.id}`, spanRest: (entry) => entry.id === 'a' },
+          { key: 'memory', title: 'Memory', minWidth: 120, priority: 1, render: (entry) => `memory ${entry.id}` },
+        ],
+        columnTitles: { title: 'Entry' },
+      },
+    });
+    view.measure(1440);
+    expect(headerTitles(view.container)).toEqual(['Entry', 'CPU', 'Memory']);
+    const rowText = (id: string) => view.query(`row:${id}`)!.closest('[role="row"]')!.textContent ?? '';
+    expect(rowText('a')).toContain('Offline · last seen yesterday 23:14');
+    expect(rowText('a')).not.toContain('memory a');
+    expect(rowText('b')).toContain('cpu b');
+    expect(rowText('b')).toContain('memory b');
+    view.unmount();
+  });
+
   it('groups rows by the one axis, with each group naming what its rows share', () => {
     const view = mount();
     view.measure(1440);
@@ -1757,6 +1916,14 @@ describe('Collection table', () => {
     const footer = view.query('collection:footer')!;
     expect(footer.textContent).toContain('peek');
     expect(footer.textContent).toContain('3 loaded · complete');
+    view.unmount();
+  });
+
+  it('names no keys on a table that opens nothing, and keeps its window line', () => {
+    const view = mount({ detail: 'none' });
+    view.measure(1440);
+    expect(view.query('collection:hints')).toBeNull();
+    expect(view.query('collection:footer')!.textContent).toContain('3 loaded · complete');
     view.unmount();
   });
 });
@@ -3639,6 +3806,8 @@ type TreeHarnessProps = Readonly<{
   sort?: CollectionProps<Proc>['sort'];
   summaryRows?: CollectionProps<Proc>['summaryRows'];
   groupAction?: CollectionProps<Proc>['groupAction'];
+  scroll?: 'page';
+  ungrouped?: boolean;
   onOpenChange: (key: string | null) => void;
 }>;
 
@@ -3655,7 +3824,7 @@ function TreeHarness(props: TreeHarnessProps): ReactElement {
   const model = useHappierCollection({
     items: procs,
     keyOf: (proc: Proc) => proc.id,
-    groups: procGroups,
+    ...(props.ungrouped ? {} : { groups: procGroups }),
     parentKey: (proc: Proc) => proc.parent,
     ...(filter === undefined ? {} : { filter }),
     ...(props.initialOpen === undefined
@@ -3682,6 +3851,7 @@ function TreeHarness(props: TreeHarnessProps): ReactElement {
       {...(props.groupAction === undefined
         ? {}
         : { groupAction: props.groupAction })}
+      {...(props.scroll === undefined ? {} : { scroll: props.scroll })}
       testID="procs"
     />
   );
@@ -4211,7 +4381,7 @@ describe("the search in the caller's header row", () => {
         view!.query('row:b')!.focus();
         view!.query('row:b')!.dispatchEvent(
           new KeyboardEvent('keydown', {
-            key: ' ',
+            key: 'x',
             bubbles: true,
             cancelable: true,
           }),
@@ -4509,5 +4679,36 @@ describe('the Collection toolbar', () => {
     expect(button(view.query('toolbar')!, 'Filters: 2')).not.toBeNull();
     expect(view.query('refine:toolbar')).toBeNull();
     view.unmount();
+  });
+});
+
+describe('an ungrouped page list (a phone)', () => {
+  const sort = { key: 'memory', direction: 'descending' as const, onChange: () => undefined };
+  const summaryRows = [{ key: 'total', title: 'Happier in total', cells: { memory: '9.9 GB' }, testID: 'procs:total' }];
+
+  it("keeps the table's header on its one sheet: what the rows are, their order, then the rows and totals", () => {
+    const view = mountTree({ presentation: 'list', scroll: 'page', ungrouped: true, sort, summaryRows });
+    view.measure(390);
+    const bar = view.query('procs:sheet-header');
+    expect(bar).not.toBeNull();
+    expect(bar!.textContent).toContain('Started by Happier');
+    expect(view.query('procs:sort:memory')?.textContent).toContain('Memory');
+    expect(view.query('procs:sort:memory:arrow')?.textContent).toBe('↓');
+    // One sheet: the bar leads the rows and the totals inside the same sheet body.
+    const sheetBody = bar!.parentElement!;
+    expect(sheetBody.contains(view.rowElement(view.rows()[0]!))).toBe(true);
+    expect(sheetBody.textContent).toContain('Happier in total');
+    view.unmount();
+  });
+
+  it('leaves grouped and unsorted page lists to their section titles', () => {
+    const grouped = mountTree({ presentation: 'list', scroll: 'page', sort });
+    grouped.measure(390);
+    expect(grouped.query('procs:sheet-header')).toBeNull();
+    grouped.unmount();
+    const unsorted = mountTree({ presentation: 'list', scroll: 'page', ungrouped: true });
+    unsorted.measure(390);
+    expect(unsorted.query('procs:sheet-header')).toBeNull();
+    unsorted.unmount();
   });
 });

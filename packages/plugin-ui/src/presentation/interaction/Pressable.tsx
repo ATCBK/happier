@@ -358,9 +358,9 @@ export function HappierPressable({
     if (key === null) return;
 
     if (!onKeyDown?.(key, event)) {
-      // RNW does not activate role=tab with Space. Keep that press semantic
+      // RNW does not activate tabs, switches or checkboxes with Space. Keep that press semantic
       // here; compound widgets that already handle it retain first refusal.
-      if (Platform.OS === 'web' && accessibilityRole === 'tab' && (key === ' ' || key === 'Spacebar')) {
+      if (Platform.OS === 'web' && (accessibilityRole === 'tab' || accessibilityRole === 'switch' || accessibilityRole === 'checkbox') && (key === ' ' || key === 'Spacebar')) {
         candidate.preventDefault?.();
         candidate.stopPropagation?.();
         handlePress({ nativeEvent: { key } });

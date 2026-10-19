@@ -8,6 +8,10 @@ import {
   HAPPIER_INSTANT_AGENT_CURSOR_MOTION,
   HappierAgentCursor,
   resolveHappierAgentCursorPlacement,
+  type HappierAgentCursorMotion,
+  type HappierAgentCursorMotionDriver,
+  type HappierAgentPoint,
+  type HappierAgentTarget,
 } from './AgentCursor.js';
 import { HappierPresenceCapsule, type HappierPresence, type HappierPresenceCapsuleCopy } from './PresenceCapsule.js';
 
@@ -388,6 +392,143 @@ describe('HappierAgentCursor', () => {
     try {
       expect(byTestId(mounted.container, 'c-pointer')).toBeNull();
       expect(byTestId(mounted.container, 'c')?.getAttribute('aria-hidden')).toBe('true');
+    } finally {
+      mounted.unmount();
+    }
+  });
+});
+
+/** A host whose fades run until the test says they landed, as a real fast duration does. */
+function createRecordingCursorMotion() {
+  const calls: string[] = [];
+  const landings = new Map<string, () => void>();
+  const motion: HappierAgentCursorMotion = {
+    set: (channel, value) => { calls.push(`set ${channel} ${value}`); },
+    travel: (channel, value) => { calls.push(`travel ${channel} ${value}`); },
+    setOpacity: (layer, value) => { calls.push(`opacity ${layer} ${value}`); },
+    fade: (layer, to, _curve, onDone) => {
+      calls.push(`fade ${layer} ${to}`);
+      if (onDone) landings.set(`${layer} ${to}`, onDone); else landings.delete(`${layer} ${to}`);
+    },
+    ringOpacity: () => 0,
+  };
+  const driver: HappierAgentCursorMotionDriver = {
+    useMotion: () => motion,
+    Pointer: (props) => <div data-testid={props.testID}>{props.children}</div>,
+    Ring: (props) => <div data-testid={props.testID}>{props.children}</div>,
+  };
+  return {
+    driver,
+    calls,
+    land: (layer: 'pointer' | 'ring', to: number) => act(() => { landings.get(`${layer} ${to}`)?.(); }),
+  };
+}
+
+const PAGE = { x: 0, y: 0, width: 400, height: 300 };
+const NOTES: HappierAgentTarget = { x: 0.5, y: 0.5, width: 0.2, height: 0.1 };
+
+describe('HappierAgentCursor point', () => {
+  const renderCursor = (
+    driver: HappierAgentCursorMotionDriver,
+    props: Readonly<{ target: HappierAgentTarget | null; point?: HappierAgentPoint | null; reducedMotion?: boolean }>,
+  ) => (
+    <HappierAgentCursor
+      target={props.target}
+      point={props.point}
+      pageRect={PAGE}
+      renderGlyph={(glyph) => <span data-glyph={glyph} />}
+      colors={{ line: 'black', casing: 'white' }}
+      reducedMotion={props.reducedMotion ?? false}
+      motion={driver}
+      testID="c"
+    />
+  );
+
+  it('shows an action whose target and end arrive in one render: arrives fully, then leaves once', async () => {
+    const motion = createRecordingCursorMotion();
+    const mounted = mountThroughReactNativeWeb(renderCursor(motion.driver, { target: null }));
+    try {
+      motion.calls.length = 0; // the idle mount's own hide is not under test
+      expect(byTestId(mounted.container, 'c-pointer')).toBeNull();
+      // The producer's target and its terminal state were applied in the same batch: this render never
+      // saw a live target, only the retained point.
+      await mounted.render(renderCursor(motion.driver, { target: null, point: { id: 'click-1', target: NOTES } }));
+      expect(byTestId(mounted.container, 'c-pointer')).not.toBeNull();
+      expect(byTestId(mounted.container, 'c-ring')).not.toBeNull();
+      expect(motion.calls).toContain('set x 200');
+      expect(motion.calls).toContain('fade pointer 1');
+      // It has not started leaving: the hand must land before it goes.
+      expect(motion.calls).not.toContain('fade pointer 0');
+      motion.land('pointer', 1);
+      expect(motion.calls).toContain('fade pointer 0');
+      expect(motion.calls).toContain('fade ring 0');
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('holds a landed point while its target is still live, and leaves when the target ends', async () => {
+    const motion = createRecordingCursorMotion();
+    const point = { id: 'click-1', target: NOTES };
+    const mounted = mountThroughReactNativeWeb(renderCursor(motion.driver, { target: null }));
+    try {
+      motion.calls.length = 0; // the idle mount's own hide is not under test
+      await mounted.render(renderCursor(motion.driver, { target: NOTES, point }));
+      motion.land('pointer', 1);
+      expect(motion.calls).not.toContain('fade pointer 0');
+      await mounted.render(renderCursor(motion.driver, { target: null, point }));
+      expect(motion.calls).toContain('fade pointer 0');
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('moves smoothly to the next action and drops the pending fade, and shows a point once', async () => {
+    const motion = createRecordingCursorMotion();
+    const mounted = mountThroughReactNativeWeb(renderCursor(motion.driver, { target: null }));
+    try {
+      motion.calls.length = 0; // the idle mount's own hide is not under test
+      await mounted.render(renderCursor(motion.driver, { target: null, point: { id: 'a', target: NOTES } }));
+      motion.land('pointer', 1);
+      motion.calls.length = 0;
+      // The second action arrives while the first is still leaving: the hand travels, never jumps.
+      await mounted.render(renderCursor(motion.driver, { target: null, point: { id: 'b', target: { ...NOTES, x: 0.25 } } }));
+      expect(motion.calls).toContain('travel x 100');
+      expect(motion.calls).not.toContain('set x 100');
+      motion.calls.length = 0;
+      // Rendering the same point again (any parent update) does not replay it.
+      motion.land('pointer', 1);
+      motion.calls.length = 0;
+      await mounted.render(renderCursor(motion.driver, { target: null, point: { id: 'b', target: { ...NOTES, x: 0.25 } } }));
+      expect(motion.calls).toEqual([]);
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('does not replay the point that was already there when the cursor mounted', async () => {
+    const motion = createRecordingCursorMotion();
+    const mounted = mountThroughReactNativeWeb(renderCursor(motion.driver, { target: null, point: { id: 'old', target: NOTES } }));
+    try {
+      motion.calls.length = 0; // the idle mount's own hide is not under test
+      expect(byTestId(mounted.container, 'c-pointer')).toBeNull();
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('reduced motion: shows the point at once, with no travel or fade, until the host withdraws it', async () => {
+    const motion = createRecordingCursorMotion();
+    const point = { id: 'click-1', target: NOTES };
+    const mounted = mountThroughReactNativeWeb(renderCursor(motion.driver, { target: null, reducedMotion: true }));
+    try {
+      motion.calls.length = 0; // the idle mount's own hide is not under test
+      await mounted.render(renderCursor(motion.driver, { target: null, point, reducedMotion: true }));
+      expect(motion.calls).toContain('opacity pointer 1');
+      expect(motion.calls.some((call) => call.startsWith('fade') || call.startsWith('travel'))).toBe(false);
+      expect(motion.calls).not.toContain('opacity pointer 0');
+      await mounted.render(renderCursor(motion.driver, { target: null, point: null, reducedMotion: true }));
+      expect(motion.calls).toContain('opacity pointer 0');
     } finally {
       mounted.unmount();
     }

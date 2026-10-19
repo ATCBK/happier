@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore, type ComponentType, type ReactElement, type ReactNode } from 'react';
-import { View, type ViewStyle } from 'react-native';
+import { View } from 'react-native';
 
-import type { HappierStyleProp } from '../portableTypes.js';
+import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import {
   evaluateHappierCollectionMotionTrack,
   type HappierCollectionMotionTracks,
@@ -48,8 +48,8 @@ export type HappierCollectionMotionDriver = Readonly<{
 export function resolveHappierCollectionTrackStyle(
   tracks: HappierCollectionMotionTracks,
   progress: number,
-): ViewStyle {
-  const style: ViewStyle = {};
+): HappierPortableStyle {
+  const style: { -readonly [Key in keyof HappierPortableStyle]: HappierPortableStyle[Key] } = {};
   if (tracks.opacity) style.opacity = evaluateHappierCollectionMotionTrack(tracks.opacity, progress);
   const transform: Array<{ translateX: number } | { translateY: number }> = [];
   if (tracks.translateX) transform.push({ translateX: evaluateHappierCollectionMotionTrack(tracks.translateX, progress) });

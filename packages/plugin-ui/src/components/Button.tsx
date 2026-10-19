@@ -1,6 +1,7 @@
-import type { ReactElement, ReactNode } from 'react';
+import { useContext, type ReactElement, type ReactNode } from 'react';
 import { View } from 'react-native';
 import { HappierSurfaceGradientLayer } from '../presentation/layout/SurfaceGradientLayer.js';
+import { HappierSectionActionStackedContext } from '../presentation/layout/PageSection.js';
 
 import { useOptionalHappierUiAccessibility, useOptionalHappierUiPalette } from '../environment/context.js';
 import { HappierPressable, type HappierPressableStyleState } from '../presentation/interaction/Pressable.js';
@@ -163,6 +164,7 @@ Button.happierPageOperation = (
     title,
     ...(props.testID === undefined ? {} : { testID: props.testID }),
     ...(props.variant === 'destructive' ? { destructive: true } : {}),
+    ...((props.variant ?? 'primary') === 'primary' ? { primary: true } : {}),
     ...(props.disabled ? { disabled: true } : {}),
     ...(props.busy ? { pending: true } : {}),
     onPress: props.onPress,
@@ -181,6 +183,7 @@ export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled
   const reducedMotion = useOptionalHappierUiAccessibility()?.reducedMotion ?? false;
   const palette = useOptionalHappierUiPalette(theme);
   const nativeMinimumTarget = useHappierNativeMinimumInteractiveTargetSize();
+  const underSectionText = useContext(HappierSectionActionStackedContext);
   const { foreground } = resolveHappierButtonChrome({ theme, variant, disabled, focused: false, ...material });
   const style = (state: HappierPressableStyleState): HappierPortableStyle => {
     const chrome = resolveHappierButtonChrome({
@@ -193,6 +196,13 @@ export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled
       // instead of overflowing the card or the pane edge.
       flexShrink: 1,
       maxWidth: '100%',
+      // A button with no resting fill, on its own line under a section's text, puts its label on that
+      // text's edge; its hover and press fill reach into the gutter by the padding it gave up. The offset is
+      // visual only (not a negative margin): the section measures this button's box to choose between inline
+      // and stacked, and a margin-narrowed box wrapped the label and made the section flip between the two.
+      ...(underSectionText && variant === 'plain' && typeof chrome.style.paddingHorizontal === 'number'
+        ? { position: 'relative', left: -(chrome.style.paddingHorizontal + (typeof chrome.style.borderWidth === 'number' ? chrome.style.borderWidth : 0)) }
+        : {}),
       opacity: state.disabled && !state.busy ? chrome.disabledOpacity : 1,
       // The shared press vocabulary: a discrete control scales under the finger
       // (an opacity dip under reduced motion), eased on web.

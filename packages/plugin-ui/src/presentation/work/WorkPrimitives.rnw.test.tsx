@@ -129,6 +129,47 @@ describe('Work primitives for plugin authors', () => {
     }
   });
 
+  it('sets a row\'s below-text actions on its text column, outside the row button', () => {
+    const open = vi.fn();
+    const decide = vi.fn();
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <authorBarrel.HappierWorkRowShell
+          testID="work-row"
+          accessibilityLabel="Approve work"
+          density="page"
+          onPress={open}
+          belowAccessory={
+            <button data-testid="decide" onClick={decide}>
+              Allow once
+            </button>
+          }
+        >
+          <span>Approve work</span>
+        </authorBarrel.HappierWorkRowShell>,
+      ),
+    );
+    try {
+      const row = byTestId(mounted.container, 'work-row')!;
+      const action = byTestId(mounted.container, 'decide')!;
+      const slot = byTestId(mounted.container, 'work-row:below')!;
+      expect(slot.contains(action)).toBe(true);
+      expect(row.contains(action)).toBe(false);
+      // Beneath the row, not beside it, and starting where the row's text starts.
+      expect(
+        row.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(slot.style.paddingLeft).toBe(
+        `${authorBarrel.HAPPIER_WORK_PAGE_ROW_METRICS.textInsetPx}px`,
+      );
+      act(() => action.click());
+      expect(decide).toHaveBeenCalledOnce();
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      mounted.unmount();
+    }
+  });
+
   it('keeps empty invitations and expansion caller-controlled', () => {
     const invite = vi.fn();
     const expand = vi.fn();

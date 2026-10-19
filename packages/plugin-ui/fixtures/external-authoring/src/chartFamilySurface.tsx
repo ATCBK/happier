@@ -16,6 +16,7 @@ function ChartFamilyPanel() {
   const theme = usePluginTheme();
   const { reducedMotion } = usePluginAccessibility();
   const [opened, setOpened] = useState<string | null>(null);
+  const [valuesExpanded, setValuesExpanded] = useState(false);
   return <Stack>
     <Text value="Storage breakdown" />
     {parts.map((part) => <Button key={part.key} variant="plain" title={`Open ${part.label}, ${part.valueLabel}`}
@@ -26,6 +27,7 @@ function ChartFamilyPanel() {
       accessibilityLabel="Storage rings" smallerLabel={smallerLabel} onOpen={(key) => setOpened(`Rings: ${key}`)} reducedMotion={reducedMotion} testID="author-sunburst" />
     <StackedSeriesChart theme={theme} label="CPU history" variant="line" size="full" width={400}
       series={[{ id: 'cpu', label: 'CPU', points: [{ id: 'first', x: '09:00', y: 20 }, { id: 'second', x: '09:01', y: 40 }] }]}
+      valuesExpanded={valuesExpanded} onValuesExpandedChange={setValuesExpanded}
       summary="CPU rose from 20 to 40 percent" valueFormatter={(value) => `${value}%`} reducedMotion={reducedMotion} testID="author-series" />
     <CapacityBar theme={theme} label="Storage in use" value={100} capacity={200} basis="GB" animated reducedMotion={reducedMotion} testID="author-capacity" />
     <CoreLoadBars theme={theme} label="CPU cores" width={400} cores={[{ index: 0, busyPct: 40 }, { index: 1, busyPct: null }]}

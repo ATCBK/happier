@@ -17,14 +17,6 @@ const relation = { status: 'allowed' as const, effect: { actionId: 'relation.set
 const plugin = { status: 'allowed' as const, effect: { actionId: 'plugin.link', input: {}, preview: { verb: 'Link to release', target: 'Release' } } };
 
 describe('describeHappierDropOutcome', () => {
-  it('keeps an applied notice quiet and shared by release and source feedback', () => {
-    const verdict = { phase: 'settled' as const, admission: relation, outcome: { status: 'applied' as const,
-      notice: { code: 'key-waiting', message: 'Updates start once the key is ready' } } };
-    expect(describeHappierSettledDrop(verdict, vocabulary)).toMatchObject({ kind: 'applied',
-      title: relation.effect.preview.verb, detail: verdict.outcome.notice.message });
-    expect(describeHappierDropOutcome(verdict, vocabulary)).toMatchObject({ tone: 'quiet',
-      detail: verdict.outcome.notice.message });
-  });
   it('preserves a plugin-declared mark through carry, pending and unknown settlement independently of Action ids', () => {
     const admission = { ...plugin, effect: { ...plugin.effect, preview: { ...plugin.effect.preview, glyph: 'copy' as const } } };
     for (const phase of ['carrying', 'pending'] as const) {
@@ -88,7 +80,9 @@ describe('describeHappierDropOutcome', () => {
   });
 
   it('has nothing to keep once an effect applied or when a refusal came before dispatch', () => {
-    expect(describeHappierDropOutcome({ phase: 'settled', admission: relation, outcome: { status: 'applied' } }, vocabulary)).toBeNull();
+    const applied = { phase: 'settled' as const, admission: relation, outcome: { status: 'applied' as const } };
+    expect(describeHappierDropOutcome(applied, vocabulary)).toBeNull();
+    expect(describeHappierSettledDrop(applied, vocabulary)).toBeNull();
     const early = { phase: 'settled' as const, admission: { status: 'refused' as const, reason: { code: 'read', message: 'Because' } }, outcome: { status: 'refused' as const, reason: { code: 'read', message: 'Because' } } };
     expect(describeHappierSettledDrop(early, vocabulary)).toBeNull();
     expect(describeHappierDropOutcome(early, vocabulary)).toMatchObject({ tone: 'refused', detail: 'Because' });

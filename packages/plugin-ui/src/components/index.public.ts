@@ -31,6 +31,11 @@ export {
 } from './Focus.js';
 export * from './Foundation.js';
 export * from './Form.js';
+export {
+  FollowPolicyEditor,
+  type FollowPolicyEditorDelivery, type FollowPolicyEditorEvent, type FollowPolicyEditorProps,
+  type FollowPolicyEditorReceiver,
+} from './FollowPolicyEditor.js';
 export { Icon, type IconName, type IconProps } from './Icon.js';
 export * from './Image.js';
 export { MotionFeedback, type MotionFeedbackProps } from './MotionFeedback.js';
@@ -83,6 +88,10 @@ export * from './Voice.js';
 export * from './Surface.js';
 export * from './Tabs.js';
 export { Timeline, type TimelineProps, type TimelineItemContent } from './Timeline.js';
+export { ThreadMessage, type ThreadMessageProps } from './ThreadMessage.js';
+export { ReplyQuote, type ReplyQuoteProps } from './ReplyQuote.js';
+export { HappierReplyQuote, type HappierReplyQuoteProps, type HappierReplyQuoteSource, type HappierReplyQuoteTextProps } from '../presentation/content/ReplyQuote.js';
+export { HappierThreadMessage, type HappierThreadMessageProps } from '../presentation/content/ThreadMessage.js';
 export * from './Text.js';
 export * from './TargetedSurface.js';
 export { WidgetSurface, type WidgetSurfaceProps } from './WidgetSurface.js';
@@ -105,6 +114,32 @@ export {
   type FloatingFrameProps as HappierFloatingFrameProps,
 } from '../presentation/layout/FloatingFrame.js';
 export { resolveFloatingFrameRect, type FrameRect } from '../presentation/layout/floatingFrameGeometry.js';
+export { resolveFloatingFrameResizeRect } from '../presentation/layout/floatingFrameGeometry.js';
+export { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from '../presentation/text/middleEllipsis.js';
+export {
+  HAPPIER_MODAL_HEADER_METRICS, HappierModalHeader, resolveHappierModalHeaderLayout,
+  type HappierModalHeaderLayout, type HappierModalHeaderProps, type HappierModalHeaderSpace,
+  type HappierModalHeaderTextRender,
+} from '../presentation/layout/ModalHeader.js';
+export { HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE, HAPPIER_TEXT_INPUT_WEB_MARKER } from '../presentation/interaction/focusVisible.js';
+export {
+  HappierApprovalPendingNotice, HappierNoticeLine,
+  type HappierApprovalPendingNoticeProps, type HappierApprovalPendingNoticeTextRender,
+  type HappierNoticeLineProps, type HappierNoticeLineTextRender,
+} from '../presentation/interaction/ApprovalPendingNotice.js';
+export {
+  HappierItemAddRow, type HappierItemAddRowContentProps, type HappierItemAddRowProps,
+  type HappierItemAddRowRenderProps,
+} from '../presentation/collection/ItemAddRow.js';
+export { HappierRowOperationContext } from '../presentation/collection/rowOperation.js';
+export { HappierSkeletonPulse, type HappierSkeletonPulseProps } from '../presentation/feedback/Skeleton.js';
+export { type HappierTabLabels, resolveHappierTabGlyphOnly } from '../presentation/navigation/Tabs.js';
+export { resolveHappierPageRowDetailLayout } from '../presentation/layout/pageRowDetail.js';
+export { splitHappierPagePrimaryOperation } from '../presentation/layout/pageOperations.js';
+export { useHappierCopyFeedback } from '../presentation/interaction/copyFeedback.js';
+export { useHappierItemOverflowState } from '../presentation/collection/ItemOverflow.js';
+export { useHappierTextSelectability } from '../presentation/text/Text.js';
+export { useHappierTreeRowLineHeight } from '../presentation/navigation/TreeRow.js';
 export { HappierStack } from '../presentation/layout/Layout.js';
 export { HappierText } from '../presentation/text/Text.js';
 export { resolveHappierTreeFocusKey, type HappierTreeNode } from '../presentation/navigation/treeInteraction.js';
@@ -386,6 +421,8 @@ export {
   HappierMarkdown,
   type HappierMarkdownProps,
   type HappierMarkdownRenderInput,
+  type MarkdownInlineReference,
+  type MarkdownInlineReferences,
 } from '../presentation/content/Markdown.js';
 export {
   HappierSetupSteps,
@@ -991,6 +1028,7 @@ export {
 export {
   HappierMaterialRoleProvider,
   HappierSurface,
+  type HappierFloatingRole,
   type HappierMaterialSurfaceRender,
   type HappierSurfaceProps,
   useContainingHappierMaterialRole,
@@ -1078,7 +1116,6 @@ export {
   HAPPIER_ROW_TITLE_META_GAP_PX,
   resolveHappierPageRowDensityInput,
   resolveHappierPageRowMetrics,
-  resolveHappierRowTitleMetaPlacement,
   type HappierPageRowDensity,
   type HappierPageRowMetrics,
   type HappierPageRowShape,

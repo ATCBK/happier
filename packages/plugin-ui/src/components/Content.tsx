@@ -8,15 +8,14 @@ import { HappierStack } from '../presentation/layout/Layout.js';
 import { HappierText, HappierTextSelectabilityScope } from '../presentation/text/Text.js';
 import {
   HappierMarkdown,
+  type HappierMarkdownRenderInput,
 } from '../presentation/content/Markdown.js';
 import { useHappierCodeBlockBehavior } from '../presentation/content/CodeBlock.js';
 import { resolveHappierDiffViewerRequest } from '../presentation/content/DiffViewer.js';
 import { Button } from './Button.js';
 
-export type MarkdownProps = Readonly<{
-  value: string;
+export type MarkdownProps = Omit<HappierMarkdownRenderInput, 'selectable'> & Readonly<{
   selectable?: boolean;
-  testID?: string;
 }>;
 
 /**
@@ -24,13 +23,14 @@ export type MarkdownProps = Readonly<{
  * product. Isolated author tests deliberately degrade to literal selectable
  * text: this package never grows a competing parser or raw-HTML execution path.
  */
-export function Markdown({ value, selectable = true, testID }: MarkdownProps): ReactElement {
+export function Markdown({ value, selectable = true, testID, inlineReferences }: MarkdownProps): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
   return (
     <HappierMarkdown
       value={value}
       selectable={selectable}
       testID={testID}
+      inlineReferences={inlineReferences}
       renderContent={host ? (input) => <>{host.renderMarkdown(input)}</> : undefined}
     />
   );

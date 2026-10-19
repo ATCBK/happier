@@ -16,6 +16,7 @@ export type {
   HappierStyleProp,
   HappierTextSelection,
 } from './portableTypes.js';
+export { HappierRowOperationContext } from './collection/rowOperation.js';
 export {
   HappierItemAddRow,
   type HappierItemAddRowContentProps,
@@ -168,7 +169,7 @@ export {
   type HappierMaterialRole,
 } from './layout/material.js';
 export { HappierSurfaceGradientLayer } from './layout/SurfaceGradientLayer.js';
-export { HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierMaterialSurfaceRender } from './layout/Surface.js';
+export { HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierFloatingRole, type HappierMaterialSurfaceRender } from './layout/Surface.js';
 export {
   matchFindText,
   type FindTextMatchRange,
@@ -219,7 +220,6 @@ export {
   type HappierPageRowShape,
   type HappierPageRowMetrics,
   HAPPIER_ROW_TITLE_META_GAP_PX,
-  resolveHappierRowTitleMetaPlacement,
 } from './layout/pageRowMetrics.js';
 export {
   HappierListDetailLayout,
@@ -351,7 +351,6 @@ export {
   HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE,
   resolveHappierPageBackPlacement,
   type HappierPageBackPlacement,
-  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
   type HappierCollectionRailWidth,
 } from './layout/pageMetrics.js';
 export {
@@ -393,9 +392,11 @@ export {
 export {
   normalizeHappierPageOperations,
   readHappierPageOperation,
+  splitHappierPagePrimaryOperation,
   type HappierPageOperation,
   type HappierPageOperationTextResolver,
 } from './layout/pageOperations.js';
+export { HappierColumnEdgeContext } from './layout/columnEdge.js';
 export {
   HappierPageSectionContext,
   HappierPageSectionHeader,
@@ -510,8 +511,10 @@ export {
 export {
   HAPPIER_SKELETON_PULSE_V1,
   HappierSkeletonBlock,
+  HappierSkeletonPulse,
   HappierSkeletonRows,
   type HappierSkeletonBlockProps,
+  type HappierSkeletonPulseProps,
   type HappierSkeletonRowsProps,
   type HappierSkeletonRowGeometry,
 } from './feedback/Skeleton.js';
@@ -928,6 +931,8 @@ export {
   HappierMarkdown,
   type HappierMarkdownProps,
   type HappierMarkdownRenderInput,
+  type MarkdownInlineReference,
+  type MarkdownInlineReferences,
 } from './content/Markdown.js';
 export {
   normalizeHappierCodeLanguage,

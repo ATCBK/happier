@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from 'react';
+import { useEffect, type ReactElement, type ReactNode } from 'react';
 
 import { HappierPageHeader, HappierPageHeadingBindingContext } from '../presentation/layout/PageHeader.js';
 import { useHappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
@@ -6,7 +6,7 @@ import { normalizeHappierPageOperations } from '../presentation/layout/pageOpera
 import { Icon, type IconName } from './Icon.js';
 import { usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
-import { useCollectionDetailHeadingBindingInternal } from './Focus.js';
+import { type PluginUiFocusTarget, useCollectionDetailHeadingBindingInternal, usePluginUiFocusTargetBindingInternal } from './Focus.js';
 import { usePluginUiSurfaceBridge } from './surfaceBridge.js';
 import { PageHeaderMarkSlot } from './pageHeaderMark.js';
 
@@ -43,6 +43,11 @@ export type PageHeaderProps = Readonly<{
   meta?: readonly PageHeaderMetaFact[];
   /** At most one primary page action plus context controls. */
   actions?: ReactNode;
+  /**
+   * Moves focus to the title when focused: a page state that replaces the content (an editor opened
+   * in place) announces itself by its title. A phone whose navigation shows the title keeps focus there.
+   */
+  focusTarget?: PluginUiFocusTarget;
   testID?: string;
 }>;
 
@@ -55,6 +60,7 @@ export type PageHeaderProps = Readonly<{
  */
 export function PageHeader(props: PageHeaderProps): ReactElement {
   const headingRef = useCollectionDetailHeadingBindingInternal();
+  const explicitHeadingRef = usePluginUiFocusTargetBindingInternal(props.focusTarget);
   const translate = usePluginTranslation();
   const chrome = useHappierPageChromeInternal();
   const bridgeSurface = usePluginUiSurfaceBridge();
@@ -64,6 +70,14 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
     chrome.showsTitle ? normalizeHappierPageOperations(props.actions, (value, key) => resolveAuthorText(translate, value, key)) : props.actions,
   )) : props.actions;
   const title = resolveAuthorText(translate, props.title, props.titleKey) ?? props.title;
+  // A collection detail keeps its heading in the body; any other page names itself in the chrome that
+  // hides its title, exactly as a core page header does, so a phone never loses the page's identity.
+  const publishTitle = headingRef === undefined ? chrome?.publishTitle : undefined;
+  useEffect(() => {
+    if (publishTitle === undefined) return;
+    publishTitle(title);
+    return () => publishTitle(undefined);
+  }, [publishTitle, title]);
   const description = resolveAuthorText(translate, props.description, props.descriptionKey);
   const meta = props.meta?.map((fact) => ({
     key: fact.key,
@@ -72,7 +86,7 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
     ...(fact.icon === undefined ? {} : { icon: <Icon name={fact.icon} size="small" tone="secondary" /> }),
   }));
   return (
-    <HappierPageHeadingBindingContext.Provider value={headingRef}>
+    <HappierPageHeadingBindingContext.Provider value={headingRef ?? explicitHeadingRef}>
     {hostActions && chrome.showsTitle ? actions : null}
     <HappierPageHeader
       title={title}

@@ -109,7 +109,7 @@ export function resolveHappierDisclosureFrameStyle(input: Readonly<{
   borderColor: string;
   backgroundColor: string;
   shadowColor?: string;
-}>): ViewStyle {
+}>): HappierPortableStyle {
   return {
     borderRadius: HAPPIER_PAGE_METRICS.sheetRadiusPx,
     borderWidth: 1,

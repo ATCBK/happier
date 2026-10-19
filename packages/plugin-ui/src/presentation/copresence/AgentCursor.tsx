@@ -17,6 +17,13 @@ import type { HappierSurfaceGlyphRenderer } from '../status/capsuleHost.js';
 /** Where the agent is acting, normalized to the page (0..1). A point, or a point with its element. */
 export type HappierAgentTarget = Readonly<{ x: number; y: number; width?: number; height?: number }>;
 
+/**
+ * One pointer action of the agent. The host keeps the latest one until the next action replaces it, so a
+ * short action that began and ended between two renders still reaches the cursor. `id` names the action
+ * (the host's own request id); the cursor presents each id once.
+ */
+export type HappierAgentPoint = Readonly<{ id: string; target: HappierAgentTarget }>;
+
 /** Where the page is drawn inside the cursor's layer (px), when it does not fill it (a fitted stream). */
 export type HappierAgentPageRect = Readonly<{ x: number; y: number; width: number; height: number }>;
 
@@ -35,8 +42,11 @@ export type HappierAgentCursorMotion = Readonly<{
   /** Travel a channel on the host's critically damped travel spring; a later call redirects it mid-way. */
   travel: (channel: HappierAgentCursorChannel, value: number) => void;
   setOpacity: (layer: 'pointer' | 'ring', value: number) => void;
-  /** Fade a layer on the host's fast duration: `standard` to arrive or settle, `exit` to leave. */
-  fade: (layer: 'pointer' | 'ring', to: number, curve: 'standard' | 'exit') => void;
+  /**
+   * Fade a layer on the host's fast duration: `standard` to arrive or settle, `exit` to leave.
+   * `onDone` runs once the fade has run to its end; a later call that redirects the layer cancels it.
+   */
+  fade: (layer: 'pointer' | 'ring', to: number, curve: 'standard' | 'exit', onDone?: () => void) => void;
   /** The ring's current opacity, so a ring that was not drawn for the last target grows from the hand. */
   ringOpacity: () => number;
 }>;
@@ -64,7 +74,16 @@ export type HappierAgentCursorColors = Readonly<{
 }>;
 
 export type HappierAgentCursorProps<Motion extends HappierAgentCursorMotion = HappierAgentCursorMotion> = Readonly<{
+  /** Where the agent is acting now (normalized to the page); `null` when it is not acting. */
   target: HappierAgentTarget | null;
+  /**
+   * The agent's latest pointer action, kept by the host until the next one replaces it. A new `id` is
+   * always shown: the hand and ring arrive, hold while `target` is still live, then leave, even when the
+   * action began and ended between two renders. A point that is already present when the cursor mounts is
+   * not replayed. Omitted, the cursor follows `target` alone and a target that comes and goes within one
+   * render is never seen. Reduced motion: it appears at once and stays until the host withdraws the point.
+   */
+  point?: HappierAgentPoint | null;
   /**
    * The drawn page inside this layer. The target is normalized to the page, so a letterboxed stream
    * (fitted with `contain`) maps into this rect; omitted, the page fills the layer.
@@ -165,8 +184,24 @@ export function HappierAgentCursor<Motion extends HappierAgentCursorMotion>(
     setSize((current) => (current && current.width === width && current.height === height ? current : { width, height }));
   }, []);
 
+  // Each new point id is presented once: it arrives, holds while the live target is still there, then
+  // leaves. The point that is already there at mount belongs to an earlier action and is not replayed.
+  const [seenPointId, setSeenPointId] = useState(props.point?.id ?? null);
+  const [heldPoint, setHeldPoint] = useState<HappierAgentPoint | null>(null);
+  const [arrivedPointId, setArrivedPointId] = useState<string | null>(null);
+  if (props.point && props.point.id !== seenPointId) {
+    setSeenPointId(props.point.id);
+    setHeldPoint(props.point);
+  } else if (!props.point && heldPoint) {
+    setHeldPoint(null);
+  }
+  const held = props.point && heldPoint?.id === props.point.id ? props.point : null;
+  const leaving = held !== null && !props.target && !reducedMotion && arrivedPointId === held.id;
+  const target = props.target ?? (held && !leaving ? held.target : null);
+  const heldArriving = held !== null && arrivedPointId !== held.id ? held.id : null;
+
   const page = props.pageRect ?? (size ? { x: 0, y: 0, width: size.width, height: size.height } : null);
-  const { point, ring } = resolveHappierAgentCursorPlacement(props.target, size ? page : null);
+  const { point, ring } = resolveHappierAgentCursorPlacement(target, page);
   // The hand and its ring stay mounted while they fade out, so leaving is a fade where the agent last
   // acted rather than a blink; they mount only once something has been shown.
   const [shown, setShown] = useState(false);
@@ -177,11 +212,15 @@ export function HappierAgentCursor<Motion extends HappierAgentCursorMotion>(
       if (reducedMotion) {
         motion.setOpacity('pointer', 0);
         motion.setOpacity('ring', 0);
+        placedRef.current = false;
       } else {
-        motion.fade('pointer', 0, 'exit');
+        // Once the hand is gone the next target appears in place; a target that arrives while it is
+        // still leaving redirects the fade, never reaches this callback, and is travelled to.
+        motion.fade('pointer', 0, 'exit', () => {
+          placedRef.current = false;
+        });
         motion.fade('ring', 0, 'exit');
       }
-      placedRef.current = false;
       return;
     }
     // The first placement appears in place; later targets are travelled to: the hand and the ring move
@@ -209,10 +248,14 @@ export function HappierAgentCursor<Motion extends HappierAgentCursorMotion>(
     }
     placedRef.current = true;
     if (reducedMotion) motion.setOpacity('pointer', 1);
-    else motion.fade('pointer', 1, 'standard');
+    else {
+      // A held point may only leave once the hand has fully arrived, so the shortest action is still seen.
+      const arrivingId = heldArriving;
+      motion.fade('pointer', 1, 'standard', arrivingId ? () => setArrivedPointId(arrivingId) : undefined);
+    }
     if (reducedMotion) motion.setOpacity('ring', ring ? 1 : 0);
     else motion.fade('ring', ring ? 1 : 0, 'standard');
-  }, [motion, point?.x, point?.y, reducedMotion, ring?.left, ring?.top, ring?.width, ring?.height]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [motion, point?.x, point?.y, reducedMotion, ring?.left, ring?.top, ring?.width, ring?.height, heldArriving]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { Pointer, Ring } = props.motion;
   return (
@@ -261,7 +304,10 @@ function createInstantCursorMotion(): InstantCursorMotion {
     set: write,
     travel: write,
     setOpacity: write,
-    fade: (layer, to) => write(layer, to),
+    fade: (layer, to, _curve, onDone) => {
+      write(layer, to);
+      onDone?.();
+    },
     ringOpacity: () => state.ring,
     read: () => state,
     subscribe: (listener) => {

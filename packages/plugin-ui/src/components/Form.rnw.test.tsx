@@ -422,7 +422,10 @@ describe('canonical Action Form presentation', () => {
     const track = toggle!.firstElementChild as HTMLElement;
     expect(getComputedStyle(track).outlineStyle).not.toBe('solid');
 
-    await act(async () => { toggle?.focus(); });
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      toggle?.focus();
+    });
 
     expect(getComputedStyle(track).outlineStyle).toBe('solid');
     expect(getComputedStyle(track).outlineOffset).toBe('2px');

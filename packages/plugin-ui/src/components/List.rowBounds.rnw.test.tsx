@@ -92,6 +92,21 @@ describe('plugin-ui List row line bounds', () => {
     expect(renderedLineBound(textElement(mount.container, 'acme/web'))).toBeNull();
     mount.unmount();
   });
+
+  it('gives up a path title\'s middle, never its file name, when asked for a middle ellipsis', () => {
+    const path = 'apps/cli/src/daemon/processes/process_tree.cjs';
+    const mount = mountRow(<List.Item title={path} titleEllipsizeMode="middle" />);
+
+    // The web draws only a tail ellipsis: the head shrinks on one line and the file name stays whole,
+    // so a narrow row never breaks `process_tree.cjs` mid-word.
+    const run = (content: string) => [...mount.container.querySelectorAll<HTMLElement>('*')]
+      .find((element) => element.children.length === 0 && element.textContent === content);
+    const head = run('apps/cli/src/daemon/processes');
+    expect(head && renderedLineBound(head)).toBe(1);
+    expect(run('/process_tree.cjs')).toBeDefined();
+    expect(mount.container.textContent).toContain(path);
+    mount.unmount();
+  });
 });
 
 describe('plugin-ui List row accessory wrapping', () => {

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { I18nManager, Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
 
-import type { HappierPageTextStep } from '../layout/pageText.js';
+import type { HappierTypeEmphasis, HappierTypeRole } from '../text/typeScale.js';
 
 import { useOptionalHappierUiLocalization, useOptionalHappierUiPalette } from '../../environment/context.js';
 import type { HappierUiTheme } from '../../environment/types.js';
@@ -86,25 +86,42 @@ export type HappierSelectionTileTextRole =
   | 'actionTitle'
   | 'actionSubtitle';
 
-const tileIos = Platform.OS === 'ios';
+/** A tile text slot as a reference into the canonical type-role table; it holds no numbers of its own. */
+export type HappierSelectionTileTextStep = Readonly<{
+  role: HappierTypeRole;
+  /** Overrides the role's weight. */
+  emphasis?: HappierTypeEmphasis;
+  /** The chosen tile's emphasis (a visual tile's caption). */
+  selectedEmphasis?: HappierTypeEmphasis;
+  /** The role a `density="compact"` card group draws this slot with. */
+  compactRole?: HappierTypeRole;
+}>;
 
 /**
- * The tiles' type scale, one owner for Happier core's tiles and the public
- * plugin tiles (each adds its own face per weight). `selectedWeight` is the
- * visual label of the chosen tile; `compactFontSize` a compact card group.
+ * The tiles' text slots, one owner for Happier core's tiles and the public plugin tiles. Each slot names
+ * a role of `HAPPIER_TYPE_SCALE` (scale roles R1/R4), so a change to the roles reaches every picker; each
+ * adapter adds its own face per weight through {@link resolveHappierSelectionTileText}.
  */
-export const HAPPIER_SELECTION_TILE_TEXT: Readonly<Record<HappierSelectionTileTextRole, HappierPageTextStep & Readonly<{
-  selectedWeight?: HappierPageTextStep['weight'];
-  compactFontSize?: number;
-}>>> = Object.freeze({
-  cardTitle: { weight: 'regular', fontSize: tileIos ? 17 : 16, lineHeight: tileIos ? 22 : 24, compactFontSize: tileIos ? 14 : 13 },
-  cardSubtitle: { weight: 'regular', fontSize: tileIos ? 15 : 14, lineHeight: 20, compactFontSize: tileIos ? 13 : 12 },
-  badge: { weight: 'regular', fontSize: 12, lineHeight: 16 },
-  visualLabel: { weight: 'regular', selectedWeight: 'medium', fontSize: 12.5, lineHeight: 16 },
-  visualSublabel: { weight: 'regular', fontSize: 11, lineHeight: 14 },
-  actionTitle: { weight: 'medium', fontSize: 13.5, lineHeight: 18 },
-  actionSubtitle: { weight: 'regular', fontSize: 12.5, lineHeight: 17 },
+export const HAPPIER_SELECTION_TILE_TEXT: Readonly<Record<HappierSelectionTileTextRole, HappierSelectionTileTextStep>> = Object.freeze({
+  cardTitle: { role: 'label', compactRole: 'body', emphasis: 'medium' },
+  cardSubtitle: { role: 'body', compactRole: 'meta' },
+  badge: { role: 'meta' },
+  visualLabel: { role: 'meta', selectedEmphasis: 'medium' },
+  visualSublabel: { role: 'micro' },
+  actionTitle: { role: 'body', emphasis: 'medium' },
+  actionSubtitle: { role: 'meta' },
 });
+
+/** The role and emphasis a tile text slot draws with in its current state. */
+export function resolveHappierSelectionTileText(
+  slot: HappierSelectionTileTextRole,
+  state: Readonly<{ selected?: boolean; compact?: boolean }> = {},
+): Readonly<{ role: HappierTypeRole; emphasis?: HappierTypeEmphasis }> {
+  const step = HAPPIER_SELECTION_TILE_TEXT[slot];
+  const emphasis = state.selected === true && step.selectedEmphasis !== undefined ? step.selectedEmphasis : step.emphasis;
+  const role = state.compact === true && step.compactRole !== undefined ? step.compactRole : step.role;
+  return emphasis === undefined ? { role } : { role, emphasis };
+}
 
 export type HappierSelectionTilesTextRenderer = (input: Readonly<{
   role: HappierSelectionTileTextRole;
@@ -363,21 +380,29 @@ function VisualSelectionTiles<T extends string, I extends string>(props: Happier
   const tileKeyboardProps = useChoiceTilesKeyboard(props);
   const selectionAccessibilityRole = props.selectionMode === 'multiple' ? 'checkbox' : 'radio';
   const fill = props.tileSizing === 'fill';
-  const columns = Math.min(props.options.length, Math.max(1, props.maximumColumns ?? props.options.length));
+  const [gridWidth, setGridWidth] = useState(0);
+  const count = props.options.length;
+  const maximumColumns = Math.min(count, Math.max(1, props.maximumColumns ?? count));
+  // A filling grid has the requested column count. A natural grid has as many natural-width
+  // columns as the measured width fits, and never fewer than three, which a phone row shrinks to fit.
+  const columns = fill || gridWidth === 0
+    ? maximumColumns
+    : Math.min(maximumColumns, Math.max(Math.min(3, count), Math.floor((gridWidth + VISUAL_GRID_GAP_PX) / (VISUAL_TILE_WIDTH_PX + VISUAL_GRID_GAP_PX))));
   // A row cannot fit columns + 1 percentage bases plus the positive shared gap. Flex growth then
   // distributes the remaining row width equally, keeping the same grid on web and native.
-  // Once measured, a filling grid that wraps gives every row the same tile width, so a short last
+  // Once measured, a grid that wraps gives every row the same tile width, so a short last
   // row lines up under the full rows instead of stretching across them.
-  const wraps = fill && columns < props.options.length;
-  const [gridWidth, setGridWidth] = useState(0);
+  const wraps = columns < count && (fill || gridWidth > 0);
+  const measured = (gridWidth - VISUAL_GRID_GAP_PX * (columns - 1)) / columns;
+  const columnWidth = fill ? measured : Math.min(VISUAL_TILE_WIDTH_PX, measured);
   const columnBasis: ViewStyle | undefined = !wraps ? undefined
     : gridWidth > 0
-      ? { width: (gridWidth - VISUAL_GRID_GAP_PX * (columns - 1)) / columns, flexBasis: 'auto', flexGrow: 0, flexShrink: 0 }
+      ? { width: columnWidth, flexBasis: 'auto', flexGrow: 0, flexShrink: 0 }
       : { flexBasis: `${100 / (columns + 1)}%`, flexShrink: 0 };
   const previewAspect: ViewStyle | null = fill && props.previewAspectRatio ? { aspectRatio: props.previewAspectRatio, minHeight: 0 } : null;
   const showLabels = props.labels !== 'hidden';
   return (
-    <View style={styles.visualGrid} onLayout={wraps ? (event) => setGridWidth(event.nativeEvent.layout.width) : undefined} {...choiceGroupSemantics(props)}>
+    <View style={styles.visualGrid} onLayout={(event) => setGridWidth(event.nativeEvent.layout.width)} {...choiceGroupSemantics(props)}>
       {props.options.map((option, index) => {
         const selected = isSelected(props, option.id);
         const disabled = option.disabled === true;

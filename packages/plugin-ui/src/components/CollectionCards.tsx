@@ -11,6 +11,7 @@ import {
 } from '../environment/context.js';
 import type { HappierTypeRole } from '../environment/types.js';
 import type { HappierCollectionKey, HappierCollectionSection } from '../presentation/collection/collectionModel.js';
+import { resolveHappierCollectionGridRows } from '../presentation/collection/collectionModel.js';
 import { HappierCardActionsCornerContext, HappierCardSelectionRingContext } from '../presentation/collection/CollectionList.js';
 import { resolveHappierCollectionGridGeometry } from '../presentation/collection/collectionTable.js';
 import { useHappierCollectionViewport, type HappierCollectionModel, type HappierCollectionViewport } from '../presentation/collection/useCollection.js';
@@ -85,7 +86,9 @@ function useCardLayout() {
         paddingTop: spacing.medium - 1, paddingBottom: spacing.medium },
       agentStripStyle: { ...agentStripStyle, paddingHorizontal: spacing.medium, paddingVertical: spacing.small + 1 },
       columnHeaderStyle: { gap: spacing.xsmall / 2, paddingHorizontal: boardCardInsetX, paddingTop: padding, paddingBottom: gap },
-      pagerStyle: { paddingHorizontal: GUTTER, paddingVertical: gap },
+      // The phone pager stands on the cards' own edge, so a track wider than the column scrolls out at the edge the
+      // whole page shares (lab `.pager`), never at an inset of its own.
+      pagerStyle: { paddingVertical: gap },
       shelfHeaderStyle: { ...shelfHeaderStyle, gap: spacing.medium },
       gridFooterStyle: { ...gridFooterStyle, gap: spacing.small, left: padding + 1, right: padding + 1, bottom: padding + 1 },
     };
@@ -355,7 +358,10 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
   }, [boardViewport, fits, narrow, stacked]);
   const columnKeys = useMemo(() => sections.map((section, index) => section.group?.key ?? `collection-${index}`), [sections]);
   const page = model.boardColumnKey;
-  const pageKey = page !== null && columnKeys.includes(page) ? page : columnKeys[0] ?? null;
+  // A reader's explicit choice wins even when that column is empty. Until
+  // they choose, land where the rows are, including after the first load.
+  const pageKey = page !== null && columnKeys.includes(page) ? page
+    : columnKeys[sections.findIndex(section => section.items.length > 0)] ?? columnKeys[0] ?? null;
   const focusRequest = props.focusRequest ?? model.focusRequest;
   useEffect(() => {
     if (focusRequest === null) return;
@@ -411,6 +417,7 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
           <View style={card.pagerStyle}>
             <HappierSegmentedChoice
               accessibilityLabel={translate('happier.plugin-ui.collection.board.columns', 'Columns')}
+              scrollable
               segments={sections.map((candidate, candidateIndex) => ({
                 key: columnKeys[candidateIndex]!,
                 label: `${candidate.group?.title ?? ''} ${candidate.items.length}`,
@@ -734,7 +741,7 @@ const GridCard = memo(GridCardView) as typeof GridCardView;
 function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
   const { model, anatomy } = props;
   const card = useCardLayout();
-  const { theme } = useCardColors();
+  const { theme, palette } = useCardColors();
   const { viewport, scrollRequest } = useHappierCollectionViewport(model, 'grid');
   const resolveGeometry = useGridGeometryResolver(props.width, props.minCardWidth ?? CARD.gridMinCardWidth,
     anatomy.cardContent?.height ?? null, anatomy.cardContent?.ownsFooter === true);
@@ -742,15 +749,22 @@ function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
   const geometry = useMemo(() => resolveGeometry(gridSlots), [gridSlots, resolveGeometry]);
   // Each grid row's own bands (R-APP-10, R-APP-14): cards in a row share its tallest card's height, and a
   // row where no card has a description or footer content drops that band (all compact tiles).
-  const rowGeometries = useMemo(() => model.sections.map((section) => {
-    const rows: GridGeometry[] = [];
-    for (let start = 0; start < section.items.length; start += geometry.columns) {
-      const slots = readGridSlots(section.items.slice(start, start + geometry.columns), anatomy);
-      rows.push(slots.description === gridSlots.description && slots.footer === gridSlots.footer ? geometry : resolveGeometry(slots));
-    }
-    return rows;
-  }), [anatomy, geometry, gridSlots, model.sections, resolveGeometry]);
+  // A compact tile starts its own row rather than stretching beside described cards (R-APP-14); the
+  // keyboard walks the same rows.
+  const gridRows = useMemo(() => resolveHappierCollectionGridRows({
+    sections: model.sections.map((section) => section.items),
+    columns: geometry.columns,
+    compact: (item) => {
+      const slots = readGridSlots([item], anatomy);
+      return !slots.description && !slots.footer;
+    },
+  }), [anatomy, geometry.columns, model.sections]);
+  const rowGeometries = useMemo(() => gridRows.map((rows) => rows.map((row) => {
+    const slots = readGridSlots(row, anatomy);
+    return slots.description === gridSlots.description && slots.footer === gridSlots.footer ? geometry : resolveGeometry(slots);
+  })), [anatomy, geometry, gridRows, gridSlots, resolveGeometry]);
   const keyOf = model.keyOf;
+  const gridRowKeys = useMemo(() => gridRows.flatMap((rows) => rows.map((row) => row.map(keyOf))), [gridRows, keyOf]);
   const keys = useMemo(() => model.sections.flatMap((section) => section.items.map(keyOf)), [keyOf, model.sections]);
   const rowIndices = useMemo(() => new Map(keys.map((key, index) => [key, index])), [keys]);
   // The last known card count, which the skeleton holds while the items are arriving again.
@@ -779,10 +793,10 @@ function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
     authorFocus(key);
   }, [authorFocus, physicalRequest]);
   const onKey = useCallback((key: string, from: string, event: unknown): boolean => model.actions.navigate({
-    key, from, event, presentation: 'grid', columns: geometry.columns,
+    key, from, event, presentation: 'grid', columns: geometry.columns, gridRows: gridRowKeys,
     store: props.selection?.multiple?.store, eligibleKeys: props.eligibleKeys,
     ...(single === undefined ? {} : { onValueChange: chooseOrOpen }),
-  }), [chooseOrOpen, geometry.columns, model.actions, props.eligibleKeys, props.selection?.multiple?.store, single === undefined]);
+  }), [chooseOrOpen, geometry.columns, gridRowKeys, model.actions, props.eligibleKeys, props.selection?.multiple?.store, single === undefined]);
   const focusRequest = props.focusRequest ?? model.focusRequest;
   useEffect(() => {
     if (focusRequest === null) return;
@@ -814,7 +828,7 @@ function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
             {row.map((index) => (
               <HappierSkeletonBlock
                 key={index}
-                color={theme.colors.control}
+                color={palette.skeleton ?? theme.colors.control}
                 width={geometry.cardWidth}
                 height={geometry.cardHeight}
                 radius={RADIUS}
@@ -834,11 +848,7 @@ function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
       {inner === null ? null : model.sections.map((section, sectionIndex) => {
         const group = section.group;
         const shelf = group !== null && group.title !== '';
-        const rows: Item[][] = [];
-        section.items.forEach((item, index) => {
-          if (index % geometry.columns === 0) rows.push([]);
-          rows[rows.length - 1]!.push(item);
-        });
+        const rows = gridRows[sectionIndex] ?? [];
         return (
           <View
             key={group?.key ?? `collection-${sectionIndex}`}

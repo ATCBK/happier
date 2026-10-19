@@ -5,6 +5,7 @@ import {
 } from 'react';
 
 import { usePluginHostApiResourceActive, usePluginHostApiResourceStore } from './context.js';
+import { usePluginHostReadiness } from './readiness.public.js';
 export { usePluginHostReadiness, type PluginUiHostReadiness } from './readiness.public.js';
 import type {
   PluginUiResourceEntry,
@@ -99,6 +100,7 @@ function usePluginResourceResult(
 ): PluginUiResourceResult {
   const resourceStore = usePluginHostApiResourceStore();
   const active = usePluginHostApiResourceActive();
+  const readiness = usePluginHostReadiness(typeof resource === 'string' || !('hostRead' in resource));
   // The store owns bare-id normalization because it alone knows the mounted
   // plugin identity. The hook only stabilizes the author-facing spelling.
   const resourceKey = pluginUiResourceReferenceKey(resource, null);
@@ -107,16 +109,21 @@ function usePluginResourceResult(
     [resourceStore, resourceKey],
   );
   const subscribe = useCallback(
-    (listener: () => void) => active ? entry.subscribe(listener, live) : () => {},
-    [entry, live, active],
+    (listener: () => void) => active && !readiness.pending ? entry.subscribe(listener, live) : () => {},
+    [entry, live, active, readiness.pending, readiness.revision],
   );
   const state = useSyncExternalStore(subscribe, entry.getSnapshot, entry.getSnapshot);
+  const presented = useMemo<PluginUiResourceSnapshot>(() => {
+    if (!readiness.pending) return state;
+    const { error: _error, ...retained } = state;
+    return Object.freeze({ ...retained, pending: state.value === undefined ? 'initial' : 'refresh' });
+  }, [readiness.pending, state]);
 
   const refresh = useCallback(async () => {
     await entry.refresh();
   }, [entry]);
 
-  return useMemo(() => ({ resource: state, refresh }), [refresh, state]);
+  return useMemo(() => ({ resource: presented, refresh }), [refresh, presented]);
 }
 
 /** Read/refresh the current Resource snapshot without opening a watch. */
