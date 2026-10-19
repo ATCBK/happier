@@ -35,6 +35,7 @@ import { z } from 'zod/mini';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import { admitApiTokenSessionOperation } from "@/app/api/utils/apiTokenRouteAdmission";
+import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
 import { API_TOKEN_SOCKET_EVENT_ACTIONS } from '@happier-dev/protocol/socketRpc';
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
 import {
@@ -2623,7 +2624,9 @@ export function sessionUpdateHandler(
                         || isTransactionDeadlineExceededError(error)
                         || isTransactionAcquisitionUnavailableError(error)
                     ) throw error;
-                    log({ module: 'websocket', level: 'error' }, `Error in pending-materialize-next: ${error}`);
+                    logUnexpectedRequestError(error, { module: 'websocket', socketId: socket.id,
+                        sessionId: trustedSessionPublisher?.binding.sessionId,
+                        event: 'pending-materialization-failed', phase: 'materialization' });
                     const failure = mapPendingMaterializationError(error);
                     respond({
                         ok: false,
@@ -2635,6 +2638,9 @@ export function sessionUpdateHandler(
                 }
                 });
             } catch (error) {
+                logUnexpectedRequestError(error, { module: 'websocket', socketId: socket.id,
+                    sessionId: trustedSessionPublisher?.binding.sessionId,
+                    event: 'pending-materialization-failed', phase: 'admission' });
                 if (
                     isLockAdmissionDeadlineExceededError(error)
                     || isTransactionDeadlineExceededError(error)
@@ -2647,7 +2653,6 @@ export function sessionUpdateHandler(
                     });
                     return;
                 }
-                log({ module: 'websocket', level: 'error' }, `Error admitting pending-materialize-next: ${error}`);
                 respond({ ok: false, error: 'internal' });
             }
         });

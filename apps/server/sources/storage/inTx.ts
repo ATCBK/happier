@@ -101,7 +101,7 @@ function errorMessage(err: unknown): string {
     return "";
 }
 
-function readPostgresTransactionSqlState(error: unknown): "40001" | "40P01" | "55P03" | "57014" | undefined {
+export function readPostgresTransactionSqlState(error: unknown): "40001" | "40P01" | "55P03" | "57014" | undefined {
     if (isPrismaErrorCode(error, "40001")) return "40001";
     if (isPrismaErrorCode(error, "40P01")) return "40P01";
     if (isPrismaErrorCode(error, "55P03")) return "55P03";

@@ -10,6 +10,7 @@ import { z } from "zod/mini";
 import { applyEnvValues, snapshotEnv, restoreEnv } from "../testkit/env";
 import { enableErrorHandlers } from './enableErrorHandlers';
 import { InactiveAccountError } from '@/app/auth/accountStatus';
+import { TransactionAcquisitionUnavailableError } from '@/storage/inTx';
 
 describe('enableErrorHandlers', () => {
     it.each([
@@ -21,6 +22,10 @@ describe('enableErrorHandlers', () => {
             file: '/srv/happier/apps/server/sources/app/machines/managed/managedRoutes.ts', serialization: true },
         { name: 'PrismaClientKnownRequestError', code: 'P2024', errorClass: 'PrismaClientKnownRequestError', prismaCode: 'P2024',
             file: '/srv/happier/apps/server/sources/storage/prisma.ts', statusCode: 503 },
+        { name: 'TransactionAcquisitionUnavailableError', code: 'P2028', errorClass: 'TransactionAcquisitionUnavailableError', prismaCode: 'P2024',
+            file: '/srv/happier/apps/server/sources/storage/inTx.ts', statusCode: 503, acquisitionCause: true },
+        { name: 'PrismaClientKnownRequestError', code: 'P2010', errorClass: 'PrismaClientKnownRequestError', prismaCode: 'P2010',
+            file: '/srv/happier/apps/server/sources/storage/inTx.ts', sqlState: '57014' },
     ])('logs a correlated safe global diagnostic for $errorClass without exception or request content', async diagnostic => {
         const records: Record<string, unknown>[] = [];
         const stream = Reflect.get(logger, symbols.streamSym) as DestinationStream;
@@ -34,7 +39,10 @@ describe('enableErrorHandlers', () => {
             request.externalActionEffectActionId = 'session.attention.set';
         });
         app.post('/v1/machines/managed/controller/report', async (_request, reply) => {
-            const failure = Object.assign(new Error('private-driver-message'), { name: diagnostic.name, code: diagnostic.code,
+            const failure = Object.assign('acquisitionCause' in diagnostic
+                ? new TransactionAcquisitionUnavailableError(Object.assign(new Error('private-driver-message'), { code: 'P2024' }))
+                : new Error('private-driver-message'), { name: diagnostic.name, code: diagnostic.code, message: 'private-driver-message',
+                ...('sqlState' in diagnostic ? { meta: { code: diagnostic.sqlState, message: 'private-driver-message' } } : {}),
                 stack: `${diagnostic.name}: private-driver-message\nSQL private-query\n    at privateFunction (${diagnostic.file}:250:18)\n    at privateFunction (https://private-host/source.js?private-token:1:2)` });
             if ('serialization' in diagnostic) return reply.serializer(() => { throw failure; }).send({ secret: 'private-response' });
             throw failure;
@@ -50,6 +58,7 @@ describe('enableErrorHandlers', () => {
                 httpRequestId: 'qb80-http-request', errorClass: diagnostic.errorClass,
                 requestId: 'admit-own-action', actionId: 'session.attention.set',
                 ...(diagnostic.prismaCode ? { prismaCode: diagnostic.prismaCode } : {}),
+                ...('sqlState' in diagnostic ? { sqlState: diagnostic.sqlState } : {}),
                 stackFrames: [{ file: diagnostic.file, line: 250, column: 18 }] })]));
             expect(JSON.stringify(records)).not.toContain('private-');
             expect(response.body).not.toContain('P2028');

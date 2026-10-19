@@ -1305,7 +1305,8 @@ describe("session update handler on SQLite", () => {
     it.each([
         { event: 'pending-delivery-accepted-v1', code: 'P2028' },
         { event: 'pending-materialize-next', code: 'P2024' },
-    ])("returns a typed retry ACK when $event cannot acquire a transaction ($code)", async ({ event, code }) => {
+        { event: 'pending-materialize-next', code: 'P2010' },
+    ])("preserves the recovery outcome for $event ($code)", async ({ event, code }) => {
         const owner = await db.account.create({
             // A Session-owning Account is current: terminal turn settlement
             // takes the canonical Account transition fence.
@@ -1333,7 +1334,7 @@ describe("session update handler on SQLite", () => {
 
         const presence = createSessionPublisherPresence();
         const socket = createAuthenticatedFakeSocket();
-        if (event !== 'pending-materialize-next') sessionUpdateHandler(
+        sessionUpdateHandler(
             owner.id,
             socket as never,
             {
@@ -1355,12 +1356,14 @@ describe("session update handler on SQLite", () => {
 
         const previousMaxRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
         process.env.HAPPIER_DB_TX_MAX_RETRIES = "0";
-        const acquisitionError = Object.assign(
-            new Error("Transaction API error: Unable to start a transaction in the given time."),
-            { code, meta: { error: "Unable to start a transaction in the given time." } },
+        const transactionError = Object.assign(
+            new Error(code === 'P2010' ? 'private-sql-fixture' : "Transaction API error: Unable to start a transaction in the given time."),
+            { code, meta: code === 'P2010' ? { code: '57014', message: 'private-sql-fixture' }
+                : { error: "Unable to start a transaction in the given time." } },
         );
         const originalTransaction = db.$transaction;
-        const transaction = vi.fn().mockRejectedValueOnce(acquisitionError);
+        const transaction = vi.fn().mockRejectedValueOnce(transactionError);
+        const diagnostic = vi.spyOn(logger, 'error').mockImplementation(() => {});
         // Prisma's overloaded transaction boundary cannot be represented by one Vitest mock signature.
         db.$transaction = transaction as unknown as typeof db.$transaction;
         const unavailableAcknowledgements: unknown[] = [];
@@ -1369,7 +1372,15 @@ describe("session update handler on SQLite", () => {
                 ? { sid: session.id, deliveryState: 'provider', deliveryTiming: 'after_foreground_ready', foregroundState: 'ready' }
                 : { v: 1, sessionId: session.id, localId: 'pending-1' },
             (value: unknown) => unavailableAcknowledgements.push(value));
+            if (code === 'P2010') {
+                expect(diagnostic).toHaveBeenCalledWith(expect.objectContaining({
+                    module: 'websocket', event: 'pending-materialization-failed', phase: 'materialization',
+                    sessionId: session.id, errorCode: 'P2010', sqlState: '57014',
+                }), expect.any(String));
+                expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-sql-fixture');
+            }
         } finally {
+            diagnostic.mockRestore();
             db.$transaction = originalTransaction;
             if (previousMaxRetries === undefined) {
                 delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
@@ -1380,8 +1391,8 @@ describe("session update handler on SQLite", () => {
 
         expect(unavailableAcknowledgements).toEqual([{
             ok: false,
-            error: "transaction-unavailable",
-            retryAfterMs: 1_000,
+            error: code === 'P2010' ? 'internal' : "transaction-unavailable",
+            ...(code === 'P2010' ? {} : { retryAfterMs: 1_000 }),
             ...(event === 'pending-delivery-accepted-v1' ? { correlationId: expect.stringMatching(/^[A-Za-z0-9_.:-]{1,160}$/u) } : {}),
         }]);
         await expect(db.sessionMessage.count({ where: { sessionId: session.id } })).resolves.toBe(0);
