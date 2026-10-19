@@ -102,6 +102,12 @@ type ListPage = Readonly<{
     incomplete: boolean;
 }>;
 
+// Strings preserve the incumbent Session query API; Doc queries use the same
+// retained pages, admission and mounted invalidation owner.
+type ListAnchor = string | Readonly<{ anchorDocArtifactId: string }>;
+const listAnchorKey = (anchor: ListAnchor) => JSON.stringify(typeof anchor === 'string' ? ['session', anchor] : ['doc', anchor.anchorDocArtifactId]);
+const listAnchorInput = (anchor?: ListAnchor) => anchor === undefined ? {} : typeof anchor === 'string' ? { anchorSessionId: anchor } : anchor;
+
 export type DiscussionRepositoryListSnapshot = Readonly<{
     items: readonly DiscussionOpenedSummaryV1[];
     nextCursor: string | null;
@@ -299,9 +305,11 @@ export function createDiscussionRepository(options: Readonly<{
 }>) {
     const listeners = new Set<() => void>();
     const listPages: Record<'active' | 'archived', ListPage[]> = { active: [], archived: [] };
-    const anchorPages = new Map<string, Record<'active' | 'archived', ListPage[]>>();
+    const anchorPages = new Map<string, { anchor: ListAnchor; pages: Record<'active' | 'archived', ListPage[]> }>();
+    const retainedAnchors = () => [...anchorPages.values()].map(entry => entry.anchor);
     const listInFlight = new Map<string, Promise<void>>();
-    const mountedAnchors = new Map<string, number>();
+    const mountedAnchors = new Map<string, { anchor: ListAnchor; count: number }>();
+    const mountedThreads = new Map<string, number>();
     const intents = new Map<string, MutationIntent>();
     let client = options.client;
     let mountedWatch: MountedDiscussionChangeWatch | null = null;
@@ -352,18 +360,19 @@ export function createDiscussionRepository(options: Readonly<{
             attention: { ...EMPTY_ATTENTION, status: 'revoked', errorCode },
         });
     };
-    const getListSnapshot = (anchorSessionId?: string): DiscussionRepositoryCollectionSnapshot => anchorSessionId === undefined
-        ? snapshot : snapshot.anchors[anchorSessionId]
+    const getListSnapshot = (anchorSessionId?: ListAnchor): DiscussionRepositoryCollectionSnapshot => anchorSessionId === undefined
+        ? snapshot : snapshot.anchors[listAnchorKey(anchorSessionId)]
             ?? (snapshot.lists.active.status === 'revoked' && snapshot.lists.archived.status === 'revoked' ? snapshot : EMPTY_COLLECTION);
-    const pagesFor = (anchorSessionId?: string) => {
+    const pagesFor = (anchorSessionId?: ListAnchor) => {
         if (anchorSessionId === undefined) return listPages;
-        let pages = anchorPages.get(anchorSessionId);
-        if (!pages) { pages = { active: [], archived: [] }; anchorPages.set(anchorSessionId, pages); }
-        return pages;
+        const key = listAnchorKey(anchorSessionId);
+        let entry = anchorPages.get(key);
+        if (!entry) { entry = { anchor: anchorSessionId, pages: { active: [], archived: [] } }; anchorPages.set(key, entry); }
+        return entry.pages;
     };
-    const updateCollection = (value: DiscussionRepositoryCollectionSnapshot, anchorSessionId?: string) => publish(anchorSessionId === undefined
-        ? { ...snapshot, ...value } : { ...snapshot, anchors: { ...snapshot.anchors, [anchorSessionId]: value } });
-    const updateList = (state: 'active' | 'archived', value: DiscussionRepositoryListSnapshot, anchorSessionId?: string) => {
+    const updateCollection = (value: DiscussionRepositoryCollectionSnapshot, anchorSessionId?: ListAnchor) => publish(anchorSessionId === undefined
+        ? { ...snapshot, ...value } : { ...snapshot, anchors: { ...snapshot.anchors, [listAnchorKey(anchorSessionId)]: value } });
+    const updateList = (state: 'active' | 'archived', value: DiscussionRepositoryListSnapshot, anchorSessionId?: ListAnchor) => {
         const current = getListSnapshot(anchorSessionId);
         const previous = current.lists[state];
         if (previous.items === value.items && previous.nextCursor === value.nextCursor && previous.status === value.status
@@ -378,7 +387,7 @@ export function createDiscussionRepository(options: Readonly<{
         if (summary !== value.summary && canonicalRoot) {
             // Scoped discovery and ordinary lists retain the same summary facts;
             // an updated root must not leave a second readable body/disposition there.
-            for (const anchor of [undefined, ...anchorPages.keys()]) {
+            for (const anchor of [undefined, ...retainedAnchors()]) {
                 const pages = pagesFor(anchor);
                 for (const state of ['active', 'archived'] as const) {
                     pages[state] = pages[state].map(page => ({ ...page, rows: page.rows.map(row =>
@@ -401,12 +410,12 @@ export function createDiscussionRepository(options: Readonly<{
         const { artifactId: _artifactId, errorCode: _errorCode, recovery: _recovery, ...retained } = current;
         updateMutation(localId, { ...retained, status: 'observed_success' });
     };
-    const updateArchivedExistence = (value: DiscussionArchivedExistence, anchorSessionId?: string) => {
+    const updateArchivedExistence = (value: DiscussionArchivedExistence, anchorSessionId?: ListAnchor) => {
         const current = getListSnapshot(anchorSessionId);
         if (current.archivedExistence === value) return;
         updateCollection({ ...current, archivedExistence: value }, anchorSessionId);
     };
-    const applyListPages = (state: 'active' | 'archived', status: DiscussionRepositoryStatus, errorCode: string | null, anchorSessionId?: string) => {
+    const applyListPages = (state: 'active' | 'archived', status: DiscussionRepositoryStatus, errorCode: string | null, anchorSessionId?: ListAnchor) => {
         const pages = pagesFor(anchorSessionId)[state];
         const current = getListSnapshot(anchorSessionId).lists[state];
         const flattened = flattenListPages(pages, current.items);
@@ -428,7 +437,7 @@ export function createDiscussionRepository(options: Readonly<{
     };
     const purgeDiscussion = (discussionId: string, errorCode: string) => {
         resourceEpochs.set(discussionId, (resourceEpochs.get(discussionId) ?? 0) + 1);
-        for (const anchor of [undefined, ...anchorPages.keys()]) {
+        for (const anchor of [undefined, ...retainedAnchors()]) {
             const pages = pagesFor(anchor);
             for (const state of ['active', 'archived'] as const) {
                 pages[state] = pages[state].map(page => ({ ...page, rows: page.rows.filter(row => row.id !== discussionId) }));
@@ -455,9 +464,17 @@ export function createDiscussionRepository(options: Readonly<{
             ? mergeDiscussionMessages(current?.messages ?? [], [firstMessage]) : current?.messages;
         const root = firstMessage && messages?.find(message => message.id === firstMessage.id);
         const row = root && root !== incoming.firstMessage ? { ...incoming, firstMessage: root } : incoming;
-        for (const anchorSessionId of [undefined, ...anchorPages.keys()]) {
+        for (const anchorSessionId of [undefined, ...retainedAnchors()]) {
             const pages = pagesFor(anchorSessionId);
-            const admitted = anchorSessionId === undefined || (row.anchor?.kind === 'session' && row.anchor.sessionId === anchorSessionId);
+            // A Doc's scoped query owns its admitted membership/projection.
+            // Unscoped detail reads must not backfill it or replace its roots
+            // with a broader latest-message projection. Closed membership can
+            // still be removed immediately; canonical root changes reconcile
+            // through updateThread below.
+            if (typeof anchorSessionId === 'object' && row.archivedAt === null) continue;
+            const admitted = anchorSessionId === undefined || (typeof anchorSessionId === 'string'
+                ? row.anchor?.kind === 'session' && row.anchor.sessionId === anchorSessionId
+                : row.anchor?.kind === 'doc' && row.anchor.doc.ref.artifactId === anchorSessionId.anchorDocArtifactId && row.archivedAt === null);
             if (!admitted && ![...pages.active, ...pages.archived].some(page => page.rows.some(item => item.id === row.id))) continue;
             const state = row.archivedAt === null ? 'active' : 'archived';
             const other = state === 'active' ? 'archived' : 'active';
@@ -504,7 +521,8 @@ export function createDiscussionRepository(options: Readonly<{
             return outcome;
         }
         if (outcome.value.discussions.some(row => (epochs.get(row.id) ?? 0) !== (resourceEpochs.get(row.id) ?? 0))) {
-            return { kind: 'failed', errorCode: 'discussion_read_denied' };
+            // This response lost custody; it is not a new Home-wide refusal.
+            return { kind: 'failed', errorCode: 'discussion_read_stale' };
         }
         if (outcome.value.serverId !== options.scope.serverId || outcome.value.discussions.some(row => {
             const root = row.firstMessage;
@@ -521,10 +539,12 @@ export function createDiscussionRepository(options: Readonly<{
             discussions: outcome.value.discussions.map(row => snapshot.threads[row.id]?.summary ?? row) } };
     };
 
-    const loadListPage = async (state: 'active' | 'archived', cursor: string | null, signal?: AbortSignal, anchorSessionId?: string) => {
+    const loadListPage = async (state: 'active' | 'archived', cursor: string | null, signal?: AbortSignal, anchorSessionId?: ListAnchor) => {
         const operationEpoch = accessLossEpoch;
         const epochs = new Map(resourceEpochs);
-        const outcome = await client.list({ state, ...(cursor ? { cursor } : {}), ...(anchorSessionId === undefined ? {} : { anchorSessionId }) }, signal);
+        const input = { state, ...(cursor ? { cursor } : {}), ...listAnchorInput(anchorSessionId) };
+        const docScoped = typeof anchorSessionId === 'object';
+        const outcome = await (docScoped ? readList(input, signal) : client.list(input, signal));
         if (signal?.aborted) return { kind: 'failed' as const, errorCode: 'canceled' };
         if (operationEpoch !== accessLossEpoch) return { kind: 'failed' as const, errorCode: 'discussion_read_denied' };
         if (outcome.kind !== 'succeeded') return outcome;
@@ -532,14 +552,20 @@ export function createDiscussionRepository(options: Readonly<{
         for (const row of rows) {
             // Query pages own membership/cursors, while a resource observed in
             // another loaded projection must not retain a divergent summary.
-            if (snapshot.threads[row.id]?.summary || [listPages, ...anchorPages.values()].some(pages =>
+            if (snapshot.threads[row.id]?.summary || [listPages, ...[...anchorPages.values()].map(entry => entry.pages)].some(pages =>
                 [...pages.active, ...pages.archived].some(page => page.rows.some(item => item.id === row.id)))) applySummary(row);
         }
         return { kind: 'succeeded' as const, value: {
             requestCursor: cursor,
             rows,
             nextCursor: outcome.value.nextCursor,
-            incomplete: outcome.value.incomplete,
+            // Scoped roots, not an unreadable title/latest preview, establish
+            // Doc discovery. Explicit null is a known inaccessible root to
+            // exclude; an unopened non-null root leaves admission unknown.
+            incomplete: docScoped
+                ? outcome.value.discussions.some(row => row.firstMessage === undefined
+                    || (row.firstMessage !== null && row.firstMessage.content === null))
+                : outcome.value.incomplete,
         } satisfies ListPage };
     };
 
@@ -549,7 +575,8 @@ export function createDiscussionRepository(options: Readonly<{
      * archived disclosure. It loads no page: the archived list stays lazy and
      * keeps its own pagination for when the reader actually opens it.
      */
-    const probeArchivedExistence = async (signal?: AbortSignal, anchorSessionId?: string): Promise<void> => {
+    const probeArchivedExistence = async (signal?: AbortSignal, anchorSessionId?: ListAnchor): Promise<void> => {
+        if (typeof anchorSessionId === 'object') return;
         if (pagesFor(anchorSessionId).archived.length > 0) return;
         const operationEpoch = accessLossEpoch;
         const epochs = new Map(resourceEpochs);
@@ -563,8 +590,8 @@ export function createDiscussionRepository(options: Readonly<{
         updateArchivedExistence(visible ? 'present' : outcome.value.discussions.length > 0 ? 'unknown' : 'empty', anchorSessionId);
     };
 
-    const listReadKey = (state: 'active' | 'archived', anchorSessionId?: string) => JSON.stringify([anchorSessionId ?? null, state]);
-    const readListPages = (state: 'active' | 'archived', append: boolean, signal?: AbortSignal, anchorSessionId?: string,
+    const listReadKey = (state: 'active' | 'archived', anchorSessionId?: ListAnchor) => JSON.stringify([anchorSessionId ?? null, state]);
+    const readListPages = (state: 'active' | 'archived', append: boolean, signal?: AbortSignal, anchorSessionId?: ListAnchor,
         input: Readonly<{ complete?: boolean }> = {}): Promise<void> => {
         const key = listReadKey(state, anchorSessionId);
         const existing = listInFlight.get(key);
@@ -611,7 +638,7 @@ export function createDiscussionRepository(options: Readonly<{
                     else replacement.push(outcome.value);
                 } else replacement.push(outcome.value);
                 cursor = outcome.value.nextCursor;
-                if (input.complete) {
+                if (input.complete && typeof anchorSessionId !== 'object') {
                     queryPages[state] = replacement.map(page => ({ ...page,
                         rows: page.rows.filter(row => (epochs.get(row.id) ?? 0) === (resourceEpochs.get(row.id) ?? 0)),
                     }));
@@ -626,17 +653,17 @@ export function createDiscussionRepository(options: Readonly<{
             if (state === 'active' && !append && !signal?.aborted) await probeArchivedExistence(signal, anchorSessionId);
         }).finally(() => { if (listInFlight.get(key) === pending) listInFlight.delete(key); });
         listInFlight.set(key, pending);
-        updateList(state, { ...retained, status: 'loading', errorCode: null }, anchorSessionId);
+        updateList(state, { ...retained, status: typeof anchorSessionId === 'object' && retained.status === 'ready' ? 'ready' : 'loading', errorCode: null }, anchorSessionId);
         return pending;
     };
 
-    const refreshList = (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string,
+    const refreshList = (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: ListAnchor,
         input?: Readonly<{ complete?: boolean }>) => readListPages(state, false, signal, anchorSessionId, input);
-    const loadMoreList = (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string,
+    const loadMoreList = (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: ListAnchor,
         input?: Readonly<{ complete?: boolean }>) => readListPages(state, true, signal, anchorSessionId, input);
 
     /** Search demand extends the same query's retained page frontier, never a second list. */
-    const loadCompleteList = async (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string): Promise<void> => {
+    const loadCompleteList = async (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: ListAnchor): Promise<void> => {
         const operationEpoch = accessLossEpoch;
         const key = listReadKey(state, anchorSessionId);
         while (listInFlight.has(key)) await listInFlight.get(key);
@@ -848,7 +875,6 @@ export function createDiscussionRepository(options: Readonly<{
             const outcome = await client.list({ state, creationLocalId: intent.creationLocalId, ...(cursor ? { cursor } : {}) }, signal);
             if (operationEpoch !== accessLossEpoch) return { kind: 'unavailable' };
             if (outcome.kind !== 'succeeded') {
-                if (outcome.kind === 'failed' && isExplicitAccessLoss(outcome.errorCode)) purgeAccessLost(outcome.errorCode);
                 return { kind: 'unavailable' };
             }
             const found = outcome.value.discussions.find((row) => row.creationLocalId === intent.creationLocalId);
@@ -993,8 +1019,9 @@ export function createDiscussionRepository(options: Readonly<{
             void reconcileRecordedIntent(intent, signal);
             return { kind: 'checking' };
         }
-        if (isExplicitAccessLoss(outcome.errorCode)) purgeAccessLost(outcome.errorCode);
-        else recordMutation(intent, 'failed', { errorCode: outcome.errorCode, recovery: recoveryForFailure(outcome.errorCode) });
+        // This proposed resource/participant set can be refused without losing
+        // Account-wide access. Home retirement belongs to the lifetime owner.
+        recordMutation(intent, 'failed', { errorCode: outcome.errorCode, recovery: recoveryForFailure(outcome.errorCode) });
         return outcome;
     };
 
@@ -1060,20 +1087,19 @@ export function createDiscussionRepository(options: Readonly<{
     const refreshLoaded = async (): Promise<void> => {
         const work: Promise<void>[] = [];
         if (attentionMountReferences > 0) work.push(refreshAttentionAfterChange());
-        for (const anchor of [...(homeMountReferences > 0 ? [undefined] : []), ...mountedAnchors.keys()]) {
+        for (const anchor of [...(homeMountReferences > 0 ? [undefined] : []), ...[...mountedAnchors.values()].map(entry => entry.anchor)]) {
             const reread = async (state: 'active' | 'archived') => {
                 const epoch = accessLossEpoch;
                 const pending = listInFlight.get(listReadKey(state, anchor));
                 if (pending) await pending;
-                if (epoch === accessLossEpoch) await refreshList(state, undefined, anchor);
+                if (epoch === accessLossEpoch) await refreshList(state, undefined, anchor, { complete: typeof anchor === 'object' });
             };
             work.push(reread('active'));
             if (pagesFor(anchor).archived.length > 0) work.push(reread('archived'));
         }
-        if (homeMountReferences > 0 || mountedAnchors.size > 0) {
-            for (const [discussionId, thread] of Object.entries(snapshot.threads)) {
-                if (thread.status !== 'revoked') work.push(refreshDiscussion(discussionId));
-            }
+        const homeThreadsDemanded = homeMountReferences > 0 || [...mountedAnchors.values()].some(entry => typeof entry.anchor === 'string');
+        for (const discussionId of homeThreadsDemanded ? Object.keys(snapshot.threads) : mountedThreads.keys()) {
+            if (snapshot.threads[discussionId]?.status !== 'revoked') work.push(refreshDiscussion(discussionId));
         }
         await Promise.all(work);
         await Promise.all([...intents.values()].map(async (intent) => {
@@ -1137,9 +1163,11 @@ export function createDiscussionRepository(options: Readonly<{
     return {
         getSnapshot: () => snapshot,
         getListSnapshot,
+        getDocListSnapshot: (artifactId: string) => getListSnapshot({ anchorDocArtifactId: artifactId }).lists.active,
         subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener); },
         setClient(nextClient: DiscussionRepositoryClient) { client = nextClient; },
         refreshList,
+        refreshDocList: (artifactId: string, signal?: AbortSignal) => refreshList('active', signal, { anchorDocArtifactId: artifactId }, { complete: true }),
         readList,
         refreshAttention,
         async loadMoreAttention(signal?: AbortSignal) {
@@ -1233,15 +1261,17 @@ export function createDiscussionRepository(options: Readonly<{
                 ? { kind: 'stopped', errorCode: outcome.errorCode }
                 : { kind: 'retryable', errorCode: outcome.errorCode };
         },
-        mount(input?: Readonly<{ anchorSessionId?: string; attention?: boolean }>) {
+        mount(input?: Readonly<{ anchorSessionId?: string; anchorDocArtifactId?: string; discussionId?: string; attention?: boolean }>) {
             mountReferences += 1;
-            const anchor = input?.anchorSessionId;
+            const anchor: ListAnchor | undefined = input?.anchorDocArtifactId === undefined ? input?.anchorSessionId : { anchorDocArtifactId: input.anchorDocArtifactId };
+            const threadId = input?.discussionId;
             if (input?.attention) attentionMountReferences += 1;
+            else if (threadId !== undefined) mountedThreads.set(threadId, (mountedThreads.get(threadId) ?? 0) + 1);
             else if (anchor === undefined) homeMountReferences += 1;
-            else mountedAnchors.set(anchor, (mountedAnchors.get(anchor) ?? 0) + 1);
+            else { const key = listAnchorKey(anchor); mountedAnchors.set(key, { anchor, count: (mountedAnchors.get(key)?.count ?? 0) + 1 }); }
             if (!mountedWatch) {
                 mountedWatch = watchMountedDiscussions({ scope: options.scope, address: options.address,
-                    includeDocSourceChanges: () => attentionMountReferences > 0,
+                    includeDocSourceChanges: () => attentionMountReferences > 0 || [...mountedAnchors.values()].some(entry => typeof entry.anchor === 'object'),
                     onInvalidated: () => { void refreshLoaded(); } });
             }
             let released = false;
@@ -1250,11 +1280,17 @@ export function createDiscussionRepository(options: Readonly<{
                 released = true;
                 mountReferences -= 1;
                 if (input?.attention) attentionMountReferences -= 1;
+                else if (threadId !== undefined) {
+                    const remaining = (mountedThreads.get(threadId) ?? 1) - 1;
+                    if (remaining > 0) mountedThreads.set(threadId, remaining);
+                    else mountedThreads.delete(threadId);
+                }
                 else if (anchor === undefined) homeMountReferences -= 1;
                 else {
-                    const remaining = (mountedAnchors.get(anchor) ?? 1) - 1;
-                    if (remaining > 0) mountedAnchors.set(anchor, remaining);
-                    else mountedAnchors.delete(anchor);
+                    const key = listAnchorKey(anchor);
+                    const remaining = (mountedAnchors.get(key)?.count ?? 1) - 1;
+                    if (remaining > 0) mountedAnchors.set(key, { anchor, count: remaining });
+                    else mountedAnchors.delete(key);
                 }
                 if (mountReferences === 0) {
                     mountedWatch?.dispose();
@@ -1274,6 +1310,7 @@ export function createDiscussionRepository(options: Readonly<{
             attentionInFlight = null;
             listInFlight.clear();
             mountedAnchors.clear();
+            mountedThreads.clear();
             listPages.active = [];
             listPages.archived = [];
             anchorPages.clear();

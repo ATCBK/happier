@@ -733,9 +733,9 @@ describe('Discussion repository', () => {
         }) });
         await repository.refreshList('active');
         await repository.refreshList('active', undefined, 'anchor-a');
-        expect(repository.getSnapshot()).toMatchObject({ anchors: { 'anchor-a': { lists: { active: {
+        expect(repository.getListSnapshot('anchor-a')).toMatchObject({ lists: { active: {
             items: [expect.objectContaining({ id: 'matching' })], nextCursor: 'anchor-page-2', status: 'ready',
-        } } } } });
+        } } });
         await repository.loadMoreAnchoredList('anchor-a', 'active');
         await repository.refreshAnchoredList('anchor-a', 'archived');
         expect(repository.getListSnapshot('anchor-a').lists.active.items.map(row => row.id)).toEqual(['matching', 'matching-page-2']);

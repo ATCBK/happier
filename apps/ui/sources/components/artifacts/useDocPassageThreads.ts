@@ -15,6 +15,8 @@ import type {
 
 export type DocPassageThreadsRead = Readonly<{
   status: 'loading' | 'ready' | 'unavailable';
+  membership: readonly DiscussionOpenedSummaryV1[] | null;
+  mountThread: (discussionId: string) => () => void;
   threads: readonly Readonly<{
     discussionId: string;
     summary: DiscussionOpenedSummaryV1;
@@ -24,6 +26,8 @@ export type DocPassageThreadsRead = Readonly<{
 
 const UNAVAILABLE: DocPassageThreadsRead = Object.freeze({
   status: 'unavailable',
+  membership: null,
+  mountThread: () => () => {},
   threads: Object.freeze([]),
 });
 const emptySubscribe = () => () => {};
@@ -71,72 +75,41 @@ export function useDocPassageThreads(
       repository?.getSnapshot ?? emptySnapshot,
       repository?.getSnapshot ?? emptySnapshot,
     );
-  React.useEffect(() => repository?.mount(), [repository]);
-  const [discovery, setDiscovery] = React.useState<Readonly<{
-    key: string;
-    ids: readonly string[] | null;
-  }> | null>(null);
-  const key = `${input.serverId}:${input.artifactId}`;
-
   React.useEffect(() => {
-    if (!client || !repository) return;
+    if (!repository) return;
     const controller = new AbortController();
-    void (async () => {
-      const ids: string[] = [];
-      let cursor: string | undefined;
-      for (;;) {
-        const page = await repository.readList(
-          {
-            state: 'active',
-            anchorDocArtifactId: input.artifactId,
-            ...(cursor ? { cursor } : {}),
-          },
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        if (page.kind !== 'succeeded') {
-          // Keep what was last read; an unreadable list is unavailable, never "no comments".
-          setDiscovery((previous) =>
-            previous?.key === key ? previous : { key, ids: null },
-          );
-          return;
-        }
-        ids.push(
-          ...page.value.discussions.filter(
-            (row) =>
-              row.anchor?.kind === 'doc' &&
-              row.anchor.doc.ref.artifactId === input.artifactId,
-          ).map(row => row.id),
-        );
-        if (!page.value.nextCursor || page.value.nextCursor === cursor) break;
-        cursor = page.value.nextCursor;
-      }
-      setDiscovery({ key, ids });
-      await Promise.all(
-        ids.map((discussionId) =>
-          repository
-            .refreshMessages(discussionId, controller.signal)
-            .catch(() => undefined),
-        ),
-      );
-    })();
-    return () => controller.abort();
-  }, [client, input.artifactId, input.refreshKey, key, repository]);
+    const release = repository.mount({ anchorDocArtifactId: input.artifactId });
+    void repository.refreshDocList(input.artifactId, controller.signal);
+    return () => { controller.abort(); release(); };
+  }, [input.artifactId, input.refreshKey, repository]);
+
+  const mountThread = React.useCallback((discussionId: string) => {
+    if (!repository) return () => {};
+    const release = repository.mount({ discussionId });
+    void repository.refreshDiscussion(discussionId);
+    return release;
+  }, [repository]);
 
   return React.useMemo(() => {
     if (!usable) return UNAVAILABLE;
-    if (!discovery || discovery.key !== key)
-      return { status: 'loading', threads: [] };
-    if (discovery.ids === null) return UNAVAILABLE;
+    const query = repository?.getDocListSnapshot(input.artifactId);
+    if (!query || query.status === 'idle' || query.status === 'loading')
+      return { status: 'loading', threads: [], membership: null, mountThread };
+    if (query.status !== 'ready' || query.incomplete || query.nextCursor !== null) return UNAVAILABLE;
     const threads: DocPassageThreadsRead['threads'][number][] = [];
-    for (const discussionId of discovery.ids) {
+    for (const summary of query.items) {
+      const discussionId = summary.id;
       const thread = snapshot?.threads[discussionId];
-      if (!thread?.summary || thread.status === 'revoked' || thread.status === 'locked') return UNAVAILABLE;
+      if (!thread?.summary || thread.status === 'revoked'
+        || !thread.messages.find(message => message.seq === 1)?.content) return UNAVAILABLE;
+      if (thread.summary.archivedAt !== null) continue;
       threads.push({ discussionId, summary: thread.summary, messages: thread.messages });
     }
     return {
       status: 'ready',
       threads,
+      membership: query.items,
+      mountThread,
     };
-  }, [discovery, key, snapshot?.threads, usable]);
+  }, [input.artifactId, mountThread, repository, snapshot, usable]);
 }
