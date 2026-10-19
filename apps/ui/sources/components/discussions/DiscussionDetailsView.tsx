@@ -45,7 +45,8 @@ import { Avatar } from '@/components/ui/avatar/Avatar';
 import { AvatarStack } from '@/components/ui/avatar/AvatarStack';
 import { DetailsTabHeader, type DetailsTabHeaderMetaFact } from '@/components/appShell/panes/details/header/DetailsTabHeader';
 import { artifactViewRoute } from '@/components/artifacts/artifactBrowserModel';
-import { useArtifact } from '@/sync/domains/state/storage';
+import { useArtifact, useDiscussionRequesterApprovals } from '@/sync/domains/state/storage';
+import { ApprovalRequesterThreadCard } from '@/components/approvals/ApprovalRequesterThreadCard';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -100,7 +101,7 @@ import { DiscussionWorkflowRunRow } from '@/components/discussions/DiscussionWor
 import { useDiscussionManagedWorkflowRuns } from '@/components/discussions/useDiscussionManagedWorkflowRuns';
 import { useDiscussionRunChips } from '@/components/discussions/useDiscussionRunChips';
 import { buildDiscussionContent } from '@/components/discussions/discussionComposerDocument';
-import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, type DiscussionTimelineItem } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, resolveReadableVisibleDiscussionSeqs, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, type DiscussionTimelineItem, placeDiscussionRequesterApprovals } from '@/components/discussions/discussionTimelineProjection';
 import { useShareViewerProfile } from '@/components/sharing/useShareViewerProfile';
 import { useDiscussionParticipantProfiles } from './useDiscussionParticipantProfiles';
 import { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
@@ -786,6 +787,15 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const sourceSubagents = props.source?.activity.subagents ?? NO_SOURCE_SUBAGENTS;
     const readSourceExecutionRunEntry = props.source?.activity.readExecutionRunEntry ?? readNoSourceExecutionRunEntry;
     const items = React.useMemo(() => buildDiscussionTimelineItems({ serverId: props.target.address.serverId, discussionId: props.target.discussionId, messages: displayMessages, subagents: sourceSubagents, readExecutionRunEntry: readSourceExecutionRunEntry, workflowRuns: managedRuns.runs }), [displayMessages, managedRuns.runs, props.target.address.serverId, props.target.discussionId, readSourceExecutionRunEntry, sourceSubagents]);
+    // C7: a shared Bot's outward request waits in the thread that asked, under the Bot's reply to that
+    // ask (or the ask itself while the Bot is blocked on it), joined by the request's admitted cause.
+    const requesterApprovals = useDiscussionRequesterApprovals(discussionAddress, mentionedSessionAddresses);
+    const requesterApprovalsByMessage = React.useMemo(() => placeDiscussionRequesterApprovals(displayMessages, requesterApprovals), [displayMessages, requesterApprovals]);
+    // Rows render through the list's cell cache: a decided request must reach its mounted row (the
+    // receipt replaces the card in place), so its placement and versions are the list's data version.
+    const requesterApprovalsVersion = React.useMemo(() => [...requesterApprovalsByMessage].map(([messageId, approvals]) => `${messageId}:${approvals
+        .map((approval) => `${approval.artifact.id}@${approval.artifact.bodyVersion ?? ''}:${approval.artifact.updatedAt}:${approval.parsed.request.status}`).join(',')}`).join(';'), [requesterApprovalsByMessage]);
+    const discussionReturnHref = React.useMemo(() => buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: props.target.address.serverId }, discussionId: props.target.discussionId } }), [props.target.address.serverId, props.target.discussionId]);
     const messageGroupStarts = React.useMemo(() => new Set(items.flatMap((item, index) => {
         if (item.kind !== 'human_message') return [];
         const previous = items[index - 1];
@@ -1085,6 +1095,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     key={dataKey}
                     dataKey={dataKey}
                     data={items}
+                    extraData={requesterApprovalsVersion}
                     frame={frame}
                     webDomObservation={observation}
                     keyExtractor={(item) => item.kind === 'human_message' ? `message:${item.message.localId ?? item.message.id}` : item.kind === 'workflow_run' ? `workflow:${item.run.id}` : `run:${item.entry.runId ?? item.subagent.id}`}
@@ -1130,9 +1141,11 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             viewerAccountId={props.scope.accountId}
                             attributionLine={resolveDiscussionReplyAttributionLine(item.message, props.scope,
                                 item.message.producerV1 ? resolveSessionLabel(item.message.producerV1.sessionId) : null)}
-                            footer={pendingMutation ? <>
-                                {mutationStatusLabel(pendingMutation) ? <Text testID={`session-discussion-message-status-${item.message.localId}`} accessibilityLiveRegion="polite" style={pendingMutation.status === 'failed' ? styles.error : styles.deliveryStatus}>{mutationStatusLabel(pendingMutation)}</Text> : null}
-                                <MutationRecovery mutation={pendingMutation} onRetry={() => void repository.retry(pendingMutation.localId)} onDismiss={dismissRefusal} />
+                            footer={requesterApprovalsByMessage.has(item.message.id) || pendingMutation ? <>
+                                {requesterApprovalsByMessage.get(item.message.id)?.map((approval) => <ApprovalRequesterThreadCard
+                                    key={approval.artifact.id} approval={approval} serverId={props.scope.serverId} returnHref={discussionReturnHref} />)}
+                                {pendingMutation && mutationStatusLabel(pendingMutation) ? <Text testID={`session-discussion-message-status-${item.message.localId}`} accessibilityLiveRegion="polite" style={pendingMutation.status === 'failed' ? styles.error : styles.deliveryStatus}>{mutationStatusLabel(pendingMutation)}</Text> : null}
+                                {pendingMutation ? <MutationRecovery mutation={pendingMutation} onRetry={() => void repository.retry(pendingMutation.localId)} onDismiss={dismissRefusal} /> : null}
                             </> : null}
                         />;
                     }}

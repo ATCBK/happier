@@ -1,5 +1,5 @@
-import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
-import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { approvalArtifactBodyMatchesHeaderV1, type ParsedApprovalArtifactBodyV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import type { ApprovalRequest, ApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { isDiscussionActionIdV1 } from '@happier-dev/protocol/discussions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
@@ -73,6 +73,50 @@ export function readOpenApprovalDiscussionAttention(artifact: DecryptedArtifact)
     const serverId = request.executionOriginV1.serverIdentityId ?? request.executionOriginV1.serverId;
     return { serverId, discussionId: input.data.discussionId,
         reason: request.discussionDraftReview === true ? 'draft_waiting' : 'approval_pending' };
+}
+
+/**
+ * A shared Bot's outward request that waits for the person who asked, joined to the Discussion
+ * message that asked it. The admitted cause (`executionOriginV1.actionRequestAttributionV1`) is the
+ * only source of the link; nothing is inferred from the thread. Every status is kept, so the card
+ * becomes the request's receipt in place once it is decided.
+ */
+export type DiscussionRequesterApproval = Readonly<{
+    artifact: DecryptedArtifact;
+    parsed: Extract<ParsedApprovalArtifactBodyV1, { family: 'built_in' | 'target_action' }>;
+    subject: ApprovalRequesterConfirmationV1;
+    /** The admitted cause; a Bot reply stamped with the same ref is the answer to this ask. */
+    requestRef: string;
+    originMessageId: string;
+}>;
+
+function readDiscussionRequesterApproval(
+    artifact: DecryptedArtifact,
+    discussion: ApprovalDiscussionAddress,
+): DiscussionRequesterApproval | null {
+    if (artifact.draft === true || typeof artifact.body !== 'string') return null;
+    const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
+    if (!parsed || parsed.family === 'execution_run_host_action') return null;
+    const request = parsed.family === 'target_action' ? parsed.request : parsed.request.v === 2 ? parsed.request : null;
+    if (!request) return null;
+    const subject = request.requesterConfirmation;
+    const cause = request.executionOriginV1?.actionRequestAttributionV1;
+    const origin = cause?.origin;
+    if (!subject || !cause || origin?.kind !== 'discussion') return null;
+    if (origin.discussion.discussionId !== discussion.discussionId
+        || !areServerProfileIdentifiersEquivalent(origin.discussion.serverId, discussion.serverId)) return null;
+    return { artifact, parsed, subject, requestRef: cause.requestRef, originMessageId: origin.messageId };
+}
+
+export function listDiscussionRequesterApprovals(
+    artifacts: readonly DecryptedArtifact[],
+    discussion: ApprovalDiscussionAddress,
+): DiscussionRequesterApproval[] {
+    return artifacts.flatMap((artifact) => {
+        const entry = readDiscussionRequesterApproval(artifact, discussion);
+        return entry ? [entry] : [];
+    }).sort((left, right) => left.parsed.request.createdAtMs - right.parsed.request.createdAtMs
+        || left.artifact.id.localeCompare(right.artifact.id));
 }
 
 export function isOpenApprovalInboxArtifact(artifact: DecryptedArtifact): boolean {

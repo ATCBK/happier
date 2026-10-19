@@ -7,7 +7,7 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildDiscussionTimelineItems, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
@@ -188,9 +188,13 @@ describe('buildDiscussionTimelineItems', () => {
             readExecutionRunEntry: (runId) => entries.get(runId) ?? null,
         });
 
-        expect(items.map((item) => item.kind === 'human_message'
-            ? `message:${item.message.id}`
-            : `run:${item.entry.runId}@${item.anchorSeq}`)).toEqual([
+        expect(items.map((item) => {
+            switch (item.kind) {
+                case 'human_message': return `message:${item.message.id}`;
+                case 'agent_activity_reference': return `run:${item.entry.runId}@${item.anchorSeq}`;
+                case 'workflow_run': return `workflow:${item.run.id}`;
+            }
+        })).toEqual([
             'message:message-1',
             'message:message-2',
             'run:run-a@2',
@@ -266,4 +270,28 @@ describe('buildDiscussionTimelineItems', () => {
         ]);
     });
 
+});
+
+describe('placeDiscussionRequesterApprovals', () => {
+    const persona = { serverId: 'home', sessionId: 'release-bot' };
+    const ask = { id: 'ask', producerV1: null };
+    const botReply = (id: string, requestRef: string, outcome?: 'answer' | 'pass') => ({ id, producerV1: {
+        v: 1 as const, kind: 'agent' as const, sessionId: 'release-bot',
+        ...(outcome ? { replyReturn: { serverId: 'home', requestLocalId: 'ask-1', outcome } } : {}),
+        actionRequestAttributionV1: { requestRef, requester: { serverId: 'home', accountId: 'bob' }, persona, origin: null } } });
+    const approval = { id: 'approval-1', requestRef: 'req-1', originMessageId: 'ask' };
+
+    it('reads under the Bot reply that answered the same admitted ask', () => {
+        const placed = placeDiscussionRequesterApprovals([ask, botReply('other', 'req-2'), botReply('reply', 'req-1', 'answer')], [approval]);
+        expect([...placed.entries()]).toEqual([['reply', [approval]]]);
+    });
+
+    it('reads under the message that asked while the Bot has not replied, or replied with a one-line outcome', () => {
+        expect([...placeDiscussionRequesterApprovals([ask], [approval]).entries()]).toEqual([['ask', [approval]]]);
+        expect([...placeDiscussionRequesterApprovals([ask, botReply('passed', 'req-1', 'pass')], [approval]).entries()]).toEqual([['ask', [approval]]]);
+    });
+
+    it('places nothing whose message is not loaded in this thread', () => {
+        expect(placeDiscussionRequesterApprovals([botReply('other', 'req-2')], [approval]).size).toBe(0);
+    });
 });

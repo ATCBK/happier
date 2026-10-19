@@ -87,6 +87,34 @@ export function resolveDiscussionReplyOutcome(message: Pick<DiscussionOpenedMess
     }
 }
 
+/**
+ * Where a shared Bot's requester-bound request reads in the thread (C7 "External write needs
+ * confirmation"): under the Bot reply stamped with the same admitted cause, else under the message
+ * that asked. A one-line outcome (passed, failed, stopped) is not a place for a card, so the ask keeps
+ * it. A request whose anchor is not loaded here is not placed rather than guessed.
+ */
+export function placeDiscussionRequesterApprovals<T extends Readonly<{ requestRef: string; originMessageId: string }>>(
+    messages: ReadonlyArray<Pick<DiscussionOpenedMessageV1, 'id' | 'producerV1'>>,
+    approvals: ReadonlyArray<T>,
+): ReadonlyMap<string, ReadonlyArray<T>> {
+    const placed = new Map<string, T[]>();
+    if (approvals.length === 0) return placed;
+    const messageIds = new Set(messages.map((message) => message.id));
+    const replyByRequestRef = new Map<string, string>();
+    for (const message of messages) {
+        const requestRef = message.producerV1?.actionRequestAttributionV1?.requestRef;
+        const outcome = resolveDiscussionReplyOutcome(message);
+        if (requestRef && (outcome === null || outcome === 'answer')) replyByRequestRef.set(requestRef, message.id);
+    }
+    for (const approval of approvals) {
+        const anchor = replyByRequestRef.get(approval.requestRef)
+            ?? (messageIds.has(approval.originMessageId) ? approval.originMessageId : null);
+        if (!anchor) continue;
+        placed.set(anchor, [...(placed.get(anchor) ?? []), approval]);
+    }
+    return placed;
+}
+
 export type DiscussionTimelineMessage = Pick<DiscussionOpenedMessageV1, 'id' | 'seq'>;
 
 export type DiscussionTimelineItem<

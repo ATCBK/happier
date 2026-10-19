@@ -53,8 +53,10 @@ import type { DecryptedArtifact } from '../domains/artifacts/artifactTypes';
 import {
   collectOpenApprovalSessionReferences,
   listApprovalArtifactIdsNeedingHydrationForSession,
+  listDiscussionRequesterApprovals,
   listTranscriptApprovalArtifactsForSession,
   type ApprovalSettledPresentation,
+  type DiscussionRequesterApproval,
   type OpenApprovalArtifactForSession,
   type OpenApprovalSessionReference,
 } from '../domains/artifacts/approvalArtifacts';
@@ -3215,7 +3217,7 @@ export function useOpenApprovalSessionReferences(): ReadonlyArray<OpenApprovalSe
 }
 
 function buildOpenApprovalArtifactsForSessionSignature(
-  entries: ReadonlyArray<OpenApprovalArtifactForSession>,
+  entries: ReadonlyArray<Readonly<{ artifact: DecryptedArtifact }>>,
 ): string {
   if (entries.length === 0) return '';
   return entries.map((entry) => [
@@ -3294,6 +3296,69 @@ export function useTranscriptApprovalArtifactsForSession(
     });
   }, [serverId, missingIds, profilesGeneration]);
   return useSessionApprovalArtifacts(target, settledPresentations);
+}
+
+const emptyDiscussionRequesterApprovals: ReadonlyArray<DiscussionRequesterApproval> = Object.freeze([]);
+
+/**
+ * A Discussion's requester-bound outward requests (open and decided), each joined to the message that
+ * asked by its admitted cause. Bodies are demanded only for approvals linked to the Sessions this
+ * thread names (the Bot that was asked), through the same hydration owner as the transcript.
+ */
+export function useDiscussionRequesterApprovals(
+  discussion: Readonly<{ serverId: string; discussionId: string }> | null,
+  /** Memoized by the caller: a new array re-derives the hydration demand. */
+  linkedSessions: ReadonlyArray<SessionAddress>,
+): ReadonlyArray<DiscussionRequesterApproval> {
+  const serverId = discussion?.serverId ?? null;
+  const discussionId = discussion?.discussionId ?? null;
+  const profilesGeneration = useServerProfilesGeneration();
+  const selectMissingIds = React.useMemo(() => {
+    let previousArtifacts: StorageState['artifacts'] | null = null;
+    let previousReady = false;
+    let previousIds: string[] = [];
+    return (state: StorageState): string[] => {
+      if (previousArtifacts === state.artifacts && previousReady === state.isDataReady) return previousIds;
+      previousArtifacts = state.artifacts;
+      previousReady = state.isDataReady;
+      if (!state.isDataReady || linkedSessions.length === 0) { previousIds = []; return previousIds; }
+      const visible = collectVisibleArtifacts(state.artifacts);
+      const ids = new Set<string>();
+      for (const address of linkedSessions) {
+        for (const id of listApprovalArtifactIdsNeedingHydrationForSession(visible, address,
+          listSessionAddressesForSessionIdFromLocalState(state, address.sessionId))) ids.add(id);
+      }
+      const next = [...ids].sort();
+      previousIds = next.join('\u0000') === previousIds.join('\u0000') ? previousIds : next;
+      return previousIds;
+    };
+  }, [linkedSessions, profilesGeneration]);
+  const missingIds = getStorage()(useShallow(selectMissingIds));
+  React.useEffect(() => {
+    if (!serverId || missingIds.length === 0) return;
+    void sync.hydrateSessionApprovalArtifacts(serverId, missingIds).catch(error => {
+      log.log(`Discussion approval hydration failed: ${error instanceof Error ? error.name : 'unknown'}`);
+    });
+  }, [serverId, missingIds, profilesGeneration]);
+  const selector = React.useMemo(() => {
+    let previousArtifacts: StorageState['artifacts'] | null = null;
+    let previousReady: boolean | null = null;
+    let previousSignature = '';
+    let previous: ReadonlyArray<DiscussionRequesterApproval> = emptyDiscussionRequesterApprovals;
+    return (state: StorageState): ReadonlyArray<DiscussionRequesterApproval> => {
+      if (state.artifacts === previousArtifacts && state.isDataReady === previousReady) return previous;
+      previousArtifacts = state.artifacts;
+      previousReady = state.isDataReady;
+      const next = serverId && discussionId && state.isDataReady
+        ? listDiscussionRequesterApprovals(collectVisibleArtifacts(state.artifacts), { serverId, discussionId }) : [];
+      const signature = buildOpenApprovalArtifactsForSessionSignature(next);
+      if (signature === previousSignature) return previous;
+      previousSignature = signature;
+      previous = next.length === 0 ? emptyDiscussionRequesterApprovals : next;
+      return previous;
+    };
+  }, [discussionId, serverId, profilesGeneration]);
+  return getStorage()(useShallow(selector));
 }
 
 function useSessionApprovalArtifacts(
