@@ -507,12 +507,18 @@ export function createRuntimeProviderServices(input: Readonly<{
       && scope.accountSettingsBasis.scopeKey === snapshot!.scopeKey
       && scope.accountSettingsBasis.settingsVersion === snapshot!.settingsVersion
       && sameProviderConnectionsCatalogAuthority(scope.accountSettingsBasis.providerConnectionsCatalog, snapshot!.providerConnectionsCatalog);
-    if (!settingsBasis && scope.accountSettingsBasis && !scopedAccountSettingsBasisIsCurrent) {
+    if (!settingsBasis && scope.accountSettingsBasis && (
+      scope.accountSettingsBasis.scopeKey !== snapshot!.scopeKey
+      || scope.accountSettingsBasis.settingsVersion > snapshot!.settingsVersion
+      || !sameProviderConnectionsCatalogAuthority(scope.accountSettingsBasis.providerConnectionsCatalog, snapshot!.providerConnectionsCatalog)
+    )) {
       return {
         ok: false as const,
         error: createProviderErrorV1('provider_authorization_changed', identity),
       };
     }
+    // Preferences have an independent revision. Reparse a newer observation;
+    // the probe ticket, rather than that revision, decides authorization.
     const accountSettings = settingsBasis?.accountSettings
       ?? (scopedAccountSettingsBasisIsCurrent
         ? scope.accountSettingsBasis!.accountSettings

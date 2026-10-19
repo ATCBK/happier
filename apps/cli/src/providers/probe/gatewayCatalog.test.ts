@@ -59,9 +59,18 @@ it('reports unavailable catalog preparation rather than an endpoint outage when 
 
 it('honours a committed peer grant on the next probe and model read through its selected hub', () =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-peer-' }, async ({ homeDir }) => {
+    let onTargetRead = () => {};
+    let pool = { generation: 1, policy: { autoSwitch: false } };
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
       controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
       catalogModels: [{ id: 'gateway-model' }],
+      resolveAccountTarget: async (target, signal) => {
+        signal.throwIfAborted();
+        onTargetRead();
+        return { account: target.kind === 'account' ? target.account
+          : { service: target.service, accountId: 'upstream-account' }, displayName: 'Upstream',
+          ...(target.kind === 'group' ? { group: { groupId: target.groupId, generation: pool.generation } } : {}) };
+      },
     });
     try {
       if (!fixture.gateway) throw new Error('Expected physical gateway');
@@ -70,7 +79,9 @@ it('honours a committed peer grant on the next probe and model read through its 
       vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
       const base = ProviderSettingsV1Schema.parse({ ...fixture.providerSettings, machineGrants: [],
         connections: fixture.providerSettings.connections.map(connection => ({ ...connection,
-          gatewayPlacement: { kind: 'machine', machineId: fixture.machineId } })),
+          gatewayPlacement: { kind: 'machine', machineId: fixture.machineId },
+          purposeBindingDefaults: { upstream: { kind: 'group', groupId: 'shared-pool',
+            service: { pluginId: fixture.gateway!.pluginId, localId: 'accounts' } } } })),
       });
       const connection = resolveProviderConnectionForMachine({ connectionId: 'run-gateway', machineId: fixture.machineId,
         providerSettings: base, registry: fixture.contributes, dnsEvidenceByEndpointUrl: new Map() });
@@ -84,17 +95,18 @@ it('honours a committed peer grant on the next probe and model read through its 
       });
       let catalog = splitProviderSettingsV1(settings).catalog;
       let revision = 1;
-      const snapshot = () => ({ ...fixture.snapshot, settingsVersion: 1, rawSettings: {},
+      let settingsVersion = 1;
+      const snapshot = () => ({ ...fixture.snapshot, settingsVersion, rawSettings: {},
         scopeKey: resolveAccountSettingsScopeKey(credentials),
         providerConnectionsCatalog: { status: 'ready' as const, revision, catalog } });
       setActiveAccountSettingsSnapshot(snapshot());
       vi.spyOn(axios, 'get').mockImplementation(async url => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
-          mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+          mode: 'plain', version: 1, settingsVersion, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
         if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
           status: 'present', revision, content: { t: 'plain', v: catalog } } };
-        if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+        if (path === '/v2/account/settings') return { status: 200, data: { version: settingsVersion, content: { t: 'plain', v: {} } } };
         if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
         const history = emptyAccountSettingsHistoryCaptureResponse(path);
         if (history) return history;
@@ -124,7 +136,7 @@ it('honours a committed peer grant on the next probe and model read through its 
       });
       transport.call.mockImplementation(async ({ machineId, method, request, signal }) => {
         expect(machineId).toBe(fixture.machineId);
-        if (method === RPC_METHODS.DAEMON_PROVIDERS_PROBE) return DaemonProviderProbeResponseV1Schema.parse(await hub.probe(request, { signal }));
+        if (method === RPC_METHODS.DAEMON_PROVIDERS_PROBE) return DaemonProviderProbeResponseV1Schema.parse(await hub.probe(request, 'manual_refresh', { signal }));
         if (method === 'daemon.providers.models') return DaemonProviderModelsResponseV1Schema.parse(await hub.models(request));
         throw new Error('Unexpected hub RPC');
       });
@@ -149,6 +161,19 @@ it('honours a committed peer grant on the next probe and model read through its 
       expect(await peer.probe(request)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
       expect(await peer.models(request)).toMatchObject({ status: 'success', connectionId: request.connectionId,
         models: expect.arrayContaining([expect.objectContaining({ id: 'gateway-model' })]) });
+      // Account preferences have their own version. A publication while the
+      // hub resolves its upstream must not revoke an unchanged Gateway grant.
+      pool = { generation: pool.generation + 1, policy: { autoSwitch: true } };
+      expect(await peer.probe(request)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
+      onTargetRead = () => {
+        settingsVersion += 1;
+        setActiveAccountSettingsSnapshot(snapshot());
+      };
+      const localAfterPolicyChange = await hub.probe({ connectionId: request.connectionId, machineId: fixture.machineId });
+      expect(localAfterPolicyChange, JSON.stringify(localAfterPolicyChange)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
+      const afterPolicyChange = await peer.probe(request);
+      expect(afterPolicyChange, JSON.stringify(afterPolicyChange)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
+      onTargetRead = () => {};
       const callHub = transport.call.getMockImplementation()!;
       transport.call.mockImplementationOnce(async input => {
         const reply = DaemonProviderProbeResponseV1Schema.parse(await callHub(input));
@@ -171,5 +196,7 @@ it('honours a committed peer grant on the next probe and model read through its 
       transport.call.mockClear();
       expect(await peer.probe(request)).toMatchObject({ status: 'error', error: { code: 'provider_not_enabled_on_machine' } });
       expect(transport.call).not.toHaveBeenCalled();
+      expect(await setEnabled(true)).toMatchObject({ status: 'success' });
+      expect(await peer.probe(request)).toMatchObject({ status: 'success', models: [{ id: 'gateway-model' }] });
     } finally { await fixture.cleanup(); }
   }));
