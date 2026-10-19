@@ -1,5 +1,21 @@
 import { expect, it, vi } from 'vitest';
 
+it('resolves a three-module cycle entered concurrently through two modules', async () => {
+    const [a, b] = await Promise.all([
+        import('./testkit/fixtures/vitestAsyncMockContext/concurrentA'),
+        import('./testkit/fixtures/vitestAsyncMockContext/concurrentB'),
+    ]);
+    expect([a.concurrentA, b.concurrentB]).toEqual(['a', 'b']);
+});
+
+it('waits for a shared asynchronous dependency when no cycle exists', async () => {
+    const [a, b] = await Promise.all([
+        import('./testkit/fixtures/vitestAsyncMockContext/sharedConsumerA'),
+        import('./testkit/fixtures/vitestAsyncMockContext/sharedConsumerB'),
+    ]);
+    expect([a.readyA, b.readyB]).toEqual([true, true]);
+});
+
 // Guards the pinned Vitest patch with a real import cycle. Two-module cycles
 // also hit Vite's reciprocal-edge shortcut and would hide the lost ancestry.
 vi.mock('./testkit/fixtures/vitestAsyncMockContext/nested', () => ({ value: 'nested mock' }));
