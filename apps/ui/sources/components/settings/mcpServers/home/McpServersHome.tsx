@@ -40,7 +40,7 @@ import { useOpenMcpAddModal } from '../add/useOpenMcpAddModal';
 
 /** The tether map beside its legend (lab hm-A §12: ring radius 104 around a 36 px planet; the box is the ring and its marks, so the legend keeps the room). */
 const MAP_BOX = {
-  width: 264,
+  width: 220,
   height: 268,
   planetRadius: 36,
   ring: 104,
@@ -50,7 +50,7 @@ const PHONE_MAP = { height: 244, planetRadius: 32, ring: 92 } as const;
 const RING_MARK_PX = 22;
 /** The legend's narrowest useful column (lab hm-A2 holds map and legend side by side at 1440); under it the legend moves beneath the map. */
 const LEGEND_MIN_PX = 320;
-const REACH_GAP_PX = 24;
+const REACH_GAP_PX = 16;
 const SIDE_BY_SIDE_MIN_PX = MAP_BOX.width + REACH_GAP_PX + LEGEND_MIN_PX;
 
 function useGo() {
@@ -498,16 +498,9 @@ const LegendRow = React.memo(function LegendRow(
   const fix = React.useCallback(() => onOpen(server.id), [onOpen, server.id]);
   const { status } = server;
   const fixLabel = status ? presentCapabilityStatus(status, 'row').fixLabel : undefined;
-  // Healthy and untested is quiet: only a known tool count speaks. A problem keeps its chip and its one fix
-  // together at the end of the name's line (lab hm-A2); the row drops them beneath the name only when they do not fit.
-  const action =
-    !status && server.toolCount !== null ? (
-      <Text variant="meta" style={styles.tools}>
-        {t('capabilities.mcpHome.tools', { count: server.toolCount })}
-      </Text>
-    ) : undefined;
-  const fact = legendFact(server);
-  const summary = status ? (
+  // Healthy and untested is quiet: only a known tool count speaks. A problem keeps its chip and its one fix together
+  // in the action column, on the name's line (lab hm-A2): the legend column is sized so the pair fits beside the name.
+  const action = status ? (
     <View style={styles.fix}>
       <CapabilityStatusChip
         status={status}
@@ -523,14 +516,17 @@ const LegendRow = React.memo(function LegendRow(
         />
       ) : null}
     </View>
-  ) : (
-    fact
+  ) : server.toolCount === null ? undefined : (
+    <Text variant="meta" style={styles.tools}>
+      {t('capabilities.mcpHome.tools', { count: server.toolCount })}
+    </Text>
   );
+  const fact = legendFact(server);
   return (
     <CapabilityRow
       testID={`mcp.home.legend.${server.id}`}
       title={server.title}
-      {...(summary ? { whereSummary: summary } : {})}
+      {...(fact ? { whereSummary: fact } : {})}
       mark={<McpServerMark transport={server.server.transport} size={16} />}
       {...(action ? { action } : {})}
       density="rail"
