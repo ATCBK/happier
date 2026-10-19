@@ -14,6 +14,12 @@ import { readSessionFollowOriginalOccurrenceFrontiersInTx, readSessionFollowRule
     writeSessionFollowRuleProgressInTx, type AccountFollowRuleProgressAdmission } from './sessionFollowRuleProgress';
 import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { readRunFollowOccurrenceInTx } from './sessionFollowEdgeService';
+import { readAccountRunFollowDeliveryInTx } from './accountFollowService';
+import type { ExecutionRunFollowFrontierWitness } from './executionRunFollowSource';
+import { markSessionFollowsChangedInTx } from './changes';
+import { observeAccountDiscussionFollowOccurrenceInTx } from './discussionFollowSource';
+import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 
 type ProgressFailure = 'invalid_parameters' | 'credential_scope_denied' | 'account_inactive';
 type ProgressResult = Readonly<{ ok: true; value: SessionFollowPersonalProgressResponseV1 }>
@@ -30,6 +36,7 @@ const unrepresented = { ok: true, value: { accepted: false, alreadyRepresented: 
  */
 export async function acceptAccountFollowPersonalProgress(input: Readonly<{
     accountId: string; authentication: SessionAccessAuthentication; occurrence: SessionFollowPersonalProgressRequestV1;
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
 }>): Promise<ProgressResult> {
     const parsed = SessionFollowPersonalProgressRequestV1Schema.safeParse(input.occurrence);
     if (!parsed.success) return { ok: false, error: 'invalid_parameters' };
@@ -39,7 +46,37 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
     return inTx(async tx => {
         const account = await tx.account.findUnique({ where: { id: input.accountId }, select: { status: true } });
         if (account?.status !== 'active') return { ok: false, error: 'account_inactive' };
-        if ((await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId)).status !== 'ready') return unrepresented;
+        if ((await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId, "content")).status !== 'ready') return unrepresented;
+        if ('discussion' in occurrence) {
+            const ref = occurrence.discussion.original;
+            const current = await observeAccountDiscussionFollowOccurrenceInTx(tx, { ...input,
+                request: { v: 1, source: { kind: 'discussion', discussionId: ref.discussion.discussionId }, messageId: ref.messageId } });
+            if (!current || current.seq !== occurrence.discussion.seq) return unrepresented;
+            if (current.personal.alreadyRepresented) return { ok: true, value: { accepted: true, alreadyRepresented: true } };
+            const updated = await tx.accountSessionFollow.updateMany({ where: { accountId: input.accountId,
+                sourceKey: sourceKeyForSessionFollowSourceV1(current.source), following: true,
+                deliveredDiscussionSeq: { lt: current.seq } }, data: { deliveredDiscussionSeq: current.seq } });
+            if (updated.count !== 1) throw new TransactionReplayRequiredError('follow-rule-progress-conflict');
+            await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
+            return { ok: true, value: { accepted: true, alreadyRepresented: false } };
+        }
+        if ('original' in occurrence) {
+            const current = await readRunFollowOccurrenceInTx(tx, { source: occurrence.original.source, original: occurrence.original,
+                executionRunFrontier: input.executionRunFrontier });
+            if (!current) return unrepresented;
+            const follow = await readAccountRunFollowDeliveryInTx(tx, { ...input, ...current });
+            if (!follow) return unrepresented;
+            if (follow.represented) return { ok: true, value: { accepted: true, alreadyRepresented: true } };
+            const updated = await tx.accountSessionFollow.updateMany({ where: { accountId: input.accountId, sourceKey: follow.sourceKey,
+                following: true, ...('terminalEventId' in occurrence.original
+                    ? { deliveredExecutionRunTerminalEventId: follow.deliveredExecutionRunTerminalEventId }
+                    : { deliveredWorkflowRunRevision: follow.deliveredWorkflowRunRevision }) },
+                data: 'terminalEventId' in occurrence.original ? { deliveredExecutionRunTerminalEventId: occurrence.original.terminalEventId }
+                    : { deliveredWorkflowRunRevision: occurrence.original.revision } });
+            if (updated.count !== 1) throw new TransactionReplayRequiredError('follow-rule-progress-conflict');
+            await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
+            return { ok: true, value: { accepted: true, alreadyRepresented: false } };
+        }
         const source = await tx.session.findUnique({ where: { id: occurrence.sourceSessionId }, select: {
             ...createSessionPersonalProjectionSelect(input.accountId), agentStateVersion: true, publisherGeneration: true,
             encryptionMode: true,

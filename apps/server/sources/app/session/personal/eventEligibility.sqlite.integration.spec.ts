@@ -62,7 +62,7 @@ describe("personal event recipients", () => {
                 if (!mutation.ok || !mutation.directShare) throw new Error("Grant fixture was not admitted");
                 scheduleReleasedDirectShareEvent(tx, {
                     recipientAccountId: reader.id,
-                    cursor: mutation.effects.accountCursors.get(reader.id) ?? 0,
+                    publication: mutation.effects.accountCursors.get(reader.id),
                     event: projectReleasedDirectShareEvent({ recipientAccountId: reader.id, effects: mutation.effects,
                         directShare: mutation.directShare, directShareRemoved: false }),
                     sharedByUser: null,

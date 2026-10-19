@@ -1,5 +1,5 @@
 import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID, buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { enqueueAccountChangePublication, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { scheduleAccountActivityBadgeRefresh } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { afterTx, type Tx } from "@/storage/inTx";
 
@@ -14,21 +14,22 @@ import { afterTx, type Tx } from "@/storage/inTx";
  * The current consumer reloads the complete exact-Home Follow snapshot, so the
  * hint deliberately carries no per-Session or preference targeting vocabulary.
  */
-export async function markSessionFollowsChangedForAccountsInTx(tx: Tx, accountIds: readonly string[]): Promise<void> {
+export async function markSessionFollowsChangedForAccountsInTx(tx: Tx, accountIds: readonly string[]): Promise<AccountChangePublication[]> {
     const unique = [...new Set(accountIds)].filter(accountId => typeof accountId === 'string' && accountId.length > 0);
-    if (unique.length === 0) return;
-    await markAccountsChanged(tx, {
+    if (unique.length === 0) return [];
+    const publications = await markAccountsChanged(tx, {
         accountIds: unique,
         entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID,
         kind: 'account',
     });
-    await tx.accountChange.updateMany({
+    enqueueAccountChangePublication(tx, unique, async client => { await client.accountChange.updateMany({
         where: { accountId: { in: unique }, kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID },
         data: { hint: buildSessionFollowChangeHintV1() },
-    });
+    }); });
     // Connected clients reread the snapshot above. Closed devices consume the
     // existing badge transport, after the relation/read-baseline commit.
     afterTx(tx, () => scheduleAccountActivityBadgeRefresh({ badgeAttentionChanged: true, accountIds: unique }));
+    return publications;
 }
 
 /**
@@ -41,6 +42,8 @@ export async function markSessionFollowsChangedForAccountsInTx(tx: Tx, accountId
  */
 export async function markSessionFollowsChangedInTx(tx: Tx, input: Readonly<{
     accountId: string;
-}>): Promise<void> {
-    await markSessionFollowsChangedForAccountsInTx(tx, [input.accountId]);
+}>): Promise<AccountChangePublication> {
+    const [publication] = await markSessionFollowsChangedForAccountsInTx(tx, [input.accountId]);
+    if (!publication) throw new Error('Follow publication requires its Account recipient');
+    return publication;
 }

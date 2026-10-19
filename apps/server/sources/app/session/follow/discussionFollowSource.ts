@@ -12,6 +12,51 @@ import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
 import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { FollowPolicyV1Schema, resolveFollowDeliveryV1, serializeFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { readAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
+import { readAccountOtherFollowInTx } from './accountFollowService';
+import { resolveDiscussionContextInTx } from '@/app/discussions/access';
+import { projectReadableMessagesInTx } from '@/app/discussions/queries';
+import { DISCUSSION_MESSAGE_SELECT } from '@/app/discussions/projection';
+import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import type { SessionFollowDiscussionOccurrenceRoutesRequestV1, SessionFollowDiscussionOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+
+/** Personal Follow reads original C3 messages, never executable participant addressing or an attention mirror. */
+export async function observeAccountDiscussionFollowOccurrenceInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication; request: SessionFollowDiscussionOccurrenceRoutesRequestV1;
+}>): Promise<SessionFollowDiscussionOccurrenceV1 | null> {
+    const { source, messageId } = input.request;
+    const follow = await readAccountOtherFollowInTx(tx, { ...input, source });
+    if (!follow) return null;
+    const context = await resolveDiscussionContextInTx(tx, { discussionId: source.discussionId,
+        accountId: input.accountId, authentication: input.authentication });
+    const discussion = await tx.discussion.findUnique({ where: { id: source.discussionId }, select: { archivedAt: true } });
+    if (!context?.keyReadiness || !discussion || discussion.archivedAt !== null) return null;
+    let afterSeq = follow.deliveredDiscussionSeq;
+    for (;;) {
+        const rows = await tx.discussionMessage.findMany({ where: { discussionId: source.discussionId,
+            ...(messageId ? { id: messageId } : { seq: { gt: afterSeq } }) },
+            select: DISCUSSION_MESSAGE_SELECT, orderBy: { seq: 'asc' }, take: DISCUSSION_DEFAULT_PAGE_SIZE_V1 });
+        if (!rows.length) return null;
+        const readable = await projectReadableMessagesInTx(tx, { actorAccountId: input.accountId,
+            authentication: input.authentication, discussionId: source.discussionId, context, rows });
+        if (!readable.ok) return null;
+        for (const message of readable.value) {
+            const producer = message.producerV1;
+            // These are protected append-owner facts: an absent producer is
+            // admitted only for present-user ingress, never authored metadata.
+            if (!producer && message.authorAccountId === input.accountId
+                || producer?.actionRequestAttributionV1?.requester?.accountId === input.accountId) continue;
+            if (!producer && message.authorAccountId === null) return null;
+            const event = { kind: producer ? 'message' as const : 'person_wrote' as const };
+            if (!resolveFollowDeliveryV1({ policies: [follow.policy], event }).selected) continue;
+            if (await isDeliveryMutedInTx(tx, { accountId: input.accountId, receiver: { kind: 'account' },
+                candidate: { source, ...(producer ? { senderSessionId: producer.sessionId } : {}) } }) !== false) return null;
+            return { source, messageId: message.id, seq: message.seq, event,
+                personal: { policy: follow.policy, alreadyRepresented: follow.deliveredDiscussionSeq >= message.seq } };
+        }
+        if (messageId || rows.length < DISCUSSION_DEFAULT_PAGE_SIZE_V1) return null;
+        afterSeq = rows[rows.length - 1]!.seq;
+    }
+}
 /** Attachment and delivery progress belong to C1, never the policy-only participant row. */
 export async function attachDiscussionFollowSourceInTx(tx: Tx, input: Readonly<{ discussionId: string; destinationSessionId: string }>): Promise<void> {
     const existing = await tx.sessionFollowEdge.findUnique({ where: { destinationSessionId_sourceDiscussionId_relation: {

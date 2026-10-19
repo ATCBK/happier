@@ -2,7 +2,8 @@ import { GetOtherSessionFollowSourceResponseSchema, ListSessionFollowSourcesResp
 import { parseOtherFollowSourceRefPathV1 } from '@happier-dev/protocol/sessions/follow/followSourceRefPathV1';
 import { SessionFollowSourceProjectionRequestV1Schema, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { SessionFollowObserveInactiveRequestV1Schema, SessionFollowObserveInactiveResponseV1Schema,
-    SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+    SessionFollowObserveSourceRoutesRequestV1Schema, SessionFollowObserveSourceRoutesResponseV1Schema,
+    SessionFollowSourceOccurrenceRoutesRequestV1Schema, SessionFollowSourceOccurrenceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { z } from "zod/mini";
 import { FollowListActionOutputV1Schema } from '@happier-dev/protocol/sessions/follow/actions';
 import { FollowListPageQueryV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
@@ -20,12 +21,16 @@ import {
     projectSessionFollowSourceForRunner,
     observePendingSessionFollowForInactiveDestination,
     observeSessionFollowSourceRoutes,
+    observeFollowSourceOccurrenceRoutes,
+    invalidateRunFollowDestinationsInTx,
     type SessionFollowSourceFailure,
 } from "@/app/session/follow/sessionFollowEdgeService";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 import { readCurrentExecutionRunFollowSource } from '@/app/session/follow/executionRunFollowSource';
+import { inTx } from '@/storage/inTx';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 
 const destinationParamsSchema = z.strictObject({
     destinationSessionId: z.string().check(z.minLength(1)),
@@ -158,6 +163,35 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         const result = await listSessionFollowers({ accountId: request.userId, sourceSessionId: params.data.sourceSessionId,
             authentication: readSessionAccessAuthenticationFromRequest(request), ...query.data });
         return result.ok ? reply.send(result.value) : reply.code(FAILURE_STATUS[result.error]).send({ error: result.error });
+    });
+
+    app.post(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes, {
+        preHandler: [app.authenticate, requireFeature],
+        schema: { response: { 200: SessionFollowSourceOccurrenceRoutesResponseV1Schema,
+            400: SessionFollowSourceOccurrenceRoutesResponseV1Schema,
+            403: z.union([SessionFollowSourceOccurrenceRoutesResponseV1Schema, AccountRouteAuthenticationForbiddenResponseSchema]),
+            409: SessionFollowSourceOccurrenceRoutesResponseV1Schema } },
+    }, async (request, reply) => {
+        const body = SessionFollowSourceOccurrenceRoutesRequestV1Schema.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ ok: false, v: 1, error: 'invalid_request' });
+        if (request.externalActionExecutionAuthorized === true
+            || request.authTokenKind !== 'account' && request.authTokenKind !== 'terminal') {
+            return reply.code(403).send({ ok: false, v: 1, error: 'forbidden' });
+        }
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const source = 'original' in body.data ? body.data.original.source : body.data.source;
+        const frontier = source.kind === 'execution_run' ? await readCurrentExecutionRunFollowSource({ app,
+            accountId: request.userId, authentication, sessionId: source.sessionId, runId: source.runId }) : null;
+        const result = await observeFollowSourceOccurrenceRoutes({ accountId: request.userId, authentication, request: body.data,
+            ...(frontier?.ok ? { executionRunFrontier: frontier.value } : {}) });
+        // An exact retained-source notification also wakes foreign receiver
+        // evaluators through the existing content-free Session change feed.
+        // Source-only catch-up reads do not publish another invalidation.
+        if (result.ok && 'original' in body.data && source.kind === 'execution_run') await inTx(async tx => {
+            await acquireSessionAccountCursorLocksInTx(tx, [source.sessionId]);
+            await invalidateRunFollowDestinationsInTx(tx, source);
+        });
+        return result.ok ? reply.send(result) : reply.code(result.error === 'source_unavailable' ? 409 : 403).send(result);
     });
 
     app.post(SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.occurrenceRoutes, {

@@ -3,7 +3,9 @@ import { deriveSessionFollowWakeEventLocalIdV1, normalizeSessionFollowWakeObserv
     type SessionFollowAcknowledgeRequestV1, type SessionFollowObserveInactiveResponseV1,
     type SessionFollowObservePendingRequestV1, type SessionFollowObservePendingResponseV1,
     type SessionFollowPendingObservationV1, type SessionFollowSessionPendingObservationV1,
-    type SessionFollowObserveSourceRoutesRequestV1, type SessionFollowObserveSourceRoutesResponseV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+    type SessionFollowObserveSourceRoutesRequestV1, type SessionFollowObserveSourceRoutesResponseV1,
+    SessionFollowRunOccurrenceRoutesResponseV1Schema, type SessionFollowRunOccurrenceRoutesRequestV1,
+    type SessionFollowRunOccurrenceRoutesResponseV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { FollowPolicyV1Schema, isFollowPolicyEqualV1, serializeFollowPolicyV1, resolveFollowDeliveryV1, FOLLOW_EVENT_KINDS_V1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import type { SessionPendingEnqueueByMachineRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { isDeepStrictEqual } from 'node:util';
@@ -16,7 +18,7 @@ import { type FollowSourceRelationV1, type SessionFollowSourceV1 } from '@happie
 import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { type SessionFollowSourceProjectionRequestV1, type SessionFollowSourceProjectionResponseV1, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
-import { deriveSessionFollowInputLocalIdV1, deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1, type SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowInputLocalIdV1, deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1, type SessionFollowInputV1, type RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 
 import {
@@ -62,11 +64,14 @@ import { readAdmittedSessionFollowInputInTx, readSessionFollowOriginalOccurrence
 import { readAutonomousExchangeSourceRoot, readReceiverAutonomousExchangeRootInTx,
     isAutonomousExchangeRootReceiptForAccount, type AutonomousExchangeRoot } from '@/app/session/messages/readAutonomousExchangeSourceRoot';
 import { observeDiscussionFollowSourcesInTx } from './discussionFollowSource';
+import { observeAccountDiscussionFollowOccurrenceInTx } from './discussionFollowSource';
+import { SessionFollowRunOccurrenceRoutesRequestV1Schema, type SessionFollowSourceOccurrenceRoutesRequestV1,
+    type SessionFollowSourceOccurrenceRoutesResponseV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { readExactCurrentPublisherAuthorityInTx } from '@/app/session/pending/hasExactCurrentPublisherAuthorityInTx';
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import { projectSessionFollowDefaultRelationshipsV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { resolveSessionFollowFactsInTx } from '@/app/session/personal/followFacts';
-import { readOtherPersonalFollowerCensusInTx, readSessionPersonalFollowerCensusInTx } from './accountFollowService';
+import { readOtherPersonalFollowerCensusInTx, readSessionPersonalFollowerCensusInTx, readAccountRunFollowDeliveryInTx } from './accountFollowService';
 import type { SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 export { attachDiscussionFollowSourceInTx, detachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx,
     admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx } from './discussionFollowSource';
@@ -530,6 +535,13 @@ export async function invalidateSessionFollowDestinationsForSourceChangeInTx(
 ): Promise<void> {
     const recipients = input.recipientsBySession ?? await resolveSessionFollowSourceChangeRecipientsInTx(tx, input);
     await invalidateSessionFollowDestinationsInTx(tx, recipients.keys(), recipients);
+}
+
+/** Run source changes invalidate configured receivers; their daemon reads the original owner. */
+export async function invalidateRunFollowDestinationsInTx(tx: Tx, source: RunFollowOriginalV1['source']): Promise<void> {
+    const edges = await tx.sessionFollowEdge.findMany({ where: { sourceKey: sourceKeyForSessionFollowSourceV1(source), relation: 'follower' },
+        select: { destinationSessionId: true } });
+    await invalidateSessionFollowDestinationsInTx(tx, edges.map(edge => edge.destinationSessionId));
 }
 
 /** Invalidates surviving destinations before the database cascades source-edge deletion. */
@@ -1224,11 +1236,16 @@ export async function observePendingSessionFollowForDestinationInTx(tx: Tx, inpu
             principal: input.principal, sourceSessionId: edge.sourceSessionId, edge,
         })).ok,
     });
-    const admittedObservations: Extract<SessionFollowPendingObservationV1, { kind: 'admitted_input' }>[] = [];
+    const admittedObservations: Extract<SessionFollowPendingObservationV1, { kind: 'admitted_input' | 'admitted_run_input' }>[] = [];
     for (const localInputId of new Set(input.inputLocalIds ?? [])) {
         const custody = await readAdmittedSessionFollowInputInTx(tx, { principal: input.principal,
             accountId: destinationRuntimeAccountId, destinationSessionId: destination.id, localInputId });
-        if (!custody || !('sourceSessionId' in custody.delivery.original)) continue;
+        if (!custody) continue;
+        if ('source' in custody.delivery.original) {
+            admittedObservations.push({ kind: 'admitted_run_input', localInputId,
+                destinationSessionId: destination.id, delivery: custody.delivery });
+            continue;
+        }
         const frontiers = sessionFollowInputFrontiers(custody.delivery);
         admittedObservations.push({ kind: 'admitted_input' as const, localInputId,
             sourceSessionId: custody.delivery.original.sourceSessionId, destinationSessionId: destination.id,
@@ -1267,7 +1284,7 @@ export async function observePendingSessionFollowForDestinationInTx(tx: Tx, inpu
             delivered: frontiers.expected, observed: frontiers.observed, delivery: custody.delivery });
     }
     const combined = { ...result, currentSourceSessionIds: [...new Set([...result.currentSourceSessionIds,
-        ...admittedObservations.map(row => row.sourceSessionId)])], observations: [...result.observations, ...admittedObservations] };
+        ...admittedObservations.flatMap(row => 'sourceSessionId' in row ? [row.sourceSessionId] : [])])], observations: [...result.observations, ...admittedObservations] };
     if (!input.wakeAdmission) return combined;
     return { ...combined, wakeAdmission: await readFollowWakeAdmissionInTx(tx, {
         destinationSessionId: destination.id, destinationAccountId: destinationRuntimeAccountId,
@@ -1424,6 +1441,96 @@ async function observePendingSessionFollowEdgesInTx(tx: Tx, input: Readonly<{
     ] };
 }
 
+/** The exact retained Run original is shared by Session routing and Account settlement. */
+export async function readRunFollowOccurrenceInTx(tx: Tx, input: Readonly<{
+    source: RunFollowOriginalV1['source']; original?: RunFollowOriginalV1;
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
+}>): Promise<Readonly<{ original: RunFollowOriginalV1; event: { kind: 'finished' | 'failed_or_stopped' } }> | null> {
+    const { source } = input;
+    const requested = input.original;
+    if (source.kind === 'execution_run') {
+        const frontier = input.executionRunFrontier;
+        if (!frontier || !isDeepStrictEqual(frontier.source, source) || !frontier.terminalEventId
+            || requested && (!('terminalEventId' in requested) || frontier.terminalEventId !== requested.terminalEventId)
+            || !await isExecutionRunFollowFrontierWitnessCurrentInTx(tx, frontier)) return null;
+        const original = { source, terminalEventId: frontier.terminalEventId };
+        return frontier.status === 'succeeded' ? { original, event: { kind: 'finished' } }
+            : frontier.status === 'failed' || frontier.status === 'cancelled' ? { original, event: { kind: 'failed_or_stopped' } } : null;
+    }
+    const run = await tx.automationRun.findUnique({ where: { id: source.runId },
+        select: { revision: true, state: true, workflowCustodyState: true } });
+    if (!run || run.revision < 1 || requested && (!('revision' in requested) || run.revision !== requested.revision)
+        || run.workflowCustodyState === null) return null;
+    const original = { source, revision: run.revision };
+    return run.state === 'succeeded' ? { original, event: { kind: 'finished' } }
+        : run.state === 'failed' || run.state === 'cancelled' || run.state === 'interrupted'
+            ? { original, event: { kind: 'failed_or_stopped' } } : null;
+}
+
+/** The shared non-Session route read delegates facts to each existing source lifecycle. */
+export async function observeFollowSourceOccurrenceRoutes(input: Readonly<{
+    accountId: string; request: SessionFollowSourceOccurrenceRoutesRequestV1;
+    authentication: SessionAccessAuthentication; executionRunFrontier?: ExecutionRunFollowFrontierWitness;
+}>): Promise<SessionFollowSourceOccurrenceRoutesResponseV1> {
+    if ('source' in input.request && input.request.source.kind === 'discussion') {
+        const request = input.request;
+        const source = input.request.source;
+        return await inReadSnapshot(async tx => {
+            if (input.authentication.sessionRuntimePrincipal || !await isActingAccountActive(tx, input.accountId)
+                || !await canReadFollowSourceInTx(tx, { ...input, source }))
+                return { ok: false, v: 1, error: 'forbidden' };
+            const discussion = await observeAccountDiscussionFollowOccurrenceInTx(tx, { ...input,
+                request: { v: 1, source, ...('messageId' in request ? { messageId: request.messageId } : {}) } });
+            return discussion ? { ok: true, v: 1, discussion } : { ok: false, v: 1, error: 'source_unavailable' };
+        });
+    }
+    return observeRunFollowOccurrenceRoutes({ ...input, request: SessionFollowRunOccurrenceRoutesRequestV1Schema.parse(input.request) });
+}
+
+/** Retained Run adapter under the shared non-Session route owner. */
+export async function observeRunFollowOccurrenceRoutes(input: Readonly<{
+    accountId: string; request: SessionFollowRunOccurrenceRoutesRequestV1;
+    authentication: SessionAccessAuthentication;
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
+}>): Promise<SessionFollowRunOccurrenceRoutesResponseV1> {
+    return await inReadSnapshot(async tx => {
+        const requested = 'original' in input.request ? input.request.original : null;
+        const source = requested?.source ?? ('source' in input.request ? input.request.source : input.request.original.source);
+        const denied = { ok: false, v: 1, error: 'forbidden' } as const;
+        const unavailable = { ok: false, v: 1, error: 'source_unavailable' } as const;
+        if (input.authentication.sessionRuntimePrincipal || !await isActingAccountActive(tx, input.accountId)
+            || !await canReadFollowSourceInTx(tx, { ...input, source })) return denied;
+        const occurrence = await readRunFollowOccurrenceInTx(tx, { source, ...(requested ? { original: requested } : {}),
+            executionRunFrontier: input.executionRunFrontier });
+        if (!occurrence) return unavailable;
+        const { original, event } = occurrence;
+        const edges = await tx.sessionFollowEdge.findMany({ where: {
+            sourceKey: sourceKeyForSessionFollowSourceV1(source), relation: 'follower',
+        }, select: EDGE_SELECT });
+        const routes = [];
+        for (const edge of edges) {
+            if (!isDeepStrictEqual(sourceForSessionFollowEdgeV1(edge), source)) continue;
+            if ('terminalEventId' in original ? edge.deliveredExecutionRunTerminalEventId === original.terminalEventId
+                : (edge.deliveredWorkflowRunRevision ?? 0) >= original.revision) continue;
+            const policy = readStoredPolicy(edge.policyJson);
+            if (!policy || !resolveFollowDeliveryV1({ policies: [policy], event }).selected) continue;
+            const destination = await loadSession(tx, edge.destinationSessionId);
+            if (!destination || destination.archivedAt !== null || destination.accountId !== input.accountId
+                || !await canSubmitDestinationInput(tx, input.accountId, destination.id, input.authentication)
+                || !await mayInjectOtherFollowSourceInTx(tx, { ...input, source, destinationSessionId: destination.id })
+                || await isDeliveryMutedInTx(tx, { accountId: input.accountId,
+                    receiver: { kind: 'session', sessionId: destination.id }, candidate: { source,
+                        ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) } }) !== false) continue;
+            routes.push({ destinationSessionId: destination.id, relation: 'follower', attachedAt: edge.attachedAt.getTime(), policy,
+                ...('terminalEventId' in original ? { expectedTerminalEventId: edge.deliveredExecutionRunTerminalEventId }
+                    : { expectedRevision: edge.deliveredWorkflowRunRevision ?? 0 }) });
+        }
+        const personal = await readAccountRunFollowDeliveryInTx(tx, { ...input, original, event });
+        return SessionFollowRunOccurrenceRoutesResponseV1Schema.parse({ ok: true, v: 1, original, event, routes,
+            ...(personal ? { personal: { policy: personal.policy, alreadyRepresented: personal.represented } } : {}) });
+    });
+}
+
 export type SessionFollowAcknowledgeRejection =
     | "edge_not_found"
     | "session_archived"
@@ -1564,10 +1671,11 @@ export async function acknowledgeAdmittedSessionFollowInputInTx(tx: Tx, input: R
             await resolveSessionFollowRuntimePrincipalAuthenticationInTx(tx, input.principal))) return { ok: false, rejection: 'source_forbidden' };
     if (destination.publisherGeneration.toString() !== request.expectedPublisherGeneration) return { ok: false, rejection: 'stale_publisher_generation' };
     const custody = await readAdmittedSessionFollowInputInTx(tx, { principal: input.principal, accountId,
-        destinationSessionId: destination.id, sourceSessionId: request.sourceSessionId, localInputId: request.localInputId });
+        destinationSessionId: destination.id, ...('sourceSessionId' in request ? { sourceSessionId: request.sourceSessionId } : {}), localInputId: request.localInputId });
     if (!custody) return { ok: false, rejection: 'source_forbidden' };
     const represented = sessionFollowInputFrontiers(custody.delivery);
-    if (!isSessionFollowFrontierEqualV1(request.expected, represented.expected)
+    if ('original' in request ? !isDeepStrictEqual(request.original, custody.delivery.original)
+        : !isSessionFollowFrontierEqualV1(request.expected, represented.expected)
         || !isSessionFollowFrontierEqualV1(request.observed, represented.observed)
         || !isSessionFollowFrontierEqualV1(request.consumed, represented.observed)) return { ok: false, rejection: 'invalid_consumed_frontier' };
     if (request.acceptance.localInputId !== request.localInputId

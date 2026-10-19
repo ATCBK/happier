@@ -17,7 +17,8 @@ import { markSessionFollowsChangedForAccountsInTx, markSessionFollowsChangedInTx
 import { hasCanonicalFollowProviderInputAcceptanceInTx } from "./providerInputAcceptance";
 import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { matchesPersonalFollowOnceOccurrenceV1, parsePersistedPersonalFollowOnceV1, projectPersonalFollowCustodyV1, resolveAccountFollowVoiceSelectionV1, type PersonalFollowOnceOccurrenceV1, type PersistedPersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
-import { FollowPolicyV1Schema, isFollowPolicyEqualV1, serializeFollowPolicyV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { FollowPolicyV1Schema, isFollowPolicyEqualV1, serializeFollowPolicyV1, resolveFollowDeliveryV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import type { RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { sourceForSessionFollowEdgeV1, sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { canReadFollowSourceInTx } from './followSourceAdmission';
@@ -168,6 +169,38 @@ function projectOtherAccountFollow(row: Readonly<{
     const policy = FollowPolicyV1Schema.safeParse(value);
     return policy.success ? OtherAccountFollowV1Schema.parse({ source, following: row.following,
         persistent: row.hasPersistentFollow, policy: policy.data }) : null;
+}
+
+/** One private explicit-Follow read for non-Session source adapters. */
+export async function readAccountOtherFollowInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication; source: OtherAccountSource;
+}>) {
+    const source = input.source;
+    if (!await activeAccount(tx, input.accountId) || !await canReadFollowSourceInTx(tx, { ...input, source })) return null;
+    const sourceKey = sourceKeyForSessionFollowSourceV1(source);
+    const row = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: { accountId: input.accountId, sourceKey } },
+        select: { ...FOLLOW_SELECT, deliveredDiscussionSeq: true, deliveredExecutionRunTerminalEventId: true, deliveredWorkflowRunRevision: true } });
+    if (!row || !row.following || JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(source)) return null;
+    const follow = projectOtherAccountFollow(row);
+    return follow ? { ...row, sourceKey, policy: follow.policy } : null;
+}
+
+/** Own-Account Run delivery uses the same explicit Follow, source admission and mute owners. */
+export async function readAccountRunFollowDeliveryInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication; original: RunFollowOriginalV1;
+    event: { kind: 'finished' | 'failed_or_stopped' };
+}>) {
+    const source = input.original.source;
+    const row = await readAccountOtherFollowInTx(tx, { ...input, source });
+    if (!row || !resolveFollowDeliveryV1({ policies: [row.policy], event: input.event }).selected
+        || await isDeliveryMutedInTx(tx, { accountId: input.accountId, receiver: { kind: 'account' },
+            candidate: { source, ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) } }) !== false) return null;
+    const represented = 'terminalEventId' in input.original
+        ? row.deliveredExecutionRunTerminalEventId === input.original.terminalEventId
+        : (row.deliveredWorkflowRunRevision ?? 0) >= input.original.revision;
+    return { sourceKey: row.sourceKey, policy: row.policy, represented,
+        deliveredExecutionRunTerminalEventId: row.deliveredExecutionRunTerminalEventId,
+        deliveredWorkflowRunRevision: row.deliveredWorkflowRunRevision };
 }
 async function activeAccount(tx: Tx, accountId: string) {
     const account = await tx.account.findUnique({ where: { id: accountId }, select: ACCOUNT_SELECT });

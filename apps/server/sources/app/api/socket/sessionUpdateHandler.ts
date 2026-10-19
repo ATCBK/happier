@@ -734,6 +734,15 @@ export function sessionUpdateHandler(
         const respond = (response: unknown) => callback?.(SessionFollowAcknowledgeResponseV1Schema.parse(response));
         const request = SessionFollowAcknowledgeRequestV1Schema.safeParse(data);
         let phase = 'feature';
+        const diagnose = (causes: ReturnType<typeof sessionFollowAckErrorCauses>) => log({
+            module: 'websocket', level: 'warn', operation: 'session_follow_acknowledge', phase,
+            ...(request.success ? { destinationSessionId: request.data.destinationSessionId,
+                expectedPublisherGeneration: request.data.expectedPublisherGeneration,
+                ...('localInputId' in request.data ? { localInputId: request.data.localInputId } : {}),
+                ...('sourceSessionId' in request.data ? { sourceSessionId: request.data.sourceSessionId } : {}),
+                ...('relation' in request.data ? { relation: request.data.relation } : {}) } : {}),
+            causes,
+        }, 'Session Follow acknowledgment failed');
         try {
             if (!await isServerFeatureEnabledForHome("sessions.following")) {
                 respond({ ok: false, v: 1, error: "unsupported" });
@@ -778,21 +787,26 @@ export function sessionUpdateHandler(
                             expected: request.data.expected, observed: request.data.observed, consumed: request.data.consumed,
                             acceptance: request.data.acceptance,
                         });
-                    phase = 'commit';
+                    if (acknowledgement.ok) phase = 'commit';
                     return acknowledgement;
                 },
             });
+            if (result === null) {
+                diagnose([{ name: 'SessionFollowAcknowledgeRefusal', code: 'forbidden' }]);
+                respond({ ok: false, v: 1, error: "forbidden" });
+                return;
+            }
+            if (!result.ok) {
+                diagnose([{ name: 'SessionFollowAcknowledgeRefusal', code: result.rejection }]);
+                respond({ ok: false, v: 1, error: result.rejection });
+                return;
+            }
             phase = 'response';
-            if (result === null) { respond({ ok: false, v: 1, error: "forbidden" }); return; }
-            if (!result.ok) { respond({ ok: false, v: 1, error: result.rejection }); return; }
-            respond({ ok: true, v: 1, destinationSessionId, sourceSessionId: request.data.sourceSessionId, delivered: result.delivered });
+            respond('original' in request.data
+                ? { ok: true, v: 1, destinationSessionId, localInputId: request.data.localInputId, original: request.data.original }
+                : { ok: true, v: 1, destinationSessionId, sourceSessionId: request.data.sourceSessionId, delivered: result.delivered });
         } catch (error) {
-            log({ module: 'websocket', level: 'warn', operation: 'session_follow_acknowledge', phase,
-                ...(request.success ? { destinationSessionId: request.data.destinationSessionId,
-                    sourceSessionId: request.data.sourceSessionId,
-                    ...('relation' in request.data ? { relation: request.data.relation } : {}) } : {}),
-                causes: sessionFollowAckErrorCauses(error),
-            }, 'Session Follow acknowledgment failed');
+            diagnose(sessionFollowAckErrorCauses(error));
             respond({ ok: false, v: 1, error: isLockAdmissionDeadlineExceededError(error)
                 || isTransactionDeadlineExceededError(error)
                 || isTransactionConflictExhaustedError(error)

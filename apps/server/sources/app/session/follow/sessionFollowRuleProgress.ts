@@ -69,13 +69,12 @@ export async function writeSessionFollowRuleProgressInTx(tx: Tx, admission: Sess
             if (admission.destinationSessionId === undefined) {
                 const [change] = await markAccountChangesForSessionAccounts({ tx: changedTx,
                     sessionId: admission.sourceSessionId, accountIds: [admission.accountId] });
-                return change!.cursor;
+                return change!;
             }
-            await invalidateSessionRelationProjectionsInTx(changedTx, [admission.destinationSessionId]);
-            const change = await changedTx.accountChange.findUniqueOrThrow({ where: { accountId_kind_entityId: {
-                accountId: admission.accountId, kind: 'session', entityId: admission.destinationSessionId,
-            } }, select: { cursor: true } });
-            return change.cursor;
+            const publications = await invalidateSessionRelationProjectionsInTx(changedTx, [admission.destinationSessionId]);
+            const change = publications.find(publication => publication.accountId === admission.accountId);
+            if (!change) throw new Error('Follow progress publication requires its receiver Account');
+            return change;
         },
     });
     return result.status === 'updated';

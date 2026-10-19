@@ -2,7 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { decodeBase64 } from 'privacy-kit';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { SessionFollowObserveInactiveResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionFollowObserveInactiveResponseV1Schema, SessionFollowAdmittedRunInputAcknowledgeRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SessionFollowRunOccurrenceRoutesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { SessionFollowRelationWitnessesV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
+import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1, deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { acknowledgeAdmittedSessionFollowInputInTx, observePendingSessionFollowForDestinationInTx } from '@/app/session/follow/sessionFollowEdgeService';
+import { inTx } from '@/storage/inTx';
+import { enqueuePendingMessage } from '@/app/session/pending/pendingMessageService';
 import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { setSessionManager } from '@/app/session/follow/sessionManagerService';
@@ -51,12 +58,14 @@ describe('Session Follow source routes', () => {
         harness = await createLightSqliteHarness({
             tempDirPrefix: 'happier-session-follow-routes-',
             env: { HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: 'true',
+                HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
                 HAPPIER_SERVER_IDENTITY_ID: 'srv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
         });
     }, 180_000);
 
     afterEach(async () => {
         await db.userKVStore.deleteMany();
+        await db.sessionPendingMessage.deleteMany();
         await db.sessionMessage.deleteMany();
         await db.sessionFollowEdge.deleteMany();
         await db.accessKey.deleteMany();
@@ -67,6 +76,97 @@ describe('Session Follow source routes', () => {
     });
 
     afterAll(async () => harness.close());
+
+    it.each(['execution_run', 'workflow_run'] as const)('reads a stored %s Follow at its exact terminal original, respecting mute and removal', async kind => {
+        const owner = await createAccount();
+        const parent = await createSession(owner.id, { publisherGeneration: 1n });
+        const destination = await createSession(owner.id);
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id,
+            installationId: randomUUID(), metadata: encodePlainMachineStoredContent({}),
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] } }, operationProtocolCapabilitiesRevision: 1,
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER) } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: parent.id, data: 'opaque' } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: destination.id, data: 'opaque' } });
+        await db.session.update({ where: { id: destination.id }, data: { runtimeMachineTarget: {
+            homeId: 'srv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', accountId: owner.id, sessionId: destination.id,
+            machineId: machine.id, installationId: machine.installationId! } } });
+        await db.session.update({ where: { id: parent.id }, data: { runtimeMachineTarget: {
+            homeId: 'srv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', accountId: owner.id, sessionId: parent.id,
+            machineId: machine.id, installationId: machine.installationId! } } });
+        const run = await db.automationRun.create({ data: { accountId: owner.id, originKind: 'direct',
+            automationId: null, causeKind: null, causeOccurredAt: null,
+            workflowAcceptedSnapshotEnvelope: '{}', state: 'running', workflowCustodyState: 'pending',
+            scheduledAt: new Date(), dueAt: new Date(), revision: 3 } });
+        let terminal = false;
+        const app = await buildApp(owner.id, async () => ({ ok: true, result: {
+            sessionId: parent.id, runId: 'followed-run', status: terminal ? 'succeeded' : 'running',
+            terminalEventId: terminal ? 'terminal-original' : null,
+        } }));
+        const source = kind === 'execution_run' ? { kind, sessionId: parent.id, runId: 'followed-run' }
+            : { kind, runId: run.id };
+        const receiver = { kind: 'session' as const, sessionId: destination.id };
+        const policy = { preset: 'important' as const };
+        const path = resolveSessionFollowActionRequest('follow.set', { receiver, source, policy }).path;
+        const original = kind === 'execution_run' ? { source, terminalEventId: 'terminal-original' } : { source, revision: 4 };
+        const read = () => app.inject({ method: 'POST', url: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.runOccurrenceRoutes,
+            payload: { v: 1, original } });
+        try {
+            expect((await app.inject({ method: 'PUT', url: path, payload: { policy } })).statusCode).toBe(200);
+            terminal = true;
+            await db.automationRun.update({ where: { id: run.id }, data: { revision: 4, state: 'succeeded' } });
+            const response = await read();
+            expect(response.statusCode, response.body).toBe(200);
+            expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.parse(response.json())).toMatchObject({
+                ok: true, original, routes: [{ destinationSessionId: destination.id, policy,
+                    ...(kind === 'execution_run' ? { expectedTerminalEventId: null } : { expectedRevision: 3 }) }],
+            });
+            const routes = SessionFollowRunOccurrenceRoutesResponseV1Schema.parse(response.json());
+            if (!routes.ok) throw new Error('Expected admitted source routes');
+            const route = routes.routes[0]!;
+            const delivery = SessionFollowInputV1Schema.parse({ v: 1, original, event: { kind: 'finished' }, delivery: 'next_turn' });
+            const enqueue = () => enqueuePendingMessage({ actorUserId: owner.id, sessionId: destination.id,
+                followSourceApp: app, authentication: createPresentUserSessionAccessAuthentication({ env: {} }),
+                localId: deriveSessionFollowInputLocalIdV1({ destinationSessionId: destination.id, original: delivery.original }),
+                content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Run finished' } } },
+                messageRole: 'user', requestedAction: { v: 1, kind: 'enqueue' }, followDeliveryV1: delivery,
+                followRelations: SessionFollowRelationWitnessesV1Schema.parse([{ relation: route.relation, source,
+                    attachedAt: route.attachedAt, ...('expectedRevision' in route ? { expectedRevision: route.expectedRevision }
+                        : { expectedTerminalEventId: route.expectedTerminalEventId }) }]),
+            });
+            const admitted = await enqueue();
+            expect(admitted, JSON.stringify(admitted)).toMatchObject({ ok: true, didWrite: true });
+            expect(await enqueue()).toMatchObject({ ok: true, didWrite: false });
+            expect(await db.sessionPendingMessage.count({ where: { sessionId: destination.id } })).toBe(1);
+            const pending = await db.sessionPendingMessage.findFirstOrThrow({ where: { sessionId: destination.id } });
+            const principal = { kind: 'destination_runtime' as const, destinationRuntimeAccountId: owner.id,
+                authentication: createPresentUserSessionAccessAuthentication({ env: {} }) };
+            const observe = () => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+                principal, destinationSessionId: destination.id, inputLocalIds: [pending.localId] }));
+            expect((await observe()).observations).toContainEqual({ kind: 'admitted_run_input',
+                destinationSessionId: destination.id, localInputId: pending.localId, delivery });
+            const acknowledge = () => inTx(tx => acknowledgeAdmittedSessionFollowInputInTx(tx, { principal,
+                request: SessionFollowAdmittedRunInputAcknowledgeRequestV1Schema.parse({ v: 1, destinationSessionId: destination.id, localInputId: pending.localId,
+                    expectedPublisherGeneration: destination.publisherGeneration.toString(), original: delivery.original,
+                    acceptance: { kind: 'admitted_input', localInputId: pending.localId, userMessageSeq: 1 } }) }));
+            expect(await acknowledge()).toMatchObject({ ok: false, rejection: 'provider_acceptance_unverified' });
+            // The persistent database is the native transport boundary here:
+            // retain the real Pending receipt with its exact original acceptance.
+            await db.sessionMessage.create({ data: { sessionId: destination.id, localId: pending.localId, seq: 1,
+                messageRole: 'user', content: pending.content, inputAdmissionReceipt: pending.inputAdmissionReceipt!,
+                acceptedFollowOriginalKey: deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original),
+                deliveryResolution: { v: 1, kind: 'provider_accepted', content: { t: 'plain', v: { v: 1,
+                    acceptedAtMs: 1, delivery: { kind: 'newTurn', turnId: 'native-accepted-turn' } } } } } });
+            await db.sessionPendingMessage.delete({ where: { id: pending.id } });
+            expect(await acknowledge()).toMatchObject({ ok: true });
+            expect(await acknowledge()).toMatchObject({ ok: true });
+            expect((await read()).json()).toMatchObject({ ok: true, routes: [] });
+            expect(await changeDeliveryMute({ accountId: owner.id, receiver, scope: { kind: 'source', source },
+                operation: 'set', authentication: createPresentUserSessionAccessAuthentication({ env: {} }) })).toMatchObject({ ok: true });
+            expect((await read()).json()).toMatchObject({ ok: true, routes: [] });
+            expect((await app.inject({ method: 'DELETE', url: path })).statusCode).toBe(200);
+            expect((await read()).json()).toMatchObject({ ok: true, routes: [] });
+        } finally { await app.close(); }
+    });
 
     it.each(['account', 'session'] as const)('keeps an exact retained Execution Run source for a %s receiver', async kind => {
         const owner = await createAccount();

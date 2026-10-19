@@ -8,8 +8,7 @@ ALTER TABLE "AccountSessionFollow"
     ADD COLUMN "sourceWorkflowRunId" TEXT,
     ADD COLUMN "deliveredDiscussionSeq" INTEGER,
     ADD COLUMN "deliveredExecutionRunTerminalEventId" TEXT,
-    ADD COLUMN "deliveredWorkflowRunRevision" INTEGER,
-    ALTER COLUMN "sessionId" DROP NOT NULL;
+    ADD COLUMN "deliveredWorkflowRunRevision" INTEGER;
 WITH numbered AS (
     SELECT ctid, row_number() OVER (ORDER BY "accountId", "sessionId") AS n FROM "AccountSessionFollow"
 )
@@ -17,6 +16,7 @@ UPDATE "AccountSessionFollow" AS follow SET "id" = 'legacy:' || numbered.n, "sou
 FROM numbered WHERE follow.ctid = numbered.ctid;
 ALTER TABLE "AccountSessionFollow"
     DROP CONSTRAINT "AccountSessionFollow_pkey",
+    ALTER COLUMN "sessionId" DROP NOT NULL,
     ALTER COLUMN "id" SET NOT NULL,
     ADD CONSTRAINT "AccountSessionFollow_pkey" PRIMARY KEY ("id"),
     ADD CONSTRAINT "AccountSessionFollow_source_identity_check" CHECK (

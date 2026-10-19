@@ -113,8 +113,12 @@ export function registerSessionFollowRoutes(app: Fastify) {
         schema: { body: SessionFollowPersonalProgressRequestV1Schema,
             response: { 200: SessionFollowPersonalProgressResponseV1Schema, ...ruleErrors } },
     }, async (request, reply) => {
+        const authentication = readSessionAccessAuthenticationFromRequest(request);
+        const source = 'original' in request.body ? request.body.original.source : null;
+        const frontier = source?.kind === 'execution_run' ? await readCurrentExecutionRunFollowSource({ app,
+            accountId: request.userId, authentication, sessionId: source.sessionId, runId: source.runId }) : null;
         const result = await acceptAccountFollowPersonalProgress({ accountId: request.userId,
-            authentication: readSessionAccessAuthenticationFromRequest(request), occurrence: request.body });
+            authentication, occurrence: request.body, ...(frontier?.ok ? { executionRunFrontier: frontier.value } : {}) });
         return result.ok ? reply.send(result.value) : reply.code(ruleFailureStatus[result.error]).send({ error: result.error });
     });
     app.get('/v2/account/session-follows', { preHandler: [app.authenticate, ruleFeature], config: { ...ruleConfig, apiTokenSessionAction: 'follow.list' },

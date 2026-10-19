@@ -60,7 +60,7 @@ export async function getSessionLifecycleAutomationPublicationAudienceInTx(tx: T
 }
 
 /** Pure census of the immediate source, watcher, review and managed-wake composition; never acquires locks. */
-export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: WorkflowPublicationScope): Promise<WorkflowPublicationAudience> {
+export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: WorkflowPublicationScope): Promise<WorkflowPublicationAudience & Readonly<{ runIds: readonly string[] }>> {
     const selectedAutomations = scope.automationWhere || scope.triggerIds?.length ? await tx.automation.findMany({
         where: { accountId: scope.accountId, OR: [
             ...(scope.automationWhere ? [scope.automationWhere] : []),
@@ -86,7 +86,11 @@ export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: Workflow
     }, distinct: ["automationId"], select: { automationId: true } }) : [];
     for (const watcher of watchers) automationIds.add(watcher.automationId);
     const automationAudience = await readAutomationPublicationAudienceInTx(tx, [...automationIds]);
+    const followDestinations = runs.length ? await tx.sessionFollowEdge.findMany({ where: {
+        sourceWorkflowRunId: { in: runs.map(run => run.id) }, relation: 'follower',
+    }, select: { destinationSessionId: true } }) : [];
     const sessionIds = [...new Set([...(scope.sessionIds ?? []), ...automationAudience.sessionIds,
+        ...followDestinations.map(edge => edge.destinationSessionId),
         ...runs.flatMap(run => [run.originSessionId, run.producedSessionId].filter((id): id is string => id !== null)),
     ])].sort();
     const accountIds = new Set([scope.accountId, ...runs.map(run => run.accountId), ...automationAudience.accountIds]);
@@ -109,5 +113,5 @@ export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: Workflow
             ...(scope.machineIds ?? []).map(machineId => ({ accountId: scope.accountId, machineId })),
         ], sessionIds,
     })) accountIds.add(accountId);
-    return { accountIds: [...accountIds].sort(), sessionIds };
+    return { accountIds: [...accountIds].sort(), sessionIds, runIds: runs.map(run => run.id).sort() };
 }
