@@ -63,6 +63,11 @@ describe('snapshot Administration candidates', () => {
         expect(snapshots.map(row => row.candidate.displayName)).toEqual([
             'Studio · aaaa', 'Studio · bbbb', t('machine.lockedMachine'), t('machine.unnamedMachine'),
         ]);
+        // The two parts a one-line chip needs: the name may shorten, the telling suffix is what separates the twins.
+        expect(snapshots.map(row => row.candidate.displayNameParts)).toEqual([
+            { name: 'Studio', hint: 'aaaa' }, { name: 'Studio', hint: 'bbbb' },
+            { name: t('machine.lockedMachine'), hint: null }, { name: t('machine.unnamedMachine'), hint: null },
+        ]);
     });
     it('projects a failed server-scoped request as unreachable despite fresh pushed presence', () => {
         recordMachineRequestFailed({ serverId: 'srv_server_b', accountId: 'account-b', machineId: 'machine-b', observedAtMs: 100 });
@@ -140,6 +145,7 @@ describe('snapshot Administration candidates', () => {
             candidate: {
                 target: { serverIdentityId: 'srv_server_b', machineId: 'machine-old' },
                 displayName: 'Old machine',
+                displayNameParts: { name: 'Old machine', hint: null },
                 serverLabel: 'Server B',
                 availability: 'replaced',
                 observation: 'stale',

@@ -24,6 +24,38 @@ function settingsStoragePort(scope: Omit<Parameters<typeof executeScopedPluginSe
 }
 
 describe('UI plugin Settings Action owner', () => {
+    it('cancels the daemon read preceding a Settings write when its request retires', async () => {
+        const { projectPluginSettingsContributionV2 } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+        const { mapV2EditableSettingsGroup } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+        const definition = PluginSettingsContributionV2Schema.parse({ id: 'preferences', title: 'Preferences', scope: 'daemon',
+            target: { kind: 'plugin' }, fields: [{ id: 'endpoint', title: 'Endpoint', schema: { type: 'string' } }] });
+        const groups = [mapV2EditableSettingsGroup(projectPluginSettingsContributionV2({ pluginId: 'acme.settings', definition }))];
+        const controller = new AbortController();
+        const started = createDeferred<void>();
+        let cancelled = false;
+        const unexpected = async (): Promise<never> => { throw new Error('Unexpected Settings write'); };
+        const adapter = createScopedPluginSettingsAdapter({ accountRead: unexpected, accountWrite: unexpected, daemonSet: unexpected,
+            daemonGet: async (_machineId, options) => {
+                started.resolve();
+                return new Promise<never>((_resolve, reject) => {
+                    options.signal?.addEventListener('abort', () => { cancelled = true; reject(new Error('aborted')); }, { once: true });
+                });
+            },
+        });
+        const pending = executeScopedPluginSettingsAdministrationAction({ actionId: 'plugins.settings.set',
+            input: { pluginId: 'acme.settings', scope: { kind: 'daemon' },
+                target: { kind: 'daemon', serverIdentityId: 'srv_a', machineId: 'machine-a' },
+                localId: 'endpoint', value: 'next', expectedRevision: '1' },
+            context: { surface: 'ui', signal: controller.signal },
+            target: { kind: 'daemon', serverIdentityId: 'srv_a', serverId: 'home-a', machineId: 'machine-a' },
+            groups, adapter, secretAdapter: adapter, assertCurrent: () => controller.signal.throwIfAborted(),
+        });
+        await started.promise;
+        controller.abort();
+        expect(cancelled).toBe(true);
+        expect(await pending).toMatchObject({ ok: false });
+    });
+
     it.each(['account', 'daemon'] as const)('preserves quiet secret declines and sole executor confirmation for %s custody', async custody => {
         const { projectPluginSettingsContributionV2 } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
         const { mapV2EditableSettingsGroup } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');

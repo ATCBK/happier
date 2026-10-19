@@ -1,6 +1,7 @@
 import { projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginSettingsContributionV2 } from '@happier-dev/protocol/plugins/contributions/settings';
 import { qualifyPluginContributionReferenceV1, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 
 import {
     mapV2EditableSettingsGroup,
@@ -24,6 +25,23 @@ import {
  */
 
 export const EMPTY_ACCOUNT_DECLARED_SETTINGS_GROUPS: readonly PluginProjectionEditableSettingsGroup[] = Object.freeze([]);
+
+/** The same no-execute bundled declarations feed Agent preferences and Account Actions. */
+export function projectBundledAgentAccountSettingsGroups(params: Readonly<{
+    pluginId: string;
+    targetAgent?: PluginContributionIdentityV1;
+}>): readonly PluginProjectionEditableSettingsGroup[] {
+    return Object.values(BUNDLED_CANONICAL_AGENT_DECLARATIONS).flatMap(declaration => {
+        if (declaration.identity.pluginId !== params.pluginId
+            || params.targetAgent && (declaration.identity.pluginId !== params.targetAgent.pluginId
+                || declaration.identity.localId !== params.targetAgent.localId)) return [];
+        return projectAccountDeclaredPluginSettingsGroups({
+            pluginId: params.pluginId,
+            targetAgent: declaration.identity,
+            declaration: { id: params.pluginId, contributes: { settings: declaration.accountSettings } },
+        });
+    });
+}
 
 export function projectAccountDeclaredPluginSettingsGroups(params: Readonly<{
     pluginId: string;

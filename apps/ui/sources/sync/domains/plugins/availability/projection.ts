@@ -23,6 +23,7 @@ import {
     createPluginAccountAvailabilityReaderStore,
     readHostBundledPluginUiDeclarations,
     projectPluginAccountAvailabilityMaterializationIdentity,
+    arePluginAvailabilityObservationsEqual,
     type PluginAccountAvailabilityReader,
     type PluginAccountAvailabilityReleaseClassificationV1,
     type PluginAccountAvailabilitySnapshot,
@@ -135,9 +136,17 @@ export function retirePluginAccountAvailabilityProjection(pluginIds: readonly st
  * returned reader is bound to the active Account realm, so a consumer cannot
  * accidentally pass a local server id or machine choice into currentness.
  */
-export function useActivePluginAccountAvailabilityReader(): PluginAccountAvailabilityReader | null {
+export function useActivePluginAccountAvailabilityReader(pluginId?: string): PluginAccountAvailabilityReader | null {
     const scope = useActiveServerAccountScope();
-    const snapshot = React.useSyncExternalStore(subscribeToReactProjection, readerStore.getSnapshot, readerStore.getSnapshot);
+    const readSnapshot = React.useMemo(() => {
+        let selected = readerStore.getSnapshot();
+        return () => {
+            const current = readerStore.getSnapshot();
+            if (!pluginId || !arePluginAvailabilityObservationsEqual(selected, current, pluginId)) selected = current;
+            return selected;
+        };
+    }, [pluginId]);
+    const snapshot = React.useSyncExternalStore(subscribeToReactProjection, readSnapshot, readSnapshot);
     const serverId = scope?.serverId ?? null;
     const accountId = scope?.accountId ?? null;
 
@@ -159,16 +168,16 @@ export function useActivePluginAccountAvailabilityReader(): PluginAccountAvailab
  * Account projection is an explicit fail-closed release result, not a local
  * version or source fallback.
  */
-export function useActivePluginAccountAvailabilityReleaseClassifier(): (
+export function useActivePluginAccountAvailabilityReleaseClassifier(pluginId?: string): (
     materialization: PluginMachineMaterializationV1,
 ) => PluginAccountAvailabilityReleaseClassificationV1 {
-    const reader = useActivePluginAccountAvailabilityReader();
+    const reader = useActivePluginAccountAvailabilityReader(pluginId);
     return React.useMemo(() => {
         if (reader) return reader.classifyRelease;
         return (materialization): PluginAccountAvailabilityReleaseClassificationV1 => Object.freeze({
             ...projectPluginAccountAvailabilityMaterializationIdentity(materialization),
             releaseContent: 'unknown',
-            validation: Object.freeze({ kind: 'rejected', reason: 'unknown' }),
+            validation: Object.freeze({ kind: 'rejected', reason: materialization.portableRelease ? 'release_unavailable' : 'non_portable' }),
         });
     }, [reader]);
 }

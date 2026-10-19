@@ -794,6 +794,7 @@ export async function machinePluginStructuredMessageActionExecute(
                 : { selectedActionInputCarrier: opts.selectedActionInputCarrier }),
             ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
             ...(opts.messageActionReference ? { messageActionReference: opts.messageActionReference } : {}),
+            ...(opts.resolveClientMessageContext ? { resolveClientMessageContext: true } : {}),
             executionSurface: opts.executionSurface,
             ...(opts.invocation ? { invocation: opts.invocation } : {}),
             ...(opts.presentUserIntent ? { presentUserIntent: opts.presentUserIntent } : {}),

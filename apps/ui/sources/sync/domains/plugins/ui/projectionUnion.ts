@@ -13,6 +13,7 @@ import {
     type PluginUiTranslationsProjection,
     type PluginVoiceProviderProjection,
     type PluginUiDragSourceProjection,
+    type PluginUiWorkItemsProjection,
     type PluginUiDropTargetProjection,
     type PluginUiResourceProjection,
     type PluginUiInputTypeProjection,
@@ -166,9 +167,16 @@ export function mergeInstalledPluginUiProjections(
             if (declaration && Array.isArray(declaration.hostSupplies) && !declaration.occurrenceId) {
                 declared[key] = Object.freeze(Object.assign({}, declared[key], {
                     hostSupplies: readPluginUiContributionSupplies(entry),
-                    // Daemon Resource facts bind data, never the host renderer bytes.
+                    // The union's selected producer owns launch custody and
+                    // Resource access even when presentation uses host bytes.
+                    // Unselected supplies still carry no executable identity.
                     ...(declaration.contributionKind === 'surfacePlacement' || declaration.contributionKind === 'settingsPage'
-                        ? { runtime: asRecord(entry)?.runtime ?? declaration.runtime } : {}),
+                        ? {
+                            runtime: asRecord(entry)?.runtime ?? declaration.runtime,
+                            occurrenceId: asRecord(entry)?.occurrenceId,
+                            executionOrigin: asRecord(entry)?.executionOrigin,
+                            hostOrigin: asRecord(entry)?.hostOrigin,
+                        } : {}),
                 }));
                 continue;
             }
@@ -195,6 +203,8 @@ export function mergeInstalledPluginUiProjections(
         surfacePlacementsById: merge(model => model.surfacePlacementsById),
         settingsGroupsById: merge(model => model.settingsGroupsById),
         settingsPagesById: merge(model => model.settingsPagesById),
+        composerControlsById: merge(model => model.composerControlsById),
+        composerRegionsById: merge(model => model.composerRegionsById),
         voiceProvidersById: merge(model => model.voiceProvidersById),
         atmospherePicturesById: merge(model => model.atmospherePicturesById),
         registrySourcesById: merge(model => model.registrySourcesById),
@@ -379,8 +389,8 @@ function declarationMaps(model: PluginUiProjectionModel): readonly Readonly<Reco
     return [model.translationsByPluginId, model.sessionHeaderActionsById, model.searchProvidersById,
         model.hostedWebById, model.reactNativeBundlesById, model.surfacePlacementsById,
         model.settingsGroupsById, model.settingsPagesById, model.actionsById, model.voiceProvidersById,
-        model.dragSourcesById, model.dropTargetsById, model.atmospherePicturesById, model.registrySourcesById, model.skillsById, model.unknownEntriesById,
-        model.inputTypesById];
+        model.dragSourcesById, model.workItemsById, model.dropTargetsById, model.atmospherePicturesById, model.registrySourcesById, model.skillsById, model.unknownEntriesById,
+        model.inputTypesById, model.composerControlsById, model.composerRegionsById];
 }
 
 /** Runtime identity and health are not portable declaration content. */
@@ -794,6 +804,7 @@ export function unionPluginUiProjections(
     const actionsById: Record<string, PluginUiActionProjection> = {};
     const voiceProvidersById: Record<string, PluginVoiceProviderProjection> = {};
     const dragSourcesById: Record<string, PluginUiDragSourceProjection> = {};
+    const workItemsById: Record<string, PluginUiWorkItemsProjection> = {};
     const dropTargetsById: Record<string, PluginUiDropTargetProjection> = {};
     const resourcesById: Record<string, PluginUiResourceProjection> = {};
     const inputTypesById: Record<string, PluginUiInputTypeProjection> = {};
@@ -801,6 +812,8 @@ export function unionPluginUiProjections(
     const registrySourcesById: Record<string, PluginUiRegistrySourceProjection> = {};
     const skillsById: Record<string, PluginUiSkillProjection> = {};
     const unknownEntriesById: Record<string, UnknownRecord> = {};
+    const composerControlsById: Record<string, PluginUiProjectionModel['composerControlsById'][string]> = {};
+    const composerRegionsById: Record<string, PluginUiProjectionModel['composerRegionsById'][string]> = {};
 
     // Aggregate equivalent declarations without appointing a producer. Exact
     // source facts are retained separately, including offline supplying copies.
@@ -894,6 +907,14 @@ export function unionPluginUiProjections(
             const origin = originFor(entry);
             if (origin) publishFirstAdmitted(searchProvidersById, id, stamp(entry, origin), origin);
         }
+        for (const [id, entry] of Object.entries(model.composerControlsById)) {
+            const origin = originFor(entry);
+            if (origin) publishFirstAdmitted(composerControlsById, id, stamp(entry, origin), origin);
+        }
+        for (const [id, entry] of Object.entries(model.composerRegionsById)) {
+            const origin = originFor(entry);
+            if (origin) publishFirstAdmitted(composerRegionsById, id, stamp(entry, origin), origin);
+        }
         for (const [id, entry] of Object.entries(model.hostedWebById)) {
             const origin = originFor(entry);
             if (origin) publishFirstAdmitted(hostedWebById, id, stamp(entry, origin), origin);
@@ -925,6 +946,10 @@ export function unionPluginUiProjections(
         for (const [id, entry] of Object.entries(model.dragSourcesById)) {
             const origin = originFor(entry);
             if (origin) publishFirstAdmitted(dragSourcesById, id, stamp(entry, origin), origin);
+        }
+        for (const [id, entry] of Object.entries(model.workItemsById)) {
+            const origin = originFor(entry);
+            if (origin) publishFirstAdmitted(workItemsById, id, stamp(entry, origin), origin);
         }
         for (const [id, entry] of Object.entries(model.dropTargetsById)) {
             const origin = originFor(entry);
@@ -960,7 +985,12 @@ export function unionPluginUiProjections(
         }
         for (const [id, entry] of Object.entries(model.registrySourcesById)) {
             // Source visibility and suppliers are installation declarations;
-            // Administration's executable selection does not remove another supplier.
+            // Administration's executable selection does not remove an equivalent supplier.
+            const representative = selectedMembersByPluginId.get(entry.pluginId)?.projection.registrySourcesById[id]
+                ?? registrySourcesById[id];
+            // A supplier must declare this row's content, not a conflicting URL.
+            if (representative && stableContent(declarationContent(entry.definition))
+                !== stableContent(declarationContent(representative.definition))) continue;
             const origin = model.installedPackagesById[entry.pluginId]?.enabled === true ? originFor(entry) : null;
             if (origin) publishFirstAdmitted(registrySourcesById, id, stamp(entry, origin), origin);
         }
@@ -998,7 +1028,8 @@ export function unionPluginUiProjections(
     // keep their reported supplies for Administration's origin picker.
     const publishedMaps: readonly Record<string, unknown>[] = [translationsByPluginId, sessionHeaderActionsById, searchProvidersById,
         hostedWebById, reactNativeBundlesById, surfacePlacementsById, settingsGroupsById, settingsPagesById, actionsById,
-        voiceProvidersById, dragSourcesById, dropTargetsById, atmospherePicturesById, registrySourcesById, skillsById, unknownEntriesById, inputTypesById, resourcesById];
+        voiceProvidersById, dragSourcesById, workItemsById, dropTargetsById, atmospherePicturesById, registrySourcesById, skillsById, unknownEntriesById, inputTypesById,
+        composerControlsById, composerRegionsById, resourcesById];
     for (const [index, map] of publishedMaps.entries()) {
         for (const [key, entry] of Object.entries(map)) {
             const pluginId = readString(asRecord(entry)?.pluginId);
@@ -1026,12 +1057,15 @@ export function unionPluginUiProjections(
         + Object.keys(actionsById).length
         + Object.keys(voiceProvidersById).length
         + Object.keys(dragSourcesById).length
+        + Object.keys(workItemsById).length
         + Object.keys(dropTargetsById).length
         + Object.keys(resourcesById).length
         + Object.keys(inputTypesById).length
         + Object.keys(atmospherePicturesById).length
         + Object.keys(registrySourcesById).length
         + Object.keys(skillsById).length
+        + Object.keys(composerControlsById).length
+        + Object.keys(composerRegionsById).length
         + Object.keys(unknownEntriesById).length;
 
     if (generation === null && entryCount === 0) {
@@ -1053,12 +1087,12 @@ export function unionPluginUiProjections(
         ...establishingFacts,
         generation,
         installedPackagesById: Object.freeze(installedPackagesById),
-        // Composer contribution families remain scoped to their Session host.
-        // An App union must carry the model's complete shape without becoming a
-        // second Composer catalog/selection authority.
+        // Account-owned composers consume the same admitted declarations and
+        // per-plugin supplies; Administration still selects execution origins.
+        // Attachment state remains with its existing Session host consumers.
         composerAttachmentsById: Object.freeze({}),
-        composerControlsById: Object.freeze({}),
-        composerRegionsById: Object.freeze({}),
+        composerControlsById: Object.freeze(composerControlsById),
+        composerRegionsById: Object.freeze(composerRegionsById),
         // Provisioner catalogs remain owned by their machine projection; no
         // App-union consumer selects or executes these contributions.
         machineProvisionersById: EMPTY_PLUGIN_UI_PROJECTION.machineProvisionersById,
@@ -1073,6 +1107,7 @@ export function unionPluginUiProjections(
         actionsById: Object.freeze(actionsById),
         voiceProvidersById: Object.freeze(voiceProvidersById),
         dragSourcesById: Object.freeze(dragSourcesById),
+        workItemsById: Object.freeze(workItemsById),
         dropTargetsById: Object.freeze(dropTargetsById),
         resourcesById: Object.freeze(resourcesById),
         inputTypesById: Object.freeze(inputTypesById),

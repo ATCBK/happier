@@ -7,6 +7,7 @@ import { renderWithAppProviders } from '@/dev/testkit/render/renderWithAppProvid
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createAccountNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 
 const packaged = vi.hoisted(() => ({
     bytes: new TextEncoder().encode(`
@@ -123,6 +124,30 @@ it('recovers an already-open page as Account binding and Availability hydrate wi
         });
         expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' })).toHaveLength(0);
         expect(screen.tree.root.findAllByProps({ testID: 'plugin-app-page-unavailable' }).length).toBeGreaterThan(0);
+    } finally { await screen.unmount(); }
+});
+
+it('opens a private plugin Inbox notice through the existing admitted plugin page host', async () => {
+    await account.restore({ machines: [], features: enabledPluginFeatures, serverIdentityId: 'srv_bundled_account_page' });
+    const scope = storage.getState().profileScope!;
+    replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+        availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+    } });
+    const notice = createAccountNoticeArtifactFixture({ ownerAccountId: scope.accountId,
+        header: { source: { kind: 'plugin', pluginId: 'happier.fixture', itemId: 'review' }, page: { pageId: 'account-page' } },
+    });
+    storage.setState({ artifacts: { [notice.id]: notice }, isDataReady: true });
+    const { InboxModelProvider } = await import('@/hooks/inbox/useInboxModel');
+    const { InboxItemDetail } = await import('@/components/inbox/detail/InboxItemDetail');
+    const screen = await renderWithAppProviders(<AppPaneProvider><AppShellPluginUiProjectionProvider>
+        <InboxModelProvider><InboxItemDetail focus={{ kind: 'notice', serverId: scope.serverId, id: notice.id }} onClose={() => {}} /></InboxModelProvider>
+    </AppShellPluginUiProjectionProvider></AppPaneProvider>);
+    try {
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' }), JSON.stringify(screen.tree.toJSON())).toHaveLength(1);
+        });
+        expect(screen.tree.root.findAllByProps({ testID: 'inbox.detail' })).toHaveLength(1);
     } finally { await screen.unmount(); }
 });
 

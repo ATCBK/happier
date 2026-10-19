@@ -100,6 +100,48 @@ describe('Plugin Account Availability React publication', () => {
         });
     });
 
+    it('observes only its plugin facts while imperative reads remain current and lifecycle changes notify', async () => {
+        const pluginId = 'example.scoped';
+        const materialization: PluginMachineMaterializationV1 = {
+            serverIdentityId: 'srv_fixture', machineId: 'machine-a', materializationId: 'scoped-install',
+            pluginId, version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+            uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 1,
+        };
+        replacePluginAccountAvailabilityProjection({ scope, snapshot });
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useActivePluginAccountAvailabilityReader(pluginId);
+        });
+        const originalReader = hook.getCurrent();
+        const settledRenders = renders;
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                ...snapshot, availabilityCursor: 2,
+                materializations: [{ ...materialization, pluginId: 'example.other' }],
+            } });
+        });
+        expect(renders).toBe(settledRenders);
+        expect(hook.getCurrent()).toBe(originalReader);
+        expect(originalReader?.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 2 });
+
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                ...snapshot, availabilityCursor: 3, materializations: [materialization],
+            } });
+        });
+        expect(renders).toBeGreaterThan(settledRenders);
+        expect(hook.getCurrent()?.readMaterializations()).toMatchObject({ kind: 'available', materializations: [materialization] });
+        let previousRenders = renders;
+        await act(async () => { retirePluginAccountAvailabilityProjection([pluginId]); });
+        expect(renders).toBeGreaterThan(previousRenders);
+        previousRenders = renders;
+        await act(async () => { clearPluginAccountAvailabilityProjection(); });
+        expect(renders).toBeGreaterThan(previousRenders);
+        expect(originalReader?.readMaterializations()).toMatchObject({ kind: 'unavailable', code: 'account_availability_not_loaded' });
+        await hook.unmount();
+    });
+
     it('lets InvalidateSync retry a partial refresh after publishing its successful siblings', async () => {
         const attempts: Array<Readonly<{ failedPluginIds: readonly string[] }>> = [
             { failedPluginIds: ['happier.failed'] },
@@ -123,10 +165,10 @@ describe('Plugin Account Availability React publication', () => {
         unit.stop();
     });
 
-    it('never renders the previous Account projection after the active Account changes', async () => {
+    it.each([undefined, 'example.scoped'])('never renders the previous Account projection after the active Account changes (plugin %s)', async (pluginId) => {
         replacePluginAccountAvailabilityProjection({ scope, snapshot });
         const hook = await renderHook(() => {
-            const reader = useActivePluginAccountAvailabilityReader();
+            const reader = useActivePluginAccountAvailabilityReader(pluginId);
             return { reader, materializations: reader?.readMaterializations() };
         });
         const previousReader = hook.getCurrent().reader;

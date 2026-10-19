@@ -67,18 +67,31 @@ describe('resolveMachineAdministrationTargetLabel', () => {
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_two', machineId: 'machine-shared' },
             candidates: [onSrvOne, onSrvTwo],
-        })).toEqual({ machine: 'Build box', server: 'Server Two' });
+        })).toEqual({ machine: 'Build box', machineParts: { name: 'Build box', hint: null }, server: 'Server Two' });
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_one', machineId: 'machine-shared' },
             candidates: [onSrvOne, onSrvTwo],
-        })).toEqual({ machine: 'Laptop', server: 'Server One' });
+        })).toEqual({ machine: 'Laptop', machineParts: { name: 'Laptop', hint: null }, server: 'Server One' });
+    });
+
+    it('hands back a same-named machine in its two parts so a one-line label can keep the telling suffix', () => {
+        const twin: MachineAdministrationCandidateV1 = {
+            ...candidate({ serverIdentityId: 'srv_one', machineId: 'machine-twin' }),
+            displayName: 'Build box · 3ca2',
+            displayNameParts: { name: 'Build box', hint: '3ca2' },
+            serverLabel: 'Server One',
+        };
+        expect(resolveMachineAdministrationTargetLabel({ target: twin.target, candidates: [twin] })).toMatchObject({
+            machine: 'Build box · 3ca2',
+            machineParts: { name: 'Build box', hint: '3ca2' },
+        });
     });
 
     it('keeps the machine target identity and uses a human label for an unknown Home', () => {
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_gone', machineId: 'machine-gone' },
             candidates: [candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a' })],
-        })).toEqual({ machine: t('machine.unlistedMachine'), server: t('settingsAccount.thisHomeTitle') });
+        })).toEqual({ machine: t('machine.unlistedMachine'), machineParts: { name: t('machine.unlistedMachine'), hint: null }, server: t('settingsAccount.thisHomeTitle') });
         expect(resolveMachineAdministrationTargetLabel({
             target: null,
             candidates: [candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a' })],

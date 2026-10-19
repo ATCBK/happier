@@ -20,6 +20,7 @@ import { createPluginUiProjectedActionResolver } from './projection';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 import { resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { resolvePluginSurfaceDestinationOpen } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 
 import { normalizePluginUiProjection, EMPTY_PLUGIN_UI_PROJECTION } from './projection';
 import { selectPluginSurfacePlacementsForBinding } from './surfacePlacementSelectors';
@@ -171,6 +172,33 @@ it('uses a development override only for the explicitly selected source and othe
     expect(offline?.surfacePlacementsById[String(entry.id)]?.display).toEqual({ title: 'Bundled page' });
     expect(readPluginUiContributionSupplies(offline?.surfacePlacementsById[String(entry.id)]))
         .toMatchObject([{ machineId: 'machine-dev', interactionEnabled: false }]);
+});
+
+it('retains the selected launch authority beside host renderer bytes without admitting an unselected or offline supply', () => {
+    const pluginId = 'acme.navigation';
+    const entry = placementEntry({ pluginId, localId: 'page', container: 'appPage' });
+    const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
+        machineId: 'machine-dev', pluginId, sourceCustody: { kind: 'development', registeredRootId: 'source-root' },
+    } });
+    const declared = { ...machineProjection({ generation: 1, entriesById: { page: {
+        ...entry, occurrenceId: undefined, hostSupplies: [], display: { title: 'Host page' },
+    } } }), generation: null };
+    const source = (online: boolean) => member({ machineId: 'machine-dev', generation: 2,
+        producerOriginsByPluginId: { [pluginId]: origin }, interactionEnabled: online,
+        entriesById: { page: { ...entry, executionOrigin: origin, display: { title: 'Source page' } } },
+    });
+    const open = (online: boolean, selected: boolean) => {
+        const runtime = unionPluginUiProjections([source(online)], selected ? new Map([[pluginId, origin]]) : new Map()).pluginUiProjection;
+        const merged = mergeInstalledPluginUiProjections([declared], runtime)!;
+        const placements = selectPluginAppPagePlacements(merged);
+        expect(placements[0]?.display).toEqual({ title: 'Host page' });
+        return resolvePluginSurfaceDestinationOpen({ placements, targetKind: 'app', accountLifetime: null,
+            request: { destination: { pluginId, localId: 'page' }, input: { selected: 'entry' } } });
+    };
+    expect(open(true, false)).toMatchObject({ ok: false, reason: 'plugin_surface_open_origin_unavailable' });
+    expect(open(false, true)).toMatchObject({ ok: false, reason: 'plugin_surface_open_origin_unavailable' });
+    expect(open(true, true)).toMatchObject({ ok: true, authority: { machineId: 'machine-dev', occurrenceId: entry.occurrenceId,
+        executionOrigin: origin } });
 });
 
 it('retains runtime client callback graphs beside host-owned renderer bytes without granting another origin execution', async () => {
@@ -712,6 +740,33 @@ function selectedOrigins(...origins: readonly PluginMachineExecutionOriginV1[]):
     return new Map(origins.map((origin) => [('materializationRef' in origin ? origin.materializationRef : origin.sourceRef).pluginId, origin]));
 }
 
+function composerMember(machineId: string, label = 'Inspect'): PluginUiProjectionUnionMember {
+    const pluginId = 'acme.inspector';
+    const occurrenceId = `${machineId}:composer`;
+    const source = member({ machineId, generation: 3,
+        entriesById: { placement: placementEntry({ pluginId, localId: 'panel' }) } });
+    return { ...source, projection: normalizePluginUiProjection(PluginProjectionV2Schema.parse({
+        v: 2, generation: 3,
+        installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Inspector', version: '1.0.0',
+            enabled: true, occurrenceId, source: { kind: 'bundled', locator: pluginId },
+            executionOrigin: selectedOrigin(pluginId, machineId) } },
+        agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+        familiesById: {
+            composerControls: { family: 'composerControls', entriesById: {
+                [`${pluginId}/inspect`]: { id: `${pluginId}/inspect`, pluginId,
+                    identity: { pluginId, localId: 'inspect' }, occurrenceId,
+                    definition: { id: 'inspect', label, icon: 'search',
+                        interaction: { kind: 'attachmentPicker', attachment: 'report', presentation: 'popover', layout: 'list' } } },
+            } },
+            composerRegions: { family: 'composerRegions', entriesById: {
+                [`${pluginId}/summary`]: { id: `${pluginId}/summary`, pluginId,
+                    identity: { pluginId, localId: 'summary' }, occurrenceId,
+                    definition: { id: 'summary', placement: 'afterComposer', renderer: { renderer: 'summary' } } },
+            } },
+        },
+    })) };
+}
+
 describe('unionPluginUiProjections', () => {
     it('carries strict daemon declarations through the union to settings and app-page catalogs', () => {
         const pageId = 'overview';
@@ -1022,32 +1077,46 @@ describe('unionPluginUiProjections', () => {
         expect(unionPluginUiProjections([source('machine-a', 'a', 'retired')], selectedOrigins(selected)).pluginUiProjection).toBeNull();
         expect(unionPluginUiProjections([source('machine-a', 'a')], new Map()).pluginUiProjection).toBeNull();
     });
-    it('keeps Composer maps empty in the app union instead of becoming a Composer catalog owner', () => {
+    it('retains Composer-only declarations and their supplies without electing an execution origin', () => {
         const selected = selectedOrigin('acme.inspector', 'machine-a');
-        const source = member({
-            machineId: 'machine-a',
-            generation: 3,
-            entriesById: {
-                placement: placementEntry({ pluginId: 'acme.inspector', localId: 'panel' }),
-            },
-        });
-        if (!source.projection) throw new Error('fixture must produce a projection');
-
-        const union = unionPluginUiProjections([{
-            ...source,
-            projection: {
-                ...source.projection,
-                // Opaque fixture values are intentional: App scope must not
-                // inspect or select any Composer contribution.
-                composerAttachmentsById: { 'acme.inspector/attachment': { id: 'attachment' } as never },
-                composerControlsById: { 'acme.inspector/control': { id: 'control' } as never },
-                composerRegionsById: { 'acme.inspector/region': { id: 'region' } as never },
-            },
-        }], selectedOrigins(selected));
-
+        const sources = [composerMember('machine-b'), composerMember('machine-a')];
+        const declarations = unionPluginUiProjections(sources, new Map()).pluginUiProjection;
+        const control = declarations?.composerControlsById['acme.inspector/inspect'];
+        expect(control).toMatchObject({ definition: { label: 'Inspect' } });
+        expect(control?.occurrenceId).toBeUndefined();
+        expect(readPluginUiContributionOrigin(control)).toBeNull();
+        expect(readPluginUiContributionSupplies(control)).toMatchObject([
+            { machineId: 'machine-a', occurrenceId: 'machine-a:composer' },
+            { machineId: 'machine-b', occurrenceId: 'machine-b:composer' },
+        ]);
+        const union = unionPluginUiProjections(sources, selectedOrigins(selected));
+        expect(union.machineId).toBeNull();
+        expect(union.pluginUiProjection?.composerControlsById['acme.inspector/inspect'])
+            .toMatchObject({ occurrenceId: 'machine-a:composer' });
+        expect(readPluginUiContributionOrigin(union.pluginUiProjection?.composerRegionsById['acme.inspector/summary']))
+            .toMatchObject({ machineId: 'machine-a', executionOrigin: selected, interactionEnabled: true });
+        const offline = unionPluginUiProjections([{ ...sources[1]!, phase: 'retainedOffline', interactionEnabled: false }], selectedOrigins(selected));
+        expect(readPluginUiContributionOrigin(offline.pluginUiProjection?.composerControlsById['acme.inspector/inspect']))
+            .toMatchObject({ machineId: 'machine-a', interactionEnabled: false, phase: 'retainedOffline' });
         expect(union.pluginUiProjection?.composerAttachmentsById).toEqual({});
-        expect(union.pluginUiProjection?.composerControlsById).toEqual({});
-        expect(union.pluginUiProjection?.composerRegionsById).toEqual({});
+    });
+
+    it('uses Administration selection for conflicting Composer declarations and preserves installed declarations', () => {
+        const sources = [composerMember('machine-a'), composerMember('machine-b', 'Review')];
+        const conflict = unionPluginUiProjections(sources, new Map()).pluginUiProjection?.composerControlsById['acme.inspector/inspect'];
+        expect(readPluginUiContributionOrigin(conflict)).toBeNull();
+        expect(conflict).toMatchObject({ hostCompatibility: 'conflict' });
+        const selected = selectedOrigin('acme.inspector', 'machine-b');
+        const union = unionPluginUiProjections(sources, selectedOrigins(selected));
+        expect(union.pluginUiProjection?.composerControlsById['acme.inspector/inspect'])
+            .toMatchObject({ definition: { label: 'Review' }, occurrenceId: 'machine-b:composer' });
+        expect(readPluginUiContributionSupplies(union.pluginUiProjection?.composerControlsById['acme.inspector/inspect']))
+            .toHaveLength(2);
+        const installed = sources[0]!.projection;
+        if (!installed) throw new Error('fixture must produce a projection');
+        const cold = mergeInstalledPluginUiProjections([installed], null);
+        expect(cold?.composerControlsById['acme.inspector/inspect']).toEqual(installed.composerControlsById['acme.inspector/inspect']);
+        expect(cold?.composerRegionsById['acme.inspector/summary']).toEqual(installed.composerRegionsById['acme.inspector/summary']);
     });
 
     it('retains Resources only from the same selected member as the plugin contribution', () => {

@@ -12,7 +12,14 @@ import {
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
-type RpcOptions = Readonly<{ serverId?: string | null; timeoutMs?: number }>;
+type RpcOptions = Readonly<{
+    serverId?: string | null;
+    accountId?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+    onIssued?: () => void;
+}>;
 
 export type MachineNpmRegistryProfileMutationResult =
     | DaemonNpmRegistryProfileMutationResponseV1
@@ -23,9 +30,12 @@ export async function machineNpmRegistryProfilesGet(
     options: RpcOptions = {},
 ): Promise<DaemonNpmRegistryProfilesGetResponseV1> {
     const payload = DaemonNpmRegistryProfilesGetRequestV1Schema.parse({ machineId });
+    options.assertCurrent?.();
     const response = await machineRpcWithServerScope<unknown, typeof payload>({
         machineId,
         serverId: options.serverId,
+        accountId: options.accountId,
+        signal: options.signal,
         timeoutMs: options.timeoutMs,
         method: RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET,
         payload,
@@ -40,15 +50,23 @@ export async function machineNpmRegistryProfilesMutate(
     options: RpcOptions = {},
 ): Promise<MachineNpmRegistryProfileMutationResult> {
     const payload = DaemonNpmRegistryProfileMutationRequestV1Schema.parse({ ...request, machineId });
+    options.assertCurrent?.();
     let issued = false;
     try {
         const response = await machineRpcWithServerScope<unknown, typeof payload>({
             machineId,
             serverId: options.serverId,
+            accountId: options.accountId,
+            signal: options.signal,
             timeoutMs: options.timeoutMs,
             method: RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_MUTATE,
             payload,
-            onIssued: () => { issued = true; },
+            preparePayload: () => { options.assertCurrent?.(); return payload; },
+            onIssued: () => {
+                options.assertCurrent?.();
+                issued = true;
+                options.onIssued?.();
+            },
         });
         if (isRpcMethodNotFoundResult(response)) return { status: 'error', code: 'unavailable', retryable: false };
         const parsed = DaemonNpmRegistryProfileMutationResponseV1Schema.safeParse(response);

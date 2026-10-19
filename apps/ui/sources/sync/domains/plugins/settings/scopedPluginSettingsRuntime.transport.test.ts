@@ -34,7 +34,7 @@ describe('Account plugin Settings HTTP issue admission', () => {
                 },
             });
             try {
-                const { scopedPluginSettingsAdapter } = await import('./scopedPluginSettingsRuntime');
+                const { scopedPluginSettingsStorageAdapterForTests: scopedPluginSettingsAdapter } = await import('./scopedPluginSettingsRuntime');
                 const write = scopedPluginSettingsAdapter.write({
                     pluginId: 'acme.settings', scope: { kind: 'account' },
                     target: { kind: 'account', serverIdentityId: 'srv_settings_issue' },

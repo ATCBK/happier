@@ -237,6 +237,42 @@ function projectionSlot(): ScopedPluginSettingsProjection | null {
 }
 
 describe('useScopedPluginSettingsProjection', () => {
+    it.each(['pause', 'unmount', 'source replacement'] as const)('cancels a non-replying daemon read on %s and reads afresh on return', async ending => {
+        let cancelled = false;
+        let calls = 0;
+        const adapter = createScopedPluginSettingsAdapter({
+            daemonGet: async (_machineId: string, options: Readonly<{ pluginId: string; signal?: AbortSignal }>) => {
+                if (++calls === 1) return new Promise<never>((_resolve, reject) => {
+                    options.signal?.addEventListener('abort', () => {
+                        cancelled = true;
+                        reject(new Error('aborted'));
+                    }, { once: true });
+                });
+                return { supported: true, snapshot: { protocolVersion: 1, pluginId: 'acme.settings',
+                    scope: { kind: 'daemon' }, revision: '2', values: { endpoint: 'current' }, redactedKeys: [] } };
+            },
+            daemonSet: async () => ({ supported: false, reason: 'error' }),
+            accountRead: async () => ({ status: 'unavailable', reason: 'transport' }),
+            accountWrite: async () => ({ status: 'unavailable', reason: 'transport' }),
+        });
+        let projection: ScopedPluginSettingsProjection | null = projectionSlot();
+        const observe = (next: ScopedPluginSettingsProjection) => { projection = next; };
+        let screen = await renderScreen(<Harness fields={FIELDS} adapter={adapter} sourceLifetimeIdentity="before" onProjection={observe} />);
+        await flush();
+        expect(projection?.state.loading).toBe(true);
+        if (ending === 'unmount') await screen.unmount();
+        else await screen.update(<Harness fields={FIELDS} adapter={adapter} enabled={ending !== 'pause'}
+            sourceLifetimeIdentity={ending === 'source replacement' ? 'after' : 'before'} onProjection={observe} />);
+        await flush();
+        expect(cancelled).toBe(true);
+        if (ending !== 'unmount') expect(projection?.state.loading).toBe(false);
+        if (ending === 'unmount') screen = await renderScreen(<Harness fields={FIELDS} adapter={adapter} onProjection={observe} />);
+        else if (ending === 'pause') await screen.update(<Harness fields={FIELDS} adapter={adapter} sourceLifetimeIdentity="before" onProjection={observe} />);
+        await flush();
+        expect(projection?.state.values.endpoint).toBe('current');
+        expect(projection?.state.loading).toBe(false);
+    });
+
     it('rejects a SavedSecret bind callback retained from a retired Account lifetime', async () => {
         const accountA = createAccountLifetime('account-a');
         const writeMock = vi.fn<ScopedPluginSettingsAdapter['write']>();
@@ -428,7 +464,7 @@ describe('useScopedPluginSettingsProjection', () => {
         expect(readMock).toHaveBeenCalledTimes(2);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <Harness
                     fields={GENERIC_FIELDS}
                     adapter={adapter}
@@ -611,7 +647,7 @@ describe('useScopedPluginSettingsProjection', () => {
         let pending!: Promise<ScopedPluginSettingsWriteResult | null>;
         act(() => { pending = projection!.commit({ fieldId: 'endpoint', mutation: { kind: 'set', value: 'https://old-intent.example' } }); });
         await entered.promise;
-        await act(async () => { screen.tree.update(<AccountSource source="source-b" />); });
+        await screen.update(<AccountSource source="source-b" />);
         await flush();
         await act(async () => { release.resolve(); await pending; });
         expect(writes).toBe(0);
@@ -652,7 +688,7 @@ describe('useScopedPluginSettingsProjection', () => {
         });
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <Harness
                     fields={GENERIC_FIELDS}
                     declaredFields={DECLARED_GENERIC_FIELDS}
@@ -798,7 +834,7 @@ describe('useScopedPluginSettingsProjection', () => {
         });
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <Harness
                     fields={[FIELDS[0]!].map((field) => ({ ...field }))}
                     adapter={adapter}
@@ -808,7 +844,7 @@ describe('useScopedPluginSettingsProjection', () => {
         });
         await flush();
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <Harness
                     fields={FIELDS.map((field) => ({ ...field }))}
                     adapter={adapter}
@@ -995,7 +1031,7 @@ describe('useScopedPluginSettingsProjection', () => {
         expect(projection!.state.writePending).toBe(true);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <Harness fields={FIELDS} adapter={adapter} enabled={false} onProjection={(next) => { projection = next; }} />,
             );
         });
@@ -1006,7 +1042,7 @@ describe('useScopedPluginSettingsProjection', () => {
         expect(projection!.state.writePending).toBe(false);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <Harness fields={FIELDS} adapter={adapter} enabled onProjection={(next) => { projection = next; }} />,
             );
         });

@@ -346,12 +346,17 @@ function usePluginExecutionOriginMachineSnapshots(params: Readonly<{
             refresh();
             return () => { stopStore(); stopClock(); stopReachability(); sessionListRuntimeClock.clearWake(token); };
         };
-        return { get, subscribe };
+        return { get, subscribe, read };
     }, [activeServerId, params.enabled, params.materializations, params.pluginId, params.sources, params.readinessServerIdentityId,
         profilesGeneration, accountScopesByServerId]);
     // Clock/store notifications re-read authority, but only an eligibility
     // change commits this consumer. Unrelated relative-time wakes stay local.
-    return React.useSyncExternalStore(snapshots.subscribe, snapshots.get, snapshots.get);
+    React.useSyncExternalStore(snapshots.subscribe, snapshots.get, snapshots.get);
+    // Notifications collapse heartbeat-only changes, but another admission
+    // input (such as Availability) can still cause a render. Classify against
+    // the producer's current rows, not the retained notification snapshot's
+    // now-expired presence timestamps.
+    return snapshots.read();
 }
 
 export function advancePluginExecutionOriginSelectionRevision(
@@ -500,7 +505,7 @@ export function usePluginMachineExecutionOriginSelection(params: Readonly<{
     includeMachineCandidates?: boolean;
     contextualTarget?: PluginExecutionOriginContextualTarget | null;
 }>): PluginMachineExecutionOriginSelectionV1 {
-    const reader = useActivePluginAccountAvailabilityReader();
+    const reader = useActivePluginAccountAvailabilityReader(params.pluginId);
     const enabled = params.enabled !== false;
     const materializationAdmission = React.useMemo(
         () => enabled ? reader?.readMaterializations() ?? null : null,

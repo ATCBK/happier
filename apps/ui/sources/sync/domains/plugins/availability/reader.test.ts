@@ -239,7 +239,9 @@ describe('Plugin Account Availability reader', () => {
     it('selects the host bundled Account renderer without a machine or claimed release, and respects Account disablement', () => {
         const manifest = PluginPortableReleaseManifestV1Schema.parse({
             schemaVersion: 2, id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture',
-            runtime: { apiVersion: 1 }, contributes: { ui: { renderers: [{
+            runtime: { apiVersion: 1 }, contributes: {
+                actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'], placementBindings: [],
+                    dangerLevel: 'safe', execution: { target: 'daemon' } }], ui: { renderers: [{
                 id: 'fixture', kind: 'reactNative', artifact: 'fixture', requiredHostMethods: [],
             }], views: [{ id: 'fixture-page', container: 'appPage', title: 'Fixture', target: { kind: 'app' },
                 renderer: 'fixture' }] } },
@@ -251,7 +253,8 @@ describe('Plugin Account Availability reader', () => {
             executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0' });
         const input = { scope, snapshot: snapshot({ intentReads: [], materializations: [], snapshots: [] }),
             hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture', packageName: '@happier-dev/plugins-fixture',
-                entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifact]) }] };
+                entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifact]),
+                declaredExecution: { daemonActions: true, contributionPoints: false } }] };
         const reader = createPluginAccountAvailabilityReader(input);
         const slot = { pluginId: manifest.id, contributionId: 'fixture', tier: 'reactNative' as const, platform: 'web' as const };
         expect(reader.readCurrentArtifact(slot)).toMatchObject({ kind: 'available', artifact: {
@@ -263,6 +266,8 @@ describe('Plugin Account Availability reader', () => {
             .toMatchObject({ artifactGraph: artifact, runtime: { decision: { state: 'load' } } });
         expect(reader.readAccountUiProjection()?.installedPackagesById[manifest.id]?.source)
             .toEqual({ kind: 'bundled', locator: '@happier-dev/plugins-fixture' });
+        expect(reader.readAccountUiProjection()?.installedPackagesById[manifest.id]?.declaredExecution)
+            .toEqual({ daemonActions: true, contributionPoints: false });
         const disabled = intentRead();
         disabled.intent = { ...disabled.intent!, pluginId: manifest.id, desiredVersion: null, enabled: false };
         disabled.release = null;
@@ -297,7 +302,9 @@ describe('Plugin Account Availability reader', () => {
     it('projects admitted registry and skill declarations on a cold Account and retires their installation census', () => {
         const base = snapshot();
         const declaration = PluginPortableReleaseManifestV1Schema.parse({ ...intentRead().release!.normalizedManifest,
-            contributes: { registrySources: [{ id: 'skills', title: 'Team skills', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/skills' }],
+            contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'], placementBindings: [],
+                dangerLevel: 'safe', execution: { target: 'daemon' } }],
+                registrySources: [{ id: 'skills', title: 'Team skills', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/skills' }],
                 skills: [{ id: 'check', directory: './resources/skills/check' }] },
         });
         const materialization = { ...base.materializations[0]!, enabled: true, trustState: 'trusted' as const, declaredManifest: declaration };
@@ -309,6 +316,8 @@ describe('Plugin Account Availability reader', () => {
         const installed = reader.readInstalledPlugins();
         if (installed.kind !== 'available') throw new Error('Fixture must be admitted');
         const projection = installed.plugins[0]!.installations[0]!.uiModel;
+        expect(projection.installedPackagesById[materialization.pluginId]?.declaredExecution)
+            .toEqual({ daemonActions: true, contributionPoints: false });
         expect(projection.registrySourcesById['com.acme.fixture/skills']).toMatchObject({ pluginId: 'com.acme.fixture',
             pluginVersion: '1.2.3', definition: { id: 'skills', kinds: ['skill'] } });
         expect(projection.registrySourcesById['com.acme.fixture/skills']).not.toHaveProperty('occurrenceId');

@@ -57,6 +57,8 @@ export type MachineAdministrationCandidateAvailabilityV1 =
 export type MachineAdministrationCandidateV1 = Readonly<{
     target: MachineAdministrationTargetV1;
     displayName: string;
+    /** `displayName` in its two parts: the Machine's own name and the suffix that tells it apart from a same-named one. */
+    displayNameParts?: Readonly<{ name: string; hint: string | null }>;
     serverLabel: string;
     availability: MachineAdministrationCandidateAvailabilityV1;
     observation: 'live' | 'stale';
@@ -143,14 +145,16 @@ export function readMachineAdministrationCandidateName(candidate: MachineAdminis
 export function resolveMachineAdministrationTargetLabel(params: Readonly<{
     target: MachineAdministrationTargetV1 | null;
     candidates: readonly MachineAdministrationCandidateV1[];
-}>): Readonly<{ machine: string; server: string }> | null {
+}>): Readonly<{ machine: string; machineParts: Readonly<{ name: string; hint: string | null }>; server: string }> | null {
     const target = params.target;
     if (!target) return null;
     const candidate = params.candidates.find((entry) => (
         machineAdministrationTargetsEqual(entry.target, target)
     )) ?? null;
+    const machine = candidate?.displayName ?? getMachineDisplayName({ id: target.machineId, absence: 'unlisted' });
     return Object.freeze({
-        machine: candidate?.displayName ?? getMachineDisplayName({ id: target.machineId, absence: 'unlisted' }),
+        machine,
+        machineParts: candidate?.displayNameParts ?? { name: machine, hint: null },
         server: candidate?.serverLabel ?? resolveHomeDisplayLabel(getServerProfileById(target.serverIdentityId), target.serverIdentityId),
     });
 }

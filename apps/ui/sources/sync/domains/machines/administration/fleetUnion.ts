@@ -72,26 +72,4 @@ export function resolveFleetReadState(states: readonly FleetReadState[]): 'curre
     return states.includes('transportFailure') ? 'failed' : 'current';
 }
 
-/** Domain owners supply identity/content; only admitted current supplies can disagree. */
-export function resolveFleetSupplyAgreement<T>(params: Readonly<{
-    supplies: readonly Readonly<{ value: T; selectable: boolean }>[];
-    identity: (value: T) => string;
-    content: (value: T) => string;
-}>): Readonly<{
-    variantsByIdentity: ReadonlyMap<string, ReadonlyMap<string, T>>;
-    conflictingIdentities: readonly string[];
-}> {
-    const variantsByIdentity = new Map<string, Map<string, T>>();
-    for (const supply of params.supplies) {
-        if (!supply.selectable) continue;
-        const identity = params.identity(supply.value);
-        const variants = variantsByIdentity.get(identity) ?? new Map<string, T>();
-        const content = params.content(supply.value);
-        if (!variants.has(content)) variants.set(content, supply.value);
-        variantsByIdentity.set(identity, variants);
-    }
-    return {
-        variantsByIdentity,
-        conflictingIdentities: [...variantsByIdentity].filter(([, variants]) => variants.size > 1).map(([identity]) => identity),
-    };
-}
+export { resolveFleetSupplyAgreement } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';

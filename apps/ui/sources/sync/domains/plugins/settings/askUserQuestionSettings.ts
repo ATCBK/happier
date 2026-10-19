@@ -100,6 +100,7 @@ export async function persistDeclaredAskUserQuestionSetting(
         mutation: { kind: 'set', value: input.value },
         isCurrent: isTargetCurrent,
     });
+    if (result?.status === 'declined') return;
     if (result?.status !== 'ready' && result?.status !== 'applied') {
         throw new Error('Unable to persist the selected setting.');
     }

@@ -206,12 +206,18 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const hook = await renderHook(() => {
             renders += 1;
             return usePluginMachineExecutionOriginSelection({ pluginId,
-                includeMachineCandidates: false, classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), sourceCandidates });
+                includeMachineCandidates: false, classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(pluginId), sourceCandidates });
         });
         expect(hook.getCurrent().selectedOrigin).toEqual(origin);
         expect(credentials.mock.calls.filter(([readUrl, options]) => readUrl === foreignUrl
             && options?.storageReadFailure === 'surface')).toHaveLength(0);
         const settledRenders = renders;
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                availabilityCursor: 2, intentReads: [], materializations: [], snapshots: [],
+            } });
+        });
+        expect(renders).toBe(settledRenders);
         await act(async () => { recordMachineRequestFailed({ ...scope, machineId: 'unrelated-machine' }); });
         expect(renders).toBe(settledRenders);
         await act(async () => { recordMachineRequestFailed({ ...scope, machineId: machine.id }); });
@@ -644,6 +650,9 @@ describe('execution-origin plugin identity with real Account and machine owners'
             sourceCustody: { kind: 'development' as const, registeredRootId: 'presence-root' } } };
         const source = { origin, version: '1.0.0', occurrenceId: 'presence-occurrence', generation: 1, serverId: home.id };
         const candidates = [{ source, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+            availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+        } });
         const defaults = [origin];
         let renders = 0;
         const hook = await renderHook(() => {
@@ -763,6 +772,14 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await act(async () => { storage.setState({ machineListByServerId: { [home.id]: [heartbeat] } }); });
         await act(async () => { await vi.advanceTimersByTimeAsync(firstExpiry - Date.now()); });
         expect(hook.getCurrent().canExecute).toBe(true);
+        // A heartbeat preserves semantic eligibility, but a later Availability
+        // publication must classify against the renewed census, not the
+        // selector's retained presentation timestamp from before that heartbeat.
+        await act(async () => { replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+            availabilityCursor: 2, intentReads: [], materializations: [], snapshots: [],
+        } }); });
+        expect(hook.getCurrent().state).toMatchObject({ kind: 'selected', origin });
+        expect(hook.getCurrent().candidates.every(candidate => candidate.validation.kind === 'admitted')).toBe(true);
         const expiry = readMachineStatusNextRefreshAtMs(heartbeat, Date.now())!;
         await act(async () => { await vi.advanceTimersByTimeAsync(expiry - Date.now()); });
         expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable', reasons: ['offline'] });

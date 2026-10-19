@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 const probe = vi.hoisted(() => ({
     calls: [] as Array<{ fn: string; bytes: number; ms: number }>,
@@ -56,11 +63,6 @@ vi.mock('@happier-dev/protocol/plugins/ui', async (importOriginal) => {
     };
 });
 
-const activeAccountHostedArtifactSource = vi.hoisted(() => ({ create: vi.fn() }));
-vi.mock('@/sync/api/plugins/availability/activePluginAccountHostedArtifactRead', () => ({
-    createActivePluginAccountHostedArtifactSourceCandidate: (input: unknown) => activeAccountHostedArtifactSource.create(input),
-}));
-
 import {
     computePluginUiArtifactFileSetSha256DigestV1,
     computePluginUiArtifactSha256DigestV1,
@@ -83,7 +85,7 @@ import {
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 
 import { createPluginAccountAvailabilityReader, type PluginAccountAvailabilitySnapshot } from './reader';
-import { createPluginReactNativeArtifactAvailabilityProducer } from './reactNativeArtifactAvailability';
+const { createPluginReactNativeArtifactAvailabilityProducer } = await import('./reactNativeArtifactAvailability');
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 const permanentlyCurrentLifetime: ActiveServerAccountScopeLifetime = Object.freeze({
@@ -93,7 +95,6 @@ const permanentlyCurrentLifetime: ActiveServerAccountScopeLifetime = Object.free
 });
 
 const inactiveAppExactSource = Object.freeze({ kind: 'appExact' as const, fetch: async () => null });
-const inactiveAccountHostedSource = Object.freeze({ kind: 'accountHosted' as const, fetch: async () => null });
 
 // Realistic single-file CommonJS RN plugin bundle (the canonical executable grammar is one file).
 const ENTRY_BYTES_SIZE = 3 * 1024 * 1024;
@@ -231,7 +232,6 @@ function fixture() {
 
 describe('U6 cold-mount integrity probe', () => {
     it('counts full-bytes hash passes on a cold daemon-sourced mount', async () => {
-        activeAccountHostedArtifactSource.create.mockReturnValue(inactiveAccountHostedSource);
         const current = fixture();
         // eslint-disable-next-line no-console
         console.log(`\n=== wire payload: ${(current.wireBytes / 1048576).toFixed(2)}MiB for ${(ENTRY_BYTES_SIZE / 1048576).toFixed(2)}MiB of artifact`);
@@ -262,7 +262,6 @@ describe('U6 cold-mount integrity probe', () => {
     }, 120_000);
 
     it('counts full-bytes hash passes on a cold daemon-sourced mount WITH persistent custody', async () => {
-        activeAccountHostedArtifactSource.create.mockReturnValue(inactiveAccountHostedSource);
         const current = fixture();
         const persistent = createPersistentStore();
         const cache = createPluginReactNativeBundleCache({ persistentStore: {

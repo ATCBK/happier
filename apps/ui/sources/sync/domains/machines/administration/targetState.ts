@@ -2,7 +2,7 @@ import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/accou
 
 import { resolveFleetMachineAvailability } from './fleetUnion';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { formatMachineDisplayNameParts, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import type {
     ServerMachineInventorySnapshotV1,
 } from '@/sync/domains/machines/machineInventorySnapshots';
@@ -60,20 +60,22 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
     const rows: MachineAdministrationCandidateInventoryRowV1<MachineDisplayRenderable>[] = [];
     for (const snapshot of params.snapshots) {
         if (snapshot.kind !== 'resolved') continue;
-        const displayNames = resolveMachineDisplayNames(snapshot.machines);
+        const displayNameParts = resolveMachineDisplayNameParts(snapshot.machines);
         for (const machine of snapshot.machines) {
             const parsedTarget = MachineAdministrationTargetV1Schema.safeParse({
                 serverIdentityId: snapshot.serverIdentityId,
                 machineId: machine.id,
             });
             if (!parsedTarget.success) continue;
+            const machineNameParts = displayNameParts.get(machine.id)!;
             const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine, params.nowMs);
             const replacementTarget = availability === 'replaced'
                 ? buildReplacementTarget(snapshot.serverIdentityId, machine)
                 : undefined;
             const candidate: MachineAdministrationCandidateV1 = Object.freeze({
                 target: Object.freeze(parsedTarget.data),
-                displayName: displayNames.get(machine.id)!,
+                displayName: formatMachineDisplayNameParts(machineNameParts),
+                displayNameParts: machineNameParts,
                 serverLabel: snapshot.serverName,
                 availability,
                 observation: snapshot.observation,

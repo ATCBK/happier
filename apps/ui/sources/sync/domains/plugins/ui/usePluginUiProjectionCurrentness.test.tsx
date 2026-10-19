@@ -431,7 +431,7 @@ describe('usePluginUiProjectionCurrentness', () => {
             serverId: serverIdentityId,
         }));
         await flushHookEffects();
-        expect(cold.getCurrent()).toMatchObject({ phase: 'retainedOffline', unavailableReasonCode: 'plugin_machine_unreachable', interactionEnabled: false });
+        expect(cold.getCurrent()).toMatchObject({ phase: 'retainedOffline', unavailableReasonCode: 'plugin_daemon_unavailable', interactionEnabled: false });
 
         setMachine({ active: false });
         await act(async () => {
@@ -714,6 +714,27 @@ describe('usePluginUiProjectionCurrentness', () => {
         });
     });
 
+    it('admits the first successful describe when the initial Machine census arrives before AppShell mounts', async () => {
+        const machine = storage.getState().machines['machine-1']!;
+        storage.setState({ machines: {}, machineListByServerId: {} });
+        projectionRuntime.describe.mockResolvedValue(supportedProjection('First live catalog'));
+        await expect(loadDaemonMergedProjectionCacheEntry({
+            machineId: 'machine-1', serverId: serverIdentityId,
+        })).resolves.toMatchObject({ kind: 'ready' });
+
+        storage.getState().applyMachines([machine], true, { sourceServerId: connection!.home.id });
+        const rendered = await renderHook(() => usePluginUiProjectionCurrentness({
+            machineId: 'machine-1', serverId: serverIdentityId,
+        }));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().phase).toBe('current'));
+        expect(rendered.getCurrent().interactionEnabled).toBe(true);
+        expect(rendered.getCurrent().pluginUiProjection?.translationsByPluginId['acme.preview']?.bundles).toEqual({
+            en: { title: 'First live catalog' },
+        });
+        expect(projectionRuntime.describe).toHaveBeenCalledTimes(1);
+        await rendered.unmount();
+    });
+
     it('reports a first describe as establishing instead of an empty unavailable projection', async () => {
         projectionRuntime.describe.mockImplementationOnce(() => new Promise(() => {}));
 
@@ -949,7 +970,23 @@ describe('usePluginUiProjectionCurrentness', () => {
             phase: 'unavailable',
             pluginUiProjection: null,
             interactionEnabled: false,
+            unavailableReasonCode: 'plugin_daemon_unsupported',
         });
+    });
+
+    it('keeps an invalid daemon response distinct from machine reachability and clears it on recovery', async () => {
+        projectionRuntime.describe.mockResolvedValue({ supported: true, projection: { invalid: true } });
+        const rendered = await renderHook(() => usePluginUiProjectionCurrentness({
+            machineId: 'machine-1', serverId: serverIdentityId,
+        }));
+        await flushHookEffects();
+        expect(rendered.getCurrent()).toMatchObject({
+            phase: 'unavailable', interactionEnabled: false, unavailableReasonCode: 'plugin_daemon_invalid_response',
+        });
+        projectionRuntime.describe.mockResolvedValue(supportedProjection('Recovered catalog'));
+        await act(async () => { publishMachineContributionRegistryProjectionInvalidation({ machineId: 'machine-1', serverId: serverIdentityId }); });
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().phase).toBe('current'));
+        expect(rendered.getCurrent().unavailableReasonCode).toBeUndefined();
     });
 
     it('fences a retired projection without updating another component during Account capture in render', async () => {

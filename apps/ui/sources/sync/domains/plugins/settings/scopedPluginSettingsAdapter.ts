@@ -81,6 +81,7 @@ export type ScopedPluginDaemonSecretReadResult =
 /** A dispatched daemon-secret mutation is never replayed after acknowledgement loss. */
 export type ScopedPluginDaemonSecretWriteResult =
     | ScopedPluginDaemonSecretReadResult
+    | Readonly<{ status: 'declined' }>
     | Readonly<{ status: 'outcomeUnknown'; snapshot?: ScopedPluginDaemonSecretSnapshot }>;
 
 export type ScopedPluginDaemonSecretAdapter = Readonly<{
@@ -180,6 +181,7 @@ export type ScopedPluginSettingsOutcomeUnknownResult = Readonly<{
 
 export type ScopedPluginSettingsWriteResult =
     | ScopedPluginSettingsReadResult
+    | Readonly<{ status: 'declined' }>
     /** Exact write settlement after its presentation lifetime has retired. */
     | Readonly<{ status: 'applied'; revision: ScopedPluginSettingsRevision }>
     | ScopedPluginSettingsConflictResult
@@ -278,7 +280,7 @@ export type ScopedPluginSettingsAccountTransport = Readonly<{
 export type ScopedPluginSettingsAdapterDependencies = Readonly<{
     daemonGet: (
         machineId: string,
-        params: Readonly<{ serverId: string; serverIdentityId: string; pluginId: string }>,
+        params: Readonly<{ serverId: string; serverIdentityId: string; pluginId: string; signal?: AbortSignal }>,
     ) => Promise<MachinePluginSettingsResult>;
     daemonSet: (
         machineId: string,
@@ -289,6 +291,7 @@ export type ScopedPluginSettingsAdapterDependencies = Readonly<{
             fieldId: string;
             mutation: ScopedPluginSettingsRecordMutation;
             expectedRevision?: string;
+            signal?: AbortSignal;
         }>,
     ) => Promise<MachinePluginSettingsSetResult>;
     accountRead: (input: ScopedPluginSettingsAccountReadInput) => Promise<ScopedPluginSettingsReadResult>;
@@ -337,6 +340,7 @@ export type ScopedPluginSettingsReadInput = Readonly<{
     scope: ScopedPluginSettingsScope;
     target: ScopedPluginSettingsTarget;
     fields: readonly ScopedPluginSettingsField[];
+    signal?: AbortSignal;
 }>;
 
 export type ScopedPluginSettingsWriteInput = ScopedPluginSettingsReadInput & Readonly<{
@@ -757,6 +761,7 @@ async function readDaemonScopedPluginSettings(params: Readonly<{
             serverId: params.target.serverId,
             serverIdentityId: params.target.serverIdentityId,
             pluginId: params.input.pluginId,
+            ...(params.input.signal ? { signal: params.input.signal } : {}),
         });
         return daemonResultToScopedResult({ result, input: params.input });
     } catch {
@@ -970,6 +975,7 @@ export function createScopedPluginSettingsAdapter(
                     fieldId: input.fieldId,
                     mutation: input.mutation,
                     expectedRevision: input.expectedRevision.value,
+                    ...(input.signal ? { signal: input.signal } : {}),
                 });
                 const settled = daemonSetResultToScopedResult({ result, input });
                 if (settled.status !== 'outcomeUnknown') return settled;

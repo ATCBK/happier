@@ -118,7 +118,8 @@ async function executeScopedPluginSettingsAdministrationActionCore(
         }
         if (isSecret && (field?.secretCustody !== 'account' || 'canonicalOrigin' in input && input.canonicalOrigin !== undefined))
             return fail('invalid_arguments');
-        const readInput = { pluginId: input.pluginId, scope, target: params.target, fields };
+        const readInput = { pluginId: input.pluginId, scope, target: params.target, fields,
+            ...(params.context.signal ? { signal: params.context.signal } : {}) };
         const before = await adapter.read(readInput);
         params.context.signal?.throwIfAborted();
         assertCurrent();
@@ -218,7 +219,7 @@ export function createUiPluginSettingsAdministrationAction(
             target = { ...selected, serverId: account.serverId };
             const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
             const projection = await loadDaemonMergedProjectionInputs({ machineId: selected.machineId, serverId: account.serverId,
-                accountLifetime: account.accountLifetime });
+                accountLifetime: account.accountLifetime, signal: request.context.signal });
             assertCurrent();
             if (!projection) return null;
             groups = projection.pluginProjectionById[input.pluginId]?.editableSettingsGroups ?? [];

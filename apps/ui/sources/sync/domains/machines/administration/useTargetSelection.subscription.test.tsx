@@ -61,15 +61,17 @@ describe('machine administration target demand', () => {
                 settings: { ...state.settings, machineAdministrationTargetsLocalV1: {} },
             }));
             // Observe actual projection work; the spy delegates to the real name owner.
-            const names = vi.spyOn(machineDisplayNames, 'resolveMachineDisplayNames');
+            const names = vi.spyOn(machineDisplayNames, 'resolveMachineDisplayNameParts');
+            let maxNameProjectionsPerRender = 0;
             const hook = await renderHook(() => {
                 const before = names.mock.calls.length;
                 const selection = useMachineAdministrationTargetSelection(selectionKey);
-                return { ...selection, nameProjections: names.mock.calls.length - before };
+                maxNameProjectionsPerRender = Math.max(maxNameProjectionsPerRender, names.mock.calls.length - before);
+                return selection;
             });
             try {
                 expect(hook.getCurrent().pickerRows).toHaveLength(2);
-                expect(hook.getCurrent().nameProjections).toBe(1);
+                expect(maxNameProjectionsPerRender).toBe(1);
                 expect(hook.getCurrent().candidates.every((candidate, index) => candidate === hook.getCurrent().pickerRows[index]?.candidate)).toBe(true);
                 expect(hook.getCurrent().selectedTarget).toBeNull();
                 expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
@@ -191,9 +193,22 @@ describe('machine administration target demand', () => {
             await act(async () => {
                 storage.setState({ machineListStatusByServerId: { [profile.id]: 'loading' } });
             });
+            expect(initialBinding.resolveExactExecutionTarget(targetA)?.machine.daemonStateVersion).toBe(2);
+            await act(async () => {
+                storage.setState({ machineListByServerId: { [profile.id]: [{
+                    ...machineA, daemonStateVersion: 2,
+                    keyBasis: { metadataVersion: machineA.metadataVersion + 1, daemonStateVersion: 2, dataEncryptionKey: machineA.dataEncryptionKey ?? null },
+                }, machineB] } });
+            });
             expect(initialBinding.resolveExactExecutionTarget(targetA)).toBeNull();
             await act(async () => {
-                storage.setState({ machineListStatusByServerId: { [profile.id]: 'idle' } });
+                storage.setState({
+                    machineListStatusByServerId: { [profile.id]: 'idle' },
+                    machineListByServerId: { [profile.id]: [{
+                        ...machineA, metadataVersion: machineA.metadataVersion + 1, daemonStateVersion: 2,
+                        keyBasis: { metadataVersion: machineA.metadataVersion + 1, daemonStateVersion: 2, dataEncryptionKey: machineA.dataEncryptionKey ?? null },
+                    }, machineB] },
+                });
             });
             expect(initialBinding.resolveExactExecutionTarget(targetA)?.machine.daemonStateVersion).toBe(2);
             await hook.rerender({ enabled: false });

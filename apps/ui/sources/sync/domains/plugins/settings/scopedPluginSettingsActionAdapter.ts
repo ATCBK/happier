@@ -135,7 +135,7 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
                 ...(bindingServerIdentityId !== undefined ? { bindingServerIdentityId } : {}),
                 ...(isSet ? { value: actionValue } : {}),
                 ...(input.mutation.kind === 'bind' ? { savedSecretId: input.mutation.savedSecretId } : {}),
-            }, input.target, lifetime, undefined, input.isCurrent);
+            }, input.target, lifetime, input.signal, input.isCurrent);
             if (!result.ok) return recordFailure(result.errorCode, result.details, input, lifetime);
             const receipt = PluginSettingsAdministrationActionOutputV1Schema.safeParse(result.result);
             if (!receipt.success || receipt.data.kind !== actionId) return { status: 'unavailable', reason: 'transport' };

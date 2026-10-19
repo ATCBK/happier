@@ -21,6 +21,7 @@ import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plu
 import { normalizePluginInstalledUiDeclarations, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
 import { projectPluginSkillDeclarationV1 } from '@happier-dev/protocol/plugins/contributions/skills';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import {
     areServerAccountScopesEqual,
@@ -545,6 +546,27 @@ export type PluginAccountAvailabilityStoredProjection = Readonly<{
 
 type AvailabilityProjectionState = PluginAccountAvailabilityStoredProjection;
 
+/** React observation only; bound reader methods always inspect the current owner state. */
+export function arePluginAvailabilityObservationsEqual(
+    previous: PluginAccountAvailabilityStoredProjection | null,
+    next: PluginAccountAvailabilityStoredProjection | null,
+    pluginId: string,
+): boolean {
+    if (previous === next) return true;
+    if (!previous || !next || !areServerAccountScopesEqual(previous.scope, next.scope)) return false;
+    return previous.snapshot.inventoryComplete === next.snapshot.inventoryComplete
+        && previous.stalePluginIds.includes(pluginId) === next.stalePluginIds.includes(pluginId)
+        && (previous.retiredPluginIds?.includes(pluginId) ?? false) === (next.retiredPluginIds?.includes(pluginId) ?? false)
+        && sameStrictJsonValue(previous.snapshot.intentReads.filter(row => row.pluginId === pluginId),
+            next.snapshot.intentReads.filter(row => row.pluginId === pluginId))
+        && sameStrictJsonValue(previous.snapshot.materializations.filter(row => row.pluginId === pluginId),
+            next.snapshot.materializations.filter(row => row.pluginId === pluginId))
+        && sameStrictJsonValue(previous.snapshot.releases?.filter(row => row.ref.pluginId === pluginId) ?? [],
+            next.snapshot.releases?.filter(row => row.ref.pluginId === pluginId) ?? [])
+        // Empty/replaced Machine reports still affect discovery and admission.
+        && sameStrictJsonValue(previous.snapshot.snapshots, next.snapshot.snapshots);
+}
+
 // The owner snapshots these rows immutably. Index their exact identities once
 // per snapshot: origin selection classifies every installation and must not
 // rescan the complete fleet for each one. Keep duplicate rows so ambiguity
@@ -802,6 +824,10 @@ function readInstalledPluginsAdmission(
                 enabled: materialization.enabled,
                 source: { kind: materialization.sourceClass, locator: materialization.materializationId },
                 ...(declaration?.executionTarget ? { executionTarget: declaration.executionTarget } : {}),
+                ...(declaration ? { declaredExecution: {
+                    daemonActions: declaration.contributes.actions?.some(action => action.execution?.target !== 'client') === true,
+                    contributionPoints: (declaration.contributes.pluginContributionPoints?.length ?? 0) > 0,
+                } } : {}),
             }, registrySources, skills);
         installations.push(Object.freeze({
             materialization,
@@ -1512,6 +1538,7 @@ function createBoundReader(input: Readonly<{
                 installedPackagesById: Object.freeze(Object.fromEntries(bundles.map(bundle => [bundle.pluginId, {
                     id: bundle.pluginId, displayName: bundle.displayName,
                     version: bundle.pluginVersion, enabled: true, source: { kind: 'bundled' as const, locator: bundle.packageName },
+                    ...(bundle.declaredExecution ? { declaredExecution: bundle.declaredExecution } : {}),
                 }]))),
             }) : null;
         },
