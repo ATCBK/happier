@@ -818,7 +818,7 @@ A list with
 `contextual: true` discovers current opaque command addresses; `contextualTarget:
 { commandId }` reads or changes that exact mounted choice. The current-UI
 command owner retires the address with its mount, target or Account lifetime.
-Within the same mount and entity, republishing an unchanged command retains its
+Within the same mount and unchanged entity descriptor, republishing an unchanged command retains its
 opaque address: title, description and the declared `executeAction` or
 `openSurface` payload must stay equal. Updating other context details does not
 retire that command. Changing its meaning or removing it retires the old address;

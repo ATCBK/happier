@@ -246,7 +246,7 @@ snapshot-scoped command id to context readers. It retains the command payload
 on the invoking client and resolves the id again against the current snapshot
 before any effect. Plugins do not generate or persist those ids.
 In 0.3 development source, an unchanged command keeps its address when the same
-mount republishes context for the same entity. Its title, description and
+mount republishes context with an unchanged entity descriptor. Its title, description and
 declared Action or surface payload must remain equal; changes to other context
 details do not retire it. Removing the command or changing its meaning retires
 the old address, as do mount, target and Account retirement. Always discover the
