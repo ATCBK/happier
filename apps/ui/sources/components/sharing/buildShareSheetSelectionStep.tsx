@@ -177,13 +177,17 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
 
     const sections: SelectionListSectionDescriptor[] = [];
     sections.push(...adapterSections.leading ?? []);
+    // While a query is typed the results are what the person is looking at: they lead, and who already has
+    // access follows them instead of pushing them below the fold.
+    const searching = !input.directoryKind && model.directory.query.trim().length > 0;
+    const roster: SelectionListSectionDescriptor[] = [];
     if (!input.directoryKind) {
         // Last-good rows stay while the owner cannot be reached, but must not read as the current answer.
-        sections.push({ kind: 'static', id: 'current',
+        roster.push({ kind: 'static', id: 'current',
             title: model.stale ? t('shareSheet.whoHasAccessStale') : t('shareSheet.whoHasAccess'), options: current });
-        sections.push(...adapterSections.afterAccess ?? []);
+        roster.push(...adapterSections.afterAccess ?? []);
         const publicLink = adapter.publicLink;
-        if (publicLink) sections.push({ kind: 'static', id: 'public-link', options: [{
+        if (publicLink) roster.push({ kind: 'static', id: 'public-link', options: [{
             id: 'public-link', testID: `${idPrefix}${ns}-public-link`, label: t('session.sharing.publicLink'),
             icon: () => <ShareHandoffIcon name="link" />,
             accessibilityLabel: `${t('session.sharing.publicLink')}, ${publicLink.stateLabel}`,
@@ -192,6 +196,7 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ...(publicLink.renderContent ? { expandedContentInset: 'row', expandedContent: () => publicLink.renderContent!(context) } : {}),
         }] });
     }
+    if (!searching) sections.push(...roster);
     const collapsedControls: SelectionListOption[] = [];
     if (model.editable) for (const kind of SHARE_DIRECTORY_KINDS) {
         if (input.directoryKind && input.directoryKind !== kind) continue;
@@ -227,6 +232,7 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             disableInputFilter: true, emptyStateLabel: t('common.noMatches'), sections };
     }
     sections.push(...adapterSections.trailing ?? []);
+    if (searching) sections.push(...roster);
 
     // Compact popovers disclose help; full and inline sheets show it directly in the body footer.
     if (input.presentation === 'compact' && (Object.values(adapter.levels).some(level => level.help) || adapter.notes?.length)) {
