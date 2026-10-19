@@ -15,7 +15,7 @@ import { resolveResourceGrantAccessFromFacts, resolveResourceGrantAudienceFromFa
     resolveResourceGrantAccessInTx, resolveResourceGrantAudienceInTx,
     type ResourceGrantAccess, projectResourceRecipientEnvelope as projectRecipientEnvelope,
     projectResourceRecipientCensus, validateResourceRecipientEnvelopeCommit, applyResourceRecipientKeyEnvelopesInTx,
-    mayManageResourceGrants, validateResourceGrantPrincipalInTx,
+    mayManageResourceGrants, validateResourceGrantPrincipalInTx, readResourceGrantPrincipalAudienceInTx,
     type ResourceStoredRecipientEnvelope, type ResourceRecipientEnvelopeStorageAdapter } from '@/app/teams/resourceGrantAccess';
 import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
@@ -70,20 +70,34 @@ function resolveArtifactAudienceFromFacts(row: ArtifactAccessFacts): string[] {
 
 /**
  * Fence the complete publication audience before reading mode, head or storage budget.
- * Account storage quotas require exclusive admission before any Artifact write.
+ * Account storage quotas require exclusive admission before byte-budget writes.
  * Other mutations preserve mode/currentness through compatible content admission.
  */
-export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: string, additionalAccountIds: readonly string[] = []): Promise<void> {
+export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: string, additionalAccountIds: readonly string[] = [], options: Readonly<{
+    intent?: "content" | "exclusive";
+    additionalGrantPrincipal?: ArtifactAccessGrantSetStorageInputV1["principal"];
+}> = {}): Promise<void> {
     // SQLite already admits one writer. PostgreSQL/MySQL use the same ordered
     // Account locks as publication, including the single-owner Artifact case.
     if (getDbProviderFromEnv(process.env, "postgres") === "sqlite") return;
-    const accountIds = [...new Set([...await resolveArtifactAudienceInTx(tx, artifactId), ...additionalAccountIds])];
+    const readAudience = async () => {
+        const audience = await resolveArtifactAudienceInTx(tx, artifactId);
+        if (options.additionalGrantPrincipal) {
+            const owner = await tx.artifact.findUnique({ where: { id: artifactId }, select: { accountId: true } });
+            if (owner) audience.push(...await readResourceGrantPrincipalAudienceInTx(tx, {
+                ownerAccountId: owner.accountId, principal: options.additionalGrantPrincipal,
+            }));
+        }
+        return [...new Set([...audience, ...additionalAccountIds])];
+    };
+    const accountIds = await readAudience();
     await acquireAccountChangePublicationLocksInTx(tx, accountIds, {
         includeSingleAccount: true,
-        intent: readArtifactStorageEnv(process.env).accountLimitBytes === null ? "content" : "exclusive",
+        intent: options.intent ?? (readArtifactStorageEnv(process.env).accountLimitBytes === null ? "content" : "exclusive"),
     });
-    // Header/body versions are independent, but head sequence, retained history
-    // and document storage admission consume one complete current head.
+    // Head/budget writes and grant/envelope mutations share the parent lock.
+    // Take it before child rows: physical deletion cascades to those rows and
+    // cleans AccountChange FKs, reversing a child-first publication's order.
     if (getDbProviderFromEnv(process.env, "postgres") === "postgres") {
         await tx.$queryRawUnsafe('SELECT "id" FROM "Artifact" WHERE "id" = $1 FOR NO KEY UPDATE', artifactId);
     } else {
@@ -92,7 +106,7 @@ export async function acquireArtifactPublicationLocksInTx(tx: Tx, artifactId: st
     const captured = new Set(accountIds);
     // ReadCommitted may observe a newly granted recipient while acquiring the
     // locks. Replay instead of extending an already ordered lock set in place.
-    if ((await resolveArtifactAudienceInTx(tx, artifactId)).some(accountId => !captured.has(accountId))) {
+    if ((await readAudience()).some(accountId => !captured.has(accountId))) {
         throw new TransactionReplayRequiredError("transaction-account-audience-changed");
     }
 }
@@ -484,6 +498,9 @@ export async function listArtifactAccessGrantsInTx(tx: Tx, input: Readonly<{
 
 /** Owner/admin idempotent grant writes; only the owner may assign admin. */
 export async function setArtifactAccessGrantInTx(tx: Tx, input: ArtifactAccessGrantSetStorageInputV1 & { actorAccountId: string }): Promise<AccessResult<ArtifactAccessGrantMutationResponseV1>> {
+    await acquireArtifactPublicationLocksInTx(tx, input.artifactId, [input.actorAccountId], {
+        intent: "content", additionalGrantPrincipal: input.principal,
+    });
     const access = await resolveArtifactAccessInTx(tx, input);
     if (!access) return { ok: false, error: "artifact_not_found" };
     if (!mayManageResourceGrants(access, input.accessLevel)) return { ok: false, error: "artifact_access_forbidden" };
@@ -517,6 +534,7 @@ export async function setArtifactAccessGrantInTx(tx: Tx, input: ArtifactAccessGr
 
 /** Revocation removes unreachable envelopes and reports success without a roster when the caller loses access. */
 export async function removeArtifactAccessGrantInTx(tx: Tx, input: ArtifactAccessGrantRemoveInputV1 & { actorAccountId: string }): Promise<AccessResult<ArtifactAccessGrantMutationResponseV1>> {
+    await acquireArtifactPublicationLocksInTx(tx, input.artifactId, [input.actorAccountId], { intent: "content" });
     const access = await resolveArtifactAccessInTx(tx, input);
     if (!access) return { ok: false, error: "artifact_not_found" };
     if (!mayManageResourceGrants(access)) return { ok: false, error: "artifact_access_forbidden" };
@@ -592,6 +610,7 @@ function projectArtifactRecipientCensus(artifactId: string, access: ArtifactAcce
 
 /** Commit opaque client-prepared tuples only while owner key, caller and recipient remain current. */
 export async function commitArtifactRecipientKeyEnvelopesInTx(tx: Tx, input: ArtifactRecipientKeyEnvelopeCommitInputV1 & { actorAccountId: string }): Promise<AccessResult<ArtifactRecipientKeyEnvelopeCommitResponseV1>> {
+    await acquireArtifactPublicationLocksInTx(tx, input.artifactId, [input.actorAccountId], { intent: "content" });
     const access = await resolveArtifactAccessInTx(tx, input);
     if (!access) return { ok: false, error: "artifact_not_found" };
     if (access.encryptionMode === "plain") return { ok: false, error: "data_key_not_required" };
