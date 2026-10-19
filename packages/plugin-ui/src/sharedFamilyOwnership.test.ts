@@ -101,7 +101,11 @@ const APPROVED_CATALOG_VOCABULARY = [
   // C3 DISC-13: the existing Discussion frame shared with external author threads.
   'ThreadMessage',
   'ReplyQuote',
+  // C2 U4: the answer another session returned to an Ask, shared by core and external authors.
+  'ReturnedAnswerQuote',
   'FollowPolicyEditor',
+  // C3/C4 R7: one host-mediated, controlled participant choice/search presentation.
+  'ExecutableParticipantPicker',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -2061,6 +2065,57 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no reply-quote node; source admission is caller-owned.' },
   },
+  {
+    publicName: 'ReturnedAnswerQuote',
+    propTypeName: 'ReturnedAnswerQuoteProps',
+    family: 'Returned answer quote',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/ReturnedAnswerQuote.tsx',
+    sharedSymbol: 'HappierReturnedAnswerQuote',
+    pluginOwner: { module: 'components/ReturnedAnswerQuote.tsx', symbol: 'ReturnedAnswerQuote' },
+    coreConsumers: ['components/sessions/transcript/returnedAnswer/ReturnedAnswerQuote.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/returnedAnswerQuoteSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no returned-answer node; answer admission and the question read are caller-owned.' },
+  },
+  {
+    publicName: 'ExecutableParticipantPicker',
+    propTypeName: 'ExecutableParticipantPickerProps',
+    family: 'Host-mediated executable participant picker',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    // Source core/author mounts are proven; public declaration and loaded-platform gates remain separate.
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentationHost/context.ts',
+    sharedSymbol: 'useOptionalPluginUiPresentationHost',
+    pluginOwner: { module: 'components/ExecutableParticipantPicker.tsx', symbol: 'ExecutableParticipantPicker' },
+    coreConsumers: ['components/sessions/authoring/ExecutableParticipantPickerModal.tsx'],
+    coreAdapter: { module: 'components/ExecutableParticipantPicker.tsx', symbol: 'ExecutableParticipantPicker' },
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/executableParticipantPickerSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: {
+      kind: 'not-applicable',
+      reason: 'V2 has no participant-picker node; native and RNW surfaces bind the same host SelectionList presenter, without inventory or setup authority.',
+    },
+    hostComposition: {
+      adapter: { module: 'components/plugins/surfaces/pluginUiPrivatePresentationHost.tsx', symbol: 'createPluginUiPrivatePresentationRenderers' },
+      physicalHost: {
+        module: 'components/sessions/authoring/ExecutableParticipantPickerPresentation.tsx',
+        symbol: 'ExecutableParticipantPickerPresentation',
+        callbackSymbol: 'renderExecutableParticipantPicker',
+      },
+    },
+  },
   // These five public adapters request the existing physical host. They do not duplicate its
   // presentation or lifecycle and are source-present, not loaded-platform graduated.
   ...[
@@ -2834,7 +2889,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       'NavigationList.Row',
       'DragSource', 'DropTarget',
       'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
     ]);
   });
 
