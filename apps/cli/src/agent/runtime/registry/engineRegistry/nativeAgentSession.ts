@@ -2450,6 +2450,7 @@ export function createNativeAgentSessionOperations(
         sessionId: expectedSessionId,
         ...(expectedProviderSessionId ? { expectedProviderSessionId } : {}),
     });
+    let lastProviderSessionEvent: Extract<AgentSessionRuntimeEvent, { kind: 'provider-session-id' }> | null = null;
     let deliveryOutcomeHandler: ((outcome: PluginRuntimePromptDeliveryOutcome) => void) | null = null;
     let providerNativeCommandNames = new Set<string>();
     const inputCorrelations = new Map<string, NativeInputCorrelation>();
@@ -2852,6 +2853,7 @@ export function createNativeAgentSessionOperations(
         }
         if (observation.status === 'ignored') return;
         const event = observation.event;
+        if (event.kind === 'provider-session-id') lastProviderSessionEvent = event;
         if (firstAssistantTextTiming
             && isForegroundTurnRuntimeTranscriptEvent(event)
             && event.turnId === firstAssistantTextTiming.turnId
@@ -3141,6 +3143,9 @@ export function createNativeAgentSessionOperations(
     };
     const createControlContext = (activity: 'active' | 'inactive'): AgentSessionControlContext => {
         if (!directFacets) throw new Error('Native Agent direct-facet context is unavailable');
+        // Controls can be the first demand after Resume. Observe the admitted
+        // native identity before reading it, just as prompt dispatch does.
+        ensureSubscription();
         const providerSessionId = invariant.read().providerSessionId ?? undefined;
         return createNativeAgentSessionControlContext({
             context: directFacets.context,
@@ -3764,12 +3769,19 @@ export function createNativeAgentSessionOperations(
         subscribeRuntimeEvents(handler) {
             if (disposeStarted) return () => undefined;
             const refreshCurrentSnapshot = listeners.size === 0 && subscription !== null;
+            const providerIdentity = refreshCurrentSnapshot ? lastProviderSessionEvent : null;
             listeners.add(handler);
             if (refreshCurrentSnapshot) {
                 subscription?.dispose();
                 subscription = null;
             }
             ensureSubscription();
+            // An earlier control may have demanded the initial identity with
+            // no transcript listener. Replay that accepted snapshot, without
+            // re-admitting it as a new native event or losing it on re-watch.
+            if (providerIdentity && providerIdentity === lastProviderSessionEvent) {
+                publishCanonicalEvent?.(providerIdentity);
+            }
             return () => listeners.delete(handler);
         },
         async sendTurnPrompt(prompt: string, meta?: RuntimeTurnPromptMeta): Promise<void> {

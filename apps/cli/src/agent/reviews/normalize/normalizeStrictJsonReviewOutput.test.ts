@@ -13,6 +13,8 @@ describe('normalizeStrictJsonReviewOutput', () => {
     ['\n## Heading only\n\n---', 'Review follow-up completed.'],
     ['The first paragraph wraps\nonto another line.\n\nThe next paragraph stays in the full answer.',
       'The first paragraph wraps onto another line.'],
+    ['## Authorization implications\n\nChanging `&&` to `||` means either matching check is sufficient for deletion.',
+      'Changing && to || means either matching check is sufficient for deletion.'],
   ])('summarizes substantive follow-up prose and preserves the full answer: %s', (answerMarkdown, summary) => {
     const result = normalizeStrictJsonReviewOutput({
       runId: 'review', callId: 'review-call', sidechainId: 'review-sidechain', backendId: 'installed-agent',

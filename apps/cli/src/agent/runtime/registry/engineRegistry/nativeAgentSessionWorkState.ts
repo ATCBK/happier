@@ -247,6 +247,11 @@ export function createNativeAgentSessionWorkStateService(params: Readonly<{
                     request: Parameters<WorkStatePublisher['publish']>[0],
                     options?: Parameters<WorkStatePublisher['publish']>[1],
                 ) {
+                    // Capture the producer before the publication queue severs
+                    // its stack. This contains no Goal content or credentials.
+                    const goalProducerStack = declaration.itemKinds.includes('goal')
+                        ? new Error('Goal source producer').stack
+                        : undefined;
                     let resolveResult!: (result: Awaited<ReturnType<WorkStatePublisher['publish']>>) => void;
                     const result = new Promise<Awaited<ReturnType<WorkStatePublisher['publish']>>>((resolve) => {
                         resolveResult = resolve;
@@ -309,6 +314,7 @@ export function createNativeAgentSessionWorkStateService(params: Readonly<{
                                 occurrenceId: params.occurrenceId,
                                 sourceSequence: request.sourceSequence,
                                 observedAtMs: request.observedAtMs,
+                                producerStack: goalProducerStack,
                                 goals: normalized.items.filter(item => item.kind === 'goal').map(item => ({
                                     id: item.id, status: item.status,
                                     tokenBudget: item.tokenBudget ?? null, updatedAt: item.updatedAt,

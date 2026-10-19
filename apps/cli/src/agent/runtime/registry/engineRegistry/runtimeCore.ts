@@ -631,14 +631,12 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 scope: options.scope,
                                 hasParentSessionCustody: host !== undefined && host !== null,
                                 agentExposesSessionRuntime: Boolean(nativeAgentRuntime.sessions),
+                                agentExposesDetachedConversation: typeof executionRunContextV1?.openConversation === 'function',
                                 sessionCapabilities: effectiveSessionCapabilities ?? null,
                                 intent: options.start?.intent ?? null,
                                 runClass: options.start?.runClass ?? null,
                                 retentionPolicy: options.start?.retentionPolicy ?? null,
                             });
-                        if (adapterSelection === 'retained_agent_conversation' && !executionRunContextV1?.openConversation) {
-                            throw createExecutionRunCodedError('execution_run_protocol_unsupported', 'Agent does not support retained detached conversations');
-                        }
                         const transformNativeAgentRequest = async (
                             payload: Readonly<Record<string, unknown>>,
                             transformOptions: Readonly<{ signal: AbortSignal }>,

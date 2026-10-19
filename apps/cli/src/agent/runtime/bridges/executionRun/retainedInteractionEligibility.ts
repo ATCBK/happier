@@ -25,6 +25,8 @@ export type ExecutionRunSessionAdapterInput = Readonly<{
     hasParentSessionCustody: boolean;
     /** True when the selected Agent runtime exposes a Session runtime at all. */
     agentExposesSessionRuntime: boolean;
+    /** The selected generation exposes the optional detached multi-turn facet. */
+    agentExposesDetachedConversation: boolean;
     /** The selected Agent generation's declared Session capabilities, if any. */
     sessionCapabilities: AgentSessionCapabilities | null;
     intent: string | null | undefined;
@@ -61,6 +63,9 @@ export function selectExecutionRunSessionAdapter(
         && capabilities.open.includes('create')
         && capabilities.delivery.includes('newTurn');
     if (!retainable) return 'finite_agent_session';
+    if (input.scope === 'detached' && !input.agentExposesDetachedConversation) {
+        return 'finite_agent_session';
+    }
     if (input.scope === 'session_owned' && !input.hasParentSessionCustody) {
         return 'finite_agent_session';
     }

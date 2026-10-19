@@ -17,6 +17,7 @@ function input(overrides: Partial<ExecutionRunSessionAdapterInput> = {}): Execut
         scope: 'session_owned',
         hasParentSessionCustody: true,
         agentExposesSessionRuntime: true,
+        agentExposesDetachedConversation: true,
         sessionCapabilities: sessionCapable,
         intent: 'delegate',
         runClass: 'long_lived',
@@ -71,6 +72,11 @@ describe('selectExecutionRunSessionAdapter', () => {
             'a detached run never consumes accidentally supplied parent custody',
             input({ scope: 'detached', hasParentSessionCustody: true }),
             'retained_agent_conversation',
+        ],
+        [
+            'a finite-only detached facet completes work without requiring a retained conversation',
+            input({ scope: 'detached', hasParentSessionCustody: false, agentExposesDetachedConversation: false }),
+            'finite_agent_session',
         ],
         [
             'an Agent without declared Session capabilities cannot be retained',
