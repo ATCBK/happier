@@ -311,7 +311,8 @@ export async function setOtherAccountFollow(input: Readonly<{
         const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: key }, select: FOLLOW_SELECT });
         if (existing && JSON.stringify(sourceFromAccountFollow(existing)) !== JSON.stringify(input.source))
             throw new Error('Account Follow Run source digest collision');
-        if (!existing && input.source.kind === 'execution_run') {
+        const reseed = !existing || !existing.following;
+        if (reseed && input.source.kind === 'execution_run') {
             const frontier = input.executionRunFrontier;
             if (!frontier || JSON.stringify(frontier.source) !== JSON.stringify(input.source)
                 || !await isExecutionRunFollowFrontierWitnessCurrentInTx(tx, frontier))
@@ -342,7 +343,7 @@ export async function setOtherAccountFollow(input: Readonly<{
                 following: true, hasPersistentFollow: true, notificationLevel,
                 includeInVoice: false, followPolicy },
             update: { following: true, hasPersistentFollow: true, notificationLevel,
-                includeInVoice: false, followPolicy, ...(existing ? {} : baseline) },
+                includeInVoice: false, followPolicy, ...(reseed ? baseline : {}) },
             select: FOLLOW_SELECT });
         if (JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(input.source))
             throw new Error('Account Follow Run source digest collision');

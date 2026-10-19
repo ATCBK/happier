@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SessionFollowActionInputSchemasV1 } from './actions.js';
 import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from './actionTransport.js';
+import { OtherSessionFollowSourceV1Schema } from './sessionFollowSourcesApi.js';
 
 describe('generic Follow sources', () => {
   const receiver = { kind: 'session' as const, sessionId: 'receiver' };
@@ -21,8 +22,8 @@ describe('generic Follow sources', () => {
     expect(request.method).toBe('PUT');
     expect(request.path).toContain('/follows/');
     expect(request.body).toMatchObject({ policy });
-    const relation = { source, destinationSessionId: receiver.sessionId, policy,
-      deliveryState: 'eligible', hasPendingUpdates: false, relation: 'follower' };
+    const relation = OtherSessionFollowSourceV1Schema.parse({ source, destinationSessionId: receiver.sessionId, policy,
+      deliveryState: 'eligible', sourceAvailability: 'available', hasPendingUpdates: false, relation: 'follower' });
     expect(parseSessionFollowActionResponse('follow.get', { receiver, source }, { source: relation }))
       .toEqual({ source: relation });
     expect(() => parseSessionFollowActionResponse('follow.get', { receiver, source },
