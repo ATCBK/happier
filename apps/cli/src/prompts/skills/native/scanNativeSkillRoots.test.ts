@@ -1,4 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
+import { constants, openSync, writeSync, closeSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +17,62 @@ async function createSkill(root: string, name: string) {
 }
 
 const homes: string[] = [];
-afterEach(async () => { for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true }); });
+const releaseReads: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const release of releaseReads.splice(0)) await release();
+  for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
+});
+it.skipIf(process.platform === 'win32')('reports a FIFO entry as unknown without blocking preparation or Found', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-native-fifo-')); homes.push(home);
+  const root = join(home, '.native');
+  const directory = join(root, 'blocked');
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, 'SKILL.md');
+  execFileSync('mkfifo', [path]);
+  // Release the old scanner's pending OS read after the runner reports RED.
+  // The bound belongs to Vitest; the product has no scan timer.
+  const nativeRoots = { user: [['.native']] };
+  const masking = scanNativeSkillRoots({ home, nativeRoots });
+  releaseReads.push(async () => {
+    const fd = openSync(path, constants.O_RDWR | constants.O_NONBLOCK);
+    try { writeSync(fd, 'Native fixture'); } finally { closeSync(fd); }
+    await masking;
+  });
+  expect(await masking).toEqual({ status: 'failed', roots: [root], names: [] });
+  const found = await scanNativeSkillRoots({ purpose: 'found', home, agents: [{ agentId: 'reader', nativeRoots }] });
+  expect(found).toEqual({ roots: [{ path: root, scope: 'user', agents: ['reader'], status: 'failed' }], items: [] });
+}, 1000);
+
+it('merges physical aliases and Agent coverage while retaining distinct copies and failed aliases', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-native-alias-')); homes.push(home);
+  const skill = await createSkill(join(home, '.claude', 'skills'), 'review');
+  await mkdir(join(home, '.agents'));
+  await symlink(join(home, '.claude', 'skills'), join(home, '.agents', 'skills'), process.platform === 'win32' ? 'junction' : 'dir');
+  const separate = await createSkill(join(home, '.separate'), 'review');
+  const failed = join(home, '.failed');
+  // A valid alias whose target is not a directory must remain a failed root.
+  const notDirectory = join(home, 'not-directory');
+  await writeFile(notDirectory, 'Not a directory');
+  await symlink(notDirectory, failed, process.platform === 'win32' ? 'junction' : undefined);
+  const found = await scanNativeSkillRoots({ purpose: 'found', home, agents: [
+    { agentId: 'first', nativeRoots: { user: [['.claude', 'skills']] } },
+    { agentId: 'second', nativeRoots: { user: [['.agents', 'skills'], ['.separate'], ['.failed']] } },
+  ] });
+  expect(found.items.map(item => ({ path: item.path, agents: item.agents }))).toEqual([
+    { path: skill, agents: ['first', 'second'] }, { path: separate, agents: ['second'] },
+  ]);
+  expect(found.roots).toContainEqual({ path: failed, scope: 'user', agents: ['second'], status: 'failed' });
+});
+
+it('retains failed-root uncertainty for an existing alias whose target is missing', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-native-broken-alias-')); homes.push(home);
+  const alias = join(home, '.native');
+  await symlink(join(home, 'missing'), alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const nativeRoots = { user: [['.native']] };
+  expect(await scanNativeSkillRoots({ home, nativeRoots })).toEqual({ status: 'failed', roots: [alias], names: [] });
+  const found = await scanNativeSkillRoots({ purpose: 'found', home, agents: [{ agentId: 'reader', nativeRoots }] });
+  expect(found).toEqual({ roots: [{ path: alias, scope: 'user', agents: ['reader'], status: 'failed' }], items: [] });
+});
 it('uses declared roots, walks only to the repository boundary and retains failed-root uncertainty', async () => {
   const home = await mkdtemp(join(tmpdir(), 'happier-native-scan-')); homes.push(home);
   const root = join(home, 'repo'), directory = join(root, 'nested');
@@ -131,4 +188,17 @@ it('selects the newest plugin version, confines plugin links and excludes plugin
   ]));
   const masking = await scanNativeSkillRoots({ home, nativeRoots });
   expect(masking).toEqual({ status: 'ok', names: [{ name: 'native', path: join(home, '.native', 'native', 'SKILL.md'), root: join(home, '.native') }] });
+});
+
+it('keeps plugin ownership distinct when a native root aliases its confined skill directory', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'happier-native-provenance-')); homes.push(home);
+  const pluginRoot = join(home, 'cache', 'fixture', 'skills');
+  await createSkill(pluginRoot, 'review');
+  await symlink(pluginRoot, join(home, '.native'), process.platform === 'win32' ? 'junction' : 'dir');
+  const found = await scanNativeSkillRoots({ purpose: 'found', home, agents: [{ agentId: 'reader', nativeRoots: {
+    user: [['.native']], plugin: [['cache', '{plugin}', 'skills']],
+  } }] });
+  expect(found.items.map(({ scope, pluginOwned }) => ({ scope, pluginOwned }))).toEqual([
+    { scope: 'user', pluginOwned: null }, { scope: 'plugin', pluginOwned: { pluginName: 'fixture' } },
+  ]);
 });

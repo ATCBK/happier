@@ -59,6 +59,18 @@ a per-skill deny. Gemini, Kilo, Cursor, Grok and Oh My Pi remain index-only unti
 their native probes pass. Native roots are read-only discovery inputs, not proof
 that an unprobed launch loads an injected directory.
 
+The Agent's optional `preflightSessionControls.resolveNativeSkillDirectories`
+projects extra launch directories from its exact non-secret Settings and runtime
+descriptor. Runner preparation, live reapply, Session-owned Runs and spawn
+previews scan those directories through the same declared project-root patterns.
+Claude uses its existing launch-settings resolver, including SDK
+`additionalDirectories`; an explicit unified-terminal descriptor supplies no
+SDK-only roots.
+Discovery reads only regular `SKILL.md` files. An unreadable or special entry
+retains failed-root uncertainty, so it cannot unmask a library skill. Found folds
+physical directory aliases and combines their Agent coverage, while retaining
+distinct copies, declared-root failures and plugin ownership/confinement.
+
 Declarative ACP Agents use the same lazy normalizer and one host ACP composer.
 The optional `skills.sessionDelivery` block selects `env_path_list`,
 `defaults_file_env`, or `native_config_skills_dir`; it accompanies a matching

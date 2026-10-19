@@ -15,7 +15,7 @@ import type { McpPluginItemV1 } from '@happier-dev/protocol/mcp/servers/settings
 import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import type { AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import type { SkillArtifactStore } from '@/prompts/skills/library/readSkillLibraryContent';
-import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
+import { resolveAgentSkillsCapability, resolveAgentNativeSkillDirectories } from '@/agent/skills/resolveAgentSkillsCapability';
 import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
 import { prepareSessionSkillPlan } from '@/prompts/skills/runtime/prepareSessionSkillPlan';
 import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
@@ -99,6 +99,7 @@ export async function resolveSessionMcpPreview(params: Readonly<{
   const warnings = (params.detectedWarnings ?? []).map(formatWarning).filter((value) => value.length > 0);
   const prepared = params.skillLibrary ? await prepareSessionSkillPlan({ ...params.skillLibrary, selected: managedSelection.skills,
     agentSkills, agentHasActionChannel: resolveAgentToolsDelivery(params.agentId) !== 'unsupported',
+    additionalProjectDirectories: await resolveAgentNativeSkillDirectories(params.agentId, { sessionMetadata: params.sessionMetadata, signal: params.signal }),
     directory: params.directory, home: params.home, signal: params.signal, assertCurrent }) : null;
   const plan = prepared?.plan ?? { plan: 'none' as const, items: [], nativeDisables: [], diagnostics: [] };
   const planItems = new Map(plan.items.map(item => [item.skillId, item]));

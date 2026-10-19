@@ -641,6 +641,13 @@ export type AgentPreflightSessionControlsModelsV1 = Readonly<{
  * enforcement, dispatch, and result projection.
  */
 export type AgentPreflightSessionControlsContributionV1 = Readonly<{
+  /** Extra launch directories whose project skill roots this Agent will load.
+   * The host scans them using the Agent's declared nativeRoots.project patterns.
+   */
+  resolveNativeSkillDirectories?: (input: Readonly<{
+    pluginSettings: AgentCliSessionCommandPluginSettingsV1;
+    runtimeDescriptorV1?: RuntimeDescriptorV1;
+  }>) => readonly string[] | Promise<readonly string[]>;
   /** Reuse the Agent's native account preparation for this exact operation.
    * Values stay private to launch preparation; catalog callbacks see presence facts only.
    * The host disposes prepared assets after native inspection, before retiring account custody.

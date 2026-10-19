@@ -18,6 +18,7 @@ export async function prepareSessionSkillPlan(input: Readonly<{
   agentSkills: PluginAgentSkillsCapabilityV2;
   agentHasActionChannel: boolean;
   directory: string | null;
+  additionalProjectDirectories?: readonly string[];
   home?: string;
   signal?: AbortSignal;
   assertCurrent: () => Promise<void>;
@@ -74,7 +75,8 @@ export async function prepareSessionSkillPlan(input: Readonly<{
     const item = { ...content.frontmatter, skillId: skill.skillId, description: content.frontmatter.description ?? '', digest: content.digest };
     items.push(item); contents.set(item.skillId, { item, body: content.body });
   }
-  const nativeSkills = await traceSkillPreparationPhase('native_scan', () => scanNativeSkillRoots({ nativeRoots: input.agentSkills.nativeRoots, directory: input.directory, home: input.home }));
+  const nativeSkills = await traceSkillPreparationPhase('native_scan', () => scanNativeSkillRoots({ nativeRoots: input.agentSkills.nativeRoots, directory: input.directory, home: input.home,
+    additionalProjectDirectories: input.additionalProjectDirectories }));
   await input.assertCurrent();
   const plan = resolveSessionSkillPlanV1({ items, selected: input.selected.items, excludeNativeSkillNames: input.selected.excludeNativeSkillNames,
     agentSkills: input.agentSkills, agentHasActionChannel: input.agentHasActionChannel, nativeSkills });

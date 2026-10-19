@@ -8,7 +8,7 @@ import type { StoredCredentials } from '@/persistence';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SkillArtifactStore } from '../library/readSkillLibraryContent';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
+import { resolveAgentSkillsCapability, resolveAgentNativeSkillDirectories } from '@/agent/skills/resolveAgentSkillsCapability';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
@@ -152,8 +152,12 @@ async function resolveRunnerSkillsForHome(input: ResolveRunnerSkillsInput, trans
     await current();
     reach = { context, rules };
     unavailableReason = 'skill_plan_unavailable';
+    const additionalProjectDirectories = await resolveAgentNativeSkillDirectories(input.agentId, {
+      catalog: input.contributes, sessionMetadata: input.sessionMetadata,
+    });
+    await current();
     const { plan, contents, nativeSkills } = await traceSkillPreparationPhase('plan', () => prepareSessionSkillPlan({ artifacts, selected, agentSkills, pluginSkills,
-      agentHasActionChannel: input.agentHasActionChannel, directory: input.directory, home: input.home, assertCurrent: current }));
+      agentHasActionChannel: input.agentHasActionChannel, directory: input.directory, additionalProjectDirectories, home: input.home, assertCurrent: current }));
     // Startup can deliver readable items, but a failed live read cannot withdraw the retained folder's content.
     if (input.lifecycle === 'reapply' && plan.items.some(item => item.reason === 'content_unreadable')) {
       return { reach, plan, indexItems: [], unavailable: true, unavailableReason: 'content_unreadable' };

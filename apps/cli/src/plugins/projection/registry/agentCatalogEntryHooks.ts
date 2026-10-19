@@ -954,6 +954,7 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
 }>): Pick<ResolvedCatalogEntry,
     | 'needsAccountSettingsForProbes'
     | 'preparePreflightLaunchEnvironment'
+    | 'resolveNativeSkillDirectories'
     | 'resolveProbePluginSettings'
     | 'resolveModelsProbeVariant'
     | 'resolveSessionControlsProbeVariant'
@@ -1267,6 +1268,14 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
         : Promise.resolve(null);
     return Object.freeze({
         ...(params.resolvePluginSettings ? { resolveProbePluginSettings: params.resolvePluginSettings } : {}),
+        ...(contribution.resolveNativeSkillDirectories ? { resolveNativeSkillDirectories: async (
+            input: Parameters<NonNullable<AgentPreflightSessionControlsContributionV1['resolveNativeSkillDirectories']>>[0],
+        ) => {
+            if (!params.isCurrent()) throw new Error('Agent native skill discovery belongs to a retired generation');
+            const directories = await contribution.resolveNativeSkillDirectories!(input);
+            if (!params.isCurrent()) throw new Error('Agent native skill discovery belongs to a retired generation');
+            return directories;
+        } } : {}),
         ...(contribution.prepareLaunchEnvironment ? { preparePreflightLaunchEnvironment: async (
             input: Parameters<NonNullable<AgentPreflightSessionControlsContributionV1['prepareLaunchEnvironment']>>[0],
         ) => {

@@ -1127,6 +1127,7 @@ function snapshotAgentPreflightSessionControlsContribution(
     }
     const snapshot: {
         prepareLaunchEnvironment?: AgentPreflightSessionControlsContributionV1['prepareLaunchEnvironment'];
+        resolveNativeSkillDirectories?: AgentPreflightSessionControlsContributionV1['resolveNativeSkillDirectories'];
         catalogs?: AgentPreflightSessionControlsContributionV1['catalogs'];
         probeCatalogs?: AgentPreflightSessionControlsContributionV1['probeCatalogs'];
         resolveProbeVariant?: AgentPreflightSessionControlsContributionV1['resolveProbeVariant'];
@@ -1211,6 +1212,7 @@ function snapshotAgentPreflightSessionControlsContribution(
     }
     for (const key of [
         'prepareLaunchEnvironment',
+        'resolveNativeSkillDirectories',
         'probeModels',
         'probeCatalogs',
         'probeModes',

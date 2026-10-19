@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { CLAUDE_PLUGIN } from '@happier-dev/plugins-claude/manifest';
+import { projectAgentPreflightSessionControlsCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
 import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { setImmediate } from 'node:timers/promises';
 import retained from '../../../../../../packages/protocol/fixtures/0.2-retained-skill-path.json';
@@ -71,6 +74,63 @@ async function fixture() {
   return { home, directory, input, artifacts, store, readIds };
 }
 describe('runner skill resolution', () => {
+  it('composes the registered Claude launch settings with masking and fails closed after registration retirement', async () => {
+    const f = await fixture();
+    const extra = join(f.home, 'extra');
+    const native = join(extra, '.claude', 'skills', 'sample');
+    await mkdir(native, { recursive: true });
+    await writeFile(join(native, 'SKILL.md'), '---\nname: sample\n---\nNative');
+    const plugin = await createPluginTestkit({ manifest: CLAUDE_PLUGIN.manifest, module: CLAUDE_PLUGIN });
+    onTestFinished(() => plugin.dispose());
+    const contribution = plugin.registration('agents', 'claude')?.preflightSessionControls;
+    expect(contribution).toBeDefined();
+    let current = true;
+    const projected = projectAgentPreflightSessionControlsCatalogEntry({ agentId: 'claude', preflightSessionControls: contribution!,
+      systemTools: [{ id: 'claude-cli', title: 'Claude', executableNames: ['claude'] }],
+      retirementSignal: new AbortController().signal, isCurrent: () => current,
+      resolvePluginSettings: async () => ({ account: { claudeRemoteAdvancedOptionsJson: JSON.stringify({ additionalDirectories: [extra] }) } }),
+    });
+    const input = { ...f.input, agentId: 'claude', contributes: { catalogEntriesById: { claude: {
+      ...f.input.contributes!.catalogEntriesById.test!, ...projected,
+      skills: { delivery: 'session_dir' as const, nativeDisable: 'supported' as const, liveReload: 'supported' as const,
+        nativeRoots: { project: [['.claude', 'skills']] } },
+    } } } };
+    const transports = { artifacts: f.artifacts, ensureSessionDir: (request: Parameters<typeof f.store.ensureSkillSessionDir>[0]) => f.store.ensureSkillSessionDir(request) };
+    const masked = await resolveRunnerSkills(input, transports);
+    expect(masked.plan.items).toContainEqual(expect.objectContaining({ skillId: 'library', state: 'masked_by_native' }));
+    const terminal = await resolveRunnerSkills({ ...input, sessionMetadata: { runtimeDescriptorV1: {
+      v: 1, agentId: 'claude', agent: { backendMode: 'unifiedTerminal' },
+    } } }, transports);
+    expect(terminal.delivery?.items).toContainEqual(expect.objectContaining({ skillId: 'library' }));
+    current = false;
+    const retired = await resolveRunnerSkills(input, transports);
+    expect(retired.unavailable).toBe(true);
+    expect(retired.delivery).toBeUndefined();
+  });
+  it('uses Agent-owned effective launch directories for native masking and disables', async () => {
+    const f = await fixture();
+    const extra = join(f.home, 'extra');
+    const native = join(extra, '.skills', 'sample');
+    await mkdir(native, { recursive: true });
+    await writeFile(join(native, 'SKILL.md'), '---\nname: sample\n---\nNative extra-directory skill');
+    const catalog = { catalogEntriesById: { test: {
+      skills: { delivery: 'session_dir' as const, nativeDisable: 'supported' as const, liveReload: 'supported' as const,
+        nativeRoots: { project: [['.skills']] } },
+      resolveProbePluginSettings: async () => ({ account: { extra } }),
+      resolveNativeSkillDirectories: ({ pluginSettings }: { pluginSettings: { account?: Readonly<Record<string, unknown>> } }) =>
+        [String(pluginSettings.account?.extra)],
+    } } };
+    const input = { ...f.input, contributes: catalog };
+    const result = await resolveRunnerSkills(input, { artifacts: f.artifacts,
+      ensureSessionDir: request => f.store.ensureSkillSessionDir(request) });
+    expect(result.plan.items).toContainEqual(expect.objectContaining({ skillId: 'library', state: 'masked_by_native', maskedBy: { path: join(native, 'SKILL.md') } }));
+    expect(result.delivery?.items).not.toContainEqual(expect.objectContaining({ skillId: 'library' }));
+    const disabled = await resolveRunnerSkills({ ...input, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: ['sample'],
+    } } }, { artifacts: f.artifacts, ensureSessionDir: request => f.store.ensureSkillSessionDir(request) });
+    expect(disabled.delivery?.nativeDisables).toEqual([{ name: 'sample', path: join(native, 'SKILL.md') }]);
+    expect(disabled.delivery?.items).toContainEqual(expect.objectContaining({ skillId: 'library' }));
+  });
   it('delivers readable skills beside unavailable plugin content that is not selected', async () => {
     const f = await fixture();
     const selected = resolveSessionCapabilitiesV1({ context: { machineId: 'machine', machinePlatform: 'posix', directory: f.directory,

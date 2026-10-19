@@ -1,6 +1,7 @@
 import { projectAgentCapabilitiesV2FromDefinition } from '@happier-dev/plugin-sdk/agents';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { AgentPreflightSessionControlsContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV,
   HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV,
@@ -21,6 +22,8 @@ import {
   resolveClaudeCliSessionOptions,
 } from './agent/cli/command.js';
 import { resolveClaudeSessionRuntimePreferences } from './agent/preferences/session.js';
+import { resolveClaudeNativeLaunchSettings } from './agent/runtime/launchSettings.js';
+import { readClaudeTerminalRuntimeSelection } from './agent/runtime/terminal/unified/selection.js';
 import { HAPPIER_CLAUDE_CONFIG_DIR_ENV } from './agent/environment.js';
 import {
   augmentClaudeDaemonSpawnEnv,
@@ -437,7 +440,18 @@ export const CLAUDE_PLUGIN = definePlugin({
         } },
       },
       factory: createClaudeAgentRuntime,
-      preflightSessionControls: { catalogs: CLAUDE_PREFLIGHT_CATALOGS },
+      preflightSessionControls: {
+        catalogs: CLAUDE_PREFLIGHT_CATALOGS,
+        async resolveNativeSkillDirectories({ pluginSettings, runtimeDescriptorV1 }: Parameters<NonNullable<AgentPreflightSessionControlsContributionV1['resolveNativeSkillDirectories']>>[0]) {
+          const values = pluginSettings.account ?? {};
+          const launch = await resolveClaudeNativeLaunchSettings({
+            settings: { get: key => values[key], snapshot: async () => ({ values }) },
+            launchEnv: {},
+            includeAdvancedOptions: readClaudeTerminalRuntimeSelection(runtimeDescriptorV1)?.mode !== 'unifiedTerminal',
+          });
+          return launch.settingSources.includes('project') ? launch.advancedOptions.additionalDirectories ?? [] : [];
+        },
+      },
       cliAuth: {
         async detectAuthStatus({ runDeclaredSystemToolCommand }) {
           // Claude Code 2.1.292 observes CLAUDE_CONFIG_DIR and native credential
