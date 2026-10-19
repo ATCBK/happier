@@ -18,7 +18,11 @@ export type AccountKvCipher = Readonly<{
 export class AccountKvCipherError extends Error {
   constructor(readonly code: 'account_stored_json_mode_mismatch' | 'account_kv_content_unreadable'
     | 'account_stored_json_encryption_material_unavailable') {
-    super(code);
+    super(code === 'account_stored_json_mode_mismatch'
+      ? 'Stored Account content does not match its authoritative encryption mode'
+      : code === 'account_stored_json_encryption_material_unavailable'
+        ? 'Account encryption material is unavailable for encrypted content'
+        : 'The encrypted Account KV record could not be opened');
     this.name = 'AccountKvCipherError';
   }
 }
