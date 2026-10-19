@@ -20,7 +20,7 @@ type Slot =
 
 /**
  * The visible sections in order, consecutive cards grouped into rows. Every other section is its own
- * slot keyed by its id. A card run belongs to the preceding non-card boundary, independently of
+ * slot keyed by its id. A card run belongs to the preceding non-card boundary (even when hidden), independently of
  * which cards are visible or first, so edits within a run preserve its unaffected children.
  */
 function buildSlots(sections: readonly HomeHubSection<WidgetCandidate>[]): Slot[] {
@@ -32,13 +32,12 @@ function buildSlots(sections: readonly HomeHubSection<WidgetCandidate>[]): Slot[
         run = [];
     };
     sections.forEach((section, index) => {
-        if (section.hidden) return;
         if (isHomeHubCardSection(section)) {
-            run.push({ section, index });
+            if (!section.hidden) run.push({ section, index });
             return;
         }
         flush();
-        slots.push({ kind: 'single', key: section.id, entry: { section, index } });
+        if (!section.hidden) slots.push({ kind: 'single', key: section.id, entry: { section, index } });
         runKey = `cards:after:${section.id}`;
     });
     flush();

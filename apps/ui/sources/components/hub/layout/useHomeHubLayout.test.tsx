@@ -44,6 +44,29 @@ function AccountShell({ children }: React.PropsWithChildren) {
 }
 
 describe('Home layout write feedback without Sections', () => {
+    it('withholds default placement until the first Account layout read settles', async () => {
+        const artifact = createHomeHubArtifactHttpBoundary('account-a');
+        artifact.seed({ v: 1, items: [], order: ['attention', 'automations', 'start'], hidden: ['setup'] });
+        const read = createDeferred<void>();
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://home-layout-hydration.test', accountId: 'account-a', request: async (url, init) => {
+            if (new URL(String(url)).pathname === `/v1/artifacts/${artifact.artifactId}`) await read.promise;
+            return artifact.request(url, init);
+        } });
+        const scope = { serverId: connection.home.id, accountId: 'account-a' };
+        storage.setState({ isDataReady: true, profileScope: scope, settingsScope: scope });
+        try {
+            const hook = await renderHook(useHomeHubLayout, { wrapper: AccountShell });
+            expect(hook.getCurrent().sections).toEqual([]);
+            expect(hook.getCurrent().order).toEqual([]);
+            expect(hook.getCurrent()).toMatchObject({ status: 'loading', hasSnapshot: false });
+            await act(async () => { read.resolve(); });
+            await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+            expect(hook.getCurrent()).toMatchObject({ hasSnapshot: true });
+            expect(hook.getCurrent().sections.filter(section => !section.hidden).map(section => section.id))
+                .toEqual(['attention', 'automations', 'start']);
+        } finally { read.resolve(); }
+    });
+
     it.each([false, true])('loads a fresh mount after Account activation without changing Profile scope (Session index ready: %s)', async isDataReady => {
         const artifact = createHomeHubArtifactHttpBoundary('account-a');
         artifact.seed({ v: 1, items: [], order: ['setup'], hidden: ['setup'] });

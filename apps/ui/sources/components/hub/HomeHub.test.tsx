@@ -311,6 +311,7 @@ function shownSections(text: string): string[] {
 describe('HomeHub', () => {
     it('reserves the phone sections while its acknowledged layout is unknown, then replaces the placeholder', async () => {
         settings.viewport = { width: 390, height: 900 };
+        settings.layout = { order: ['attention', 'automations', 'start'], hidden: ['setup'] };
         const read = createDeferred<void>();
         let pending = true;
         const screen = await renderHome(async (input, init) => {
@@ -318,14 +319,14 @@ describe('HomeHub', () => {
             return artifact.request(input, init);
         });
         try {
-            expect(screen.findByTestId('home-hub.layout.loading')).not.toBeNull();
-            // Only the composer holds its room in the hero (it always exists and leads by default), so
-            // nothing under it drops when the layout arrives; every other section waits for the layout.
-            expect(shownSections(screen.getTextContent()).filter(id => id !== 'start')).toEqual([]);
+            expect(screen.findByTestId('home-hub.loading')).not.toBeNull();
+            expect(screen.findByTestId('home-hero')).toBeNull();
+            expect(shownSections(screen.getTextContent())).toEqual([]);
             await act(async () => { pending = false; read.resolve(); });
             await flushHookEffects({ cycles: 20 });
             expect(screen.findByTestId('home-hub.layout.loading')).toBeNull();
-            expect(shownSections(screen.getTextContent()).length).toBeGreaterThan(0);
+            expect(shownSections(screen.getTextContent())).toEqual(['attention', 'automations', 'start']);
+            expect(holdsText(screen.findByTestId('home-hero')!, 'section:start')).toBe(false);
         } finally { read.resolve(); }
     });
     it('holds a quiet page while it is not known yet whether a machine can run a session', async () => {
