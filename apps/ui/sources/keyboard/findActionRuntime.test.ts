@@ -4,6 +4,20 @@ import { createFindSurfaceRegistry } from './findSurfaceRegistry';
 import { executeFindAction, registerFindActionRuntime } from './findActionRuntime';
 
 describe('mounted ui.find Action', () => {
+    it('reports refolding as unsupported on a surface without folding', async () => {
+        const registry = createFindSurfaceRegistry();
+        const release = registerFindActionRuntime(registry);
+        const controller: FindController = {
+            query: 'needle', options: { matchCase: false, regex: false }, status: { kind: 'idle' },
+            capabilities: { regex: true, stop: false }, setQuery() {}, setOptions() {}, step() {}, stop() {}, close() {},
+        };
+        registry.register({ surfaceId: 'file', controller, containsFocus: () => true,
+            open() {}, isOpen: () => true, isInputFocused: () => false });
+        try {
+            expect(await executeFindAction({ actionId: 'ui.find', input: { op: 'refold' }, context: { surface: 'agent' } }))
+                .toEqual({ ok: true, result: { status: 'unavailable', reason: 'unsupportedOperation' } });
+        } finally { release(); }
+    });
     it('addresses read, navigation, stop and close to the named surface even when another surface has focus', async () => {
         const registry = createFindSurfaceRegistry();
         const release = registerFindActionRuntime(registry);
