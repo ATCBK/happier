@@ -5,6 +5,7 @@ import {
   MACHINE_LIVE_STREAM_RELAY_AUTHORIZATION_AUDIENCE_V1,
   MachineLiveStreamWireFrameV1Schema as MachineLiveStreamFrameV1Schema,
   MachineLiveStreamRelayEnvelopeV1Schema,
+  MachineLiveStreamReceiptV1Schema,
   PEER_MEDIATION_RECEIPTS,
   createMachineLiveStreamRelayAuthorizationSigningInputV1,
   type MachineLiveStreamWireFrameV1 as MachineLiveStreamFrameV1,
@@ -1579,6 +1580,7 @@ describe('machineLiveStreamRelayHandler', () => {
     const emit = vi.fn();
     const to = vi.fn(() => ({ emit }));
     const socketEmit = vi.fn();
+    const observe = vi.fn();
     const socket = createFakeSocket({ emit: socketEmit, id: 'source-socket' });
     socket.data = {
       clientType: 'machine-scoped',
@@ -1597,6 +1599,7 @@ describe('machineLiveStreamRelayHandler', () => {
       relayWindowFrames: 1,
       relayWindowBytes: 1_000,
       nowMs: () => 1_000,
+      observability: { emit: observe },
     };
 
     machineLiveStreamRelayHandler('user-1', socket as unknown as LiveStreamRelaySocket, ctx);
@@ -1643,6 +1646,13 @@ describe('machineLiveStreamRelayHandler', () => {
         id: PEER_MEDIATION_RECEIPTS.streamBandwidthCapped,
       }) }),
     }));
+    const cappedReceipts = () => socketEmit.mock.calls.filter(([, raw]) => {
+      const envelope = MachineLiveStreamRelayEnvelopeV1Schema.parse(raw);
+      if (envelope.message.kind !== 'receipt') return false;
+      const receipt = MachineLiveStreamReceiptV1Schema.parse(envelope.message.receipt);
+      return receipt.id === PEER_MEDIATION_RECEIPTS.streamBandwidthCapped;
+    });
+    expect(cappedReceipts()).toHaveLength(1);
 
     // Recovery and a second loss happen at the same clock value, while the
     // first bandwidth diagnostic is still throttled. Recovery must not be.
@@ -1651,7 +1661,6 @@ describe('machineLiveStreamRelayHandler', () => {
       message: { kind: 'frame', frame: frame({ sequence: 5, payloadKind: 'image_keyframe', payloadSizeBytes: 3 }) },
     });
     emit.mockClear();
-    socketEmit.mockClear();
     for (const sequence of [6, 7, 8]) {
       await handler({
         v: 1, sourceMachineId: 'machine-source', targetMachineId: 'machine-target',
@@ -1663,11 +1672,21 @@ describe('machineLiveStreamRelayHandler', () => {
         kind: 'keyframe_required', reasonCode: 'relay_window_pressure',
       }) }),
     }));
-    expect(socketEmit).not.toHaveBeenCalledWith(MACHINE_LIVE_STREAM_SOCKET_EVENT, expect.objectContaining({
-      message: expect.objectContaining({ kind: 'receipt', receipt: expect.objectContaining({
-        id: PEER_MEDIATION_RECEIPTS.streamBandwidthCapped,
-      }) }),
+    expect(cappedReceipts()).toHaveLength(1);
+    // Close after both pressure losses: diagnostic throttling must not suppress
+    // the authoritative totals, including deltas rejected during resync.
+    await handler({
+      v: 1, sourceMachineId: 'machine-source', targetMachineId: 'machine-target',
+      message: { kind: 'control', control: { v: 1, streamId: 'stream_1', kind: 'stop', reasonCode: 'done' } },
+    });
+    expect(observe).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'flow.closed',
+      data: expect.objectContaining({
+        bytesIn: 24, bytesOut: 6,
+        bytesRelayed: 6, framesRelayed: 2, bytesDropped: 18, framesDropped: 6,
+      }),
     }));
+    expect(cappedReceipts()).toHaveLength(1);
   });
 
   it('requires a live-stream start before relaying frames', async () => {

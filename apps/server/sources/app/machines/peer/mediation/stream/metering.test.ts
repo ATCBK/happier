@@ -16,7 +16,7 @@ function relayFrame(sequence: number, payloadKind: 'image_delta' | 'image_keyfra
 }
 
 describe('applyMachineLiveStreamRelayBackpressure', () => {
-    it('drops oldest image deltas and returns bandwidth-capped metering without payloads', () => {
+    it.each([true, false])('returns drop facts independently of receipt admission (receipt=%s)', (capIntervalExceeded) => {
         const result = applyMachineLiveStreamRelayBackpressure({
             streamId: 'stream_1',
             routeKind: 'server_relay',
@@ -28,19 +28,21 @@ describe('applyMachineLiveStreamRelayBackpressure', () => {
             ],
             maxWindowFrames: 2,
             maxWindowBytes: 8,
-            capIntervalExceeded: true,
+            capIntervalExceeded,
         });
 
         expect(result.frames.map((frame) => [frame.sequence, frame.payloadKind])).toEqual([
             [1, 'image_keyframe'],
             [4, 'image_keyframe'],
         ]);
-        expect(result.receipt).toMatchObject({
+        expect(result).toMatchObject({ framesDropped: 2, bytesDropped: 8 });
+        if (capIntervalExceeded) expect(result.receipt).toMatchObject({
             id: 'peer.stream.bandwidth_capped',
             streamId: 'stream_1',
             framesDropped: 2,
             bytesDropped: 8,
         });
+        else expect(result.receipt).toBeNull();
         expect(JSON.stringify(result.receipt)).not.toContain('AQID');
     });
 });

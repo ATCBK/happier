@@ -573,10 +573,10 @@ function applyRelayWindowPressure(input: Readonly<{
         capIntervalExceeded,
     });
     input.state.queuedFrames = [...pressured.frames];
+    input.state.framesDropped += pressured.framesDropped;
+    input.state.bytesDropped += pressured.bytesDropped;
     if (pressured.receipt) {
         input.state.lastBandwidthCappedReceiptAtMs = input.nowMs;
-        input.state.framesDropped += pressured.receipt.framesDropped ?? 0;
-        input.state.bytesDropped += pressured.receipt.bytesDropped ?? 0;
         emitReceipt({
             socket: input.socket,
             envelope: input.envelope,
