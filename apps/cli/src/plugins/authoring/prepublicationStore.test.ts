@@ -36,20 +36,22 @@ describe('prepublication author store', () => {
       // Physical package distribution is the external boundary. The selector,
       // materializer, transient overrides and managed pnpm all execute for real.
       const manifests = [
-        { name: '@happier-dev/plugin-sdk' },
-        { name: '@happier-dev/plugin-ui', peerDependencies: { '@happier-dev/plugin-sdk': '>=0.0.0 <1.0.0' } },
-        { name: '@happier-dev/triage-sources', dependencies: { '@happier-dev/plugin-ui': '0.0.0' } },
-        { name: '@happier-dev/channels-protocol' },
+        { name: '@happier-dev/plugin-sdk', source: 'export const installed = true;\n' },
+        { name: '@happier-dev/plugin-ui', peerDependencies: { '@happier-dev/plugin-sdk': '>=0.0.0 <1.0.0' },
+          source: 'export { installed } from "@happier-dev/plugin-sdk";\n' },
+        { name: '@happier-dev/triage-sources', dependencies: { '@happier-dev/plugin-ui': '0.0.0' },
+          source: 'export { installed } from "@happier-dev/plugin-ui";\n' },
+        { name: '@happier-dev/channels-protocol', source: 'export const installed = true;\n' },
       ];
       const bundles = [];
-      for (const manifest of manifests) {
+      for (const { source, ...manifest } of manifests) {
         const srcDir = join(root, 'packages', ...manifest.name.split('/'));
         await mkdir(join(srcDir, 'dist'), { recursive: true });
         await writeFile(join(srcDir, 'package.json'), JSON.stringify({
           ...manifest, version: '0.0.0', type: 'module', main: 'dist/index.js', types: 'dist/index.d.ts',
           files: ['dist'], happier: { publicSdkRelease: { posture: 'developer_preview' } },
         }));
-        await writeFile(join(srcDir, 'dist/index.js'), 'export const installed = true;\n');
+        await writeFile(join(srcDir, 'dist/index.js'), source);
         await writeFile(join(srcDir, 'dist/index.d.ts'), 'export declare const installed: true;\n');
         bundles.push({ packageName: manifest.name, srcDir, destDir: join(root, 'unused', ...manifest.name.split('/')) });
       }
@@ -68,12 +70,11 @@ describe('prepublication author store', () => {
         },
       });
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
-      const sourcesRequire = createRequire(join(projectRoot, 'node_modules', '@happier-dev', 'triage-sources', 'package.json'));
-      const uiEntrypoint = sourcesRequire.resolve('@happier-dev/plugin-ui');
-      const uiRequire = createRequire(uiEntrypoint);
-      expect((await import(pathToFileURL(uiEntrypoint).href)).installed).toBe(true);
-      expect((await import(pathToFileURL(uiRequire.resolve('@happier-dev/plugin-sdk')).href)).installed).toBe(true);
-      expect(() => sourcesRequire.resolve('@happier-dev/channels-protocol')).toThrow();
+      const authorRequire = createRequire(join(projectRoot, 'package.json'));
+      // Follow Node's actual entrypoint resolution through pnpm's physical
+      // package graph, including the UI dependency and its SDK peer import.
+      expect((await import(pathToFileURL(authorRequire.resolve('@happier-dev/triage-sources')).href)).installed).toBe(true);
+      expect(() => authorRequire.resolve('@happier-dev/channels-protocol')).toThrow();
       await expect(lstat(join(projectRoot, 'pnpm-workspace.yaml'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -91,6 +91,7 @@ type DynamicResourceFixtureControl = {
     value: string;
     inputTypeActionInvocations?: number;
     observedAccountStorage?: boolean;
+    invalidate?: () => void;
     publish(next: string): void;
 };
 
@@ -106,6 +107,7 @@ async function seedFixture(options: Readonly<{
     inputType?: boolean;
     usageCoach?: boolean;
     admissionFailure?: string;
+    activationFailure?: boolean;
 }> = {}): Promise<Readonly<{ happyHomeDir: string; pluginRoot: string }>> {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-live-resources-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-live-resources-plugin-'));
@@ -169,6 +171,7 @@ async function seedFixture(options: Readonly<{
         })).code
         : `${options.admissionFailure ? "import { PluginError } from '@happier-dev/plugin-sdk';" : ''}
         export function activate(api) {
+        ${options.activationFailure ? "throw new Error('Resource fixture activation refused');" : ''}
         const usesAccountStorage = ${options.accountStorage === true ? 'true' : 'false'};
         const registersDynamicResource = ${options.registerDynamicProducer !== false ? 'true' : 'false'};
         const sessionScoped = ${options.sessionScoped === true ? 'true' : 'false'};
@@ -203,6 +206,7 @@ async function seedFixture(options: Readonly<{
                         : control.value;
                 },
                 observe: (invalidate, options) => {
+                    control.invalidate = invalidate;
                     control.observedAccountStorage = usesAccountStorage
                         ? options.accountStorage !== undefined
                         : undefined;
@@ -528,10 +532,14 @@ describe('executable plugin dynamic resource observation (EU-4b)', () => {
         }
     }, 60_000);
 
-    it('keeps a requested dynamic Resource declaration strict when its producer is missing', async () => {
-        const { happyHomeDir, pluginRoot } = await seedFixture({ registerDynamicProducer: false });
-
+    it.each([false, true])('isolates a missing dynamic producer at its plugin boundary while a healthy peer keeps serving (activation throws: %s)', async (activationFailure) => {
+        const { happyHomeDir, pluginRoot } = await seedFixture({ registerDynamicProducer: false, activationFailure });
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        let controller: ReturnType<typeof createPluginReloadController> | null = null;
+        let lease: Awaited<ReturnType<ReturnType<typeof createPluginReloadController>['acquireRuntimeRegistry']>> | null = null;
+        let peer: Awaited<ReturnType<typeof seedScopedDynamicResourcePeerFixture>> | null = null;
         try {
+            peer = await seedScopedDynamicResourcePeerFixture(happyHomeDir);
             const contributes = await resolveScopedDynamicResourceFixtureContributes(happyHomeDir);
             const generationAuthority = await readCurrentCommittedPluginGenerations(
                 resolvePluginStorePaths({ happyHomeDir }),
@@ -541,16 +549,53 @@ describe('executable plugin dynamic resource observation (EU-4b)', () => {
                 throw new Error('Expected committed dynamic Resource fixture generation');
             }
 
-            await expect(resolveExecutablePluginRuntimeRegistry({
-                happyHomeDir,
-                contributes,
-                generationAuthority,
-                pluginIds: [PLUGIN_ID],
+            controller = createPluginReloadController({
+                resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
+                    happyHomeDir,
+                    contributes,
+                    generationAuthority,
+                    pluginIds: [PLUGIN_ID, PEER_PLUGIN_ID],
+                }),
+            });
+            // This is the daemon's cold initialization/publication boundary.
+            // A plugin-local refusal must not reject its initialization task.
+            lease = await controller.acquireRuntimeRegistry();
+            runtime = lease.registry;
+            expect(controller.getState().activeRegistry).toBe(runtime);
+            expect(runtime.activatedPluginIds.has(PLUGIN_ID)).toBe(false);
+            expect(runtime.targetActivationFacts).toEqual(expect.arrayContaining([
+                expect.objectContaining({ pluginId: PLUGIN_ID, status: 'unavailable', bound: [] }),
+            ]));
+            expect(runtime.pluginDiagnosticsByPluginId[PLUGIN_ID]).not.toHaveLength(0);
+            if (activationFailure) {
+                expect(runtime.pluginDiagnosticsByPluginId[PLUGIN_ID]).toEqual(expect.arrayContaining([
+                    expect.objectContaining({ message: expect.stringContaining('Resource fixture activation refused') }),
+                ]));
+            }
+            await expect(runtime.readUiResource?.({
+                expectedCallerOccurrenceId: requirePluginOccurrenceId(runtime, PLUGIN_ID),
+                callerPluginId: PLUGIN_ID,
+                resourceId: 'live-status',
             })).rejects.toMatchObject({ code: 'plugin_resource_producer_unavailable' });
+            await expect(runtime.openUiResourceWatch?.({
+                expectedCallerOccurrenceId: requirePluginOccurrenceId(runtime, PLUGIN_ID),
+                callerPluginId: PLUGIN_ID,
+                subscriptionId: 'missing-producer',
+                resourceId: 'live-status',
+            })).rejects.toMatchObject({ code: 'plugin_resource_producer_unavailable' });
+            const resource = await runtime.readUiResource?.({
+                expectedCallerOccurrenceId: requirePluginOccurrenceId(runtime, PEER_PLUGIN_ID),
+                callerPluginId: PEER_PLUGIN_ID,
+                resourceId: PEER_RESOURCE_ID,
+            });
+            expect(new TextDecoder().decode(resource?.bytes)).toEqual(JSON.stringify({ producer: 'peer' }));
         } finally {
             delete globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__;
+            await lease?.release();
+            await controller?.shutdown();
             await rm(happyHomeDir, { recursive: true, force: true });
             await rm(pluginRoot, { recursive: true, force: true });
+            if (peer) await rm(peer.pluginRoot, { recursive: true, force: true });
         }
     }, 60_000);
 
@@ -891,7 +936,7 @@ describe('executable plugin dynamic resource observation (EU-4b)', () => {
         }
     }, 60_000);
 
-    it('releases a parked poll when its generation is superseded instead of holding it to the poll budget', async () => {
+    it('contains retired producer callbacks and releases a parked poll when its occurrence is superseded', async () => {
         // Generation replacement must converge, not go silent. The RPC handler
         // that parks this poll holds a runtime-registry lease for its whole
         // duration, so a superseded generation that does not fence its live
@@ -904,14 +949,18 @@ describe('executable plugin dynamic resource observation (EU-4b)', () => {
         let reloadController: ReturnType<typeof createPluginReloadController> | null = null;
         let firstLease: Awaited<ReturnType<ReturnType<typeof createPluginReloadController>['acquireRuntimeRegistry']>> | null = null;
         try {
-            firstRuntime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir });
+            const contributes = await resolveScopedDynamicResourceFixtureContributes(happyHomeDir);
+            firstRuntime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes });
             const expectedCallerOccurrenceId = requirePluginOccurrenceId(firstRuntime, PLUGIN_ID);
+            const retiredProducer = control();
             await firstRuntime.openUiResourceWatch?.({
                 expectedCallerOccurrenceId,
                 callerPluginId: PLUGIN_ID,
                 subscriptionId: 'surface-1',
                 resourceId: 'live-status',
             });
+            const invalidateRetiredProducer = retiredProducer.invalidate;
+            if (!invalidateRetiredProducer) throw new Error('Expected a live producer observation');
             reloadController = createPluginReloadController({
                 resolveRuntimeRegistry: async () => firstRuntime!,
             });
@@ -926,6 +975,7 @@ describe('executable plugin dynamic resource observation (EU-4b)', () => {
 
             secondRuntime = await resolveExecutablePluginRuntimeRegistry({
                 happyHomeDir,
+                contributes,
                 generation: 2,
                 stableEventsBroker: firstRuntime.stableEventsBroker,
             });
@@ -936,13 +986,33 @@ describe('executable plugin dynamic resource observation (EU-4b)', () => {
                 runningSessionDisposition: 'retainRunningSessions',
             });
 
+            expect(firstRuntime.readPluginOccurrenceId?.(PLUGIN_ID)).toBeNull();
+            // A native producer can retain an invalidation callback after its
+            // occurrence loses authority. It must not escape into the daemon
+            // or deliver bytes from that retired producer to its successor.
+            expect(() => retiredProducer.publish(JSON.stringify({ revision: 'retired' }))).not.toThrow();
+            expect(() => invalidateRetiredProducer()).not.toThrow();
+
             await expect(Promise.race([
                 polled,
                 new Promise((resolve) => { setTimeout(() => { resolve('still parked'); }, 2_000); }),
             ])).resolves.toMatchObject({
                 status: 'event',
-                event: { kind: 'error', code: 'stale_surface' },
+                event: { kind: 'error', code: 'stale_surface', diagnostics: ['plugin_generation_stale'] },
             });
+            await expect(firstRuntime.readUiResource?.({
+                expectedCallerOccurrenceId,
+                callerPluginId: PLUGIN_ID,
+                resourceId: 'live-status',
+            })).rejects.toMatchObject({ code: 'plugin_generation_stale' });
+            const currentOccurrenceId = requirePluginOccurrenceId(secondRuntime, PLUGIN_ID);
+            expect(currentOccurrenceId).not.toBe(expectedCallerOccurrenceId);
+            const current = await secondRuntime.readUiResource?.({
+                expectedCallerOccurrenceId: currentOccurrenceId,
+                callerPluginId: PLUGIN_ID,
+                resourceId: 'live-status',
+            });
+            expect(new TextDecoder().decode(current?.bytes)).toBe(JSON.stringify({ revision: 0 }));
         } finally {
             delete globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__;
             await firstLease?.release();
