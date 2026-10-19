@@ -118,4 +118,22 @@ describe('ValueRefRowsEditor', () => {
       API_KEY: { t: 'literal', v: 'sk-123' },
     });
   });
+  it('says what a declared input is under its one name, never repeating the name in a second line', async () => {
+    const { ValueRefRowsEditor } = await import('./ValueRefRowsEditor');
+    const screen = await renderScreen(
+      <ValueRefRowsEditor
+        kind="env"
+        declaredNames
+        entries={{ BRAVE_API_KEY: { t: 'literal', v: '' } }}
+        descriptions={{ BRAVE_API_KEY: 'Your API key from the Brave dashboard' }}
+        onChangeEntries={vi.fn()}
+        secrets={[]}
+        testIdPrefix="env"
+      />,
+    );
+    // The declared name carries zero-width break points after underscores.
+    const text = screen.getTextContent().replaceAll('\u200b', '');
+    expect(text).toContain('Your API key from the Brave dashboard');
+    expect(text.split('BRAVE_API_KEY').length - 1).toBe(1);
+  });
 });

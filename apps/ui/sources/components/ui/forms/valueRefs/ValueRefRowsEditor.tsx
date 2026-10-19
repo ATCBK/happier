@@ -120,6 +120,8 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
      * rows can't be removed or renamed, and no row is added. Only the values and their types are edited.
      */
     declaredNames?: boolean;
+    /** What each declared name is for, by name: a quiet line under that row, so the name is said once. */
+    descriptions?: Readonly<Record<string, string>>;
     /** Test ids: `<prefix>.row.<i>.{name,value,type,more}` and `<prefix>.add`. */
     testIdPrefix: string;
     /** Names whose value is missing (the banner's "Add key" lands here): drawn as the attention field. */
@@ -226,6 +228,7 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
             }
             scope={props.scope}
             declaredName={props.declaredNames === true}
+            description={props.descriptions?.[row.key]}
             onSubmit={(key, valueRef) =>
               editor.submitEntry(row.key, key, valueRef)
             }
@@ -235,15 +238,21 @@ export const ValueRefRowsEditor = React.memo(function ValueRefRowsEditor(
             onEditInModal={() => openRowModal(row.key, row.valueRef)}
           />
         ) : (
-          <Item
-            key={row.key}
-            testID={`${props.testIdPrefix}.row.${index}`}
-            title={row.key}
-            titleStyle={styles.mono}
-            subtitle={describe(row.valueRef)}
-            onPress={() => openRowModal(row.key, row.valueRef)}
-            showDivider={false}
-          />
+          <View key={row.key}>
+            <Item
+              testID={`${props.testIdPrefix}.row.${index}`}
+              title={row.key}
+              titleStyle={styles.mono}
+              subtitle={describe(row.valueRef)}
+              onPress={() => openRowModal(row.key, row.valueRef)}
+              showDivider={false}
+            />
+            {props.descriptions?.[row.key] ? (
+              <Text variant="meta" style={[styles.description, { color: theme.colors.text.secondary }]}>
+                {props.descriptions[row.key]}
+              </Text>
+            ) : null}
+          </View>
         ),
       )}
       {props.fixedRows?.map((row) => (
@@ -324,6 +333,8 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
     autoFocus?: boolean;
     /** The name is fixed text: no rename, no remove. */
     declaredName?: boolean;
+    /** What the declared name is for, quietly under the row. */
+    description?: string;
     onSubmit: (key: string, valueRef: ValueRefV1) => SubmitResult;
     onRemove: () => void;
     onEditInModal: () => void;
@@ -640,6 +651,11 @@ const ValueRefInlineRow = React.memo(function ValueRefInlineRow(
           />
         </View>
       </View>
+      {props.description ? (
+        <Text variant="meta" testID={`${props.testID}.description`} style={[styles.description, { color: theme.colors.text.secondary }]}>
+          {props.description}
+        </Text>
+      ) : null}
       {error ? (
         <Text
           variant="meta"
@@ -659,6 +675,9 @@ const styles = StyleSheet.create((theme) => ({
   },
   rowWrap: {
     gap: theme.space.s4,
+  },
+  description: {
+    paddingTop: theme.space.s2,
   },
   row: {
     flexDirection: 'row',

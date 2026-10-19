@@ -158,7 +158,12 @@ export function McpAddDetail(
     supported?.fields.filter((f) => f.presentation === 'header') ?? [];
   const textFields =
     supported?.fields.filter((f) => f.presentation === 'text') ?? [];
-  const described = supported?.fields.filter((f) => f.description) ?? [];
+  // A declared input says what it is for under its own name, once: env and header rows carry it, a text field
+  // carries it under its label.
+  const descriptionsOf = (fields: readonly McpAddField[]) =>
+    Object.fromEntries(
+      fields.flatMap((f) => (f.description ? [[f.key, f.description] as const] : [])),
+    );
   const hasSecret = supported?.fields.some((f) => f.secret) ?? false;
   const added = props.state?.status === 'added';
   const deprecated = props.row.flags?.deprecated === true;
@@ -295,6 +300,7 @@ export function McpAddDetail(
                     <ValueRefRowsEditor
                       kind="env"
                       declaredNames
+                      descriptions={descriptionsOf(envFields)}
                       entries={entriesOf(envFields, values)}
                       onChangeEntries={setGroup}
                       secrets={secrets}
@@ -306,6 +312,7 @@ export function McpAddDetail(
                     <ValueRefRowsEditor
                       kind="header"
                       declaredNames
+                      descriptions={descriptionsOf(headerFields)}
                       entries={entriesOf(headerFields, values)}
                       onChangeEntries={setGroup}
                       secrets={secrets}
@@ -321,15 +328,6 @@ export function McpAddDetail(
                       onChange={(value) => setValue(field.key, value)}
                       testID={`${props.testID}.field.${field.key}`}
                     />
-                  ))}
-                  {described.map((field) => (
-                    <Text
-                      key={field.key}
-                      variant="meta"
-                      style={{ color: theme.colors.text.secondary }}
-                    >
-                      {`${field.key} · ${field.description}`}
-                    </Text>
                   ))}
                   {hasSecret ? (
                     <View style={styles.hint}>
@@ -431,6 +429,11 @@ function TextField(
       <Text variant="label" style={{ color: theme.colors.text.primary }}>
         {props.field.key}
       </Text>
+      {props.field.description ? (
+        <Text variant="meta" style={{ color: theme.colors.text.secondary }}>
+          {props.field.description}
+        </Text>
+      ) : null}
       {props.field.choices ? (
         <ToolbarSelect
           testID={props.testID}
