@@ -38,6 +38,10 @@ export function createHomeSearchService(params: Readonly<{
             if (!parsed.success) {
                 return { v: 1, ok: false, errorCode: 'memory_invalid_query', error: 'Invalid Home search query' };
             }
+            if (parsed.data.scope.type === 'project') {
+                return { v: 1, ok: false, errorCode: 'memory_project_scope_unsupported',
+                    error: 'Project memory search requires a selected daemon.' };
+            }
             const currentCapability = capability();
             if (!currentCapability.enabled || !params.db) {
                 if (!isPlainHomeStoragePolicy(params.storagePolicy)) {
@@ -58,24 +62,25 @@ export function createHomeSearchService(params: Readonly<{
                 };
             }
             const db = params.db;
+            const scope = parsed.data.scope;
             try {
                 const eligibleSessionIdSet = parsed.data.eligibleSessionIds === undefined
                     ? undefined
                     : new Set(parsed.data.eligibleSessionIds);
-                if (context?.visibleSessions && parsed.data.scope.type === 'session'
-                    && !context.visibleSessions.some((constraint) => constraint.sessionId === parsed.data.scope.sessionId)) {
+                if (context?.visibleSessions && scope.type === 'session'
+                    && !context.visibleSessions.some((constraint) => constraint.sessionId === scope.sessionId)) {
                     return { v: 1, ok: true, hits: [] };
                 }
                 if (
                     eligibleSessionIdSet
-                    && parsed.data.scope.type === 'session'
-                    && !eligibleSessionIdSet.has(parsed.data.scope.sessionId)
+                    && scope.type === 'session'
+                    && !eligibleSessionIdSet.has(scope.sessionId)
                 ) {
                     return { v: 1, ok: true, hits: [] };
                 }
-                const scopedConstraints = parsed.data.scope.type === 'session'
+                const scopedConstraints = scope.type === 'session'
                     ? context?.visibleSessions
-                        ? context.visibleSessions.filter((constraint) => constraint.sessionId === parsed.data.scope.sessionId)
+                        ? context.visibleSessions.filter((constraint) => constraint.sessionId === scope.sessionId)
                         : undefined
                     : context?.visibleSessions
                         ?? (eligibleSessionIdSet

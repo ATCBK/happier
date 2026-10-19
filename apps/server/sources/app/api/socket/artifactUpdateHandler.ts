@@ -1,6 +1,6 @@
 import { websocketEventsCounter } from "@/app/monitoring/metrics/index";
 import { buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate, eventRouter } from "@/app/events/eventRouter";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { Socket } from "socket.io";
@@ -37,9 +37,7 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
                 return;
             }
 
-            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId }), {
-                isolationLevel: "Serializable" /* Artifact admission, mode/key and disclosed content span multiple rows. */,
-            });
+            const read = await inReadSnapshot(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId }));
             if (!read.ok) {
                 callback?.({ result: 'error', message: read.error === 'artifact_not_found' ? 'Artifact not found' : 'Internal error' });
                 return;
@@ -101,6 +99,11 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             websocketEventsCounter.inc({ event_type: 'artifact-update' });
 
             const { artifactId, header, body } = data;
+
+            if (Object.hasOwn(data, 'memoryDecisionSource')) {
+                callback?.({ result: 'error', error: 'memory_decision_source_unsupported' });
+                return;
+            }
 
             if ((data.provenance != null && typeof data.provenance !== 'string')
                 || (data.provenanceDataEncryptionKey != null && typeof data.provenanceDataEncryptionKey !== 'string')) {
@@ -233,6 +236,11 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
             websocketEventsCounter.inc({ event_type: 'artifact-create' });
 
             const { id, header, body, dataEncryptionKey } = data;
+
+            if (Object.hasOwn(data, 'memoryDecisionSource')) {
+                callback?.({ result: 'error', error: 'memory_decision_source_unsupported' });
+                return;
+            }
 
             if ((data.provenance != null && typeof data.provenance !== 'string')
                 || (data.provenanceDataEncryptionKey != null && typeof data.provenanceDataEncryptionKey !== 'string')) {

@@ -133,6 +133,11 @@ describe("Artifact document grants (real SQLite)", () => {
                     const response = await app.inject({ method: 'GET', url: detailUrl, headers });
                     expect(response.statusCode, response.body).toBe(200);
                     expect(response.json()).toMatchObject({ publicAudience: expected });
+                    const batch = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers,
+                        payload: { artifactIds: [artifact.id] } });
+                    expect(batch.statusCode, batch.body).toBe(200);
+                    expect(batch.json().items).toMatchObject([{ artifactId: artifact.id, ok: true,
+                        artifact: { publicAudience: expected } }]);
                 };
                 expect((await app.inject({ method: 'GET',
                     url: `/v1/public-shares?subjectKind=artifact&subjectId=${artifact.id}`, headers })).statusCode).toBe(404);

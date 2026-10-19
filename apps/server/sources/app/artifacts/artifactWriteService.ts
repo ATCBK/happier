@@ -1,11 +1,11 @@
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import * as privacyKit from 'privacy-kit';
 import { artifactConversionBlobKey, artifactConversionBlobCustody, type PreparedArtifactAccountEncryptionConversionBlob, type PreparedArtifactAccountEncryptionConversionBlobs } from './artifactEncryptionConversionBlobService';
 import { db } from '@/storage/db';
 import { deletePrivateFile } from '@/storage/blob/files';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
-import { prepareArtifactBlobWrite, admitArtifactBlobWriteInTx, completeArtifactBlobCandidateCustodyInTx, discardArtifactBlobCandidate, cleanupArtifactOrphanBlobs, cleanupRejectedArtifactBlobUploads, artifactBlobRejectedUploadReuseKey, type PreparedArtifactBlobWrite } from './artifactBlobService';
-import { markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { prepareArtifactBlobWrite, admitArtifactBlobWriteInTx, completeArtifactBlobCandidateCustodyInTx, discardArtifactBlobCandidate, cleanupArtifactOrphanBlobs, cleanupArtifactOrphanBlobsAfterCommit, cleanupRejectedArtifactBlobUploads, artifactBlobRejectedUploadReuseKey, type PreparedArtifactBlobWrite } from './artifactBlobService';
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -37,8 +37,11 @@ import {
     readArtifactForCallerInTx,
     resolveArtifactAccessInTx,
     resolveArtifactAudienceInTx,
+    acquireArtifactPublicationLocksInTx,
     applyArtifactRecipientKeyEnvelopesInTx,
 } from "./artifactAccessService";
+import { admitArtifactMemoryDecisionInTx, type ArtifactMemoryDecisionWriteContext, type MemoryDecisionAdmissionError } from './artifactMemoryDecisionAdmission';
+import { artifactContextStorageAdapter, newArtifactContextStorageAdapter } from './artifactContextInjection';
 
 type Cursor = number;
 
@@ -617,6 +620,7 @@ export type CreateArtifactResult =
         error:
             | "invalid-params"
             | "conflict"
+            | MemoryDecisionAdmissionError
             | "internal";
       };
 
@@ -643,7 +647,7 @@ export async function createArtifact(params: {
     provenance?: Uint8Array;
     provenanceDataEncryptionKey?: Uint8Array;
     blob?: ArtifactBlobWriteV1;
-}): Promise<CreateArtifactResult> {
+} & ArtifactMemoryDecisionWriteContext): Promise<CreateArtifactResult> {
     const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const artifactId = typeof params.artifactId === "string" ? params.artifactId : "";
     const header = params.header instanceof Uint8Array ? params.header : null;
@@ -670,8 +674,9 @@ export async function createArtifact(params: {
             dataEncryptionKey,
             provenance: params.provenance,
             provenanceDataEncryptionKey: params.provenanceDataEncryptionKey,
+            memoryDecisionSource: params.memoryDecisionSource, authentication: params.authentication,
             blob: params.blob, preparedBlob,
-        }), { /* Artifact storage budget and head sequence are read before distinct header/body writes. */ isolationLevel: "Serializable" });
+        }), { transactionClass: "artifact-create" });
         admitted = result.ok && result.didWrite;
         return result;
     } catch {
@@ -698,8 +703,9 @@ export async function createArtifactTx(
          * while composing its classification in this same transaction.
          */
         markChanged?: (artifactId: string) => Promise<Cursor>;
-    }
+    } & ArtifactMemoryDecisionWriteContext
 ): Promise<CreateArtifactResult> {
+    await acquireAccountChangePublicationLocksInTx(tx, [params.actorUserId], { includeSingleAccount: true });
     const account = await tx.account.findUnique({
         where: { id: params.actorUserId },
         select: {
@@ -762,6 +768,10 @@ export async function createArtifactTx(
             return { ok: false, error: "conflict" };
         }
 
+        const decisionFailure = await admitArtifactMemoryDecisionInTx(tx, { ...params, actorAccountId: params.actorUserId,
+            destinationAdapter: artifactContextStorageAdapter });
+        if (decisionFailure) return { ok: false, error: decisionFailure };
+
         const opened = openArtifactStoredContentPair({
             accountId: existing.accountId,
             artifactId: existing.id,
@@ -796,6 +806,11 @@ export async function createArtifactTx(
             },
         };
     }
+
+    const decisionFailure = await admitArtifactMemoryDecisionInTx(tx, { ...params, actorAccountId: params.actorUserId,
+        destinationAdapter: newArtifactContextStorageAdapter({ artifactId: params.artifactId, ownerAccountId: params.actorUserId,
+            encryptionMode: currentness.currentness.encryptionMode }) });
+    if (decisionFailure) return { ok: false, error: decisionFailure };
 
     if (
         !artifactStoredContentMatchesAccountMode({
@@ -929,6 +944,7 @@ export type UpdateArtifactResult =
             | "not-found"
             | "version-mismatch"
             | "artifact_binary_content_requires_explicit_update"
+            | MemoryDecisionAdmissionError
             | "internal";
         current?: {
             headerVersion: number;
@@ -946,7 +962,7 @@ export async function updateArtifact(params: {
     provenance?: Uint8Array;
     provenanceDataEncryptionKey?: Uint8Array;
     blob?: ArtifactBlobWriteV1 | null;
-}): Promise<UpdateArtifactResult> {
+} & ArtifactMemoryDecisionWriteContext): Promise<UpdateArtifactResult> {
     const actorUserId = typeof params.actorUserId === "string" ? params.actorUserId : "";
     const artifactId = typeof params.artifactId === "string" ? params.artifactId : "";
     const header = params.header;
@@ -970,7 +986,9 @@ export async function updateArtifact(params: {
     let preparedBlob: PreparedArtifactBlobWrite | undefined;
     let admitted = false;
     try {
-        const access = await inTx(tx => resolveArtifactAccessInTx(tx, { actorAccountId: actorUserId, artifactId }), { /* Artifact upload access and owner mode must share one admission capture. */ isolationLevel: "Serializable" });
+        const access = await inReadSnapshot(tx => resolveArtifactAccessInTx(tx, { actorAccountId: actorUserId, artifactId }), {
+            transactionClass: "artifact-update-admission",
+        });
         if (!access || access.level === 'view') return { ok: false, error: 'not-found' };
         await cleanupArtifactOrphanBlobs(artifactId);
         if (params.blob) {
@@ -987,10 +1005,11 @@ export async function updateArtifact(params: {
             body,
             provenance: params.provenance,
             provenanceDataEncryptionKey: params.provenanceDataEncryptionKey,
+            memoryDecisionSource: params.memoryDecisionSource, authentication: params.authentication,
             blob: params.blob, preparedBlob,
-        }), { /* Artifact storage budget and head sequence are read before distinct header/body writes. */ isolationLevel: "Serializable" });
+        }), { transactionClass: "artifact-update" });
         admitted = result.ok;
-        if (result.ok) await cleanupArtifactOrphanBlobs(artifactId);
+        if (result.ok) await cleanupArtifactOrphanBlobsAfterCommit(artifactId);
         return result;
     } catch {
         return { ok: false, error: "internal" };
@@ -1012,8 +1031,9 @@ export async function updateArtifactTx(
         blob?: ArtifactBlobWriteV1 | null;
         preparedBlob?: PreparedArtifactBlobWrite;
         restoredBlobId?: string | null;
-    },
+    } & ArtifactMemoryDecisionWriteContext,
 ): Promise<UpdateArtifactResult> {
+    await acquireArtifactPublicationLocksInTx(tx, params.artifactId);
     const access = await resolveArtifactAccessInTx(tx, {
         actorAccountId: params.actorUserId,
         artifactId: params.artifactId,
@@ -1065,6 +1085,10 @@ export async function updateArtifactTx(
     if (!current) {
         return { ok: false, error: "not-found" };
     }
+    if (params.memoryDecisionSource !== undefined && !params.body) return { ok: false, error: 'invalid-params' };
+    const decisionFailure = await admitArtifactMemoryDecisionInTx(tx, { ...params, actorAccountId: params.actorUserId,
+        destinationAdapter: artifactContextStorageAdapter });
+    if (decisionFailure) return { ok: false, error: decisionFailure };
     if ((params.provenance !== undefined || params.provenanceDataEncryptionKey !== undefined) && !params.body) return { ok: false, error: "invalid-params" };
 
     if (!artifactUpdateMatchesStoredMode({
@@ -1299,6 +1323,7 @@ export async function deleteArtifact(params: {
 
     try {
         const retirement = await inTx(async (tx) => {
+            await acquireArtifactPublicationLocksInTx(tx, artifactId, [actorUserId]);
             const artifact = await tx.artifact.findFirst({
                 where: {
                     id: artifactId,
@@ -1360,7 +1385,7 @@ export async function deleteArtifact(params: {
                 if (retired.count !== 1) throw new ArtifactDeleteVersionConflictError();
             }
             return { ok: true as const, cursor, deletedAt, artifact };
-        }, { /* Artifact retirement captures Account mode and recipient audience before publication. */ isolationLevel: "Serializable" });
+        }, { transactionClass: "artifact-delete" });
         if (!retirement.ok) return retirement;
         // Retired rows keep exact custody until every idempotent physical delete succeeds.
         for (const blob of retirement.artifact.blobs) {

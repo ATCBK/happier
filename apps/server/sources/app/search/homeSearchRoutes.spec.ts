@@ -114,6 +114,15 @@ describe('Home search route', () => {
                     ok: true,
                     hits: [expect.objectContaining({ sessionId: 'shared', seqFrom: 4, seqTo: 4 })],
                 });
+                const project = await app.inject({
+                    method: 'POST', url: '/v1/home/search',
+                    payload: { v: 1, query: 'needle', scope: {
+                        type: 'project', projectRef: { serverId: 'srv-home', projectKey: 'payments' },
+                    }, mode: 'auto' },
+                    headers: { 'x-test-user-id': 'reader' },
+                });
+                expect(project.json()).toMatchObject({ ok: false, errorCode: 'memory_project_scope_unsupported' });
+                expect(project.json()).not.toHaveProperty('hits');
             });
         } finally {
             index.close();

@@ -6,12 +6,21 @@ import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 import { log } from '@/utils/logging/log';
 import * as privacyKit from 'privacy-kit';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
 export type ArtifactHttpMutationResult = Awaited<ReturnType<typeof createArtifactHttpMutation | typeof updateArtifactHttpMutation>>;
-export type ArtifactCreateHttpInput = Readonly<{ id: string; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 }>;
-export type ArtifactUpdateHttpInput = Readonly<{ header?: string; expectedHeaderVersion?: number; body?: string; expectedBodyVersion?: number; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 | null }>;
+export type ArtifactCreateHttpInput = Readonly<{ id: string; header: string; body: string; dataEncryptionKey: string; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1; memoryDecisionSource?: CoordinationMessageRefV1 }>;
+export type ArtifactUpdateHttpInput = Readonly<{ header?: string; expectedHeaderVersion?: number; body?: string; expectedBodyVersion?: number; provenance?: string | null; provenanceDataEncryptionKey?: string | null; blob?: ArtifactBlobWriteV1 | null; memoryDecisionSource?: CoordinationMessageRefV1 }>;
 
-export async function createArtifactHttpMutation(userId: string, input: ArtifactCreateHttpInput) {
+function memoryDecisionHttpFailure(error: string) {
+    if (error === 'memory_decision_source_unavailable') return { statusCode: 404 as const, body: { error: 'memory_decision_source_unavailable' as const } };
+    if (error === 'memory_decision_source_unsupported') return { statusCode: 409 as const, body: { error: 'memory_decision_source_unsupported' as const } };
+    if (error === 'memory_decision_disclosure_denied') return { statusCode: 403 as const, body: { error: 'memory_decision_disclosure_denied' as const } };
+    return null;
+}
+
+export async function createArtifactHttpMutation(userId: string, input: ArtifactCreateHttpInput, authentication?: SessionAccessAuthentication) {
         const { id, header, body, dataEncryptionKey, blob } = input;
 
         try {
@@ -25,9 +34,12 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
                 provenance: input.provenance == null ? undefined : privacyKit.decodeBase64(input.provenance),
                 provenanceDataEncryptionKey: input.provenanceDataEncryptionKey == null ? undefined : privacyKit.decodeBase64(input.provenanceDataEncryptionKey),
                 blob,
+                memoryDecisionSource: input.memoryDecisionSource, authentication,
             });
 
             if (!result.ok) {
+                const decisionFailure = memoryDecisionHttpFailure(result.error);
+                if (decisionFailure) return decisionFailure;
                 if (result.error === 'quota_exceeded') return { statusCode: 413 as const, body: { error: result.error, budget: result.budget, limitBytes: result.limitBytes, usedBytes: result.usedBytes } };
                 if (result.error === 'invalid-params') {
                     return { statusCode: 400 as const, body: { error: 'Invalid parameters' as const } };
@@ -77,7 +89,7 @@ export async function createArtifactHttpMutation(userId: string, input: Artifact
         }
     }
 
-export async function updateArtifactHttpMutation(userId: string, artifactId: string, input: ArtifactUpdateHttpInput) {
+export async function updateArtifactHttpMutation(userId: string, artifactId: string, input: ArtifactUpdateHttpInput, authentication?: SessionAccessAuthentication) {
         const id = artifactId;
         const { header, expectedHeaderVersion, body, expectedBodyVersion, blob } = input;
 
@@ -108,9 +120,12 @@ export async function updateArtifactHttpMutation(userId: string, artifactId: str
                 provenance: input.provenance == null ? undefined : privacyKit.decodeBase64(input.provenance),
                 provenanceDataEncryptionKey: input.provenanceDataEncryptionKey == null ? undefined : privacyKit.decodeBase64(input.provenanceDataEncryptionKey),
                 blob,
+                memoryDecisionSource: input.memoryDecisionSource, authentication,
             });
 
             if (!result.ok) {
+                const decisionFailure = memoryDecisionHttpFailure(result.error);
+                if (decisionFailure) return decisionFailure;
                 if (result.error === 'artifact_binary_content_requires_explicit_update') {
                     return { statusCode: 409 as const, body: { error: result.error } };
                 }

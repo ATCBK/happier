@@ -1,10 +1,10 @@
 import { inTx, type Tx } from "@/storage/inTx";
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
-import { readArtifactForCallerInTx, readmitArtifactContentInTx } from "./artifactAccessService";
+import { acquireArtifactPublicationLocksInTx, readArtifactForCallerInTx, readmitArtifactContentInTx } from "./artifactAccessService";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { openArtifactStoredContentBytes, openArtifactProvenanceBytes } from "./artifactStoredContent";
 import { updateArtifactTx, type UpdateArtifactResult } from "./artifactWriteService";
-import { cleanupArtifactOrphanBlobs } from './artifactBlobService';
+import { cleanupArtifactOrphanBlobsAfterCommit } from './artifactBlobService';
 import { ArtifactBodyEnvelopeV1Schema, ArtifactBodyEnvelopeV1StoredSchema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -67,6 +67,7 @@ export async function restoreArtifactBodyRevision(input: Readonly<{
 }>): Promise<UpdateArtifactResult> {
     try {
         const result = await inTx<UpdateArtifactResult>(async tx => {
+            await acquireArtifactPublicationLocksInTx(tx, input.artifactId);
             const read = await readArtifactForCallerInTx(tx, { actorAccountId: input.actorUserId, artifactId: input.artifactId });
             if (!read.ok || read.artifact.access === "view") return { ok: false, error: "not-found" };
             const revision = await tx.artifactRevision.findUnique({ where: {
@@ -89,8 +90,8 @@ export async function restoreArtifactBodyRevision(input: Readonly<{
                 provenance: input.provenance, provenanceDataEncryptionKey: input.provenanceDataEncryptionKey,
                 header: { bytes: input.header, expectedVersion: input.expectedRevision.headerVersion },
                 body: { bytes: input.body ?? bytes, expectedVersion: input.expectedRevision.bodyVersion }, restoredBlobId: revision.blobId });
-        }, { /* Artifact restore shares the storage-budget and head-sequence invariant with writes. */ isolationLevel: "Serializable" });
-        if (result.ok) await cleanupArtifactOrphanBlobs(input.artifactId);
+        }, { transactionClass: "artifact-restore" });
+        if (result.ok) await cleanupArtifactOrphanBlobsAfterCommit(input.artifactId);
         return result;
     } catch {
         return { ok: false, error: "internal" };

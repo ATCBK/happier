@@ -1,8 +1,9 @@
 import { createArtifactHttpMutation, updateArtifactHttpMutation } from '@/app/artifacts/artifactMutationHttpResponse';
 import { registerArtifactUploadRoutes } from './registerArtifactUploadRoutes';
+import { registerArtifactEditProposalRoutes } from './artifactEditProposalRoutes';
 import { readArtifactAccountEncryptionMigrationInventoryInTx } from '@/app/artifacts/artifactAccountEncryptionMigrationInventory';
 import { eventRouter, buildNewArtifactUpdate, buildUpdateArtifactUpdate, buildDeleteArtifactUpdate } from "@/app/events/eventRouter";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import {
     commitArtifactRecipientKeyEnvelopesInTx,
     listArtifactAccessGrants,
@@ -17,7 +18,7 @@ import {
 import { ArtifactHttpReadV1Schema, ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema,
     type ArtifactReadBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { Fastify } from "../../types";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { log } from "@/utils/logging/log";
 import * as privacyKit from "privacy-kit";
@@ -34,6 +35,8 @@ import { ArtifactRevisionListResponseV1Schema, ArtifactStorageUsageV1Schema, Art
 import { ArtifactBlobWriteV1Schema, ArtifactBlobReadResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { ArtifactHtmlPreviewResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { ArtifactAccountEncryptionMigrationInventoryV1Schema } from '@happier-dev/protocol/artifacts/artifactAccountEncryptionMigrationV1';
+import { CoordinationMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
+import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 
 const DEFAULT_ARTIFACT_LIST_LIMIT = 500;
 
@@ -81,24 +84,25 @@ function parseArtifactListCursor(value: string | undefined): { updatedAt: Date; 
 }
 
 export function artifactsRoutes(app: Fastify) {
+    registerArtifactEditProposalRoutes(app);
     registerArtifactUploadRoutes(app);
     registerArtifactHtmlViewerRoutes(app);
     app.get('/v1/account/encryption/artifacts', {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'artifacts') },
-        schema: { querystring: z.object({ afterId: z.string().min(1).optional(),
-            limit: z.coerce.number().int().min(1).max(DEFAULT_ARTIFACT_LIST_LIMIT).optional() }).strict(),
+        schema: { querystring: z.strictObject({ afterId: z.optional(z.string().check(z.minLength(1))),
+            limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(DEFAULT_ARTIFACT_LIST_LIMIT))) }),
             response: { 200: ArtifactAccountEncryptionMigrationInventoryV1Schema,
-                503: z.object({ error: z.literal('artifact_content_unavailable') }).strict() } },
+                503: z.strictObject({ error: z.literal('artifact_content_unavailable') }) } },
     }, async (request, reply) => {
-        const inventory = await inTx(tx => readArtifactAccountEncryptionMigrationInventoryInTx({ tx, accountId: request.userId,
-            afterId: request.query.afterId, limit: request.query.limit ?? DEFAULT_ARTIFACT_LIST_LIMIT }), { /* Artifact mode, recipient keys and effective audience must remain coherent. */ isolationLevel: "Serializable", readOnly: true });
+        const inventory = await inReadSnapshot(tx => readArtifactAccountEncryptionMigrationInventoryInTx({ tx, accountId: request.userId,
+            afterId: request.query.afterId, limit: request.query.limit ?? DEFAULT_ARTIFACT_LIST_LIMIT }));
         return inventory ? reply.send(inventory) : reply.code(503).send({ error: 'artifact_content_unavailable' });
     });
     app.get('/v1/artifacts/:id/html-preview', {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'artifacts') },
-        schema: { params: z.object({ id: z.string().min(1) }).strict(), response: {
+        schema: { params: z.strictObject({ id: z.string().check(z.minLength(1)) }), response: {
             200: ArtifactHtmlPreviewResponseV1Schema,
             404: z.object({ error: z.literal('Artifact not found') }),
             503: z.object({ error: z.enum(['artifact_content_unavailable', 'artifact_html_isolation_unavailable']) }),
@@ -114,7 +118,7 @@ export function artifactsRoutes(app: Fastify) {
     app.get('/v1/artifacts/:id/blobs/:blobId', {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'artifacts') },
-        schema: { params: z.object({ id: z.string(), blobId: z.string().uuid() }), response: {
+        schema: { params: z.object({ id: z.string(), blobId: z.string().check(z.uuid()) }), response: {
             200: ArtifactBlobReadResponseV1Schema,
             404: z.object({ error: z.literal('Artifact not found') }),
             503: z.object({ error: z.literal('artifact_content_unavailable') }),
@@ -133,7 +137,7 @@ export function artifactsRoutes(app: Fastify) {
         schema: { response: { 200: ArtifactStorageUsageV1Schema,
             503: z.object({ error: z.literal('storage_size_out_of_range') }) } },
     }, async (request, reply) => {
-        try { return reply.send(await inTx(tx => readArtifactStorageUsageInTx(tx, request.userId), { readOnly: true })); }
+        try { return reply.send(await inReadSnapshot(tx => readArtifactStorageUsageInTx(tx, request.userId))); }
         catch (error) {
             if (error instanceof ArtifactStorageSizeUnavailableError) return reply.code(503).send({ error: error.code });
             throw error;
@@ -162,10 +166,10 @@ export function artifactsRoutes(app: Fastify) {
     app.post('/v1/artifacts/:id/revisions/:bodyVersion/restore', {
         preHandler: app.authenticate,
         schema: {
-            params: z.object({ id: z.string(), bodyVersion: z.coerce.number().int().min(1) }),
-            body: z.object({ header: z.string(), body: z.string().optional(),
-                provenance: z.string().nullable().optional(), provenanceDataEncryptionKey: z.string().nullable().optional(),
-                expectedHeaderVersion: z.number().int().min(1), expectedBodyVersion: z.number().int().min(1) }).strict(),
+            params: z.object({ id: z.string(), bodyVersion: z.coerce.number().check(z.int(), z.minimum(1)) }),
+            body: z.strictObject({ header: z.string(), body: z.optional(z.string()),
+                provenance: z.optional(z.nullable(z.string())), provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
+                expectedHeaderVersion: z.number().check(z.int(), z.minimum(1)), expectedBodyVersion: z.number().check(z.int(), z.minimum(1)) }),
             response: {
                 200: z.union([
                     z.object({ success: z.literal(true), headerVersion: z.number(), bodyVersion: z.number() }),
@@ -214,19 +218,19 @@ export function artifactsRoutes(app: Fastify) {
         },
         schema: {
             querystring: z.object({
-                limit: z.coerce.number().int().min(1).max(500).optional(),
-                cursor: z.string().min(1).optional(),
-                includeBody: z.literal('true').optional(),
+                limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500))),
+                cursor: z.optional(z.string().check(z.minLength(1))),
+                includeBody: z.optional(z.literal('true')),
             }),
             response: {
                 200: z.array(z.object({
                     id: z.string(),
                     header: z.string(),
                     headerVersion: z.number(),
-                    body: z.string().optional(),
+                    body: z.optional(z.string()),
                     bodyVersion: z.number(),
-                    provenance: z.string().nullable().optional(),
-                    provenanceDataEncryptionKey: z.string().nullable().optional(),
+                    provenance: z.optional(z.nullable(z.string())),
+                    provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
                     dataEncryptionKey: z.string(),
                     seq: z.number(),
                     createdAt: z.number(),
@@ -236,9 +240,6 @@ export function artifactsRoutes(app: Fastify) {
                     encryptionMode: ArtifactAccessRecipientCensusResponseV1Schema.shape.encryptionMode,
                 })),
                 400: z.object({ error: z.literal('Failed to get artifacts') }),
-                500: z.object({
-                    error: z.literal('Failed to get artifacts')
-                })
             }
         }
     }, async (request, reply) => {
@@ -248,69 +249,58 @@ export function artifactsRoutes(app: Fastify) {
         const cursor = parseArtifactListCursor(query.cursor);
         if (query.cursor && !cursor) return reply.code(400).send({ error: 'Failed to get artifacts' });
 
-        try {
-            const artifacts = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: listLimit, cursor,
-                includeBody: query.includeBody === 'true' });
+        const artifacts = await listArtifactHeadersForCaller({ actorAccountId: userId, limit: listLimit, cursor,
+            includeBody: query.includeBody === 'true' });
 
-            const projected = artifacts.map((artifact) => {
-                return {
-                    id: artifact.id,
-                    ownerAccountId: artifact.ownerAccountId,
-                    access: artifact.access,
-                    encryptionMode: artifact.encryptionMode,
-                    header: privacyKit.encodeBase64(artifact.header),
-                    headerVersion: artifact.headerVersion,
-                    ...(artifact.body === undefined ? {} : { body: privacyKit.encodeBase64(artifact.body) }),
-                    bodyVersion: artifact.bodyVersion,
-                    provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,
-                    provenanceDataEncryptionKey: artifact.provenanceDataEncryptionKey ? privacyKit.encodeBase64(artifact.provenanceDataEncryptionKey) : null,
-                    dataEncryptionKey: privacyKit.encodeBase64(artifact.dataEncryptionKey),
-                    seq: artifact.seq,
-                    createdAt: artifact.createdAt.getTime(),
-                    updatedAt: artifact.updatedAt.getTime(),
-                };
-            });
-            return reply.send(projected);
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to get artifacts: ${error}`);
-            return reply.code(500).send({ error: 'Failed to get artifacts' });
-        }
+        const projected = artifacts.map((artifact) => {
+            return {
+                id: artifact.id,
+                ownerAccountId: artifact.ownerAccountId,
+                access: artifact.access,
+                encryptionMode: artifact.encryptionMode,
+                header: privacyKit.encodeBase64(artifact.header),
+                headerVersion: artifact.headerVersion,
+                ...(artifact.body === undefined ? {} : { body: privacyKit.encodeBase64(artifact.body) }),
+                bodyVersion: artifact.bodyVersion,
+                provenance: artifact.provenance ? privacyKit.encodeBase64(artifact.provenance) : null,
+                provenanceDataEncryptionKey: artifact.provenanceDataEncryptionKey ? privacyKit.encodeBase64(artifact.provenanceDataEncryptionKey) : null,
+                dataEncryptionKey: privacyKit.encodeBase64(artifact.dataEncryptionKey),
+                seq: artifact.seq,
+                createdAt: artifact.createdAt.getTime(),
+                updatedAt: artifact.updatedAt.getTime(),
+            };
+        });
+        return reply.send(projected);
     });
 
     // Selected details and current recipient facts share a read-only capture.
     app.post('/v1/artifacts/read', {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'artifacts') },
-        schema: { body: ArtifactReadBatchInputV1Schema, response: { 200: ArtifactReadBatchResponseV1Schema,
-            500: z.object({ error: z.literal('artifact_content_unavailable') }).strict() } },
+        schema: { body: ArtifactReadBatchInputV1Schema, response: { 200: ArtifactReadBatchResponseV1Schema } },
     }, async (request, reply) => {
-        try {
-            const captured = await readArtifactBatchForCaller({ actorAccountId: request.userId, artifactIds: request.body.artifactIds });
-            const items = (() => {
-                const result: ArtifactReadBatchResponseV1['items'] = [];
-                for (const { artifactId, read, census } of captured) {
-                    if (!read.ok) {
-                        const refusal = projectArtifactHttpReadFailure(read, request.userId);
-                        result.push({ artifactId, ok: false, error: read.error, status: refusal.status, retryable: refusal.retryable });
-                        continue;
-                    }
-                    if (census && !census.ok) {
-                        // The incumbent recipient API rejects with a generic typed Error,
-                        // which the existing retry owner retries; preserve that classification.
-                        result.push({ artifactId, ok: false, error: census.error,
-                            status: artifactAccessHttpFailureStatus(census.error), retryable: true });
-                        continue;
-                    }
-                    result.push({ artifactId, ok: true, artifact: projectArtifactHttpRead(read.artifact),
-                        recipientCensus: census?.value ?? null });
+        const captured = await readArtifactBatchForCaller({ actorAccountId: request.userId, artifactIds: request.body.artifactIds });
+        const items = (() => {
+            const result: ArtifactReadBatchResponseV1['items'] = [];
+            for (const { artifactId, read, census } of captured) {
+                if (!read.ok) {
+                    const refusal = projectArtifactHttpReadFailure(read, request.userId);
+                    result.push({ artifactId, ok: false, error: read.error, status: refusal.status, retryable: refusal.retryable });
+                    continue;
                 }
-                return result;
-            })();
-            return reply.send({ items });
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to read Artifact details: ${error}`);
-            return reply.code(500).send({ error: 'artifact_content_unavailable' });
-        }
+                if (census && !census.ok) {
+                    // The incumbent recipient API rejects with a generic typed Error,
+                    // which the existing retry owner retries; preserve that classification.
+                    result.push({ artifactId, ok: false, error: census.error,
+                        status: artifactAccessHttpFailureStatus(census.error), retryable: true });
+                    continue;
+                }
+                result.push({ artifactId, ok: true, artifact: projectArtifactHttpRead(read.artifact),
+                    recipientCensus: census?.value ?? null });
+            }
+            return result;
+        })();
+        return reply.send({ items });
     });
 
     // GET /v1/artifacts/:id - Get single artifact with full body
@@ -338,21 +328,16 @@ export function artifactsRoutes(app: Fastify) {
         const userId = request.userId;
         const { id } = request.params;
 
-        try {
-            const read = await readArtifactForCaller({ actorAccountId: userId, artifactId: id });
-            if (!read.ok) {
-                const refusal = projectArtifactHttpReadFailure(read, userId);
-                return reply.code(refusal.status).send({ error: refusal.error });
-            }
-            return reply.send(projectArtifactHttpRead(read.artifact));
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to get artifact: ${error}`);
-            return reply.code(500).send({ error: 'Failed to get artifact' });
+        const read = await readArtifactForCaller({ actorAccountId: userId, artifactId: id });
+        if (!read.ok) {
+            const refusal = projectArtifactHttpReadFailure(read, userId);
+            return reply.code(refusal.status).send({ error: refusal.error });
         }
+        return reply.send(projectArtifactHttpRead(read.artifact));
     });
 
-    const accessParams = z.object({ id: z.string().min(1) }).strict();
-    const accessError = z.object({ error: ArtifactAccessErrorCodeV1Schema }).strict();
+    const accessParams = z.strictObject({ id: z.string().check(z.minLength(1)) });
+    const accessError = z.strictObject({ error: ArtifactAccessErrorCodeV1Schema });
     const accessErrors = { 400: accessError, 403: accessError, 404: accessError, 409: accessError };
     const accessErrorStatus = artifactAccessHttpFailureStatus;
     app.get('/v1/artifacts/:id/access/grants', {
@@ -398,18 +383,19 @@ export function artifactsRoutes(app: Fastify) {
     });
 
     // POST /v1/artifacts - Create new artifact
-    const registerCreateArtifactRoute = (url: string, requiresBlob: boolean) => app.post(url, {
+    const registerCreateArtifactRoute = (url: string, requiresBlob: boolean, requiresMemoryDecisionSource = false) => app.post(url, {
         preHandler: app.authenticate,
         schema: {
-            body: z.object({
-                id: z.string().uuid(),
+            body: z.strictObject({
+                id: z.string().check(z.uuid()),
                 header: z.string(),
                 body: z.string(),
                 dataEncryptionKey: z.string(),
                 blob: z.optional(ArtifactBlobWriteV1Schema),
-                provenance: z.string().nullable().optional(),
-                provenanceDataEncryptionKey: z.string().nullable().optional(),
-            }).strict().refine(value => requiresBlob ? value.blob !== undefined : value.blob === undefined),
+                memoryDecisionSource: requiresMemoryDecisionSource ? CoordinationMessageRefV1Schema : z.optional(z.never()),
+                provenance: z.optional(z.nullable(z.string())),
+                provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
+            }).check(z.refine(value => requiresBlob ? value.blob !== undefined : value.blob === undefined)),
             response: {
                 200: z.object({
                     id: z.string(),
@@ -417,8 +403,8 @@ export function artifactsRoutes(app: Fastify) {
                     headerVersion: z.number(),
                     body: z.string(),
                     bodyVersion: z.number(),
-                    provenance: z.string().nullable().optional(),
-                    provenanceDataEncryptionKey: z.string().nullable().optional(),
+                    provenance: z.optional(z.nullable(z.string())),
+                    provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
                     dataEncryptionKey: z.string(),
                     seq: z.number(),
                     createdAt: z.number(),
@@ -427,9 +413,9 @@ export function artifactsRoutes(app: Fastify) {
                     access: ArtifactCallerAccessV1Schema,
                     encryptionMode: ArtifactAccessRecipientCensusResponseV1Schema.shape.encryptionMode,
                 }),
-                409: z.object({
-                    error: z.literal('Artifact with this ID already exists for another account')
-                }),
+                403: z.object({ error: z.string() }),
+                404: z.object({ error: z.literal('memory_decision_source_unavailable') }),
+                409: z.object({ error: z.enum(['Artifact with this ID already exists for another account', 'memory_decision_source_unsupported']) }),
                 413: ArtifactQuotaExceededV1Schema,
                 400: z.object({
                     error: z.literal('Invalid parameters')
@@ -440,52 +426,54 @@ export function artifactsRoutes(app: Fastify) {
             }
         }
     }, async (request, reply) => {
-        const result = await createArtifactHttpMutation(request.userId, request.body);
+        const result = await createArtifactHttpMutation(request.userId, request.body,
+            request.body.memoryDecisionSource === undefined ? undefined : readSessionAccessAuthenticationFromRequest(request));
         return reply.code(result.statusCode).send(result.body);
     });
 
     registerCreateArtifactRoute('/v1/artifacts', false);
     registerCreateArtifactRoute('/v1/artifacts/content/binary', true);
+    registerCreateArtifactRoute('/v1/artifacts/memory-decision/create', false, true);
 
     // Both transports use the same canonical body-version mutation owner.
-    const registerUpdateArtifactRoute = (url: string, requiresBlob: boolean) => app.post(url, {
+    const registerUpdateArtifactRoute = (url: string, requiresBlob: boolean, requiresMemoryDecisionSource = false) => app.post(url, {
         preHandler: app.authenticate,
         schema: {
             params: z.object({
                 id: z.string()
             }),
-            body: z.object({
-                header: z.string().optional(),
-                expectedHeaderVersion: z.number().int().min(0).optional(),
-                body: z.string().optional(),
-                expectedBodyVersion: z.number().int().min(0).optional(),
-                provenance: z.string().nullable().optional(),
-                provenanceDataEncryptionKey: z.string().nullable().optional(),
+            body: z.strictObject({
+                header: z.optional(z.string()),
+                expectedHeaderVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
+                body: z.optional(z.string()),
+                expectedBodyVersion: z.optional(z.number().check(z.int(), z.minimum(0))),
+                provenance: z.optional(z.nullable(z.string())),
+                provenanceDataEncryptionKey: z.optional(z.nullable(z.string())),
                 blob: z.optional(z.nullable(ArtifactBlobWriteV1Schema)),
-            }).strict().refine(value => requiresBlob ? value.blob !== undefined : value.blob === undefined),
+                memoryDecisionSource: requiresMemoryDecisionSource ? CoordinationMessageRefV1Schema : z.optional(z.never()),
+            }).check(z.refine(value => requiresBlob ? value.blob !== undefined : value.blob === undefined)),
             response: {
                 200: z.union([
                     z.object({
                         success: z.literal(true),
-                        headerVersion: z.number().optional(),
-                        bodyVersion: z.number().optional()
+                        headerVersion: z.optional(z.number()),
+                        bodyVersion: z.optional(z.number())
                     }),
                     z.object({
                         success: z.literal(false),
                         error: z.literal('version-mismatch'),
-                        currentHeaderVersion: z.number().optional(),
-                        currentBodyVersion: z.number().optional(),
-                        currentHeader: z.string().optional(),
-                        currentBody: z.string().optional()
+                        currentHeaderVersion: z.optional(z.number()),
+                        currentBodyVersion: z.optional(z.number()),
+                        currentHeader: z.optional(z.string()),
+                        currentBody: z.optional(z.string())
                     })
                 ]),
                 400: z.object({
                     error: z.literal('Invalid parameters')
                 }),
-                404: z.object({
-                    error: z.literal('Artifact not found')
-                }),
-                409: z.object({ error: z.literal('artifact_binary_content_requires_explicit_update') }),
+                403: z.object({ error: z.string() }),
+                404: z.object({ error: z.enum(['Artifact not found', 'memory_decision_source_unavailable']) }),
+                409: z.object({ error: z.enum(['artifact_binary_content_requires_explicit_update', 'memory_decision_source_unsupported']) }),
                 413: ArtifactQuotaExceededV1Schema,
                 500: z.object({
                     error: z.literal('Failed to update artifact')
@@ -493,23 +481,25 @@ export function artifactsRoutes(app: Fastify) {
             }
         }
     }, async (request, reply) => {
-        const result = await updateArtifactHttpMutation(request.userId, request.params.id, request.body);
+        const result = await updateArtifactHttpMutation(request.userId, request.params.id, request.body,
+            request.body.memoryDecisionSource === undefined ? undefined : readSessionAccessAuthenticationFromRequest(request));
         return reply.code(result.statusCode).send(result.body);
     });
 
     registerUpdateArtifactRoute('/v1/artifacts/:id', false);
     registerUpdateArtifactRoute('/v1/artifacts/:id/content/binary', true);
+    registerUpdateArtifactRoute('/v1/artifacts/:id/memory-decision', false, true);
 
     // DELETE /v1/artifacts/:id - Delete artifact
     const registerDeleteArtifactRoute = (url: string, requiresRevision: boolean) => app.delete(url, {
         preHandler: app.authenticate,
         schema: {
-            params: z.object({
+            params: z.strictObject({
                 id: z.string(),
-                expectedHeaderVersion: z.coerce.number().int().nonnegative().optional(),
-                expectedBodyVersion: z.coerce.number().int().nonnegative().optional(),
-            }).strict().refine((params) => !requiresRevision
-                || (params.expectedHeaderVersion !== undefined && params.expectedBodyVersion !== undefined)),
+                expectedHeaderVersion: z.optional(z.coerce.number().check(z.int(), z.nonnegative())),
+                expectedBodyVersion: z.optional(z.coerce.number().check(z.int(), z.nonnegative())),
+            }).check(z.refine((params) => !requiresRevision
+                || (params.expectedHeaderVersion !== undefined && params.expectedBodyVersion !== undefined))),
             response: {
                 200: z.object({
                     success: z.literal(true)
