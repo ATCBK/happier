@@ -144,9 +144,10 @@ it('keeps typing local, commits one edit, and does not replay an uncertain edit'
   expect(saved).toHaveLength(1);
 });
 
-it('refuses editing when the admitted source has no edit role', async () => {
+it('offers no Edit task when the admitted source has no edit role', async () => {
   const { fixture, saved } = await mountEditor({ readOnly: true });
-  await act(async () => { await expect(fixture.press(await fixture.getByRole('button', { name: 'Edit task' }))).rejects.toMatchObject({ code: 'stale_surface' }); });
+  // A control that can never succeed is not drawn (a greyed "Edit task" on every read-only source's entry).
+  await expect(fixture.queryByRole('button', { name: 'Edit task' })).resolves.toBeUndefined();
   expect(document.querySelector('input[aria-label="Title"]')).toBeNull();
   expect(saved).toEqual([]);
 });
