@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -11,7 +11,7 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import * as uuidBoundary from '@/platform/randomUUID';
 import { type JsonValue, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, SessionListQueryResponseV1Schema, projectLegacySessionAccessCapabilitiesV1,
     SessionSystemRecordStoredSchema, tryWriteServerEnabledBitInPlace, decodePlainArtifactStoredContent, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
-import { readBuiltinWidgetDescriptorV1, resolveConfiguredWidgetInputs, WidgetInstanceActionOutputSchemasV1, type WidgetInputBindingsV1 } from '@happier-dev/protocol/widgets';
+import { readBuiltinWidgetDescriptorV1, resolveConfiguredWidgetInputs, WidgetInstanceActionOutputSchemasV1, type WidgetInputBindingsV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -267,12 +267,18 @@ describe('Session widget placement through the destination setup', () => {
         storage.getState().applySettingsForScope(settingsScope, settings, 2);
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 2 } });
         const { View, Pressable } = await import('react-native');
+        let showLibrary: (copy: WidgetInstanceV1) => void = () => { throw new Error('Expected a mounted source'); };
         function Card() {
-            const flows = useWidgetDefinitionFlows({ instance: input.declarative ? null : instance, scope: { ...account, owner: { kind: 'sessionBoard', sessionId } },
+            const [library, setLibrary] = React.useState<WidgetInstanceV1 | null>(null);
+            showLibrary = setLibrary;
+            const flows = useWidgetDefinitionFlows({ instance: library ?? (input.declarative ? null : instance),
+                scope: library ? { ...storage.getState().profileScope!, owner: { kind: 'home' } }
+                    : { ...account, owner: { kind: 'sessionBoard', sessionId } },
                 providedContext: { session: [{ serverId, sessionId }], projects: [['source-project']] },
                 sessionItem: { itemId: instance.id, title: 'Source widget', savable: true, canEdit: true, converted: [], sourceLabel: 'Source widget' },
                 anchorRef: React.useRef(null), testID: 'placement' });
-            return <View><Pressable testID="openAdd" onPress={flows.addTo} /><Pressable testID="openSave" onPress={flows.saveAsYours} />{flows.panel}</View>;
+            return <View><Pressable testID="openAdd" onPress={flows.addTo} /><Pressable testID="openSave" onPress={flows.saveAsYours} />
+                <Pressable testID="openAbout" onPress={flows.about} />{flows.panel}</View>;
         }
         const screen = await renderScreen(<InjectedAuthProvider credentials={connected.credentials}><Card /></InjectedAuthProvider>);
         const savedDefinitions = () => harness.artifacts(serverId).list().filter(row => Reflect.get(decodePlainArtifactStoredContent(row.header) as object, 'kind') === 'widget-definition.v1');
@@ -313,7 +319,11 @@ describe('Session widget placement through the destination setup', () => {
             await vi.waitFor(() => expect(screen.tree.root.findAllByType(WidgetSetupStep), screen.getTextContent()).toHaveLength(1), { timeout: 8000 });
             return screen.tree.root.findByType(WidgetSetupStep).props.setup;
         };
-        return { account, sessionId, screen, placeAt, saveTo, savedDefinitions, copies, credentials: connected.credentials, disconnect: connected.disconnect };
+        const openAbout = async (copy: WidgetInstanceV1) => {
+            await act(async () => { showLibrary(copy); });
+            await screen.pressByTestIdAsync('openAbout');
+        };
+        return { account, sessionId, screen, placeAt, saveTo, savedDefinitions, copies, openAbout, disconnect: connected.disconnect };
     }
 
     const sessionValue = (sessionId: string, serverId: string): WidgetInputBindingsV1 => ({ session: { kind: 'value', value: { serverId, sessionId } } });
@@ -338,7 +348,7 @@ describe('Session widget placement through the destination setup', () => {
             if (via === 'save') {
                 await home.screen.pressByTestIdAsync('openSave');
                 await home.screen.pressByTestIdAsync('placement.save.primary');
-                await vi.waitFor(() => expect(home.screen.getTextContent()).toContain(t('widgetDefinition.saveFailed')));
+                await waitForHomeGovernance(() => expect(home.screen.getTextContent()).toContain(t('widgetDefinition.saveFailed')));
             } else {
                 setup = await home.placeAt('addTo');
                 let first: unknown;
@@ -401,20 +411,12 @@ describe('Session widget placement through the destination setup', () => {
     it('Duplicate resumes its unknown definition and allocates a new identity only for the next intentional copy', async () => {
         const home = await openSessionHome({ key: 'lost-duplicate', builtinId: 'session_summary',
             bindings: { session: { kind: 'context', slot: 'session' } } });
-        let aboutScreen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         try {
             await home.saveTo();
             const instance = (await home.copies()).find(copy => copy.definition.kind === 'artifact');
             if (!instance) throw new Error('Expected the saved placement');
-            const { View, Pressable } = await import('react-native');
-            function Card() {
-                const flows = useWidgetDefinitionFlows({ instance: instance!, scope: { ...home.account, owner: { kind: 'home' } },
-                    anchorRef: React.useRef(null), testID: 'library' });
-                return <View><Pressable testID="openAbout" onPress={flows.about} />{flows.panel}</View>;
-            }
-            aboutScreen = await renderScreen(<InjectedAuthProvider credentials={home.credentials}><Card /></InjectedAuthProvider>);
-            await aboutScreen.pressByTestIdAsync('openAbout');
-            await vi.waitFor(() => expect(aboutScreen!.findByTestId('library.about.duplicate')).not.toBeNull(), { timeout: 8000 });
+            await home.openAbout(instance);
+            await waitForHomeGovernance(() => expect(home.screen.findByTestId('placement.about.duplicate'), home.screen.getTextContent()).not.toBeNull());
             const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
             let readsUnavailable = false;
             setRuntimeFetch((input, init) => {
@@ -427,16 +429,16 @@ describe('Session widget placement through the destination setup', () => {
                 readsUnavailable = true;
                 throw new TypeError('Connection lost after duplicate commit');
             });
-            await aboutScreen.pressByTestIdAsync('library.about.duplicate');
-            await vi.waitFor(() => expect(aboutScreen!.getTextContent()).toContain(t('widgetDefinition.duplicateFailed')));
+            await home.screen.pressByTestIdAsync('placement.about.duplicate');
+            await waitForHomeGovernance(() => expect(home.screen.getTextContent()).toContain(t('widgetDefinition.duplicateFailed')));
             expect(home.savedDefinitions()).toHaveLength(2);
             readsUnavailable = false;
-            await aboutScreen.pressByTestIdAsync('library.about.duplicate');
-            await vi.waitFor(() => expect(aboutScreen!.getTextContent()).not.toContain(t('widgetDefinition.duplicateFailed')));
+            await home.screen.pressByTestIdAsync('placement.about.duplicate');
+            await waitForHomeGovernance(() => expect(home.screen.getTextContent()).toContain(t('widgetDefinition.duplicated', { name: 'Source widget' })));
             expect(home.savedDefinitions()).toHaveLength(2);
-            await aboutScreen.pressByTestIdAsync('library.about.duplicate');
+            await home.screen.pressByTestIdAsync('placement.about.duplicate');
             await vi.waitFor(() => expect(home.savedDefinitions()).toHaveLength(3));
-        } finally { await aboutScreen?.unmount(); await home.screen.unmount(); await home.disconnect(); }
+        } finally { await home.screen.unmount(); await home.disconnect(); }
     });
 
     it.each([

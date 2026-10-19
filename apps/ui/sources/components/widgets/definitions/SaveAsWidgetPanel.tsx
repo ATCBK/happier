@@ -23,8 +23,8 @@ import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { useSessionMetadata } from '@/sync/store/hooks';
 import { t } from '@/text';
 
-import { runWidgetDefinitionCommand } from './widgetDefinitionCommands';
-import { buildWidgetCopySetup, placeWidgetCopyWhenReady, useWidgetCopyTarget } from './WidgetCopyPanel';
+import { createWidgetArtifactWriteAttempt } from './widgetDefinitionCommands';
+import { buildWidgetCopySetup, placeWidgetCopyWhenReady, useWidgetCopyTarget, type WidgetCopyAttempt } from './WidgetCopyPanel';
 
 /** A read the Session item makes from its own context, which becomes an input of the copy. */
 export type SaveAsWidgetConvertedInput = Readonly<{ path: string; title: string; becomes: 'viewer' | 'context' }>;
@@ -59,7 +59,7 @@ export function SaveAsWidgetPanel(props: Readonly<{
     /** The copy is saved, and placed wherever the person chose. */
     onDone: () => void;
     /** The copy is saved and these places still need their setup, each in turn. */
-    onSaved: (saved: WidgetDefinitionV1, destinationKeys: readonly string[]) => void;
+    onSaved: (saved: WidgetDefinitionV1, destinationKeys: readonly string[], attempts: ReadonlyMap<string, WidgetCopyAttempt>) => void;
     testID: string;
 }>): React.ReactElement {
     const { account, session } = props;
@@ -71,6 +71,9 @@ export function SaveAsWidgetPanel(props: Readonly<{
     const [chosen, setChosen] = React.useState<ReadonlySet<string>>(() => new Set(['home']));
     const [state, setState] = React.useState<'idle' | 'busy' | 'failed' | 'pending'>('idle');
     const inFlight = React.useRef(false);
+    const attempt = React.useMemo(() => createWidgetArtifactWriteAttempt('widgets.definition.saveFromSession', account),
+        [account.serverId, account.accountId, session.serverId, session.sessionId, props.itemId]);
+    const placementAttempts = React.useMemo(() => new Map<string, WidgetCopyAttempt>(), [attempt]);
     const trimmed = name.trim();
 
     // The places offered at once: Home and the project this Session works in. Everything else is one chooser away.
@@ -87,24 +90,24 @@ export function SaveAsWidgetPanel(props: Readonly<{
         if (trimmed.length === 0 || inFlight.current || state === 'pending') return;
         inFlight.current = true;
         setState('busy');
-        const saved = await runWidgetDefinitionCommand('widgets.definition.saveFromSession', () => ({
+        const saved = await attempt.run(() => ({
             account, session, itemId: props.itemId, artifactId: randomUUID(), name: trimmed,
-        }), account);
+        }));
         if (saved.kind !== 'applied') { inFlight.current = false; setState(saved.kind === 'approvalPending' ? 'pending' : 'failed'); return; }
         const definition = saved.result.definition;
         const places = destinations.filter((destination) => chosen.has(destination.key));
         const remaining = await placeWhereReady({ places, definition, instance: props.instance, itemId: props.itemId, candidate,
-            current, providedContext: props.providedContext ?? {}, testID: props.testID });
+            current, providedContext: props.providedContext ?? {}, attempts: placementAttempts, testID: props.testID });
         inFlight.current = false;
         AccessibilityInfo.announceForAccessibility?.(t('widgetDefinition.savedAsYours', { name: trimmed }));
-        if (remaining.needsSetup.length > 0) { props.onSaved(definition, remaining.needsSetup); return; }
+        if (remaining.needsSetup.length > 0) { props.onSaved(definition, remaining.needsSetup, placementAttempts); return; }
         if (places.length > 0) {
             publishPresentationNotice({ key: `widget-save:${props.itemId}`, severity: 'info', message: remaining.approvalPending
                 ? `${t('widgetDefinition.savedButNotPlaced')} ${t('widgetAdd.areaApprovalPending')}`
                 : t('widgetAdd.justAdded', { widget: trimmed }) });
         }
         props.onDone();
-    }, [account, candidate, chosen, current, destinations, props, session, state, trimmed]);
+    }, [account, attempt, candidate, chosen, current, destinations, placementAttempts, props, session, state, trimmed]);
 
     const busy = state === 'busy';
     const otherChosen = others.filter((destination) => chosen.has(destination.key));
@@ -244,6 +247,7 @@ async function placeWhereReady(input: Readonly<{
     candidate: ReturnType<typeof useWidgetCopyTarget>['candidate'];
     current: WidgetSurfaceRefV1;
     providedContext: Readonly<Record<string, readonly JsonValue[]>>;
+    attempts: Map<string, WidgetCopyAttempt>;
     testID: string;
 }>): Promise<Readonly<{ needsSetup: readonly string[]; approvalPending: boolean }>> {
     // Content that declares no inputs is placed as its own saved definition.
@@ -255,8 +259,10 @@ async function placeWhereReady(input: Readonly<{
     const promoted = { current: input.definition };
     for (const destination of input.places) {
         if (!candidate) { needsSetup.push(destination.key); continue; }
+        let attempt = input.attempts.get(destination.key);
+        if (!attempt) { attempt = {}; input.attempts.set(destination.key, attempt); }
         const setup = buildWidgetCopySetup({ candidate, destination, instance, current: input.current,
-            providedContext: input.providedContext, promoted, testID: `${input.testID}.${destination.key}` });
+            providedContext: input.providedContext, promoted, attempt, testID: `${input.testID}.${destination.key}` });
         const placed = await placeWidgetCopyWhenReady(setup).catch(() => null);
         if (!placed || !placed.ok) { needsSetup.push(destination.key); continue; }
         if (placed.approvalPending) approvalPending = true;

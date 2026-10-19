@@ -160,6 +160,70 @@ describe('saved-group Gallery management', () => {
         await vi.waitFor(() => expect(harness.artifacts(serverId).list()).toHaveLength(2));
     });
 
+    it('retries Save group after a lost acknowledgement without creating another saved group', async () => {
+        const { account, serverId } = await renderGallery();
+        const group = instantiateWidgetLayoutFragmentGroupV1(DRAFT.group, { groupId: 'source-group', childIds: ['source-widget'] });
+        function KeepGroup() {
+            const flow = useWidgetGroupKeepFlows({ group, name: 'Release checks',
+                scope: { ...account, owner: { kind: 'home' } }, candidates: [], anchorRef: React.useRef(null), testID: 'lost-save' });
+            return <><Pressable testID="lost-save.open" onPress={flow.onSave} />{flow.overlay}</>;
+        }
+        const screen = await renderScreen(<KeepGroup />);
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        let readsUnavailable = false;
+        setRuntimeFetch((input, init) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+            return readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/')
+                ? Promise.resolve(new Response('{}', { status: 503 })) : harness.request(input, init);
+        });
+        harness.artifacts(serverId).afterNextCreate(async () => {
+            readsUnavailable = true;
+            throw new TypeError('Connection lost after fragment commit');
+        });
+        await screen.pressByTestIdAsync('lost-save.open');
+        await screen.pressByTestIdAsync('lost-save.saveGroup.panel.submit');
+        await vi.waitFor(() => expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary,
+            JSON.stringify({ artifacts: harness.artifacts(serverId).list().map(row => row.id), requests: harness.requests.map(row => row.path) }))
+            .toMatchObject({ busy: false, label: 'Retry' }), { timeout: 8000 });
+        expect(harness.artifacts(serverId).list()).toHaveLength(2);
+        const savedId = harness.artifacts(serverId).list().find(row => row.id !== 'saved')!.id;
+        readsUnavailable = false;
+        await screen.pressByTestIdAsync('lost-save.saveGroup.panel.submit');
+        await vi.waitFor(() => expect(screen.findByTestId('lost-save.saveGroup.panel')).toBeNull());
+        expect(harness.artifacts(serverId).list().map(row => row.id)).toEqual(['saved', savedId]);
+        await screen.pressByTestIdAsync('lost-save.open');
+        await screen.pressByTestIdAsync('lost-save.saveGroup.panel.submit');
+        await vi.waitFor(() => expect(screen.findByTestId('lost-save.saveGroup.panel')).toBeNull());
+        expect(harness.artifacts(serverId).list()).toHaveLength(3);
+    });
+
+    it('retries Duplicate after a lost acknowledgement and starts a new copy only after success', async () => {
+        const { choose, screen, serverId } = await renderGallery();
+        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        let readsUnavailable = false;
+        setRuntimeFetch((input, init) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+            return readsUnavailable && new URL(url).pathname.startsWith('/v1/artifacts/')
+                ? Promise.resolve(new Response('{}', { status: 503 })) : harness.request(input, init);
+        });
+        harness.artifacts(serverId).afterNextCreate(async () => {
+            readsUnavailable = true;
+            throw new TypeError('Connection lost after fragment duplicate commit');
+        });
+        await choose('duplicate');
+        await vi.waitFor(() => expect(modalBoundary.alert,
+            JSON.stringify({ artifacts: harness.artifacts(serverId).list().map(row => row.id), requests: harness.requests.map(row => row.path) }))
+            .toHaveBeenCalled(), { timeout: 8000 });
+        expect(harness.artifacts(serverId).list()).toHaveLength(2);
+        const copiedId = harness.artifacts(serverId).list().find(row => row.id !== 'saved')!.id;
+        readsUnavailable = false;
+        await choose('duplicate');
+        await vi.waitFor(() => expect(screen.findByTestId(`gallery.entry.group-${copiedId}`)).not.toBeNull());
+        expect(harness.artifacts(serverId).list().map(row => row.id)).toEqual(['saved', copiedId]);
+        await choose('duplicate');
+        await vi.waitFor(() => expect(harness.artifacts(serverId).list()).toHaveLength(3));
+    });
+
     it('reports a failed Add-to preparation after closing the chooser and lets a reopened chooser retry', async () => {
         const { account, serverId } = await renderGallery();
         const group = instantiateWidgetLayoutFragmentGroupV1({ ...DRAFT.group, children: [{ kind: 'widget',

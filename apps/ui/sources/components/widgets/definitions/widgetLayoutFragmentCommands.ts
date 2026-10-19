@@ -2,13 +2,17 @@ import { captureWidgetLayoutFragmentGroupV1, instantiateWidgetLayoutFragmentGrou
     type WidgetLayoutFragmentDraftV1, type WidgetLayoutFragmentGroupV1, type WidgetLayoutGroupV1,
     type WidgetSurfaceRefV1, type WidgetProjectAreaV1 } from '@happier-dev/protocol/widgets';
 import { randomUUID } from '@/platform/randomUUID';
-import { runWidgetDefinitionCommand, type WidgetCommandTarget } from './widgetDefinitionCommands';
+import { createWidgetArtifactWriteAttempt, runWidgetDefinitionCommand, type WidgetCommandTarget } from './widgetDefinitionCommands';
 
-/** Saving copies content into a fragment; the source group keeps its own independent layout. */
-export function runSaveWidgetGroupCommandV1(group: WidgetLayoutGroupV1,
-    descriptor: Omit<WidgetLayoutFragmentDraftV1, 'group'>, target: WidgetCommandTarget, signal?: AbortSignal) {
-    return runWidgetDefinitionCommand('widgets.fragment.create', () => ({ account: target, artifactId: randomUUID(),
-        fragment: { ...descriptor, group: captureWidgetLayoutFragmentGroupV1(group) } }), target, signal);
+/** One Save intent retains its prepared fragment identity until the Home acknowledges it. */
+export function createSaveWidgetGroupAttemptV1(target: WidgetCommandTarget) {
+    const attempt = createWidgetArtifactWriteAttempt('widgets.fragment.create', target);
+    return {
+        run(group: WidgetLayoutGroupV1, descriptor: Omit<WidgetLayoutFragmentDraftV1, 'group'>, signal?: AbortSignal) {
+            return attempt.run(() => ({ account: target, artifactId: randomUUID(),
+                fragment: { ...descriptor, group: captureWidgetLayoutFragmentGroupV1(group) } }), signal);
+        },
+    };
 }
 
 /** Gallery and Add-to use one copy path and allocate placement identities before the atomic Action. */

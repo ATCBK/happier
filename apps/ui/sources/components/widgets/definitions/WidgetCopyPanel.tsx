@@ -21,7 +21,13 @@ import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
-import { runWidgetDefinitionCommand } from './widgetDefinitionCommands';
+import { createWidgetArtifactWriteAttempt, createWidgetItemAddAttempt } from './widgetDefinitionCommands';
+
+/** An open copy owns promotion and placement independently, including a Save → setup handoff. */
+export type WidgetCopyAttempt = {
+    promotion?: ReturnType<typeof createWidgetArtifactWriteAttempt<'widgets.definition.saveFromSession'>>;
+    placement?: ReturnType<typeof createWidgetItemAddAttempt>;
+};
 
 /**
  * The copy's candidate and the places that can host it: never where it already is. The one owner of
@@ -75,6 +81,7 @@ export function WidgetCopyPanel(props: Readonly<{
     providedContext: Readonly<Record<string, readonly JsonValue[]>>;
     /** A library copy Save as your widget already created: placement only, never a second promotion. */
     saved?: WidgetDefinitionV1;
+    attempt?: WidgetCopyAttempt;
     /** Absent when there is no chooser to return to (the places a Save chose). */
     onBack?: () => void;
     onClose: () => void;
@@ -85,6 +92,7 @@ export function WidgetCopyPanel(props: Readonly<{
     const { candidate, destinations } = useWidgetCopyTarget(props.instance, props.current);
     // This open flow retains an acknowledged library copy when destination placement is refused.
     const promoted = React.useRef<WidgetDefinitionV1 | null>(props.saved ?? null);
+    const attempt = React.useRef<WidgetCopyAttempt>({});
     const phone = useDeviceType() === 'phone';
     const destination = destinations.find(entry => entry.key === props.destinationKey);
     if (!candidate || !destination) return (
@@ -92,7 +100,7 @@ export function WidgetCopyPanel(props: Readonly<{
             note={t('widgetDefinition.aboutUnavailable')}>{null}</WidgetFlowPanel>
     );
     const setup = buildWidgetCopySetup({ candidate, destination, instance: props.instance, current: props.current,
-        providedContext: props.providedContext, promoted, testID: props.testID });
+        providedContext: props.providedContext, promoted, attempt: props.attempt ?? attempt.current, testID: props.testID });
     return <WidgetSetupStep key={destination.key} setup={setup} phone={phone} {...(props.onBack ? { onBack: props.onBack } : {})}
         onCancel={props.onClose} onDone={result => {
             publishPresentationNotice({ key: `widget-copy:${props.instance.id}`, severity: 'info', message: result.approvalPending
@@ -116,9 +124,11 @@ export function buildWidgetCopySetup(input: Readonly<{
     providedContext: Readonly<Record<string, readonly JsonValue[]>>;
     /** The library copy this flow made (or Save as your widget made); filled by the first placement otherwise. */
     promoted: { current: WidgetDefinitionV1 | null };
+    attempt?: WidgetCopyAttempt;
     testID: string;
 }>): WidgetSetup {
     const { candidate, destination, promoted, current, instance } = input;
+    const attempt = input.attempt ?? {};
     const owner = destination.surface.owner;
     const context: WidgetSurfaceContext = owner.kind === 'project' ? { slots: {
         projects: { label: t('widgetAdd.thisProject'), value: { value: [owner.projectId], label: destination.label } },
@@ -131,11 +141,12 @@ export function buildWidgetCopySetup(input: Readonly<{
         submit: async draft => {
             const sourceOwner = current.owner;
             if (sourceOwner.kind === 'sessionBoard' && !promoted.current) {
-                const saved = await runWidgetDefinitionCommand('widgets.definition.saveFromSession', () => ({
+                attempt.promotion ??= createWidgetArtifactWriteAttempt('widgets.definition.saveFromSession', current);
+                const saved = await attempt.promotion.run(() => ({
                     account: { serverId: current.serverId, accountId: current.accountId },
                     session: { serverId: current.serverId, sessionId: sourceOwner.sessionId },
                     itemId: instance.id, artifactId: randomUUID(),
-                }), current);
+                }));
                 if (saved.kind === 'approvalPending') return { ok: true, approvalPending: true };
                 if (saved.kind === 'refused') return { ok: false, message: t('widgetDefinition.saveFailed') };
                 promoted.current = saved.result.definition;
@@ -143,12 +154,13 @@ export function buildWidgetCopySetup(input: Readonly<{
             const definition = promoted.current;
             const { networkOverride: _sourceNetworkOverride, ...sourceInstance } = instance;
             const networkOverride = definition ? readWidgetDefinitionNetworkOverrideV1(definition) : undefined;
-            const outcome = await runWidgetDefinitionCommand('widgets.item.add', () => ({ surface: destination.surface,
+            attempt.placement ??= createWidgetItemAddAttempt(destination.surface);
+            const outcome = await attempt.placement.run(() => ({ surface: destination.surface,
                 instance: definition ? { ...sourceInstance, id: randomUUID(), definition: { kind: 'artifact', artifactId: definition.id },
                     bindings: draft.bindings, ...(networkOverride ? { networkOverride } : {}) }
                     : { ...instance, id: randomUUID(), bindings: draft.bindings },
-                ...(destination.area ? { area: destination.area } : {}), ...(draft.size ? { size: draft.size } : {}) }), destination.surface,
-                undefined, { surface: destination.surface, values: providedContext });
+                ...(destination.area ? { area: destination.area } : {}), ...(draft.size ? { size: draft.size } : {}) }),
+                { surface: destination.surface, values: providedContext });
             return outcome.kind === 'refused' ? { ok: false, message: t(definition ? 'widgetDefinition.savedButNotPlaced' : 'widgetAdd.addFailed') }
                 : { ok: true, ...(outcome.kind === 'approvalPending' ? { approvalPending: true } : {}) };
         },

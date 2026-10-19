@@ -6,7 +6,7 @@ import type {
 } from '@happier-dev/protocol/widgets';
 
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
-import { runSaveWidgetGroupCommandV1 } from '@/components/widgets/definitions/widgetLayoutFragmentCommands';
+import { createSaveWidgetGroupAttemptV1 } from '@/components/widgets/definitions/widgetLayoutFragmentCommands';
 import { WidgetFlowShell } from '@/components/widgets/flow/WidgetFlowShell';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { storage } from '@/sync/domains/state/storage';
@@ -44,6 +44,11 @@ export function useWidgetGroupKeepFlows(
   const close = React.useCallback(() => setOpen(null), []);
   const latest = React.useRef(input);
   latest.current = input;
+  const saveAttempt = React.useRef<Readonly<{
+    serverId: string;
+    accountId: string;
+    attempt: ReturnType<typeof createSaveWidgetGroupAttemptV1>;
+  }> | null>(null);
   const save = React.useCallback(
     async (name: string): Promise<SaveWidgetGroupOutcome> => {
       const { group, scope, candidates } = latest.current;
@@ -54,7 +59,12 @@ export function useWidgetGroupKeepFlows(
         title: name,
         candidates,
       });
-      const outcome = await runSaveWidgetGroupCommandV1(
+      if (saveAttempt.current?.serverId !== scope.serverId || saveAttempt.current.accountId !== scope.accountId) {
+        saveAttempt.current = { serverId: scope.serverId, accountId: scope.accountId,
+          attempt: createSaveWidgetGroupAttemptV1({ serverId: scope.serverId, accountId: scope.accountId }) };
+      }
+      const { attempt } = saveAttempt.current;
+      const outcome = await attempt.run(
         group,
         {
           name,
@@ -65,17 +75,17 @@ export function useWidgetGroupKeepFlows(
           // Read when saving, so a closed menu holds no Project subscription.
           ...(origin ? { origin } : {}),
         },
-        { serverId: scope.serverId, accountId: scope.accountId },
       );
       if (outcome.kind === 'refused')
         return { ok: false, message: t('widgetFrame.groupSaveFailed') };
+      if (outcome.kind === 'applied' && saveAttempt.current?.attempt === attempt) saveAttempt.current = null;
       publishPresentationNotice({
         key: `widget-group-save:${group.id}`,
         severity: 'info',
         message:
           outcome.kind === 'approvalPending'
             ? t('widgetAdd.areaApprovalPending')
-            : t('widgetFrame.groupSaved', { name }),
+            : t('widgetFrame.groupSaved', { name: outcome.result.fragment.name }),
       });
       return outcome.kind === 'approvalPending'
         ? { ok: true, approvalPending: true }
@@ -85,7 +95,7 @@ export function useWidgetGroupKeepFlows(
   );
   const available = input.scope !== null;
   const onSave = React.useMemo(
-    () => (available ? () => setOpen('save') : undefined),
+    () => (available ? () => { saveAttempt.current = null; setOpen('save'); } : undefined),
     [available],
   );
   const onAddTo = React.useMemo(

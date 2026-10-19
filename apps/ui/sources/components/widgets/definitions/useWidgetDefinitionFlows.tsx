@@ -18,13 +18,13 @@ import { t } from '@/text';
 
 import { SaveAsWidgetPanel, type SaveAsWidgetConvertedInput } from './SaveAsWidgetPanel';
 import { WidgetAboutPanel, readWidgetAboutSources } from './WidgetAboutPanel';
-import { runWidgetDefinitionCommand } from './widgetDefinitionCommands';
+import { createWidgetArtifactWriteAttempt, runWidgetDefinitionCommand } from './widgetDefinitionCommands';
 import { WidgetFlowPanel } from '@/components/widgets/flow/WidgetFlowPanel';
 import { WIDGET_FLOW_WIDTH_PX, WidgetFlowShell } from '@/components/widgets/flow/WidgetFlowShell';
 import type { IconName } from '@/components/ui/icons/Icon';
 import { createWidgetSnapshotCaptureSlot, useWidgetSnapshotCaptureAvailable, type WidgetSnapshotCaptureSlot } from './widgetSnapshotCapture';
 import { WidgetSnapshotConfirmPanel } from './WidgetSnapshotConfirmPanel';
-import { WidgetCopyChooser, WidgetCopyPanel } from './WidgetCopyPanel';
+import { WidgetCopyChooser, WidgetCopyPanel, type WidgetCopyAttempt } from './WidgetCopyPanel';
 
 type Flow = 'about' | 'save' | 'snapshot' | 'addTo';
 
@@ -91,7 +91,8 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     // Add to… chooses its place in the shared chooser first; the copy's setup then opens at setup width.
     const [copyTo, setCopyTo] = React.useState<string | null>(null);
     // Save as your widget hands each place the person chose to the same setup Add to… uses; the copy it created stays.
-    const [placing, setPlacing] = React.useState<Readonly<{ saved: WidgetDefinitionV1; instance: WidgetInstanceV1; remaining: readonly string[] }> | null>(null);
+    const [placing, setPlacing] = React.useState<Readonly<{ saved: WidgetDefinitionV1; instance: WidgetInstanceV1; remaining: readonly string[];
+        attempts: ReadonlyMap<string, WidgetCopyAttempt> }> | null>(null);
     const close = React.useCallback(() => { setFlow(null); setCopyTo(null); setPlacing(null); }, []);
     const stopPlacing = React.useCallback(() => {
         if (placing) publishPresentationNotice({ key: `widget-save:${instance?.id ?? 'item'}`, severity: 'info', message: t('widgetDefinition.savedButNotPlaced') });
@@ -129,7 +130,7 @@ export function useWidgetDefinitionFlows(input: Readonly<{
                 {...(flow === 'addTo' ? { width: WIDGET_FLOW_WIDTH_PX.setup } : {})}>
                 {flow === 'addTo' && placeInstance && copyTo !== null ? (
                     <WidgetCopyPanel instance={placeInstance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
-                        {...(placing ? { saved: placing.saved, onDone: placeNext, onClose: stopPlacing } : { onBack: () => setCopyTo(null), onClose: close })}
+                        {...(placing ? { saved: placing.saved, attempt: placing.attempts.get(copyTo), onDone: placeNext, onClose: stopPlacing } : { onBack: () => setCopyTo(null), onClose: close })}
                         testID={`${testID}.addTo`} />
                 ) : flow === 'save' && sessionItem && scope.owner.kind === 'sessionBoard' ? (
                     <SaveAsWidgetPanel
@@ -145,9 +146,9 @@ export function useWidgetDefinitionFlows(input: Readonly<{
                         providedContext={input.providedContext ?? {}}
                         onCancel={close}
                         onDone={close}
-                        onSaved={(saved, [first = null, ...remaining]) => {
+                        onSaved={(saved, [first = null, ...remaining], attempts) => {
                             // The copy is placed from what it is: the item's widget, or its own definition when it declares no inputs.
-                            setPlacing({ saved, remaining, instance: instance ?? { v: 1, id: sessionItem.itemId, definition: { kind: 'inline', definition: saved }, bindings: {} } });
+                            setPlacing({ saved, remaining, attempts, instance: instance ?? { v: 1, id: sessionItem.itemId, definition: { kind: 'inline', definition: saved }, bindings: {} } });
                             setCopyTo(first); setFlow('addTo');
                         }}
                         testID={`${testID}.save`}
@@ -250,6 +251,7 @@ function AboutPanelContent(props: Parameters<typeof AboutBoundFlow>[0] & Readonl
     resolution: Parameters<typeof readWidgetAboutSources>[0]['resolution'];
 }>): React.ReactElement {
     const { account, artifactId } = props;
+    const duplicate = React.useRef<ReturnType<typeof createWidgetArtifactWriteAttempt<'widgets.definition.duplicate'>> | null>(null);
     const draftTarget = readDraftTarget(props.scope, props.definition);
     const editInputs = props.editInputs;
     return (
@@ -272,7 +274,9 @@ function AboutPanelContent(props: Parameters<typeof AboutBoundFlow>[0] & Readonl
                 });
             } } : {})}
             {...(artifactId ? { onDuplicate: async () => {
-                const outcome = await runWidgetDefinitionCommand('widgets.definition.duplicate', () => ({ account, artifactId, newArtifactId: randomUUID() }), account);
+                duplicate.current ??= createWidgetArtifactWriteAttempt('widgets.definition.duplicate', account);
+                const outcome = await duplicate.current.run(() => ({ account, artifactId, newArtifactId: randomUUID() }));
+                if (outcome.kind === 'applied') duplicate.current = null;
                 return outcome.kind === 'applied' ? outcome.result.definition.name : null;
             } } : {})}
             testID={props.testID}
