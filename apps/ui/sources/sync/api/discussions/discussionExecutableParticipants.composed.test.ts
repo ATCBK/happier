@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -18,6 +18,11 @@ import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferRowReadResponseV1Schema } fro
 import { SessionSpawnNewResultV1Schema, type SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { DiscussionCreateRequestV1Schema } from '@happier-dev/protocol/discussions/api';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { encodeBase64 } from '@/encryption/base64';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 // The person accepts the real Action policy's UI confirmation at the presentation boundary.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
@@ -99,6 +104,76 @@ function answerDiscussionRead(serverId: string) {
         messages: [message], hasMoreOlder: false, messageSeq: 1,
     } });
 }
+
+it('retains resolved initial Session invitations and the original E2EE key after a lost create response', async () => {
+    const secret = new Uint8Array(32).fill(17);
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64url') };
+    const serverId = await homes.addHome({ name: 'Encrypted review', serverUrl: 'https://encrypted-review.test', accountId: 'alice',
+        currentAccount: true, accountEncryptionMode: 'e2ee', credentials });
+    const contentKeyFingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+        createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint);
+    homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'e2ee', version: 1,
+        signingKeyFingerprint: 'a'.repeat(64), contentKeyFingerprint, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } });
+    const transport = answerDiscussionThreadForTests(homes, serverId, { accountId: 'alice', mode: 'e2ee', loseCreate: true, loseFirstRejoin: false });
+    let selected = 'chosen-at-submit';
+    homes.answer(serverId, '/v1/discussions/source/participants', { select: () => ({ body: {
+        discussionId: 'source', ownerAccountId: 'alice', access: 'owner', grants: [],
+        participants: [{ participant: { kind: 'session', sessionId: selected }, answerPolicy: 'when_addressed', createdAt: 1 }],
+    } }) });
+    homes.answer(serverId, '/v1/discussions/committed-thread/data-key/recipients', { select: () => ({ body: {
+        discussionId: 'committed-thread', ownerAccountId: 'alice', access: 'owner', encryptionMode: 'e2ee',
+        dataEncryptionKey: transport.stored()?.discussion.dataEncryptionKey,
+        callerDataEncryptionKey: transport.stored()?.discussion.dataEncryptionKey,
+        recipients: [{ recipientAccountId: 'bob', contentKey: { status: 'unavailable', reason: 'plain_account' },
+            contentPublicKeyFingerprint: null, encryptedDataKey: null, recipientContentPublicKeyFingerprint: null }],
+    } }) });
+    const scope = { serverId, accountId: 'alice' };
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client: createDiscussionClient({ scope, availability: 'available' }) });
+    expect(await repository.create({ creationLocalId: 'create-selected', messageLocalId: 'first-selected', title: 'Review',
+        content: { v: 1, parts: [{ t: 'text', text: 'Question' }] },
+        participants: [{ kind: 'account', accountId: 'bob' }, { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } }],
+        draftSubmission: { scope, address: { kind: 'newDiscussion' }, currentness: { address: { kind: 'newDiscussion' }, mutationIds: {} } },
+    })).toMatchObject({ kind: 'checking' });
+    await vi.waitFor(() => expect(repository.getSnapshot().mutations['create-selected']?.status).toBe('outcome_unknown'));
+    selected = 'joined-later';
+    const retried = await repository.retry('create-selected');
+    const creates = homes.requestsFor('/v1/discussions').filter(request => request.input && typeof request.input === 'object'
+        && 'firstMessage' in request.input).map(request => DiscussionCreateRequestV1Schema.parse(request.input));
+    expect(creates).toHaveLength(2);
+    expect(creates[1].participants).toEqual(creates[0].participants);
+    expect(creates[1].dataEncryptionKey).toBe(creates[0].dataEncryptionKey);
+    expect(creates[1].creationLocalId).toBe('create-selected');
+    expect(creates[1].firstMessage.localId).toBe('first-selected');
+    expect(homes.requestsFor('/v1/discussions/source/participants')).toHaveLength(1);
+    expect(retried).toMatchObject({ kind: 'succeeded' });
+});
+
+it('does not resurrect a retired create intent when Session resolution finishes late', async () => {
+    const serverId = await homes.addHome({ name: 'Review', serverUrl: 'https://review.test', accountId: 'alice', currentAccount: true });
+    answerDiscussionThreadForTests(homes, serverId, { loseCreate: false, loseFirstRejoin: false });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    homes.answer(serverId, '/v1/discussions/source/participants', { select: async () => {
+        entered.resolve();
+        await release.promise;
+        return { body: { discussionId: 'source', ownerAccountId: 'alice', access: 'owner', grants: [],
+            participants: [{ participant: { kind: 'session', sessionId: 'chosen' }, answerPolicy: 'when_addressed', createdAt: 1 }] } };
+    } });
+    const scope = { serverId, accountId: 'alice' };
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client: createDiscussionClient({ scope, availability: 'available' }) });
+    const creating = repository.create({ creationLocalId: 'retired-create', messageLocalId: 'retired-first', title: 'Review',
+        content: { v: 1, parts: [{ t: 'text', text: 'Question' }] },
+        participants: [{ kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } }],
+        draftSubmission: { scope, address: { kind: 'newDiscussion' }, currentness: { address: { kind: 'newDiscussion' }, mutationIds: {} } },
+    });
+    await entered.promise;
+    repository.clear();
+    const retired = repository.getSnapshot();
+    release.resolve();
+    expect(await creating).toMatchObject({ kind: 'failed', errorCode: 'discussion_read_denied' });
+    expect(repository.getSnapshot()).toBe(retired);
+    expect(await repository.retry('retired-create')).toEqual({ kind: 'failed', errorCode: 'discussion_retry_not_found' });
+});
 
 it('keeps model Home admission at the canonical Action before any reservation HTTP request', async () => {
     const serverId = await homes.addHome({ name: 'Review', serverUrl: 'https://review.test', accountId: 'alice', currentAccount: true });

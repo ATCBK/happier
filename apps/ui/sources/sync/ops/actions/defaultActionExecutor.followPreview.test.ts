@@ -61,6 +61,10 @@ it('resolves matching through every ordinary and attention page without changing
     const preview = await executor.execute('follow.preview', { receiver: { kind: 'account' }, filter: { ...filter, show: 'sessions' } },
         { surface: 'ui', serverId, expectedAccountId: 'alice' });
     expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 3 } });
+    expect(await executor.previewSessionTargets({ selector: 'matching', filter },
+        { surface: 'ui', serverId, expectedAccountId: 'alice' })).toMatchObject({ coverage: 'complete', addresses: [
+        { serverId, sessionId: 'first-match' }, { serverId, sessionId: 'older-match' }, { serverId, sessionId: 'attention-match' },
+    ] });
     pages.length = 0;
     const result = await executor.execute('session.status.get', { sessionId: { selector: 'matching', filter } },
         { surface: 'ui', serverId, expectedAccountId: 'alice' });

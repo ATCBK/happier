@@ -642,6 +642,12 @@ export type ActionExecutorContext = Readonly<{
   onWaitSnapshot?: (snapshot: unknown) => void | Promise<void>;
   /** Host-only issuance witness for callers retaining uncertain mutation custody. */
   onTransportIssued?: () => void;
+  /** In-process observation for the caller's existing retry intent; never serialized or execution authority. */
+  onSessionTargetsResolved?: (resolution: Readonly<{
+    actionId: ActionId;
+    input: unknown;
+    targets: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
+  }>) => void;
 
   /** Host-stamped caller identity. Never accepted from plugin action input. */
   actionCaller?: ActionCaller;

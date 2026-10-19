@@ -16,11 +16,13 @@ import type { SessionDraftCurrentness } from '@/sync/ops/sessionDrafts/sessionDr
 import type { createDiscussionClient, DiscussionClientOutcome } from '@/sync/api/discussions/discussionActions';
 import { watchMountedDiscussions, type MountedDiscussionChangeWatch } from '@/sync/domains/discussions/discussionChangeWatch';
 import type { DiscussionAnchorV1, DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
-import type { DiscussionAccountParticipantRefV1 } from '@happier-dev/protocol/discussions/participants';
+import type { DiscussionCreateInputV1 } from '@happier-dev/protocol/discussions/actions';
+import type { DiscussionInitialParticipantV1 } from '@happier-dev/protocol/discussions/participants';
 import { DISCUSSION_NOT_TRACKED_CODE_V1 } from '@happier-dev/protocol/discussions/api';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import type { DiscussionAttentionResultV1 } from '@happier-dev/protocol/discussions/actions';
 import type { DiscussionAttentionQueryV1 } from '@happier-dev/protocol/discussions/api';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 
 export type DiscussionRepositoryClient = Readonly<Pick<ReturnType<typeof createDiscussionClient>,
     'participants' | 'setParticipantPolicy' | 'invite' | 'inviteExecutableParticipant' | 'removeParticipant' | 'leave' | 'transferOwner' | 'listGrants' | 'setGrant' | 'removeGrant'> & {
@@ -28,7 +30,7 @@ export type DiscussionRepositoryClient = Readonly<Pick<ReturnType<typeof createD
     list(input?: DiscussionListInputV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionListResultV1>>;
     get(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
     read(discussionId: string, input?: Readonly<{ beforeSeq?: number; afterSeq?: number; limit?: number }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionReadResultV1>>;
-    create(input: Readonly<{ creationLocalId: string; messageLocalId: string; title: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; anchor?: DiscussionAnchorV1; participants?: readonly DiscussionAccountParticipantRefV1[]; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>>;
+    create(input: Readonly<{ creationLocalId: string; messageLocalId: string; title: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; anchor?: DiscussionAnchorV1; participants?: readonly NonNullable<DiscussionCreateInputV1['participants']>[number][]; onResolvedParticipants?: (participants: readonly DiscussionInitialParticipantV1[]) => void; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>>;
     post(input: Readonly<{ discussionId: string; localId: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionPostResultV1>>;
     rename(discussionId: string, title: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
     archive(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
@@ -60,7 +62,7 @@ type CreateIntent = Readonly<{
     mentionedAccountIds?: readonly string[];
     mentionedSessionIds?: readonly string[];
     anchor?: DiscussionAnchorV1;
-    participants?: readonly DiscussionAccountParticipantRefV1[];
+    participants?: readonly NonNullable<DiscussionCreateInputV1['participants']>[number][];
     replyTarget?: DiscussionReplyTargetV1;
     draftSubmission: DiscussionDraftSubmission;
 }>;
@@ -107,6 +109,29 @@ export type DiscussionRepositoryListSnapshot = Readonly<{
     errorCode: string | null;
     incomplete: boolean;
 }>;
+
+/** Search only opened display facts. Message bodies, ciphertext and opaque ids are never inputs. */
+export function selectDiscussionListSearch(
+    list: DiscussionRepositoryListSnapshot,
+    query: string,
+    sourceLabels: ReadonlyMap<string, readonly string[]>,
+    previous?: DiscussionRepositoryListSnapshot,
+): DiscussionRepositoryListSnapshot {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return list;
+    const matches = list.items.filter(row => [row.title,
+        ...(row.participantAccounts ?? []).flatMap(actor => actor.profile
+            ? [formatAccountDisplayName(actor.profile), actor.profile.username] : []),
+        ...(sourceLabels.get(row.id) ?? []),
+    ].some(label => label?.toLocaleLowerCase().includes(needle)));
+    const sameItems = (items: readonly DiscussionOpenedSummaryV1[]) => items.length === matches.length
+        && items.every((row, index) => row === matches[index]);
+    const items = previous && sameItems(previous.items) ? previous.items : sameItems(list.items) ? list.items : matches;
+    const incomplete = list.incomplete || list.nextCursor !== null || list.status !== 'ready';
+    if (previous && previous.items === items && previous.incomplete === incomplete && previous.status === list.status
+        && previous.nextCursor === list.nextCursor && previous.errorCode === list.errorCode) return previous;
+    return items === list.items && incomplete === list.incomplete ? list : { ...list, items, incomplete };
+}
 
 export type DiscussionRepositoryThreadSnapshot = Readonly<{
     summary: DiscussionOpenedSummaryV1 | null;
@@ -275,6 +300,7 @@ export function createDiscussionRepository(options: Readonly<{
     const listeners = new Set<() => void>();
     const listPages: Record<'active' | 'archived', ListPage[]> = { active: [], archived: [] };
     const anchorPages = new Map<string, Record<'active' | 'archived', ListPage[]>>();
+    const listInFlight = new Map<string, Promise<void>>();
     const mountedAnchors = new Map<string, number>();
     const intents = new Map<string, MutationIntent>();
     let client = options.client;
@@ -307,6 +333,7 @@ export function createDiscussionRepository(options: Readonly<{
     };
     const purgeAccessLost = (errorCode: string) => {
         accessLossEpoch += 1;
+        listInFlight.clear();
         attentionPages = [];
         listPages.active = [];
         listPages.archived = [];
@@ -495,8 +522,11 @@ export function createDiscussionRepository(options: Readonly<{
     };
 
     const loadListPage = async (state: 'active' | 'archived', cursor: string | null, signal?: AbortSignal, anchorSessionId?: string) => {
+        const operationEpoch = accessLossEpoch;
         const epochs = new Map(resourceEpochs);
         const outcome = await client.list({ state, ...(cursor ? { cursor } : {}), ...(anchorSessionId === undefined ? {} : { anchorSessionId }) }, signal);
+        if (signal?.aborted) return { kind: 'failed' as const, errorCode: 'canceled' };
+        if (operationEpoch !== accessLossEpoch) return { kind: 'failed' as const, errorCode: 'discussion_read_denied' };
         if (outcome.kind !== 'succeeded') return outcome;
         const rows = outcome.value.discussions.filter(row => (epochs.get(row.id) ?? 0) === (resourceEpochs.get(row.id) ?? 0));
         for (const row of rows) {
@@ -524,7 +554,7 @@ export function createDiscussionRepository(options: Readonly<{
         const operationEpoch = accessLossEpoch;
         const epochs = new Map(resourceEpochs);
         const outcome = await client.list({ state: 'archived', limit: 1, ...(anchorSessionId === undefined ? {} : { anchorSessionId }) }, signal);
-        if (operationEpoch !== accessLossEpoch) return;
+        if (operationEpoch !== accessLossEpoch || signal?.aborted) return;
         if (outcome.kind !== 'succeeded') {
             if (outcome.kind === 'failed' && isExplicitAccessLoss(outcome.errorCode)) purgeAccessLost(outcome.errorCode);
             return;
@@ -533,54 +563,90 @@ export function createDiscussionRepository(options: Readonly<{
         updateArchivedExistence(visible ? 'present' : outcome.value.discussions.length > 0 ? 'unknown' : 'empty', anchorSessionId);
     };
 
-    const refreshList = async (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string): Promise<void> => {
+    const listReadKey = (state: 'active' | 'archived', anchorSessionId?: string) => JSON.stringify([anchorSessionId ?? null, state]);
+    const readListPages = (state: 'active' | 'archived', append: boolean, signal?: AbortSignal, anchorSessionId?: string,
+        input: Readonly<{ complete?: boolean }> = {}): Promise<void> => {
+        const key = listReadKey(state, anchorSessionId);
+        const existing = listInFlight.get(key);
+        if (existing) return existing;
+        if (signal?.aborted) return Promise.resolve();
         const operationEpoch = accessLossEpoch;
         const epochs = new Map(resourceEpochs);
         const queryPages = pagesFor(anchorSessionId);
         const retained = getListSnapshot(anchorSessionId).lists[state];
-        updateList(state, { ...retained, status: 'loading', errorCode: null }, anchorSessionId);
-        const pageCount = Math.max(1, queryPages[state].length);
-        const replacement: ListPage[] = [];
-        let cursor: string | null = null;
-        for (let index = 0; index < pageCount; index += 1) {
-            const outcome = await loadListPage(state, cursor, signal, anchorSessionId);
+        let cursor = append ? queryPages[state].at(-1)?.nextCursor ?? null : null;
+        if (append && !cursor) return Promise.resolve();
+        const pageCount = append ? 1 : Math.max(1, queryPages[state].length);
+        const firstPage = loadListPage(state, cursor, undefined, anchorSessionId);
+        const pending = Promise.resolve().then(async () => {
             if (operationEpoch !== accessLossEpoch) return;
-            if (outcome.kind !== 'succeeded') {
-                const code = outcome.kind === 'failed' ? outcome.errorCode : 'outcome_unknown';
-                if (isExplicitAccessLoss(code)) purgeAccessLost(code);
-                else updateList(state, { ...getListSnapshot(anchorSessionId).lists[state], status: statusForFailure(code), errorCode: outcome.kind === 'failed' ? outcome.errorCode : outcome.kind }, anchorSessionId);
-                return;
+            let replacement: ListPage[] = append ? [...queryPages[state]] : [];
+            const visited = new Set<string | null>();
+            for (let index = 0; index < pageCount || (input.complete && !signal?.aborted); index += 1) {
+                if (visited.has(cursor)) {
+                    updateList(state, { ...getListSnapshot(anchorSessionId).lists[state], status: 'error', errorCode: 'discussion_invalid_content' }, anchorSessionId);
+                    return;
+                }
+                visited.add(cursor);
+                // The accepted page belongs to every joined reader. Canceling
+                // search demand stops further traversal, not shared page custody.
+                const outcome = await (index === 0 ? firstPage : loadListPage(state, cursor, undefined, anchorSessionId));
+                if (operationEpoch !== accessLossEpoch) return;
+                if (outcome.kind === 'failed' && outcome.errorCode === 'canceled') {
+                    const current = getListSnapshot(anchorSessionId).lists[state];
+                    updateList(state, { ...current, status: input.complete && queryPages[state].length > 0
+                        ? current.incomplete ? 'locked' : 'ready' : retained.status, errorCode: retained.errorCode }, anchorSessionId);
+                    return;
+                }
+                if (outcome.kind !== 'succeeded') {
+                    const code = outcome.kind === 'failed' ? outcome.errorCode : 'outcome_unknown';
+                    if (isExplicitAccessLoss(code)) purgeAccessLost(code);
+                    else updateList(state, { ...getListSnapshot(anchorSessionId).lists[state], status: statusForFailure(code), errorCode: outcome.kind === 'failed' ? outcome.errorCode : outcome.kind }, anchorSessionId);
+                    return;
+                }
+                if (append) {
+                    replacement = [...queryPages[state]];
+                    const pageIndex = replacement.findIndex(page => page.requestCursor === cursor);
+                    if (pageIndex >= 0) replacement[pageIndex] = outcome.value;
+                    else replacement.push(outcome.value);
+                } else replacement.push(outcome.value);
+                cursor = outcome.value.nextCursor;
+                if (input.complete) {
+                    queryPages[state] = replacement.map(page => ({ ...page,
+                        rows: page.rows.filter(row => (epochs.get(row.id) ?? 0) === (resourceEpochs.get(row.id) ?? 0)),
+                    }));
+                    applyListPages(state, 'loading', null, anchorSessionId);
+                }
+                if (!cursor) break;
             }
-            replacement.push(outcome.value);
-            cursor = outcome.value.nextCursor;
-            if (!cursor) break;
-        }
-        queryPages[state] = replacement.map(page => ({ ...page,
-            rows: page.rows.filter(row => (epochs.get(row.id) ?? 0) === (resourceEpochs.get(row.id) ?? 0)),
-        }));
-        applyListPages(state, replacement.some((page) => page.incomplete) ? 'locked' : 'ready', null, anchorSessionId);
-        if (state === 'active') await probeArchivedExistence(signal, anchorSessionId);
+            queryPages[state] = replacement.map(page => ({ ...page,
+                rows: page.rows.filter(row => (epochs.get(row.id) ?? 0) === (resourceEpochs.get(row.id) ?? 0)),
+            }));
+            applyListPages(state, replacement.some((page) => page.incomplete) ? 'locked' : 'ready', null, anchorSessionId);
+            if (state === 'active' && !append && !signal?.aborted) await probeArchivedExistence(signal, anchorSessionId);
+        }).finally(() => { if (listInFlight.get(key) === pending) listInFlight.delete(key); });
+        listInFlight.set(key, pending);
+        updateList(state, { ...retained, status: 'loading', errorCode: null }, anchorSessionId);
+        return pending;
     };
 
-    const loadMoreList = async (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string): Promise<void> => {
-        const queryPages = pagesFor(anchorSessionId);
-        const cursor = queryPages[state].at(-1)?.nextCursor ?? null;
-        if (!cursor) return;
-        const retained = getListSnapshot(anchorSessionId).lists[state];
+    const refreshList = (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string,
+        input?: Readonly<{ complete?: boolean }>) => readListPages(state, false, signal, anchorSessionId, input);
+    const loadMoreList = (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string,
+        input?: Readonly<{ complete?: boolean }>) => readListPages(state, true, signal, anchorSessionId, input);
+
+    /** Search demand extends the same query's retained page frontier, never a second list. */
+    const loadCompleteList = async (state: 'active' | 'archived', signal?: AbortSignal, anchorSessionId?: string): Promise<void> => {
         const operationEpoch = accessLossEpoch;
-        updateList(state, { ...retained, status: 'loading', errorCode: null }, anchorSessionId);
-        const outcome = await loadListPage(state, cursor, signal, anchorSessionId);
-        if (operationEpoch !== accessLossEpoch) return;
-        if (outcome.kind !== 'succeeded') {
-            const code = outcome.kind === 'failed' ? outcome.errorCode : 'outcome_unknown';
-            if (isExplicitAccessLoss(code)) purgeAccessLost(code);
-            else updateList(state, { ...getListSnapshot(anchorSessionId).lists[state], status: statusForFailure(code), errorCode: outcome.kind === 'failed' ? outcome.errorCode : outcome.kind }, anchorSessionId);
-            return;
-        }
-        const pageIndex = queryPages[state].findIndex((page) => page.requestCursor === cursor);
-        if (pageIndex >= 0) queryPages[state][pageIndex] = outcome.value;
-        else queryPages[state].push(outcome.value);
-        applyListPages(state, outcome.value.incomplete ? 'locked' : 'ready', null, anchorSessionId);
+        const key = listReadKey(state, anchorSessionId);
+        while (listInFlight.has(key)) await listInFlight.get(key);
+        if (operationEpoch !== accessLossEpoch || signal?.aborted) return;
+        const current = getListSnapshot(anchorSessionId).lists[state];
+        if (current.status === 'revoked') return;
+        if (current.status === 'idle' || (!pagesFor(anchorSessionId)[state].length && current.status !== 'ready')
+            || ((current.status === 'error' || current.status === 'offline') && !current.nextCursor)) {
+            await refreshList(state, signal, anchorSessionId, { complete: true });
+        } else if (current.nextCursor) await loadMoreList(state, signal, anchorSessionId, { complete: true });
     };
 
     const refreshMessages = async (discussionId: string, signal?: AbortSignal): Promise<void> => {
@@ -815,7 +881,7 @@ export function createDiscussionRepository(options: Readonly<{
         // Resource/message existence cannot prove the post-create key-delivery
         // step completed. An explicit retry reuses this intent and the original
         // authorized envelope through the same create Action and shared runner.
-        if (found.encryptionMode === 'e2ee' && intent.participants?.length) return false;
+        if (found.encryptionMode === 'e2ee' && intent.participants?.some(participant => participant.kind === 'account')) return false;
         const resourceOperation = captureOperation(found.id);
         const messages = await client.read(found.id, { beforeSeq: 2 }, signal);
         if (operationEpoch !== accessLossEpoch || !isCurrentOperation(resourceOperation)) return false;
@@ -902,10 +968,17 @@ export function createDiscussionRepository(options: Readonly<{
         return false;
     };
 
-    const executeCreate = async (intent: CreateIntent, signal?: AbortSignal): Promise<DiscussionRepositoryMutationOutcome<DiscussionCreateResultV1>> => {
+    const executeCreate = async (initialIntent: CreateIntent, signal?: AbortSignal): Promise<DiscussionRepositoryMutationOutcome<DiscussionCreateResultV1>> => {
+        let intent = initialIntent;
         const operationEpoch = accessLossEpoch;
         recordMutation(intent, 'sending');
-        const outcome = await client.create(intent, signal);
+        const outcome = await client.create({ ...intent, onResolvedParticipants: participants => {
+            // The front door owns resolution. Retain its concrete choice in the
+            // existing mutation intent before approval or an uncertain write.
+            if (operationEpoch !== accessLossEpoch) return;
+            intent = { ...intent, participants: [...participants] };
+            intents.set(intent.creationLocalId, intent);
+        } }, signal);
         if (operationEpoch !== accessLossEpoch) return { kind: 'failed', errorCode: 'discussion_read_denied' };
         if (outcome.kind === 'succeeded') {
             completeCreate(intent, outcome.value);
@@ -988,8 +1061,14 @@ export function createDiscussionRepository(options: Readonly<{
         const work: Promise<void>[] = [];
         if (attentionMountReferences > 0) work.push(refreshAttentionAfterChange());
         for (const anchor of [...(homeMountReferences > 0 ? [undefined] : []), ...mountedAnchors.keys()]) {
-            work.push(refreshList('active', undefined, anchor));
-            if (pagesFor(anchor).archived.length > 0) work.push(refreshList('archived', undefined, anchor));
+            const reread = async (state: 'active' | 'archived') => {
+                const epoch = accessLossEpoch;
+                const pending = listInFlight.get(listReadKey(state, anchor));
+                if (pending) await pending;
+                if (epoch === accessLossEpoch) await refreshList(state, undefined, anchor);
+            };
+            work.push(reread('active'));
+            if (pagesFor(anchor).archived.length > 0) work.push(reread('archived'));
         }
         if (homeMountReferences > 0 || mountedAnchors.size > 0) {
             for (const [discussionId, thread] of Object.entries(snapshot.threads)) {
@@ -1071,6 +1150,7 @@ export function createDiscussionRepository(options: Readonly<{
             return pending;
         },
         loadMoreList,
+        loadCompleteList,
         refreshAnchoredList(anchorSessionId: string, state: 'active' | 'archived', signal?: AbortSignal) { return refreshList(state, signal, anchorSessionId); },
         loadMoreAnchoredList(anchorSessionId: string, state: 'active' | 'archived', signal?: AbortSignal) { return loadMoreList(state, signal, anchorSessionId); },
         refreshDiscussion,
@@ -1192,6 +1272,7 @@ export function createDiscussionRepository(options: Readonly<{
             attentionMountReferences = 0;
             attentionPages = [];
             attentionInFlight = null;
+            listInFlight.clear();
             mountedAnchors.clear();
             listPages.active = [];
             listPages.archived = [];

@@ -14,6 +14,9 @@ import { DiscussionOpenedMessageV1Schema, DiscussionListResultV1Schema, Discussi
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createDiscussionActionAdapter, type DiscussionClientOutcome } from '@/sync/api/discussions/discussionActions';
 import { Encryption } from '@/sync/encryption/encryption';
+import { createResourceDataKey } from '@/sync/encryption/resourceDataKey';
+import { resourceStoredContentContext } from '@/sync/encryption/resourceStoredContent';
+import { sealSessionStoredContent } from '@happier-dev/sync-client';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { DiscussionCreateRequestV1Schema, type DiscussionCreateRequestV1, type DiscussionCreateResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionCreateResultV1Schema } from '@happier-dev/protocol/discussions/actions';
@@ -21,7 +24,7 @@ import { DiscussionAccessGrantsListResponseV1Schema, DiscussionAccessGrantMutati
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 
-import { createDiscussionRepository, type DiscussionRepositoryClient } from './discussionRepository';
+import { createDiscussionRepository, selectDiscussionListSearch, type DiscussionRepositoryClient } from './discussionRepository';
 import { publishMountedDiscussionChanges } from '@/sync/domains/discussions/discussionChangeWatch';
 import {
     clearDiscussionRepositoryRegistryForTests,
@@ -924,6 +927,125 @@ describe('Discussion repository', () => {
         });
     });
 
+    it.each(['active', 'archived'] as const)('completes the selected %s corpus for client search through existing HTTP keyset pages', async state => {
+        const requests: URL[] = [];
+        const row = (id: string) => ({ ...storedSummary(id), archivedAt: state === 'archived' ? 20 : null });
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            requests.push(url);
+            if (url.searchParams.get('state') !== state) return response({ discussions: [], nextCursor: null });
+            const cursor = url.searchParams.get('cursor');
+            return response(cursor === 'page-3'
+                ? { discussions: [row('last-page-match')], nextCursor: null }
+                : cursor === 'page-2'
+                    ? { discussions: [row('middle')], nextCursor: 'page-3' }
+                    : { discussions: [row('first')], nextCursor: 'page-2' });
+        }) });
+        await repository.refreshList(state, undefined, undefined, { complete: true });
+        expect(repository.getSnapshot().lists[state].items.map(row => row.id)).toEqual(['first', 'middle', 'last-page-match']);
+        expect(repository.getSnapshot().lists[state]).toMatchObject({ status: 'ready', nextCursor: null, incomplete: false });
+        expect(requests.filter(url => url.searchParams.get('state') === state).map(url => url.searchParams.get('cursor')))
+            .toEqual([null, 'page-2', 'page-3']);
+        expect(requests.every(url => [...url.searchParams.keys()].every(key => ['state', 'cursor', 'limit'].includes(key)))).toBe(true);
+    });
+
+    it('keeps received search pages visible with the real next frontier when a later page fails', async () => {
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (url.searchParams.get('state') === 'archived') return response({ discussions: [], nextCursor: null });
+            return url.searchParams.has('cursor') ? response({ error: 'temporary_failure' }, 503)
+                : response({ discussions: [storedSummary('known-match')], nextCursor: 'unread-page' });
+        }) });
+        await repository.refreshList('active', undefined, undefined, { complete: true });
+        expect(repository.getSnapshot().lists.active).toMatchObject({
+            items: [{ id: 'known-match' }], status: 'error', nextCursor: 'unread-page',
+        });
+        expect(selectDiscussionListSearch(repository.getSnapshot().lists.active, 'known-match', new Map())).toMatchObject({
+            items: [{ id: 'known-match' }], status: 'error', nextCursor: 'unread-page', incomplete: true,
+        });
+    });
+
+    it('keeps a normal joined page read when its search caller cancels and resumes the same frontier', async () => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const requests: string[] = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (url.searchParams.get('state') === 'archived') return response({ discussions: [], nextCursor: null });
+            requests.push(url.searchParams.get('cursor') ?? 'first');
+            if (!url.searchParams.has('cursor')) { entered.resolve(); await release.promise; }
+            return response({ discussions: [storedSummary(url.searchParams.has('cursor') ? 'last' : 'first')],
+                nextCursor: url.searchParams.has('cursor') ? null : 'later-page' });
+        }) });
+        const search = new AbortController();
+        const completing = repository.loadCompleteList('active', search.signal);
+        await entered.promise;
+        const visibleRead = repository.refreshList('active');
+        search.abort();
+        release.resolve();
+        await Promise.all([completing, visibleRead]);
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'ready', items: [{ id: 'first' }], nextCursor: 'later-page' });
+        expect(requests).toEqual(['first']);
+        await repository.loadCompleteList('active');
+        expect(repository.getSnapshot().lists.active.items.map(row => row.id)).toEqual(['first', 'last']);
+        expect(requests).toEqual(['first', 'later-page']);
+        const snapshot = repository.getSnapshot();
+        await repository.loadCompleteList('active');
+        expect(repository.getSnapshot()).toBe(snapshot);
+    });
+
+    it('searches a later-page title opened by the actual resource cipher, never ciphertext or message bodies', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(37));
+        const key = await createResourceDataKey({ mode: 'e2ee', encryptDataEncryptionKey: value => encryption.encryptEncryptionKey(value) });
+        if (!key || key.mode !== 'e2ee') throw new Error('Expected resource key fixture');
+        const title = await sealSessionStoredContent(resourceStoredContentContext(key), { v: 1, title: 'Private payroll review' });
+        const body = await sealSessionStoredContent(resourceStoredContentContext(key), { v: 1, parts: [{ t: 'text', text: 'body-only-needle' }] });
+        if (title.status !== 'ready' || title.content.t !== 'encrypted' || body.status !== 'ready') throw new Error('Expected sealed resource fixture');
+        const opened = { ...storedSummary('opened-title'), encryptionMode: 'e2ee', dataEncryptionKey: key.dataEncryptionKey,
+            titleContent: title.content, latestMessage: { ...storedSummary('opened-title').latestMessage, content: body.content } };
+        const locked = { ...opened, id: 'locked-title', keyReadiness: false };
+        const requests: Array<{ url: URL; init: RequestInit | undefined }> = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async (path, init) => {
+            const url = new URL(path, 'https://home.invalid');
+            requests.push({ url, init });
+            return response({ discussions: url.searchParams.get('state') === 'archived' ? []
+                : url.searchParams.has('cursor') ? [opened] : [locked],
+                nextCursor: url.searchParams.get('state') === 'archived' || url.searchParams.has('cursor') ? null : 'encrypted-page-2' });
+        }, { encryption, accountMode: 'e2ee' }) });
+        await repository.loadCompleteList('active');
+        const list = repository.getSnapshot().lists.active;
+        expect(list.items.map(row => row.title)).toEqual([null, 'Private payroll review']);
+        const selected = selectDiscussionListSearch(list, 'PAYROLL', new Map());
+        expect(selected.items.map(row => row.id)).toEqual(['opened-title']);
+        expect(selected).toMatchObject({ status: 'locked', nextCursor: null, incomplete: true });
+        expect(selectDiscussionListSearch(list, title.content.c, new Map()).items).toEqual([]);
+        expect(selectDiscussionListSearch(list, 'body-only-needle', new Map()).items).toEqual([]);
+        expect(requests.every(({ url, init }) => init?.method === 'GET' && init.body === undefined
+            && [...url.searchParams.keys()].every(name => ['state', 'cursor', 'limit'].includes(name)))).toBe(true);
+    });
+
+    it('does not publish a later search page or continue traversal after Home retirement', async () => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const cursors: Array<string | null> = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            const cursor = url.searchParams.get('cursor');
+            cursors.push(cursor);
+            if (cursor) { entered.resolve(); await release.promise; }
+            return response({ discussions: [storedSummary(cursor ? 'retired-private' : 'first')], nextCursor: cursor ? 'must-not-read' : 'later-page' });
+        }) });
+        const completing = repository.loadCompleteList('active');
+        await entered.promise;
+        repository.clear();
+        const retired = repository.getSnapshot();
+        release.resolve();
+        await completing;
+        expect(repository.getSnapshot()).toBe(retired);
+        expect(repository.getSnapshot().lists.active.items).toEqual([]);
+        expect(cursors).toEqual([null, 'later-page']);
+    });
+
     it('keeps active and archived keyset pages separate and merges repeated rows stably', async () => {
         const first = summary('discussion-a', null, 3);
         const second = summary('discussion-b', null, 2);
@@ -1000,7 +1122,9 @@ describe('Discussion repository', () => {
 
         const retried = await repository.retry('create-local-a');
         expect(retried.kind).toBe('succeeded');
-        expect(create.mock.calls[0]?.[0]).toEqual(create.mock.calls[1]?.[0]);
+        const submitted = create.mock.calls.map(([{ onResolvedParticipants: _observe, ...intent }]) => intent);
+        expect(submitted).toHaveLength(2);
+        expect(submitted[0]).toEqual(submitted[1]);
         expect(repository.getSnapshot().lists.active.items[0]?.id).toBe('discussion-created');
     });
 

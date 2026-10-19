@@ -14,7 +14,7 @@ import { createDiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/
 import type { DiscussionActionIdV1 } from '@happier-dev/protocol/discussions/actionIds';
 import type { DiscussionMessageV1, DiscussionSummaryV1 } from '@happier-dev/protocol/discussions/models';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { openSessionStoredContent, sealSessionStoredContent } from '@happier-dev/sync-client';
 import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -28,6 +28,7 @@ import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountC
 import { prepareDiscussionExecutableParticipantInvitation, type DiscussionExecutableParticipantInviteInput } from './executableParticipantInvitation';
 import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinionPreviewResponseV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { DiscussionSecondOpinionStartInputV1Schema } from '@happier-dev/protocol/discussions/secondOpinionActions';
+import { DiscussionInitialParticipantsV1Schema, type DiscussionInitialParticipantV1 } from '@happier-dev/protocol/discussions/participants';
 import { projectDiscussionSecondOpinionPreviewInputV1 } from '@happier-dev/protocol/actions/executor/discussionSecondOpinion';
 import { DiscussionCandidatesListInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { DiscussionAttentionResponseV1Schema, type DiscussionAttentionQueryV1 } from '@happier-dev/protocol/discussions/api';
@@ -170,6 +171,8 @@ export function createDiscussionActionAdapter(options: AdapterOptions): Discussi
             if (actionId === 'discussion.create') {
                 if (!options.accountMode) return failure('discussion_encryption_mode_mismatch');
                 const args = DiscussionCreateInputV1Schema.parse(input);
+                // Selector intent is front-door-only; the storage writer/equality owner sees concrete refs.
+                const participants = args.participants === undefined ? undefined : DiscussionInitialParticipantsV1Schema.parse(args.participants);
                 const creationLocalId = args.creationLocalId ?? randomUUID();
                 const messageLocalId = args.firstMessage.localId ?? randomUUID();
                 const retained = options.accountMode === 'e2ee' ? await findCreatedDiscussion(options, creationLocalId, signal) : null;
@@ -186,9 +189,9 @@ export function createDiscussionActionAdapter(options: AdapterOptions): Discussi
                 if (titleContent.status !== 'ready' || messageContent.status !== 'ready') return failure('discussion_encryption_mode_mismatch');
                 body = buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId, titleContent: titleContent.content,
                     creationEqualityEvidenceV1: equality(key, serializeDiscussionMutationEqualityIntentV1({ kind: 'create', title,
-                        anchor: args.anchor, participants: args.participants,
+                        anchor: args.anchor, participants,
                         firstMessage: { localId: messageLocalId, content, mentionedAccountIds, mentionedSessionIds, replyTarget: args.firstMessage.replyTarget } })),
-                    anchor: args.anchor, participants: args.participants,
+                    anchor: args.anchor, participants,
                     ...(key.mode === 'e2ee' ? { dataEncryptionKey: key.dataEncryptionKey,
                         expectedOwnerContentPublicKeyFingerprint: options.ownerContentPublicKeyFingerprint } : {}),
                     firstMessage: { localId: messageLocalId, content: messageContent.content, authoredContent: content, mentionedAccountIds, mentionedSessionIds,
@@ -241,7 +244,7 @@ export function createDiscussionActionAdapter(options: AdapterOptions): Discussi
             if (actionId === 'discussion.create') {
                 const value = DiscussionCreateResponseV1Schema.parse(payload);
                 if (value.firstMessage.discussionId !== value.discussion.id) throw refusal('outcome_unknown');
-                if (DiscussionCreateInputV1Schema.parse(input).participants?.length) {
+                if (DiscussionCreateInputV1Schema.parse(input).participants?.some(participant => participant.kind === 'account')) {
                     preparingRecipients = true;
                     await prepareDiscussionRecipients(options, value.discussion, signal);
                     preparingRecipients = false;
@@ -341,11 +344,13 @@ export async function readDiscussionAttentionPage(options: AdapterOptions, input
 }
 
 export function createDiscussionClient(options: Readonly<{ scope: ServerAccountScope; availability: SessionCollaborationAvailability }>) {
-    const run = async <T extends keyof ClientActionInputs>(actionId: T, input: ClientActionInputs[T], signal?: AbortSignal): Promise<DiscussionClientOutcome<ClientActionResult<T>>> => {
+    const run = async <T extends keyof ClientActionInputs>(actionId: T, input: ClientActionInputs[T], signal?: AbortSignal,
+        onSessionTargetsResolved?: ActionExecutorContext['onSessionTargetsResolved']): Promise<DiscussionClientOutcome<ClientActionResult<T>>> => {
         if (options.availability === 'unavailable') return { kind: 'failed', errorCode: 'unsupported_action' };
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const result = await createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', serverId: options.scope.serverId,
             expectedAccountId: options.scope.accountId,
+            ...(onSessionTargetsResolved ? { onSessionTargetsResolved } : {}),
             ...(signal ? { signal } : {}) });
         if (!result.ok) return { kind: 'failed', errorCode: result.errorCode };
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
@@ -390,6 +395,7 @@ export function createDiscussionClient(options: Readonly<{ scope: ServerAccountS
         create: async (input: Omit<DiscussionActionInputV1ById['discussion.create'], 'firstMessage' | 'participants'> & {
             messageLocalId: string; content: DiscussionActionInputV1ById['discussion.post']['content']; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[];
             participants?: readonly NonNullable<DiscussionActionInputV1ById['discussion.create']['participants']>[number][];
+            onResolvedParticipants?: (participants: readonly DiscussionInitialParticipantV1[]) => void;
             replyTarget?: DiscussionActionInputV1ById['discussion.post']['replyTarget'] }, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>> => {
             if ('kind' in input.content && input.content.kind === 'doc_passage_comment') {
                 const { passage, content } = input.content;
@@ -410,7 +416,12 @@ export function createDiscussionClient(options: Readonly<{ scope: ServerAccountS
             participants: input.participants === undefined ? undefined : [...input.participants],
             firstMessage: { localId: input.messageLocalId, content: input.content,
                 mentionedAccountIds: input.mentionedAccountIds === undefined ? undefined : [...input.mentionedAccountIds],
-                mentionedSessionIds: input.mentionedSessionIds === undefined ? undefined : [...input.mentionedSessionIds], replyTarget: input.replyTarget } }, signal);
+                mentionedSessionIds: input.mentionedSessionIds === undefined ? undefined : [...input.mentionedSessionIds], replyTarget: input.replyTarget } }, signal,
+            resolution => {
+                if (resolution.actionId !== 'discussion.create') return;
+                const resolved = DiscussionCreateInputV1Schema.parse(resolution.input);
+                input.onResolvedParticipants?.(DiscussionInitialParticipantsV1Schema.parse(resolved.participants ?? []));
+            });
         },
         post: (input: Omit<DiscussionActionInputV1ById['discussion.post'], 'mentionedAccountIds' | 'mentionedSessionIds'> & { mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[] }, signal?: AbortSignal) => {
             if ('kind' in input.content && input.content.kind === 'doc_passage_comment') {

@@ -16,25 +16,36 @@ import { participantRecipientsMatch } from '@/sync/domains/input/participants/re
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 import { t } from '@/text';
 import { useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
+import { useDiscussionTitleProjections } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
 
 import { AGENT_INPUT_MENU_ICON_SIZE_PX } from '../definitions/agentInputChipIconMetrics';
 import { resolveSessionParticipantTargetLabel } from './recipientOptions';
-import { useSessionTalkTargets } from './sessionTalkTargets';
+import { SessionTalkDiscussionChoices } from './SessionTalkDiscussionChoices';
+import { useSessionTalkTargets, type SessionTalkTargets } from './sessionTalkTargets';
 
 export type SessionTalkIntent = SessionDraftSessionMessagingValueV1;
 export type SessionTalkVerb = 'send' | 'ask' | 'post_update';
-/** The `manager` relations the composer offers; the Action owns every other selector. */
-export type SessionTalkSelector = 'manager' | 'workers' | 'siblings';
+/** The selectors the composer offers, each previewed by the Action's own resolver. */
+export type SessionTalkSelector = 'manager' | 'workers' | 'siblings' | 'followers' | 'following' | 'discussion';
+/** A chosen selector: the Discussion selector carries which Discussion. */
+export type SessionTalkTarget =
+  | Readonly<{ selector: Exclude<SessionTalkSelector, 'discussion'> }>
+  | Readonly<{ selector: 'discussion'; discussionId: string }>;
 
-const SELECTORS: readonly SessionTalkSelector[] = [
+const RELATION_SELECTORS = [
   'manager',
   'workers',
   'siblings',
-];
+  'followers',
+  'following',
+] as const satisfies readonly SessionTalkSelector[];
 const SELECTOR_ICON: Readonly<Record<SessionTalkSelector, IconName>> = {
   manager: 'tree-structure',
   workers: 'arrow-elbow-down-right',
   siblings: 'arrows-left-right',
+  followers: 'bell',
+  following: 'eye',
+  discussion: 'chats-circle',
 };
 
 export function readSessionTalkVerb(
@@ -47,33 +58,38 @@ export function readSessionTalkVerb(
     : null;
 }
 
-export function readSessionTalkSelector(
+export function readSessionTalkTarget(
   intent: SessionTalkIntent | null,
-): SessionTalkSelector | null {
+): SessionTalkTarget | null {
   if (
     !intent ||
     intent.kind === 'post_update' ||
     typeof intent.target === 'string'
   )
     return null;
-  const selector = intent.target.selector;
-  return selector === 'manager' ||
-    selector === 'workers' ||
-    selector === 'siblings'
-    ? selector
+  const target = intent.target;
+  if (target.selector === 'discussion') return { selector: 'discussion', discussionId: target.discussionId };
+  return (RELATION_SELECTORS as readonly string[]).includes(target.selector)
+    ? { selector: target.selector as (typeof RELATION_SELECTORS)[number] }
     : null;
+}
+
+export function readSessionTalkSelector(
+  intent: SessionTalkIntent | null,
+): SessionTalkSelector | null {
+  return readSessionTalkTarget(intent)?.selector ?? null;
 }
 
 /** Ask always returns its answers here: the composer has no inline reader for a waited answer. */
 export function buildSessionTalkIntent(
   verb: SessionTalkVerb,
-  selector: SessionTalkSelector | null,
+  target: SessionTalkTarget | null,
 ): SessionTalkIntent | null {
   if (verb === 'post_update') return { kind: 'post_update' };
-  if (!selector) return null;
+  if (!target) return null;
   return verb === 'ask'
-    ? { kind: 'ask', target: { selector }, reply: 'return' }
-    : { kind: 'send', target: { selector } };
+    ? { kind: 'ask', target, reply: 'return' }
+    : { kind: 'send', target };
 }
 
 export function selectorTitle(selector: SessionTalkSelector): string {
@@ -104,20 +120,35 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
   const [verb, setVerb] = React.useState<SessionTalkVerb>(
     () => readSessionTalkVerb(props.intent) ?? 'ask',
   );
-  const selected = readSessionTalkSelector(props.intent);
-  const targets = useSessionTalkTargets(props.sessionId, props.serverId);
+  const selectedTarget = readSessionTalkTarget(props.intent);
+  const selected = selectedTarget?.selector ?? null;
+  // The Discussion selector needs one Discussion; the step below chooses it, and the row then previews it.
+  const [step, setStep] = React.useState<'targets' | 'discussion'>('targets');
+  const [discussionId, setDiscussionId] = React.useState<string | null>(
+    () => (selectedTarget?.selector === 'discussion' ? selectedTarget.discussionId : null),
+  );
+  const [commitDiscussion, setCommitDiscussion] = React.useState(false);
+  const targets = useSessionTalkTargets(props.sessionId, props.serverId, {
+    enabled: verb !== 'post_update',
+    ...(discussionId ? { discussionId } : {}),
+  });
+  const discussionTitle = useDiscussionTitleProjections(React.useMemo(
+    () => (discussionId ? [{ serverId: props.serverId, discussionId }] : []),
+    [discussionId, props.serverId],
+  ))[0] ?? null;
   const participantTargets = props.participants?.targets ?? [];
   const chatSelected = props.intent === null && !props.participants?.recipient;
 
   // Post update and back restores the sessions chosen before (lab T1u).
-  const lastSelector = React.useRef(selected);
-  if (selected) lastSelector.current = selected;
+  const lastTarget = React.useRef(selectedTarget);
+  if (selectedTarget) lastTarget.current = selectedTarget;
   const chooseVerb = React.useCallback(
     (next: SessionTalkVerb) => {
       setVerb(next);
+      setStep('targets');
       if (next === 'post_update') props.onIntentChange({ kind: 'post_update' });
       else if (props.intent)
-        props.onIntentChange(buildSessionTalkIntent(next, lastSelector.current));
+        props.onIntentChange(buildSessionTalkIntent(next, lastTarget.current));
     },
     [props.intent, props.onIntentChange],
   );
@@ -128,10 +159,23 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
     setBodyMinHeight((current) => (height > current ? height : current));
   }, []);
 
-  const chooseSelector = (selector: SessionTalkSelector) => {
+  const chooseTarget = (target: SessionTalkTarget) => {
     props.participants?.onRecipientChange(null);
-    props.onIntentChange(buildSessionTalkIntent(verb, selector));
+    props.onIntentChange(buildSessionTalkIntent(verb, target));
     props.requestClose();
+  };
+  // A Discussion chosen in its step is sent to once the Action's preview proves who is in it.
+  const discussionPreview = targets.discussion;
+  const discussionReady = discussionPreview.coverage === 'complete' && discussionPreview.addresses.length > 0;
+  React.useEffect(() => {
+    if (!commitDiscussion || !discussionId || discussionPreview.loading) return;
+    setCommitDiscussion(false);
+    if (discussionReady) chooseTarget({ selector: 'discussion', discussionId });
+  });
+  const chooseDiscussion = (id: string) => {
+    setDiscussionId(id);
+    setCommitDiscussion(true);
+    setStep('targets');
   };
   const chooseChat = () => {
     props.onIntentChange(null);
@@ -163,12 +207,6 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
       color={theme.colors.text.primary}
     />
   );
-  const names: Readonly<Record<SessionTalkSelector, readonly string[]>> = {
-    manager: targets.manager ? [targets.manager] : [],
-    workers: targets.workers,
-    siblings: targets.siblings,
-  };
-
   return (
     <View style={styles.root} testID="session-talk-picker">
       <View style={styles.verb}>
@@ -196,6 +234,14 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
           sessionId={props.sessionId}
           serverId={props.serverId}
         />
+      ) : step === 'discussion' && props.serverId ? (
+        <SessionTalkDiscussionChoices
+          sessionId={props.sessionId}
+          serverId={props.serverId}
+          selectedId={discussionId}
+          onChoose={chooseDiscussion}
+          onBack={() => setStep('targets')}
+        />
       ) : (
         <View>
           <CollectionListGroupLabel
@@ -222,40 +268,47 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
             accessibilityChecked={chatSelected}
             onPress={chooseChat}
           />
-          {SELECTORS.map((selector) => {
-            const list = names[selector];
-            const empty = list.length === 0;
+          {RELATION_SELECTORS.map((selector) => {
+            const preview = targets[selector];
             const isSelected = selected === selector;
             return (
               <Item
                 key={selector}
                 testID={`session-talk-target:${selector}`}
                 rowRole="menu"
-                icon={
-                  <Icon
-                    name={SELECTOR_ICON[selector]}
-                    size={AGENT_INPUT_MENU_ICON_SIZE_PX}
-                    color={iconColor}
-                  />
-                }
+                icon={<Icon name={SELECTOR_ICON[selector]} size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={iconColor} />}
                 title={selectorTitle(selector)}
-                subtitle={
-                  empty
-                    ? t('session.participants.talk.noneNow')
-                    : summarizeNames(list)
-                }
-                detail={empty ? undefined : String(list.length)}
+                subtitle={describeTalkPreview(preview)}
+                detail={preview.coverage === 'complete' && preview.names.length > 0 ? String(preview.names.length) : undefined}
                 selected={isSelected}
                 rightElement={isSelected ? check : undefined}
-                disabled={empty}
+                disabled={preview.coverage !== 'complete' || preview.names.length === 0}
                 showChevron={false}
                 showDivider={false}
                 accessibilityRole="radio"
                 accessibilityChecked={isSelected}
-                onPress={() => chooseSelector(selector)}
+                onPress={() => chooseTarget({ selector })}
               />
             );
           })}
+          <Item
+            testID="session-talk-target:discussion"
+            rowRole="menu"
+            icon={<Icon name={SELECTOR_ICON.discussion} size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={iconColor} />}
+            title={discussionTitle ?? selectorTitle('discussion')}
+            subtitle={discussionId ? describeTalkPreview(discussionPreview) : t('session.participants.talk.chooseDiscussion')}
+            detail={discussionReady ? String(discussionPreview.names.length) : undefined}
+            selected={selected === 'discussion'}
+            // Ready, it sends there; otherwise (none chosen, or one that can't be reached) it opens the choice.
+            rightElement={selected === 'discussion' ? check : undefined}
+            showChevron={!discussionReady}
+            showDivider={false}
+            accessibilityRole="radio"
+            accessibilityChecked={selected === 'discussion'}
+            onPress={() => (discussionReady && discussionId
+              ? chooseTarget({ selector: 'discussion', discussionId })
+              : setStep('discussion'))}
+          />
           {participantTargets.length > 0 ? (
             <>
               <CollectionListGroupLabel
@@ -303,6 +356,19 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
       </View>
     </View>
   );
+}
+
+/**
+ * One line for a selector's preview: who it reaches now, or why that isn't known. Unloaded or unreachable
+ * relations never read as empty; only a complete preview with nobody in it says "None right now".
+ */
+function describeTalkPreview(preview: SessionTalkTargets[SessionTalkSelector]): string {
+  if (preview.loading && preview.names.length === 0) return t('common.loading');
+  if (preview.coverage === 'unavailable') return t('session.participants.talk.unavailable');
+  if (preview.coverage === 'partial') {
+    return `${summarizeNames(preview.names)} · ${t('session.participants.talk.partial')}`;
+  }
+  return preview.names.length === 0 ? t('session.participants.talk.noneNow') : summarizeNames(preview.names);
 }
 
 /** "A, B" up to two names, then "A, B +N" (the approval preview lists everyone). */

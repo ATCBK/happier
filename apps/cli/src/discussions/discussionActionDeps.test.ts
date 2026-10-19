@@ -128,6 +128,34 @@ describe('Home Discussion resource transport', () => {
     expect(requests).toEqual(['https://home.example.test/v1/discussions/discussion-1/participants']);
   });
 
+  it('materializes create and invite selectors before the concrete captured-Home HTTP boundary', async () => {
+    const original = axiosRequest.getMockImplementation()!;
+    axiosRequest.mockImplementation(async (request: { url: string; method: string; data?: string }) => {
+      const path = new URL(request.url).pathname;
+      if (path === '/v1/discussions/source/participants') return { status: 200, data: {
+        discussionId: 'source', ownerAccountId: 'account-1', access: 'owner', grants: [], participants: [
+          { participant: { kind: 'session', sessionId: 'chosen' }, answerPolicy: 'when_addressed', createdAt: 1 },
+        ],
+      } };
+      if (path === '/v1/discussions/discussion-1/participants/invite') return { status: 200, data: {
+        discussionId: 'discussion-1', ownerAccountId: 'account-1', access: 'owner', grants: [], changed: true,
+      } };
+      return original(request);
+    });
+    const executor = createActionExecutor({ discussionAction: action() });
+    const participant = { kind: 'session', sessionId: { selector: 'discussion', discussionId: 'source' } };
+    expect(await executor.execute('discussion.create', { ...createInput, participants: [participant] }, context))
+      .toMatchObject({ ok: true, result: { discussion: { id: 'discussion-1' } } });
+    expect(await executor.execute('discussion.invite', { discussionId: 'discussion-1', participant }, context))
+      .toMatchObject({ ok: true, result: { changed: true } });
+    const writes = axiosRequest.mock.calls.map(([request]) => request)
+      .filter(request => request.method === 'POST').map(request => ({ path: new URL(request.url).pathname, body: JSON.parse(request.data) }));
+    expect(writes).toMatchObject([
+      { path: '/v1/discussions', body: { participants: [{ kind: 'session', sessionId: 'chosen' }] } },
+      { path: '/v1/discussions/discussion-1/participants/invite', body: { participant: { kind: 'session', sessionId: 'chosen' } } },
+    ]);
+  });
+
   it('runs the registered people candidate Action through the captured HTTP boundary and native pager', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
     const profiles = ['account-1', 'candidate'].map(id => ({ id, name: id, username: id, firstName: id,

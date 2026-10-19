@@ -3,7 +3,7 @@ import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Sc
 import { SessionDiscussionParticipantV1Schema } from '../sessions/creation/sessionDiscussionParticipantV1.js';
 import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
 import { isSessionStopConfirmed, SessionStopResultSchema } from '../sessions/control/contract.js';
-import { readActionSessionTargetField, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
+import { bindActionSessionTargetOperands, readActionSessionTargetField, readActionSessionTargetOperands, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
 import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV1Schema,
   deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
 import { AutonomousExchangeControlRequestV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
@@ -353,7 +353,7 @@ import { SessionBoardActionIdV1Schema } from '../sessions/board/actionIds.js';
 import { DiscussionActionIdV1Schema } from '../discussions/actionIds.js';
 import { DISCUSSION_ACTION_INPUT_SCHEMAS_V1, DiscussionInviteInputV1Schema,
   DiscussionParticipantRemoveInputV1Schema, DiscussionDetailsResultV1Schema } from '../discussions/actions.js';
-import { DiscussionInviteResponseV1Schema, DiscussionRemoveParticipantResponseV1Schema, DiscussionParticipantsListResponseV1Schema,
+import { DiscussionInitialParticipantsV1Schema, DiscussionInviteResponseV1Schema, DiscussionRemoveParticipantResponseV1Schema, DiscussionParticipantsListResponseV1Schema,
   type DiscussionOwnedSessionV1, type DiscussionAnswerPolicyV1 } from '../discussions/participants.js';
 import { projectDiscussionModelParticipantLaunchV1, type DiscussionModelParticipantLaunchV1 } from '../discussions/modelParticipantLaunch.js';
 import { executeDiscussionSecondOpinionV1 } from './executor/discussionSecondOpinion.js';
@@ -2724,7 +2724,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const definitionAction = isActionFamilyId(actionId, WidgetDefinitionActionIdV1Schema)
       || isActionFamilyId(actionId, WidgetLayoutFragmentActionIdV1Schema);
     const definitionSession = definitionAction ? readWidgetDefinitionActionSessionV1(input) : null;
-    const sessionId = definitionSession?.sessionId ?? widgetSessionId ?? (input === undefined ? null : normalizeId(readRecord(input).sessionId));
+    const declaredAction = ActionIdSchema.safeParse(actionId);
+    const declaration = declaredAction.success ? getActionSpec(declaredAction.data).sessionTarget : undefined;
+    const sessionId = definitionSession?.sessionId ?? widgetSessionId ?? (input === undefined ? null
+      : normalizeId(readRecord(input).sessionId) || (declaration && !declaration.field.includes('*')
+        ? normalizeId(readActionSessionTargetField(readRecord(input), declaration.field)) : null));
     const target = sessionId ? { kind: 'session' as const, sessionId } : widgetSurface || definitionAction ? null : ctx.externalActionTarget
       ?? (ctx.defaultSessionId ? { kind: 'session' as const, sessionId: ctx.defaultSessionId } : null);
     const result = evaluateApiTokenGrantV1({
@@ -2782,7 +2786,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // Execution placement is not source attribution. Ask the authenticated host
     // boundary, then re-enter the same grant owner; absent proof stays closed.
     while (failure && readRecord(failure.details).reason === 'target_not_granted') {
-      const sessionId = normalizeId(readRecord(failure.details).sourceSessionId) || normalizeId(readRecord(input).sessionId);
+      const declaration = getActionSpec(actionId).sessionTarget;
+      const sessionId = normalizeId(readRecord(failure.details).sourceSessionId) || normalizeId(readRecord(input).sessionId)
+        || (declaration && !declaration.field.includes('*') ? normalizeId(readActionSessionTargetField(readRecord(input), declaration.field)) : null);
       if (!sessionId || sourceMachineIds.has(sessionId)) return failure;
       try {
         const machineId = await deps.resolveApiTokenGrantSessionMachineId({ actionId, sessionId, context: ctx });
@@ -2792,6 +2798,25 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       } catch { return failure; }
     }
     return failure;
+  }
+
+  async function admitDiscussionInvitationTargets(actionId: ActionId, input: unknown, ctx: ActionExecutorContext,
+    snapshot: ActionExecutorContext['sessionTargetsV1']): Promise<ActionExecuteFailure | null> {
+    if (actionId !== 'discussion.create' && actionId !== 'discussion.invite') return null;
+    if (snapshot) {
+      if (snapshot.targets.some(target => !ctx.serverId || !isSameHome(target.serverId, ctx.serverId, ctx))) {
+        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      }
+      for (const target of snapshot.targets) {
+        const failure = await admitCredentialScope(actionId, { ...ctx, serverId: target.serverId }, { sessionId: target.sessionId });
+        if (failure) return failure;
+      }
+    }
+    if (actionId === 'discussion.create' && readRecord(input).participants !== undefined
+      && !DiscussionInitialParticipantsV1Schema.safeParse(readRecord(input).participants).success) {
+      return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+    }
+    return null;
   }
 
   function workspaceWriteFailure(
@@ -3321,7 +3346,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && replayServerId && replayServerId !== origin.data.serverId
       ? { ...reviewedSessionTargets, targets: reviewedSessionTargets.targets.map(target => (
           target.serverId === origin.data.serverId ? { ...target, serverId: replayServerId } : target
-        )) }
+        )), ...(reviewedSessionTargets.operands ? { operands: reviewedSessionTargets.operands.map(operand => ({ ...operand,
+          target: operand.target.serverId === origin.data.serverId ? { ...operand.target, serverId: replayServerId } : operand.target,
+        })) } : {}) }
       : reviewedSessionTargets;
     let executionContext: ActionExecutorContext = {
       ...(args.ctx.signal ? { signal: args.ctx.signal } : {}),
@@ -3942,8 +3969,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (!snapshot.success || snapshot.data.actionId !== actionId || snapshot.data.field !== spec.sessionTarget.field) {
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
+        if (!spec.sessionTarget.field.includes('*') && (snapshot.data.operands
+          || spec.sessionTarget.cardinality === 'one' && snapshot.data.targets.length !== 1)) {
+          return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        }
       } else {
-        if (options?.approvalReplay && readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field) !== undefined) {
+        if (options?.approvalReplay && (spec.sessionTarget.field.includes('*')
+          ? readActionSessionTargetOperands(readRecord(admittedInput), spec.sessionTarget.field).length > 0
+          : readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field) !== undefined)) {
+          if (spec.sessionTarget.field.includes('*')) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
           try {
             if (typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field)) !== 'string') {
               return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
@@ -3957,6 +3991,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (targets && 'ok' in targets) return targets;
         if (targets) ctx = { ...ctx, sessionTargetsV1: targets };
       }
+      const snapshot = ctx.sessionTargetsV1;
+      if (spec.sessionTarget.field.includes('*') && snapshot) {
+        const bound = bindActionSessionTargetOperands(readRecord(admittedInput), snapshot, options?.approvalReplay === true);
+        if (!bound) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        admittedInput = bound;
+      } else if (snapshot && actionId === 'discussion.invite') {
+        admittedInput = replaceActionSessionTargetField(readRecord(admittedInput), snapshot.field, snapshot.targets[0].sessionId);
+      }
+    }
+    const invitationFailure = await admitDiscussionInvitationTargets(actionId, admittedInput, ctx, ctx.sessionTargetsV1);
+    if (invitationFailure) return invitationFailure;
+    if (!existingAdmission && ctx.sessionTargetsV1) {
+      ctx.onSessionTargetsResolved?.({ actionId, input: admittedInput, targets: ctx.sessionTargetsV1 });
     }
     if (actionId === 'session.exchange.control') {
       const exchangeInput = readRecord(admittedInput);
@@ -4453,6 +4500,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         && review.actionId === actionId && review.requestId === ctx.actionRequestId && review.decidingAccountId
         && review.inputDigest === computeActionInputApprovalDigestV1(actionId, admittedInput));
       discussionDraftReviewRequired = discussionPolicy.answerPolicy === 'drafts_for_approval' && !reviewed;
+      // The exact Workflow original already authorized this informational
+      // answer. Keep explicit Settings Require and private draft review at
+      // their existing owners instead of applying the generic new-post default.
+      if (discussionPolicy.informationalReturn) contextualSafety = 'safe';
       if (discussionDraftReviewRequired && options?.approvalReplay) {
         return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
       }
@@ -4500,10 +4551,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       : resolveBaseApprovalRouting(ctx);
     const folderApprovalRouting = folderCreateInput && !existingAdmission ? resolveActionApprovalRouting({
       actionId: 'artifact.folders.create', spec: getActionSpec('artifact.folders.create'), input: folderCreateInput,
-      // The exact Workflow original already authorized this informational
-      // answer. Keep explicit Settings Require and private draft review at
-      // their existing owners instead of applying the generic new-post default.
-      if (discussionPolicy.informationalReturn) contextualSafety = 'safe';
       context: ctx, settings: ctx.actionsSettings,
       ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
       requiredByPolicy: ctx.bypassApprovals ? false : deps.isActionApprovalRequired?.('artifact.folders.create', ctx, folderCreateInput),
@@ -4879,7 +4926,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
       }
 
-      if (spec.sessionTarget && ctx.sessionTargetsV1) {
+      if (spec.sessionTarget && ctx.sessionTargetsV1 && !ctx.sessionTargetsV1.operands) {
         const snapshot = ctx.sessionTargetsV1;
         const runTargets = async (): Promise<ActionExecuteResult> => {
           const results: Array<{ target: ActionSessionAddress; result: ActionExecuteResult }> = [];
@@ -10568,7 +10615,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const targets = await resolveActionSessionTargets(deps, { actionId: targetActionId,
             declaration: targetSpec.sessionTarget, input: readRecord(targetArgs), context: ctx });
           if (targets && 'ok' in targets) return targets;
-          if (targets) ctx = { ...ctx, sessionTargetsV1: targets };
+          if (targets) {
+            ctx = { ...ctx, sessionTargetsV1: targets };
+            if (targets.operands) {
+              const bound = bindActionSessionTargetOperands(readRecord(targetArgs), targets);
+              if (!bound) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+              targetArgs = bound;
+            } else if (targetActionId === 'discussion.invite') {
+              targetArgs = replaceActionSessionTargetField(readRecord(targetArgs), targets.field, targets.targets[0].sessionId);
+            }
+            const invitationFailure = await admitDiscussionInvitationTargets(targetActionId, targetArgs, ctx, targets);
+            if (invitationFailure) return invitationFailure;
+            ctx.onSessionTargetsResolved?.({ actionId: targetActionId, input: targetArgs, targets });
+          }
         }
         if (isMemoryWriteActionV1(targetActionId)) {
           if (!deps.memoryLibrary) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${targetActionId}` };
@@ -11241,7 +11300,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     let selectorIntent = false;
     if (spec.sessionTarget) {
-      try { selectorIntent = typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(input), spec.sessionTarget.field)) !== 'string'; }
+      try { selectorIntent = spec.sessionTarget.field.includes('*')
+        ? readActionSessionTargetOperands(readRecord(input), spec.sessionTarget.field).length > 0
+        : typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(input), spec.sessionTarget.field)) !== 'string'; }
       catch { /* Canonical semantic parsing below returns invalid_parameters. */ }
     }
     const credentialFailure = selectorIntent
