@@ -177,20 +177,23 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     expect(reads).toEqual(['local:memory', 'other-home:memory', 'local:instructions']);
   });
 
-  it('loads only complete, budgeted index entries and topic summaries, never topic detail', async () => {
+  it.each(['coding', 'voice'] as const)('loads only complete, budgeted decision index entries and topic summaries on %s, never decision metadata or topic detail', async surface => {
     const fact = (id: string, text: string) => ({ id, text, createdAtMs: 0, sourceSessionRef: null });
+    const decision = { reason: 'Private review rationale', sourceMessageRef: { kind: 'session',
+      session: { serverId: 'home', sessionId: 'source-session' }, messageId: 'committed-source' },
+      approvedBy: { accountId: 'deciding-person', atMs: 1 } };
     const indexLine = '- Key preference [id: key; added: 1970-01-01]';
     const summaryLine = '- Topic: architecture — Design decisions';
     const index = `${indexLine}\n${summaryLine}`;
     const readArtifact = async () => ({ id: 'memory',
       header: { v: 1, kind: 'memory_doc.v1', title: 'Project memory' },
-      body: JSON.stringify({ v: 1, index: [fact('key', 'Key preference')], topics: [
-        { title: 'architecture', summary: 'Design decisions', facts: [fact('detail', 'Private on-demand topic detail')] },
+      body: JSON.stringify({ v: 1, index: [{ ...fact('key', 'Key preference'), decision }], topics: [
+        { title: 'architecture', summary: 'Design decisions', facts: [{ ...fact('detail', 'Private on-demand topic detail'), decision }] },
         { title: 'archive', summary: 'Past facts', facts: [fact('old', 'Archived on-demand fact')] },
       ] }), revision: { headerVersion: 1, bodyVersion: 2 },
     });
     const result = await resolvePromptStackSystemAppendBlocksV1({
-      surface: 'coding', projectEntries: [{ ...entry('memory'), maxChars: index.length }],
+      surface, projectEntries: [{ ...entry('memory'), maxChars: index.length }],
       nowMs: () => 1, readArtifact,
     });
     expect(result.blocks).toEqual([`Memory: ${JSON.stringify({ document: 'Project memory', layer: 'project',
@@ -199,13 +202,13 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
       loadedFactIds: ['key'], notLoadedFactIds: [], loadedTopicTitles: ['architecture'], notLoadedTopicTitles: ['archive'],
     } })]);
     await expect(resolvePromptStackSystemAppendBlocksV1({
-      surface: 'coding', projectEntries: [{ ...entry('memory'), maxChars: indexLine.length - 1 }],
+      surface, projectEntries: [{ ...entry('memory'), maxChars: indexLine.length - 1 }],
       nowMs: () => 1, readArtifact,
     })).resolves.toMatchObject({ blocks: [expect.stringContaining(summaryLine)], admittedEntries: [expect.objectContaining({ memory: {
       loadedFactIds: [], notLoadedFactIds: ['key'], loadedTopicTitles: ['architecture'], notLoadedTopicTitles: ['archive'],
     } })] });
     await expect(resolvePromptStackSystemAppendBlocksV1({
-      surface: 'coding', projectEntries: [{ ...entry('memory'), maxChars: 0 }],
+      surface, projectEntries: [{ ...entry('memory'), maxChars: 0 }],
       nowMs: () => 1, readArtifact,
     })).resolves.toMatchObject({ blocks: [], admittedEntries: [{ entryId: 'memory', outcome: 'valid-empty', memory: {
       loadedFactIds: [], notLoadedFactIds: ['key'], loadedTopicTitles: [], notLoadedTopicTitles: ['architecture', 'archive'],
@@ -247,6 +250,38 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
       { entryId: 'selected', layer: 'session', scope, ref: { kind: 'doc', artifactId: 'selected', serverId: 'home' },
         outcome: 'unavailable', reason: 'unavailable', revision: null },
     ] });
+  });
+
+  it.each(['coding', 'voice'] as const)('keeps unknown Account encryption mode pending until admitted on %s', async surface => {
+    const scope = { serverId: 'home', accountId: 'account' };
+    for (const memoryEnabled of [true, false]) {
+      for (const required of [true, false]) {
+        let errorCode: string | null = 'account_encryption_mode_unavailable';
+        const read = async () => {
+          if (errorCode) throw Object.assign(new Error(errorCode), { code: errorCode });
+          return artifact('selected', 'Admitted context');
+        };
+        const input = { surface, scope, memoryEnabled,
+          sessionEntries: [{ ...entry('selected'), required }],
+          readArtifactHeader: read, readArtifact: read };
+        await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
+          code: 'preparation_pending', reason: 'unavailable', admittedEntries: [
+            { entryId: 'selected', outcome: 'unavailable', reason: 'unavailable', revision: null },
+          ],
+        });
+        // Missing currentness is retryable; a confirmed mode mismatch still needs repair.
+        for (const lockedCode of ['artifact_account_mode_mismatch', 'artifact_encryption_material_unavailable']) {
+          errorCode = lockedCode;
+          await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
+            code: 'attachment_unavailable', reason: 'locked',
+          });
+        }
+        errorCode = null;
+        await expect(resolvePromptStackSystemAppendBlocksV1(input)).resolves.toMatchObject({
+          blocks: ['Admitted context'], admittedEntries: [{ entryId: 'selected', outcome: 'ready' }],
+        });
+      }
+    }
   });
 
   it.each(['coding', 'voice'] as const)('keeps transient optional header/body reads pending on %s', async surface => {

@@ -35,6 +35,7 @@ export const RoleArtifactV1Schema = lazyZodSchema(() => z.strictObject({
   profileId: z.optional(z.string().check(z.minLength(1))),
   workspaceWrites: z.enum(['allow', 'deny']),
   secondOpinion: z.enum(['off', 'encouraged']),
+  canDelegateToOtherRoles: z.optional(z.boolean()),
   enabled: z.boolean(),
 }));
 export type RoleArtifactV1 = z.infer<typeof RoleArtifactV1Schema>;

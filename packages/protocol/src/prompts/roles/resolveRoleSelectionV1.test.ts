@@ -1,12 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import { RoleArtifactV1Schema, type RoleArtifactV1 } from './roleArtifactV1.js';
 import { WorkflowRoleV1Schema } from './rolesV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { resolveRoleSelectionV1, readSessionWorkspaceWritesV1 } from './resolveRoleSelectionV1.js';
 import { WorkflowActionFailureV1Schema } from '../../workflows/workflowProgressV1.js';
+import { createSessionOwnerMetadataV1, projectSessionOwnerCompatibilityViewV1,
+  projectSessionSharedMetadataV1 } from '../../sessions/metadata/sessionMetadataEnvelopesV1.js';
 
 const role: RoleArtifactV1 = { name: 'UI work', instructions: 'Settings instructions', engine: { agentTargetKey: 'agent:claude', modelId: 'settings-model' }, runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off', enabled: true };
 
 describe('resolveRoleSelectionV1', () => {
+  it('preserves declaration and plugin delegation traits and merges explicit false independently at every layer', () => {
+    const declared = { ...role, canDelegateToOtherRoles: true };
+    expect(RoleArtifactV1Schema.safeParse(declared).success).toBe(true);
+    expect(createStoredReadSchema(RoleArtifactV1Schema).safeParse({ ...declared, future: true })).toMatchObject({
+      success: true, data: declared,
+    });
+    expect(RoleArtifactV1Schema.safeParse({ ...declared, canDelegateToOtherRoles: 'yes' }).success).toBe(false);
+    expect(resolveRoleSelectionV1({ roleId: 'plugin:acme/lead', pluginRoles: [{ pluginId: 'acme', localId: 'lead', role: declared }] }))
+      .toMatchObject({ ok: true, selection: { canDelegateToOtherRoles: true } });
+    const input = { roleId: 'ui', settingsRoles: { ui: declared },
+      settingsOverrides: { ui: { roleId: 'ui', canDelegateToOtherRoles: false } } };
+    expect(resolveRoleSelectionV1(input)).toMatchObject({ ok: true, selection: { canDelegateToOtherRoles: false } });
+    const session = { ...input, sessionRoles: { overrides: { ui: { roleId: 'ui', canDelegateToOtherRoles: true } }, sessionRoles: {}, notes: '' } };
+    expect(resolveRoleSelectionV1(session)).toMatchObject({ ok: true, selection: { canDelegateToOtherRoles: true } });
+    const workflow = { ...session, workflowRoles: [WorkflowRoleV1Schema.parse({ roleId: 'ui', canDelegateToOtherRoles: false })] };
+    expect(resolveRoleSelectionV1(workflow)).toMatchObject({ ok: true, selection: { canDelegateToOtherRoles: false } });
+    expect(resolveRoleSelectionV1({ ...workflow, runOverrides: [{ roleId: 'ui', canDelegateToOtherRoles: true }] }))
+      .toMatchObject({ ok: true, selection: { canDelegateToOtherRoles: true } });
+  });
+  it('preserves the authored Session ceiling without a Role and never relaxes it through a Role', () => {
+    expect(readSessionWorkspaceWritesV1({ workspaceWrites: 'allow' })).toBeUndefined();
+    expect(readSessionWorkspaceWritesV1({ workspaceWrites: 'deny' })).toBe('deny');
+    const metadata = { workspaceWrites: 'deny' as const };
+    const stored = createSessionOwnerMetadataV1({ metadata });
+    expect(stored).toMatchObject({ ok: true, ownerMetadata: { runtime: metadata } });
+    if (!stored.ok) throw new Error('Authored workspace ceiling was not retained');
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata });
+    expect(sharedMetadata).not.toHaveProperty('workspaceWrites');
+    expect(readSessionWorkspaceWritesV1(projectSessionOwnerCompatibilityViewV1({
+      sharedMetadata, ownerMetadata: stored.ownerMetadata,
+    }))).toBe('deny');
+    expect(readSessionWorkspaceWritesV1({ workspaceWrites: 'deny', work: { sessionRolesV1: {
+      roleId: 'builder', overrides: {}, sessionRoles: {}, notes: '',
+    } } })).toBe('deny');
+    expect(readSessionWorkspaceWritesV1({ workspaceWrites: 'allow', work: { sessionRolesV1: {
+      roleId: 'orchestrator', overrides: {}, sessionRoles: {}, notes: '',
+    } } })).toBe('deny');
+  });
   it('admits known selected sources but refuses unknown origins from a partial inventory', () => {
     const roleSourceInventory = { status: 'partial' as const, entries: [], diagnostics: [{ source: 'legacy-guidance' as const, reason: 'unavailable' as const }] };
     expect(resolveRoleSelectionV1({ roleId: 'builder', roleSourceInventory, defaultEngine: { agentTargetKey: 'agent:codex' } })).toMatchObject({ ok: true });

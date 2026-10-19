@@ -106,4 +106,4 @@ export type SyncedSessionAuthoringFieldIdV1 = (typeof SYNCED_SESSION_AUTHORING_F
 export const SyncedSessionAuthoringFieldIdV1Schema = lazyZodSchema(() => z.enum(
   SYNCED_SESSION_AUTHORING_FIELD_IDS_V1 as [SyncedSessionAuthoringFieldIdV1, ...SyncedSessionAuthoringFieldIdV1[]],
 ));
-export type SyncedSessionAuthoringValueV1 = typeof SyncedSessionAuthoringValueV1Schema['_output'];
+export type SyncedSessionAuthoringValueV1 = z.output<typeof SyncedSessionAuthoringValueV1Schema>;

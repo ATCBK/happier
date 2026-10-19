@@ -10,7 +10,7 @@ describe('Role override destination catalog', () => {
 
   it('preserves every override field and neighboring deny while set and reset use the same semantic owner', () => {
     const override = { roleId: 'reader', engine: { agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'model', effort: 'high' },
-      runsAs: { kind: 'background_run', intent: 'review' }, profileId: 'profile', workspaceWrites: 'deny', secondOpinion: 'encouraged', instructionsOverride: 'Keep current guidance' } as const;
+      runsAs: { kind: 'background_run', intent: 'review' }, profileId: 'profile', workspaceWrites: 'deny', secondOpinion: 'encouraged', canDelegateToOtherRoles: false, instructionsOverride: 'Keep current guidance' } as const;
     const neighbor = { roleId: 'neighbor', workspaceWrites: 'deny' } as const;
     const set = applyRoleOverrideMutationV1({ overrides: { neighbor } }, { kind: 'set', override });
     expect(StoredRoleOverrideRecordV1Schema.parse({ v: 1, ...set, future: true })).toEqual({ v: 1, overrides: { neighbor, reader: override } });

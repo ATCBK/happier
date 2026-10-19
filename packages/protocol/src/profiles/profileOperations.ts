@@ -31,9 +31,9 @@ export function setProfileFavoritePreferenceV1(raw: Readonly<Record<string, unkn
   return { ...raw, favoriteProfiles: setProfileFavoriteIdsV1(accountSettingsParse(raw).favoriteProfiles, id, favorite) };
 }
 
-export function setProfileEnabledOverrideV1(overrides: Readonly<Record<string, unknown>> | null | undefined,
-  profile: Readonly<{ id: string; defaultEnabled?: boolean }>, enabled: boolean): Record<string, unknown> {
-  const next = { ...overrides };
+export function setProfileEnabledOverrideV1<Value>(overrides: Readonly<Record<string, Value>> | null | undefined,
+  profile: Readonly<{ id: string; defaultEnabled?: boolean }>, enabled: boolean): Record<string, Value | boolean> {
+  const next: Record<string, Value | boolean> = { ...overrides };
   if (enabled === (profile.defaultEnabled !== false)) delete next[profile.id];
   else next[profile.id] = enabled;
   return next;
@@ -243,12 +243,14 @@ export function createProfileOperations(ports: ProfileOperationsPorts) {
       } else {
         const opened = inventory();
         if (opened.status !== 'ready') return opened;
-        const visible = ports.readVisibleProfiles?.();
-        if (visible && !('status' in visible)) profile = visible.find(profile => profile.id === input.id);
-        else {
-          // Actual granted resources are visible independently of remembered builtin evidence.
-          profile = opened.profiles.find(profile => profile.id === input.id && profile.artifactId);
-          if (!profile) return visible ?? { status: 'unavailable' as const, reason: 'profile_selection_evidence_unavailable' };
+        // Authored and granted identities are decided by the current inventory.
+        // Only a builtin can exist solely through remembered visibility evidence.
+        profile = opened.profiles.find(profile => profile.id === input.id && profile.artifactId);
+        if (!profile && getBuiltInBackendProfile(input.id)) {
+          const visible = ports.readVisibleProfiles?.();
+          if (!visible || 'status' in visible) return visible ?? {
+            status: 'unavailable' as const, reason: 'profile_selection_evidence_unavailable' };
+          profile = visible.find(profile => profile.id === input.id);
         }
       }
       if (!profile) return invalid('profile-not-found', input.id);

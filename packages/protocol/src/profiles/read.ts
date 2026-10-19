@@ -52,7 +52,7 @@ export const AiLaunchProfileV1Schema = lazyZodSchema(() => {
   };
   return z.union([
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(AIBackendProfileSchema, { ...source,
-      codingPromptBehaviorV1: z.optional(z.catchall(HistoricalCodingPromptBehaviorProfileOverrideV1Schema._zod.def.innerType, z.never())),
+      codingPromptBehaviorV1: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(HistoricalCodingPromptBehaviorProfileOverrideV1Schema._zod.def.innerType)),
       codingPromptBehaviorOverrides: z.optional(CodingPromptBehaviorOverridesV1Schema),
     })),
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.safeExtend(StoredLaunchProfileV2Schema, source)),

@@ -7,6 +7,7 @@ import { RoleInstructionsOverrideV1Schema, ResolvedRolesSnapshotV1Schema, type R
 export const SessionRoleIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1)));
 export const SessionRolesV1Schema = lazyZodSchema(() => z.strictObject({
   roleId: z.optional(SessionRoleIdV1Schema),
+  answersWorkerQuestions: z.optional(z.boolean()),
   inheritedFrom: z.optional(z.string().check(z.minLength(1))),
   overrides: z.record(z.string().check(z.minLength(1)), RoleInstructionsOverrideV1Schema),
   sessionRoles: ResolvedRolesSnapshotV1Schema,
@@ -21,12 +22,23 @@ export const SessionRolesConfigurationSetRpcV1Schema = lazyZodSchema(() => z.str
   sessionId: z.string().check(z.minLength(1)), configuration: SessionRoleConfigurationV1Schema,
 }));
 
-export function readSessionRolesV1(metadata: unknown): SessionRolesV1 | null {
-  if (!metadata || typeof metadata !== 'object' || !('work' in metadata)) return null;
+function readRawSessionRolesV1(metadata: unknown): unknown {
+  if (!metadata || typeof metadata !== 'object' || !('work' in metadata)) return undefined;
   const work = metadata.work;
-  if (!work || typeof work !== 'object' || !('sessionRolesV1' in work)) return null;
-  const parsed = createStoredReadSchema(SessionRolesV1Schema).safeParse(work.sessionRolesV1);
+  return work && typeof work === 'object' && 'sessionRolesV1' in work ? work.sessionRolesV1 : undefined;
+}
+
+export function readSessionRolesV1(metadata: unknown): SessionRolesV1 | null {
+  const stored = readRawSessionRolesV1(metadata);
+  if (stored === undefined) return null;
+  const parsed = createStoredReadSchema(SessionRolesV1Schema).safeParse(stored);
   return parsed.success ? parsed.data : null;
+}
+
+/** Old and new sessions default on; malformed retained settings never grant answer authority. */
+export function readSessionAnswersWorkerQuestionsV1(metadata: unknown): boolean {
+  const snapshot = readSessionRolesV1(metadata);
+  return snapshot ? snapshot.answersWorkerQuestions ?? true : readRawSessionRolesV1(metadata) === undefined;
 }
 
 /** No fallback to legacy work.roleId: the session roles owner is authoritative. */
@@ -54,7 +66,7 @@ export function writeSessionRoleIdV1ToMetadata<TMetadata extends Record<string, 
   };
 }
 
-/** Configuration edits do not overwrite a separately queued current-role selection. */
+/** Role copies preserve the recipient's question preference unless explicitly edited. */
 export function writeSessionRoleConfigurationV1ToMetadata<TMetadata extends Record<string, unknown>>(
   metadata: TMetadata,
   configuration: SessionRoleConfigurationV1,
@@ -62,9 +74,12 @@ export function writeSessionRoleConfigurationV1ToMetadata<TMetadata extends Reco
   const parsed = SessionRoleConfigurationV1Schema.parse(configuration);
   const work = metadata.work;
   const currentWork = migrateRetainedSessionWorkContextV1(work);
-  if ('sessionRolesV1' in currentWork) createStoredReadSchema(SessionRolesV1Schema).parse(currentWork.sessionRolesV1);
-  const roleId = readSessionRoleIdV1(metadata);
-  return { ...metadata, work: { ...currentWork, sessionRolesV1: { ...parsed, ...(roleId ? { roleId } : {}) } } };
+  const current = 'sessionRolesV1' in currentWork
+    ? createStoredReadSchema(SessionRolesV1Schema).parse(currentWork.sessionRolesV1) : undefined;
+  const roleId = current?.roleId;
+  const answersWorkerQuestions = parsed.answersWorkerQuestions ?? current?.answersWorkerQuestions;
+  return { ...metadata, work: { ...currentWork, sessionRolesV1: { ...parsed,
+    ...(answersWorkerQuestions === undefined ? {} : { answersWorkerQuestions }), ...(roleId ? { roleId } : {}) } } };
 }
 
 export function snapshotSessionRolesAtSpawnV1(input: Readonly<{

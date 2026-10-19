@@ -159,8 +159,10 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       args.signal?.throwIfAborted();
       if (error instanceof PromptStackPreparationError) throw error;
       const code = error instanceof Error && 'code' in error ? error.code : null;
+      // Unobserved Account mode is unavailable admission, not a confirmed lock.
+      // Keep preparation pending without opening or omitting the selected content.
       const locked = code === 'artifact_encryption_material_unavailable' || code === 'artifact_account_mode_mismatch'
-        || code === 'account_encryption_mode_unavailable' || code === 'artifact_content_unavailable' || code === 'content_unavailable';
+        || code === 'artifact_content_unavailable' || code === 'content_unavailable';
       throw new PromptStackPreparationError(locked ? 'locked' : 'unavailable', ref);
     }
   };
@@ -176,27 +178,36 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       throw error;
     }
   };
+  // Each selected address has independent read authority. Overlap its IO,
+  // preserving Memory-off header admission before any body read and sharing
+  // duplicate addresses only within this preparation. Settle every read before
+  // returning or refusing; interpretation and failure inventory stay authored.
+  const preparedReads = await Promise.allSettled(entries.map(async ({ entry, layer }) => {
+    const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && scope ? { serverId: scope.serverId } : {}) };
+    const key = JSON.stringify([ref.serverId ?? null, ref.artifactId]);
+    if (args.memoryEnabled === false) {
+      if (!args.readArtifactHeader) throw new PromptStackPreparationError('unavailable', ref);
+      let pending = headers.get(key);
+      if (!pending) { pending = read(ref, () => args.readArtifactHeader!(ref)); headers.set(key, pending); }
+      const header = await readEntry(pending, entry);
+      if (!header) return { omitted: false as const, artifact: null };
+      if (omittedByMemoryPolicy(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false })) {
+        return { omitted: true as const };
+      }
+    }
+    let pending = reads.get(key);
+    if (!pending) { pending = read(ref, () => args.readArtifact(ref)); reads.set(key, pending); }
+    return { omitted: false as const, artifact: await readEntry(pending, entry) };
+  }));
   try {
-    for (const { entry, layer } of entries) {
+    for (const [index, { entry, layer }] of entries.entries()) {
       const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && scope ? { serverId: scope.serverId } : {}) };
       preparing = { entryId: entry.id, layer, scope, ref };
       observedRevision = null;
-      const key = JSON.stringify([ref.serverId ?? null, ref.artifactId]);
-      if (args.memoryEnabled === false) {
-        if (!args.readArtifactHeader) throw new PromptStackPreparationError('unavailable', ref);
-        let pending = headers.get(key);
-        if (!pending) { pending = read(ref, () => args.readArtifactHeader!(ref)); headers.set(key, pending); }
-        const header = await readEntry(pending, entry);
-        if (!header) {
-          if (entry.required) throw new PromptStackPreparationError('not_found', ref);
-          admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
-          continue;
-        }
-        if (omittedByMemoryPolicy(ref, header.header, { layer, entryId: entry.id, memoryEnabled: false })) continue;
-      }
-      let pending = reads.get(key);
-      if (!pending) { pending = read(ref, () => args.readArtifact(ref)); reads.set(key, pending); }
-      const artifact = await readEntry(pending, entry);
+      const prepared = preparedReads[index]!;
+      if (prepared.status === 'rejected') throw prepared.reason;
+      if (prepared.value.omitted) continue;
+      const artifact = prepared.value.artifact;
       if (!artifact) {
         if (entry.required) throw new PromptStackPreparationError('not_found', ref);
         admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
