@@ -60,6 +60,11 @@ describe('createActionExecutor (Automation conversation admission)', () => {
         contributionLocalId: 'provider/observation-ingest-v1',
         materialization: callerMaterialization,
       },
+      context: {
+        surface: 'plugin',
+        actionCaller: { kind: 'plugin', pluginId: 'happier.channels', contributionLocalId: 'provider/observation-ingest-v1', materialization: callerMaterialization },
+        signal: controller.signal,
+      },
       signal: controller.signal,
     });
   });
@@ -100,6 +105,10 @@ describe('createActionExecutor (Automation conversation admission)', () => {
         contributionLocalId: 'observation-ingest-v1',
         materialization: externalMaterialization,
       },
+      context: {
+        surface: 'plugin',
+        actionCaller: { kind: 'plugin', pluginId: 'com.acme.other', contributionLocalId: 'observation-ingest-v1', materialization: externalMaterialization },
+      },
     });
   });
 
@@ -134,6 +143,11 @@ describe('createActionExecutor (Automation conversation admission)', () => {
         pluginId: 'happier.channels',
         contributionLocalId: 'binding/create-v1',
         materialization: callerMaterialization,
+      },
+      context: {
+        surface: 'plugin',
+        actionCaller: { kind: 'plugin', pluginId: 'happier.channels', contributionLocalId: 'binding/create-v1', materialization: callerMaterialization },
+        signal: controller.signal,
       },
       signal: controller.signal,
     });
@@ -181,6 +195,10 @@ describe('createActionExecutor (Automation conversation admission)', () => {
         pluginId: 'happier.channels',
         contributionLocalId: 'binding/create-v1',
         materialization: callerMaterialization,
+      },
+      context: {
+        surface: 'plugin',
+        actionCaller: { kind: 'plugin', pluginId: 'happier.channels', contributionLocalId: 'binding/create-v1', materialization: callerMaterialization },
       },
     });
   });

@@ -1,7 +1,13 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { SessionIdSchema } from '../sessions/idsV1.js';
+import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
+import { ActionSessionTargetDeclarationV1Schema, SessionTargetV1Schema, withSessionTargetFanoutResultV1 } from './sessionTargetV1.js';
+import { SessionCoordinatorEnableInputV1Schema, SessionCoordinatorEnableResultV1Schema } from '../sessions/follow/sessionCoordinatorActionsV1.js';
 
 /** What a presenting app knows that an approval summary may use; every field is optional. */
 export type ApprovalPresentationContext = Readonly<{
+  /** The target Machine's readable form of a path (home-relative). */
+  formatPath?: (path: string) => string;
   /** Names captured from the admitted widget/catalog owners; presentation only, never routing. */
   widgetPresentation?: Readonly<{ widgetName?: string; pageName?: string; areaName?: string }>;
 }>;
@@ -25,6 +31,9 @@ import { MACHINE_PRESET_INPUT_FIELDS, MACHINE_POOL_INPUT_FIELDS } from './specs/
 import { AccountHomeContinuationInputV1Schema, AccountHomeContinuationResultV1Schema } from './accountHomeContinuationV1.js';
 import { SessionForkRpcParamsSchema } from '../sessions/fork.js';
 import { SessionResumeRequestV1Schema } from '../sessions/control/sessionResumeRequestV1.js';
+import { SessionNeedsYouRaiseInputV1Schema, SessionNeedsYouRaiseOutputV1Schema } from '../sessions/permissions/questionV1.js';
+import { SessionStatusActionResultV1Schema } from '../sessions/control/contract.js';
+import { RestartSessionRunnerResultV1Schema } from '../sessions/control/sessionRunnerRestartV1.js';
 import { PromptDocRevisionV1Schema, PromptDocCreateActionInputV1Schema } from '../prompts/library/promptDocV2.js';
 import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
 import { PromptLibrarySaveOrganizationFieldsV1, isPromptLibrarySaveFolderAssignmentV1 } from '../prompts/library/promptFolderActionSchemasV1.js';
@@ -38,6 +47,7 @@ import { SessionPendingMarkHandledInputV1Schema, SessionPendingDeliveryRecoveryI
   SessionPendingDeliveryRecoveryResultV1Schema, SessionPendingSendAsNewResultV1Schema } from '../sessions/control/pendingDeliveryRecoveryV1.js';
 import { SessionModelMutationExpectedV1Schema, SessionModelTransitionResultV1Schema } from '../sessions/control/modelTransitionV1.js';
 import { MEMORY_DOCUMENT_ACTION_SPECS_V1 } from './specs/memoryDocuments.js';
+import { DOC_COLLABORATION_ACTION_SPECS_V1 } from './specs/docCollaboration.js';
 import { WORKFLOW_EVENT_CATALOG_ACTION_SPECS_V1 } from './specs/workflowEvents.js';
 import { MEMORY_DOCUMENT_ACTION_IDS_V1 } from '../prompts/library/memoryActionsV1.js';
 import { PROFILE_ACTION_SPECS_V1 } from './specs/profiles.js';
@@ -71,7 +81,7 @@ import { OpenProjectInputV1Schema, OpenProjectResultV1Schema } from '../projects
 import { BotSetInputSchema } from '../sessions/identity/sessionBotV1.js';
 import { MANAGED_MACHINE_ACTION_SPECS } from './specs/managedMachines.js';
 import { ManagedMachineActionInputSchemasV1, ManagedMachineActionOutputSchemasV1, type ManagedMachineActionIdV1 } from '../machines/managed/actionsV1.js';
-import { SessionTitleSetInputSchema, SessionToolCallsSetInputSchema, SessionMemorySetInputV1Schema, SessionVoicePreferenceSetInputV1Schema, SessionContextUpdateInputV1Schema, SessionInstructionsSetInputV1Schema } from './sessionStateFieldActions.js';
+import { SessionTitleSetInputSchema, SessionStatusReasonSetInputSchema, SessionStatusReasonSetResultSchema, SessionToolCallsSetInputSchema, SessionMemorySetInputV1Schema, SessionVoicePreferenceSetInputV1Schema, SessionContextUpdateInputV1Schema, SessionInstructionsSetInputV1Schema } from './sessionStateFieldActions.js';
 import { ProjectContextUpdateInputV1Schema, ProjectContextUpdateOutputV1Schema } from '../projects/projectContextV1.js';
 import { ProjectVisibilitySetInputV1Schema, ProjectVisibilitySetOutputV1Schema } from '../projects/projectVisibilityV1.js';
 import { ProjectWorkspaceUpdateInputV1Schema, ProjectWorkspaceUpdateOutputV1Schema,
@@ -106,7 +116,7 @@ import { z } from 'zod/mini';
 import { ExternalSessionsRpcErrorCodeSchema } from '../sessions/external/rpcErrorCodes.js';
 import { AccountHistoricalEncryptionKeyForgetInputV1Schema, AccountHistoricalEncryptionKeyForgetResultV1Schema,
   AccountEncryptionAutomationTemplatesRecoverInputV1Schema, AccountEncryptionAutomationTemplatesRecoverResultV1Schema } from '../auth/accountSecurity.js';
-import { ScmComparisonSourceSchema } from '../scm/comparison.js';
+import { SCM_COMPARISON_VIEWS, ScmComparisonSourceSchema } from '../scm/comparison.js';
 import { redactPublicShareCapabilityUrl } from '../crypto/publicShareCapabilityUrl.js';
 import { ExecutionRunWaitConditionSchema } from '../execution/runs/waitForTerminal.js';
 import { WaitActionInputV1Schema, WaitActionResultV1Schema, WAIT_CLI_PROJECTION } from './specs/wait.js';
@@ -164,6 +174,7 @@ import { ACTION_OPERATION_ACTION_SPECS, ActionOperationActionInputSchemasV1, Act
 import { SESSION_ORGANIZATION_MOVE_ACTION_SPECS } from './sessionOrganizationMoveAction.js';
 import { LIST_REORDER_ACTION_SPECS } from './listReorderAction.js';
 import { TODO_SESSION_LINK_ACTION_SPECS } from './todoSessionLinkAction.js';
+import { INTERNAL_TASK_ACTION_SPECS } from './internalTaskActions.js';
 import { WORKFLOW_AUTHORING_ACTION_SPECS } from './workflowAuthoringAction.js';
 import { WORKFLOW_DIAGNOSTIC_ACTION_SPECS } from './workflowDiagnosticActionSpecs.js';
 import { SessionAuthoringOpenV1Schema, SessionAuthoringOpenResultV1Schema } from '../plugins/ui/hostApiRequests.js';
@@ -184,12 +195,12 @@ import { ARTIFACT_ACCESS_ACTION_IDS_V1, ArtifactAccessActionInputSchemasV1, Arti
 import { ARTIFACT_ACTION_IDS_V1, ArtifactActionInputSchemasV1, ArtifactActionOutputSchemasV1, type ArtifactActionIdV1 } from '../artifacts/artifactActionsV1.js';
 import { SessionListQueryV1Schema } from '../sessions/listing/query.js';
 import { QualifiedProjectKeyV1Schema } from '../workspaces/workspaceRefV1.js';
-import { SessionReportsToSetActionInputV1Schema, SessionReportsToSetResultV1Schema } from '../sessions/relations/sessionReportsToV1.js';
+import { SessionManagerSetActionInputV1Schema, SessionManagerSetResultV1Schema } from '../sessions/follow/sessionManagerV1.js';
 import {
   SetSessionFolderAssignmentRequestSchema, SetSessionFolderAssignmentResponseSchema,
   SetSessionTagAssignmentsRequestSchema, SetSessionTagAssignmentsResponseSchema,
 } from '../sessions/organization/mutations.js';
-import { SessionWorkerPublishInputV1Schema, SessionWorkerPublishOutputV1Schema } from '../sessions/relations/workerUpdateV1.js';
+import { SessionUpdatePostInputV1Schema, SessionUpdatePostOutputV1Schema } from '../sessions/relations/workerUpdateV1.js';
 import {
   SESSION_LIST_AWARENESS_VIEW_V1,
   SESSION_LIST_SUMMARY_VIEW_V1,
@@ -204,9 +215,9 @@ import {
   SESSION_BOARD_MUTATION_SERVER_TRANSPORT_V1,
 } from '../sessions/board/actions.js';
 import {
-  SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1,
-  SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1,
-} from '../sessions/discussions/actions.js';
+  DISCUSSION_ACTION_INPUT_SCHEMAS_V1,
+  DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1,
+} from '../discussions/actions.js';
 import {
   CurrentSessionPresentationActionInputV1Schema,
   CurrentSessionPresentationActionResultV1Schema,
@@ -432,6 +443,8 @@ import {
 } from './actionInputHints.js';
 import {
   MemorySearchQueryV1Schema,
+  MemorySearchScopeSchema,
+  MemoryDocumentSearchCoverageV1Schema,
   MemorySearchResultHitV1Schema,
   MemorySearchResultV1Schema,
 } from '../memory/memorySearch.js';
@@ -504,7 +517,10 @@ import {
 } from '../sessions/messages/sessionInputAdmission.js';
 import { ExternalShareableTranscriptPageV1Schema } from '../sessions/messages/sessionExternalShareableTranscriptV1.js';
 import { PendingLocalIdSchema } from '../sessions/pending/pendingLocalId.js';
-import { PendingRequestedActionV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartCancelInputV1Schema, PendingResetStartSetResultV1Schema, PendingResetStartCancelResultV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
+import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
+import { AutonomousExchangeObservedRevisionV1Schema,
+  AutonomousExchangeStatusV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
+import { PendingRequestedActionV1Schema, SessionPendingActionSetInputV1Schema, SessionPendingActionSetResultV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartCancelInputV1Schema, PendingResetStartSetResultV1Schema, PendingResetStartCancelResultV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
 import {
   SessionPermissionRemoteGrantRevokeInputV1Schema,
   SessionPermissionRemoteGrantRevokeOutputV1Schema,
@@ -538,7 +554,8 @@ import {
 } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { SESSION_FOLLOW_HTTP_PATHS_V1 } from '../sessions/follow/api.js';
 import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '../sessions/follow/sessionFollowSourcesApi.js';
-import { SESSION_DISCUSSION_HTTP_PATHS_V1 } from '../sessions/discussions/api.js';
+import { DELIVERY_MUTE_HTTP_PATHS_V1, FollowReceiverRefV1Schema } from '../sessions/follow/sessionDeliveryMuteV1.js';
+import { DISCUSSION_HTTP_PATHS_V1 } from '../discussions/api.js';
 import { SessionWorkStateStatusV1Schema } from '../sessions/work/state/sessionWorkStateV1.js';
 import { StructuredQuestionAnswersV1Schema } from '../tools/structuredQuestionAnswersV1.js';
 import {
@@ -773,16 +790,16 @@ import {
 } from './specs/sessionBoardCli.js';
 import { SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1 } from '../sessions/board/actionIds.js';
 import {
-  SESSION_DISCUSSION_ARCHIVE_CLI_PROJECTION,
-  SESSION_DISCUSSION_CREATE_CLI_PROJECTION,
-  SESSION_DISCUSSION_GET_CLI_PROJECTION,
-  SESSION_DISCUSSION_LIST_CLI_PROJECTION,
-  SESSION_DISCUSSION_POST_CLI_PROJECTION,
-  SESSION_DISCUSSION_READ_CLI_PROJECTION,
-  SESSION_DISCUSSION_READ_STATE_SET_CLI_PROJECTION,
-  SESSION_DISCUSSION_RENAME_CLI_PROJECTION,
-  SESSION_DISCUSSION_RESTORE_CLI_PROJECTION,
-} from './specs/sessionDiscussionCli.js';
+  DISCUSSION_ARCHIVE_CLI_PROJECTION,
+  DISCUSSION_CREATE_CLI_PROJECTION,
+  DISCUSSION_GET_CLI_PROJECTION,
+  DISCUSSION_LIST_CLI_PROJECTION,
+  DISCUSSION_POST_CLI_PROJECTION,
+  DISCUSSION_READ_CLI_PROJECTION,
+  DISCUSSION_READ_STATE_SET_CLI_PROJECTION,
+  DISCUSSION_RENAME_CLI_PROJECTION,
+  DISCUSSION_RESTORE_CLI_PROJECTION,
+} from './specs/discussionCli.js';
 import { SESSION_READ_STATE_SET_CLI_PROJECTION } from './specs/sessionReadStateCli.js';
 import {
   SESSION_READ_STATE_ACTION_INPUT_SCHEMAS_V1,
@@ -999,6 +1016,7 @@ export const ActionSpecSchema = lazyZodSchema(() => z.looseObject({
     rpcMethodAliases: z.optional(z.array(z.string().check(z.minLength(1)))),
   })),
   surfaceBindings: z.optional(ActionSpecSurfaceBindingsSchema),
+  sessionTarget: z.optional(ActionSessionTargetDeclarationV1Schema),
   outputSchema: z.optional(ZodSchemaLike),
   /** The deciding person's reduced operands; never an approval policy. */
   approvalNarrowing: z.optional(z.strictObject({
@@ -1034,6 +1052,10 @@ export const ActionSpecSchema = lazyZodSchema(() => z.looseObject({
   )),
   /** Domain-owned, value-free human description of the exact effect under review. */
   approvalPresentation: z.optional(z.strictObject({
+    /**
+     * The presenting app may pass what only it knows (a Machine's home, to read paths `~/work/app`); without it the
+     * summary still reads, so every surface (agent, CLI, MCP) gets the same contract.
+     */
     summary: z.custom<(input: unknown, context?: ApprovalPresentationContext) => string | null>((value) => typeof value === 'function'),
     /**
      * Input paths that identify or correlate the request (command, view and session ids, fixed discriminators,
@@ -1343,6 +1365,7 @@ export type ActionSpecWithoutApproval = Readonly<{
   prompting?: ParsedActionSpec['prompting'];
   toolExposure?: ParsedActionSpec['toolExposure'];
   contextualDefaults?: ParsedActionSpec['contextualDefaults'];
+  sessionTarget?: ParsedActionSpec['sessionTarget'];
   operation?: ParsedActionSpec['operation'];
   requiredAuthority?: ParsedActionSpec['requiredAuthority'];
   executionPlacement?: ParsedActionSpec['executionPlacement'];
@@ -1384,7 +1407,10 @@ export function defineActionSpecs<const TSpecs extends readonly PreNormalizedAct
 ): {
   readonly [Index in keyof TSpecs]: ActionSpecProjectionMetadata & {
     readonly [Key in keyof TSpecs[Index] as Key extends ActionSpecProjectionKey ? Key : never]: TSpecs[Index][Key];
-  };
+  } & (TSpecs[Index]['surfaces'] extends Readonly<{ api: false }> ? Readonly<{
+    // API exclusions affect public type membership; other surface metadata may stay broad.
+    surfaces: PreNormalizedActionSurfaces & Readonly<{ api: false }>;
+  }> : unknown);
 };
 export function defineActionSpecs(
   specs: readonly PreNormalizedActionSpec[],
@@ -1459,8 +1485,9 @@ export const SessionModelSetInputSchema = lazyZodSchema(() => z.looseObject({
 })));
 
 const SessionStatusGetInputSchema = lazyZodSchema(() => z.looseObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
   live: z.optional(z.boolean()),
+  readiness: z.optional(z.boolean()),
 }));
 
 const SessionHistoryGetInputSchema = lazyZodSchema(() => z.looseObject({
@@ -1709,6 +1736,9 @@ const SessionFollowPreferencesCliInputSchema = lazyZodSchema(() => z.strictObjec
   direct: z.enum(['on', 'off']),
   team: z.enum(['on', 'off']),
   group: z.enum(['on', 'off']),
+  managerPolicy: SessionFollowActionInputSchemasV1['follow.preferences.set'].shape.managerPolicy,
+  runReportPolicy: SessionFollowActionInputSchemasV1['follow.preferences.set'].shape.runReportPolicy,
+  discussionReceivePolicy: SessionFollowActionInputSchemasV1['follow.preferences.set'].shape.discussionReceivePolicy,
 }));
 
 const SessionCatalogListInputSchema = lazyZodSchema(() => z.looseObject({
@@ -1989,7 +2019,7 @@ const ExecutionRunWaitPublicInputSchema = lazyZodSchema(() => (<T extends z.ZodM
 
 const SessionOpenInputSchema = lazyZodSchema(() => z.strictObject({
   tabId: z.optional(z.string().check(z.trim(), z.minLength(1))),
-  sessionId: z.optional(z.string().check(z.minLength(1))),
+  sessionId: z.optional(SessionTargetV1Schema),
   sessionTitle: z.optional(z.string().check(z.trim(), z.minLength(1))),
   serverId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   approvedNewDirectoryCreation: z.optional(z.boolean()),
@@ -1998,7 +2028,7 @@ const SessionOpenInputSchema = lazyZodSchema(() => z.strictObject({
   destination: z.optional(z.strictObject({
     kind: z.literal('scmReview'),
     comparison: ScmComparisonSourceSchema,
-    view: z.enum(['walkthrough', 'files']),
+    view: z.enum(SCM_COMPARISON_VIEWS),
     explain: z.optional(z.boolean()),
     comparisonId: z.optional(z.string().check(z.regex(/^[a-f0-9]{64}$/))),
   })),
@@ -2007,7 +2037,8 @@ const SessionOpenInputSchema = lazyZodSchema(() => z.strictObject({
     || value.resumeRequest.sessionId !== value.sessionId)) ctx.addIssue({
       code: 'custom', path: ['resumeRequest'], message: 'Resume request requires its exact headless Session address',
     });
-  if (!(typeof value.sessionId === 'string' && value.sessionId.trim().length > 0) && !(typeof value.sessionTitle === 'string' && value.sessionTitle.trim().length > 0)) {
+  if ((value.sessionId === undefined || typeof value.sessionId === 'string' && !value.sessionId.trim())
+    && !(typeof value.sessionTitle === 'string' && value.sessionTitle.trim().length > 0)) {
     ctx.addIssue({
       code: "custom",
       message: 'sessionId or sessionTitle is required',
@@ -2509,13 +2540,15 @@ const CurrentUiContextCommandInvokeInputSchema = lazyZodSchema(() => z.strictObj
 }));
 
 const SessionSendUserTextInputFieldsSchema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.optional(z.string().check(z.minLength(1))),
+  sessionId: z.optional(SessionTargetV1Schema),
   recipient: PluginSessionUserTextAuthoredFieldSchemasV1.recipient,
   // The executor re-admits a plugin-bound input through this canonical shape
   // before dispatch. Keep the content rule here too: attachment-only is valid,
   // while the executor still rejects authored attachments from non-plugin
   // callers before the writer.
   message: z.string(),
+  /** Raw Composer context; the target's existing input owner admits it before commit. */
+  structuredInput: z.optional(RawIngressStructuredInputV1Schema),
   requestedAction: z.optional(PendingRequestedActionV1Schema),
   /**
    * The caller-retained stable identity for this durable input. Resubmitting
@@ -2532,13 +2565,22 @@ const SessionSendUserTextInputFieldsSchema = lazyZodSchema(() => z.strictObject(
   modelOverride: z.optional(z.union([z.string().check(z.trim(), z.minLength(1)), z.null()])),
   providerConnectionId: z.optional(z.nullable(ProviderConnectionIdSchema)),
   wait: z.optional(z.boolean()),
-  timeoutSeconds: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(3600))),
+  reply: z.optional(z.enum(['none', 'wait', 'return'])),
+  /** Exact destination for a person's Ask; never an Agent causal-turn assertion. */
+  returnToSessionId: z.optional(asProtocolZod(SessionIdSchema)),
+  timeoutSeconds: z.optional(z.number().check(z.int(), z.minimum(1))),
 }));
 
 function validateSessionSendProviderSelection(
   value: z.infer<typeof SessionSendUserTextInputFieldsSchema>,
   ctx: z.core.$RefinementCtx,
 ): void {
+  if (value.reply !== undefined && value.wait !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['reply'], message: 'reply and legacy wait cannot be combined' });
+  }
+  if (value.returnToSessionId !== undefined && value.reply !== 'return') {
+    ctx.addIssue({ code: 'custom', path: ['returnToSessionId'], message: 'A human return destination requires return reply mode' });
+  }
   if (value.providerConnectionId === undefined) return;
   // A Provider connection is only ever applied together with the model
   // selection it sources. Without a `modelOverride` the send path composes no
@@ -2568,24 +2610,29 @@ const SessionSendUserTextPublicInputSchema = lazyZodSchema(() => z.omit(SessionS
 
 /** Plugin Session messages carry only host-attributed admission intent. */
 const SessionSendUserTextPluginInputV1Schema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
   // Blank only when an attachment carries the input, decided by the one
   // `requireSessionInputContent` owner this binding shares with
   // `PluginSessionInputRequestV1Schema`. A `.min(1)` here would let the Action
   // surface refuse an attachment-only input the seam beneath it admits.
   message: z.string(),
   ...PluginSessionUserTextAuthoredFieldSchemasV1,
-}).check(z.superRefine(requireSessionInputContent)));
+  ...z.pick(SessionSendUserTextInputFieldsSchema, { reply: true, wait: true, timeoutSeconds: true }).shape,
+}).check(z.superRefine(requireSessionInputContent), z.superRefine((value, ctx) => {
+  if (value.reply !== undefined && value.wait !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['reply'], message: 'reply and legacy wait cannot be combined' });
+  }
+})));
 
 const SessionSendSubagentLaunchPluginInputV1Schema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
   kind: z.literal('sessionSubagentLaunch'),
   launch: SubagentLaunchV1Schema,
   idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
 }));
 
 const SessionSendSubagentCommandInputSchema = lazyZodSchema(() => z.strictObject({
-  sessionId: z.string().check(z.minLength(1)),
+  sessionId: SessionTargetV1Schema,
   kind: z.literal('sessionSubagentCommand'),
   command: SubagentCommandV1Schema,
   idempotencyKey: z.optional(PluginSessionInputIdempotencyKeyV1Schema),
@@ -2605,11 +2652,32 @@ const SessionSendMessagePluginInputV1Schema = lazyZodSchema(() => z.union([
   SessionSendSubagentCommandPluginInputV1Schema,
 ]));
 
-const SessionSendMessageInputSchema = lazyZodSchema(() => z.union([
+export const SessionSendMessageInputSchema = lazyZodSchema(() => z.union([
   SessionSendUserTextInputSchema,
   SessionSendSubagentLaunchPluginInputV1Schema,
   SessionSendSubagentCommandInputSchema,
 ]));
+export type SessionMessageSendAuthoredInput = z.infer<typeof SessionSendMessageInputSchema>;
+
+const SessionMessageReplyInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: SessionTargetV1Schema,
+  requestLocalId: PendingLocalIdSchema,
+  reply: SessionMessageExplicitReplyV1Schema,
+}));
+
+const sessionExchangeControlInputArms = <TExtra extends z.core.$ZodShape>(extra: TExtra) => {
+  const common = { sessionId: SessionTargetV1Schema, originInputLocalId: PendingLocalIdSchema,
+    ...extra };
+  return z.union([
+    z.strictObject({ ...common, decision: z.literal('continue') }),
+    z.strictObject({ ...common, decision: z.literal('continue_more'), additionalTurns: z.optional(z.literal(10)) }),
+    z.strictObject({ ...common, decision: z.literal('stop') }),
+  ]);
+};
+const SessionExchangeControlInputSchema = lazyZodSchema(() => sessionExchangeControlInputArms({
+  observedRevision: z.optional(AutonomousExchangeObservedRevisionV1Schema),
+}));
+const SessionExchangeControlPublicInputSchema = lazyZodSchema(() => sessionExchangeControlInputArms({}));
 
 const SessionPermissionRespondInputSchema = lazyZodSchema(() => z.looseObject({
   sessionId: z.optional(z.string().check(z.minLength(1))),
@@ -2646,6 +2714,8 @@ const SessionUserActionAnswerItemSchema = lazyZodSchema(() => z.strictObject({
 function validateSessionUserActionAnswer(
   value: Readonly<{
     decision?: 'approve' | 'reject' | 'request_changes';
+    disposition?: 'pass_up';
+    updatedPermissions?: unknown;
     reason?: string;
     answers?: readonly Readonly<{
       question: string;
@@ -2655,6 +2725,13 @@ function validateSessionUserActionAnswer(
   }>,
   ctx: z.core.$RefinementCtx,
 ): void {
+  if (value.disposition === 'pass_up') {
+    if (value.decision !== undefined || value.answers !== undefined || value.updatedPermissions !== undefined
+      || ['allowedTools', 'execPolicyAmendment', 'mode', 'approved'].some(key => Object.prototype.hasOwnProperty.call(value, key))) {
+      ctx.addIssue({ code: 'custom', message: 'pass_up cannot include an answer or permission decision' });
+    }
+    return;
+  }
   const hasAnswers = Array.isArray(value.answers) && value.answers.length > 0;
   const structuredAnswers = Object.create(null) as Record<string, readonly string[]>;
   for (const [index, entry] of (value.answers ?? []).entries()) {
@@ -2696,14 +2773,17 @@ const SessionUserActionAnswerInputSchema = lazyZodSchema(() => z.looseObject({
   sessionId: z.optional(z.string().check(z.minLength(1))),
   requestId: z.optional(z.string().check(z.minLength(1))),
   decision: z.optional(z.enum(['approve', 'reject', 'request_changes'])),
+  disposition: z.optional(z.literal('pass_up')),
   reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
   answers: z.optional(z.array(SessionUserActionAnswerItemSchema).check(z.minLength(1))),
   updatedPermissions: z.optional(StrictJsonValueSchema),
 }).check(z.superRefine(validateSessionUserActionAnswer)));
 
 const SessionUserActionAnswerPluginInputSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.optional(SessionTargetV1Schema),
   requestId: z.string().check(z.minLength(1)),
   decision: z.optional(z.enum(['approve', 'reject', 'request_changes'])),
+  disposition: z.optional(z.literal('pass_up')),
   reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
   answers: z.optional(z.array(SessionUserActionAnswerItemSchema).check(z.minLength(1))),
 }).check(z.superRefine(validateSessionUserActionAnswer)));
@@ -2999,7 +3079,11 @@ const SearchSettingsSetInputSchema = lazyZodSchema(() => z.strictObject({
   settings: MemorySettingsV1Schema,
 }));
 export const SearchConversationsInputV1Schema = lazyZodSchema(() => z.strictObject({
-  query: MemorySearchQueryV1Schema,
+  // Conversation fanout and Home search retain their existing scope contract.
+  // Project memory is queried through one selected daemon's memory.search.
+  query: z.safeExtend(MemorySearchQueryV1Schema, { scope: z.discriminatedUnion('type', [
+    MemorySearchScopeSchema._zod.def.options[0], MemorySearchScopeSchema._zod.def.options[1],
+  ]) }),
   machineIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
   mode: z._default(z.enum(['auto', 'indexed', 'standard']), 'auto'),
   retryUnreachableMachines: z.optional(z.boolean()),
@@ -3018,7 +3102,7 @@ export const SearchConversationsResultV1Schema = lazyZodSchema(() => z.strictObj
       source: ExternalSessionsSourceSchema, candidate: ExternalSessionCandidateV1Schema }),
   ])),
   machines: z.array(z.strictObject({ machineId: z.string(), status: z.enum(['ok', 'offline', 'outdated', 'partial', 'disabled-by-settings']),
-    standardSearchEnabled: z.boolean(), documents: z.optional(z.enum(['ready', 'pending', 'unavailable'])) })),
+    standardSearchEnabled: z.boolean(), documents: z.optional(MemoryDocumentSearchCoverageV1Schema.shape.state) })),
   sources: z.optional(z.array(z.strictObject({ machineId: z.string(), agentId: z.string(), sourceKey: z.string(),
     source: ExternalSessionsSourceSchema, contentSearch: z.boolean(), indexReady: z.optional(z.boolean()),
     key: z.optional(z.string()), label: z.optional(z.string()), detail: z.optional(z.string()),
@@ -3075,6 +3159,8 @@ const ApprovalRequestGetInputSchema = lazyZodSchema(() => z.looseObject({
 
 const ApprovalRequestDecideInputSchema = lazyZodSchema(() => z.strictObject({
   artifactId: z.string().check(z.minLength(1)),
+  /** Exact Bot Session carrying the authenticated requester decision, not an execution target. */
+  sessionId: z.optional(z.string().check(z.minLength(1))),
   decision: z.enum(['approve', 'reject', 'cancel']),
   /** Reduced input admitted by the requested Action's narrowing declaration. */
   narrowedInput: z.optional(StrictJsonValueSchema),
@@ -3419,18 +3505,19 @@ function requirePluginBindingCaller(context: ActionSurfaceBindingContext): Reado
   return context.caller;
 }
 
-function bindPluginCurrentSessionInput(
+function bindPluginSessionInteractionInput(
   value: unknown,
   context: ActionSurfaceBindingContext,
 ): unknown {
   requirePluginBindingCaller(context);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('plugin_session_interaction_input_invalid');
+  }
+  if ('sessionId' in value && value.sessionId !== undefined) return value;
   const sessionId = typeof context.defaultSessionId === 'string'
     ? context.defaultSessionId.trim()
     : '';
   if (!sessionId) throw new Error('plugin_current_session_required');
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('plugin_session_interaction_input_invalid');
-  }
   return { ...value, sessionId };
 }
 
@@ -3780,6 +3867,7 @@ function createPluginDevLoopActionSpec(actionId: PluginDevLoopActionIdV1): PreNo
     },
     surfaces: {
       ui: isInspectorUiAction,
+      ...(actionId === 'plugins.install' ? { api: false } : {}),
       voice: false,
       agent: true,
       mcp: true,
@@ -4194,6 +4282,7 @@ function createReviewCommentActionSpec(actionId: ReviewCommentActionIdV1): PreNo
   const isPublicCommentAction = actionId !== 'reviews.comments.claimPublicationDispatch';
   return {
     id: actionId, approval: { result: 'none' },
+    executionPlacement: 'account',
     title: REVIEW_COMMENT_ACTION_TITLES[actionId],
     description: 'Operate on durable review comments through the shared review-comment substrate.',
     safety: isRead || isReversibleMutation ? 'safe' : 'danger',
@@ -4793,6 +4882,8 @@ const WORKFLOW_ACTION_TITLES: Readonly<Record<WorkflowActionIdV1, string>> = {
 };
 
 const WORKFLOW_TRIGGER_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<WorkflowActionIdV1, string>>> = {
+  'workflow.run.list': '{"targetSessionId":"session_123"}',
+  'workflow.run.start': '{"runId":"22222222-2222-4222-8222-222222222222","source":{"kind":"inline","definition":{"blocks":["Use the accepted workflow"]},"replay":{"runId":"11111111-1111-4111-8111-111111111111","intent":"another_round"}}}',
   'workflow.trigger.list': '{"workflow":"builtin:review-and-converge"}',
   'workflow.trigger.add': '{"workflow":"builtin:review-and-converge","project":{"machineId":"machine_123","directory":"/workspace/project"},"trigger":{"kind":"schedule","enabled":true,"schedule":{"kind":"cron","scheduleExpr":"0 9 * * *","everyMs":null,"timezone":"UTC"}}}',
   'workflow.trigger.update': '{"automationId":"automation_123","triggerId":"trigger_123","expectedRevision":1,"patch":{"enabled":false}}',
@@ -4805,6 +4896,7 @@ const WORKFLOW_TRIGGER_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<WorkflowActi
 };
 
 const WORKFLOW_ACTION_DESCRIPTIONS: Readonly<Partial<Record<WorkflowActionIdV1, string>>> = {
+  'workflow.run.start': 'Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.',
   'workflow.trigger.remove': 'Remove one trigger by automationId and triggerId; the last child removal leaves a Manual set. Omit triggerId to delete the whole Account trigger set, including an empty Manual set. Past Runs are kept.',
   'workflow.definition.list': 'List saved workflows in this Home Account and available plugin workflows. Returns definitions with metadata, content availability and trigger summaries, plus pluginWorkflows when available. Follow nextCursor to read later pages; use workflow.definition.get to read a saved definition.',
   'workflow.definition.get': 'Read one saved workflow definition, its metadata, revision and destinations using a definitionId from workflow.definition.list.',
@@ -4854,10 +4946,13 @@ const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_AC
       // Trusted clients reach the same daemon-owned Workflow Action port. The
       // method is the Action id, so there is no second transport vocabulary.
       rpcMethod: actionId,
+      ...(actionId === 'workflow.run.start' || actionId === 'workflow.run.list'
+        || actionId === 'workflow.trigger.list' || actionId === 'session.trigger.list'
+        ? { voiceClientToolName: actionId.replaceAll('.', '_') } : {}),
     },
     surfaces: {
       ui: true,
-      voice: actionId.startsWith('workflow.trigger.') || actionId.startsWith('session.trigger.'),
+      voice: actionId === 'workflow.run.list' || actionId === 'workflow.run.start' || actionId.startsWith('workflow.trigger.') || actionId.startsWith('session.trigger.'),
       agent: true,
       mcp: true,
       cli: true,
@@ -4916,7 +5011,18 @@ const WORKFLOW_ACTION_SPECS_V1: readonly PreNormalizedActionSpec[] = WORKFLOW_AC
       : actionId === 'session.trigger.add'
         ? [{ path: 'target.ref', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' }]
       : actionId === 'workflow.run.start'
-        ? [{ path: 'source.workflow', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' }]
+        ? [
+          { path: 'runId', title: 'New Run id', widget: 'text', required: true,
+            description: 'Allocate a UUID for this new start; reuse it to reconcile a lost response.' },
+          { path: 'source.workflow', title: 'Workflow', widget: 'select', optionsSourceId: 'workflows.references.available' },
+          { path: 'source.replay.runId', title: 'Accepted Run to repeat', widget: 'text',
+            description: 'With an inline source, reopens this authorized Run and preserves its accepted graph and concrete participants.' },
+          { path: 'source.replay.intent', title: 'Continuation', widget: 'select',
+            options: [{ value: 'another_round', label: 'Another round' }],
+            description: 'Omit for ordinary Run again. Another round retains accepted inputs and supplies authorized outcomes as previousRoundContext; that JSON input must be declared by the workflow.' },
+          { path: 'inputs', title: 'Workflow inputs', widget: 'json',
+            description: 'Typed input values. Another round inherits the completed Run inputs; it never substitutes current picker defaults.' },
+        ]
       : actionId === 'workflow.run.invocations.list'
         ? [{ path: 'includeContent', title: 'Include invocation content', widget: 'boolean',
           description: 'Open progress and output beside each history row in the same page. Not available with parentRecordId.' }]
@@ -5141,6 +5247,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
 
 const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING = Object.freeze(defineActionSpecs([
   ...MEMORY_DOCUMENT_ACTION_SPECS_V1,
+  ...DOC_COLLABORATION_ACTION_SPECS_V1,
   ...PROJECT_ACTION_SPECS_V1,
   ...WORKFLOW_EFFECT_ACTION_SPECS_V1,
   ...WORKSPACE_ACTION_SPECS,
@@ -5151,6 +5258,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD_OPENING = Object.freeze(defineAc
   ...SESSION_ORGANIZATION_MOVE_ACTION_SPECS,
   ...LIST_REORDER_ACTION_SPECS,
   ...TODO_SESSION_LINK_ACTION_SPECS,
+  ...INTERNAL_TASK_ACTION_SPECS,
   ...SESSION_TERMINAL_ACTION_SPECS,
   ...SESSION_AGENT_TRANSITION_ACTION_SPECS,
   ...APP_SHELL_ACTION_SPECS,
@@ -5265,7 +5373,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
       fields.push({ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true });
     }
     if (id !== 'roles.list' && id !== 'session.notes.set' && !reports) {
-      fields.push({ path: 'roleId', title: 'Role id', widget: 'text', required: id !== 'roles.create' });
+      fields.push({ path: 'roleId', title: 'Role id', widget: 'text', required: id !== 'roles.create' && id !== 'session.role.set' });
+    }
+    if (id === 'session.role.set') {
+      fields.push({ path: 'answersWorkerQuestions', title: 'Answers its workers’ questions', widget: 'boolean' });
     }
     if (id === 'session.roles.add' || id === 'roles.create' || id === 'roles.update') {
       fields.push({ path: 'role', title: 'Role', widget: 'json', required: true });
@@ -5305,7 +5416,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD = Object.freeze(defineActionSpec
     const voiceArgsExample = voiceArgsExamples[id];
     // What a person reads in Settings, approvals and the form; agents read the schema.
     const copy = ({
-      'session.role.set': ['Set Session role', 'Give a session a role, such as Orchestrator, so it works the way that role describes.'],
+      'session.role.set': ['Set Session role', 'Choose a session’s role or whether it answers its workers’ questions. Supply at least one choice; omitted choices stay unchanged.'],
       'session.roles.override.set': ['Change a role for one Session', 'Change how a role runs for one session and the sessions under it, leaving your settings as they are.'],
       'session.roles.override.clear': ['Use default role in a Session', 'Remove a session\'s change to a role, so the role runs as set in your settings again.'],
       'session.roles.add': ['Add a role to one Session', 'Give one session a role of its own that the sessions under it can use.'],
@@ -6547,7 +6658,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
   },
 ] as const));
 
-const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActionSpecs([
+const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSpecs([
   {
     id: 'execution.run.start', approval: {result: 'optional',flow: 'deferred'},
     title: 'Start execution run',
@@ -7042,13 +7153,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'session.open', approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
     // Navigation belongs to the answering client, including CLI requests.
     // Only explicit resume without a Workspace destination is headless.
     executionPlacementForInput: (input: unknown) =>
       typeof input === 'object' && input !== null && 'intent' in input && input.intent === 'resume'
         && !('destination' in input) && !('tabId' in input) ? 'session' : 'client',
     title: 'Open session',
-    description: 'Open or resume a session. Explicit fresh-folder consent lets the daemon recover a missing managed folder.',
+    description: 'Open or resume a session, including Files, Walkthrough or pending-only Commits for an SCM comparison. Explicit fresh-folder consent lets the daemon recover a missing managed folder.',
     sideEffectClass: 'external',
     safety: 'safe',
     placements: ['command_palette', 'session_info', 'voice_panel'],
@@ -7271,16 +7383,18 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       rpcMethod: RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3,
       rpcMethodAliases: [RPC_METHODS.DAEMON_SESSION_HANDOFF_START],
       sdkMethod: 'session.handoff.start',
+      mcpToolName: 'session_handoff',
+      voiceClientToolName: 'session_handoff',
     },
     examples: {
       voice: { argsExample: '{"sessionId":"{{sessionId}}","targetMachineId":"{{machineId}}"}' },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
-      cli: false,
+      cli: true,
       rpc: true,
       },
     inputHints: {
@@ -7471,6 +7585,9 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     outputSchema: StrictJsonValueSchema,
     inputSchema: SessionHandoffStatusGetRequestSchema,
   },
+] as const));
+
+const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActionSpecs([
   {
     id: 'workspace.sync.conflict.resolve', approval: {result: 'required',flow: 'deferred'},
     workspaceWrite: true,
@@ -8527,6 +8644,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'session.message.send', approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'sessionId', cardinality: 'many' },
     title: 'Send a message to a session',
     sideEffectClass: 'external',
     description: 'Send a user message to the AI coding assistant inside the specified session.',
@@ -8555,23 +8673,90 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
         { path: 'permissionModeOverride', title: 'Permission mode override (optional)', widget: 'text' },
         { path: 'modelOverride', title: 'Model override (optional)', widget: 'text' },
         { path: 'providerConnectionId', title: 'Provider connection id (optional)', widget: 'text' },
+        { path: 'reply', title: 'Reply mode (optional)', description: 'none sends information; wait observes the exact answer; return hands off its answer to the original Session.', widget: 'select', options: [
+          { value: 'none', label: 'No reply' }, { value: 'wait', label: 'Wait' }, { value: 'return', label: 'Return later' },
+        ] },
         { path: 'wait', title: 'Wait for message completion (optional)', widget: 'boolean' },
         { path: 'timeoutSeconds', title: 'Timeout seconds (optional)', widget: 'text' },
       ],
     },
-    outputSchema: SessionMessageSendResultV1Schema,
+    outputSchema: withSessionTargetFanoutResultV1(SessionMessageSendResultV1Schema),
     inputSchema: SessionSendMessageInputSchema,
     cli: { ...SESSION_SEND_CLI_PROJECTION, wholeInputSchema: SessionSendMessagePublicInputSchema },
     surfaceBindings: {
       api: {
         inputSchema: SessionSendMessagePublicInputSchema,
-        outputSchema: SessionMessageSendResultV1Schema,
+        outputSchema: withSessionTargetFanoutResultV1(SessionMessageSendResultV1Schema),
       },
       plugin: {
         inputSchema: SessionSendMessagePluginInputV1Schema,
-        outputSchema: SessionMessageSendResultV1Schema,
+        outputSchema: withSessionTargetFanoutResultV1(SessionMessageSendResultV1Schema),
       },
     } satisfies ActionSpecSurfaceBindings,
+  },
+  {
+    id: 'session.message.reply', approval: { result: 'optional', flow: 'deferred' },
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
+    executionPlacement: 'session',
+    title: 'Reply to a Session request',
+    description: 'Publish an answer or pass for one exact admitted request in the receiving Session.',
+    sideEffectClass: 'external',
+    safety: 'safe',
+    placements: [],
+    bindings: { mcpToolName: 'session_message_reply', voiceClientToolName: 'session_message_reply' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { title: 'Reply to a Session request', fields: [
+      { path: 'sessionId', title: 'Receiving Session', widget: 'text', required: true },
+      { path: 'requestLocalId', title: 'Original input id', widget: 'text', required: true },
+      { path: 'reply', title: 'Answer or pass', widget: 'json', required: true },
+    ] },
+    inputSchema: SessionMessageReplyInputSchema,
+    outputSchema: SessionMessageReplyMutationResultV1Schema,
+  },
+  {
+    id: 'discussion.pass', approval: { result: 'optional', flow: 'deferred' },
+    executionPlacement: 'session',
+    title: 'Pass on the current Discussion question',
+    description: 'Settle the current participant’s exact admitted Discussion question with a typed pass, without posting an authored substitute message.',
+    sideEffectClass: 'external', safety: 'safe', placements: [],
+    bindings: { mcpToolName: 'discussion_pass', voiceClientToolName: 'discussion_pass' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [{ path: 'discussionId', title: 'Discussion id', widget: 'text', required: true }] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.pass'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.pass'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'pass'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'session.exchange.control', approval: { result: 'optional', flow: 'deferred' },
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
+    requiredAuthority: 'account_automation',
+    executionPlacement: 'account',
+    title: 'Control autonomous exchange',
+    description: 'Continue, continue ten more turns, or stop work rooted in one original input.',
+    sideEffectClass: 'danger',
+    safety: 'danger',
+    placements: [],
+    bindings: { mcpToolName: 'session_exchange_control', voiceClientToolName: 'session_exchange_control' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputSchema: SessionExchangeControlInputSchema,
+    outputSchema: AutonomousExchangeStatusV1Schema,
+    surfaceBindings: { api: { inputSchema: SessionExchangeControlPublicInputSchema,
+      outputSchema: AutonomousExchangeStatusV1Schema },
+      plugin: { inputSchema: SessionExchangeControlPublicInputSchema,
+        outputSchema: AutonomousExchangeStatusV1Schema } } satisfies ActionSpecSurfaceBindings,
+    cli: { commands: [{ path: ['session', 'exchange', 'control'], positionals: ['sessionId', 'originInputLocalId', 'decision'], visibility: 'canonical' }],
+      wholeInputSchema: SessionExchangeControlPublicInputSchema },
+    inputHints: { fields: [
+      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'originInputLocalId', title: 'Original input id', widget: 'text', required: true },
+      { path: 'decision', title: 'Control', widget: 'select', required: true,
+        options: [
+          { value: 'continue', label: 'Continue' },
+          { value: 'continue_more', label: 'Continue 10 more' },
+          { value: 'stop', label: 'Stop' },
+        ] },
+      { path: 'additionalTurns', title: 'Additional turns', widget: 'number' },
+    ] },
   },
   {
     id: 'session.turn.cancel', approval: {result: 'none'},
@@ -8589,6 +8774,28 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     inputSchema: SessionTurnCancelInputSchema,
     outputSchema: StrictJsonValueSchema,
     cli: { commands: [{ path: ['session', 'turn', 'cancel'], positionals: ['sessionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'session.runtime.refresh', approval: { result: 'none' },
+    title: 'Refresh Session runtime',
+    description: 'Refresh a stale Session runner on its hosting machine through the same planned restart used by the Session banner. Active child work defers replacement.',
+    safety: 'safe',
+    sideEffectClass: 'write',
+    placements: [],
+    bindings: { mcpToolName: 'session_runtime_refresh' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    inputSchema: lazyZodSchema(() => z.strictObject({
+      sessionId: z.string().check(z.trim(), z.minLength(1)),
+      machineId: z.string().check(z.trim(), z.minLength(1)),
+      serverId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    })),
+    outputSchema: RestartSessionRunnerResultV1Schema,
+    inputHints: { fields: [
+      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'machineId', title: 'Hosting machine id', widget: 'text', required: true },
+      { path: 'serverId', title: 'Home id', widget: 'text' },
+    ] },
+    examples: { mcp: { argsExample: '{"sessionId":"{{sessionId}}","machineId":"{{machineId}}"}' } },
   },
   {
     id: 'session.stop', approval: {result: 'none'},
@@ -8700,10 +8907,27 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
 // the runtime aggregate must not serialize their complete schema union again.
 const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX: readonly PreNormalizedActionSpec[] = Object.freeze([
   ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING,
+  ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE,
   ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER,
 ]);
 
 const ACTION_SPECS_WITHOUT_APPROVAL_PENDING: readonly PreNormalizedActionSpec[] = Object.freeze(defineActionSpecs([
+  {
+    id: 'session.pending.action.set', approval: { result: 'required' }, title: 'Update queued message action',
+    description: 'Change the requested action or explicitly resume the exact queued input through its existing pending owner.',
+    safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account',
+    approvalPolicy: { uiConfirmation: 'direct', rpcConfirmation: true }, placements: ['pending_messages'],
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
+    bindings: { mcpToolName: 'session_pending_action_set', rpcMethod: 'session.pending.action.set' },
+    serverTransport: { method: 'PATCH', path: '/v2/sessions/:sessionId/pending/:localId/action' },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'pending', 'action', 'set'], visibility: 'canonical' }] },
+    inputHints: { description: 'Update this pending input; explicitly request resume when it becomes available.', fields: [
+      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'localId', title: 'Pending message id', widget: 'text', required: true },
+      { path: 'requestedAction', title: 'Requested action', widget: 'json', required: true },
+      { path: 'resumeWhenAvailable', title: 'Resume when available', widget: 'boolean' }] },
+    inputSchema: SessionPendingActionSetInputV1Schema, outputSchema: SessionPendingActionSetResultV1Schema,
+  },
   {
     id: 'session.pending.markHandled', approval: { result: 'required' }, title: 'Mark pending delivery handled',
     description: 'Resolve historical uncertain input you have confirmed was handled, without sending it again.',
@@ -8786,14 +9010,15 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PENDING: readonly PreNormalizedActionSpec[] 
   },
 ] as const));
 
-const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionSpecs([
+const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING = Object.freeze(defineActionSpecs([
   {
-    id: 'session.worker.publish', approval: {result: 'required'}, title: 'Publish a worker report',
+    id: 'session.update.post', approval: {result: 'required'}, title: 'Post an update',
     safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'session',
-    placements: [], bindings: { mcpToolName: 'session_worker_publish' },
-    surfaces: { ui: false, voice: false, agent: true, mcp: true, cli: false, rpc: false },
-    inputHints: { description: 'Let a worker session report what it did to the session that leads it.', fields: [{ path: 'summary', title: 'Report', widget: 'text', required: true }] },
-    inputSchema: SessionWorkerPublishInputV1Schema, outputSchema: SessionWorkerPublishOutputV1Schema,
+    placements: [], bindings: { mcpToolName: 'session_update_post', voiceClientToolName: 'session_update_post', rpcMethod: 'session.update.post' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
+    cli: { commands: [] },
+    inputHints: { description: 'Persist an update from the current session for its selected followers.', fields: [{ path: 'summary', title: 'Update', widget: 'text', required: true }] },
+    inputSchema: SessionUpdatePostInputV1Schema, outputSchema: SessionUpdatePostOutputV1Schema,
   },
   // The four shared human/Agent Board intents. People reach them through the UI
   // executor and Agents through the generic Action/tool projection; neither gets a
@@ -8980,221 +9205,478 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     cli: SESSION_BOARD_LAYOUT_UPDATE_CLI_PROJECTION,
   },
 
-  // The Session-owned human discussion family. People reach these through the UI
+  // The Home-owned Discussion family. People reach these through the UI
   // and CLI executors; an Agent reaches the reads and the deliberate post through
   // the same rows under its own admitted execution principal. Discussion content
-  // is sealed and opened by the executor through the existing Session cipher, so
+  // is sealed and opened by the executor through the existing Discussion key, so
   // these inputs carry strict semantic plaintext and never the storage envelope.
+] as const));
+
+const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
   {
-    id: 'session.discussion.list', approval: {result: 'required'},
-    title: 'List Session discussions',
-    description: 'List the human discussions attached to a Session, newest activity first. Titles are opened locally; unread and mention counts are the caller’s own private facts.',
+    id: 'discussion.second_opinion.start',
+    title: 'Get a second opinion',
+    description: 'Preview the quoted source and actual source access, then explicitly Ask one ordinary reviewer in an anchored Discussion. Retry retains the original create, quote, question and participant identities. Multiple reviewers require Fresh opinions and report unavailable while that Workflow producer is unavailable.',
+    safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', requiredAuthority: 'present_user',
+    approval: { result: 'optional', flow: 'deferred' }, approvalPolicy: { uiConfirmation: 'direct' },
+    originalExecution: { accountRoot: 'allowed' }, placements: [],
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'discussion_second_opinion_start', voiceClientToolName: 'discussion_second_opinion_start' },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.second_opinion.start'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.second_opinion.start'],
+    inputHints: { fields: [
+      { path: 'intent', title: 'Preview or Ask', widget: 'select', required: true,
+        options: [{ value: 'preview', label: 'Preview' }, { value: 'ask', label: 'Ask' }] },
+      { path: 'source', title: 'Exact source', widget: 'json', required: true },
+      { path: 'title', title: 'Discussion title', widget: 'text', required: true },
+      { path: 'question', title: 'Question', widget: 'textarea', required: true },
+      { path: 'reviewers', title: 'Reviewers', widget: 'json', required: true },
+      { path: 'retry', title: 'Retained retry identities', widget: 'json', required: true },
+      { path: 'confirmedPreview', title: 'Confirmed access preview', widget: 'json' },
+    ] },
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'second-opinion', 'start'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.list', approval: {result: 'required'},
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'List Discussions',
+    description: 'List the human discussions in the captured Home, newest activity first. Titles are opened locally; unread and mention counts are the caller’s own private facts.',
     safety: 'safe',
     sideEffectClass: 'read',
     placements: [],
-    bindings: { mcpToolName: 'session_discussion_list' },
-    serverTransport: { method: 'GET', path: SESSION_DISCUSSION_HTTP_PATHS_V1.collection },
+    bindings: { mcpToolName: 'discussion_list', voiceClientToolName: 'discussion_list' },
+    serverTransport: { method: 'GET', path: DISCUSSION_HTTP_PATHS_V1.collection },
     examples: {
-      mcp: { argsExample: '{"sessionId":"{{sessionId}}","state":"active","limit":30}' },
+      mcp: { argsExample: '{"state":"active","limit":30}' },
     },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'List discussions',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'state', title: 'State', widget: 'text' },
         { path: 'cursor', title: 'Page cursor', widget: 'text' },
         { path: 'limit', title: 'Page size', widget: 'integer' },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.list'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.list'],
-    cli: SESSION_DISCUSSION_LIST_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.list'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.list'],
+    cli: DISCUSSION_LIST_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.get', approval: {result: 'required'},
-    title: 'Read one Session discussion',
+    id: 'discussion.get', approval: {result: 'required'},
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Read one Discussion',
     description: 'Read one human discussion’s opened title, activity, capabilities and the caller’s private unread facts. It returns no message bodies.',
     safety: 'safe',
     sideEffectClass: 'read',
     placements: [],
-    bindings: { mcpToolName: 'session_discussion_get' },
-    serverTransport: { method: 'GET', path: SESSION_DISCUSSION_HTTP_PATHS_V1.discussion },
+    bindings: { mcpToolName: 'discussion_get', voiceClientToolName: 'discussion_get' },
+    serverTransport: { method: 'GET', path: DISCUSSION_HTTP_PATHS_V1.discussion },
     examples: {
-      mcp: { argsExample: '{"sessionId":"{{sessionId}}","discussionId":"{{discussionId}}"}' },
+      mcp: { argsExample: '{"discussionId":"{{discussionId}}"}' },
     },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Read a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.get'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.get'],
-    cli: SESSION_DISCUSSION_GET_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.get'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.get'],
+    cli: DISCUSSION_GET_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.read', approval: {result: 'required'},
+    id: 'discussion.read', approval: {result: 'required'},
+    originalExecution: { accountRoot: 'allowed' },
     title: 'Read discussion messages',
     description: 'Read one bounded page of a discussion’s authored human messages, opened locally. Reading never advances the caller’s private read cursor.',
     safety: 'safe',
     sideEffectClass: 'read',
     placements: [],
-    bindings: { mcpToolName: 'session_discussion_read' },
-    serverTransport: { method: 'GET', path: SESSION_DISCUSSION_HTTP_PATHS_V1.messages },
+    bindings: { mcpToolName: 'discussion_read', voiceClientToolName: 'discussion_read' },
+    serverTransport: { method: 'GET', path: DISCUSSION_HTTP_PATHS_V1.messages },
     examples: {
-      mcp: { argsExample: '{"sessionId":"{{sessionId}}","discussionId":"{{discussionId}}","limit":30}' },
+      mcp: { argsExample: '{"discussionId":"{{discussionId}}","limit":30}' },
     },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Read discussion messages',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'beforeSeq', title: 'Before sequence', widget: 'integer' },
         { path: 'afterSeq', title: 'After sequence', widget: 'integer' },
         { path: 'limit', title: 'Page size', widget: 'integer' },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.read'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.read'],
-    cli: SESSION_DISCUSSION_READ_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.read'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read'],
+    cli: DISCUSSION_READ_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.create', approval: {result: 'optional',flow: 'deferred'},
+    id: 'discussion.create', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
+    originalExecution: { accountRoot: 'allowed' },
     requiredAuthority: 'present_user',
-    title: 'Start a Session discussion',
+    title: 'Start a Discussion',
     description: 'Start one human discussion with its title and first message in a single atomic write. Agent and MCP callers request present-user approval.',
-    safety: 'safe',
+    safety: 'danger',
     sideEffectClass: 'write',
     placements: [],
-    serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.collection },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'discussion_create', voiceClientToolName: 'discussion_create' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.collection },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Start a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'title', title: 'Title', widget: 'text', required: true },
         { path: 'firstMessage', title: 'First message', widget: 'json', required: true },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.create'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.create'],
-    cli: SESSION_DISCUSSION_CREATE_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.create'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.create'],
+    cli: DISCUSSION_CREATE_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.post', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
+    id: 'discussion.post', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
+    originalExecution: { accountRoot: 'allowed' },
     title: 'Post a discussion message',
-    description: 'Post one authored message to a human discussion. Every Session collaborator sees it. An Agent posts under its own authenticated execution Account with visible “via agent” attribution; it never posts as the person who asked.',
+    description: 'Post one authored message to a human discussion. Every currently admitted Discussion reader sees it. An Agent posts under its own authenticated execution Account with visible “via agent” attribution; it never posts as the person who asked.',
     safety: 'danger',
     sideEffectClass: 'danger',
     placements: [],
-    bindings: { mcpToolName: 'session_discussion_post' },
-    serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.messages },
+    bindings: { mcpToolName: 'discussion_post', voiceClientToolName: 'discussion_post' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.messages },
     examples: {
-      mcp: { argsExample: '{"sessionId":"{{sessionId}}","discussionId":"{{discussionId}}","content":{"v":1,"parts":[{"t":"text","text":"Migration is green on all three providers."}]}}' },
+      mcp: { argsExample: '{"discussionId":"{{discussionId}}","content":{"v":1,"parts":[{"t":"text","text":"Migration is green on all three providers."}]}}' },
     },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Post to a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'content', title: 'Message', widget: 'json', required: true },
         { path: 'mentionedAccountIds', title: 'Mentioned Account ids', widget: 'text_list', listSeparator: 'comma' },
+        { path: 'mentionedSessionIds', title: 'Mentioned Session ids', widget: 'text_list', listSeparator: 'comma' },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.post'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.post'],
-    cli: SESSION_DISCUSSION_POST_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.post'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.post'],
+    cli: DISCUSSION_POST_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.rename', approval: {result: 'optional',flow: 'deferred'},
+    id: 'discussion.rename', approval: {result: 'optional',flow: 'deferred'},
+    originalExecution: { accountRoot: 'allowed' },
     requiredAuthority: 'present_user',
     title: 'Rename a discussion',
     description: 'Change one human discussion’s title. It does not reorder the discussion or touch its messages.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
-    serverTransport: { method: 'PATCH', path: SESSION_DISCUSSION_HTTP_PATHS_V1.discussion },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'discussion_rename', voiceClientToolName: 'discussion_rename' },
+    serverTransport: { method: 'PATCH', path: DISCUSSION_HTTP_PATHS_V1.discussion },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Rename a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'title', title: 'Title', widget: 'text', required: true },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.rename'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.rename'],
-    cli: SESSION_DISCUSSION_RENAME_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.rename'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.rename'],
+    cli: DISCUSSION_RENAME_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.archive', approval: {result: 'optional',flow: 'deferred'},
+    id: 'discussion.archive', approval: {result: 'optional',flow: 'deferred'},
+    originalExecution: { accountRoot: 'allowed' },
     requiredAuthority: 'present_user',
     title: 'Archive a discussion',
     description: 'Archive one human discussion. It stays readable and restorable; new posts and title changes stop.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
-    serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.archive },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'discussion_archive', voiceClientToolName: 'discussion_archive' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.archive },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Archive a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.archive'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.archive'],
-    cli: SESSION_DISCUSSION_ARCHIVE_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.archive'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.archive'],
+    cli: DISCUSSION_ARCHIVE_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.restore', approval: {result: 'optional',flow: 'deferred'},
+    id: 'discussion.restore', approval: {result: 'optional',flow: 'deferred'},
+    originalExecution: { accountRoot: 'allowed' },
     requiredAuthority: 'present_user',
     title: 'Restore a discussion',
     description: 'Restore one archived human discussion so it accepts posts again.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
-    serverTransport: { method: 'POST', path: SESSION_DISCUSSION_HTTP_PATHS_V1.restore },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'discussion_restore', voiceClientToolName: 'discussion_restore' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.restore },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Restore a discussion',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.restore'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.restore'],
-    cli: SESSION_DISCUSSION_RESTORE_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.restore'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.restore'],
+    cli: DISCUSSION_RESTORE_CLI_PROJECTION,
   },
   {
-    id: 'session.discussion.read_state.set', approval: {result: 'optional',flow: 'deferred'},
+    id: 'discussion.read_state.set', approval: {result: 'optional',flow: 'deferred'},
+    originalExecution: { accountRoot: 'allowed' },
     requiredAuthority: 'present_user',
     title: 'Mark a discussion read',
     description: 'Advance the executing Account’s own private read position in a discussion. Agent and MCP callers request present-user approval.',
     safety: 'safe',
     sideEffectClass: 'write',
     placements: [],
-    serverTransport: { method: 'PUT', path: SESSION_DISCUSSION_HTTP_PATHS_V1.read },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'discussion_read_state_set', voiceClientToolName: 'discussion_read_state_set' },
+    serverTransport: { method: 'PUT', path: DISCUSSION_HTTP_PATHS_V1.read },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     inputHints: {
       title: 'Mark a discussion read',
       fields: [
-        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
         { path: 'lastReadSeq', title: 'Last read sequence', widget: 'integer', required: true },
       ],
     },
-    outputSchema: SESSION_DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['session.discussion.read_state.set'],
-    inputSchema: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1['session.discussion.read_state.set'],
-    cli: SESSION_DISCUSSION_READ_STATE_SET_CLI_PROJECTION,
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.read_state.set'],
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read_state.set'],
+    cli: DISCUSSION_READ_STATE_SET_CLI_PROJECTION,
+  },
+  {
+    id: 'discussion.reply', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Reply in a discussion',
+    description: 'Reply to one committed message in this Discussion through the same admitted message writer. Replying does not grant source access or start an agent turn.',
+    safety: 'danger', sideEffectClass: 'danger', placements: [],
+    bindings: { mcpToolName: 'discussion_reply', voiceClientToolName: 'discussion_reply' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.messages },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { title: 'Reply in a discussion', fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'content', title: 'Reply', widget: 'json', required: true },
+      { path: 'replyTarget', title: 'Reply target', widget: 'json', required: true },
+      { path: 'localId', title: 'Durable message identity for retry', widget: 'text' },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.reply'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.reply'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'reply'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.participants.list', approval: { result: 'required' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'List discussion participants',
+    description: 'Inspect the authorized Discussion roster through its current grants. Membership and private Follow choices remain separate.',
+    safety: 'safe', sideEffectClass: 'read', placements: [],
+    bindings: { mcpToolName: 'discussion_participants_list', voiceClientToolName: 'discussion_participants_list' },
+    serverTransport: { method: 'GET', path: DISCUSSION_HTTP_PATHS_V1.participants },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [{ path: 'discussionId', title: 'Discussion id', widget: 'text', required: true }] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.participants.list'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.participants.list'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'participants', 'list'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.candidates.list', approval: { result: 'required' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Find discussion participants',
+    description: 'Search eligible people or page accessible Sessions on this Home. Models project only supplied ordinary authoring selections; this read never probes, starts or invites a participant.',
+    safety: 'safe', sideEffectClass: 'read', placements: [],
+    bindings: { mcpToolName: 'discussion_candidates_list', voiceClientToolName: 'discussion_candidates_list' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [
+      { path: 'source', title: 'Candidate source', widget: 'text', required: true },
+      { path: 'discussionId', title: 'Existing discussion', widget: 'text' },
+      { path: 'query', title: 'People search', widget: 'text' },
+      { path: 'cursor', title: 'Source continuation', widget: 'text' },
+      { path: 'options', title: 'Selected ordinary model setups', widget: 'json' },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.candidates.list'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.candidates.list'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'candidates', 'list'], positionals: [], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.invite', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Invite a participant to a discussion',
+    description: 'Invite a person, bind an existing Session, or reserve a model slot and start its ordinary Session without an initial prompt. Retain the same slot on an uncertain start. This grants no access to an anchored source.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_invite', voiceClientToolName: 'discussion_invite' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.invite },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'participant', title: 'Participant to invite', widget: 'json', required: true },
+      { path: 'answerPolicy', title: 'Session answer policy', widget: 'text' },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.invite'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.invite'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'invite'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.participant.policy.set', approvalPolicy: { uiConfirmation: 'direct' },
+    approval: { result: 'optional', flow: 'deferred' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Set a discussion participant answer policy',
+    description: 'Choose when addressed, reads only, private drafts for review, or watch and speak up. Watching spends model turns even when the agent stays silent. Changing Action confirmation does not waive private draft review.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_participant_policy_set', voiceClientToolName: 'discussion_participant_policy_set' },
+    serverTransport: { method: 'PUT', path: DISCUSSION_HTTP_PATHS_V1.participantPolicy },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'participant', title: 'Agent participant', widget: 'json', required: true },
+      { path: 'answerPolicy', title: 'Answer policy', widget: 'text', required: true },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.participant.policy.set'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.participant.policy.set'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'participants', 'policy', 'set'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.participant.remove', approvalPolicy: { uiConfirmation: 'direct' },
+    approval: { result: 'optional', flow: 'deferred' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Remove a discussion invitation',
+    description: 'Remove a person’s direct grant, detach an existing Session, or archive a Discussion-owned model Session through ordinary Session lifecycle. Inherited Team and Group access remains explicit.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_participant_remove', voiceClientToolName: 'discussion_participant_remove' },
+    serverTransport: { method: 'DELETE', path: DISCUSSION_HTTP_PATHS_V1.participant },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'participant', title: 'Participant to remove', widget: 'json', required: true },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.participant.remove'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.participant.remove'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'participants', 'remove'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.leave', approval: { result: 'optional', flow: 'deferred' }, requiredAuthority: 'present_user',
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Leave a discussion',
+    description: 'Remove only the present person’s direct invitation. An owner must transfer ownership or choose the existing archive operation; inherited access is not removed.',
+    safety: 'safe', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_leave', voiceClientToolName: 'discussion_leave' },
+    serverTransport: { method: 'POST', path: DISCUSSION_HTTP_PATHS_V1.leave },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [{ path: 'discussionId', title: 'Discussion id', widget: 'text', required: true }] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.leave'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.leave'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'leave'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.owner.transfer', approval: { result: 'optional', flow: 'deferred' }, requiredAuthority: 'present_user',
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Transfer discussion ownership',
+    description: 'The current owner transfers ownership to an eligible person in the same grant transaction. Cancelling approval preserves ownership.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_owner_transfer', voiceClientToolName: 'discussion_owner_transfer' },
+    serverTransport: { method: 'PUT', path: DISCUSSION_HTTP_PATHS_V1.ownerTransfer },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { description: 'The selected person becomes the owner. You will need their help to transfer ownership back.', fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'accountId', title: 'Successor Account id', widget: 'text', required: true },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.owner.transfer'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.owner.transfer'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'owner', 'transfer'], positionals: ['discussionId', 'accountId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.access.grants.list', approval: { result: 'required' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Inspect discussion sharing',
+    description: 'Read the Discussion’s effective access and explicit Account, Team and Group grants through the shared resource grant owner.',
+    safety: 'safe', sideEffectClass: 'read', placements: [],
+    bindings: { mcpToolName: 'discussion_access_grants_list', voiceClientToolName: 'discussion_access_grants_list' },
+    serverTransport: { method: 'GET', path: DISCUSSION_HTTP_PATHS_V1.grants },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [{ path: 'discussionId', title: 'Discussion id', widget: 'text', required: true }] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.access.grants.list'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.access.grants.list'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'access', 'grants', 'list'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.access.grants.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Share a discussion',
+    description: 'Set an explicit resource grant using the shared PrincipalRef and view/edit/admin policy. Source grants remain separate.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_access_grants_set', voiceClientToolName: 'discussion_access_grants_set' },
+    serverTransport: { method: 'PUT', path: DISCUSSION_HTTP_PATHS_V1.grants },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'principal', title: 'Account, Team or Group', widget: 'json', required: true },
+      { path: 'accessLevel', title: 'Access level', widget: 'text', required: true },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.access.grants.set'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.access.grants.set'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'access', 'grants', 'set'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'discussion.access.grants.remove', approval: { result: 'optional', flow: 'deferred' },
+    originalExecution: { accountRoot: 'allowed' },
+    title: 'Remove discussion sharing',
+    description: 'Remove an explicit resource grant through the same shared resource grant owner and current access checks.',
+    safety: 'danger', sideEffectClass: 'write', placements: [],
+    bindings: { mcpToolName: 'discussion_access_grants_remove', voiceClientToolName: 'discussion_access_grants_remove' },
+    serverTransport: { method: 'DELETE', path: DISCUSSION_HTTP_PATHS_V1.grants },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [
+      { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+      { path: 'principal', title: 'Account, Team or Group', widget: 'json', required: true },
+    ] },
+    inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.access.grants.remove'],
+    outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.access.grants.remove'],
+    cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'access', 'grants', 'remove'], positionals: ['discussionId'], visibility: 'canonical' }] },
+  },
+] as const));
+
+const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(defineActionSpecs([
+  {
+    id: 'session.coordinator.enable', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    title: 'Make coordinator',
+    description: 'Configure this session through existing role, Bot, pin, manager and Important Follow rule Actions; returns each effect separately.',
+    sessionTarget: { field: 'sessionId', cardinality: 'one' },
+    safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [],
+    bindings: { mcpToolName: 'session_coordinator_enable', voiceClientToolName: 'makeSessionCoordinator' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    examples: { voice: { argsExample: '{"sessionId":"session_123","roleId":"orchestrator","keep":"none","ruleSuggestions":[]}' } },
+    inputHints: { fields: [
+      { path: 'sessionId', title: 'Session', widget: 'text', required: true },
+      { path: 'roleId', title: 'Role', widget: 'text', required: true },
+      { path: 'keep', title: 'Where to keep it', widget: 'select', required: true, options: [
+        { value: 'rail_bot', label: 'Left rail, as a Bot' }, { value: 'list_pin', label: 'Top of your list' }, { value: 'none', label: 'Just in the list' },
+      ] },
+      { path: 'answersWorkerQuestions', title: 'Answers its workers’ questions', widget: 'boolean' },
+      { path: 'managedBy', title: 'Manager and reviewed current manager', widget: 'json' },
+      { path: 'ruleSuggestions', title: 'Selected rule intents', widget: 'json', required: true },
+    ] },
+    inputSchema: SessionCoordinatorEnableInputV1Schema, outputSchema: SessionCoordinatorEnableResultV1Schema,
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'coordinator', 'enable'], visibility: 'canonical' }] },
+  },
+  {
+    id: 'session.status.set_reason', approval: { result: 'none' },
+    title: 'Explain session status',
+    description: 'Set or clear an explanation for the current session without changing its runtime status.',
+    safety: 'safe', sideEffectClass: 'write', executionPlacement: 'account', placements: [],
+    bindings: { mcpToolName: 'session_status_set_reason', voiceClientToolName: 'setSessionStatusReason' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    examples: { voice: { argsExample: '{"reason":"Waiting for the local build"}' } },
+    inputHints: { fields: [{ path: 'reason', title: 'Explanation, or null to clear', widget: 'json', required: true }] },
+    inputSchema: SessionStatusReasonSetInputSchema,
+    outputSchema: SessionStatusReasonSetResultSchema,
+    cli: { commands: [{ path: ['session', 'set-status-reason'], visibility: 'canonical' }] },
   },
   {
     id: 'session.title.set', approval: {result: 'none'},
@@ -9273,11 +9755,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.context.update', approval: {result: 'none'}, title: 'Update session context',
-    description: 'Apply one context-entry or inherited-entry switch intent against its reviewed metadata revision.',
+    description: 'Apply one context-entry, inherited-entry switch or Plan Doc selection intent against its reviewed metadata revision.',
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'account', placements: [],
     bindings: { mcpToolName: 'session_context_update', voiceClientToolName: 'updateSessionContext' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
-    inputHints: { description: 'Turn a piece of context on or off for a session.', title: 'Update context', fields: [
+    inputHints: { description: 'Edit session context or select an existing Doc as its Plan with set_plan; a null entryId clears the selection.', title: 'Update context', fields: [
       { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'serverId', title: 'Home id', widget: 'text', required: true },
       { path: 'expectedMetadataRevision', title: 'Reviewed metadata revision', widget: 'number', required: true },
@@ -9482,17 +9964,19 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   },
   {
     id: 'session.status.get', sideEffectClass: 'read', approval: {result: 'required'},
+    sessionTarget: { field: 'sessionId', cardinality: 'many' },
     title: 'Get session status',
-    description: 'Get summary status for a session, optionally refreshing live agent state.',
+    description: 'Get summary status for a session, optionally refreshing live agent state or inspecting current execution prerequisites.',
     safety: 'safe',
     placements: [],
     bindings: { mcpToolName: 'session_status_get' },
     examples: {
       mcp: { argsExample: '{"sessionId":"{{sessionId}}","live":true}' },
+      voice: { argsExample: '{"sessionId":"session_123","readiness":true}' },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -9504,9 +9988,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
       fields: [
         { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
         { path: 'live', title: 'Live', widget: 'boolean' },
+        { path: 'readiness', title: 'Inspect execution readiness', widget: 'boolean' },
       ],
     },
-    outputSchema: StrictJsonValueSchema,
+    outputSchema: lazyZodSchema(() => withSessionTargetFanoutResultV1(SessionStatusActionResultV1Schema)),
     inputSchema: SessionStatusGetInputSchema,
     cli: SESSION_STATUS_GET_CLI_PROJECTION,
   },
@@ -9688,25 +10173,25 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'POST', path: '/v2/sessions/access-context/set' },
   },
   {
-    id: 'session.reports_to.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
-    title: 'Set Session lead',
+    id: 'session.manager.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
+    title: 'Set Session manager',
     safety: 'danger',
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
-    cli: { commands: [{ path: ['session', 'reports-to', 'set'], visibility: 'canonical' }] },
+    cli: { commands: [{ path: ['session', 'manager', 'set'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_reports_to_set' },
-    examples: { voice: { argsExample: '{"sessionId":"{{sessionId}}","leadSessionId":"lead_session","expectedLeadSessionId":null}' } },
+    bindings: { mcpToolName: 'session_manager_set', voiceClientToolName: 'session_manager_set' },
+    examples: { voice: { argsExample: '{"sessionId":"{{sessionId}}","managerSessionId":"manager_session","expectedManagerSessionId":null}' } },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'danger',
-    inputHints: { description: 'Choose which session leads this one, or let it stand on its own.', fields: [
+    inputHints: { description: 'Choose which session manages this one, or let it stand on its own.', fields: [
       { path: 'sessionId', title: 'Session', prompt: 'Which session?', widget: 'text' },
-      { path: 'leadSessionId', title: 'Lead session', description: 'Leave empty to detach it from its lead.', widget: 'text' },
-      { path: 'expectedLeadSessionId', title: 'Expected current lead', widget: 'text' },
+      { path: 'managerSessionId', title: 'Manager session', description: 'Leave empty to detach it from its manager.', widget: 'text' },
+      { path: 'expectedManagerSessionId', title: 'Expected current manager', widget: 'text' },
     ] },
-    inputSchema: SessionReportsToSetActionInputV1Schema,
-    outputSchema: SessionReportsToSetResultV1Schema,
-    serverTransport: { method: 'POST', path: '/v1/sessions/:sessionId/reports-to' },
+    inputSchema: SessionManagerSetActionInputV1Schema,
+    outputSchema: SessionManagerSetResultV1Schema,
+    serverTransport: { method: 'POST', path: '/v1/sessions/:sessionId/manager' },
   },
   {
     id: 'session.responsibility.set', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
@@ -9752,7 +10237,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'read',
     inputHints: { description: 'See whether a session has a public link and what the link allows.', fields: [] },
-    inputSchema: SessionAccessGrantsListRequestV1Schema,
+    inputSchema: lazyZodSchema(() => z.strictObject(SessionIdRequiredInputSchema.shape)),
     outputSchema: SessionPublicLinkGetActionResultV1Schema,
     serverTransport: { method: 'GET', path: '/v1/sessions/:sessionId/public-share' },
   },
@@ -9800,111 +10285,156 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     serverTransport: { method: 'DELETE', path: '/v1/sessions/:sessionId/public-share' },
   },
   {
-    id: 'session.follow.get', approval: {result: 'required'},
+    id: 'follow.get', approval: {result: 'required'},
+    sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
     title: 'Get Session Follow',
     description: 'Get Session Follow for the authenticated Account.',
     safety: 'safe',
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
-    cli: { commands: [{ path: ['session', 'follow', 'get'], visibility: 'canonical' }] },
+    cli: { commands: [{ path: ['follow', 'get'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_get' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'follow_get', voiceClientToolName: 'follow_get' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'read',
     inputHints: { fields: [] },
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.get'],
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.get'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.get'],
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.get'],
     serverTransport: { method: 'GET', path: SESSION_FOLLOW_HTTP_PATHS_V1.follow },
   },
   {
-    id: 'session.follow.set', approval: {result: 'optional',flow: 'deferred'},
+    id: 'follow.set', approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
     title: 'Set Session Follow',
     description: 'Set Session Follow for the authenticated Account.',
-    safety: 'safe',
+    safety: 'danger',
+    safetyForInput: (input: unknown) => {
+      const parsed = FollowReceiverRefV1Schema.safeParse((input as { receiver?: unknown } | null)?.receiver);
+      return parsed.success && parsed.data.kind === 'account' ? 'safe' as const : 'danger' as const;
+    },
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
-    cli: { commands: [{ path: ['session', 'follow', 'set'], visibility: 'canonical' }] },
+    cli: { commands: [{ path: ['follow', 'set'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_set' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'follow_set', voiceClientToolName: 'follow_set' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'write',
     inputHints: { fields: [] },
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.set'],
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.set'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.set'],
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.set'],
     serverTransport: { method: 'PUT', path: SESSION_FOLLOW_HTTP_PATHS_V1.follow },
   },
   {
-    id: 'session.follow.remove', approval: {result: 'optional',flow: 'deferred'},
+    id: 'follow.remove', approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
     title: 'Remove Session Follow',
     description: 'Remove Session Follow for the authenticated Account.',
-    safety: 'safe',
+    safety: 'danger',
+    safetyForInput: (input: unknown) => {
+      const parsed = FollowReceiverRefV1Schema.safeParse((input as { receiver?: unknown } | null)?.receiver);
+      return parsed.success && parsed.data.kind === 'account' ? 'safe' as const : 'danger' as const;
+    },
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
-    cli: { commands: [{ path: ['session', 'follow', 'remove'], visibility: 'canonical' }] },
+    cli: { commands: [{ path: ['follow', 'remove'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_remove' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'follow_remove', voiceClientToolName: 'follow_remove' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'write',
     inputHints: { fields: [] },
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.remove'],
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.remove'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.remove'],
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.remove'],
     serverTransport: { method: 'DELETE', path: SESSION_FOLLOW_HTTP_PATHS_V1.follow },
   },
+] as const));
+
+function deliveryMuteActionMetadata(operation: 'set' | 'remove' | 'list') {
+  return {
+    sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
+    approval: operation === 'list' ? { result: 'required' } : { result: 'optional', flow: 'deferred' },
+    title: operation === 'list' ? 'List receiver delivery mutes' : operation === 'set' ? 'Mute deliveries to a receiver' : 'Unmute deliveries to a receiver',
+    description: 'Inspect or change exact sender and Follow-source suppression for one receiver on this Home.',
+    safety: operation === 'list' ? 'safe' : 'danger',
+    ...(operation === 'list' ? {} : { safetyForInput: (input: unknown) => {
+      const parsed = FollowReceiverRefV1Schema.safeParse((input as { receiver?: unknown } | null)?.receiver);
+      return parsed.success && parsed.data.kind === 'account' ? 'safe' as const : 'danger' as const;
+    } }),
+    requiredAuthority: 'account_automation',
+    executionPlacement: 'account',
+    cli: { commands: [{ path: ['session', 'delivery', 'mute', operation], visibility: 'canonical' }] },
+    placements: [],
+    bindings: { mcpToolName: `session_delivery_mute_${operation}`, voiceClientToolName: `session_delivery_mute_${operation}` },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    sideEffectClass: operation === 'list' ? 'read' : 'write',
+    inputHints: { fields: [{ path: 'receiver', title: 'Receiver', widget: 'json', required: true },
+      ...(operation === 'list' ? [] : [{ path: 'scope', title: 'Mute scope', widget: 'json' as const, required: true }])] },
+    serverTransport: { method: operation === 'list' ? 'GET' : operation === 'set' ? 'PUT' : 'DELETE',
+      path: DELIVERY_MUTE_HTTP_PATHS_V1.account },
+  } as const satisfies Omit<PreNormalizedActionSpec, 'id' | 'inputSchema' | 'outputSchema'>;
+}
+
+const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionSpecs([
   {
-    id: 'session.follow.preferences.get', approval: {result: 'required'},
+    id: 'follow.preferences.get', approval: {result: 'required'},
     title: 'Get Follow defaults',
     description: 'Get Follow defaults for the authenticated Account.',
     safety: 'safe',
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
-    cli: { commands: [{ path: ['session', 'follow', 'preferences', 'get'], visibility: 'canonical' }] },
+    cli: { commands: [{ path: ['follow', 'preferences', 'get'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_preferences_get' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'follow_preferences_get', voiceClientToolName: 'follow_preferences_get' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'read',
     inputHints: { fields: [] },
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.preferences.get'],
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.preferences.get'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.preferences.get'],
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.preferences.get'],
     serverTransport: { method: 'GET', path: SESSION_FOLLOW_HTTP_PATHS_V1.preferences },
   },
   {
-    id: 'session.follow.preferences.set', approval: {result: 'optional',flow: 'deferred'},
+    id: 'follow.preferences.set', approval: {result: 'optional',flow: 'deferred'},
     title: 'Set Follow defaults',
     description: 'Set Follow defaults for the authenticated Account.',
     safety: 'safe',
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
     cli: {
-      commands: [{ path: ['session', 'follow', 'preferences', 'set'], visibility: 'canonical' }],
+      commands: [{ path: ['follow', 'preferences', 'set'], visibility: 'canonical' }],
       inputSchema: SessionFollowPreferencesCliInputSchema,
       bindInput: (value) => {
         const input = SessionFollowPreferencesCliInputSchema.parse(value);
-        return { assigned: input.assigned === 'on', direct: input.direct === 'on', team: input.team === 'on', group: input.group === 'on' };
+        return { assigned: input.assigned === 'on', direct: input.direct === 'on', team: input.team === 'on', group: input.group === 'on',
+          ...(input.managerPolicy ? { managerPolicy: input.managerPolicy } : {}),
+          ...(input.runReportPolicy ? { runReportPolicy: input.runReportPolicy } : {}),
+          ...(input.discussionReceivePolicy ? { discussionReceivePolicy: input.discussionReceivePolicy } : {}) };
       },
     },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_preferences_set' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'follow_preferences_set', voiceClientToolName: 'follow_preferences_set' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
     sideEffectClass: 'write',
     inputHints: { fields: [] },
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.preferences.set'],
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.preferences.set'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.preferences.set'],
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.preferences.set'],
     serverTransport: { method: 'PUT', path: SESSION_FOLLOW_HTTP_PATHS_V1.preferences },
   },
   {
-    id: 'session.follow.sources.list', approval: {result: 'none'},
+    id: 'follow.list', approval: {result: 'none'},
+    sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
     title: 'List followed sessions',
     description: 'List the sessions whose updates are included with this session\'s next turn.',
     safety: 'safe',
-    cli: { commands: [{ path: ['session', 'follow', 'sources', 'list'], visibility: 'canonical' }] },
+    requiredAuthority: 'account_automation',
+    executionPlacement: 'account',
+    cli: { commands: [{ path: ['follow', 'list'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_sources_list' },
+    bindings: { mcpToolName: 'follow_list', voiceClientToolName: 'follow_list' },
     examples: {
-      mcp: { argsExample: '{"destinationSessionId":"{{sessionId}}"}' },
+      mcp: { argsExample: '{"direction":"following","receiver":{"kind":"session","sessionId":"{{sessionId}}"}}' },
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -9912,71 +10442,60 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     },
     inputHints: {
       title: 'List followed sessions',
-      fields: [{ path: 'destinationSessionId', title: 'Destination session id', widget: 'text', required: true }],
+      fields: [{ path: 'receiver', title: 'Receiver', widget: 'json', required: false },
+        { path: 'source', title: 'Source', widget: 'json', required: false },
+        { path: 'direction', title: 'Direction', widget: 'text', required: true }],
     },
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.sources.list'],
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.sources.list'],
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.list'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.list'],
     serverTransport: { method: 'GET', path: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list },
   },
   {
-    id: 'session.follow.sources.set', approval: {result: 'optional',flow: 'deferred'},
-    title: 'Send updates from another session',
-    description: 'Include another authorized session\'s updates as context on this session\'s next turn.',
-    safety: 'danger',
-    cli: { commands: [{ path: ['session', 'follow', 'sources', 'set'], visibility: 'canonical' }] },
+    id: 'follow.preview', approval: {result: 'none'},
+    sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
+    title: 'Preview Follow rule',
+    description: 'Preview the authorized matching corpus without creating Follow enrollments.',
+    safety: 'safe',
+    requiredAuthority: 'account_automation',
+    executionPlacement: 'account',
+    cli: { commands: [{ path: ['follow', 'preview'], visibility: 'canonical' }] },
     placements: [],
-    bindings: { mcpToolName: 'session_follow_sources_set' },
-    examples: {
-      mcp: { argsExample: '{"destinationSessionId":"{{sessionId}}","sourceSessionId":"{{sourceSessionId}}"}' },
-    },
+    bindings: { mcpToolName: 'follow_preview', voiceClientToolName: 'follow_preview' },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
       rpc: false,
     },
     inputHints: {
-      title: 'Send updates from another session',
+      title: 'Preview Follow rule',
       fields: [
-        { path: 'destinationSessionId', title: 'Destination session id', widget: 'text', required: true },
-        { path: 'sourceSessionId', title: 'Source session id', widget: 'text', required: true },
+        { path: 'receiver', title: 'Receiver', widget: 'json', required: true },
+        { path: 'filter', title: 'Filter', widget: 'json', required: true },
       ],
     },
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.sources.set'],
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.sources.set'],
-    serverTransport: { method: 'PUT', path: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.source },
+    outputSchema: SessionFollowActionOutputSchemasV1['follow.preview'],
+    inputSchema: SessionFollowActionInputSchemasV1['follow.preview'],
   },
   {
-    id: 'session.follow.sources.remove', approval: {result: 'optional',flow: 'deferred'},
-    title: 'Stop updates from another session',
-    description: 'Stop including another session\'s updates. Following again later starts from the current state.',
-    safety: 'danger',
-    cli: { commands: [{ path: ['session', 'follow', 'sources', 'remove'], visibility: 'canonical' }] },
-    placements: [],
-    bindings: { mcpToolName: 'session_follow_sources_remove' },
-    examples: {
-      mcp: { argsExample: '{"destinationSessionId":"{{sessionId}}","sourceSessionId":"{{sourceSessionId}}"}' },
-    },
-    surfaces: {
-      ui: true,
-      voice: false,
-      agent: true,
-      mcp: true,
-      cli: true,
-      rpc: false,
-    },
-    inputHints: {
-      title: 'Stop updates from another session',
-      fields: [
-        { path: 'destinationSessionId', title: 'Destination session id', widget: 'text', required: true },
-        { path: 'sourceSessionId', title: 'Source session id', widget: 'text', required: true },
-      ],
-    },
-    outputSchema: SessionFollowActionOutputSchemasV1['session.follow.sources.remove'],
-    inputSchema: SessionFollowActionInputSchemasV1['session.follow.sources.remove'],
-    serverTransport: { method: 'DELETE', path: SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.source },
+    ...deliveryMuteActionMetadata('set'),
+    id: 'session.delivery.mute.set',
+    inputSchema: SessionFollowActionInputSchemasV1['session.delivery.mute.set'],
+    outputSchema: SessionFollowActionOutputSchemasV1['session.delivery.mute.set'],
+  },
+  {
+    ...deliveryMuteActionMetadata('remove'),
+    id: 'session.delivery.mute.remove',
+    inputSchema: SessionFollowActionInputSchemasV1['session.delivery.mute.remove'],
+    outputSchema: SessionFollowActionOutputSchemasV1['session.delivery.mute.remove'],
+  },
+  {
+    ...deliveryMuteActionMetadata('list'),
+    id: 'session.delivery.mute.list',
+    inputSchema: SessionFollowActionInputSchemasV1['session.delivery.mute.list'],
+    outputSchema: SessionFollowActionOutputSchemasV1['session.delivery.mute.list'],
   },
   {
     id: 'session.read_state.set', approval: {result: 'none'},
@@ -9985,8 +10504,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     safety: 'safe',
     executionPlacement: 'account',
     placements: [],
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
-    bindings: { mcpToolName: 'session_read_state_set' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'session_read_state_set', voiceClientToolName: 'session_read_state_set' },
     sideEffectClass: 'write',
     inputHints: {
       title: 'Mark a session read',
@@ -10456,7 +10975,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     requiredAuthority: 'account_automation',
     executionPlacement: 'account',
     placements: [],
-    surfaces: { ui: true, cli: true, voice: true, agent: true, mcp: false, rpc: false },
+    surfaces: { ui: true, cli: true, voice: true, agent: true, mcp: true, rpc: false },
+    bindings: { mcpToolName: 'session_attention_set', voiceClientToolName: 'session_attention_set' },
     examples: {
       voice: { argsExample: '{"sessionId":"{{sessionId}}","standing":false}' },
     },
@@ -10640,6 +11160,34 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     inputSchema: SessionPermissionRemoteGrantRevokeInputV1Schema,
   },
   {
+    id: 'session.needs_you.raise', approval: { result: 'optional', flow: 'deferred' },
+    title: 'Ask the user',
+    description: 'Ask one structured question request in the current session, or withdraw a request you raised.',
+    sideEffectClass: 'write',
+    executionPlacement: 'session',
+    safety: 'safe',
+    placements: [],
+    bindings: { voiceClientToolName: 'raiseNeedsYou', mcpToolName: 'session_needs_you_raise', rpcMethod: 'session.needs_you.raise' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
+    inputHints: { fields: [
+      { path: 'sessionId', title: 'Session', widget: 'text' },
+      { path: 'mode', title: 'Wait or continue', widget: 'select', options: [
+        { value: 'wait', label: 'Wait' }, { value: 'continue', label: 'Continue' },
+      ] },
+      { path: 'type', title: 'Question type', widget: 'select', options: [
+        { value: 'decision', label: 'Decision' }, { value: 'blocked', label: 'Blocked' },
+      ] },
+      { path: 'title', title: 'Title', widget: 'text' },
+      { path: 'questions', title: 'Questions', widget: 'json' },
+      { path: 'assumption', title: 'Continue-mode assumption', widget: 'text' },
+      { path: 'lasting', title: 'Lasting decision', widget: 'boolean' },
+      { path: 'requestId', title: 'Request to withdraw', widget: 'text' },
+      { path: 'withdraw', title: 'Withdrawal reason', widget: 'text' },
+    ] },
+    inputSchema: SessionNeedsYouRaiseInputV1Schema,
+    outputSchema: SessionNeedsYouRaiseOutputV1Schema,
+  },
+  {
     id: 'session.user_action.answer', approval: {result: 'optional',flow: 'deferred'},
     title: 'Respond to user-action request',
     sideEffectClass: 'write',
@@ -10657,7 +11205,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
     surfaceBindings: {
       plugin: {
         inputSchema: SessionUserActionAnswerPluginInputSchema,
-        bindInput: bindPluginCurrentSessionInput,
+        bindInput: bindPluginSessionInteractionInput,
         projectOutput: projectPluginSessionInteractionResponse,
       },
     },
@@ -11125,7 +11673,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     id: 'memory.search', approval: {result: 'required'},
     title: 'Search memory',
     sideEffectClass: 'read',
-    description: 'Search the local daemon memory index.',
+    description: 'Search the selected daemon memory index by global, Session, or qualified Project scope. Project search requires explicit support from that daemon and never falls back to global search.',
     safety: 'safe',
     placements: ['voice_panel', 'command_palette'],
     prompting: { voiceHotPath: true },
@@ -12678,6 +13226,9 @@ const ACTION_SPECS_WITHOUT_APPROVAL: readonly (
   | (typeof ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES)[number]
   | (typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX)[number]
   | (typeof ACTION_SPECS_WITHOUT_APPROVAL_PENDING)[number]
+  | (typeof ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING)[number]
+  | (typeof DISCUSSION_ACTION_SPECS_V1)[number]
+  | (typeof ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION)[number]
   | (typeof ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX)[number]
   | (typeof ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX)[number]
 )[] = Object.freeze([
@@ -12685,6 +13236,9 @@ const ACTION_SPECS_WITHOUT_APPROVAL: readonly (
   ...ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES,
   ...ACTION_SPECS_WITHOUT_APPROVAL_PREFIX,
   ...ACTION_SPECS_WITHOUT_APPROVAL_PENDING,
+  ...ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING,
+  ...DISCUSSION_ACTION_SPECS_V1,
+  ...ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION,
   ...ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX,
   ...ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX,
 ]);
@@ -12916,6 +13470,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...ACTION_ID_FAMILIES_V1.plugin_webhooks,
     ...ACTION_ID_FAMILIES_V1.account_plugin_data,
     ...ACTION_ID_FAMILIES_V1.account_sessions,
+    ...ACTION_ID_FAMILIES_V1.discussion,
     ...ACTION_ID_FAMILIES_V1.account_security.filter((id) => id !== 'account.encryption.historicalKey.forget'
       && id !== 'account.encryption.automationTemplates.recover'),
     ...ACTION_ID_FAMILIES_V1.account_api_tokens,
@@ -12967,7 +13522,6 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...ACTION_ID_FAMILIES_V1.messaging,
     ...ACTION_ID_FAMILIES_V1.session_control.filter((actionId) => actionId !== 'session.history.get'),
     ...ACTION_ID_FAMILIES_V1.intent_start,
-    ...ACTION_ID_FAMILIES_V1.review_comments,
     ...ACTION_ID_FAMILIES_V1.subagent_registry,
     'session.activity.get',
     ...ACTION_ID_FAMILIES_V1.session_transcripts.filter(
@@ -12976,8 +13530,6 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...ACTION_ID_FAMILIES_V1.session_permissions,
     // The Board lives on the Session's own Home; its records resolve through that owner.
     ...ACTION_ID_FAMILIES_V1.session_board,
-    // Human discussions are Session-owned rows on that same Home.
-    ...ACTION_ID_FAMILIES_V1.session_discussion,
     'browser.recording.attachToComposer',
     'sessions.external.follow',
     'sessions.external.unfollow',
@@ -13167,6 +13719,7 @@ type DirectActionSpecDefinition =
   | LiteralActionSpecTupleDefinition<typeof SESSION_ORGANIZATION_MOVE_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof LIST_REORDER_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof TODO_SESSION_LINK_ACTION_SPECS>
+  | LiteralActionSpecTupleDefinition<typeof INTERNAL_TASK_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof APP_SHELL_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof HOME_HUB_LAYOUT_ACTION_SPECS>
   | LiteralActionSpecTupleDefinition<typeof PROJECT_SOURCE_ACTION_SPECS_V1>
@@ -13177,11 +13730,20 @@ type DirectActionSpecDefinition =
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_LEAD>
   | LiteralActionSpecDefinition<(typeof ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES)[number]>
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING>
+  | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE>
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER>
+  | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_OPENING>
+  | LiteralActionSpecTupleDefinition<typeof DISCUSSION_ACTION_SPECS_V1>
+  | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION>
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX>
   | LiteralActionSpecTupleDefinition<typeof ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX>;
 
 type SessionPendingCustodyActionSpecDefinition =
+  | CanonicalActionSchemaDefinition<
+      'session.pending.action.set',
+      typeof SessionPendingActionSetInputV1Schema,
+      typeof SessionPendingActionSetResultV1Schema
+    >
   | CanonicalActionSchemaDefinition<
       'session.pending.markHandled',
       typeof SessionPendingMarkHandledInputV1Schema,
@@ -13575,6 +14137,7 @@ type AccountSecurityActionSpecDefinition =
     >;
 
 export type CanonicalActionSpecDefinition =
+  | (typeof DOC_COLLABORATION_ACTION_SPECS_V1)[number]
   | (typeof CAPABILITY_RULES_ACTION_SPECS_V1)[number]
   | (typeof SESSION_CAPABILITIES_ACTION_SPECS_V1)[number]
   | (typeof SKILL_ACTION_SPECS_V1)[number]
@@ -13760,6 +14323,7 @@ export type PluginInvocableActionSpec = Readonly<{
   prompting?: ParsedActionSpec['prompting'];
   toolExposure?: ParsedActionSpec['toolExposure'];
   contextualDefaults?: ParsedActionSpec['contextualDefaults'];
+  sessionTarget?: ParsedActionSpec['sessionTarget'];
   operation?: ParsedActionSpec['operation'];
   requiredAuthority: ActionRequiredAuthority;
   executionPlacement: ActionExecutionPlacement;
@@ -14138,6 +14702,7 @@ const ACTION_PLUGIN_CALLER_POLICY_BY_ID: Readonly<
   'session.restore': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'session.terminalComposer.clear': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'session.pendingInput.interruptAndRun': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
+  'session.pending.action.set': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'session.pending.withdraw': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'session.pending.markHandled': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'session.pending.dismiss': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
@@ -14191,6 +14756,7 @@ function resolveActionPluginCallerPolicy(
 }
 
 const CURRENT_SESSION_CONTEXT_ACTION_IDS = new Set<ActionId>([
+  'session.needs_you.raise',
   'reviews.comments.create',
   'reviews.comments.list',
   'browser.recording.attachToComposer',
@@ -14245,6 +14811,7 @@ const CURRENT_SESSION_CONTEXT_ACTION_IDS = new Set<ActionId>([
   'session.message.send',
   'session.turn.cancel',
   'session.stop',
+  'session.runtime.refresh',
   'session.terminalComposer.clear',
   'session.pendingInput.interruptAndRun',
   'session.title.set',
@@ -14280,15 +14847,6 @@ const CURRENT_SESSION_CONTEXT_ACTION_IDS = new Set<ActionId>([
   'session.board.item.upsert',
   'session.board.item.remove',
   'session.board.layout.update',
-  'session.discussion.list',
-  'session.discussion.get',
-  'session.discussion.read',
-  'session.discussion.create',
-  'session.discussion.post',
-  'session.discussion.rename',
-  'session.discussion.archive',
-  'session.discussion.restore',
-  'session.discussion.read_state.set',
   'session.permission.respond',
   'session.permission.remote.pending.list',
   'session.permission.remote.respond',
@@ -14329,6 +14887,28 @@ function resolveBuiltInActionContextualDefaults(actionId: ActionId): ActionConte
 // authored examples remain on their rows; this catalog-owned supplement adds
 // only the missing examples, not a runtime sample generator or another catalog.
 const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = {
+  'discussion.second_opinion.start': '{"intent":"preview","title":"Second opinion","question":"What would you change?","source":{"kind":"session","message":{"kind":"session","session":{"serverId":"home","sessionId":"source"},"messageId":"answer"}},"reviewers":[{"selection":{"kind":"session","session":{"serverId":"home","sessionId":"reviewer"}}}],"retry":{"creationLocalId":"opinion-create","quoteLocalId":"opinion-quote","questionLocalId":"opinion-question"}}',
+  'discussion.list': '{}',
+  'discussion.get': '{"discussionId":"discussion-1"}',
+  'discussion.read': '{"discussionId":"discussion-1","limit":30}',
+  'discussion.create': '{"title":"Release review","firstMessage":{"localId":"first-post-1","content":{"v":1,"parts":[{"t":"text","text":"What should we check?"}]}}}',
+  'discussion.post': '{"discussionId":"discussion-1","content":{"v":1,"parts":[{"t":"text","text":"The migration is ready."}]}}',
+  'discussion.reply': '{"discussionId":"discussion-1","replyTarget":{"kind":"message","messageId":"question-1"},"content":{"v":1,"parts":[{"t":"text","text":"The migration is ready."}]}}',
+  'discussion.pass': '{"discussionId":"discussion-1"}',
+  'discussion.rename': '{"discussionId":"discussion-1","title":"Release readiness"}',
+  'discussion.archive': '{"discussionId":"discussion-1"}',
+  'discussion.restore': '{"discussionId":"discussion-1"}',
+  'discussion.read_state.set': '{"discussionId":"discussion-1","lastReadSeq":1}',
+  'discussion.participants.list': '{"discussionId":"discussion-1"}',
+  'discussion.candidates.list': '{"source":"people","query":"alex"}',
+  'discussion.invite': '{"discussionId":"discussion-1","participant":{"kind":"account","accountId":"account-2"}}',
+  'discussion.participant.remove': '{"discussionId":"discussion-1","participant":{"kind":"account","accountId":"account-2"}}',
+  'discussion.participant.policy.set': '{"discussionId":"discussion-1","participant":{"kind":"session","sessionId":"participant-1"},"answerPolicy":"reads_only"}',
+  'discussion.leave': '{"discussionId":"discussion-1"}',
+  'discussion.owner.transfer': '{"discussionId":"discussion-1","accountId":"account-2"}',
+  'discussion.access.grants.list': '{"discussionId":"discussion-1"}',
+  'discussion.access.grants.set': '{"discussionId":"discussion-1","principal":{"kind":"account","accountId":"account-2"},"accessLevel":"view"}',
+  'discussion.access.grants.remove': '{"discussionId":"discussion-1","principal":{"kind":"account","accountId":"account-2"}}',
   'settings.list': '{"pageId":"notifications"}',
   'settings.get': '{"anchor":"notifications.quietHours"}',
   'settings.set': '{"anchor":"notifications.quietHours","value":{"enabled":false}}',
@@ -14370,6 +14950,7 @@ const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = 
   "widgets.fragment.duplicate": "{\"account\":{\"serverId\":\"home\",\"accountId\":\"example\"},\"artifactId\":\"fragment-1\",\"newArtifactId\":\"fragment-2\"}",
   "widgets.fragment.delete": "{\"account\":{\"serverId\":\"home\",\"accountId\":\"example\"},\"artifactId\":\"fragment-1\"}",
   "memory.remember": "{\"ref\":{\"kind\":\"doc\",\"artifactId\":\"example\"},\"expectedRevision\":{\"headerVersion\":0,\"bodyVersion\":0},\"text\":\"Remember the verified project decision.\"}",
+  "memory.decision.save": "{\"ref\":{\"kind\":\"doc\",\"artifactId\":\"example\"},\"expectedRevision\":{\"headerVersion\":0,\"bodyVersion\":0},\"text\":\"Use PostgreSQL.\",\"reason\":\"Reviewed the alternatives.\",\"sourceMessageRef\":{\"kind\":\"session\",\"session\":{\"serverId\":\"home\",\"sessionId\":\"example\"},\"messageId\":\"committed\"}}",
   "memory.update": "{\"ref\":{\"kind\":\"doc\",\"artifactId\":\"example\"},\"expectedRevision\":{\"headerVersion\":0,\"bodyVersion\":0},\"factId\":\"example\",\"text\":\"Remember the verified project decision.\"}",
   "memory.forget": "{\"ref\":{\"kind\":\"doc\",\"artifactId\":\"example\"},\"expectedRevision\":{\"headerVersion\":0,\"bodyVersion\":0},\"factId\":\"example\"}",
   "memory.read": "{\"ref\":{\"kind\":\"doc\",\"artifactId\":\"example\"}}",
@@ -14459,6 +15040,7 @@ const ACTION_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<ActionId, string>>> = 
   "projects.workspace.update": "{\"serverId\":\"home\",\"workspaceId\":\"example\"}",
   "projects.workspace.forget": "{\"serverId\":\"home\",\"workspaceId\":\"example\"}",
   "projects.list": "{}",
+  "session.pending.action.set": "{\"sessionId\":\"session-1\",\"localId\":\"example\",\"requestedAction\":{\"v\":1,\"kind\":\"enqueue\"},\"resumeWhenAvailable\":true}",
   "session.pending.withdraw": "{\"sessionId\":\"session-1\",\"localId\":\"example\"}",
   "session.pending.markHandled": "{\"sessionId\":\"session-1\",\"localId\":\"example\"}",
   "session.pending.dismiss": "{\"sessionId\":\"session-1\",\"localId\":\"example\"}",

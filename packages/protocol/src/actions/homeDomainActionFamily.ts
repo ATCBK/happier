@@ -101,12 +101,12 @@ type HomeDomainActionObjectErrorV1 = z.infer<
 export type HomeDomainActionErrorCodeV1 =
   | HomeDomainActionObjectErrorV1['error']
   | z.infer<typeof ProviderErrorV1Schema>['code']
-  | 'session_absent' | 'session_delete_conflict';
+  | 'session_absent' | 'session_active' | 'session_delete_conflict';
 
 // The session DELETE route predates typed error codes. Keep its exact released
 // refusals at the same Home error boundary as the other domain envelopes.
 const SessionDeleteRefusalSchema = lazyZodSchema(() => z.strictObject({
-  error: z.enum(['Session not found or not owned by user', 'Session delete condition was lost']),
+  error: z.enum(['Session not found or not owned by user', 'Session is active', 'Session delete condition was lost']),
 }));
 
 /**
@@ -125,7 +125,10 @@ export function readHomeDomainActionErrorV1(value: unknown): Readonly<{
   const sessionDelete = SessionDeleteRefusalSchema.safeParse(value);
   if (sessionDelete.success) return {
     code: sessionDelete.data.error === 'Session not found or not owned by user'
-      ? 'session_absent' : 'session_delete_conflict',
+      ? 'session_absent'
+      : sessionDelete.data.error === 'Session is active'
+        ? 'session_active'
+        : 'session_delete_conflict',
     details: sessionDelete.data,
   };
   const provider = ProviderErrorV1Schema.safeParse(value);

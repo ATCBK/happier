@@ -1,4 +1,6 @@
 import type { GlassSurfaceMaterials, GlassSurfaceGroup, GlassSurfaceMaterial, GlassBlurStep } from '../../account/settings/glassSurfaceMaterials.js';
+import { resolveGlassTintValues } from '../../account/settings/glassTint.js';
+export { DEFAULT_GLASS_TINT_INTENSITY, readGlassTintIntensity, resolveGlassTintValues } from '../../account/settings/glassTint.js';
 
 export type { GlassBlurStep, GlassSurfaceGroup, GlassSurfaceMaterial, GlassSurfaceMaterials };
 export const GLASS_PRESETS = ['solid', 'auto', 'everywhere', 'clear'] as const;
@@ -6,19 +8,6 @@ export type GlassPreset = typeof GLASS_PRESETS[number];
 export type GlassMaterialChoice = GlassPreset | 'custom';
 export const GLASS_SURFACE_GROUPS = ['chrome', 'sidebar', 'content', 'card', 'floating'] as const;
 export const GLASS_BLUR_STEPS = ['off', 'light', 'regular', 'strong'] as const;
-/** How much of its own paint a named preset's Elements and menus carry over the blurred backdrop. */
-export const GLASS_TINT_STEPS = ['subtle', 'medium', 'strong'] as const;
-export type GlassTintStep = typeof GLASS_TINT_STEPS[number];
-/**
- * Coats per tint for the named presets' Elements (`card`) and floating surfaces. Subtle is the thinnest
- * coat that still carries the surface's own warm paint without a neutral lift. Medium is the earlier faint coat, Strong a clearly
- * frosted one. Clear keeps a lighter Elements coat. Shell planes keep each preset's own recipe.
- */
-const TINT_COATS = {
-    subtle: { card: 0.07, clearCard: 0.06, floating: 0.11 },
-    medium: { card: 0.25, clearCard: 0.15, floating: 0.02 },
-    strong: { card: 0.45, clearCard: 0.3, floating: 0.25 },
-} as const satisfies Record<GlassTintStep, Readonly<{ card: number; clearCard: number; floating: number }>>;
 export const GLASS_BLUR_INTENSITY = { off: 0, light: 25, regular: 50, strong: 80 } as const;
 /** Strong matches the reference's 24px frost through the existing blur control. */
 export const GLASS_BLUR_RADIUS_PX = { off: 0, light: 5, regular: 10, strong: 24 } as const;
@@ -29,7 +18,7 @@ const CONTENT_OPACITY = { light: 0.78, regular: 0.84, strong: 0.90 } as const;
 export type GlassMaterialSettings = Readonly<{
     glassBlurEnabled?: boolean;
     glassBlurIntensity?: 'light' | 'regular' | 'strong';
-    glassTintIntensity?: GlassTintStep;
+    glassTintIntensity?: number;
     glassSurfaceMaterials?: Omit<GlassSurfaceMaterials, 'card'> & Partial<Pick<GlassSurfaceMaterials, 'card'>> | null;
 }>;
 
@@ -91,21 +80,21 @@ export function readGlassPreset(settings: GlassMaterialSettings): GlassMaterialC
 
 /**
  * The materials a named preset renders with: its stored table, with the Elements and floating coats of
- * the selected tint (Subtle when unset). Solid groups, the Solid preset and authored (custom) tables
+ * the selected tint (12 when unset). Solid groups, the Solid preset and authored (custom) tables
  * keep their exact values.
  */
 export function readGlassTintedMaterials(settings: GlassMaterialSettings): GlassSurfaceMaterials {
     const materials = readGlassMaterials(settings);
     const preset = matchGlassPreset(materials, settings.glassBlurIntensity);
     if (preset === 'custom' || preset === 'solid') return materials;
-    const coats = TINT_COATS[settings.glassTintIntensity ?? 'subtle'];
+    const coats = resolveGlassTintValues(settings.glassTintIntensity);
     const tinted = (material: GlassSurfaceMaterial, opacity: number) => material.opacity < 1 ? { ...material, opacity } : material;
     return { ...materials,
-        card: tinted(materials.card, preset === 'clear' ? coats.clearCard : coats.card),
-        floating: tinted(materials.floating, coats.floating) };
+        card: tinted(materials.card, preset === 'clear' ? coats.clearCardCoat : coats.cardCoat),
+        floating: tinted(materials.floating, coats.floatingCoat) };
 }
 
-export function resolveGlassTintSettingsDelta(_settings: GlassMaterialSettings, tint: GlassTintStep) {
+export function resolveGlassTintSettingsDelta(_settings: GlassMaterialSettings, tint: number) {
     return { glassTintIntensity: tint };
 }
 

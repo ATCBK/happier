@@ -34,6 +34,18 @@ const baseSnapshot = {
 } as const;
 
 describe('Action operation v1 contract', () => {
+  it('carries the exact blocking Ask only during its approval wait and omits the reference for V1 readers', () => {
+    const approval = { kind: 'approval_request_created', artifactId: 'stop-ask', actionId: 'machines.managed.power.set' };
+    const progress = { kind: 'phase', phase: 'waiting_for_approval', label: 'Waiting for approval', approval };
+    const snapshot = ActionOperationSnapshotV1Schema.parse({ ...baseSnapshot, state: 'running', startedAt: 110, progress });
+    expect(snapshot.progress).toEqual(progress);
+    expect(projectActionOperationSnapshotForV1Reader(snapshot).progress).toEqual({
+      kind: 'phase', phase: 'waiting_for_approval', label: 'Waiting for approval',
+    });
+    expect(ActionOperationProgressV1Schema.safeParse({ ...progress, phase: 'managed.intent.draining' }).success).toBe(false);
+    expect(ActionOperationProgressV1Schema.safeParse({ ...progress, approval: { ...approval, actionArgs: { intent: 'stop' } } }).success).toBe(false);
+    expect(ActionOperationProgressV1Schema.safeParse({ ...progress, approval: { ...approval, artifactId: '' } }).success).toBe(false);
+  });
   it('retains machine setup output on the exact Home and Machine without exposing executable or secret material', () => {
     const domainRef = { kind: 'machineEnvironment', serverId: 'setup-home', machineId: 'guest',
       preset: { id: 'preset', revision: 3 }, managedId: 'paid', terminalId: 'actual-terminal', exitCode: 17 };

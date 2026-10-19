@@ -3,8 +3,17 @@ import { getActionSpec } from './actionSpecs.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+import { UiBrowserAutomationDispatchRequestV1Schema } from '../browser/automation/reverseDispatchV1.js';
 
 describe('pre-mount Browser workspace Action contract', () => {
+  it('carries the canonical openExternal input from Machine placement to its exact answering client', () => {
+    const spec = getActionSpec('browser.view.openExternal');
+    const input = spec.inputSchema.parse({ browserSessionId: 'browser-session', viewId: 'view', commandId: 'open-external' });
+    expect(spec.executionPlacement).toBe('machine');
+    expect(UiBrowserAutomationDispatchRequestV1Schema.safeParse({ v: 1, sessionId: 'session',
+      actionId: spec.id, input, authority: 'account_automation' }).success).toBe(true);
+    expect(spec.inputSchema.safeParse({ ...input, kind: 'openExternal' }).success).toBe(false);
+  });
   it('admits a typed target on the client and preserves configurable Agent Ask-first policy', () => {
     const spec = getActionSpec('browser.workspace.open');
     expect(spec).toMatchObject({ safety: 'danger', executionPlacement: 'client',

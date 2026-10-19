@@ -6,9 +6,10 @@ import { getActionSpec } from './actionSpecs.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { PluginSettingsAdministrationSetActionInputV1Schema } from '../plugins/settingsAdministration.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestV2Schema } from '../approvals/approvalRequestV1.js';
 
 describe('createActionExecutor (plugin Settings administration)', () => {
-  it('defaults sensitive Settings Actions to approval while letting users waive each surface', () => {
+  it('defaults automation and irreversible UI Settings writes to approval while letting users waive each surface', () => {
     const defaults = ActionsSettingsV1Schema.parse({ v: 1 });
     for (const actionId of [
       'plugins.settings.list', 'plugins.settings.get', 'plugins.settings.secret.status',
@@ -19,8 +20,10 @@ describe('createActionExecutor (plugin Settings administration)', () => {
       const sensitive = spec.sideEffectClass === 'write';
       for (const surface of ['ui', 'agent', 'mcp'] as const) {
         const context = { surface, authority: surface === 'ui' ? 'present_user' as const : 'account_automation' as const };
+        const requiresApproval = sensitive && (surface !== 'ui'
+          || actionId === 'plugins.settings.reset' || actionId === 'plugins.settings.secret.delete');
         expect(resolveActionApprovalRouting({ actionId, spec, settings: defaults, context }).required,
-          `${actionId}/${surface}`).toBe(sensitive);
+          `${actionId}/${surface}`).toBe(requiresApproval);
         const waived = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
         expect(resolveActionApprovalRouting({ actionId, spec, settings: waived, context }).required,
           `${actionId}/${surface} waived`).toBe(false);
@@ -105,15 +108,20 @@ describe('createActionExecutor (plugin Settings administration)', () => {
     }, { admitInput: async () => null });
     const executor = createActionExecutor({ pluginSettingsAdministrationAction: port,
       isActionApprovalRequired: id => id === 'plugins.settings.set',
-      approvalsCreate: async args => { request = args.request; return { artifactId: 'settings-approval' }; },
+      approvalsCreate: async args => {
+        request = ApprovalRequestV2Schema.parse(args.request);
+        return { artifactId: 'settings-approval' };
+      },
       approvalsGet: async () => request,
       approvalsUpdate: async args => { request = args.request; return { ok: true }; },
       isApprovalExecutionOriginCurrent: async () => true,
     } as ActionExecutorDeps);
     const input = { pluginId: 'acme.settings', scope: { kind: 'account' }, target: { kind: 'account' }, localId: 'enabled', value: true, expectedRevision: '7' };
     expect(await executor.execute('plugins.settings.set', input, { surface: 'cli', authority: 'present_user', serverId: 'server-1',
+      executionRunTargetMachineId: 'ambient-run-machine', defaultSessionMachineId: 'ambient-session-machine',
       actionCaller: { kind: 'host' }, actionRequestId: 'settings-ordinary-attempt' })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     expect(request).toMatchObject({ actionArgs: input, approval: { flow: 'deferred' } });
+    expect(request).not.toHaveProperty('executionOriginV1.machineId');
     expect(enabled).toBe(false);
     expect(await executor.execute('approval.request.decide', { artifactId: 'settings-approval', decision: 'approve' },
       { surface: 'ui', authority: 'present_user', serverId: 'server-1', actionCaller: { kind: 'host' } })).toMatchObject({ ok: true });
@@ -142,13 +150,17 @@ describe('createActionExecutor (plugin Settings administration)', () => {
     expect(observations).toHaveLength(1);
     expect(JSON.stringify(observations)).not.toContain(secretValue);
   });
-  it('refuses an unapproved UI setting write before effects and replays the approved intent', async () => {
-    expect(isApprovalRequiredByActionsSettings('plugins.settings.set', ActionsSettingsV1Schema.parse({ v: 1 }),
+  it('honors explicit Ask first for a UI setting write before effects and replays the approved intent', async () => {
+    const settings = ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { 'plugins.settings.set': { approvalRequiredSurfaces: ['ui'] } } });
+    expect(isApprovalRequiredByActionsSettings('plugins.settings.set', settings,
       { surface: 'ui', authority: 'present_user' })).toBe(true);
     const write = Object.assign(vi.fn(async () => ({ ok: true, kind: 'plugins.settings.set' as const,
       data: { scope: { kind: 'account' as const }, target: { kind: 'account' as const },
         localId: 'enabled', revision: '8', application: { kind: 'live' as const } } })), { admitInput: async () => null });
-    const executor = createActionExecutor({ pluginSettingsAdministrationAction: write } as ActionExecutorDeps);
+    const executor = createActionExecutor({ pluginSettingsAdministrationAction: write,
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
+    } as ActionExecutorDeps);
     const input = { pluginId: 'acme.settings', scope: { kind: 'account' as const },
       target: { kind: 'account' as const }, localId: 'enabled', value: true, expectedRevision: '7' };
     const context = { surface: 'ui' as const, authority: 'present_user' as const };
@@ -286,9 +298,7 @@ describe('createActionExecutor (plugin Settings administration)', () => {
       },
     } as const;
     const mutationActionIds = Object.keys(inputs) as Array<keyof typeof inputs>;
-    const withoutApprovalCustody = createActionExecutor({ pluginSettingsAdministrationAction,
-      isActionApprovalRequired: () => false,
-    } as ActionExecutorDeps);
+    const withoutApprovalCustody = createActionExecutor({ pluginSettingsAdministrationAction } as ActionExecutorDeps);
 
     for (const actionId of mutationActionIds) {
       await expect(withoutApprovalCustody.execute(actionId, inputs[actionId], {

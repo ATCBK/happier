@@ -54,7 +54,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
 
   it.each([
     'projects.service.placement.set', 'projects.worker.preferences.set', 'projects.worker.preferences.reset', 'machines.worker.policy.set',
-    'session.checkpoint', 'session.connected_services_auth.set', 'prompt_doc.create',
+    'session.checkpoint', 'session.connected_services_auth.set', 'session.pending.action.set', 'prompt_doc.create',
     'roles.create', 'roles.update', 'roles.override.set',
     'daemon.filesystem.createDirectory',
     'settings.set', 'settings.reset',
@@ -103,10 +103,10 @@ describe('isApprovalRequiredByActionsSettings', () => {
     'scm.remote.publish', 'scm.worktree.create', 'scm.pullRequest.openOrReuse', 'scm.repository.init',
     'scm.hostingRepository.publish',
     'account.name.set', 'account.username.set',
-    'session.discussion.post', 'session.access.grant.set', 'session.access.grant.remove',
+    'discussion.post', 'session.access.grant.set', 'session.access.grant.remove',
     'session.access.context.set',
     'session.public_link.create', 'artifact.public_link.create',
-    'session.reports_to.set', 'session.responsibility.set',
+    'session.manager.set', 'session.responsibility.set',
     'home.runtime.restart', 'relay.runtime.restart', 'remote_hosts.relay.restart',
     'plugins.settings.set', 'plugins.settings.secret.bind', 'plugins.settings.secret.unbind',
     'teams.restore', 'teams.members.suspend', 'teams.members.reactivate',

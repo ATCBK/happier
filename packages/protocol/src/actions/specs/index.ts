@@ -58,6 +58,9 @@ const RUNTIME_ACTION_DESCRIPTIONS = mergeRuntimeActionTextMaps((family) => famil
 const RUNTIME_ACTION_APPROVAL_POLICIES: NonNullable<RuntimeActionSpecFamily['approvalPolicies']> = Object.freeze(
   Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalPolicies ?? {})),
 );
+const RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS: NonNullable<RuntimeActionSpecFamily['approvalTechnicalInputPaths']> = Object.freeze(
+  Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalTechnicalInputPaths ?? {})),
+);
 
 /**
  * The sole aggregate runtime-schema owner. Family maps retain literal schema
@@ -132,7 +135,7 @@ function createRuntimeActionSpecFor<
   const controlRpcMethod = Object.hasOwn(LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, actionId)
     ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[actionId as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
   const controlKind = resolveLocalServiceActionKindForRuntimeActionId(actionId);
-  const requiresAnsweringClient = controlKind === 'copy_url' || controlKind === 'open_preview'
+  const requiresAnsweringClient = controlKind === 'copy_url'
     || actionId === 'localServices.launcher.openPreview' || actionId === 'localServices.publicPreview.copyUrl';
   const domainRpc = resolveLocalServiceDomainActionRpcBinding(actionId);
   const serviceCli = createLocalServiceActionCliProjection(actionId);
@@ -153,6 +156,12 @@ function createRuntimeActionSpecFor<
     sideEffectClass,
     outputSchema: params.outputSchema,
     inputSchema: params.inputSchema,
+    ...(actionId === 'browser.view.open' ? {
+      operation: { version: 1 as const, visibility: 'activity' as const, progress: 'reported' as const,
+        presentation: { onStart: 'current' as const } },
+    } : {}),
+    ...(RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] ? { approvalPresentation: {
+      summary: () => null, technicalInputPaths: RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] } } : {}),
     ...(actionId === 'computer.target.select' ? { approvalNarrowing: computerTargetSelectionNarrowing } : {}),
     ...(serviceCli ? { cli: serviceCli } : {}),
     ...(domainRpc ? { executionPlacement: 'machine' as const, bindings: { rpcMethod: domainRpc.rpcMethod,

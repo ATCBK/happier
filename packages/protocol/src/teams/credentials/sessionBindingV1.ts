@@ -22,7 +22,7 @@ export type SessionTeamCredentialBindingMutationOperationV1 = z.infer<
  * witness-only operation.
  */
 export const SessionTeamCredentialBindingMetadataPatchV1Schema =
-  lazyZodSchema(() => z.extend(z.omit(SessionMetadataOwnerPatchV1Schema, { publisherPrecondition: true, activitySummaryV1: true }), {
+  lazyZodSchema(() => z.extend(z.omit(SessionMetadataOwnerPatchV1Schema, { publisherPrecondition: true, activitySummaryV1: true, sharedActionConfirmationSummaryV1: true }), {
     mode: z.literal('owner_team_credential_binding'),
     operation: SessionTeamCredentialBindingMutationOperationV1Schema,
     teamCredentialBindings: SessionTeamCredentialBindingIntentsV1Schema.check(z.minLength(1)),

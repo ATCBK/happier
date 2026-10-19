@@ -1,5 +1,5 @@
 import { DiagnosticsActionInputSchemas, DiagnosticsActionOutputSchemas } from '../diagnosticsActionFamily.js';
-import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ActionSpecProjectionMetadata, PreNormalizedActionSpec } from '../actionSpecs.js';
 
 const diagnosticRead = {
   safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client', placements: [],
@@ -7,7 +7,15 @@ const diagnosticRead = {
   toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only', cli: 'discoverable_only' },
   inputHints: { fields: [] },
 } as const;
-export const DIAGNOSTICS_ACTION_SPECS = [
+type DiagnosticsActionSpec = {
+  [Id in keyof typeof DiagnosticsActionInputSchemas]: ActionSpecProjectionMetadata & typeof diagnosticRead & Readonly<{
+    id: Id;
+    approval: { result: 'required' };
+    inputSchema: (typeof DiagnosticsActionInputSchemas)[Id];
+    outputSchema: (typeof DiagnosticsActionOutputSchemas)[Id];
+  }>;
+}[keyof typeof DiagnosticsActionInputSchemas];
+export const DIAGNOSTICS_ACTION_SPECS: readonly DiagnosticsActionSpec[] = [
   { ...diagnosticRead, id: 'diagnostics.diagnosis.run', approval: {result: 'required'}, title: 'Run diagnosis',
     description: 'Run the mounted Diagnosis page checks on its current Home and Account, including its pasted doctor document. Return sanitized findings without native logs.',
     inputSchema: DiagnosticsActionInputSchemas['diagnostics.diagnosis.run'], outputSchema: DiagnosticsActionOutputSchemas['diagnostics.diagnosis.run'],

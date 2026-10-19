@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { ActionIdSchema } from './actionIds.js';
-import { markSessionListQueryResultV1 } from '../sessions/awareness/action.js';
+import { markSessionListQueryResultV1, SessionListQueryActionResultV1Schema } from '../sessions/awareness/action.js';
 import { computeWorkspaceSyncPolicyDigest, type HandoffWorkspaceActionV1 } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
 function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
@@ -55,11 +55,12 @@ describe('hands-off Action admission', () => {
   it('admits session role edits only for the agent own or server-proved led sessions', async () => {
     const roleActionExecute = vi.fn(async () => ({ updated: true }));
     let accessible = true;
+    const listedReport = SessionListQueryActionResultV1Schema.parse(markSessionListQueryResultV1({
+      sessions: [{ id: 'report', active: false, presence: 'offline', updatedAt: 10 }],
+      nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    }));
     const executor = createExecutor({ roleActionExecute,
-      sessionList: async () => markSessionListQueryResultV1({
-        sessions: accessible ? [{ id: 'report', active: false, presence: 'offline', updatedAt: 10 }] : [],
-        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
-      }),
+      sessionList: async () => ({ ...listedReport, sessions: accessible ? listedReport.sessions : [] }),
     });
     const context = { surface: 'agent' as const, defaultSessionId: 'self', workspaceWrites: 'allow' as const,
       agentStartContext: { caller: { kind: 'session' as const, sessionId: 'self', starterDepth: 0, turnDepth: 0 },
@@ -69,7 +70,7 @@ describe('hands-off Action admission', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'subtree_denied' });
     expect(roleActionExecute).not.toHaveBeenCalled();
     await expect(executor.execute('session.notes.set', { sessionId: 'report', notes: 'task' }, context))
-      .resolves.toMatchObject({ ok: true });
+      .resolves.toEqual({ ok: true, result: { updated: true } });
     const prepared = await executor.prepare('session.notes.set', { sessionId: 'report', notes: 'stale task' }, context);
     expect(prepared.kind).toBe('ready');
     if (prepared.kind !== 'ready') throw new Error('Expected admitted led Session notes');
@@ -79,8 +80,14 @@ describe('hands-off Action admission', () => {
     expect(roleActionExecute).not.toHaveBeenCalled();
     await expect(executor.execute('session.notes.set', { sessionId: 'self', notes: 'own task' }, context))
       .resolves.toMatchObject({ ok: true });
-    const runContext = { ...context, agentStartContext: { ...context.agentStartContext,
-      caller: { kind: 'originless' as const, runId: 'workflow-run', runDepth: 4, runOriginSessionId: 'self' } } };
+  });
+
+  it('admits an originless Run only on its proven origin without applying start depth to a target write', async () => {
+    const executor = createExecutor({ roleActionExecute: async () => ({ updated: true }) });
+    const runContext = { surface: 'agent' as const, workspaceWrites: 'allow' as const,
+      agentStartContext: { caller: { kind: 'originless' as const, runId: 'workflow-run', runDepth: 4, runOriginSessionId: 'self' },
+        baseline: { machineId: 'machine-1', directory: '/repo' }, ledSubtreeSessionIds: [],
+        workDepthLimit: 4, roles: {}, callerPermissionCeiling: 'default' as const } };
     await expect(executor.execute('session.notes.set', { sessionId: 'self', notes: 'origin task' }, runContext))
       .resolves.toMatchObject({ ok: true });
     await expect(executor.execute('session.notes.set', { sessionId: 'report', notes: 'detached task' }, runContext))

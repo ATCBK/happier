@@ -18,8 +18,11 @@ export function resolveInvocationAuthority(input: Readonly<{
   credential: 'account' | 'terminal' | 'api_token' | 'plugin' | 'agent' | 'none';
   surface: keyof ActionSurfaces;
   terminalPolicy?: TerminalPresentUserPolicy;
+  /** Trusted host proof of a current built-in device-local UI mutation, never caller input. */
+  localUiInteraction?: boolean;
 }>): ActionRequiredAuthority {
   if (input.credential === 'account' && (input.surface === 'ui' || input.surface === 'rpc')) return 'present_user';
+  if (input.credential === 'none' && input.surface === 'ui' && input.localUiInteraction === true) return 'present_user';
   if (input.credential === 'terminal'
     && input.terminalPolicy === 'allowed'
     && (input.surface === 'cli' || input.surface === 'rpc')) return 'present_user';

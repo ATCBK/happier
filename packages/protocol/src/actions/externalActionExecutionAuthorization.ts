@@ -1,5 +1,6 @@
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import { computeCanonicalDomainSeparatedDigest, encodeCanonicalLengthDelimited } from '../crypto/canonicalDigest.js';
+import { ActionResolvedSessionTargetsV1Schema, type ActionResolvedSessionTargetsV1 } from './sessionTargetV1.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { signEd25519Message, verifyEd25519Signature } from '../crypto/ed25519.js';
 import { MachineInstallationPrivateKeySchema, MachineInstallationPublicKeySchema } from '../machines/identity/installationIdentity.js';
@@ -9,6 +10,7 @@ import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1 } from '../sessions/message
 import { SESSION_PENDING_EXECUTION_RUN_ENQUEUE_BY_MACHINE_EVENT_V2 } from '../sessions/messages/sessionPendingExecutionRunMachineAdmissionV2.js';
 import { RPC_METHODS } from '../rpc/methods.js';
 import { SessionRequesterInstallationSealedBootstrapV1Schema } from '../sessions/creation/sessionRequesterBootstrapSchemasV1.js';
+import type { ApprovalRequesterConfirmationV1 } from '../approvals/approvalRequestV1.js';
 
 export type ExternalActionMachineRpcEventV1 = typeof SOCKET_RPC_EVENTS.CALL
   | typeof SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1
@@ -28,6 +30,7 @@ export function isExternalActionAuthorizationBoundToEnvelope(binding: ExternalAc
   input: Readonly<{ actionId: string; machineId: string; envelope: ExternalActionRequestEnvelope }>): boolean {
   return binding.actionId === input.actionId && binding.machineId === input.machineId
     && binding.requestId === input.envelope.requestId
+    && binding.idempotencyKey === input.envelope.idempotencyKey
     && (input.envelope.target?.kind === 'session'
       || input.envelope.target?.kind === 'machine' && input.envelope.target.machineId === input.machineId)
     && encodeExternalActionResolvedTargetV1(binding.target) === encodeExternalActionResolvedTargetV1(input.envelope.target)
@@ -71,6 +74,7 @@ type MachineRequest = Readonly<{
   method: string;
   path: string;
   body?: unknown;
+  idempotencyKey?: string;
 }>;
 
 function machineRequestBytes(request: MachineRequest): Uint8Array {
@@ -81,10 +85,12 @@ function machineRequestBytes(request: MachineRequest): Uint8Array {
     request.method.toUpperCase(), request.path,
     request.body === undefined ? 'absent' : 'json',
     createCanonicalJsonSigningInput(request.body === undefined ? null : request.body),
+    ...(request.idempotencyKey === undefined ? [] : ['idempotency-key', request.idempotencyKey]),
   ]);
 }
 
-type ApprovalInput = Readonly<{ authorizationToken: string; actionId: string; target: ExternalActionTargetV1; input: unknown }>;
+type ApprovalInput = Readonly<{ authorizationToken: string; actionId: string; target: ExternalActionTargetV1; input: unknown;
+  requesterConfirmation?: ApprovalRequesterConfirmationV1; sessionTargetsV1?: ActionResolvedSessionTargetsV1 }>;
 type MachineRpcRequest = Readonly<{
   authorizationToken: string;
   /** Exact incumbent private custody, authenticated by the installed producer. */
@@ -163,6 +169,8 @@ function approvalInputBytes(input: ApprovalInput): Uint8Array {
     'happier-external-action-approval-input-v1', input.authorizationToken,
     input.actionId, createCanonicalJsonSigningInput(ExternalActionTargetV1Schema.parse(input.target)),
     createCanonicalJsonSigningInput(input.input),
+    ...(input.requesterConfirmation ? ['requester-confirmation-v1', createCanonicalJsonSigningInput(input.requesterConfirmation)] : []),
+    ...(input.sessionTargetsV1 ? ['session-targets-v1', createCanonicalJsonSigningInput(ActionResolvedSessionTargetsV1Schema.parse(input.sessionTargetsV1))] : []),
   ]);
 }
 

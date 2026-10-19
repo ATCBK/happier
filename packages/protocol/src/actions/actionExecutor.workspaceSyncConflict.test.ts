@@ -86,7 +86,7 @@ describe('workspace.sync.conflict.resolve Action authority', () => {
     } as unknown as ActionExecutorDeps);
     const origin = {
       surface: 'agent' as const, authority: 'account_automation' as const,
-      serverId: 'server-1', defaultSessionId: 'session-c',
+      serverId: 'server-1', defaultSessionId: 'session-c', defaultSessionMachineId: 'machine-c',
     };
 
     await expect(executor.execute('workspace.sync.conflict.resolve', input, {

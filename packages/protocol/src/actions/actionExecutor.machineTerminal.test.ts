@@ -63,8 +63,9 @@ describe('Machine terminal canonical Action family', () => {
     })).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
     expect(waitedForHuman).toBe(true);
   });
-  it('keeps pane creation an intent while actual shell creation requires default approval before any PTY effect', async () => {
-    const settings = ActionsSettingsV1Schema.parse({ v: 1 });
+  it('keeps pane creation an intent while an explicit Ask setting requires approval before any PTY effect', async () => {
+    const settings = ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { 'machines.terminal.open': { approvalRequiredSurfaces: ['ui'] } } });
     for (const actionId of ['session.terminals.open', 'session.terminals.split', 'session.terminals.run_script', 'session.terminals.restart'] as const) {
       expect(isApprovalRequiredByActionsSettings(actionId, settings, { surface: 'ui', authority: 'present_user' }, getActionSpec(actionId).safety)).toBe(false);
       expect(getActionSpec(actionId).sideEffectClass).toBe('external');

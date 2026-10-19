@@ -40,7 +40,7 @@ describe('Session read-state Action vertical', () => {
       mcp: true,
       api: true,
       plugin: true,
-      voice: false,
+      voice: true,
     });
     expect(spec.serverTransport).toEqual({
       method: 'POST',
@@ -55,7 +55,7 @@ describe('Session read-state Action vertical', () => {
     expect(PublicActionIdSchema.safeParse(spec.id).success).toBe(true);
   });
 
-  it.each(['agent', 'mcp'] as const)('allows %s to mark a session read without confirmation', async (surface) => {
+  it.each(['agent', 'mcp', 'voice'] as const)('allows %s to mark a session read without confirmation', async (surface) => {
     const sessionReadStateAction = vi.fn(async () => ({
       success: true, state: 'read', lastViewedSessionSeq: 7, didChange: true,
     }));

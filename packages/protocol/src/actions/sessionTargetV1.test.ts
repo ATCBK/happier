@@ -1,0 +1,41 @@
+import { describe, expect, it } from 'vitest';
+import { normalizeSessionListFilterV1 } from '../sessions/listFilter/sessionListFilterV1.js';
+import { normalizeSessionTargetV1, SessionTargetV1Schema, ActionResolvedSessionTargetsV1Schema } from './sessionTargetV1.js';
+
+describe('Session target routing contract', () => {
+  it('normalizes only reserved shorthand and keeps exact reference operands exact', () => {
+    expect(normalizeSessionTargetV1('session-existing')).toBe('session-existing');
+    expect(normalizeSessionTargetV1('workers')).toEqual({ selector: 'workers' });
+    expect(normalizeSessionTargetV1(' self ')).toEqual({ selector: 'self' });
+    expect(normalizeSessionTargetV1('discussion:room-id')).toEqual({ selector: 'discussion', discussionId: 'room-id' });
+    expect(normalizeSessionTargetV1({ selector: 'manager', of: 'workers' })).toEqual({ selector: 'manager', of: 'workers' });
+    const filter = normalizeSessionListFilterV1({ homeServerIds: ['home-id'], show: 'sessions' });
+    expect(normalizeSessionTargetV1(`matching:${JSON.stringify(filter)}`)).toEqual({ selector: 'matching', filter });
+    expect(() => normalizeSessionTargetV1('matching:{broken')).toThrow();
+    expect(() => normalizeSessionTargetV1('discussion:')).toThrow();
+  });
+
+  it('rejects unknown routing fields, recursive operands and noncanonical filters', () => {
+    expect(SessionTargetV1Schema.safeParse({ selector: 'workers', recursive: true, of: 'base' }).success).toBe(true);
+    for (const target of [
+      { selector: 'workers', of: { selector: 'self' } },
+      { selector: 'manager', recursive: true },
+      { selector: 'discussion', discussionId: 'id', grant: true },
+      { selector: 'matching', filter: { expression: 'status=failed' } },
+      { selector: 'matching', filter: { ...normalizeSessionListFilterV1(), hiddenScope: true } },
+    ]) expect(SessionTargetV1Schema.safeParse(target).success).toBe(false);
+  });
+
+  it('keeps the reviewed address snapshot closed down to concrete routing identities', () => {
+    const snapshot = { actionId: 'session.message.send', field: 'sessionId', selector: true,
+      targets: [{ serverId: 'home', sessionId: 'session' }] };
+    expect(ActionResolvedSessionTargetsV1Schema.parse(snapshot)).toEqual(snapshot);
+    expect(ActionResolvedSessionTargetsV1Schema.safeParse({ ...snapshot, targets: [] }).success).toBe(false);
+    expect(ActionResolvedSessionTargetsV1Schema.safeParse({ ...snapshot,
+      targets: [{ serverId: 'home', sessionId: { selector: 'workers' } }],
+    }).success).toBe(false);
+    expect(ActionResolvedSessionTargetsV1Schema.safeParse({ ...snapshot,
+      targets: [{ ...snapshot.targets[0], accountId: 'untrusted' }],
+    }).success).toBe(false);
+  });
+});

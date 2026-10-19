@@ -28,7 +28,7 @@ describe('plugin execution origin Action front door', () => {
   it('discovers and mutates the exact plugin preference through the client owner', async () => {
     for (const [rawId, input, output] of [
       ['plugins.execution_origin.list', { pluginId: 'acme.plugin' }, { status: 'available', storedTarget: null, storedOrigin: null,
-        selectedOrigin: origin, candidates: [{ origin, version: '1.0.0', selectable: true }] }],
+        selectedOrigin: origin, selectionSource: 'auto', candidates: [{ origin, version: '1.0.0', selectable: true }] }],
       ['plugins.execution_origin.set', { pluginId: 'acme.plugin', origin }, { status: 'applied' }],
       ['plugins.execution_origin.clear', { pluginId: 'acme.plugin' }, { status: 'applied' }],
     ] as const) {

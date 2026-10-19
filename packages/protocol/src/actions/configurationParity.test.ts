@@ -54,7 +54,7 @@ describe('notification configuration and app update Action parity', () => {
   });
 
   it('refuses an unavailable client owner rather than claiming a configured webhook or update', async () => {
-    const executor = createActionExecutor({ isApprovalRequired: () => false });
+    const executor = createActionExecutor({ isActionApprovalRequired: () => false });
     for (const [id, input] of [['notifications.webhooks.add', { url: 'https://hooks.example.test/notify' }],
       ['app.updates.restart', {}]] as const) {
       await expect(executor.execute(id as ActionId, input, { surface: 'ui', authority: 'present_user' })).resolves.toMatchObject({

@@ -7,6 +7,7 @@ import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from
 import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import type { ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { createPluginInstallationReviewFixture } from '../testing/pluginInstallationReviewFixture.js';
 
 const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('Review the complete skill instructions.'), 0o755);
 const cases: readonly (readonly [ActionId, unknown, string])[] = [
@@ -44,7 +45,12 @@ function requestFor(actionId: ActionId, raw: unknown) {
   const observation = spec.projectObservationInput?.(input) ?? input;
   return ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
     createdBy: { surface: 'cli' }, actionId, actionArgs: spec.approvalInputCustody === 'live_only' ? observation : input,
-    preview: { actionId, actionArgs: observation }, summary: spec.title,
+    preview: { actionId, actionArgs: observation,
+      ...(actionId === 'plugins.install' ? { pluginInstall: { permissionsDisclosure: 'daemonEvaluated', pendingReview: {
+        kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'neighbor-plugin-install',
+        reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
+        review: createPluginInstallationReviewFixture(),
+      } } } : {}) }, summary: spec.title,
     executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'neighbor-request',
       surface: 'cli', serverId: 'home', actionId } });
 }

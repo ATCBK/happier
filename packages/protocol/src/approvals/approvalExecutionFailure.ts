@@ -1,5 +1,8 @@
 import type { ActionExecuteFailure } from '../actions/actionExecutionResult.js';
-import { getActionSpec } from '../actions/actionSpecs.js';
+import { AccountActionHttpFailureDetailsV1Schema } from '../actions/actionExecutionResult.js';
+import * as z from 'zod/mini';
+import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
+import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '../actions/actionIds.js';
 import { isFilesystemActionId } from '../actions/filesystemActionFamily.js';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '../actions/projectActionFamily.js';
 import {
@@ -29,6 +32,8 @@ import { ActionOperationCancelV1ResponseSchema } from '../actions/operations/v1.
 import { ApprovalStaleFailureDetailsSchema } from './approvalStaleReason.js';
 import { WidgetBindingResolutionV1Schema, WidgetInstanceActionInputSchemasV1 } from '../widgets/actionsV1.js';
 import { WidgetInstanceActionIdV1Schema } from '../widgets/actionIdsV1.js';
+import { isProviderActionIdV1, PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '../providers/providerActionsV1.js';
+import { ProviderErrorV1Schema } from '../providers/errors.js';
 import type {
   ApprovalExecutionV2,
   ApprovalRequest,
@@ -40,6 +45,30 @@ function parseStrictApprovalFailure(input: Readonly<{
   request: ApprovalRequestV2;
   failure: ActionExecuteFailure;
 }>, storedRead = false): ActionExecuteFailure | null {
+  if (isProviderActionIdV1(input.request.actionId)) {
+    const details = (storedRead ? createStoredReadSchema(ProviderErrorV1Schema) : ProviderErrorV1Schema)
+      .safeParse(input.failure.details);
+    if (details.success) {
+      const schema = PROVIDER_ACTION_INPUT_SCHEMAS_V1[input.request.actionId];
+      const args = (storedRead ? createStoredReadSchema(schema) : schema).safeParse(input.request.actionArgs);
+      if (!args.success || details.data.code !== input.failure.errorCode) return null;
+      for (const key of ['connectionId', 'machineId', 'sourceProfileId'] as const) {
+        if (details.data[key] !== undefined && (!(key in args.data) || Reflect.get(args.data, key) !== details.data[key])) return null;
+      }
+      return { ...input.failure, details: details.data };
+    }
+  }
+  if (input.failure.errorCode === 'outcome_unknown') {
+    const details = (storedRead ? createStoredReadSchema(AccountActionHttpFailureDetailsV1Schema)
+      : AccountActionHttpFailureDetailsV1Schema).safeParse(input.failure.details);
+    if (details.success) {
+      const spec = getActionSpec(input.request.actionId);
+      const args = (storedRead ? createStoredReadSchema(spec.inputSchema) : spec.inputSchema).safeParse(input.request.actionArgs);
+      if (!args.success || resolveActionExecutionPlacementForInput(spec, args.data) !== 'account'
+        || spec.sideEffectClass === 'read' || spec.sideEffectClass === 'none') return null;
+      return { ...input.failure, details: details.data };
+    }
+  }
   if (input.failure.errorCode === 'approval_stale') {
     const details = (storedRead ? createStoredReadSchema(ApprovalStaleFailureDetailsSchema)
       : ApprovalStaleFailureDetailsSchema).safeParse(input.failure.details);
@@ -96,8 +125,17 @@ function parseStrictApprovalFailure(input: Readonly<{
     if (input.failure.errorCode !== removal.code) return null;
     const args = (storedRead ? createStoredReadSchema(removal.input) : removal.input)
       .safeParse(input.request.actionArgs);
+    let domainDetails = input.failure.details;
+    if (domainDetails && typeof domainDetails === 'object' && !Array.isArray(domainDetails)
+      && Object.hasOwn(domainDetails, 'httpStatus')) {
+      // homeDomainActions adds transport metadata beside the strict domain
+      // payload. Validate and remove only that field before domain admission.
+      const { httpStatus, ...payload } = domainDetails as Record<string, unknown>;
+      if (typeof httpStatus !== 'number' || !Number.isInteger(httpStatus) || httpStatus < 100 || httpStatus > 599) return null;
+      domainDetails = payload;
+    }
     const details = (storedRead ? createStoredReadSchema(removal.failure) : removal.failure)
-      .safeParse(input.failure.details);
+      .safeParse(domainDetails);
     return args.success && details.success && details.data.error === removal.code
       ? { ...input.failure, details: details.data }
       : null;
@@ -164,25 +202,51 @@ function readDomainExecutionFailure(request: ApprovalRequest): ActionExecuteFail
   }
   const preset = MachinePresetActionIdV1Schema.safeParse(request.actionId);
   const managed = ManagedMachineActionIdV1Schema.safeParse(request.actionId);
+  const pluginActionId = isPluginDevLoopActionIdV1(request.actionId) ? request.actionId : null;
   const mutationId = request.actionId === 'machines.worker.policy.set'
     || request.actionId === 'projects.worker.preferences.set'
     || request.actionId === 'projects.worker.preferences.reset'
     || request.actionId === 'projects.service.placement.set'
     ? request.actionId : null;
-  const schema = preset.success ? MachinePresetActionOutputSchemasV1[preset.data]
+  const familySchema = preset.success ? MachinePresetActionOutputSchemasV1[preset.data]
     : managed.success ? ManagedMachineActionOutputSchemasV1[managed.data]
       : request.actionId === 'machines.pools.resolve' ? MachinePoolResolveResultV1Schema
         : mutationId ? ProjectWorkerActionOutputSchemasV1[mutationId]
-          : request.actionId === 'action.operations.cancel' ? ActionOperationCancelV1ResponseSchema : null;
+          : request.actionId === 'action.operations.cancel' ? ActionOperationCancelV1ResponseSchema
+            : pluginActionId ? getActionSpec(pluginActionId).outputSchema : null;
+  // Only failure-shaped receipts need the catalog read. Successful/opaque Action
+  // data is not an error merely because it happens to contain a status or kind.
+  if (!familySchema && !readTypedDomainFailure(request.execution?.result)) return null;
+  const actionId = ActionIdSchema.safeParse(request.actionId);
+  const schema = familySchema ?? (actionId.success ? getActionSpec(actionId.data).outputSchema : null);
   if (!schema) return null;
-  const parsed = createStoredReadSchema(schema).safeParse(request.execution?.result);
-  if (!parsed.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+  // Plugin development-loop diagnostics are opaque fields on the loose output;
+  // keep them only long enough to select the display primitives below.
+  const parsed = (pluginActionId ? schema : createStoredReadSchema(schema))
+    .safeParse(request.execution?.result);
+  if (!parsed.success) return familySchema
+    ? { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' } : null;
   const result: unknown = parsed.data;
+  if (pluginActionId && result && typeof result === 'object') {
+    if (!('ok' in result) || result.ok !== false) return null;
+    if ('outcome' in result && result.outcome === 'reviewRequired') return null;
+    // Diagnostics are opaque in the Action's output contract. Read only the
+    // producer's first display code/message; never expose its arbitrary bags.
+    const diagnostic: unknown = 'diagnostics' in result && Array.isArray(result.diagnostics) ? result.diagnostics[0] : null;
+    const errorCode = diagnostic && typeof diagnostic === 'object' && 'code' in diagnostic
+      && typeof diagnostic.code === 'string' && diagnostic.code.trim()
+      ? diagnostic.code : 'plugin_change_failed';
+    const error = diagnostic && typeof diagnostic === 'object' && 'message' in diagnostic
+      && typeof diagnostic.message === 'string' && diagnostic.message.trim()
+      ? diagnostic.message : errorCode;
+    return { ok: false, errorCode, error };
+  }
   if (mutationId && result && typeof result === 'object' && 'status' in result && typeof result.status === 'string') {
     const errorCode = result.status;
     return errorCode === 'applied' || errorCode === 'satisfied' || errorCode === 'unchanged'
       ? null : { ok: false, errorCode, error: errorCode, details: result };
   }
+  if (!familySchema) return readDeclaredDomainFailure(schema, result);
   if (!result || typeof result !== 'object' || !('kind' in result)) return null;
   if (request.actionId === 'action.operations.cancel' && (result.kind === 'unsupported' || result.kind === 'not_found')) {
     return { ok: false, errorCode: result.kind, error: result.kind, details: result };
@@ -193,6 +257,66 @@ function readDomainExecutionFailure(request: ApprovalRequest): ActionExecuteFail
       : result.kind === 'unavailable' && 'reason' in result && typeof result.reason === 'string'
         ? result.reason : null;
   return errorCode ? { ok: false, errorCode, error: errorCode, details: result } : null;
+}
+
+/** A JSON bag accepting failure-looking fields does not declare failure semantics. */
+function readDeclaredDomainFailure(schema: z.core.$ZodType, value: unknown): ActionExecuteFailure | null {
+  const def = (schema as z.core.$ZodTypes)._zod.def;
+  switch (def.type) {
+    case 'union':
+      for (const option of def.options) {
+        const parsed = z.safeParse(createStoredReadSchema(option), value);
+        if (!parsed.success) continue;
+        const failure = readDeclaredDomainFailure(option, parsed.data);
+        if (failure) return failure;
+      }
+      return null;
+    case 'lazy': return readDeclaredDomainFailure((schema as z.core.$ZodLazy)._zod.innerType, value);
+    case 'pipe': return readDeclaredDomainFailure(def.out, value);
+    case 'optional': case 'nullable': case 'default': case 'prefault': case 'nonoptional': case 'readonly': case 'catch':
+      return readDeclaredDomainFailure(def.innerType, value);
+    case 'object': {
+      // Only finite discriminators describe a domain outcome. Unbounded strings,
+      // records, unknown values and transforms remain opaque to this projection.
+      const carrier = Object.fromEntries(['ok', 'success', 'status', 'kind', 'outcome'].flatMap(key => {
+        const field = def.shape[key];
+        return field && (field._zod.def.type === 'literal' || field._zod.def.type === 'enum')
+          && value && typeof value === 'object' && key in value
+          ? [[key, Reflect.get(value, key)]] : [];
+      }));
+      return hasDomainFailureDiscriminant(carrier)
+        ? readTypedDomainFailure(value) : null;
+    }
+    default: return null;
+  }
+}
+
+function hasDomainFailureDiscriminant(result: Readonly<Record<string, unknown>>): boolean {
+  return result.ok === false || result.success === false
+    || ['failed', 'error', 'denied', 'refused', 'rejected', 'blocked', 'timedOut', 'timed_out',
+      'stale', 'policy_denied', 'unsupported', 'unavailable', 'invalid', 'not_supported',
+      'conflict', 'collectorDegraded'].includes(String(result.status))
+    || ['refused', 'rejected', 'blocked', 'unavailable', 'invalid', 'stale', 'conflict'].includes(String(result.kind))
+    || result.outcome === 'failed' || result.outcome === 'error';
+}
+
+/** Recognize display primitives; callers expose them only after catalog validation. */
+function readTypedDomainFailure(value: unknown): ActionExecuteFailure | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const result = value as Readonly<Record<string, unknown>>;
+  if (!hasDomainFailureDiscriminant(result)) return null;
+  const error = result.error && typeof result.error === 'object' && !Array.isArray(result.error)
+    ? result.error as Readonly<Record<string, unknown>> : null;
+  const reason = result.reason && typeof result.reason === 'object' && !Array.isArray(result.reason)
+    ? result.reason as Readonly<Record<string, unknown>> : null;
+  const code = [result.errorCode, error?.code, result.code, result.reasonCode, reason?.code,
+    typeof result.reason === 'string' ? result.reason : undefined,
+    typeof result.error === 'string' ? result.error : undefined]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (!code) return null;
+  const message = [error?.message, result.error, reason?.message]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  return { ok: false, errorCode: code, error: message ?? code };
 }
 
 /** Read terminal history without trusting legacy or unvalidated opaque fields. */

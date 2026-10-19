@@ -2,9 +2,36 @@ import { describe, expect, it } from 'vitest';
 import * as externalActionApi from './externalActionApi.js';
 import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
+import tweetnacl from 'tweetnacl';
+import { signMachineInstallationProof } from '../machines/identity/installationIdentity.js';
+import { computeExternalActionRequestEnvelopeDigestV1 } from './externalActionExecutionAuthorization.js';
 
 const invocationGrant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: ['session.title.set'] },
   targets: { sessions: [], machines: ['machine-1'] }, approve: false, origins: [], models: null, permissionModes: null, create: null });
+
+it('binds a signed Workflow Role invocation to its genuine Run and exact Session without a source Session', () => {
+  const signing = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(38));
+  const workflowActionOrigin = { runId: 'run', requestId: 'role-write', sessionAuthority: {
+    authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
+    runDepth: 4, runOriginSessionId: 'origin', directory: '/repo', workspaceWrites: 'deny',
+  } } as const;
+  const request = { v: 1, machineId: 'executor', workflowActionOrigin,
+    envelope: externalActionApi.ExternalActionRequestEnvelopeSchema.parse({ v: 1, requestId: 'role-write', target: { kind: 'session', sessionId: 'origin' },
+      input: { sessionId: 'origin', roleId: 'builder' } }),
+  };
+  // The proof's cryptography is Home's boundary; obtain its structural shape
+  // from the existing signed-Machine proof owner below.
+  const proof = signMachineInstallationProof({ privateKey: signing.secretKey,
+    payload: { version: 1, accountId: 'account', machineId: 'executor', installationId: 'installed',
+      externalActionOrigin: { homeId: 'home', actionId: 'session.role.set', requestId: 'role-write',
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), origin: workflowActionOrigin } } });
+  const parsed = externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.parse({ ...request, installationProof: proof });
+  expect(parsed.workflowActionOrigin).toEqual(workflowActionOrigin);
+  expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse({ ...request, installationProof: proof,
+    workflowActionOrigin: { runId: 'run', requestId: 'role-write' } }).success).toBe(false);
+  expect(externalActionApi.ExternalActionWorkflowOriginV1Schema.safeParse({ ...workflowActionOrigin,
+    sessionAuthority: { ...workflowActionOrigin.sessionAuthority, sourceSessionId: 'pretend-source' } }).success).toBe(false);
+});
 
 it('carries mounted plugin claims in both root envelopes while rejecting authority and unbound claims', () => {
   const mountedBinding = { pluginId: 'happier.inspector', contributionLocalId: 'inspector-app', occurrenceId: 'mounted-occurrence',
@@ -156,6 +183,7 @@ it.each(['present_user', 'account_automation'] as const)('keeps signed ordinary 
   }).success).toBe(true);
   expect(externalActionApi.ExternalActionExecutionAuthorizationV1Schema.parse(authorization)).toEqual(authorization);
   for (const forged of [
+    { ...principal, authority: 'session_runtime' },
     { ...principal, grant: invocationGrant },
     { ...principal, credentialId: 'fake-pat' },
     { ...principal, authentication: { ...authentication, tokenEpoch: -1 } },
@@ -814,5 +842,15 @@ describe('External Action API envelope v1', () => {
       error: 'Target rejected this request',
       details: { reason: 'policy' },
     });
+  });
+
+  it.each([
+    { facet: { phase: 'missing_matching_publication' }, retained: true },
+    { facet: { phase: 'missing_matching_publication', nativeError: 'private native details' }, retained: false },
+  ])('keeps only closed Goal diagnostics at the external Action boundary (retained: $retained)', ({ facet, retained }) => {
+    const failure = { ok: false, errorCode: 'session_goal_control_work_state_unavailable',
+      error: 'session_goal_control_work_state_unavailable' };
+    expect(projectExternalActionExecutionResultV1({ ...failure, goalControlFailure: facet, privateTransit: true }))
+      .toEqual({ ...failure, ...(retained ? { goalControlFailure: facet } : {}) });
   });
 });

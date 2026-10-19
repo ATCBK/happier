@@ -55,8 +55,9 @@ describe('skills.read Action', () => {
       }),
     });
     for (const surface of ['ui', 'cli', 'agent', 'mcp', 'rpc'] as const) {
-      expect(await executor.execute('skills.read', { name: 'review', sessionId: 'session', file: 'scripts/check.bin' },
-        { surface, authority: 'account_automation' })).toMatchObject({ ok: true, result: {
+      const result = await executor.execute('skills.read', { name: 'review', sessionId: 'session', file: 'scripts/check.bin' },
+        { surface, authority: 'account_automation', defaultSessionId: 'session' });
+      expect(result, JSON.stringify({ surface, result })).toMatchObject({ ok: true, result: {
           skillId: 'selected', name: 'review', skillMd,
           files: [{ path: 'SKILL.md', bytes: new TextEncoder().encode(skillMd).length },
             { path: 'scripts/check.bin', bytes: 4, unixMode: 0o755 }],

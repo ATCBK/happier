@@ -4,6 +4,7 @@ import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.
 import { buildAcpConfigOptionOverridesV1 } from '../sessions/metadata/metadataOverridesV1.js';
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { ExecutionRunStartRequestSchema } from '../execution/runs/startRequest.js';
+import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
 import { projectActionWorkflowSelectionInputV1 } from './executor/agentStartAdmission.js';
 
 function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
@@ -150,14 +151,26 @@ it.each(['execution.run.start', 'review.start', 'subagents.plan.start', 'subagen
   },
 );
 
-it.each(['subagents.plan.start', 'subagents.delegate.start', 'voice_agent.start', 'review.start'] as const)(
-  'round-trips a contributed Agent option through %s admission and dispatch', async (actionId) => {
-    const agentTarget = { kind: 'agent', identity: { pluginId: 'acme.review', localId: 'reviewer' } } as const;
+it.each((['subagents.plan.start', 'subagents.delegate.start', 'voice_agent.start', 'review.start'] as const).flatMap(actionId => [
+  { actionId, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } as const },
+  { actionId, agentTarget: { kind: 'agent', identity: { pluginId: 'acme.review', localId: 'reviewer' } } as const },
+  { actionId, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+    definitionId: 'review / exact:definition' } as const },
+]))(
+  'round-trips $agentTarget through $actionId options, admission and strict Run dispatch', async ({ actionId, agentTarget }) => {
     const key = buildBackendTargetKeyV2(agentTarget);
+    const received: ReturnType<typeof ExecutionRunStartRequestSchema.parse>[] = [];
     const deps = createDeps({
+      // The machine transport is the only replaced boundary. Real Action options,
+      // admission and fan-out must produce the strict current Agent target.
+      executionRunStart: async (_sessionId, input) => {
+        AgentExecutionTargetV1Schema.parse(input.backendTarget);
+        received.push(ExecutionRunStartRequestSchema.parse(input));
+        return { runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' };
+      },
       reviewEnginesList: async () => ({ items: [{ targetKey: key, label: 'Plugin reviewer' }] }),
       agentsBackendsList: async () => ({ items: [{ targetKey: key, label: 'Plugin reviewer', enabled: true,
-        agentId: 'acme.review/reviewer', identity: agentTarget.identity }] }),
+        identity: agentTarget.identity }] }),
     });
     const executor = createActionExecutor(deps);
     const fieldPath = actionId === 'review.start' ? 'engineIds' : 'backendTargetKeys';
@@ -166,7 +179,7 @@ it.each(['subagents.plan.start', 'subagents.delegate.start', 'voice_agent.start'
     const result = await executor.execute(actionId, { sessionId: 's1', instructions: 'Review the plan',
       [fieldPath]: [key] }, { ...UI_CALLER, agentStartContext: START_CONTEXT });
     expect(result).toMatchObject({ ok: true, result: { results: [{ ok: true }] } });
-    expect(vi.mocked(deps.executionRunStart).mock.calls[0]?.[1]).toMatchObject({ backendTarget: agentTarget });
+    expect(received.map(request => request.backendTarget)).toEqual([agentTarget]);
   },
 );
 
@@ -525,8 +538,8 @@ describe('createActionExecutor run options parity (model + effort)', () => {
     const executionRunStart = vi.fn(async () => ({ runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' }));
     const executor = createActionExecutor(createDeps({ executionRunStart }));
     const launchOrigin = {
-      kind: 'session_discussion',
-      sessionId: 's1',
+      kind: 'discussion',
+      serverId: 'home-1',
       discussionId: 'discussion_1',
       messageIds: ['message_1'],
       draftCorrelationId: 'draft_1',
@@ -657,12 +670,12 @@ describe('createActionExecutor run options parity (model + effort)', () => {
         waitForCompletion: expect.anything(),
         waitTimeoutSeconds: expect.anything(),
       }),
-      { serverId: 'server_1', originSessionId: 's1' },
+      { serverId: 'server_1', originSessionId: 's1', surface: 'ui' },
     );
     expect(executionRunWait).toHaveBeenCalledWith(
       null,
       { runId: 'run_1', timeoutSeconds: 12 },
-      { serverId: 'server_1', originSessionId: 's1' },
+      { serverId: 'server_1', originSessionId: 's1', surface: 'ui' },
     );
     expect(executionRunCheckProtocolV2).toHaveBeenCalledWith(
       null,
@@ -673,7 +686,7 @@ describe('createActionExecutor run options parity (model + effort)', () => {
         runScopedAgentBindings: false,
         secretReferenceOverlay: false,
       },
-      { serverId: 'server_1', originSessionId: 's1' },
+      { serverId: 'server_1', originSessionId: 's1', surface: 'ui' },
     );
   });
 
@@ -1205,7 +1218,7 @@ describe('createActionExecutor run options parity (model + effort)', () => {
         runScopedAgentBindings: false,
         secretReferenceOverlay: false,
       },
-      { serverId: 'server_1', originSessionId: 's1' },
+      { serverId: 'server_1', originSessionId: 's1', surface: 'ui' },
     );
     expect(executionRunStart).not.toHaveBeenCalled();
   });
@@ -1277,7 +1290,7 @@ describe('createActionExecutor run options parity (model + effort)', () => {
         runScopedAgentBindings: false,
         secretReferenceOverlay: true,
       },
-      { serverId: 'server_1' },
+      { serverId: 'server_1', surface: 'ui' },
     );
     expect(executionRunStart).not.toHaveBeenCalled();
   });
@@ -1301,12 +1314,12 @@ describe('createActionExecutor run options parity (model + effort)', () => {
     expect(executionRunStart).toHaveBeenCalledWith(
       null,
       expect.any(Object),
-      { serverId: 'server_1', originSessionId: 's1', exactMachineId: 'machine_2' },
+      { serverId: 'server_1', originSessionId: 's1', exactMachineId: 'machine_2', surface: 'ui' },
     );
     expect(executionRunWait).toHaveBeenCalledWith(
       null,
       { runId: 'run_1' },
-      { serverId: 'server_1', originSessionId: 's1', exactMachineId: 'machine_2' },
+      { serverId: 'server_1', originSessionId: 's1', exactMachineId: 'machine_2', surface: 'ui' },
     );
   });
 
@@ -1335,12 +1348,12 @@ describe('createActionExecutor run options parity (model + effort)', () => {
         runScopedAgentBindings: false,
         secretReferenceOverlay: false,
       },
-      { serverId: 'server_1', targetMachineId: 'machine_mounted' },
+      { serverId: 'server_1', targetMachineId: 'machine_mounted', surface: 'ui' },
     );
     expect(executionRunStart).toHaveBeenCalledWith(
       null,
       expect.any(Object),
-      { serverId: 'server_1', targetMachineId: 'machine_mounted', exactMachineId: 'machine_exact' },
+      { serverId: 'server_1', targetMachineId: 'machine_mounted', exactMachineId: 'machine_exact', surface: 'ui' },
     );
   });
 

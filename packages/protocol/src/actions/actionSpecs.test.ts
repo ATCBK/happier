@@ -34,11 +34,35 @@ import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActi
 import type { ActionSpec } from './actionSpecs.js';
 import {
   ActionIdSchema,
+  ACTION_IDS,
   PLUGIN_DEV_LOOP_ACTION_IDS_V1,
   RuntimeActionIdV1Schema,
   type ActionId,
   type RuntimeActionIdV1,
 } from './actionIds.js';
+
+it('publishes receiver mute and autonomous exchange controls to the Voice catalog', () => {
+  const voiceActions = listVoiceToolActionSpecs().map(spec => spec.id);
+  expect(voiceActions).toEqual(expect.arrayContaining([
+    'session.delivery.mute.set',
+    'session.delivery.mute.remove',
+    'session.delivery.mute.list',
+    'session.exchange.control',
+  ]));
+});
+
+it('exposes status explanations without admitting target selectors or runtime status writes', () => {
+  const spec = getActionSpec('session.status.set_reason');
+  expect(spec.inputSchema.safeParse({ reason: 'Waiting for the build' }).success).toBe(true);
+  expect(spec.inputSchema.safeParse({ reason: null }).success).toBe(true);
+  for (const extra of [{ sessionId: 'other' }, { status: 'done' }, { thinking: false }]) {
+    expect(spec.inputSchema.safeParse({ reason: 'Done', ...extra }).success).toBe(false);
+  }
+  for (const surface of ['ui', 'voice', 'agent', 'mcp', 'cli'] as const) {
+    expect(isActionSpecSurfacedOn(spec, surface)).toBe(true);
+  }
+  expect(resolveActionApprovalRouting({ actionId: spec.id, spec, context: { surface: 'agent' } }).required).toBe(false);
+});
 
 it('PARITY2 publishes hook inventory and registry installation with user-changeable approval defaults', () => {
   for (const id of ['plugins.sessionHooks.status.get', 'prompt_registry.install', 'plugins.permissions.grants.list', 'plugins.permissions.grants.revoke'] as const) {
@@ -80,6 +104,15 @@ it('looks up canonical Action specs without scanning the catalog on each call', 
   } finally {
     find.mockRestore();
   }
+});
+
+it('registers every declared Action before approval defaults read the catalog', () => {
+  expect(listActionSpecs().map(spec => spec.id).sort()).toEqual([...ACTION_IDS].sort());
+  const spec = getActionSpec('tasks.internal.reorder');
+  expect(spec.executionPlacement).toBe('account');
+  expect(() => resolveActionApprovalRouting({
+    actionId: spec.id, spec, context: { surface: 'agent' },
+  })).not.toThrow();
 });
 
 describe('Profile entity operation parity', () => {
@@ -367,8 +400,8 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'agents.acp.backends.upsert',
   'agents.acp.backends.delete',
   'secrets.shared.list',
-  'session.follow.get',
-  'session.follow.preferences.get',
+  'follow.get',
+  'follow.preferences.get',
   'action.spec.search',
   'action.spec.get',
   'action.options.resolve',
@@ -432,9 +465,11 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'session.events.get',
   'session.wait.idle',
   'session.board.get',
-  'session.discussion.list',
-  'session.discussion.get',
-  'session.discussion.read',
+  'discussion.list',
+  'discussion.get',
+  'discussion.read',
+  'discussion.participants.list',
+  'discussion.access.grants.list',
   'session.list',
   'session.activity.get',
   'session.messages.recent.get',
@@ -509,7 +544,8 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'session.access.grants.list',
   'session.public_link.get',
   'session.responsibility.candidates.list',
-  'session.follow.sources.list',
+  'follow.list',
+  'follow.preview',
   'session.stop',
   'session.delete',
   'session.folder.set',
@@ -575,7 +611,7 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
 const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'prompt_registry.install',
   'plugins.permissions.grants.revoke',
-  'session.reports_to.set',
+  'session.manager.set',
   // Session-access mutations, mirrored from their owner's rows now that the
   // declared family is projected into the canonical id list.
   'session.access.grant.set',
@@ -590,11 +626,9 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   ...WORKFLOW_ACTION_IDS_V1.filter((id) => !WORKFLOW_READ_ACTION_ID_SET.has(id)),
   'sessions.runner.activation.create',
   'sessions.runner.activation.cancel',
-  'session.follow.set',
-  'session.follow.remove',
-  'session.follow.preferences.set',
-  'session.follow.sources.set',
-  'session.follow.sources.remove',
+  'follow.set',
+  'follow.remove',
+  'follow.preferences.set',
   'review.start',
   'subagents.plan.start',
   'subagents.delegate.start',
@@ -626,12 +660,19 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.board.item.upsert',
   'session.board.item.remove',
   'session.board.layout.update',
-  'session.discussion.create',
-  'session.discussion.post',
-  'session.discussion.rename',
-  'session.discussion.archive',
-  'session.discussion.restore',
-  'session.discussion.read_state.set',
+  'discussion.create',
+  'discussion.post',
+  'discussion.reply',
+  'discussion.invite',
+  'discussion.participant.remove',
+  'discussion.leave',
+  'discussion.owner.transfer',
+  'discussion.access.grants.set',
+  'discussion.access.grants.remove',
+  'discussion.rename',
+  'discussion.archive',
+  'discussion.restore',
+  'discussion.read_state.set',
   'session.permission.respond',
   'session.user_action.answer',
   'session.mode.set',
@@ -702,6 +743,11 @@ describe('Action Spec Registry', () => {
       ['plugins.scaffold', 'danger'],
       ['plugins.install', 'danger'],
       ['plugins.uninstall', 'danger'],
+      ['plugins.enable', 'danger'],
+      ['plugins.disable', 'danger'],
+      ['plugins.rollback', 'danger'],
+      ['plugins.trust.forget', 'danger'],
+      ['plugins.update_policy.set', 'danger'],
       ['plugins.dev.submit', 'danger'],
       ['plugins.dev.unregister', 'danger'],
       ['plugins.dev.install', 'danger'],
@@ -851,9 +897,9 @@ describe('Action Spec Registry', () => {
       }).required).toBe(false);
     }
     expect(install.surfaces.rpc).toBe(false);
-    expect(install.surfaces.api).toBe(true);
+    expect(install.surfaces.api).toBe(false);
     expect(SignedRootActionIdSchema.safeParse(install.id).success).toBe(true);
-    expect(PublicActionIdSchema.safeParse(install.id).success).toBe(true);
+    expect(PublicActionIdSchema.safeParse(install.id).success).toBe(false);
     expect(install.surfaces.plugin).toBe(true);
     expect(install.requiredAuthority).toBe('account_automation');
 
@@ -869,12 +915,12 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it('surfaces plugin inspection and install to UI while keeping scaffold and uninstall internal', () => {
+  it('surfaces plugin inspection, scaffold, install and uninstall to UI', () => {
     expect(getActionSpec('plugins.list').surfaces.ui).toBe(true);
     expect(getActionSpec('plugins.reload').surfaces.ui).toBe(true);
-    expect(getActionSpec('plugins.scaffold').surfaces.ui).toBe(false);
+    expect(getActionSpec('plugins.scaffold').surfaces.ui).toBe(true);
     expect(getActionSpec('plugins.install').surfaces).toMatchObject({ ui: true, agent: true, mcp: true });
-    expect(getActionSpec('plugins.uninstall').surfaces.ui).toBe(false);
+    expect(getActionSpec('plugins.uninstall').surfaces.ui).toBe(true);
   });
 
   it('requires a plugin id for plugin uninstall', () => {
@@ -1140,6 +1186,15 @@ describe('Action Spec Registry', () => {
     expect(parsed.surfaceBindings?.plugin?.projectOutput).toBe(transform);
   });
 
+  it('keeps plugin installation on signed roots and out of the public API catalog', () => {
+    expect(getActionSpec('plugins.install').surfaces.api).toBe(false);
+    expect(SIGNED_ROOT_ACTION_IDS).toContain('plugins.install');
+    expect(PUBLIC_ACTION_IDS).not.toContain('plugins.install');
+    expect(PublicActionIdSchema.safeParse('plugins.install').success).toBe(false);
+    expect(Object.hasOwn(PUBLIC_ACTION_INPUT_SCHEMAS, 'plugins.install')).toBe(false);
+    expect(Object.hasOwn(PUBLIC_ACTION_OUTPUT_SCHEMAS, 'plugins.install')).toBe(false);
+  });
+
   it('exposes stable action specs', () => {
     const all = listActionSpecs();
     expect(all.length).toBeGreaterThan(0);
@@ -1338,6 +1393,7 @@ describe('Action Spec Registry', () => {
   });
 
   it('classifies every current ActionSpec explicitly for API and plugin invocation', () => {
+    expect(SignedRootActionIdSchema.safeParse('account.apiTokens.list').success).toBe(true);
     for (const spec of listActionSpecs()) {
       expect(Object.prototype.hasOwnProperty.call(spec.surfaces, 'api')).toBe(true);
       expect(typeof spec.surfaces.api).toBe('boolean');
@@ -1346,7 +1402,7 @@ describe('Action Spec Registry', () => {
           && !isPluginProvenanceOnlyActionId(spec.id)
           && !isHumanSecretApiExcludedActionId(spec.id)
           && !['plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete',
-            'plugin.webhook.delivery.movePending'].includes(spec.id)
+            'plugin.webhook.delivery.movePending', 'account.apiTokens.list', 'plugins.install'].includes(spec.id)
           && (spec.requiredAuthority === 'account_automation'
             || ['approval.request.decide', 'session.permission.respond', 'session.user_action.answer'].includes(spec.id)),
       );
@@ -1373,7 +1429,7 @@ describe('Action Spec Registry', () => {
     expect(SIGNED_ROOT_ACTION_IDS).toContain('automation.conversation.targets.list');
     expect(PUBLIC_ACTION_IDS).not.toContain('automation.conversation.targets.list');
     expect(PUBLIC_ACTION_IDS).toContain('approval.request.decide');
-    expect(PUBLIC_ACTION_IDS).toContain('plugins.install');
+    expect(PUBLIC_ACTION_IDS).not.toContain('plugins.install');
     for (const actionId of PUBLIC_ACTION_IDS) {
       expect(getActionSpec(actionId).requiredAuthority, actionId).toBe(
         ['approval.request.decide', 'session.user_action.answer'].includes(actionId)
@@ -1484,14 +1540,15 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it('publishes the caller’s private Discussion read position to granted API callers', () => {
-    const spec = getActionSpec('session.discussion.read_state.set');
+  it('keeps private Discussion read-position writes present-user gated on signed roots', () => {
+    const spec = getActionSpec('discussion.read_state.set');
     expect(spec.surfaces.ui).toBe(true);
     expect(spec.surfaces.cli).toBe(true);
-    expect(spec.requiredAuthority).toBe('account_automation');
-    expect(spec.surfaces.api).toBe(true);
-    expect(PUBLIC_ACTION_IDS).toContain('session.discussion.read_state.set');
-    expect(PublicActionIdSchema.safeParse('session.discussion.read_state.set').success).toBe(true);
+    expect(spec.requiredAuthority).toBe('present_user');
+    expect(spec.surfaces.api).toBe(false);
+    expect(PUBLIC_ACTION_IDS).not.toContain('discussion.read_state.set');
+    expect(PublicActionIdSchema.safeParse('discussion.read_state.set').success).toBe(false);
+    expect(SignedRootActionIdSchema.safeParse('discussion.read_state.set').success).toBe(true);
   });
 
   it('gives remote permission mediation an Account-automation minimum so a host-stamped plugin caller can reach it', () => {
@@ -1560,6 +1617,22 @@ describe('Action Spec Registry', () => {
     expect(permission.outputSchema.parse({ ok: true })).toEqual({ ok: true });
     expect(permission.outputSchema.safeParse({ ok: true, sessionId: 'private' }).success).toBe(false);
     expect(userAction.outputSchema.parse({ ok: true })).toEqual({ ok: true });
+  });
+
+  it('preserves a plugin worker question target and defaults only an omitted Session operand', async () => {
+    const spec = getActionSpec('session.user_action.answer');
+    const binding = spec.surfaceBindings?.plugin;
+    const context = { actionId: spec.id, surface: 'plugin' as const,
+      caller: { kind: 'plugin' as const, pluginId: 'example' }, defaultSessionId: 'manager' };
+    const response = { requestId: 'worker-question', disposition: 'pass_up' };
+    for (const sessionId of ['worker', { selector: 'manager', of: 'worker' }]) {
+      const input = binding?.inputSchema.parse({ ...response, sessionId });
+      expect(await binding?.bindInput?.(input, context)).toEqual({ ...response, sessionId });
+    }
+    expect(await binding?.bindInput?.(binding.inputSchema.parse(response), context))
+      .toEqual({ ...response, sessionId: 'manager' });
+    expect(binding?.inputSchema.safeParse({ ...response, sessionId: { selector: 'manager', accountId: 'foreign' } }).success).toBe(false);
+    expect(binding?.inputSchema.safeParse({ ...response, readSessionActionRpcOrigin: {} }).success).toBe(false);
   });
 
   it('exposes the remote permission mediation Actions only through their canonical caller surfaces', () => {
@@ -1774,6 +1847,9 @@ describe('Action Spec Registry', () => {
     );
     const publicInput = PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'];
     expect(publicInput.parse(input)).toEqual(input);
+    const structuredInput = { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:s1', token: '@session' }] };
+    expect(publicInput.parse({ ...input, message: '@session Continue', structuredInput }))
+      .toEqual({ ...input, message: '@session Continue', structuredInput });
     for (const extra of [
       { source: { sourceRef: 'private-source' } },
       { attachments: [] },
@@ -1791,9 +1867,6 @@ describe('Action Spec Registry', () => {
     expect(publicInput.safeParse(launch).success).toBe(false);
 
     const publicOutput = PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send'];
-    expect(getActionSpec('session.message.send').outputSchema).toBe(
-      protocol.SessionMessageSendResultV1Schema,
-    );
     expect(publicOutput.parse({ status: 'accepted', localId: 'caller-local-id' })).toEqual({
       status: 'accepted',
       localId: 'caller-local-id',
@@ -1821,6 +1894,57 @@ describe('Action Spec Registry', () => {
       localId: 'caller-local-id',
       executorDiagnostic: 'must-not-cross-the-public-boundary',
     }).success).toBe(false);
+  });
+
+  it('admits one canonical reply mode while refusing mixed legacy wait intent', () => {
+    for (const [schema, input] of [
+      [PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'], { sessionId: 's1', message: 'Which revision?' }],
+      [PLUGIN_ACTION_INPUT_SCHEMAS['session.message.send'], { sessionId: 's1', message: 'Which revision?', idempotencyKey: 'ask-one' }],
+    ] as const) {
+      for (const reply of ['none', 'wait', 'return']) {
+        expect(schema.safeParse({ ...input, reply, timeoutSeconds: 3601 }).success).toBe(true);
+        for (const wait of [false, true]) expect(schema.safeParse({ ...input, reply, wait }).success).toBe(false);
+      }
+      expect(schema.safeParse({ ...input, reply: 'eventually' }).success).toBe(false);
+      expect(schema.safeParse({ ...input, reply: 'wait', timeoutSeconds: 0 }).success).toBe(false);
+      expect(schema.safeParse({ ...input, wait: true }).success).toBe(true);
+    }
+  });
+
+  it('exposes exact committed reply outcomes without admitting a destination or authored turn', () => {
+    const id = ActionIdSchema.parse('session.message.reply');
+    const input = { sessionId: 's1', requestLocalId: 'original-input', reply: { kind: 'pass' } };
+    for (const schema of [getActionSpec(id).inputSchema, PUBLIC_ACTION_INPUT_SCHEMAS[id], PLUGIN_ACTION_INPUT_SCHEMAS[id]]) {
+      expect(schema.parse(input)).toEqual(input);
+      for (const extra of [{ destinationSessionId: 's2' }, { turnId: 'guessed-turn' }, { message: 'uncommitted answer' }]) {
+        expect(schema.safeParse({ ...input, ...extra }).success).toBe(false);
+      }
+      expect(schema.parse({ ...input, reply: { kind: 'answer', message: 'The checked revision is 42.' } }))
+        .toMatchObject({ reply: { kind: 'answer', message: 'The checked revision is 42.' } });
+      expect(schema.safeParse({ ...input, reply: { kind: 'answer', message: '   ' } }).success).toBe(false);
+      expect(schema.safeParse({ ...input, outcome: { kind: 'answer', publicationRef: {
+        kind: 'session', session: { serverId: 'home', sessionId: 's1' }, messageId: 'unrelated' },
+      } }).success).toBe(false);
+    }
+    const messageRef = { kind: 'session', session: { serverId: 'home', sessionId: 's1' }, messageId: 'committed-answer' };
+    const replied = { status: 'replied', localId: 'original-input', outcome: { kind: 'answer', text: '42', messageRef } };
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send'].parse(replied)).toEqual(replied);
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send'].safeParse({ ...replied,
+      outcome: { kind: 'answer', text: '42', localId: 'not-a-message-ref' } }).success).toBe(false);
+  });
+
+  it('exposes one original-input exchange control with a required observed revision', () => {
+    const id = ActionIdSchema.parse('session.exchange.control');
+    const input = { sessionId: 's1', originInputLocalId: 'original-input', decision: 'continue_more' };
+    for (const schema of [PUBLIC_ACTION_INPUT_SCHEMAS[id], PLUGIN_ACTION_INPUT_SCHEMAS[id]]) {
+      expect(schema.parse(input)).toEqual(input);
+      expect(schema.safeParse({ ...input, observedRevision: 'session-message-row-revision:v1:3' }).success).toBe(false);
+      expect(schema.safeParse({ ...input, additionalTurns: 100 }).success).toBe(false);
+    }
+    expect(getActionSpec(id).inputSchema.parse({ ...input,
+      observedRevision: 'session-message-row-revision:v1:3' })).toMatchObject(input);
+    expect(getActionSpec(id)).toMatchObject({ safety: 'danger', requiredAuthority: 'account_automation',
+      surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true } });
   });
 
   it('keeps public transcript and wait inputs closed and their outputs exact', () => {

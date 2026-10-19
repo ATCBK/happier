@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { ReviewCommentV1Schema } from '../reviews/comments/v1.js';
+import { deriveReviewCommentStructuralMutationV1 } from '../reviews/comments/mutation.js';
+import { splitReviewCommentV1, sealReviewCommentSensitiveEnvelopeV1, openStoredReviewCommentV1 } from '../reviews/comments/content.js';
+import { executeReviewCommentTransportV1 } from '../reviews/comments/transport.js';
+import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentCommitMutationRequestV1Schema, type ReviewCommentPreparedRecordV1 } from '../reviews/comments/mutation.js';
+import { ReviewCommentActionInputSchemasV1 } from '../reviews/comments/actions.js';
 
 function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
   return {
@@ -37,6 +44,70 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (review comments)', () => {
+  it.each(['reviews.comments.edit', 'reviews.comments.transition'] as const)('executes an approved Session comment mutation through the human Account owner: %s', async actionId => {
+    const workspace = { machineId: 'machine', path: '/workspace' };
+    let comment = ReviewCommentV1Schema.parse({ v: 1, id: 'comment', accountId: 'account', workspace, sessionId: 'session',
+      anchor: { kind: 'file', filePath: 'a.ts' }, snapshot: { kind: 'none', capturedAt: 1 }, body: 'Original finding',
+      bodyVersion: 1, edits: [], author: { kind: 'plugin', pluginId: 'acme.external-review' }, state: 'open', flags: {},
+      dispositions: {}, threadId: 'comment', transitions: [], createdAt: 1, updatedAt: 1, serverRevision: 1 });
+    let approval: ApprovalRequest | null = null;
+    const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(91) };
+    let prepared: ReviewCommentPreparedRecordV1 | undefined;
+    const read = () => {
+      const split = splitReviewCommentV1(comment);
+      return { v: 1 as const, structural: split.structural, sensitiveEnvelope: sealReviewCommentSensitiveEnvelopeV1({ ...split, mode: 'e2ee', material, randomBytes: length => new Uint8Array(length).fill(92) }) };
+    };
+    const executor = createActionExecutor(createDeps({
+      // Account Artifact persistence and Home authorization are boundaries of the Protocol executor.
+      approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'approval' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = request; return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async () => true,
+      reviewCommentAction: async ({ actionId: commentAction, input, reviewCommentPrincipal }) => {
+        if (commentAction !== actionId) throw new Error('Unexpected comment action');
+        expect(reviewCommentPrincipal).toBeUndefined();
+        // The actual Account transport must select the human actor after approval;
+        // the original external-review author must remain immutable.
+        return executeReviewCommentTransportV1({ actionId: commentAction, input: ReviewCommentActionInputSchemasV1[commentAction].parse(input),
+          context: { accountId: 'account', mode: 'e2ee', material },
+          actor: reviewCommentPrincipal?.actor ?? { kind: 'user', userId: 'account' },
+          randomBytes: length => new Uint8Array(length), request: async request => {
+            if (request.path.endsWith('/prepare')) {
+              const body = ReviewCommentPrepareMutationRequestV1Schema.parse(request.body);
+              const previous = read();
+              const derived = deriveReviewCommentStructuralMutationV1({ accountId: 'account',
+                actor: { kind: 'user', userId: 'account' }, current: [previous.structural], mutation: body.mutation,
+                runtime: { now: () => 2, createId: prefix => prefix + '-new' } });
+              prepared = { ...derived.records[0]!, previous: { structural: previous.structural,
+                source: { v: 1, layout: 'canonical_v1', envelope: previous.sensitiveEnvelope } } };
+              return { v: 1, receipt: 'receipt', request: body, records: [prepared], replayed: false, failed: [] };
+            }
+            const body = ReviewCommentCommitMutationRequestV1Schema.parse(request.body);
+            const next = { v: 1 as const, structural: prepared!.structural, sensitiveEnvelope: body.records[0]!.sensitiveEnvelope };
+            const opened = openStoredReviewCommentV1({ stored: next, mode: 'e2ee', material });
+            if (opened.status !== 'available') throw new Error('Unusable comment');
+            comment = opened.comment;
+            return { v: 1, comments: [next], replayed: false, failed: [] };
+          } });
+      },
+    }));
+    const input = actionId === 'reviews.comments.edit'
+      ? { workspace, commentId: 'comment', expectedServerRevision: 1, expectedBodyVersion: 1, nextBody: 'Approved edit', clientMutationId: 'edit' }
+      : { workspace, commentId: 'comment', expectedServerRevision: 1, expectedState: 'open', toState: 'dismissed', reason: 'Approved dismissal', clientMutationId: 'transition' };
+    await expect(executor.execute(actionId, input, { surface: 'agent', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_home',
+      actionRequestId: 'request', defaultSessionId: 'session', defaultSessionMachineId: 'machine',
+      actionCaller: { kind: 'session', sessionId: 'session', starterDepth: 0, turnDepth: 0 },
+      reviewCommentPrincipal: { actor: { kind: 'agent', agentId: 'acme.external/agent', sessionId: 'session' } },
+    })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(comment.serverRevision).toBe(1);
+    const result = await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, {
+      surface: 'cli', authority: 'present_user', serverId: 'home', serverIdentityId: 'srv_home', runtimeAccountId: 'account', actionCaller: { kind: 'host' },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    expect(comment).toMatchObject({ serverRevision: 2, author: { kind: 'plugin', pluginId: 'acme.external-review' },
+      ...(actionId === 'reviews.comments.edit' ? { body: 'Approved edit', edits: [{ editedBy: { kind: 'user', userId: 'account' } }] }
+        : { state: 'dismissed', transitions: [{ transitionedBy: { kind: 'user', userId: 'account' } }] }) });
+  });
   it('drains explicitly requested pages under the same host-stamped principal without forwarding the Action-only flag', async () => {
     const signal = new AbortController().signal;
     const requests: unknown[] = [];

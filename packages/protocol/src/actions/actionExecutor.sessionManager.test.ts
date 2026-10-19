@@ -4,11 +4,11 @@ import type { ActionExecutorDeps } from './executor/types.js';
 import { getActionSpec } from './actionSpecs.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { encodeV2SessionListCursorV2 } from '../sessions/listing/cursor.js';
-import { SessionReportsToSetResultV1Schema } from '../sessions/relations/sessionReportsToV1.js';
+import { SessionManagerSetResultV1Schema } from '../sessions/follow/sessionManagerV1.js';
 import type {
-  SessionReportsToSetActionInputV1,
-  SessionReportsToSetResultV1,
-} from '../sessions/relations/sessionReportsToV1.js';
+  SessionManagerSetActionInputV1,
+  SessionManagerSetResultV1,
+} from '../sessions/follow/sessionManagerV1.js';
 
 // These ports replace authenticated server HTTP adapters, not internal tree or admission logic.
 function createTransportExecutor(overrides: Partial<ActionExecutorDeps>) {
@@ -32,56 +32,56 @@ function createTransportExecutor(overrides: Partial<ActionExecutorDeps>) {
   });
 }
 
-const input = { sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null };
+const input = { sessionId: 'worker', managerSessionId: 'lead', expectedManagerSessionId: null };
 const context = { surface: 'cli', authority: 'present_user', serverId: 'home', bypassApprovals: true } as const;
 
-describe('session.worker.publish', () => {
+describe('session.update.post', () => {
   it('admits a caller-bound report with references and preserves typed producer refusals', async () => {
     const reports: unknown[] = [];
     const deliverables = [{ kind: 'workspace_file', sessionId: 'worker', path: 'result.md' }, { kind: 'artifact', artifactId: 'report' }];
     const executor = createTransportExecutor({
-      sessionWorkerPublish: async ({ context: _context, ...report }) => {
+      sessionUpdatePost: async ({ context: _context, ...report }) => {
         reports.push(report);
         return report.summary === 'allowed'
-        ? { sessionId: 'worker', leadSessionId: 'lead', localId: 'report-1' }
-        : { ok: false, errorCode: 'session_worker_requires_reports_to', error: 'session_worker_requires_reports_to' };
+        ? { sessionId: 'worker', localId: 'report-1', persisted: true }
+        : { ok: false, errorCode: 'session_update_not_committed', error: 'session_update_not_committed' };
       },
     });
     const agent = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'worker' } as const;
-    await expect(executor.execute('session.worker.publish', { summary: 'allowed', deliverables }, agent)).resolves.toMatchObject({
-      ok: true, result: { sessionId: 'worker', leadSessionId: 'lead', localId: 'report-1' },
+    await expect(executor.execute('session.update.post', { summary: 'allowed', deliverables }, agent)).resolves.toMatchObject({
+      ok: true, result: { sessionId: 'worker', localId: 'report-1', persisted: true },
     });
     expect(reports).toEqual([{ summary: 'allowed', deliverables }]);
-    await expect(executor.execute('session.worker.publish', { summary: 'allowed', leadSessionId: 'forged' }, agent)).resolves.toMatchObject({ ok: false });
-    await expect(executor.execute('session.worker.publish', { summary: 'refused' }, agent)).resolves.toMatchObject({ ok: false, errorCode: 'session_worker_requires_reports_to' });
-    expect(getActionSpec('session.worker.publish').surfaces.cli).toBe(false);
+    await expect(executor.execute('session.update.post', { summary: 'allowed', sessionId: 'forged' }, agent)).resolves.toMatchObject({ ok: false });
+    await expect(executor.execute('session.update.post', { summary: 'refused' }, agent)).resolves.toMatchObject({ ok: false, errorCode: 'session_update_not_committed' });
+    expect(getActionSpec('session.update.post').surfaces).toMatchObject({ ui: true, voice: true, agent: true, mcp: true, cli: true });
   });
 });
 
-describe('session.reports_to.set', () => {
+describe('session.manager.set', () => {
   it('keeps a committed relation successful while source-key preparation waits', async () => {
-    const committed = { ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: 1,
+    const committed = { ok: true, sessionId: 'worker', managerSessionId: 'lead', attachedAt: 1,
       sourceKeyPreparation: { kind: 'waiting', reason: 'source_key_unavailable' } } as const;
-    const executor = createTransportExecutor({ sessionReportsToSet: async () => committed });
-    const result = await executor.execute('session.reports_to.set', input, context);
+    const executor = createTransportExecutor({ sessionManagerSet: async () => committed });
+    const result = await executor.execute('session.manager.set', input, context);
     expect(result).toEqual({ ok: true, result: committed });
     if (!result.ok) throw new Error('Committed relation was reported failed');
-    expect(SessionReportsToSetResultV1Schema.parse(result.result)).toEqual(committed);
-    expect(getActionSpec('session.reports_to.set').outputSchema!.parse(result.result)).toEqual(committed);
-    expect(SessionReportsToSetResultV1Schema.safeParse({ ...committed,
+    expect(SessionManagerSetResultV1Schema.parse(result.result)).toEqual(committed);
+    expect(getActionSpec('session.manager.set').outputSchema!.parse(result.result)).toEqual(committed);
+    expect(SessionManagerSetResultV1Schema.safeParse({ ...committed,
       sourceKeyPreparation: { ...committed.sourceKeyPreparation, secret: 'invalid' },
     }).success).toBe(false);
   });
 
   it.each(['summary', 'awareness'] as const)('edits a child proved by %s but does not submit an unapproved outside-subtree mutation', async (view) => {
-    const submittedAttachments: SessionReportsToSetActionInputV1[] = [];
-    const sessionReportsToSet = async (request: SessionReportsToSetActionInputV1): Promise<SessionReportsToSetResultV1> => {
+    const submittedAttachments: SessionManagerSetActionInputV1[] = [];
+    const sessionManagerSet = async (request: SessionManagerSetActionInputV1): Promise<SessionManagerSetResultV1> => {
       submittedAttachments.push({
         sessionId: request.sessionId,
-        leadSessionId: request.leadSessionId,
-        expectedLeadSessionId: request.expectedLeadSessionId,
+        managerSessionId: request.managerSessionId,
+        expectedManagerSessionId: request.expectedManagerSessionId,
       });
-      return { ok: true, sessionId: request.sessionId, leadSessionId: request.leadSessionId, attachedAt: 1 };
+      return { ok: true, sessionId: request.sessionId, managerSessionId: request.managerSessionId, attachedAt: 1 };
     };
     const sessionList = vi.fn(async () => view === 'awareness' ? {
       view: 'awareness', projectionVersion: 1,
@@ -94,10 +94,10 @@ describe('session.reports_to.set', () => {
       sessions: [{ id: 'worker', active: false, presence: 'offline', updatedAt: 10 }],
       nextCursor: null, hasNext: false, queryVersion: 1, attentionNextCursor: null, attentionHasNext: false,
     });
-    const executor = createTransportExecutor({ sessionReportsToSet, sessionList, isActionApprovalRequired: () => false });
+    const executor = createTransportExecutor({ sessionManagerSet, sessionList, isActionApprovalRequired: () => false });
     const agent = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'lead' } as const;
-    await expect(executor.execute('session.reports_to.set', input, agent)).resolves.toMatchObject({ ok: true });
-    await expect(executor.execute('session.reports_to.set', { ...input, sessionId: 'unrelated' }, agent)).resolves.toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    await expect(executor.execute('session.manager.set', input, agent)).resolves.toMatchObject({ ok: true });
+    await expect(executor.execute('session.manager.set', { ...input, sessionId: 'unrelated' }, agent)).resolves.toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
     expect(submittedAttachments).toEqual([input]);
     expect(sessionList).toHaveBeenCalledWith(expect.objectContaining({ query: expect.objectContaining({ underSessionId: 'lead' }) }));
   });
@@ -106,23 +106,23 @@ describe('session.reports_to.set', () => {
     const submittedAttachments: string[] = [];
     const executor = createTransportExecutor({
       sessionList: async () => ({ sessions: [], nextCursor: null, hasNext: false, queryVersion: 1, attentionNextCursor: null, attentionHasNext: false }),
-      sessionReportsToSet: async ({ sessionId }) => {
+      sessionManagerSet: async ({ sessionId }) => {
         submittedAttachments.push(sessionId);
-        return { ok: false, error: 'reports_to_forbidden', reason: 'input' };
+        return { ok: false, error: 'manager_forbidden', reason: 'input' };
       },
     });
     const agent = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'lead' } as const;
-    await expect(executor.execute('session.reports_to.set', { ...input, sessionId: 'lead' }, {
+    await expect(executor.execute('session.manager.set', { ...input, sessionId: 'lead' }, {
       ...agent,
       actionsSettings: ActionsSettingsV1Schema.parse({
         v: 1,
-        actions: { 'session.reports_to.set': { approvalRequiredSurfaces: ['agent'] } },
+        actions: { 'session.manager.set': { approvalRequiredSurfaces: ['agent'] } },
       }),
     })).resolves.toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
-    await expect(executor.execute('session.reports_to.set', input, {
+    await expect(executor.execute('session.manager.set', input, {
       ...agent,
-      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {}, approvalWaivedSurfaces: { 'session.reports_to.set': ['agent'] } }),
-    })).resolves.toMatchObject({ ok: false, errorCode: 'reports_to_forbidden', details: { reason: 'input' } });
+      actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {}, approvalWaivedSurfaces: { 'session.manager.set': ['agent'] } }),
+    })).resolves.toMatchObject({ ok: false, errorCode: 'manager_forbidden', details: { reason: 'input' } });
     expect(submittedAttachments).toEqual(['worker']);
   });
 
@@ -136,28 +136,28 @@ describe('session.reports_to.set', () => {
         hasNext: query?.storage === 'archived' && query.cursor === undefined,
         queryVersion: 1, attentionNextCursor: null, attentionHasNext: false,
       }),
-      sessionReportsToSet: async () => ({ ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: 1 }),
+      sessionManagerSet: async () => ({ ok: true, sessionId: 'worker', managerSessionId: 'lead', attachedAt: 1 }),
     });
-    await expect(executor.execute('session.reports_to.set', input, {
+    await expect(executor.execute('session.manager.set', input, {
       surface: 'agent', authority: 'account_automation', defaultSessionId: 'lead',
     })).resolves.toMatchObject({ ok: true });
   });
 
   it('requires explicit compare-and-set facts and preserves typed service failures', async () => {
-    const spec = getActionSpec('session.reports_to.set');
-    expect(spec.inputSchema.safeParse({ sessionId: 'worker', leadSessionId: 'lead' }).success).toBe(false);
-    const sessionReportsToSet = vi.fn(async () => ({ ok: false as const, error: 'reports_to_forbidden' as const, reason: 'pairwise' as const }));
-    const executor = createTransportExecutor({ sessionReportsToSet });
-    await expect(executor.execute('session.reports_to.set', input, context)).resolves.toMatchObject({
-      ok: false, errorCode: 'reports_to_forbidden', details: { reason: 'pairwise' },
+    const spec = getActionSpec('session.manager.set');
+    expect(spec.inputSchema.safeParse({ sessionId: 'worker', managerSessionId: 'lead' }).success).toBe(false);
+    const sessionManagerSet = vi.fn(async () => ({ ok: false as const, error: 'manager_forbidden' as const, reason: 'pairwise' as const }));
+    const executor = createTransportExecutor({ sessionManagerSet });
+    await expect(executor.execute('session.manager.set', input, context)).resolves.toMatchObject({
+      ok: false, errorCode: 'manager_forbidden', details: { reason: 'pairwise' },
     });
-    expect(sessionReportsToSet).toHaveBeenCalledWith(expect.objectContaining({ ...input, context, serverId: 'home' }));
+    expect(sessionManagerSet).toHaveBeenCalledWith(expect.objectContaining({ ...input, context, serverId: 'home' }));
   });
 
   it('refuses a response that belongs to a different attachment', async () => {
     const executor = createTransportExecutor({
-      sessionReportsToSet: async () => ({ ok: true, sessionId: 'other-worker', leadSessionId: 'lead', attachedAt: 1 }),
+      sessionManagerSet: async () => ({ ok: true, sessionId: 'other-worker', managerSessionId: 'lead', attachedAt: 1 }),
     });
-    await expect(executor.execute('session.reports_to.set', input, context)).resolves.toMatchObject({ ok: false });
+    await expect(executor.execute('session.manager.set', input, context)).resolves.toMatchObject({ ok: false });
   });
 });

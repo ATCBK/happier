@@ -9,6 +9,9 @@ import { UsageAnalyticsQueryResponseSchema } from '../usage/usageAnalyticsContra
 import { UsageFileResultSchema } from '../usage/usageExport.js';
 import { decodeBase64 } from '../crypto/base64.js';
 import { PluginUiResourceSubscriptionRequestV1Schema } from '../plugins/ui/subscriptions.js';
+import { createPluginInstallationReviewFixture } from '../testing/pluginInstallationReviewFixture.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 
 function pluginCaller(
   pluginId: string,
@@ -32,6 +35,10 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
     ...overrides,
   } as ActionExecutorDeps);
 }
+
+const defaultApprovalPolicy: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, context, input) =>
+  isApprovalRequiredByActionsSettings(id, context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }),
+    context, undefined, undefined, input);
 
 describe('createActionExecutor plugin caller policy', () => {
   it('permits selected-field export under safe-read caller admission while retaining the Resource ceiling', async () => {
@@ -69,7 +76,7 @@ describe('createActionExecutor plugin caller policy', () => {
   it('keeps trusted-plugin Actions open while classifying every non-safe plugin Action', () => {
     for (const [actionId, requiredAuthority] of [
       ['plugins.scaffold', 'account_automation'],
-      ['plugins.install', 'present_user'],
+      ['plugins.install', 'account_automation'],
       ['plugins.uninstall', 'present_user'],
       ['plugins.sessionHooks.status.get', 'account_automation'],
       ['plugins.sessionHooks.install', 'present_user'],
@@ -103,7 +110,7 @@ describe('createActionExecutor plugin caller policy', () => {
       ok: true as const,
       kind: 'plugins_uninstall',
     }));
-    const executor = createExecutor({ pluginsDevLoopAction });
+    const executor = createExecutor({ pluginsDevLoopAction, isActionApprovalRequired: defaultApprovalPolicy });
 
     await expect(executor.execute('plugins.uninstall', {
       pluginId: 'acme.author',
@@ -123,6 +130,7 @@ describe('createActionExecutor plugin caller policy', () => {
     }, {
       surface: 'cli',
       authority: 'present_user',
+      presentUserConfirmation: { actionId: 'plugins.uninstall' },
       actionCaller: { kind: 'host' },
     })).resolves.toEqual({
       ok: true,
@@ -147,6 +155,7 @@ describe('createActionExecutor plugin caller policy', () => {
     });
     const executor = createExecutor({
       pluginsDevLoopAction, approvalsCreate,
+      isActionApprovalRequired: defaultApprovalPolicy,
       approvalsGet: async () => storedRequest,
       approvalsUpdate: async ({ request }) => {
         storedRequest = request;
@@ -161,6 +170,7 @@ describe('createActionExecutor plugin caller policy', () => {
       surface: 'plugin',
       serverId: 'server-1',
       actionRequestId: 'uninstall-1',
+      executionRunTargetMachineId: 'machine-1',
       authority: 'account_automation',
       actionCaller: {
         ...pluginCaller('acme.author'),
@@ -173,6 +183,11 @@ describe('createActionExecutor plugin caller policy', () => {
     expect(pluginsDevLoopAction).not.toHaveBeenCalled();
     expect(approvalsCreate).toHaveBeenCalledWith(expect.objectContaining({ request: expect.objectContaining({
       status: 'open', actionId: 'plugins.uninstall', actionArgs: { pluginId: 'acme.author' },
+      approval: expect.objectContaining({ flow: 'deferred' }),
+      executionOriginV1: expect.objectContaining({ authority: 'account_automation', caller: {
+        kind: 'plugin', pluginId: 'acme.author', contributionLocalId: 'surface',
+        sourceCustody: { kind: 'development', registeredRootId: 'author-root-1' }, startedBy: 'trigger',
+      } }),
     }) }));
 
     await expect(executor.execute('approval.request.decide', {
@@ -188,6 +203,7 @@ describe('createActionExecutor plugin caller policy', () => {
       surface: 'plugin',
       serverId: 'server-1',
       actionRequestId: 'interactive-uninstall-1',
+      executionRunTargetMachineId: 'machine-1',
       authority: 'present_user',
       actionCaller: {
         ...pluginCaller('acme.author'),
@@ -200,13 +216,169 @@ describe('createActionExecutor plugin caller policy', () => {
     expect(pluginsDevLoopAction).toHaveBeenCalledTimes(1);
   });
 
-  it('requires uninstall consent custody for a trusted plugin even when the host waives approval', async () => {
+  it('settles an Agent plugin install only through the canonical human approval replay', async () => {
+    const pluginsDevLoopAction = vi.fn(async ({ context }: Parameters<NonNullable<ActionExecutorDeps['pluginsDevLoopAction']>>[0]) => ({
+      ok: true as const,
+      kind: 'plugins_install',
+      outcome: 'applied' as const,
+      proofArtifactId: context.presentUserApproval?.artifactId ?? null,
+    }));
+    let storedRequest: Parameters<NonNullable<ActionExecutorDeps['approvalsCreate']>>[0]['request'] | null = null;
+    const executor = createExecutor({
+      pluginsDevLoopAction,
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+        normalizeActionsSettingsV1({ v: 1 }), context),
+      buildApprovalPreview: async ({ defaultPreview }) => ({
+        ...defaultPreview,
+        pluginInstall: {
+          permissionsDisclosure: 'daemonEvaluated',
+          pendingReview: {
+            kind: 'reviewRequired',
+            reviewKind: 'installation',
+            pendingChangeId: 'pending-plugin-install',
+            reason: 'firstInstall',
+            currentVersion: null,
+            authorityExpansion: [],
+            review: createPluginInstallationReviewFixture(),
+          },
+        },
+      }),
+      approvalsCreate: async ({ request }) => {
+        storedRequest = request;
+        return { artifactId: 'plugin-install-approval' };
+      },
+      approvalsGet: async () => storedRequest,
+      approvalsUpdate: async ({ request }) => {
+        storedRequest = request;
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const input = { path: '/workspace/acme-plugin', kind: 'path' as const };
+    const requester = {
+      surface: 'agent' as const,
+      authority: 'account_automation' as const,
+      serverId: 'server-1',
+      runtimeAccountId: 'account-1',
+      defaultSessionId: 'agent-session-1',
+      executionRunTargetMachineId: 'machine-1',
+      actionRequestId: 'agent-install-1',
+      actionCaller: {
+        kind: 'session' as const,
+        sessionId: 'agent-session-1',
+        starterDepth: 0,
+        turnDepth: 0,
+      },
+    };
+
+    await expect(executor.execute('plugins.install', input, requester)).resolves.toMatchObject({
+      ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'plugin-install-approval' },
+    });
+    expect(pluginsDevLoopAction).not.toHaveBeenCalled();
+    await expect(executor.execute('approval.request.decide', {
+      artifactId: 'plugin-install-approval', decision: 'approve',
+    }, requester)).resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(pluginsDevLoopAction).not.toHaveBeenCalled();
+
+    const decided = await executor.execute('approval.request.decide', {
+      artifactId: 'plugin-install-approval', decision: 'approve',
+    }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+    });
+    expect(decided, JSON.stringify(decided)).toMatchObject({
+      ok: true,
+      result: { status: 'executed', execution: { ok: true, result: { proofArtifactId: 'plugin-install-approval' } } },
+    });
+    expect(pluginsDevLoopAction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['ui', 'cli'] as const)('returns the ordinary install approval handle on %s with the default policy', async (surface) => {
+    const requests: unknown[] = [];
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+        normalizeActionsSettingsV1({ v: 1 }), context),
+      approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'install-review' }; },
+      pluginsDevLoopAction: async () => { throw new Error('Install effect must wait for approval'); },
+    } as ActionExecutorDeps);
+    const result = await executor.execute('plugins.install', { kind: 'path', path: '/tmp/example' }, {
+      surface, authority: 'present_user', serverId: 'home-1', actionRequestId: 'default-install',
+      actionCaller: { kind: 'host' },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'install-review' } });
+    expect(requests).toEqual([expect.objectContaining({ status: 'open', actionId: 'plugins.install',
+      approval: expect.objectContaining({ flow: 'deferred' }) })]);
+  });
+
+  it('executes a plugin install with the user-waived Agent policy without inventing human approval', async () => {
+    const settings = normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { 'plugins.install': ['agent'] } });
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
+      pluginsDevLoopAction: async ({ context }) => ({ ok: true, kind: 'plugins_install',
+        outcome: 'applied', authority: context.authority, proofArtifactId: context.presentUserApproval?.artifactId ?? null }),
+    } as ActionExecutorDeps);
+    const result = await executor.execute('plugins.install', { kind: 'path', path: '/tmp/example' }, {
+      surface: 'agent', authority: 'account_automation', serverId: 'home-1',
+      actionRequestId: 'waived-install', actionCaller: { kind: 'host' },
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: {
+      outcome: 'applied', authority: 'account_automation', proofArtifactId: null,
+    } });
+  });
+
+  it('keeps a plugin install Artifact open when daemon evaluation is still pending', async () => {
+    const pluginsDevLoopAction = vi.fn(async () => ({ ok: true, kind: 'plugins_install' }));
+    let storedRequest: Parameters<NonNullable<ActionExecutorDeps['approvalsCreate']>>[0]['request'] | null = null;
+    const executor = createExecutor({
+      pluginsDevLoopAction,
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
+        normalizeActionsSettingsV1({ v: 1 }), context),
+      buildApprovalPreview: async ({ defaultPreview }) => ({
+        ...defaultPreview,
+        pluginInstall: { permissionsDisclosure: 'pendingDaemonEvaluation' },
+      }),
+      approvalsCreate: async ({ request }) => {
+        storedRequest = request;
+        return { artifactId: 'plugin-install-pending-evaluation' };
+      },
+      approvalsGet: async () => storedRequest,
+      approvalsUpdate: async ({ request }) => {
+        storedRequest = request;
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+    });
+    const requester = {
+      surface: 'agent' as const,
+      authority: 'account_automation' as const,
+      serverId: 'server-1',
+      actionRequestId: 'agent-install-pending-evaluation',
+      actionCaller: { kind: 'host' as const },
+    };
+
+    await expect(executor.execute('plugins.install', {
+      path: '/workspace/acme-plugin', kind: 'path',
+    }, requester)).resolves.toMatchObject({
+      ok: true,
+      result: { kind: 'approval_request_created', artifactId: 'plugin-install-pending-evaluation' },
+    });
+    await expect(executor.execute('approval.request.decide', {
+      artifactId: 'plugin-install-pending-evaluation', decision: 'approve',
+    }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'approval_context_unavailable' });
+    expect(storedRequest).toMatchObject({ status: 'open' });
+    expect(pluginsDevLoopAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses uninstall without human authority when a trusted plugin has waived approval', async () => {
     const pluginsDevLoopAction = vi.fn(async () => ({ ok: true, kind: 'plugins_uninstall' }));
-    // Approval persistence is the external boundary; admission and routing stay real.
     const approvalsCreate = vi.fn<NonNullable<ActionExecutorDeps['approvalsCreate']>>(
       async () => ({ artifactId: 'approval-uninstall-1' }),
     );
-    const executor = createExecutor({ pluginsDevLoopAction, approvalsCreate });
+    const executor = createExecutor({ pluginsDevLoopAction, approvalsCreate, isActionApprovalRequired: defaultApprovalPolicy });
     const caller = {
       ...pluginCaller('acme.author'),
       sourceCustody: { kind: 'development' as const, registeredRootId: 'author-root-1' },
@@ -218,30 +390,12 @@ describe('createActionExecutor plugin caller policy', () => {
       serverId: 'server-1',
       actionRequestId: 'uninstall-1',
       actionCaller: caller,
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'plugins.uninstall': ['plugin'] } }),
     })).resolves.toMatchObject({
-      ok: true,
-      result: { kind: 'approval_request_created', artifactId: 'approval-uninstall-1' },
+      ok: false,
+      errorCode: 'present_user_required',
     });
-    expect(approvalsCreate).toHaveBeenCalledWith({
-      serverId: 'server-1',
-      request: expect.objectContaining({
-        v: 2,
-        status: 'open',
-        actionId: 'plugins.uninstall',
-        actionArgs: { pluginId: 'acme.author' },
-        approval: expect.objectContaining({ flow: 'deferred' }),
-        executionOriginV1: expect.objectContaining({
-          authority: 'account_automation',
-          caller: {
-            kind: 'plugin',
-            pluginId: 'acme.author',
-            contributionLocalId: 'surface',
-            sourceCustody: caller.sourceCustody,
-            startedBy: 'trigger',
-          },
-        }),
-      }),
-    });
+    expect(approvalsCreate).not.toHaveBeenCalled();
     expect(pluginsDevLoopAction).not.toHaveBeenCalled();
   });
 

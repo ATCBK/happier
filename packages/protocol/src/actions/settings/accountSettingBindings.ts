@@ -1,4 +1,5 @@
 import { ACCOUNT_SETTING_DEFINITIONS, resolveNewSessionWizardSectionPresentation, type AccountSettings, type NewSessionWizardSelectionSectionId } from '../../account/settings/accountSettings.js';
+import { GlassTintIntensitySchema } from '../../account/settings/glassTint.js';
 import type { SettingDomainValueV1 } from './settingsOwnerActions.js';
 import { normalizeActionsSettingsV1, setActionApprovalOverride, type ActionSurfaceKey } from '../actionSettings.js';
 import { accountNotificationStorageBinding } from './notificationPreferenceMutations.js';
@@ -7,7 +8,7 @@ import { DEFAULT_AGENT_ID } from '../../agents/defaultAgent.js';
 import { readDirectConnectionsEnabled, withDirectConnectionsEnabled, readMachineDirectConnectionChoice, withMachineDirectConnectionChoice } from '../../account/settings/peerMediationPreferencesV1.js';
 import { MachineRetentionDefaultsV1Schema, updateMachineRetentionCategoryPreferenceV1, type MachineRetentionCategoryV1 } from '../../account/settings/machineRetentionDefaultsV1.js';
 import { UI_FEATURE_REGISTRY, listUiFeatureToggleDefinitions, resolveUiFeatureToggleEnabled, buildUiFeatureToggleChange, buildUiFeatureExperimentsChange } from './featurePreferenceMutations.js';
-import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, GLASS_TINT_STEPS, resolveGlassTintSettingsDelta, readGlassMaterials, readGlassPreset, readGlassSurfaceMode, resolveGlassSurfaceModeSettingsDelta, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
+import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, readGlassTintIntensity, resolveGlassTintSettingsDelta, readGlassMaterials, readGlassPreset, readGlassSurfaceMode, resolveGlassSurfaceModeSettingsDelta, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
 import { buildKeyboardShortcutResetDelta, buildKeyboardShortcutSetDelta, buildKeyboardShortcutToggleDelta } from './keyboardPreferenceMutations.js';
 import { prepareDefaultProviderStateSharingChangeV1, prepareAgentProviderStateSharingChangeV1, AgentProviderStateSharingChangeV1Schema, type ProviderStateSharingMutationServicesV1 } from './providerStateSharingMutations.js';
 import { BackendTargetKeyV2InputSchema } from '../../backends/targets/backendTargetRefV2.js';
@@ -198,10 +199,16 @@ export const glassIntensityStorageBinding: PortableAccountSettingBindingV1 = { .
     parse: value => value === 'light' || value === 'regular' || value === 'strong' ? { success: true, value } : { success: false },
     mutate: (settings, value) => value === 'light' || value === 'regular' || value === 'strong' ? resolveGlassIntensitySettingsDelta(settings, value) : null,
 };
-export const glassTintStorageBinding: PortableAccountSettingBindingV1 = { ...owner, allowedValues: GLASS_TINT_STEPS,
-    read: settings => settings.glassTintIntensity ?? 'subtle',
-    parse: value => GLASS_TINT_STEPS.some(step => step === value) && typeof value === 'string' ? { success: true, value } : { success: false },
-    mutate: (settings, value) => { const tint = GLASS_TINT_STEPS.find(step => step === value); return tint ? resolveGlassTintSettingsDelta(settings, tint) : null; },
+export const glassTintStorageBinding: PortableAccountSettingBindingV1 = { ...owner,
+    read: settings => readGlassTintIntensity(settings.glassTintIntensity),
+    parse: value => {
+        const parsed = GlassTintIntensitySchema.safeParse(value);
+        return parsed.success ? { success: true, value: parsed.data } : { success: false };
+    },
+    mutate: (settings, value) => {
+        const parsed = GlassTintIntensitySchema.safeParse(value);
+        return parsed.success ? resolveGlassTintSettingsDelta(settings, parsed.data) : null;
+    },
 };
 export function glassSurfaceStorageBinding(group: GlassSurfaceGroup, field: 'blur' | 'opacity' | 'mode'): PortableAccountSettingBindingV1 {
     if (field === 'mode') return { ...owner, allowedValues: ['glass', 'solid'],

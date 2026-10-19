@@ -6,6 +6,7 @@ import type { ActionExecutorDeps } from './executor/types.js';
 
 const relationshipsResult = {
   controllerMachineId: 'machine-a',
+  sets: [],
   relationships: [],
   remoteRelationships: [],
   membership: { workspaceRefId: 'workspace-a', found: false },
@@ -90,6 +91,17 @@ describe('workspace sync read Actions', () => {
     expect(workspaceSyncConflictsList).toHaveBeenCalledWith({
       input: { controllerMachineId: 'machine-a', relationshipId: 'rel-ab', limit: 50 },
     });
+  });
+
+  it('rejects a relationships inventory outside the canonical closed output contract', async () => {
+    const executor = createExecutor({
+      workspaceSyncRelationshipsList: async () => ({ ...relationshipsResult, unexpected: true }),
+    });
+    await expect(executor.execute(
+      'workspace.sync.relationships.list',
+      { controllerMachineId: 'machine-a' },
+      { surface: 'agent', authority: 'account_automation', serverId: 'server-1' },
+    )).resolves.toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
   });
 
   it('executes conflict.inspect for a set-member path without approval', async () => {

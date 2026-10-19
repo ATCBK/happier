@@ -2,6 +2,17 @@ import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import type { ExecutionRunHostActionApprovalRequestV1 } from '../approvals/executionRunHostActionApprovalRequestV1.js';
 import type { TargetActionApprovalRequestV1 } from '../approvals/targetActionApprovalRequestV1.js';
 import type { ActionRequiredAuthority } from './metadata.js';
+import type { ActionExecuteResult } from './actionExecutionResult.js';
+import type { ActionExecutorContext } from './executor/types.js';
+
+type RequesterApprovalDecision = NonNullable<ActionExecutorContext['requesterApprovalDecision']>;
+
+/** Host-private one-shot custody for an approved token's live requester. */
+export type BlockingApprovalTokenExecution = Readonly<{
+  settled: Promise<void>;
+  execute(input: unknown, signal?: AbortSignal): Promise<ActionExecuteResult>;
+  dispose(): Promise<void>;
+}>;
 
 export type BlockingApprovalRequest =
   | ApprovalRequest
@@ -9,7 +20,9 @@ export type BlockingApprovalRequest =
   | ExecutionRunHostActionApprovalRequestV1;
 
 export type BlockingApprovalWaitDecision =
-  | Readonly<{ decision: 'approve'; request: BlockingApprovalRequest; decisionAuthority?: ActionRequiredAuthority }>
+  | Readonly<{ decision: 'approve'; request: BlockingApprovalRequest; decisionAuthority?: ActionRequiredAuthority;
+      requesterApprovalDecision?: RequesterApprovalDecision;
+      tokenExecution?: BlockingApprovalTokenExecution }>
   | Readonly<{ decision: 'reject'; request: BlockingApprovalRequest; reason?: string }>
   | Readonly<{ decision: 'canceled'; request: BlockingApprovalRequest; reason?: string }>;
 
@@ -37,10 +50,12 @@ export type BlockingApprovalCoordinator = Readonly<{
   }>) => void) => Readonly<{ dispose(): void }>;
   resolveBlockingDecision: (args: Readonly<{
     artifactId: string;
-    request: ApprovalRequest;
+    request: BlockingApprovalRequest;
     decision: 'approve' | 'reject';
     /** Authenticated live decision ingress only; never read from the Artifact. */
     decisionAuthority?: ActionRequiredAuthority;
+    requesterApprovalDecision?: RequesterApprovalDecision;
+    tokenExecution?: BlockingApprovalTokenExecution;
   }>) => Promise<Readonly<{ resolved: boolean }>>;
   cancelApproval: (artifactId: string, reason?: string) => void;
   dispose: (reason?: string) => void;
@@ -81,6 +96,10 @@ function readDecision(request: BlockingApprovalRequest): BlockingApprovalWaitDec
 }
 
 function readDurableDecision(request: BlockingApprovalRequest): BlockingApprovalWaitDecision | null {
+  // A persisted person label is history, never a live decision witness. The
+  // original waiter must receive the authenticated ingress's currentness check.
+  if ('requesterConfirmation' in request && request.requesterConfirmation
+    && request.status === 'approved' && request.decision?.kind === 'approve') return null;
   if ('kind' in request
     && (request.kind === 'plugin_target_action' || request.kind === 'execution_run_host_action')
     && request.status === 'approved'
@@ -142,7 +161,15 @@ export function createBlockingApprovalCoordinator(): BlockingApprovalCoordinator
         let subscription: ReturnType<BlockingApprovalChangeSubscription> | undefined;
         const waiter: Waiter = {
           resolve: (value) => {
-            if (settled) return;
+            if (settled) { if (value.decision === 'approve') void value.tokenExecution?.dispose(); return; }
+            if (value.decision === 'approve' && value.tokenExecution) {
+              const custody = value.tokenExecution;
+              const retire = () => { void custody.dispose(); };
+              signal?.addEventListener('abort', retire, { once: true });
+              if (signal?.aborted) retire();
+              value = { ...value, tokenExecution: { settled: custody.settled, execute: custody.execute,
+                dispose: async () => { signal?.removeEventListener('abort', retire); await custody.dispose(); } } };
+            }
             settled = true;
             removeWaiter(artifactId, waiter);
             void Promise.resolve().then(() => waiter.cleanup()).then(() => resolve(value), reject);
@@ -244,15 +271,18 @@ export function createBlockingApprovalCoordinator(): BlockingApprovalCoordinator
         },
       });
     },
-    resolveBlockingDecision: async ({ artifactId: rawArtifactId, request, decision, decisionAuthority }) => {
+    resolveBlockingDecision: async ({ artifactId: rawArtifactId, request, decision, decisionAuthority, tokenExecution, requesterApprovalDecision }) => {
       const artifactId = normalizeId(rawArtifactId);
       if (!artifactId) return { resolved: false };
       const waiters = waitersByArtifactId.get(artifactId);
       if (!waiters || waiters.size === 0) return { resolved: false };
 
       const resolvedDecision = readDecision(request) ?? { decision, request };
+      if (resolvedDecision.decision === 'approve' && 'requesterConfirmation' in request
+        && request.requesterConfirmation && !requesterApprovalDecision) return { resolved: false };
       const liveDecision = resolvedDecision.decision === 'approve' && decisionAuthority !== undefined
-        ? { ...resolvedDecision, decisionAuthority }
+        ? { ...resolvedDecision, decisionAuthority, ...(tokenExecution ? { tokenExecution } : {}),
+            ...(requesterApprovalDecision ? { requesterApprovalDecision } : {}) }
         : resolvedDecision;
       waitersByArtifactId.delete(artifactId);
       for (const waiter of waiters) {

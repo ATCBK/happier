@@ -84,7 +84,7 @@ describe('ActionSpec registry portability', () => {
     expect(forbiddenModules, JSON.stringify(forbiddenImportChains, null, 2)).toEqual([]);
     expect(externalImports).toEqual([]);
     expect(chunks).toHaveLength(1);
-    const browser = { URL, TextEncoder, TextDecoder, actionSchemaResult: undefined };
+    const browser = { URL, TextEncoder, TextDecoder, structuredClone, actionSchemaResult: undefined };
     runInNewContext(chunks[0]!, browser);
     expect(browser.actionSchemaResult).toEqual({
       id: 'session.spawn_new',
@@ -113,7 +113,7 @@ describe('ActionSpec registry portability', () => {
     expect(authorization.PeerTcpTunnelRelayAuthorizationV2Schema).toBe(portableAuthorization.PeerTcpTunnelRelayAuthorizationV2Schema);
     expect(authorization.ProviderBrokerExternalApiKeyRelayBindingV1Schema).toBe(portableAuthorization.ProviderBrokerExternalApiKeyRelayBindingV1Schema);
     expect(usage.ProviderAccountUsageSnapshotV1Schema).toBe(portableUsage.ProviderAccountUsageSnapshotV1Schema);
-    expect(usageRefs.ProviderAccountUsageRefsV1Schema.shape.recordIds.element).toBe(portableUsage.ProviderAccountUsageRecordIdSchema);
+    expect(usageRefs.ProviderAccountUsageRefsV1Schema.shape.recordIds._zod.def.element).toBe(portableUsage.ProviderAccountUsageRecordIdSchema);
     expect(profileTransfer.ProfileTransferContentV1Schema).toBe(profileTransferSchema.ProfileTransferContentV1Schema);
     expect(profileTransfer.ProfileTransferMutationV1Schema).toBe(profileTransferSchema.ProfileTransferMutationV1Schema);
   });

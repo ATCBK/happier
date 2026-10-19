@@ -4,19 +4,27 @@ import {
 import {
   readSessionCapabilitySelectionFromMetadataV1, writeSessionCapabilitySelectionToMetadataV1,
 } from '../../reach/sessionCapabilityMetadataV1.js';
-import type { SessionCapabilitiesSetInputV1, SessionCapabilitiesSetOutputV1 } from '../specs/sessionCapabilities.js';
+import type { SessionCapabilitiesGetOutputV1, SessionCapabilitiesSetInputV1, SessionCapabilitiesSetOutputV1 } from '../specs/sessionCapabilities.js';
+import { isMachineRpcTimeoutError, readRpcErrorCode } from '../../rpc/errors.js';
 import type { ActionExecutorContext } from './types.js';
-import { readSessionCapabilityOverrideV1, setSessionCapabilitySelectionItemV1 } from '../../reach/sessionCapabilitySelectionV1.js';
+import { areSessionCapabilitySelectionsEquivalentV1, readSessionCapabilityOverrideV1, setSessionCapabilitySelectionItemV1 } from '../../reach/sessionCapabilitySelectionV1.js';
 
 export type SessionCapabilitiesActionSnapshotV1 = Readonly<{
-  metadata: object; revision: number; sessionRunning: boolean;
+  metadata: object; sessionRunning: boolean;
   agent: CapabilityApplyTimingInputV1['agent']; launchRestart: CapabilityApplyTimingInputV1['launchRestart'];
 }>;
 export type SessionCapabilitiesActionPortV1 = Readonly<{
   readSession: (input: Readonly<{ sessionId: string; serverId?: string }>, context: ActionExecutorContext) => Promise<SessionCapabilitiesActionSnapshotV1 | null>;
   resolveItem: (input: Readonly<{ kind: SessionCapabilitiesSetInputV1['kind']; id: string; sessionId: string; serverId?: string }>, context: ActionExecutorContext) => Promise<string | null>;
-  writeMetadata: (input: Readonly<{ sessionId: string; serverId?: string; expectedRevision: number; metadata: object }>, context: ActionExecutorContext) => Promise<'updated' | 'conflict'>;
+  writeMetadata: (input: Readonly<{ sessionId: string; serverId?: string; update: (metadata: object) => object }>, context: ActionExecutorContext) => Promise<'updated' | 'conflict'>;
 }>;
+
+/** A preview deadline says nothing about whether its Session still exists. */
+export function resolveSessionCapabilitiesGetFailureV1(error: unknown): Extract<SessionCapabilitiesGetOutputV1, { ok: false }> {
+  const code = error && typeof error === 'object' ? Reflect.get(error, 'errorCode') ?? Reflect.get(error, 'code') : undefined;
+  return { ok: false, code: isMachineRpcTimeoutError(error) || readRpcErrorCode(error) === 'RPC_REQUEST_TIMEOUT'
+    || code === 'RPC_REQUEST_TIMEOUT' ? 'preview_timeout' : 'session_unavailable' };
+}
 
 /** Opaque ids win over display names; a duplicate name must never pick an arbitrary item. */
 export function resolveSessionCapabilityItemIdentityV1(items: readonly Readonly<{ id: string; name: string }>[], idOrName: string): string | null {
@@ -45,10 +53,17 @@ export async function setSessionCapabilityV1(input: Readonly<{
   if (!id) return { ok: false, code: 'not_found' };
   const current = readSessionCapabilitySelectionFromMetadataV1(snapshot.metadata);
   const previous = readSessionCapabilityOverrideV1(current, request.kind, id);
-  const selection = setSessionCapabilitySelectionItemV1(current, request.kind, id, request.state);
-  const metadata = writeSessionCapabilitySelectionToMetadataV1(snapshot.metadata,
-    request.kind === 'mcp_server' ? { mcp: selection.mcp } : { skills: selection.skills }, { sessionActive: snapshot.sessionRunning });
-  const written = await port.writeMetadata({ ...address, expectedRevision: snapshot.revision, metadata }, context);
+  const written = await port.writeMetadata({ ...address, update: metadata => {
+    const latest = readSessionCapabilitySelectionFromMetadataV1(metadata);
+    // Runtime acknowledgments may advance the tuple while identity resolution is pending.
+    // Preserve those fields, but never overwrite an intervening desired-selection edit.
+    if (!areSessionCapabilitySelectionsEquivalentV1(current, latest)) {
+      throw Object.assign(new Error('Session capability selection changed'), { code: 'conflict' });
+    }
+    const selection = setSessionCapabilitySelectionItemV1(latest, request.kind, id, request.state);
+    return writeSessionCapabilitySelectionToMetadataV1(metadata,
+      request.kind === 'mcp_server' ? { mcp: selection.mcp } : { skills: selection.skills }, { sessionActive: snapshot.sessionRunning });
+  } }, context);
   return written === 'conflict' ? { ok: false, code: 'conflict' }
     : { ok: true, state: request.state, previous, applyTiming };
 }

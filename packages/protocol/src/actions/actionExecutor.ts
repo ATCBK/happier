@@ -1,4 +1,14 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
+import { SessionDiscussionParticipantV1Schema } from '../sessions/creation/sessionDiscussionParticipantV1.js';
+import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
+import { isSessionStopConfirmed, SessionStopResultSchema } from '../sessions/control/contract.js';
+import { readActionSessionTargetField, replaceActionSessionTargetField, resolveActionSessionAddress, resolveActionSessionTargets } from './executor/sessionTargets.js';
+import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV1Schema,
+  type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
+import { AutonomousExchangeControlRequestV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
+import { AutonomousExchangeObservedRevisionV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
+import { ActionResolvedSessionTargetsV1Schema, normalizeSessionTargetV1 } from './sessionTargetV1.js';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
 import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import * as z from 'zod/mini';
@@ -42,7 +52,7 @@ import { ProjectContextUpdateInputV1Schema } from '../projects/projectContextV1.
 import { SessionPendingWithdrawInputV1Schema } from '../sessions/control/pendingWithdrawV1.js';
 import { SessionPendingMarkHandledInputV1Schema, SessionPendingDeliveryRecoveryInputV1Schema } from '../sessions/control/pendingDeliveryRecoveryV1.js';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema } from '../sessions/organization/mutations.js';
-import { isMemoryWriteActionV1, MEMORY_DOCUMENT_ACTION_IDS_V1, MemoryDocReadInputV1Schema, MemoryListInputV1Schema } from '../prompts/library/memoryActionsV1.js';
+import { isMemoryWriteActionV1, MEMORY_DOCUMENT_ACTION_IDS_V1, MemoryDocReadInputV1Schema, MemoryListInputV1Schema, MemoryDecisionSourceErrorCodeV1Schema } from '../prompts/library/memoryActionsV1.js';
 import { readMemoryDocInLibrary, listMemoryDocsInLibrary, MemoryDocFailureV1, projectLegacySkillRegistryInstallActionResultV1 } from '../prompts/library/promptLibraryActionOperations.js';
 import { isArtifactFolderActionIdV1 } from '../prompts/library/artifactFolderActionIdsV1.js';
 import { executeArtifactFolderActionV1, ArtifactOrganizationMutationFailureV1, ArtifactOrganizationMutationFailureDetailsV1Schema } from '../prompts/library/promptFolderActionsV1.js';
@@ -58,18 +68,21 @@ import {
   ProjectSourcesUpdateInputV1Schema, ProjectSourcesDeleteInputV1Schema,
 } from '../projects/sources/projectSourceV1.js';
 import { isSessionStateFieldActionId, resolveSessionStateFieldActionWrite } from './sessionStateFieldActions.js';
+import { SessionCoordinatorEnableInputV1Schema } from '../sessions/follow/sessionCoordinatorActionsV1.js';
+import { executeSessionCoordinatorEnableV1 } from './executor/sessionCoordinator.js';
 import { isProjectDefinitionActionId } from './projectDefinitionActionFamily.js';
 import { isAccountSettingActionSurfaceAllowedV1 } from './accountSettingDeclarations.js';
 import { AccountHomeContinuationInputV1Schema } from './accountHomeContinuationV1.js';
 import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 import { resolveProjectActionMachineV1 } from './executor/projectActionPlacement.js';
 import type { ApprovalPresentationContext, PublicActionInputById } from './actionSpecs.js';
+import type { ApprovalStaleReason } from '../approvals/approvalExecutionFailure.js';
 import type { SessionResumeRequestV1 } from '../sessions/control/sessionResumeRequestV1.js';
 import type { SessionGoalSetRequestV1 } from '../sessions/work/state/sessionWorkStateRpc.js';
 import { WaitActionInputV1Schema } from './specs/wait.js';
 import { ActionOperationActionIdV1Schema, ActionOperationActionInputSchemasV1 } from './specs/actionOperations.js';
 import { readActionFailureEnvelope, readFailureEnvelopeDetails } from './executor/actionFailureEnvelope.js';
-import { readUsageNoticeArtifactV1, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/usageNoticeArtifactV1.js';
+import { readAccountNoticeArtifactV1, readUsageNoticeArtifactV1, ACCOUNT_NOTICE_ARTIFACT_KIND_V1, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '../activity/usageNoticeArtifactV1.js';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { readLocalServiceControlActionRequest } from './specs/localServices.js';
 import { resolveActionOriginationPreferenceFailureV1 } from './executor/actionOriginationPreferences.js';
@@ -78,6 +91,7 @@ import type { UsageSourceActionRequest } from './executor/usageSourceActions.js'
 import { ManagedDeleteOutputV1Schema, ManagedMachineActionIdV1Schema, ManagedMachineActionInputSchemasV1 } from '../machines/managed/actionsV1.js';
 import { MachineReferenceCensusV1Schema, type MachineReferenceCensusV1 } from '../machines/machineReferenceCensusV1.js';
 import { ManagedRefusalCodeV1Schema } from '../machines/managed/providerFactsV1.js';
+import { ManagedControllerRequestFailureDetailsV1Schema } from './operations/v1.js';
 import { PrivateSecretContinuationV1Schema, type PrivateSecretContinuationV1 } from '../approvals/privateSecretContinuationV1.js';
 import { SecretFillSettlementV1Schema } from '../computer/v1.js';
 import { executeWaitActionV1 } from './executor/waitAction.js';
@@ -92,14 +106,16 @@ import { SESSION_AGENT_TRANSITION_ACTION_INPUT_SCHEMAS } from './sessionAgentTra
 import { SessionAgentTransitionRequestV1Schema } from '../sessions/agentTransition.js';
 import { parseWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionRefV1.js';
 import { ComputerSelectedTargetResponseV1Schema, ComputerTargetSelectRequestV1Schema, ComputerTargetsListResponseV1Schema, computerTargetKeyV1, type ComputerApprovalDisplayV1 } from '../computer/v1.js';
-import { isSessionFollowActionIdV1 } from '../sessions/follow/actions.js';
+import { isSessionFollowActionIdV1, SessionFollowActionInputSchemasV1 } from '../sessions/follow/actions.js';
 import { evaluateApiTokenGrantV1, isApiTokenGrantTargetMemberV1, isPermissionModeGrantedV1 } from '../auth/apiTokenGrant.js';
 import { resolveCredentialActionAdmissionV1, resolveWorkspaceWriteActionAdmissionV1, canRequestPresentUserApprovalForActionInputV1, requiresPresentUserDecisionForActionInputV1, requiresPresentUserExecutionAuthorityForActionInputV1, computeActionInputApprovalDigestV1, isPublicLinkCreationActionV1 } from './decisionAuthority.js';
+import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
+import { SessionNeedsYouRaiseInputV1Schema } from '../sessions/permissions/questionV1.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { SESSION_PERMISSION_MODES } from '../sessions/metadata/sessionPermissionModes.js';
 import { SessionPermissionRespondActionDecisionV1Schema, SessionPermissionRespondRpcParamsV1Schema } from '../sessions/permissions/respondRpcParamsV1.js';
 import { StructuredQuestionAnswersV1Schema } from '../tools/structuredQuestionAnswersV1.js';
-import { SessionWorkerPublishInputV1Schema, SessionWorkerPublishOutputV1Schema } from '../sessions/relations/workerUpdateV1.js';
+import { SessionUpdatePostInputV1Schema, SessionUpdatePostOutputV1Schema } from '../sessions/relations/workerUpdateV1.js';
 import { MachinesAgentsListInputSchema, MachinesAgentsListOutputSchema, MachineAcpInventoryDefinitionSchema } from '../capabilities/machineAgentInventory.js';
 import { resolveAcpPlatformFitV1 } from '../acp/catalog/registry/acpPlatformFitV1.js';
 import { installAcpRegistryAgentV1 } from '../acp/catalog/registry/installAcpRegistryAgentV1.js';
@@ -177,6 +193,7 @@ import {
   resolveActionCurrentSessionScopeFailure,
   resolveActionSessionListAccessFailure,
 } from './executor/sessionListAccess.js';
+import { resolveActionWorkflowSessionScopeV1 } from './executor/workflowSessionScope.js';
 import { parseSessionFollowActionResponse } from '../sessions/follow/actionTransport.js';
 import { parseSessionReadStateActionResponse } from '../sessions/readState/actionTransport.js';
 import {
@@ -193,10 +210,10 @@ import { projectActionSpecSchemaSections } from './actionSpecSections.js';
 import { resolveActionApprovalFlow } from './actionApprovalMetadata.js';
 import { parseInputTypeOptionsSourceId } from '../inputs/inputTypes.js';
 import { readInputFieldOptionsSourceId } from '../inputs/inputTypeRuntime.js';
-import { resolveActionApprovalRouting, SURFACE_AUTHORITY_AGENT_FLOOR } from './actionApprovalPolicy.js';
+import { isSharedRequesterActionV1, resolveActionApprovalRouting, SURFACE_AUTHORITY_AGENT_FLOOR } from './actionApprovalPolicy.js';
 import { resolveWorkflowRunStartedByForActionCallerV1 } from '../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { readActionCallerLedSubtreeSessionIds } from './executor/sessionLedSubtree.js';
-import { projectTargetActionApprovalInput, readPluginInstallApprovalPendingReview, resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
+import { projectApprovalExecutionForObservation, projectApprovalRequestForPublicRead, readPluginInstallApprovalPendingReview, resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
 import { resolveRequestedSessionModeId } from './sessionModeIds.js';
 import {
   findSpawnConfigOptionAliasConflicts,
@@ -225,6 +242,7 @@ import {
   ExecutionRunPermissionRespondInputSchema,
   SessionListActionInputV1Schema,
   SessionModelSetInputSchema,
+  SessionSendMessageInputSchema,
   getActionSpec,
   resolveActionExecutionPlacementForInput,
   listActionSpecs,
@@ -244,7 +262,7 @@ import {
   parseSessionListQueryActionResultV1,
 } from '../sessions/awareness/action.js';
 import { SessionListUnavailableQueryV1Schema, SessionListQueryV1Schema } from '../sessions/listing/query.js';
-import { SessionReportsToSetActionInputV1Schema, SessionReportsToSetResultV1Schema } from '../sessions/relations/sessionReportsToV1.js';
+import { SessionManagerSetActionInputV1Schema, SessionManagerSetResultV1Schema } from '../sessions/follow/sessionManagerV1.js';
 import { SessionAwarenessProjectionV1Schema } from '../sessions/awareness/projectionV1.js';
 import {
   resolveActionSurfaceAvailability,
@@ -262,6 +280,7 @@ import {
 import { WorkflowActionInputSchemasV1 } from '../workflows/actionsV1.js';
 import { ArtifactAccessActionIdV1Schema, ArtifactAccessActionInputSchemasV1, ArtifactAccessActionOutputSchemasV1, ArtifactAccessErrorCodeV1Schema } from '../artifacts/artifactAccessV1.js';
 import { ArtifactActionIdV1Schema, ArtifactActionInputSchemasV1, ArtifactActionOutputSchemasV1 } from '../artifacts/artifactActionsV1.js';
+import { executeDocReadV1, executeDocDiscussionWriteV1, executeDocEditDecisionV1 } from './executor/docCollaborationActions.js';
 import { getArtifactKindPolicyV1 } from '../artifacts/artifactSharingV1.js';
 import { WorkflowActionFailureV1Schema } from '../workflows/workflowProgressV1.js';
 import type { ActionUiPlacement } from './actionUiPlacements.js';
@@ -277,6 +296,11 @@ import {
   ApprovalRequestOriginV1Schema,
   StoredApprovalRequestSchema,
   requiresExactDaemonApprovalReplay,
+  isSessionDiscussionApprovalPublicationV1,
+  admitApprovalRequesterDecisionV1,
+  buildApprovalRequesterConfirmationV1,
+  isApprovalRequesterConfirmationBoundToOriginV1,
+  type ApprovalRequesterConfirmationV1,
   type ApprovalExecutionOriginCallerV1,
   type ApprovalExecutionOriginV1,
   type ApprovalRequest,
@@ -325,8 +349,13 @@ import {
   AutomationEventActionInputSchemasV1,
 } from '../automations/automationActionSpecsV1.js';
 import { SessionBoardActionIdV1Schema } from '../sessions/board/actionIds.js';
-import { SessionDiscussionActionIdV1Schema } from '../sessions/discussions/actionIds.js';
-import { SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1 } from '../sessions/discussions/actions.js';
+import { DiscussionActionIdV1Schema } from '../discussions/actionIds.js';
+import { DISCUSSION_ACTION_INPUT_SCHEMAS_V1, DiscussionInviteInputV1Schema,
+  DiscussionParticipantRemoveInputV1Schema, DiscussionDetailsResultV1Schema } from '../discussions/actions.js';
+import { DiscussionInviteResponseV1Schema, DiscussionRemoveParticipantResponseV1Schema, DiscussionParticipantsListResponseV1Schema,
+  type DiscussionOwnedSessionV1, type DiscussionAnswerPolicyV1 } from '../discussions/participants.js';
+import { projectDiscussionModelParticipantLaunchV1, type DiscussionModelParticipantLaunchV1 } from '../discussions/modelParticipantLaunch.js';
+import { executeDiscussionSecondOpinionV1 } from './executor/discussionSecondOpinion.js';
 import {
   SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1,
   SessionBoardItemUpsertInputV1Schema,
@@ -414,8 +443,8 @@ import {
   derivePluginSessionInputLocalIdV1,
   type SessionInputCausalPermissionAuthorityV1,
 } from '../sessions/messages/sessionInputAdmission.js';
-import { SessionDiscussionSelectionSourceV1Schema } from '../sessions/discussions/content.js';
-import { PendingRequestedActionV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartCancelInputV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
+import { DiscussionSelectionSourceV1Schema } from '../discussions/content.js';
+import { PendingRequestedActionV1Schema, SessionPendingActionSetInputV1Schema, PendingResetStartSetInputV1Schema, PendingResetStartCancelInputV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
 import {
   SessionPermissionRemoteGrantRevokeInputV1Schema,
   SessionPermissionRemoteGrantsListInputV1Schema,
@@ -464,6 +493,7 @@ import {
   type SessionCreationKeyV1,
 } from '../sessions/creation/sessionCreationIdentityV1.js';
 import {
+  SessionSpawnNewAgentAuthoringInputV2Schema,
   SessionSpawnNewInputV2Schema,
   type SessionSpawnNewInputV2,
 } from '../sessions/creation/sessionSpawnNewInputV2.js';
@@ -552,6 +582,9 @@ const SCM_ACTION_ID_SET: ReadonlySet<ActionId> = new Set([
 const SESSION_TRANSCRIPT_ACTION_ID_SET: ReadonlySet<ActionId> = new Set(
   ACTION_ID_FAMILIES_V1.session_transcripts,
 );
+function delegatesApprovalClassificationToResolvedAction(actionId: ActionId): boolean {
+  return actionId === 'action.invoke' || actionId === 'ui.current_context.command.invoke';
+}
 
 // Plugin-provenance External Session registration. The low-level ephemeral
 // viewer-lease Actions (`sessions.external.follow`/`unfollow`) are excluded
@@ -621,7 +654,7 @@ function normalizeId(raw: unknown): string {
 function resolveExecutionRunLaunchOrigin(ctx: ActionExecutorContext): ExecutionRunLaunchOrigin {
   const mountedOrigin = ExecutionRunLaunchOriginSchema.safeParse(ctx.executionRunLaunchOrigin);
   if (mountedOrigin.success) return mountedOrigin.data;
-  const discussionSource = SessionDiscussionSelectionSourceV1Schema.safeParse(ctx.sessionInputSource);
+  const discussionSource = DiscussionSelectionSourceV1Schema.safeParse(ctx.sessionInputSource);
   if (discussionSource.success) return discussionSource.data;
   const source = SessionInputSourceSessionV1Schema.safeParse(ctx.sessionInputSource);
   if (source.success) {
@@ -740,18 +773,25 @@ function buildSessionSpawnNewArgs(
   data: Readonly<Record<string, unknown>>,
   ctx: ActionExecutorContext,
   legacyMetadataLabel?: string,
+  discussionParticipantLaunch?: DiscussionModelParticipantLaunchV1,
 ): Parameters<ActionExecutorDeps['sessionSpawnNew']>[0] | null {
-  const creationKey = resolveSessionSpawnNewCreationKey(data, ctx);
+  const participant = SessionDiscussionParticipantV1Schema.safeParse(data.discussionParticipant);
+  const discussionParticipant = participant.success ? participant.data : null;
+  const creationKey = discussionParticipant?.participantSlotId ?? resolveSessionSpawnNewCreationKey(data, ctx);
   if (!creationKey) return null;
 
   if (
-    ctx.actionCaller?.kind === 'automationRun'
+    !discussionParticipant && ctx.actionCaller?.kind === 'automationRun'
     && creationKey !== `automation-run:${ctx.actionCaller.runId}`
   ) {
     return null;
   }
 
-  const callerCreationNamespace = ctx.actionCaller?.kind === 'automationRun'
+  // The actual Home's Account/tag index already supplies Home scope. A local
+  // server-profile alias or the current caller must not create another slot.
+  const callerCreationNamespace = discussionParticipant
+    ? JSON.stringify(['discussion-participant', discussionParticipant.discussionId])
+    : ctx.actionCaller?.kind === 'automationRun'
     ? `automation:${ctx.actionCaller.automationId}`
     : ctx.surface === 'plugin'
     && ctx.actionCaller?.kind === 'plugin'
@@ -783,8 +823,8 @@ function buildSessionSpawnNewArgs(
   if (!callerCreationNamespace) return null;
   const args: Record<string, unknown> = {
     ...data,
-    ...(isAgentCaller(ctx) && data.reportsTo === undefined && ctx.defaultSessionId
-      ? { reportsTo: { sessionId: normalizeId(ctx.defaultSessionId) } } : {}),
+    ...(!discussionParticipant && isAgentCaller(ctx) && data.manager === undefined && ctx.defaultSessionId
+      ? { manager: { sessionId: normalizeId(ctx.defaultSessionId) } } : {}),
     creationKey,
     sessionCreationTag: deriveSessionCreationTagV1({
       callerCreationNamespace,
@@ -816,7 +856,12 @@ function buildSessionSpawnNewArgs(
     args.creationAuthorization = { token: ctx.externalActionExecutionAuthorization.token };
   }
   assignIfDefined(args, 'workDepth', ctx.agentStartWorkDepth);
-  if (ctx.agentStartWorkDepth !== undefined) {
+  if (discussionParticipant) {
+    args.originKind = 'discussion';
+    args.discussionParticipant = discussionParticipant;
+    args.discussionParticipantLaunch = discussionParticipantLaunch
+      ?? projectDiscussionModelParticipantLaunchV1(SessionSpawnNewInputV2Schema.parse(data));
+  } else if (ctx.agentStartWorkDepth !== undefined) {
     args.originKind = ctx.actionCaller?.kind === 'workflowRun' ? 'run_step' : ctx.runtimeRunId ? 'execution_run' : 'session';
     if (ctx.actionCaller?.kind === 'workflowRun') args.originRunId = ctx.actionCaller.runId;
     if (ctx.defaultSessionId) args.originSessionId = ctx.defaultSessionId;
@@ -866,6 +911,7 @@ function sessionAttestedContextCallerFailure(
 }
 
 type ActionExecuteFailure = Extract<ActionExecuteResult, Readonly<{ ok: false }>>;
+type ActionHomeEquivalence = (left: string | null | undefined, right: string | null | undefined) => boolean;
 
 function createPermissionPolicyResult(
   ctx: ActionExecutorContext,
@@ -912,6 +958,7 @@ function resolveAgentSessionInputSource(
 ): Readonly<{
   sourceSessionId: string;
   sourceTurnId: string;
+  sourceInputId?: string;
   via: 'action' | 'mcp';
   causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
 }> | null {
@@ -1227,7 +1274,7 @@ function buildApprovalSummary(spec: ActionSpec, input?: unknown, preview?: unkno
 }
 
 function sentenceTerminated(value: string): string {
-  return /[.!?…]$/u.test(value) ? value : `${value}.`;
+  return /[.!?\u2026]$/u.test(value) ? value : `${value}.`;
 }
 
 /** One canonical summary source for every approval and present-user confirmation; domain presenters refine exact effects. */
@@ -1375,6 +1422,7 @@ async function prepareApprovalRequest(params: Readonly<{
   const preview = {
     ...customizedRecord,
     actionId: params.actionId,
+    ...(params.context.sessionTargetsV1 ? { sessionTargets: params.context.sessionTargetsV1.targets } : {}),
     // This private preview is distinct from shared observations. A declared
     // review schema validates its safe projection, including live-only inputs
     // whose raw operands stay with the originating waiter.
@@ -1551,6 +1599,7 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
   admittedInput?: unknown;
   context: ActionExecutorContext;
   targetSessionId: string | null;
+  requesterConfirmation?: ApprovalRequesterConfirmationV1;
 }>): ApprovalExecutionOriginV1 | null {
   const authority = params.context.authority ?? 'account_automation';
   const requestedSurface = parseActionSurfaceKey(params.context.surface);
@@ -1579,7 +1628,7 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
   if (sessionActionOrigin && params.context.workspaceWrites !== sessionActionOrigin.workspaceWrites) return null;
   const surface = externalAuthorization
     ? accountBinding
-      ? sessionActionOrigin ? 'agent' as const
+      ? sessionActionOrigin ? requestedSurface === 'plugin' && caller.kind === 'plugin' ? 'plugin' as const : 'agent' as const
         : requestedSurface === 'plugin' && caller.kind === 'plugin' ? 'plugin' as const
           : requestedSurface === 'cli' && caller.kind === 'host' ? 'cli' as const : 'ui' as const
       : 'api' as const
@@ -1591,12 +1640,17 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
       externalActionInputSignature = params.context.signExternalActionApprovalInput({
         actionId: params.actionId, input: params.input, authorization: externalAuthorization,
         target: params.context.externalActionTarget ?? externalAuthorization.binding.target,
+        ...(params.requesterConfirmation ? { requesterConfirmation: params.requesterConfirmation } : {}),
+        ...(params.context.sessionTargetsV1 ? { sessionTargetsV1: params.context.sessionTargetsV1 } : {}),
       });
     } catch { return null; }
   }
   const externalTarget = params.context.externalActionTarget;
   const targetSessionId = params.targetSessionId
-    || (externalTarget?.kind === 'session' ? normalizeId(externalTarget.sessionId) : '');
+    || (externalTarget?.kind === 'session' ? normalizeId(externalTarget.sessionId) : '')
+    // Account-placed automatic returns still retain their exact original
+    // input custody. This does not turn ordinary Account work into a Session target.
+    || (params.context.discussionReplyReturn ? normalizeId(params.context.defaultSessionId) : '');
   const observedServerIdentityId = normalizeId(params.context.serverIdentityId);
   if (
     externalAuthorization
@@ -1629,10 +1683,13 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
     && settingsTarget.serverIdentityId !== capturedServerIdentityId) return null;
   const serverIdentityId = capturedServerIdentityId || (settingsTarget?.kind === 'daemon' ? settingsTarget.serverIdentityId : '');
   // Account storage does not erase the originating invocation's replay custody.
-  // An unsigned Account/UI edit still needs no Machine; signed invocations and
-  // Session callers retain theirs so approval can recheck the original authority.
+  // An unsigned Account/UI edit still needs no Machine; explicit invocation
+  // targets, signed invocations and Session callers retain their replay custody.
   const machineId = settingsTarget?.kind === 'daemon'
     ? settingsTarget.machineId
+    : settingsTarget?.kind === 'account' && !externalAuthorization && caller.kind === 'host'
+      && externalTarget?.kind !== 'machine'
+      ? ''
     : normalizeId(params.context.executionRunTargetMachineId)
     || externalAuthorization?.binding.machineId
     // Placement parses the admitted payload; durable approval input may omit live-only values.
@@ -1663,11 +1720,12 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
         }
       : {}),
     ...(externalAuthorization ? { externalActionExecutionAuthorization: externalAuthorization } : {}),
-    ...((params.actionId === 'projects.script.run' || params.actionId === 'projects.compute.exec' || params.actionId === 'projects.service.relocate')
+    ...((params.actionId === 'projects.open' || params.actionId === 'projects.script.run' || params.actionId === 'projects.compute.exec' || params.actionId === 'projects.service.relocate')
       && externalAuthorization?.binding.actionId === params.actionId && params.context.originalActionEnvelope
       ? { originalActionEnvelope: params.context.originalActionEnvelope } : {}),
     ...(externalActionInputSignature ? { externalActionInputSignature } : {}),
     ...(targetSessionId ? { sessionId: targetSessionId } : {}),
+    ...(params.context.sessionTargetsV1 ? { sessionTargetsV1: params.context.sessionTargetsV1 } : {}),
     ...(params.context.sessionListAccess !== undefined
       ? { sessionListAccess: params.context.sessionListAccess }
       : {}),
@@ -1684,12 +1742,16 @@ export function buildApprovalExecutionOriginV1(params: Readonly<{
     ...(params.context.sessionInputSource !== undefined
       ? { sessionInputSource: params.context.sessionInputSource }
       : {}),
+    ...(params.context.discussionReplyReturn ? { discussionReplyReturn: params.context.discussionReplyReturn } : {}),
+    ...(params.context.actionRequestAttributionV1 ? { actionRequestAttributionV1: params.context.actionRequestAttributionV1 } : {}),
     ...(externalTarget ? { target: externalTarget } : {}),
     actionId: params.actionId,
     requestId: normalizeId(params.context.actionRequestId) || normalizeId(inputRecord.creationKey),
   };
   const parsed = ApprovalExecutionOriginV1Schema.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success || params.requesterConfirmation
+    && !isApprovalRequesterConfirmationBoundToOriginV1(params.requesterConfirmation, parsed.data)) return null;
+  return parsed.data;
 }
 
 function resolveExplicitApprovalRequestingSessionId(
@@ -1740,27 +1802,6 @@ function isApprovalRequestActionReplayAdmitted(request: ApprovalRequest, context
 
 function isBlockingApprovalRequest(request: ApprovalRequest): boolean {
   return request.approval?.flow === 'blocking';
-}
-
-async function resolveActionSessionAddress(
-  deps: ActionExecutorDeps,
-  input: Readonly<{ sessionId?: unknown; sessionTitle?: unknown }>,
-  context: ActionExecutorContext,
-): Promise<ActionSessionReferenceResolution> {
-  const sessionId = normalizeId(input.sessionId);
-  const sessionTitle = normalizeId(input.sessionTitle);
-  const serverId = normalizeId(context.serverId);
-  if (sessionId && serverId) {
-    return { kind: 'unique', address: { serverId, sessionId } };
-  }
-  if (!sessionId && !sessionTitle) return { kind: 'none' };
-  if (!deps.resolveSessionReference) return { kind: 'incomplete' };
-  return await deps.resolveSessionReference({
-    context,
-    ...(sessionId ? { sessionId } : {}),
-    ...(sessionTitle ? { sessionTitle } : {}),
-    ...(context.signal ? { signal: context.signal } : {}),
-  });
 }
 
 function projectSessionReferenceFailure(
@@ -2115,23 +2156,6 @@ function projectActionObservationInput(actionId: ActionId, input: unknown): unkn
   return project ? project(input) : input;
 }
 
-function projectApprovalExecutionForDecisionObservation(
-  request: ApprovalRequest,
-): ApprovalRequest['execution'] {
-  const execution = request.execution;
-  if (!execution?.ok) return execution;
-
-  // Approval decisions and result custody are deliberately different powers.
-  // The exact originating continuation reads the encrypted Artifact body; a
-  // caller observing `approval.request.decide` receives the target Action's
-  // existing observation projection instead. Released V1 history can name a
-  // retired Action, so preserve it when no current projection owner exists.
-  const actionId = ActionIdSchema.safeParse(request.actionId);
-  if (!actionId.success) return execution;
-  const project = getActionSpec(actionId.data).projectObservationOutput;
-  return project ? { ...execution, result: project(execution.result) } : execution;
-}
-
 function readUnavailableApprovalReplayOrigin(request: ApprovalRequest): ActionExecuteFailure | null {
   if (request.v !== 2 || !requiresExactDaemonApprovalReplay(request)
     || normalizeId(request.executionOriginV1.machineId)) return null;
@@ -2143,16 +2167,22 @@ function readUnavailableApprovalReplayOrigin(request: ApprovalRequest): ActionEx
 }
 
 function buildApprovalDecisionResult(request: ApprovalRequest, liveResult?: ActionExecuteResult): ActionExecuteResult {
-  const observedExecution = projectApprovalExecutionForDecisionObservation(request);
-  return {
-    ok: true,
-    result: {
+  const observedExecution = projectApprovalExecutionForObservation(request);
+  try {
+    return {
       ok: true,
-      status: request.status,
-      ...(observedExecution ? { execution: observedExecution } : {}),
-      ...(liveResult?.ok ? { liveExecution: liveResult } : {}),
-    },
-  };
+      // Typed Action results can retain native optional members. The decision
+      // is a strict JSON observation, after the target's custody projection.
+      result: projectNativeJsonValueForTransport({
+        ok: true,
+        status: request.status,
+        ...(observedExecution ? { execution: observedExecution } : {}),
+        ...(liveResult?.ok ? { liveExecution: liveResult } : {}),
+      }),
+    };
+  } catch {
+    return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+  }
 }
 
 export function buildActionExecuteResultFromRecordedApprovalExecution(request: ApprovalRequest): ActionExecuteResult | null {
@@ -2207,6 +2237,11 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
   const rawCodes = [errorRecord.code, errorRecord.errorCode]
     .map((value) => (typeof value === 'string' ? String(value).trim() : ''))
     .filter((value) => value.length > 0);
+  const managedRequest = ManagedControllerRequestFailureDetailsV1Schema.safeParse(rawDetails);
+  if (managedRequest.success && (!managedRequest.data.code || rawCodes.includes(managedRequest.data.code))) {
+    const code = managedRequest.data.code ?? rawCodes[0] ?? 'managed_controller_request_failed';
+    return { errorCode: code, error: code, details: managedRequest.data };
+  }
   const sessionListUnavailable = SessionListUnavailableQueryV1Schema.safeParse(rawDetails);
   if (sessionListUnavailable.success && rawCodes.includes(sessionListUnavailable.data.code)) {
     return {
@@ -2219,12 +2254,17 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
     SessionControlErrorCodeSchema.safeParse(value).success
     || SpawnSessionErrorCodeSchema.safeParse(value).success
     || ArtifactAccessErrorCodeV1Schema.safeParse(value).success
+    || MemoryDecisionSourceErrorCodeV1Schema.safeParse(value).success
     || SkillUnavailableReasonV1Schema.safeParse(value).success
     || value === 'workspace_sync_update_required'
     // Host HTTP readers have already validated the strict authentication refusal.
     || value === 'credential_scope_denied'
+    // The selected transport can lack an adapter for an admitted operation.
+    || value === 'unsupported_action'
+    || value === 'project_requester_home_unavailable'
     // Transport owners have already decided whether a mutation may have committed.
     || value === 'outcome_unknown'
+    || value === 'MACHINE_RPC_TIMEOUT'
     || value === 'cancelled'
     || value === 'version_mismatch'
     || value === 'prompt_bundle_invalid_kind'
@@ -2272,6 +2312,26 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
     error: message || 'action_failed',
     ...(details !== undefined ? { details } : {}),
   };
+}
+
+export async function classifyApprovalExecutionOriginCurrentness(args: Readonly<{
+  check: (reportStale: (reason: ApprovalStaleReason) => void) => Promise<boolean>;
+}>): Promise<Readonly<
+  { status: 'current' }
+  | { status: 'stale'; reason: ApprovalStaleReason }
+  | { status: 'requester_home_unavailable'; error: unknown }
+>> {
+  let reason: ApprovalStaleReason = 'origin_not_current';
+  try {
+    const current = await args.check(value => { reason = value; });
+    return current ? { status: 'current' } : { status: 'stale', reason };
+  } catch (error) {
+    if (normalizeActionExecutorThrownError(error).errorCode === 'project_requester_home_unavailable') {
+      return { status: 'requester_home_unavailable', error };
+    }
+    reason = 'currentness_read_failed';
+    return { status: 'stale', reason };
+  }
 }
 
 function completeActionResult(
@@ -2423,7 +2483,9 @@ function completeSpawnActionResult(result: unknown): ActionExecuteResult {
 function redactMemoryActionInput(actionId: string, input: unknown): unknown {
   const request = readRecord(input);
   return isMemoryWriteActionV1(actionId) && typeof request.text === 'string'
-    ? { ...request, text: redactBugReportSensitiveText(request.text) } : input;
+    ? { ...request, text: redactBugReportSensitiveText(request.text),
+      ...(actionId === 'memory.decision.save' && typeof request.reason === 'string'
+        ? { reason: redactBugReportSensitiveText(request.reason) } : {}) } : input;
 }
 
 function isActionFamilyId<Id extends string>(
@@ -2534,6 +2596,68 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && !ctx.rpcSessionAuthorization;
   }
 
+  async function readDiscussionPublicationPolicy(actionId: string, input: unknown, ctx: ActionExecutorContext,
+    originalSessionId?: string): Promise<Readonly<{ ok: true; answerPolicy: DiscussionAnswerPolicyV1 }> | ActionExecuteFailure | null> {
+    if (actionId !== 'discussion.post' && actionId !== 'discussion.reply') return null;
+    const publisherSessionId = originalSessionId || (ctx.actionCaller?.kind === 'session' ? normalizeId(ctx.actionCaller.sessionId)
+      : ctx.actionCaller?.kind === 'host' && ctx.discussionReplyReturn ? normalizeId(ctx.defaultSessionId) : '');
+    if (!publisherSessionId) return null;
+    if (!deps.discussionAction) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+    let rawRoster: unknown;
+    try {
+      rawRoster = await deps.discussionAction({ actionId: 'discussion.participants.list',
+        input: { discussionId: readRecord(input).discussionId }, context: ctx,
+        ...(ctx.signal ? { signal: ctx.signal } : {}) });
+    } catch (error) {
+      const failure = normalizeActionExecutorThrownError(error);
+      return { ok: false, ...failure };
+    }
+    const failure = readActionFailureEnvelope(rawRoster);
+    if (failure) return failure;
+    const roster = DiscussionParticipantsListResponseV1Schema.safeParse(rawRoster);
+    if (!roster.success || roster.data.discussionId !== readRecord(input).discussionId) {
+      return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    }
+    const participant = roster.data.participants.find(entry => entry.participant.kind === 'session'
+      ? entry.participant.sessionId === publisherSessionId : 'sessionId' in entry && entry.sessionId === publisherSessionId);
+    return participant ? { ok: true, answerPolicy: participant.answerPolicy }
+      : { ok: false, errorCode: 'discussion_participant_required', error: 'discussion_participant_required' };
+  }
+
+  async function requireDiscussionDraftReviewAuthority(request: ApprovalRequest, ctx: ActionExecutorContext): Promise<ActionExecuteFailure | null> {
+    if (resolveHostStampedAuthority(ctx) === 'present_user' || request.v !== 2) return null;
+    const origin = request.executionOriginV1;
+    if (!isSessionDiscussionApprovalPublicationV1(request)) return null;
+    const policy = await readDiscussionPublicationPolicy(request.actionId, request.actionArgs,
+      { ...ctx, serverId: origin.serverId, runtimeAccountId: origin.accountId },
+      origin.caller.kind === 'session' ? origin.caller.sessionId : origin.sessionId);
+    if (policy && !policy.ok) return policy;
+    return policy?.answerPolicy === 'drafts_for_approval'
+      ? { ok: false, errorCode: 'present_user_required', error: 'present_user_required' } : null;
+  }
+
+  /** Structural transport admission only; the asking Session alone decides manager eligibility. */
+  function hasSessionQuestionAnswerOrigin(actionId: string, ctx: ActionExecutorContext): boolean {
+    if (actionId !== 'session.user_action.answer' || ctx.signal?.aborted
+      || ctx.externalActionCredential || ctx.externalActionExecutionAuthorization) return false;
+    if (ctx.actionCaller?.kind === 'plugin') {
+      return SessionActionRpcOriginV1Schema.safeParse(ctx.readSessionActionRpcOrigin?.()).success;
+    }
+    if (ctx.actionCaller?.kind !== 'session') return false;
+    const source = ctx.sessionInputSource;
+    if (!source || typeof source !== 'object' || !('sourceSessionId' in source)
+      || source.sourceSessionId !== ctx.actionCaller.sessionId) return false;
+    const permissionMode = ctx.callerPermissionMode ? parseAgentPermissionIntentV1Alias(ctx.callerPermissionMode) : null;
+    if (ctx.callerPermissionMode && !permissionMode) return false;
+    return SessionActionRpcOriginV1Schema.safeParse({
+      v: 1, caller: ctx.actionCaller,
+      sourceTurnId: 'sourceTurnId' in source ? source.sourceTurnId : undefined,
+      ...('sourceInputId' in source ? { sourceInputId: source.sourceInputId } : {}),
+      callerPermissionMode: permissionMode,
+      requestId: ctx.actionRequestId,
+    }).success;
+  }
+
   function requiredAuthorityFailure(
     spec: ActionSpec,
     ctx: ActionExecutorContext,
@@ -2542,13 +2666,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // Request admission is not replay authority. Only the decision owner may
     // stamp the human authority after claiming a present-user approval below.
     if (ctx.bypassApprovals && canRequestPresentUserApprovalForActionInputV1(spec, input)
-      && resolveHostStampedAuthority(ctx) !== 'present_user') {
+      && resolveHostStampedAuthority(ctx) !== 'present_user' && !hasSessionQuestionAnswerOrigin(spec.id, ctx)) {
       return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
     }
     const admission = resolveCredentialActionAdmissionV1({
       spec, authority: resolveHostStampedAuthority(ctx), grant: ctx.externalActionCredential?.grant ?? null,
       surface: ctx.surface, hasExternalCredential: ctx.externalActionCredential !== undefined,
       actionInput: input,
+      hasSessionQuestionAnswerOrigin: hasSessionQuestionAnswerOrigin(spec.id, ctx),
     });
     return admission.ok ? null : { ok: false, errorCode: admission.errorCode, error: admission.errorCode };
   }
@@ -2753,8 +2878,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     expectedOriginServerId?: string | null;
     expectedServerIdentityId?: string | null;
     signal?: AbortSignal;
+    reportStale?: (reason: ApprovalStaleReason) => void;
   }>): Promise<boolean> {
-    if (args.request.v !== 2 || !deps.isApprovalExecutionOriginCurrent) return false;
+    const stale = (reason: ApprovalStaleReason) => { args.reportStale?.(reason); return false; };
+    if (args.request.v !== 2) return stale('origin_version');
+    if (!deps.isApprovalExecutionOriginCurrent) return stale('currentness_owner_unavailable');
     const origin = ApprovalExecutionOriginV1Schema.safeParse(args.request.executionOriginV1);
     if (
       !origin.success
@@ -2762,20 +2890,22 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         origin.data.externalActionExecutionAuthorization === undefined
         || origin.data.externalActionInputSignature === undefined
       ))
-      || origin.data.actionId !== args.request.actionId
-      || (args.expectedOriginServerId !== undefined
-        && args.expectedOriginServerId !== origin.data.serverId)
-      || (args.expectedServerIdentityId !== undefined
-        && args.expectedServerIdentityId !== origin.data.serverIdentityId)
     ) {
-      return false;
+      return stale('origin_invalid');
     }
-    const ownerCurrent = await deps.isApprovalExecutionOriginCurrent({
-      origin: origin.data,
-      request: args.request,
-      ...(args.signal ? { signal: args.signal } : {}),
-    }).catch(() => false);
-    if (!ownerCurrent) return false;
+    if (origin.data.actionId !== args.request.actionId) return stale('origin_action_changed');
+    if (args.expectedOriginServerId !== undefined && args.expectedOriginServerId !== origin.data.serverId
+      || args.expectedServerIdentityId !== undefined && args.expectedServerIdentityId !== origin.data.serverIdentityId) return stale('home_changed');
+    const currentness = await classifyApprovalExecutionOriginCurrentness({
+      check: async reportStale => await deps.isApprovalExecutionOriginCurrent!({
+        origin: origin.data,
+        request: args.request,
+        ...(args.signal ? { signal: args.signal } : {}),
+        reportStale,
+      }),
+    });
+    if (currentness.status === 'requester_home_unavailable') throw currentness.error;
+    if (currentness.status === 'stale') return stale(currentness.reason);
     if (!origin.data.runId || !origin.data.runOccurrenceId) return true;
     try {
       const currentRun = await deps.executionRunGet(
@@ -2783,14 +2913,40 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         { runId: origin.data.runId, includeStructured: false },
         { ...(args.signal ? { signal: args.signal } : {}) },
       );
-      const run = readRecord(readRecord(currentRun).run);
+      // The CLI Session adapter returns its service envelope; Machine and app
+      // adapters return the payload. Use the public Run Action's one normalizer.
+      const observed = completeExecutionRunServiceActionResult('execution.run.get', currentRun);
+      if (!observed.ok) return stale('currentness_read_failed');
+      const run = readRecord(readRecord(observed.result).run);
       const inputTurns = readRecord(run.inputTurns);
       return normalizeId(run.runId) === origin.data.runId
-        && normalizeId(inputTurns.occurrenceId) === origin.data.runOccurrenceId;
+        && normalizeId(inputTurns.occurrenceId) === origin.data.runOccurrenceId || stale('run_occurrence_changed');
     } catch {
-      return false;
+      return stale('currentness_read_failed');
     }
   }
+
+  async function readMatchingApprovalRequestReceipt(args: Readonly<{
+    artifactId: string;
+    serverId: string | null;
+    request: ApprovalRequest;
+  }>): Promise<ApprovalRequest | null> {
+    try {
+      const persisted = StoredApprovalRequestSchema.safeParse(await deps.approvalsGet?.({
+        artifactId: args.artifactId, serverId: args.serverId,
+      }));
+      if (persisted.success && sameStrictJsonValue(persisted.data, JSON.parse(JSON.stringify(args.request)))) {
+        return persisted.data;
+      }
+    } catch { /* An unreadable or different receipt cannot establish a committed write. */ }
+    return null;
+  }
+
+  const approvalContextUnavailable = (): ActionExecuteFailure => ({
+    ok: false,
+    errorCode: 'approval_context_unavailable',
+    error: 'approval_context_unavailable',
+  });
 
   async function executeApprovedActionForRequest(args: Readonly<{
     artifactId: string;
@@ -2817,6 +2973,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     | Readonly<{ ok: true; request: ApprovalRequest; exec: ActionExecuteResult }>
     | Readonly<{ ok: false; errorCode: string; error: string }>
   > {
+    if (args.request.v === 2) {
+      const admission = await admitApprovalRequesterDecisionV1({ request: args.request, context: args.ctx });
+      if (!admission.ok) return admission;
+    }
     if (!deps.approvalsUpdate) {
       return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:approvals' };
     }
@@ -2829,7 +2989,6 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       errorCode: 'approval_execution_outcome_unknown',
       error: 'approval_execution_outcome_unknown',
     });
-
     const persistPreExecutionFailure = async (
       request: ApprovalRequest,
       failure: ActionExecuteFailure,
@@ -2854,18 +3013,39 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               error: failure.error,
             },
       };
-      const updated = await deps.approvalsUpdate!({
-        artifactId: args.artifactId,
-        request: nextFailed,
-        serverId: args.artifactServerId,
-      });
+      const persistenceFailure = async (fallback: ActionExecuteFailure) => {
+        const persisted = await readMatchingApprovalRequestReceipt({
+          artifactId: args.artifactId, serverId: args.artifactServerId, request: nextFailed,
+        });
+        if (persisted) return { ok: true as const, request: persisted, exec: failure };
+        // A pre-effect check may fail after the execution claim. Losing that
+        // settlement acknowledgement cannot advertise an unclaimed retry.
+        return request.v === 2 && request.status === 'executing' ? executionOutcomeUnknown() : fallback;
+      };
+      let updated: unknown;
+      try {
+        updated = await deps.approvalsUpdate!({
+          artifactId: args.artifactId,
+          request: nextFailed,
+          serverId: args.artifactServerId,
+        });
+      } catch {
+        return await persistenceFailure(approvalContextUnavailable());
+      }
       const updateFailure = readActionFailureEnvelope(updated);
-      return updateFailure ?? { ok: true, request: nextFailed, exec: failure };
+      return updateFailure ? await persistenceFailure(updateFailure) : { ok: true, request: nextFailed, exec: failure };
     };
 
-    const latestRaw = deps.approvalsGet
-      ? await deps.approvalsGet({ artifactId: args.artifactId, serverId: args.artifactServerId })
-      : null;
+    let latestRaw: unknown;
+    try {
+      latestRaw = deps.approvalsGet
+        ? await deps.approvalsGet({ artifactId: args.artifactId, serverId: args.artifactServerId })
+        : null;
+    } catch {
+      // This invocation has not attempted an execution claim. Repeating the
+      // same decision still goes through the existing claim owner.
+      return approvalContextUnavailable();
+    }
     const latestParsed = StoredApprovalRequestSchema.safeParse(latestRaw);
     const latestRequest = latestParsed.success ? latestParsed.data : null;
     if (latestRequest) {
@@ -2904,6 +3084,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ok: false,
         errorCode: 'approval_stale',
         error: 'approval_stale',
+        details: { reason: 'live_invocation_unavailable' },
       });
     }
     // `approvalsUpdate` has already claimed the open→approved transition at
@@ -2912,8 +3093,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // terminal rows discovered above remain authoritative and idempotent.
     let request = args.request;
     if (request.v === 2) {
+      const admission = await admitApprovalRequesterDecisionV1({ request, context: args.ctx });
+      if (!admission.ok) return await persistPreExecutionFailure(request, admission);
+      let staleReason: ApprovalStaleReason = 'origin_not_current';
       const originIsCurrentBeforeClaim = await isApprovalExecutionOriginCurrentForRequest({
         request,
+        reportStale: reason => { staleReason = reason; },
         expectedOriginServerId: args.expectedOriginServerId ?? args.artifactServerId,
         ...(args.expectedServerIdentityId !== undefined
           ? { expectedServerIdentityId: args.expectedServerIdentityId }
@@ -2925,6 +3110,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ok: false,
           errorCode: 'approval_stale',
           error: 'approval_stale',
+          details: { reason: staleReason },
         });
       }
       const executingRequest: ApprovalRequest = {
@@ -2932,16 +3118,30 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         status: 'executing',
         updatedAtMs: Math.max(Date.now(), request.updatedAtMs),
       };
-      const claimed = await deps.approvalsUpdate({
-        artifactId: args.artifactId,
-        request: executingRequest,
-        serverId: args.artifactServerId,
-      });
+      let claimed: unknown;
+      let claimThrew = false;
+      try {
+        claimed = await deps.approvalsUpdate({
+          artifactId: args.artifactId,
+          request: executingRequest,
+          serverId: args.artifactServerId,
+        });
+      } catch (error) {
+        claimThrew = true;
+        claimed = { ok: false, ...normalizeActionExecutorThrownError(error) };
+      }
       const claimFailure = readActionFailureEnvelope(claimed);
       if (claimFailure) {
-        const persistedRaw = deps.approvalsGet
-          ? await deps.approvalsGet({ artifactId: args.artifactId, serverId: args.artifactServerId })
-          : null;
+        let persistedRaw: unknown;
+        try {
+          persistedRaw = deps.approvalsGet
+            ? await deps.approvalsGet({ artifactId: args.artifactId, serverId: args.artifactServerId })
+            : null;
+        } catch {
+          // An unreadable claim receipt cannot prove that execution custody
+          // stayed unclaimed, including after a lost write acknowledgement.
+          return executionOutcomeUnknown();
+        }
         const persistedParsed = StoredApprovalRequestSchema.safeParse(persistedRaw);
         const persisted = persistedParsed.success ? persistedParsed.data : null;
         if (persisted) {
@@ -2952,8 +3152,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if (persisted.v === 2 && persisted.status === 'executing') {
             return executionOutcomeUnknown();
           }
+          if ((claimThrew || claimFailure.errorCode === 'update_failed')
+            && persisted.status === 'approved' && persisted.decision?.kind === 'approve' && !persisted.execution
+            && sameStrictJsonValue(persisted, JSON.parse(JSON.stringify(request)))) {
+            // A returned HTTP failure and a thrown/lost acknowledgement have
+            // the same pre-effect recovery only when the exact approved input
+            // is still unclaimed. A different receipt cannot invite replay.
+            return approvalContextUnavailable();
+          }
         }
-        return claimFailure;
+        return claimThrew ? executionOutcomeUnknown() : claimFailure;
       }
       request = executingRequest;
     }
@@ -2963,14 +3171,27 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const origin = request.v === 2
       ? ApprovalExecutionOriginV1Schema.safeParse(request.executionOriginV1)
       : null;
-    const originIsCurrent = await isApprovalExecutionOriginCurrentForRequest({
-      request,
-      expectedOriginServerId: args.expectedOriginServerId ?? args.artifactServerId,
-      ...(args.expectedServerIdentityId !== undefined
-        ? { expectedServerIdentityId: args.expectedServerIdentityId }
-        : {}),
-      ...(args.ctx.signal ? { signal: args.ctx.signal } : {}),
-    });
+    let staleReason: ApprovalStaleReason = 'origin_not_current';
+    let originIsCurrent: boolean;
+    try {
+      originIsCurrent = await isApprovalExecutionOriginCurrentForRequest({
+        request,
+        reportStale: reason => { staleReason = reason; },
+        expectedOriginServerId: args.expectedOriginServerId ?? args.artifactServerId,
+        ...(args.expectedServerIdentityId !== undefined
+          ? { expectedServerIdentityId: args.expectedServerIdentityId }
+          : {}),
+        ...(args.ctx.signal ? { signal: args.ctx.signal } : {}),
+      });
+    } catch (error) {
+      // The claim is durable, but no Action has been entered yet. An unavailable
+      // Home recheck must settle that claim rather than escape to the outer
+      // request catch and strand it as executing without an effect receipt.
+      const failure = normalizeActionExecutorThrownError(error);
+      return await persistPreExecutionFailure(request, {
+        ok: false, ...failure, error: redactBugReportSensitiveText(failure.error),
+      });
+    }
     // Origin verification above uses the original signed arguments, never the
     // person's choice. Only then admit the choice through the Action's owner.
     const admittedReplay = resolveApprovalRequestExecutionInput(request);
@@ -2987,12 +3208,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const retainsHostInvocation = Boolean(retainedHostLifetime
       && 'actionId' in retainedHostLifetime && retainedHostLifetime.actionId === actionId
       && args.ctx.signal === retainedHostLifetime.signal && !retainedHostLifetime.signal.aborted
-      && requestSurface === 'ui' && request.approval?.flow === 'blocking');
-    if (actionId !== null && getActionSpec(actionId).approvalPolicy?.retainUiFieldIntent === true
-      && requestSurface === 'ui' && request.approval?.flow === 'blocking'
-      && !retainsHostInvocation && args.retainedPluginSettingsIntent?.() !== true) {
-      return await persistPreExecutionFailure(request, { ok: false, errorCode: 'approval_stale', error: 'approval_stale' });
-    }
+      && requestSurface === (retainedHostLifetime.surface ?? 'cli') && request.approval?.flow === 'blocking');
     const retainsHostOperation = Boolean(retainedHostLifetime
       && 'operationId' in retainedHostLifetime
       && args.ctx.signal === retainedHostLifetime.signal
@@ -3004,6 +3220,20 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && origin.data.requestId === args.ctx.actionRequestId
       && request.v === 2
       && request.approval?.flow === 'blocking');
+    // UI/CLI normally return durable deferred proposals. A blocking proposal
+    // instead retains a private invocation, field or operation. Losing that
+    // lifetime must not turn its Artifact into a detached effect executor.
+    const requiresRetainedHostInvocation = (requestSurface === 'ui' || requestSurface === 'cli')
+      && request.approval?.flow === 'blocking'
+      && custodySpec?.approvalInputCustody !== 'live_only'
+      && custodySpec?.approvalResultCustody !== 'live_only';
+    const retainsUiFieldIntent = actionId !== null
+      && getActionSpec(actionId).approvalPolicy?.retainUiFieldIntent === true
+      && requestSurface === 'ui' && args.retainedPluginSettingsIntent?.() === true;
+    if (requiresRetainedHostInvocation && !retainsHostInvocation && !retainsHostOperation && !retainsUiFieldIntent) {
+      return await persistPreExecutionFailure(request, { ok: false, errorCode: 'approval_stale', error: 'approval_stale',
+        details: { reason: 'live_invocation_unavailable' } });
+    }
     const persistedDirectoryApproval = request.actionId === 'session.spawn_new'
       ? SessionCreationDirectoryApprovalV1Schema.safeParse(
         request.sessionCreationDirectoryApproval,
@@ -3030,6 +3260,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // decided by the approval owner; original provenance stays on the Artifact.
     const replayPlacement = actionId !== null
       ? resolveActionExecutionPlacementForInput(getActionSpec(actionId), replayInput) : null;
+    const sessionDiscussionPublication = isSessionDiscussionApprovalPublicationV1(request);
     const appOwnedReplay = actionId !== null && origin?.success && originIsCurrent
       && !requiresExactDaemonApprovalReplay(request)
       && (replayPlacement === 'account' || replayPlacement === 'client')
@@ -3042,6 +3273,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && readRecord(replayInput).serverId === origin.data.serverId
       ? { ...readRecord(replayInput), serverId: replayServerId }
       : replayInput;
+    const reviewedSessionTargets = origin?.success ? origin.data.sessionTargetsV1 : undefined;
+    // Reuse the verified Home-profile mapping above without changing the
+    // reviewed Session ids or moving targets belonging to a different Home.
+    const replaySessionTargets = reviewedSessionTargets && appOwnedReplay && origin?.success
+      && replayServerId && replayServerId !== origin.data.serverId
+      ? { ...reviewedSessionTargets, targets: reviewedSessionTargets.targets.map(target => (
+          target.serverId === origin.data.serverId ? { ...target, serverId: replayServerId } : target
+        )) }
+      : reviewedSessionTargets;
     let executionContext: ActionExecutorContext = {
       ...(args.ctx.signal ? { signal: args.ctx.signal } : {}),
       ...(retainsHostOperation ? {
@@ -3097,12 +3337,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ...(origin.data.sessionAgentSpawnPolicyV1 !== undefined ? { sessionAgentSpawnPolicyV1: origin.data.sessionAgentSpawnPolicyV1 } : {}),
         ...(origin.data.causalPermissionAuthority !== undefined ? { causalPermissionAuthority: origin.data.causalPermissionAuthority } : {}),
         ...(origin.data.sessionInputSource !== undefined ? { sessionInputSource: origin.data.sessionInputSource } : {}),
+        ...(origin.data.discussionReplyReturn ? { discussionReplyReturn: origin.data.discussionReplyReturn } : {}),
+        ...(origin.data.actionRequestAttributionV1 ? { actionRequestAttributionV1: origin.data.actionRequestAttributionV1 } : {}),
         ...(origin.data.externalActionExecutionAuthorization
           && 'authentication' in origin.data.externalActionExecutionAuthorization.binding
           && origin.data.externalActionExecutionAuthorization.binding.sessionActionOrigin?.workspaceWrites
           ? { workspaceWrites: origin.data.externalActionExecutionAuthorization.binding.sessionActionOrigin.workspaceWrites }
           : {}),
       } : {}),
+      ...(replaySessionTargets ? { sessionTargetsV1: replaySessionTargets } : {}),
       actionCaller: appOwnedReplay ? { kind: 'host' } : replayCaller,
       ...(args.retainedPluginSettingsIntent
         ? { isPluginSettingsIntentCurrent: args.retainedPluginSettingsIntent } : {}),
@@ -3115,10 +3358,35 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               && origin?.success && originIsCurrent ? { presentUserApproval: {
                 artifactId: args.artifactId, actionId, requestId: origin.data.requestId,
                 inputDigest: computeActionInputApprovalDigestV1(actionId, executionInput),
+                requestSurface: origin.data.surface,
               } } : {}),
           } : {}),
       placement: null,
+      // Ordinary same-Account consent is witnessed by the validated origin, not the editable decision label.
+      ...(actionId !== null && (isMemoryWriteActionV1(actionId) || sessionDiscussionPublication) && request.v === 2
+        && !request.requesterConfirmation
+        && request.status === 'executing' && request.decision?.kind === 'approve'
+        && request.decision.authority === 'present_user' && origin?.success && originIsCurrent
+        && resolveHostStampedAuthority(args.ctx) === 'present_user'
+        && origin.data.accountId ? { presentUserApproval: {
+          artifactId: args.artifactId, actionId, requestId: origin.data.requestId,
+          inputDigest: computeActionInputApprovalDigestV1(actionId, executionInput),
+          requestSurface: origin.data.surface,
+          decidingAccountId: origin.data.accountId,
+          decidedAtMs: request.decision.decidedAtMs,
+        } } : {}),
+      ...(request.v === 2 && request.requesterConfirmation && origin?.success
+        && request.status === 'executing' && args.ctx.requesterApprovalDecision ? { presentUserApproval: {
+          artifactId: args.artifactId, actionId: request.actionId, requestId: origin.data.requestId,
+          inputDigest: request.requesterConfirmation.inputDigest,
+          requestSurface: origin.data.surface,
+          decidingAccountId: args.ctx.requesterApprovalDecision.actor.accountId,
+          ...(request.decision ? { decidedAtMs: request.decision.decidedAtMs } : {}),
+        } } : {}),
       bypassApprovals: true,
+      ...(sessionDiscussionPublication && originIsCurrent && request.v === 2
+        && request.status === 'executing' && request.decision?.kind === 'approve'
+        ? { approvedActionReplay: { artifactId: args.artifactId } } : {}),
       ...(request.actionId === 'workspace.sync.conflict.resolve'
         ? { actionRequestId: args.artifactId }
         : {}),
@@ -3132,6 +3400,17 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }
         : {}),
     };
+    // The verified origin binds its creator-local profile to this Home even
+    // when that profile does not exist on the deciding device. Keep this
+    // comparison evidence private to this replay; never rewrite stored refs,
+    // retry identities, or the captured transport's routing context.
+    const sameReplayHome: ActionHomeEquivalence | undefined = appOwnedReplay && origin?.success
+      && origin.data.serverIdentityId && origin.data.serverIdentityId === args.ctx.serverIdentityId
+      ? (left, right) => isSameHome(
+          left === origin.data.serverId ? origin.data.serverIdentityId : left,
+          right === origin.data.serverId ? origin.data.serverIdentityId : right,
+          executionContext,
+        ) : undefined;
     const executeConfidential = async (): Promise<ActionExecuteResult> => {
       const continuation = args.privateSecretContinuation;
       if (!continuation || !deps.confidentialSecretFill) {
@@ -3168,17 +3447,26 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: true, result: { status: 'unknown', code: 'delivery_unknown' } };
       }
     };
+    let effectAttempted = false;
     const exec = await (async (): Promise<ActionExecuteResult> => {
-      if (!originIsCurrent || !actionId
-        || actionId === 'session.board.item.upsert' && !readRecord(replayInput).reviewedVisual) {
+      if (request.v === 2) {
+        const admission = await admitApprovalRequesterDecisionV1({ request, context: args.ctx });
+        if (!admission.ok) return admission;
+      }
+      if (!originIsCurrent) {
+        return { ok: false, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: staleReason } };
+      }
+      if (!actionId || actionId === 'session.board.item.upsert' && !readRecord(replayInput).reviewedVisual) {
         return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
       }
-      if (args.privateSecretContinuation) return await executeConfidential();
+      if (args.privateSecretContinuation) { effectAttempted = true; return await executeConfidential(); }
       if (!requestSurface) return { ok: false, errorCode: 'approval_execution_surface_invalid', error: 'approval_execution_surface_invalid' };
       if (actionId === 'account.apiTokens.create' && args.tokenExecution) {
         // Retained human credentials select the native effect, while current
         // authority, surface and Action policy still belong to core admission.
-        return await executeCoreTerminal(actionId, executionInput, executionContext, true, undefined, undefined, true, args.tokenExecution);
+        effectAttempted = true;
+        return await executeCoreTerminal(actionId, executionInput, executionContext, true, undefined, undefined, true, args.tokenExecution,
+          false, sameReplayHome);
       }
       if (actionId === 'account.apiTokens.create' && origin?.success
         && origin.data.externalActionExecutionAuthorization?.binding.sessionActionOrigin) {
@@ -3188,19 +3476,31 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       // Strict Artifact decoding intentionally loses private ports. Only exact
       // daemon custody reacquires them from the unchanged, verified signed root;
       // app-owned Account replay continues with the approving app's authority.
-      const prepared = authorization && requiresExactDaemonApprovalReplay(request)
-        && deps.prepareApprovalExecutionAuthorization
-        ? await deps.prepareApprovalExecutionAuthorization({ authorization,
-            ...(args.ctx.signal ? { signal: args.ctx.signal } : {}) }).catch(() => null)
-        : undefined;
+      let prepared: Awaited<ReturnType<NonNullable<ActionExecutorDeps['prepareApprovalExecutionAuthorization']>>> | undefined;
+      try {
+        prepared = authorization && requiresExactDaemonApprovalReplay(request)
+          && deps.prepareApprovalExecutionAuthorization
+          ? await deps.prepareApprovalExecutionAuthorization({ authorization,
+              ...(args.ctx.signal ? { signal: args.ctx.signal } : {}) })
+          : undefined;
+      } catch (error) {
+        const failure = normalizeActionExecutorThrownError(error);
+        return { ok: false, ...failure, error: redactBugReportSensitiveText(failure.error) };
+      }
       try {
         if (prepared === null || prepared && (!authorization
           || prepared.authorization.token !== authorization.token
           || !sameStrictJsonValue(prepared.authorization.binding, authorization.binding))) {
-          return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+          return { ok: false, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: 'requester_account_unavailable' } };
         }
         if (prepared) executionContext = { ...executionContext, externalActionExecutionAuthorization: prepared.authorization };
-        return await executeCoreTerminal(actionId, executionInput, executionContext, true, undefined, undefined, true);
+        if (request.v === 2) {
+          const admission = await admitApprovalRequesterDecisionV1({ request, context: args.ctx });
+          if (!admission.ok) return admission;
+        }
+        effectAttempted = true;
+        return await executeCoreTerminal(actionId, executionInput, executionContext, true, undefined, undefined, true, undefined,
+          false, sameReplayHome);
       } finally {
         await prepared?.dispose?.();
       }
@@ -3245,13 +3545,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       status: exec.ok ? 'executed' : 'failed',
       updatedAtMs: executedAtMs,
       execution: persistedExec.ok
-        ? { executedAtMs, effectAttempted: true, ok: true, result: persistedExec.result }
+        ? { executedAtMs, effectAttempted, ok: true, result: persistedExec.result }
         : request.v === 2
           ? projectApprovalExecutionFailureV2({
               request,
               failure: persistedExec,
               executedAtMs,
-              effectAttempted: true,
+              effectAttempted,
             })
           : { executedAtMs, ok: false, errorCode: persistedExec.errorCode, error: persistedExec.error },
     };
@@ -3274,14 +3574,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       // Read the exact receipt once; never replay the effect or infer its
       // outcome from the resource's later state. The private live result stays
       // with this invocation, even when durable history contains its projection.
-      try {
-        const persisted = StoredApprovalRequestSchema.safeParse(await deps.approvalsGet?.({
-          artifactId: args.artifactId, serverId: args.artifactServerId,
-        }));
-        if (persisted.success && sameStrictJsonValue(persisted.data, JSON.parse(JSON.stringify(nextExecuted)))) {
-          return { ok: true as const, request: persisted.data, exec };
-        }
-      } catch { /* An unreadable receipt remains outcome-unknown. */ }
+      const persisted = await readMatchingApprovalRequestReceipt({
+        artifactId: args.artifactId, serverId: args.artifactServerId, request: nextExecuted,
+      });
+      if (persisted) return { ok: true as const, request: persisted, exec };
       return executionOutcomeUnknown();
     };
     let updated: unknown;
@@ -3317,7 +3613,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       // Artifact ids are Account-scoped. Read without a device-local profile
       // filter, then derive and verify every replay identity from the strict
       // immutable request itself.
-      const existingRaw = await deps.approvalsGet({ artifactId, serverId: null });
+      let existingRaw: unknown;
+      try {
+        existingRaw = await deps.approvalsGet({ artifactId, serverId: null });
+      } catch {
+        return approvalContextUnavailable();
+      }
       if (!existingRaw) {
         return { ok: false, errorCode: 'approval_not_found', error: 'approval_not_found' };
       }
@@ -3326,6 +3627,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: false, errorCode: 'approval_invalid', error: 'approval_invalid' };
       }
       const request = parsed.data;
+      // A durable decision, including a terminal receipt, never reconstructs Bob's live proof.
+      if (request.v === 2 && request.requesterConfirmation) {
+        return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+      }
       const parsedRequestActionId = ActionIdSchema.safeParse(request.actionId);
       if ((parsedRequestActionId.success && isApprovalActionId(parsedRequestActionId.data))
         || isInternalActionId(request.actionId)) {
@@ -3348,6 +3653,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: false, errorCode: 'approval_not_approved', error: 'approval_not_approved' };
       }
 
+      const draftReviewFailure = await requireDiscussionDraftReviewAuthority(request,
+        { ...(args.callerAuthority ? { authority: args.callerAuthority } : {}), ...(args.signal ? { signal: args.signal } : {}) });
+      if (draftReviewFailure) return draftReviewFailure;
       const requiresHumanDecision = parsedRequestActionId.success
         && (requiresPresentUserDecisionForActionInputV1(getActionSpec(parsedRequestActionId.data), request.actionArgs)
           || (parsedRequestActionId.data === 'plugins.install'
@@ -3389,7 +3697,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         artifactServerId,
         ctx: {
           ...(args.signal ? { signal: args.signal } : {}),
-          ...(requiresHumanDecision && args.callerAuthority === 'present_user'
+          ...(args.callerAuthority === 'present_user'
             ? { authority: 'present_user' as const } : {}),
         },
         observeExecution: true,
@@ -3410,6 +3718,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     artifactId: string;
     decision: 'approve' | 'reject';
     decisionAuthority: ActionRequiredAuthority;
+    requesterApprovalDecision?: ActionExecutorContext['requesterApprovalDecision'];
     request: ApprovalRequest;
     serverId: string | null;
   }>): Promise<boolean> {
@@ -3423,6 +3732,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         artifactId: args.artifactId,
         decision: args.decision,
         decisionAuthority: args.decisionAuthority,
+        ...(args.requesterApprovalDecision ? { requesterApprovalDecision: args.requesterApprovalDecision } : {}),
         request: args.request,
         serverId: args.serverId,
         ...(tokenExecution ? { tokenExecution } : {}),
@@ -3439,6 +3749,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     context: ActionExecutorContext;
     memoryAdmission?: MemoryWriteAdmissionV1;
     legacyMetadataLabel?: string;
+    /** Selected intent, before ordinary Role/Profile/permission resolution. Not authority. */
+    discussionParticipantLaunch?: DiscussionModelParticipantLaunchV1;
     /** The host runner has already admitted this exact effect, including a scope refusal. */
     operationObserved?: true;
   }>;
@@ -3510,7 +3822,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       prepared?: PreparedCoreAdmission;
       hostInternal?: boolean;
       approvalReplay?: boolean;
+      /** This private dispatch already holds a concrete address, even if its ID resembles shorthand. */
+      sessionTargetLeaf?: boolean;
       approvedApiTokenExecution?: import('./blockingApprovalCoordinator.js').BlockingApprovalTokenExecution;
+      /** Private Home binding from the already-verified approval replay owner. */
+      sameHome?: ActionHomeEquivalence;
     }>,
   ): Promise<ActionExecuteResult | ActionPrepareResult> => {
     const existingAdmission = options?.prepared;
@@ -3575,7 +3891,51 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ? classifyExecutionRunStartFailure(invalid, 'noRunCreated')
         : invalid;
     }
+    const discussionParticipantLaunch = existingAdmission?.discussionParticipantLaunch
+      ?? (actionId === 'session.spawn_new' && readRecord(parsed.data).discussionParticipant !== undefined
+        ? projectDiscussionModelParticipantLaunchV1(SessionSpawnNewInputV2Schema.parse(parsed.data)) : undefined);
     let admittedInput = redactMemoryActionInput(actionId, parsed.data);
+    if (spec.sessionTarget && !options?.sessionTargetLeaf) {
+      if (ctx.sessionTargetsV1) {
+        const snapshot = ActionResolvedSessionTargetsV1Schema.safeParse(ctx.sessionTargetsV1);
+        if (!snapshot.success || snapshot.data.actionId !== actionId || snapshot.data.field !== spec.sessionTarget.field) {
+          return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        }
+      } else {
+        if (options?.approvalReplay && readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field) !== undefined) {
+          try {
+            if (typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field)) !== 'string') {
+              return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+            }
+          } catch {
+            return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          }
+        }
+        const targets = await resolveActionSessionTargets(deps, { actionId, declaration: spec.sessionTarget,
+          input: readRecord(admittedInput), context: ctx });
+        if (targets && 'ok' in targets) return targets;
+        if (targets) ctx = { ...ctx, sessionTargetsV1: targets };
+      }
+    }
+    if (actionId === 'session.exchange.control') {
+      const exchangeInput = readRecord(admittedInput);
+      if (exchangeInput.observedRevision === undefined) {
+        if (existingAdmission || options?.approvalReplay || !deps.sessionExchangePrepare) {
+          return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        }
+        const sessionId = resolveSessionIdFromInput(admittedInput, ctx);
+        if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
+        const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+        const observedRevision = await deps.sessionExchangePrepare({ context: ctx, sessionId,
+          originInputLocalId: String(exchangeInput.originInputLocalId),
+          ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+        if (!AutonomousExchangeObservedRevisionV1Schema.safeParse(observedRevision).success) {
+          return { ok: false, errorCode: 'exchange_unavailable', error: 'exchange_unavailable' };
+        }
+        admittedInput = spec.inputSchema.parse({ ...exchangeInput, observedRevision });
+      }
+    }
     if (actionId === 'account.apiTokens.create' && readRecord(admittedInput).encryption !== undefined
       && resolveHostStampedAuthority(ctx) !== 'present_user') {
       // Wrapping material belongs to the trusted device that will disclose the
@@ -3606,6 +3966,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       admittedInput = preparedInput.data;
     }
     let memoryAdmission = existingAdmission?.memoryAdmission;
+    let memoryDuplicateReview: MemoryWriteAdmissionV1['duplicateReview'];
     if (isMemoryWriteActionV1(actionId)) {
       if (ctx.approvalOrigin?.kind === 'transcript_tool_call') ctx = { ...ctx, approvalOrigin: { ...ctx.approvalOrigin, toolInput: admittedInput } };
       if (!deps.memoryLibrary) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
@@ -3615,6 +3976,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
         memoryAdmission ??= current;
+        memoryDuplicateReview = current.duplicateReview;
         admittedInput = bindMemoryWriteApprovalInputV1(actionId, admittedInput, memoryAdmission);
       } catch (error) {
         const code = ctx.signal?.aborted ? 'cancelled' : error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
@@ -3627,10 +3989,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       && !isSameHome(readRecord(admittedInput).serverId, ctx.serverId, ctx)) {
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
     }
-    const credentialFailure = await admitCredentialScope(actionId, ctx, admittedInput);
+    // The Action grant was checked before target reads. Selector intent is not
+    // a credential target; each concrete leaf re-enters full target admission.
+    const credentialFailure = spec.sessionTarget && ctx.sessionTargetsV1
+      ? null : await admitCredentialScope(actionId, ctx, admittedInput);
     if (credentialFailure) return credentialFailure;
     const workspaceFailure = workspaceWriteFailure(spec, admittedInput, ctx);
     if (workspaceFailure) return workspaceFailure;
+    if (memoryDuplicateReview) return { ok: true, result: memoryDuplicateReview };
     if (isActionFamilyId(actionId, WidgetDefinitionActionIdV1Schema) || isActionFamilyId(actionId, WidgetLayoutFragmentActionIdV1Schema)) {
       const account = readWidgetDefinitionActionAccountV1(admittedInput) ?? readWidgetLayoutFragmentActionAccountV1(admittedInput);
       if (!account) return { ok: false, errorCode: 'widget_scope_unavailable', error: 'widget_scope_unavailable' };
@@ -3689,12 +4055,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         { sessionId: boundWidgetSession.sessionId }, ctx, { sessionId: 'current_session' }, deps);
       if (boundScopeFailure) return boundScopeFailure;
     }
-    const currentSessionScopeFailure = await resolveActionCurrentSessionScopeFailure(
+    // Selector scope is checked on each concrete leaf, before that leaf's
+    // approval/effect admission. The intent itself is not a Session identity.
+    const currentSessionScopeFailure = ctx.sessionTargetsV1 || hasSessionQuestionAnswerOrigin(actionId, ctx)
+      ? null : await resolveActionCurrentSessionScopeFailure(
       actionId,
       admittedInput,
       ctx,
       spec.contextualDefaults,
       deps,
+      resolved => { ctx = { ...ctx, agentStartContext: resolved }; },
     );
     if (currentSessionScopeFailure) {
       return classifyExecutionRunStartPreDispatchFailure(actionId, currentSessionScopeFailure);
@@ -3834,6 +4204,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         ? readRecord(readRecord(data.input).meta).permissionMode : data.permissionModeOverride)
       : { ok: true };
     if (!sessionMessageSendAdmission.ok) return sessionMessageSendAdmission.error;
+    if (actionId === 'session.message.send' && data.returnToSessionId !== undefined
+      && (isAgentCaller(ctx) || ctx.actionCaller?.kind === 'plugin')) {
+      return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+    }
     let requiredDirectoryApproval: SessionCreationDirectoryApprovalV1 | null = null;
     let requiredHandoffTargetApproval: HandoffTargetReplacementApprovalV1 | null = null;
     if (!existingAdmission && actionId === 'session.spawn_new' && deps.sessionSpawnNewDirectoryApprovalPreflight) {
@@ -3847,13 +4221,20 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       try {
         directoryPreflight = await deps.sessionSpawnNewDirectoryApprovalPreflight({
           input: spawnInput.data,
+          context: ctx,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
-      } catch {
+      } catch (error) {
+        const rpcCode = readRpcErrorCode(error);
+        if (!ctx.signal?.aborted && (rpcCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE || rpcCode === RPC_ERROR_CODES.METHOD_NOT_FOUND)) {
+          return completeSpawnActionResult({ type: 'error', code: 'incompatible_target', retryable: false,
+            incompatibleTarget: { reason: 'target_preparation_rpc_unavailable' } });
+        }
+        const forbidden = rpcCode === RPC_ERROR_CODES.FORBIDDEN;
         return completeSpawnActionResult({
           type: 'error',
-          code: ctx.signal?.aborted ? 'cancelled' : 'machine_offline',
-          retryable: !ctx.signal?.aborted,
+          code: ctx.signal?.aborted ? 'cancelled' : forbidden ? 'permission_denied' : 'spawn_failed',
+          retryable: !ctx.signal?.aborted && !forbidden,
         });
       }
       if (directoryPreflight.type === 'error') {
@@ -3872,7 +4253,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           // doing so would settle the original artifact as executed without
           // either its approved proof or the Action effect.
           if (ctx.bypassApprovals) {
-            return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+            return { ok: false, errorCode: 'approval_stale', error: 'approval_stale',
+              details: { reason: replayedApproval.success ? 'directory_changed' : 'directory_approval_missing' } };
           }
           requiredDirectoryApproval = directoryPreflight.approval;
         }
@@ -3993,7 +4375,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       : actionId === 'widgets.item.network.set' ? 'danger' as const
       : actionId === 'widgets.definition.create' && readRecord(readRecord(readRecord(admittedInput).definition).body).kind === 'html' ? 'danger' as const
       : !existingAdmission && memoryAdmission ? memoryAdmission.safety
-      : !existingAdmission && actionId === 'session.reports_to.set'
+      : !existingAdmission && actionId === 'session.manager.set'
       ? isAgentCaller(ctx)
         && (normalizeId(ctx.defaultSessionId) === String(readRecord(admittedInput).sessionId)
           || (await readActionCallerLedSubtreeSessionIds(deps, ctx))?.has(String(readRecord(admittedInput).sessionId)))
@@ -4011,12 +4393,36 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           && !ctx.externalActionCredential && !ctx.externalActionExecutionAuthorization
         : ctx.operationAcceptance?.operationId === hostApprovalLifetime.operationId
           && ctx.actionCaller?.kind === 'host' && ctx.authority === 'account_automation'));
+    // Dispatch wrappers do not describe the eventual effect. Their resolved
+    // Action is the single approval-classification and confirmation owner.
+    const sharedRequesterRequest = !delegatesApprovalClassificationToResolvedAction(actionId)
+      && isSharedRequesterActionV1(ctx);
+    const sharedRequesterEffect = spec.sideEffectClass === 'external' && sharedRequesterRequest;
+    // Speaking policy is the participant owner's deliberate publication choice,
+    // independent of the Settings confirmation policy and its normal bypasses.
+    let discussionDraftReviewRequired = false;
+    const discussionPolicy = await readDiscussionPublicationPolicy(actionId, admittedInput, ctx);
+    if (discussionPolicy) {
+      if (!discussionPolicy.ok) return discussionPolicy;
+      if (discussionPolicy.answerPolicy === 'reads_only') {
+        return { ok: false, errorCode: 'discussion_answer_policy_denied', error: 'discussion_answer_policy_denied' };
+      }
+      const review = ctx.presentUserApproval;
+      const reviewed = Boolean(ctx.approvedActionReplay && review?.artifactId === ctx.approvedActionReplay.artifactId
+        && review.actionId === actionId && review.requestId === ctx.actionRequestId && review.decidingAccountId
+        && review.inputDigest === computeActionInputApprovalDigestV1(actionId, admittedInput));
+      discussionDraftReviewRequired = discussionPolicy.answerPolicy === 'drafts_for_approval' && !reviewed;
+      if (discussionDraftReviewRequired && options?.approvalReplay) {
+        return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+      }
+    }
     const resolveBaseApprovalRouting = (context: ActionExecutorContext) => resolveActionApprovalRouting({
       actionId,
       spec,
       input: admittedInput,
       context,
       settings: context.actionsSettings,
+      ...(sharedRequesterEffect ? { defaultConfirmation: true } : {}),
       ...(retainHostOperationApproval ? { retainHostOperationApproval: true } : {}),
       ...(computerSelection ? { computerConsentGranted: computerSelection.consentGranted } : {}),
       ...(contextualSafety === undefined ? {} : { defaultSafety: contextualSafety }),
@@ -4029,7 +4435,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         || visualAdmission && context.surface === 'ui' && resolveHostStampedAuthority(context) === 'present_user'
         ? deps.isActionApprovalRequired?.(actionId, context, admittedInput) : undefined,
     });
-    const baseApprovalRouting = existingAdmission
+    const baseApprovalRouting = existingAdmission || hasSessionQuestionAnswerOrigin(actionId, ctx)
       ? { required: false, flow: 'deferred' as const, result: 'none' as const }
       : resolveBaseApprovalRouting(ctx);
     const folderApprovalRouting = folderCreateInput && !existingAdmission ? resolveActionApprovalRouting({
@@ -4055,7 +4461,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     if (confidentialChoiceRequired && ctx.bypassApprovals) {
       return { ok: false, errorCode: 'confidential_choice_required', error: 'confidential_choice_required' };
     }
-    const approvalRouting = confidentialChoiceRequired
+    const approvalRouting = confidentialChoiceRequired || discussionDraftReviewRequired
       ? { required: true, flow: 'deferred' as const, result: 'required' as const }
       : (!existingAdmission && actionId === 'workspace.sync.conflict.resolve' && !ctx.bypassApprovals)
       ? { required: true, flow: 'deferred' as const, result: 'required' as const }
@@ -4108,7 +4514,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               }
               // Re-enter current authority and domain admission with the existing
               // exact-Action confirmation fact, never an approval bypass.
-              return await executeCoreTerminal(actionId, admittedInput, confirmedContext, true, legacyMetadataLabel);
+              return await executeCoreTerminal(actionId, discussionParticipantLaunch ? parsed.data : admittedInput,
+                confirmedContext, true, legacyMetadataLabel);
             });
           }
         }
@@ -4140,7 +4547,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             }
             const admission: PreparedCoreAdmission = {
               actionId,
-              input: admittedInput,
+              input: discussionParticipantLaunch ? parsed.data : admittedInput,
               context: { ...ctx, bypassApprovals: true },
               ...(legacyMetadataLabel ? { legacyMetadataLabel } : {}),
             };
@@ -4199,7 +4606,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ...(requestingSessionId ? { sessionId: requestingSessionId } : {}),
         } as const;
         const initialApprovalActionArgs = actionId === 'session.spawn_new'
-          ? materializeSessionSpawnApprovalInput(admittedInput, ctx)
+          ? materializeSessionSpawnApprovalInput(discussionParticipantLaunch ? parsed.data : admittedInput, ctx)
           : admittedInput;
         const preparedApproval = await prepareApprovalRequest({
           deps,
@@ -4220,12 +4627,18 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
         if ('ok' in preparedApproval) return preparedApproval;
         const approvalActionArgs = preparedApproval.actionArgs;
+        const requesterConfirmation = sharedRequesterRequest
+          ? buildApprovalRequesterConfirmationV1({ context: ctx, actionId, input: approvalActionArgs }) : null;
+        if (sharedRequesterRequest && !requesterConfirmation) {
+          return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
+        }
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId,
           input: approvalActionArgs,
           admittedInput,
           context: ctx,
           targetSessionId,
+          ...(requesterConfirmation ? { requesterConfirmation } : {}),
         });
         if (!executionOriginV1) {
           return classifyExecutionRunStartPreDispatchFailure(actionId, {
@@ -4250,6 +4663,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ...(requestedSurface ? { requestedSurface } : {}),
           ...(approvalOrigin ? { origin: approvalOrigin } : {}),
           executionOriginV1,
+          ...(requesterConfirmation ? { requesterConfirmation } : {}),
+          ...(discussionDraftReviewRequired ? { discussionDraftReview: true as const } : {}),
           approval: {
             flow: approvalRouting.flow,
             result: approvalRouting.result,
@@ -4274,12 +4689,21 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }
 
           const effectiveServerId = normalizeId(ctx.serverId) || null;
-          const decision = await deps.approvalsWaitForDecision({
-            artifactId,
-            request,
-            serverId: effectiveServerId,
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
+          ctx.operationOwnerUpdate?.update({ progress: { phase: 'waiting_for_approval', label: 'Waiting for approval',
+            approval: { kind: 'approval_request_created', artifactId, actionId } } });
+          let decision: Awaited<ReturnType<NonNullable<ActionExecutorDeps['approvalsWaitForDecision']>>>;
+          try {
+            decision = await deps.approvalsWaitForDecision({
+              artifactId,
+              request,
+              serverId: effectiveServerId,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
+            });
+          } finally {
+            // Consent, rejection, cancellation and failed observation all leave
+            // this hold. The retained domain owner supplies its next progress.
+            ctx.operationOwnerUpdate?.update({ progress: {} });
+          }
 
           if (decision.decision === 'reject' || decision.decision === 'canceled') {
             const nowRejected = Date.now();
@@ -4333,7 +4757,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           // Only the exact live decision continuation carries authenticated
           // authority. Artifact notifications and durable reads carry none.
           const continuationContext = decision.decisionAuthority === 'present_user'
-            ? { ...ctx, authority: 'present_user' as const }
+            ? { ...ctx, authority: 'present_user' as const,
+              ...(decision.requesterApprovalDecision ? { requesterApprovalDecision: decision.requesterApprovalDecision } : {}) }
             : ctx;
 
           if (options?.prepareOnly) {
@@ -4386,8 +4811,31 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       // Request admission may permit automation to propose a human-only Action.
       // A policy waiver suppresses that proposal, never grants execution authority.
       if (canRequestPresentUserApprovalForActionInputV1(spec, admittedInput)
-        && resolveHostStampedAuthority(ctx) !== 'present_user') {
+        && resolveHostStampedAuthority(ctx) !== 'present_user' && !hasSessionQuestionAnswerOrigin(actionId, ctx)) {
         return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+      }
+
+      if (spec.sessionTarget && ctx.sessionTargetsV1) {
+        const snapshot = ctx.sessionTargetsV1;
+        const runTargets = async (): Promise<ActionExecuteResult> => {
+          const results: Array<{ target: ActionSessionAddress; result: ActionExecuteResult }> = [];
+          for (const target of snapshot.targets) {
+            // Every leaf passes current credential, scope, enabled-state and
+            // domain admission. Only the already-reviewed selection is reused.
+            const result: ActionExecuteResult = ctx.signal?.aborted
+              ? { ok: false, errorCode: 'cancelled', error: 'cancelled' }
+              : await executeCoreTerminal(actionId, replaceActionSessionTargetField(readRecord(admittedInput), snapshot.field, target.sessionId),
+                  { ...ctx, serverId: target.serverId, sessionTargetsV1: undefined, bypassApprovals: true }, true,
+                  legacyMetadataLabel, undefined, options?.approvalReplay === true, undefined, true);
+            results.push({ target, result });
+          }
+          return snapshot.selector
+            ? { ok: true, result: { kind: 'fanout', results } }
+            : results[0].result;
+        };
+        return options?.prepareOnly
+          ? ready({ actionId, input: admittedInput, context: ctx }, runTargets)
+          : await runTargets();
       }
 
       if (options?.prepareOnly) {
@@ -4395,6 +4843,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           actionId,
           input: admittedInput,
           context: ctx,
+          ...(discussionParticipantLaunch ? { discussionParticipantLaunch } : {}),
           ...(memoryAdmission ? { memoryAdmission } : {}),
           ...(legacyMetadataLabel ? { legacyMetadataLabel } : {}),
         });
@@ -4406,9 +4855,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return await runActionOperation({ actionId, input: admittedInput, context: ctx,
           execute: operationContext => executeCoreTerminal(actionId, admittedInput, operationContext, true, legacyMetadataLabel, {
             actionId, input: admittedInput, context: operationContext, operationObserved: true,
+            ...(discussionParticipantLaunch ? { discussionParticipantLaunch } : {}),
             ...(memoryAdmission ? { memoryAdmission } : {}),
             ...(legacyMetadataLabel ? { legacyMetadataLabel } : {}),
-          }, options?.approvalReplay === true),
+          }, options?.approvalReplay === true, undefined, options?.sessionTargetLeaf === true),
         });
       }
 
@@ -4473,8 +4923,15 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         assertMemoryHomeV1(deps.memoryLibrary, ctx.serverId);
         if (isMemoryWriteActionV1(actionId)) {
           if (!memoryAdmission) return { ok: false, errorCode: 'memory_exposure_unavailable', error: 'memory_exposure_unavailable' };
-          return completeActionResult(await executeMemoryWriteV1({ port: deps.memoryLibrary, actionId, input: admittedInput, context: ctx,
-            admission: memoryAdmission, sessionStateFieldSet: deps.sessionStateFieldSet }));
+          const proof = ctx.presentUserApproval;
+          const accountId = ctx.expectedAccountId ?? ctx.runtimeAccountId;
+          const approvedBy = proof?.actionId === actionId && proof.decidingAccountId && proof.decidedAtMs !== undefined
+            && proof.inputDigest === computeActionInputApprovalDigestV1(actionId, admittedInput)
+            ? { accountId: proof.decidingAccountId, atMs: proof.decidedAtMs }
+            : ctx.bypassApprovals !== true && resolveHostStampedAuthority(ctx) === 'present_user' && accountId
+              ? { accountId, atMs: (deps.memoryLibrary.nowMs ?? Date.now)() } : null;
+          return { ok: true, result: await executeMemoryWriteV1({ port: deps.memoryLibrary, actionId, input: admittedInput, context: ctx,
+            admission: memoryAdmission, approvedBy, sessionStateFieldSet: deps.sessionStateFieldSet }) };
         }
         if (actionId === 'memory.read') {
           const request = MemoryDocReadInputV1Schema.parse(admittedInput);
@@ -4679,7 +5136,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           )) {
             return { ok: false, errorCode: 'review_comment_permission_denied', error: 'review_comment_permission_denied' };
           }
-          reviewCommentPrincipal ??= { actor: { kind: 'workflow', runId: ctx.actionCaller.runId } };
+          // Caller-supplied projections never supply authority. Reconstruct it
+          // from this host-derived invocation and authenticated accepted leaves.
+          const workflowScope = await resolveActionWorkflowSessionScopeV1(actionId, ctx, deps);
+          ctx.signal?.throwIfAborted();
+          const { workflowScope: _suppliedScope, ...principal } = reviewCommentPrincipal ?? {};
+          reviewCommentPrincipal = { ...principal, actor: { kind: 'workflow', runId: ctx.actionCaller.runId },
+            ...(workflowScope ? { workflowScope } : {}) };
         } else if (ctx.surface === 'agent' || ctx.surface === 'mcp') {
           const actor = reviewCommentPrincipal?.actor;
           if (actor?.kind !== 'agent' || (ctx.defaultSessionId && ctx.defaultSessionId !== actor.sessionId)) {
@@ -4933,6 +5396,17 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return readActionFailureEnvelope(result) ?? { ok: true, result: ArtifactAccessActionOutputSchemasV1[artifactAccessActionId].parse(result) };
       }
 
+      if (actionId === 'doc.read') return await executeDocReadV1(parsed.data, ctx, deps,
+        options?.sameHome ?? ((left, right) => isSameHome(left, right, ctx)));
+      if (actionId === 'doc.comment.reply' || actionId === 'doc.edit.propose') {
+        return await executeDocDiscussionWriteV1(actionId, parsed.data, ctx, deps.discussionAction,
+          options?.sameHome ?? ((left, right) => isSameHome(left, right, ctx)));
+      }
+      if (actionId === 'doc.edit.accept' || actionId === 'doc.edit.decline') {
+        return await executeDocEditDecisionV1(actionId, parsed.data, ctx, deps,
+          options?.sameHome ?? ((left, right) => isSameHome(left, right, ctx)));
+      }
+
       const artifactActionId = isActionFamilyId(actionId, ArtifactActionIdV1Schema) ? actionId : null;
       if (artifactActionId !== null) {
         if (!deps.artifactAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
@@ -4940,22 +5414,23 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const internalKindRefusal = { ok: false as const, errorCode: 'artifact_kind_internal', error: 'artifact_kind_internal' };
         // The incumbent Inbox may read and dismiss its captured Account's private
         // notices. This does not admit ordinary private-document authoring or egress.
-        const isUsageNoticeInboxCaller = ctx.surface === 'ui' && ctx.authority === 'present_user'
+        const isNoticeInboxCaller = ctx.surface === 'ui' && ctx.authority === 'present_user'
           && (ctx.actionCaller === undefined || ctx.actionCaller.kind === 'host')
           && Boolean(ctx.expectedAccountId) && ctx.externalActionCredential === undefined
           && ctx.externalActionExecutionAuthorization === undefined && ctx.rpcSessionAuthorization === undefined;
-        const readOwnedUsageNotice = (artifact: Readonly<{ ownerAccountId: string; access: string;
+        const readOwnedNotice = (artifact: Readonly<{ ownerAccountId: string; access: string;
           publicAudience?: string; header: unknown; body: unknown }>) => {
-          if (!isUsageNoticeInboxCaller || artifact.ownerAccountId !== ctx.expectedAccountId
+          if (!isNoticeInboxCaller || artifact.ownerAccountId !== ctx.expectedAccountId
             || artifact.access !== 'owner' || artifact.publicAudience !== 'none') return null;
-          return readUsageNoticeArtifactV1(artifact);
+          return readAccountNoticeArtifactV1(artifact) ?? readUsageNoticeArtifactV1(artifact);
         };
-        const isUsageNoticeDismissInput = artifactActionId === 'artifact.update'
-          && isUsageNoticeInboxCaller && 'header' in artifactInput
-          && artifactInput.header.kind === USAGE_NOTICE_ARTIFACT_KIND_V1 && 'body' in artifactInput;
+        const isNoticeUpdateInput = artifactActionId === 'artifact.update'
+          && isNoticeInboxCaller && 'header' in artifactInput
+          && (artifactInput.header.kind === USAGE_NOTICE_ARTIFACT_KIND_V1
+            || artifactInput.header.kind === ACCOUNT_NOTICE_ARTIFACT_KIND_V1) && 'body' in artifactInput;
         // Generic documents consume the same kind exclusion as the browser. Specialized
         // owners keep their native transport; retagging cannot bypass their write policy.
-        if ('header' in artifactInput && !getArtifactKindPolicyV1(artifactInput.header.kind).browserListed && !isUsageNoticeDismissInput
+        if ('header' in artifactInput && !getArtifactKindPolicyV1(artifactInput.header.kind).browserListed && !isNoticeUpdateInput
           || artifactActionId === 'artifact.publish_from_file' && 'kind' in artifactInput
             && !getArtifactKindPolicyV1(artifactInput.kind).browserListed) return internalKindRefusal;
         if ((artifactActionId === 'artifact.update' || artifactActionId === 'artifact.delete' || artifactActionId === 'artifact.export'
@@ -4971,13 +5446,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if (!admitted.success || admitted.data.artifact && admitted.data.artifact.artifactId !== artifactInput.artifactId)
             return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
           if (!admitted.data.artifact) return { ok: false, errorCode: 'not_found', error: 'not_found' };
-          if (!getArtifactKindPolicyV1(admitted.data.artifact.header.kind).browserListed || isUsageNoticeDismissInput) {
+          if (!getArtifactKindPolicyV1(admitted.data.artifact.header.kind).browserListed || isNoticeUpdateInput) {
             const current = admitted.data.artifact;
-            const notice = readOwnedUsageNotice(current);
-            if (!isUsageNoticeDismissInput || !notice || notice.status !== 'open'
+            const notice = readOwnedNotice(current);
+            if (!isNoticeUpdateInput || !notice || notice.status !== 'open'
               || !('body' in artifactInput) || artifactInput.body !== current.body
-              || !('header' in artifactInput)
-              || !sameStrictJsonValue(artifactInput.header, { ...current.header, status: 'dismissed' })) return internalKindRefusal;
+              || !('header' in artifactInput)) return internalKindRefusal;
+            const dismiss = sameStrictJsonValue(artifactInput.header, { ...current.header, status: 'dismissed' });
+            const updated = readAccountNoticeArtifactV1({ header: artifactInput.header, body: artifactInput.body });
+            const markRead = notice.kind === ACCOUNT_NOTICE_ARTIFACT_KIND_V1 && !notice.resolved
+              && (notice.type === 'update' || notice.type === 'mention') && notice.readAt === undefined
+              && updated?.readAt !== undefined
+              && sameStrictJsonValue(artifactInput.header, { ...current.header, readAt: updated.readAt });
+            if (!dismiss && !markRead) return internalKindRefusal;
           }
           ctx.signal?.throwIfAborted();
         }
@@ -4989,7 +5470,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (artifactActionId === 'artifact.get') {
           const opened = ArtifactActionOutputSchemasV1['artifact.get'].parse(result);
           if (opened.artifact && !getArtifactKindPolicyV1(opened.artifact.header.kind).browserListed
-            && !readOwnedUsageNotice(opened.artifact)) return internalKindRefusal;
+            && !readOwnedNotice(opened.artifact)) return internalKindRefusal;
           return { ok: true, result: opened };
         }
         if (artifactActionId === 'artifact.list') {
@@ -5197,6 +5678,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ? await deps.nextPendingSession(ctx)
           : { status: 'unavailable' });
       }
+      if (actionId === 'session.pending.action.set') {
+        if (!deps.sessionPendingActionSet) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+        return completeActionResult(await deps.sessionPendingActionSet({
+          ...SessionPendingActionSetInputV1Schema.parse(parsed.data), context: ctx,
+        }));
+      }
       if (actionId === 'session.pending.withdraw') {
         if (!deps.sessionPendingWithdraw) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
         return completeActionResult(await deps.sessionPendingWithdraw({
@@ -5337,23 +5824,135 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return failure ?? { ok: true, result };
       }
 
-      // One family branch for all nine discussion intents. Context, availability,
+      // Passing settles the current runtime's original through C2; it is not a
+      // Home resource mutation and must not enter the HTTP Discussion adapter.
+      if (actionId === 'discussion.pass') {
+        const source = SessionInputSourceSessionV1Schema.safeParse(ctx.sessionInputSource);
+        if (!source.success || !source.data.discussionAddressing || !source.data.sourceInputId
+          || source.data.discussionAddressing.discussionId !== data.discussionId
+          || (ctx.defaultSessionId && ctx.defaultSessionId !== source.data.sourceSessionId)
+          || (ctx.actionCaller?.kind === 'session' && ctx.actionCaller.sessionId !== source.data.sourceSessionId)) {
+          return { ok: false, errorCode: 'session_reply_source_unavailable', error: 'session_reply_source_unavailable' };
+        }
+        if (!deps.sessionMessageReply) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+        const sessionId = source.data.sourceSessionId;
+        const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+        return completeActionResult(await deps.sessionMessageReply({ context: ctx, sessionId,
+          requestLocalId: source.data.sourceInputId, reply: { kind: 'pass' },
+          ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}),
+        }));
+      }
+
+      // One family branch for Discussion intents. Context, availability,
       // settings, approval, interception and observation already ran above; the
-      // host seals/opens content through the Session cipher and the canonical
+      // host seals/opens content through the Discussion key and the canonical
       // result is validated once at the terminal output boundary.
-      const sessionDiscussionActionId = isActionFamilyId(actionId, SessionDiscussionActionIdV1Schema) ? actionId : null;
-      if (sessionDiscussionActionId !== null) {
-        if (!deps.sessionDiscussionAction) {
+      const discussionActionId = isActionFamilyId(actionId, DiscussionActionIdV1Schema) ? actionId : null;
+      if (discussionActionId !== null) {
+        if (discussionActionId === 'discussion.second_opinion.start') {
+          return executeDiscussionSecondOpinionV1(parsed.data, deps, ctx, executeHostChild,
+            serverId => !!ctx.serverId && isSameHome(serverId, ctx.serverId, ctx));
+        }
+        if (!deps.discussionAction) {
           return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         }
-        const result = await deps.sessionDiscussionAction({
-          actionId: sessionDiscussionActionId,
-          input: SESSION_DISCUSSION_ACTION_INPUT_SCHEMAS_V1[sessionDiscussionActionId].parse(parsed.data),
+        if (discussionActionId === 'discussion.create') {
+          const create = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.create'].parse(parsed.data);
+          if (create.anchor?.kind === 'doc'
+            && (!ctx.serverId || !isSameHome(create.anchor.doc.ref.serverId, ctx.serverId, ctx))) {
+            return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+          }
+        }
+        if (discussionActionId === 'discussion.invite') {
+          const invite = DiscussionInviteInputV1Schema.parse(parsed.data);
+          if (invite.participant.kind === 'model'
+            && (!ctx.serverId || !isSameHome(invite.participant.launch.executionTarget.serverId, ctx.serverId, ctx))) {
+            return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+          }
+        }
+        const result = await deps.discussionAction({
+          actionId: discussionActionId,
+          input: DISCUSSION_ACTION_INPUT_SCHEMAS_V1[discussionActionId].parse(parsed.data),
           context: ctx,
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
         const failure = readActionFailureEnvelope(result);
-        return failure ?? { ok: true, result };
+        if (failure) return failure;
+        if (discussionActionId === 'discussion.invite') {
+          const invite = DiscussionInviteInputV1Schema.parse(parsed.data);
+          if (invite.participant.kind === 'model') {
+            const reservation = DiscussionInviteResponseV1Schema.safeParse(result);
+            if (!reservation.success) {
+              return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+            }
+            const modelParticipant = reservation.data.modelParticipant;
+            if (reservation.data.discussionId !== invite.discussionId || !modelParticipant
+              || modelParticipant.participant.participantSlotId !== invite.participant.participantSlotId) {
+              return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+            }
+            const started = await executeHostChild('session.spawn_new', {
+              ...modelParticipant.launch,
+              // The requested target was proved to be this captured Home before
+              // reservation. A saved device-local connection alias is not a new
+              // Machine/model selection and cannot route another client's retry.
+              executionTarget: { ...modelParticipant.launch.executionTarget, serverId: ctx.serverId },
+              creationKey: modelParticipant.participant.participantSlotId,
+              discussionParticipant: { discussionId: invite.discussionId,
+                participantSlotId: modelParticipant.participant.participantSlotId },
+              initialTriggers: [],
+            }, ctx);
+            if (!started.ok || isDeferredApprovalResult(started)) return started;
+            const sessionStart = SessionSpawnNewResultV1Schema.safeParse(started.result);
+            if (!sessionStart.success || (sessionStart.data.type === 'success' && modelParticipant.sessionId !== null
+              && modelParticipant.sessionId !== sessionStart.data.sessionId)) {
+              return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+            }
+            return { ok: true, result: { ...reservation.data,
+              modelParticipant: { ...modelParticipant,
+                sessionId: sessionStart.data.type === 'success' ? sessionStart.data.sessionId : modelParticipant.sessionId },
+              sessionStart: sessionStart.data } };
+          }
+        }
+        let ownedSessions: readonly DiscussionOwnedSessionV1[] = [];
+        if (discussionActionId === 'discussion.participant.remove') {
+          const removal = DiscussionParticipantRemoveInputV1Schema.parse(parsed.data);
+          const response = DiscussionRemoveParticipantResponseV1Schema.safeParse(result);
+          if (!response.success || response.data.discussionId !== removal.discussionId) {
+            return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+          }
+          const owned = response.data.ownedSession;
+          if (owned && (owned.discussionId !== removal.discussionId
+            || (removal.participant.kind === 'model' ? owned.participantSlotId !== removal.participant.participantSlotId
+              : removal.participant.kind !== 'session' || owned.sessionId !== removal.participant.sessionId))) {
+            return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+          }
+          if (owned) ownedSessions = [owned];
+        } else if (discussionActionId === 'discussion.archive') {
+          const response = DiscussionDetailsResultV1Schema.safeParse(result);
+          const discussionId = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.archive'].parse(parsed.data).discussionId;
+          if (!response.success || response.data.discussion.id !== discussionId
+            || response.data.ownedSessions?.some(owned => owned.discussionId !== discussionId)) {
+            return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+          }
+          ownedSessions = response.data.ownedSessions ?? [];
+        }
+        for (const owned of ownedSessions) {
+          // Resource membership does not confer Session control. These children
+          // retain ordinary authority, approval and lifecycle admission.
+          if (!ctx.serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+          const exactTarget = [{ serverId: ctx.serverId, sessionId: owned.sessionId }];
+          const stopped = await executeHostChild('session.stop', { sessionId: owned.sessionId }, { ...ctx,
+            sessionTargetsV1: { actionId: 'session.stop', field: 'sessionId', targets: exactTarget, selector: false } });
+          if (!stopped.ok || isDeferredApprovalResult(stopped)) return stopped;
+          const stop = SessionStopResultSchema.safeParse(stopped.result);
+          if (!stop.success || !isSessionStopConfirmed(stop.data)) {
+            return { ok: false, errorCode: 'session_stop_unconfirmed', error: 'session_stop_unconfirmed' };
+          }
+          const archived = await executeHostChild('session.archive', { sessionId: owned.sessionId }, { ...ctx,
+            sessionTargetsV1: { actionId: 'session.archive', field: 'sessionId', targets: exactTarget, selector: false } });
+          if (!archived.ok || isDeferredApprovalResult(archived)) return archived;
+        }
+        return { ok: true, result };
       }
 
       const managedMachineActionId = isActionFamilyId(actionId, ManagedMachineActionIdV1Schema) ? actionId : null;
@@ -5398,6 +5997,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return readActionFailureEnvelope(result) ?? { ok: true,
             result: machineReferences ? { ...readRecord(result), machineReferences } : result };
         } catch (error) {
+          if (ManagedControllerRequestFailureDetailsV1Schema.safeParse(readRecord(error).details).success) {
+            return { ok: false, ...normalizeActionExecutorThrownError(error) };
+          }
           const refusal = ManagedRefusalCodeV1Schema.safeParse(readRecord(error).code);
           if (refusal.success) return { ok: false, errorCode: refusal.data, error: refusal.data };
           throw error;
@@ -6059,7 +6661,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (!detached && !sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
         const machineTarget = detached && ctx.externalActionTarget?.kind === 'machine' ? ctx.externalActionTarget : undefined;
         const serverId = resolveServerIdForExecutionRunScope(deps, ctx, sessionId);
-        const opts = buildExecutionRunCallOptions(
+        const baseOptions = buildExecutionRunCallOptions(
           ctx.authority,
           serverId, ctx.signal, detached ? ctx.defaultSessionId : undefined,
           detached ? machineTarget?.machineId ?? ctx.executionRunTargetMachineId : undefined,
@@ -6067,6 +6669,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           detached ? ctx.executionRunWorkflowObservationSink : undefined,
           ctx,
         );
+        const workflowScope = ctx.actionCaller?.kind === 'workflowRun'
+          ? await resolveActionWorkflowSessionScopeV1(actionId, ctx, deps) : null;
+        ctx.signal?.throwIfAborted();
+        const opts = workflowScope ? { ...baseOptions, workflowScope } : baseOptions;
 
         const reviewInput = data as ReviewStartInput;
         const engineIds = reviewInput.engineIds;
@@ -6203,7 +6809,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   : {}),
                 backendTarget: data.roleId && data.backendTarget ? data.backendTarget : normalizeExecutionBackendTargetValue(engineId),
                 instructions,
-                ...(reviewInput.childSelection ? { childSelection: reviewInput.childSelection } : {}),
+                ...(reviewInput.childSelection ? { childSelection: reviewInput.childSelection }
+                  : data.modelId === undefined && data.modelSelection === undefined && !teamCredentialModel.selection
+                    && connectedSelection.bindings === undefined && connectedSelection.defaultServiceIds.length === 0
+                    && !reviewInput.roleId && !reviewInput.launchProfileId && !reviewInput.profileId
+                    && (!data.intent || data.intent === 'review') ? { childSelection: 'agentDefault' as const } : {}),
                 ...(typeof data.modelId === 'string' ? { modelId: data.modelId } : {}),
                 ...(data.modelSelection !== undefined ? { modelSelection: data.modelSelection } : {}),
                 ...(data.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: data.sessionConfigOptionOverrides } : {}),
@@ -7510,7 +8120,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 error: 'execution_run_wait_result_invalid',
               };
             }
-            return completeActionResult(res);
+            return completeExecutionRunServiceActionResult(actionId, res);
           } catch (error) {
             if (!isExecutionRunWaitCancellation(error, ctx.signal)) throw error;
             return { ok: true, result: ExecutionRunWaitResultSchema.parse({ ok: false, code: 'cancelled' }) };
@@ -7602,13 +8212,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(ctx.signal ? { signal: ctx.signal } : {}) }));
         }
 
-        if (actionId === 'session.pending.reorder' || actionId === 'todos.reorder') {
-          if (!deps.listReorder) return { ok: true, result: { status: 'unavailable' } };
-          return completeActionResult(await deps.listReorder({ actionId, input: parsed.data,
+        if (actionId === 'tasks.internal.list' || actionId === 'tasks.internal.create' || actionId === 'tasks.internal.edit' || actionId === 'tasks.internal.transition') {
+          if (!deps.internalTaskAction) return { ok: true, result: { status: 'unavailable' } };
+          return completeActionResult(await deps.internalTaskAction({ actionId, input: parsed.data, context: ctx,
             ...(ctx.signal ? { signal: ctx.signal } : {}) }));
         }
 
-        if (actionId === 'todos.session.link') {
+        if (actionId === 'session.pending.reorder' || actionId === 'tasks.internal.reorder') {
+          if (!deps.listReorder) return { ok: true, result: { status: 'unavailable' } };
+          return completeActionResult(await deps.listReorder({ actionId, input: parsed.data, context: ctx,
+            ...(ctx.signal ? { signal: ctx.signal } : {}) }));
+        }
+
+        if (actionId === 'tasks.internal.session.link') {
           if (!deps.todoSessionLink) return { ok: true, result: { status: 'unavailable' } };
           return completeActionResult(await deps.todoSessionLink({ input: parsed.data, context: ctx,
             ...(ctx.signal ? { signal: ctx.signal } : {}) }));
@@ -7624,7 +8240,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if ((typeof data.tabId === 'string' || data.destination !== undefined) && !deps.workspaceAction) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.open' };
           }
-          const resolution = await resolveActionSessionAddress(deps, data, ctx);
+          const resolution = await resolveActionSessionAddress(deps, data, ctx, 'session.open');
           if (resolution.kind !== 'unique') return projectSessionReferenceFailure(resolution);
           const { serverId, sessionId } = resolution.address;
           const destination = (parsed.data as PublicActionInputById['session.open']).destination;
@@ -7969,11 +8585,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             effectiveSpawnInput,
             ctx,
             legacyMetadataLabel,
+            discussionParticipantLaunch,
           );
           if (!spawnArgs) {
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }
-          const res = await deps.sessionSpawnNew(spawnArgs);
+          const res = await deps.sessionSpawnNew({ ...spawnArgs,
+            admittedInput: SessionSpawnNewInputV2Schema.parse(parsed.data),
+          });
           return completeSpawnActionResult(res);
         }
 
@@ -8284,7 +8903,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(typeof data.limit === 'number' ? { limit: data.limit } : {}),
             ...(backendTargetKey ? { backendTargetKey } : {}),
             ...(data.probe === undefined ? {} : { probe: AgentInventoryProbeInputSchema.parse(data.probe) }),
-          });
+          }, ctx);
           return completeActionResult(res);
         }
 
@@ -8482,6 +9101,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           );
           const sendMessageArgs = {
             context: ctx,
+            authoredInput: SessionSendMessageInputSchema.parse({ ...data, sessionId }),
             ...(ctx.externalActionCredential?.grant ? { callerInputConstraints: {
               models: ctx.externalActionCredential.grant.models,
               permissionModes: ctx.externalActionCredential.grant.permissionModes,
@@ -8496,7 +9116,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                   displayText: structuredSubagentInput.displayText,
                   messageMeta: structuredSubagentInput.messageMeta,
                 }
-              : {}),
+              : data.structuredInput !== undefined
+                ? { messageMeta: { [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: RawIngressStructuredInputV1Schema.parse(data.structuredInput) } }
+                : {}),
             ...(actionCaller.kind === 'plugin' && parsedToolAnswerDelivery?.success && parsedToolAnswerDelivery.data
               ? { messageMeta: {
                   happier: {
@@ -8526,13 +9148,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               : typeof providerConnectionIdRaw === 'string' && providerConnectionIdRaw.trim().length > 0
                 ? { providerConnectionId: ProviderConnectionIdSchema.parse(providerConnectionIdRaw) }
                 : {}),
-            ...(typeof data.wait === 'boolean' ? { wait: data.wait } : {}),
+            ...(data.reply === 'none' || data.reply === 'wait' || data.reply === 'return'
+              ? { reply: data.reply }
+              : typeof data.wait === 'boolean' ? { wait: data.wait } : {}),
+            ...(typeof data.returnToSessionId === 'string' ? { returnToSessionId: data.returnToSessionId } : {}),
             ...(typeof data.timeoutSeconds === 'number' ? { timeoutSeconds: data.timeoutSeconds } : {}),
             ...(serverId ? { serverId } : {}),
             ...(ctx.surface ? { callerSurface: ctx.surface } : {}),
             ...(sessionInputSource ? { sessionInputSource } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
-          };
+          } satisfies Parameters<typeof deps.sessionSendMessage>[0];
           if (actionCaller.kind === 'plugin') {
             dispatchedPluginSessionInputLocalId = derivePluginSessionInputLocalIdV1({
               caller: actionCaller,
@@ -8542,6 +9167,42 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }
           const res = await deps.sessionSendMessage(sendMessageArgs);
           return completeActionResult(res);
+        }
+
+        if (actionId === 'session.message.reply') {
+          const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
+          if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
+          if (!deps.sessionMessageReply) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          return completeActionResult(await deps.sessionMessageReply({ context: ctx, sessionId,
+            requestLocalId: String(data.requestLocalId), reply: SessionMessageExplicitReplyV1Schema.parse(data.reply),
+            ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }));
+        }
+
+        if (actionId === 'session.exchange.control') {
+          const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
+          if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
+          if (!deps.sessionExchangeControl) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          return completeActionResult(await deps.sessionExchangeControl({ context: ctx, sessionId,
+            originInputLocalId: String(data.originInputLocalId),
+            request: AutonomousExchangeControlRequestV1Schema.parse({
+              control: data.decision === 'continue_more' ? 'continue_more_10' : data.decision,
+              observedRevision: data.observedRevision }),
+            ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}),
+          }));
+        }
+
+        if (actionId === 'session.coordinator.enable') {
+          const request = SessionCoordinatorEnableInputV1Schema.parse(parsed.data);
+          const serverId = resolveServerIdForSession(deps, ctx, request.sessionId);
+          if (request.ruleSuggestions.some(suggestion => suggestion.ruleDefinition.filter.homeServerIds.length !== 1
+            || !serverId || !isSameHome(suggestion.ruleDefinition.filter.homeServerIds[0]!, serverId, ctx))) {
+            return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+          }
+          return completeActionResult(await executeSessionCoordinatorEnableV1(request,
+            (childId, childInput) => executeHostChild(childId, childInput, ctx), ctx.signal));
         }
 
         if (isSessionStateFieldActionId(actionId)) {
@@ -8568,6 +9229,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) }));
         }
 
+        if (actionId === 'session.runtime.refresh') {
+          if (!deps.sessionRuntimeRefresh) {
+            return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+          }
+          const input = parsed.data as PublicActionInputById['session.runtime.refresh'];
+          const serverId = input.serverId ?? resolveServerIdForSession(deps, ctx, input.sessionId);
+          return completeActionResult(await deps.sessionRuntimeRefresh({ ...input, context: ctx,
+            ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) }));
+        }
+
         if (actionId === 'session.stop') {
           const sessionId = normalizeId(data.sessionId);
           if (!sessionId) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -8575,7 +9246,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.stop' };
           }
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionStop({ sessionId, ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+          const res = await deps.sessionStop({ sessionId, context: ctx, ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
           return completeActionResult(res);
         }
 
@@ -8725,6 +9396,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
           const res = await deps.sessionArchiveSet({
             sessionId,
+            context: ctx,
             archived: actionId === 'session.archive',
             ...(serverId ? { serverId } : {}),
           });
@@ -8732,15 +9404,24 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
 
         if (isSessionFollowActionIdV1(actionId)) {
-          if (!deps.sessionFollowAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
-          if (typeof data.sourceSessionId === 'string' && data.sourceSessionId === data.destinationSessionId) {
+          const receiver = readRecord(data.receiver);
+          const source = readRecord(data.source);
+          if (receiver.kind === 'session' && source.kind === 'session' && source.sessionId === receiver.sessionId) {
             return { ok: false, errorCode: 'invalid_parameters', error: 'session_follow_same_session' };
           }
-          const sessionId = normalizeId(data.destinationSessionId) ?? normalizeId(data.sessionId);
+          const sessionId = receiver.kind === 'session' ? normalizeId(receiver.sessionId)
+            : source.kind === 'session' ? normalizeId(source.sessionId) : undefined;
           const serverId = sessionId ? resolveServerIdForSession(deps, ctx, sessionId) : normalizeId(ctx.serverId);
-          const result = await deps.sessionFollowAction({ context: ctx, actionId, input: data,
-            ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}),
-          });
+          const scope = { ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) };
+          let result: unknown;
+          if (actionId === 'follow.preview') {
+            if (!deps.sessionFollowPreview) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+            result = await deps.sessionFollowPreview({ context: ctx,
+              input: SessionFollowActionInputSchemasV1['follow.preview'].parse(data), ...scope });
+          } else {
+            if (!deps.sessionFollowAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+            result = await deps.sessionFollowAction({ context: ctx, actionId, input: data, ...scope });
+          }
           const failure = readActionFailureEnvelope(result);
           if (failure) return failure;
           return completeActionResult(parseSessionFollowActionResponse(actionId, data, result));
@@ -8772,7 +9453,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }
           const live = data.live === true;
           const serverId = resolveServerIdForSession(deps, ctx, sessionId);
-          const res = await deps.sessionStatusGet({ sessionId, live, ...(serverId ? { serverId } : {}) });
+          const res = await deps.sessionStatusGet({ sessionId, live, ...(data.readiness === true ? { readiness: true } : {}), context: ctx,
+            ...(ctx.signal ? { signal: ctx.signal } : {}), ...(serverId ? { serverId } : {}) });
           return completeActionResult(res);
         }
 
@@ -9101,6 +9783,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
+        if (actionId === 'session.needs_you.raise') {
+          const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
+          if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
+          if (!deps.sessionNeedsYouRaise) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.needs_you.raise' };
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          return completeActionResult(await deps.sessionNeedsYouRaise({ sessionId,
+            input: SessionNeedsYouRaiseInputV1Schema.parse(parsed.data), context: ctx,
+            ...(serverId ? { serverId } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) }));
+        }
+
         if (actionId === 'session.user_action.answer') {
           const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
           if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
@@ -9123,6 +9815,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                     : [],
               };
             }) : [],
+            ...(data.disposition === 'pass_up' ? { disposition: 'pass_up' as const } : {}),
             ...(readUserActionDecision(data.decision) ? { decision: readUserActionDecision(data.decision) } : {}),
             ...(typeof data.reason === 'string' ? { reason: data.reason } : {}),
             ...(hasOwn(data, 'updatedPermissions') ? { updatedPermissions: data.updatedPermissions } : {}),
@@ -9208,38 +9901,38 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return completeActionResult(res);
         }
 
-        if (actionId === 'session.worker.publish') {
-          const request = SessionWorkerPublishInputV1Schema.safeParse(admittedInput);
+        if (actionId === 'session.update.post') {
+          const request = SessionUpdatePostInputV1Schema.safeParse(admittedInput);
           if (!request.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          if (!deps.sessionWorkerPublish) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.worker.publish' };
-          const response = await deps.sessionWorkerPublish({ context: ctx, ...request.data });
+          if (!deps.sessionUpdatePost) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.update.post' };
+          const response = await deps.sessionUpdatePost({ context: ctx, ...request.data });
           const failure = readActionFailureEnvelope(response);
           if (failure) return failure;
-          const output = SessionWorkerPublishOutputV1Schema.safeParse(response);
-          if (!output.success) return { ok: false, errorCode: 'worker_report_invalid_response', error: 'worker_report_invalid_response' };
+          const output = SessionUpdatePostOutputV1Schema.safeParse(response);
+          if (!output.success) return { ok: false, errorCode: 'session_update_invalid_response', error: 'session_update_invalid_response' };
           return completeActionResult(output.data);
         }
-        if (actionId === 'session.reports_to.set') {
-          const request = SessionReportsToSetActionInputV1Schema.safeParse(admittedInput);
+        if (actionId === 'session.manager.set') {
+          const request = SessionManagerSetActionInputV1Schema.safeParse(admittedInput);
           if (!request.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
-          if (!deps.sessionReportsToSet) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.reports_to.set' };
+          if (!deps.sessionManagerSet) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.manager.set' };
           const serverId = resolveServerIdForSession(deps, ctx, request.data.sessionId);
-          const rawResponse = await deps.sessionReportsToSet({
+          const rawResponse = await deps.sessionManagerSet({
             ...request.data, context: ctx,
             ...(serverId ? { serverId } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           const hostFailure = readActionFailureEnvelope(rawResponse);
           if (hostFailure) return hostFailure;
-          const response = SessionReportsToSetResultV1Schema.safeParse(rawResponse);
-          if (!response.success) return { ok: false, errorCode: 'session_reports_to_invalid_response', error: 'session_reports_to_invalid_response' };
+          const response = SessionManagerSetResultV1Schema.safeParse(rawResponse);
+          if (!response.success) return { ok: false, errorCode: 'session_manager_invalid_response', error: 'session_manager_invalid_response' };
           const result = response.data;
           if (!result.ok) return {
             ok: false, errorCode: result.error, error: result.error,
-            ...(result.error === 'reports_to_forbidden' ? { details: { reason: result.reason } } : {}),
+            ...(result.error === 'manager_forbidden' ? { details: { reason: result.reason } } : {}),
           };
-          if (result.sessionId !== request.data.sessionId || result.leadSessionId !== request.data.leadSessionId) {
-            return { ok: false, errorCode: 'session_reports_to_invalid_response', error: 'session_reports_to_invalid_response' };
+          if (result.sessionId !== request.data.sessionId || result.managerSessionId !== request.data.managerSessionId) {
+            return { ok: false, errorCode: 'session_manager_invalid_response', error: 'session_manager_invalid_response' };
           }
           return completeActionResult(result);
         }
@@ -9766,16 +10459,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         const request = await deps.approvalsGet({ artifactId, serverId: normalizeId(ctx.serverId) || null });
         if (!request) return { ok: false, errorCode: 'approval_not_found', error: 'approval_not_found' };
-        const targetRequest = TargetActionApprovalRequestV1Schema.safeParse(request);
-        const disclosedRequest = targetRequest.success
-          ? { ...targetRequest.data, input: targetRequest.data.secretInputPaths === undefined ? null
-            : projectTargetActionApprovalInput(targetRequest.data.input, targetRequest.data.secretInputPaths)?.input ?? null }
-          : request;
         return {
           ok: true,
           result: {
             artifactId,
-            request: disclosedRequest,
+            request: projectApprovalRequestForPublicRead(request),
             queryPlan: {
               kind: 'approval_artifact_id_lookup',
               backingStore: 'ArtifactStore',
@@ -9812,10 +10500,17 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
         }
         let targetArgs = redactMemoryActionInput(targetActionId, parsedTargetArgs.data);
+        if (targetSpec.sessionTarget) {
+          const targets = await resolveActionSessionTargets(deps, { actionId: targetActionId,
+            declaration: targetSpec.sessionTarget, input: readRecord(targetArgs), context: ctx });
+          if (targets && 'ok' in targets) return targets;
+          if (targets) ctx = { ...ctx, sessionTargetsV1: targets };
+        }
         if (isMemoryWriteActionV1(targetActionId)) {
           if (!deps.memoryLibrary) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${targetActionId}` };
           const admission = await readMemoryWriteAdmissionV1(deps.memoryLibrary, targetActionId, targetArgs, ctx);
           targetArgs = bindMemoryWriteApprovalInputV1(targetActionId, targetArgs, admission);
+          if (admission.duplicateReview) return { ok: true, result: admission.duplicateReview };
         }
         const approvalPluginCaller = projectApprovalRequestPluginCaller(ctx.actionCaller);
         if (ctx.actionCaller?.kind === 'plugin' && !approvalPluginCaller) {
@@ -9870,11 +10565,19 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if ('ok' in preparedApproval) return preparedApproval;
         const summary = buildApprovalSummary(targetSpec, targetArgs, preparedApproval.preview);
         const approvalActionArgs = preparedApproval.actionArgs;
+        const sharedRequesterRequest = !delegatesApprovalClassificationToResolvedAction(targetActionId)
+          && isSharedRequesterActionV1(ctx);
+        const requesterConfirmation = sharedRequesterRequest
+          ? buildApprovalRequesterConfirmationV1({ context: ctx, actionId: targetActionId, input: approvalActionArgs }) : null;
+        if (sharedRequesterRequest && !requesterConfirmation) {
+          return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
+        }
         const executionOriginV1 = buildApprovalExecutionOriginV1({
           actionId: targetActionId,
           input: approvalActionArgs,
           context: ctx,
           targetSessionId,
+          ...(requesterConfirmation ? { requesterConfirmation } : {}),
         });
         if (!executionOriginV1) {
           return { ok: false, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable' };
@@ -9891,6 +10594,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ...(requestedSurface ? { requestedSurface } : {}),
           ...(approvalOrigin ? { origin: approvalOrigin } : {}),
           executionOriginV1,
+          ...(requesterConfirmation ? { requesterConfirmation } : {}),
           approval: buildApprovalMetadata(targetSpec),
           actionId: targetActionId,
           actionArgs: approvalActionArgs,
@@ -9918,10 +10622,35 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
         }
 
-        if (!delegatedHostDecision && decision !== 'cancel' && data.narrowedInput === undefined && deps.targetActionApprovalReplay) {
+        // A requester recipient has View, not lifecycle-write custody. Forward
+        // the exact decision through the existing host transport before any CAS.
+        let requesterPreviewRead: unknown;
+        let requesterPreviewWasRead = false;
+        if (!ctx.requesterApprovalDecision && resolveHostStampedAuthority(ctx) === 'present_user'
+          && deps.approvalRequestApprovedReplay && deps.approvalsGet) {
+          try {
+            requesterPreviewRead = await deps.approvalsGet({ artifactId, serverId: null });
+            requesterPreviewWasRead = true;
+          } catch { return approvalContextUnavailable(); }
+          const builtInPreview = StoredApprovalRequestSchema.safeParse(requesterPreviewRead);
+          const targetPreview = TargetActionApprovalRequestV1Schema.safeParse(requesterPreviewRead);
+          const preview = builtInPreview.success && builtInPreview.data.v === 2 ? builtInPreview.data
+            : targetPreview.success ? targetPreview.data : null;
+          const subject = preview?.requesterConfirmation;
+          if (preview && subject) {
+            if (data.narrowedInput !== undefined) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+            const forwarded = await deps.approvalRequestApprovedReplay({ artifactId, request: preview,
+              decision, context: ctx, ...(ctx.actionRequestId ? { requestId: ctx.actionRequestId } : {}),
+              ...(ctx.signal ? { signal: ctx.signal } : {}) });
+            return forwarded ?? { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+          }
+        }
+
+        if (!delegatedHostDecision && data.narrowedInput === undefined && deps.targetActionApprovalReplay) {
           const replay = await deps.targetActionApprovalReplay({
             artifactId,
             decision,
+            context: ctx,
             ...(ctx.externalActionCredential?.grant ? { callerGrant: ctx.externalActionCredential.grant } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
@@ -9934,18 +10663,39 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         // Approval Artifacts are Account-scoped. The deciding device's local
         // profile is not the immutable creator profile recorded by the body.
-        const existingRaw = await deps.approvalsGet({ artifactId, serverId: null });
+        let existingRaw: unknown;
+        try {
+          existingRaw = requesterPreviewWasRead ? requesterPreviewRead : await deps.approvalsGet({ artifactId, serverId: null });
+        } catch {
+          return approvalContextUnavailable();
+        }
         if (!existingRaw) return { ok: false, errorCode: 'approval_not_found', error: 'approval_not_found' };
 
         const existingParsed = StoredApprovalRequestSchema.safeParse(existingRaw);
         if (!existingParsed.success) return { ok: false, errorCode: 'approval_invalid', error: 'approval_invalid' };
         const existing = existingParsed.data;
+        if (existing.v === 2) {
+          const admission = await admitApprovalRequesterDecisionV1({ request: existing, context: ctx });
+          if (!admission.ok) return admission;
+          if (existing.requesterConfirmation && data.narrowedInput !== undefined) {
+            return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+          }
+          if (existing.requesterConfirmation && existing.status === 'open') {
+            if (!await isApprovalExecutionOriginCurrentForRequest({ request: existing, ...(ctx.signal ? { signal: ctx.signal } : {}) })) {
+              return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+            }
+            const current = await admitApprovalRequesterDecisionV1({ request: existing, context: ctx });
+            if (!current.ok) return current;
+          }
+        }
         if (decision === 'approve' && (existing.actionId === 'computer.secret.fill' || existing.actionId === 'browser.automation.secret.fill')) {
           return { ok: false, errorCode: 'confidential_choice_required', error: 'confidential_choice_required' };
         }
         const narrowsInput = data.narrowedInput !== undefined;
         const requestedActionId = ActionIdSchema.safeParse(existing.actionId);
         const requestedSpec = requestedActionId.success ? getActionSpec(requestedActionId.data) : null;
+        const draftReviewFailure = await requireDiscussionDraftReviewAuthority(existing, ctx);
+        if (draftReviewFailure) return draftReviewFailure;
         if (delegatedHostDecision) {
           const origin = existing.v === 2 ? existing.executionOriginV1 : null;
           const requestingSessionId = origin?.caller.kind === 'session' ? origin.caller.sessionId : origin?.sessionId;
@@ -10017,8 +10767,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             details: approveAdmission.details,
           };
         }
-        if (delegatedHostDecision && decision !== 'cancel' && data.narrowedInput === undefined && deps.targetActionApprovalReplay) {
+        if (delegatedHostDecision && data.narrowedInput === undefined && deps.targetActionApprovalReplay) {
           const replay = await deps.targetActionApprovalReplay({ artifactId, decision,
+            context: ctx,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           if (replay !== null) return replay;
@@ -10028,14 +10779,63 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           && existing.decision?.kind === 'approve'
           && !existing.execution;
 
+        let settleDiscussionReview: (() => Promise<ActionExecuteFailure | null>) | undefined;
+        if (decision !== 'approve' && existing.v === 2 && existing.discussionDraftReview === true
+          && existing.executionOriginV1.discussionReplyReturn) {
+          if (resolveHostStampedAuthority(ctx) !== 'present_user') {
+            return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+          }
+          const executionOrigin = existing.executionOriginV1;
+          const returned = executionOrigin.discussionReplyReturn;
+          const sessionId = executionOrigin.sessionId
+            ?? (executionOrigin.caller.kind === 'session' ? executionOrigin.caller.sessionId : undefined);
+          const publication = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.reply'].safeParse(existing.actionArgs);
+          if (!returned || !sessionId || existing.actionId !== 'discussion.reply' || !publication.success
+            || publication.data.replyTarget.kind !== 'message') {
+            return { ok: false, errorCode: 'approval_invalid', error: 'approval_invalid' };
+          }
+          // Capture the existing original-input port before CAS. The decision
+          // remains recoverable if its response or the later settlement is lost.
+          const settleOriginal = deps.sessionMessageReply;
+          if (!settleOriginal) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.message.reply' };
+          const reviewDecision = { kind: 'discussion_review' as const, discussionId: publication.data.discussionId,
+            messageId: publication.data.replyTarget.messageId, decision,
+            ...(returned.acceptedTurnId ? { acceptedTurnId: returned.acceptedTurnId } : {}) } satisfies Extract<SessionMessageReplyAccountMutationV1, { kind: 'discussion_review' }>;
+          settleDiscussionReview = async () => {
+            const response = await settleOriginal({ context: ctx, sessionId, requestLocalId: returned.requestLocalId,
+              serverId: executionOrigin.serverId, reviewDecision, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+            const failure = readActionFailureEnvelope(response);
+            if (failure) return failure;
+            const settled = SessionMessageReplyMutationResultV1Schema.safeParse(response);
+            if (!settled.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+            if (!settled.data.ok) {
+              const errorCode = settled.data.error === 'unavailable' ? 'approval_context_unavailable' : 'approval_stale';
+              return { ok: false, errorCode, error: errorCode };
+            }
+            const progress = settled.data.progress;
+            if (progress.disposition !== 'released' || progress.outcome?.kind !== 'declined'
+              || progress.discussion?.discussionId !== reviewDecision.discussionId
+              || progress.discussion.messageId !== reviewDecision.messageId || progress.discussion.participantSessionId !== sessionId
+              || progress.acceptedTurnId !== returned.acceptedTurnId) {
+              return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+            }
+            return null;
+          };
+        }
+
         if (decision === 'approve' && existing.v === 2 && existing.status === 'executing') {
           return { ok: false, errorCode: 'approval_execution_outcome_unknown', error: 'approval_execution_outcome_unknown' };
         }
 
         if (decision === 'reject' && existing.status === 'rejected' && existing.decision?.kind === 'reject') {
+          const settlementFailure = await settleDiscussionReview?.();
+          if (settlementFailure) return settlementFailure;
           return buildApprovalDecisionResult(existing);
         }
-        if (decision === 'cancel' && existing.status === 'canceled') return buildApprovalDecisionResult(existing);
+        if (decision === 'cancel' && existing.status === 'canceled') {
+          const settlementFailure = await settleDiscussionReview?.();
+          return settlementFailure ?? buildApprovalDecisionResult(existing);
+        }
 
         if (decision === 'approve'
           && (existing.status === 'approved' || existing.status === 'executed' || existing.status === 'failed')
@@ -10056,6 +10856,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const updated = await deps.approvalsUpdate({ artifactId, request: nextCanceled, serverId: effectiveServerId });
           const updateFailure = readActionFailureEnvelope(updated);
           if (updateFailure) return updateFailure;
+          const settlementFailure = await settleDiscussionReview?.();
+          if (settlementFailure) return settlementFailure;
           // Blocking waiters observe the persisted canceled Artifact through their
           // existing cancellation branch; no approval/rejection authority is minted.
           return buildApprovalDecisionResult(nextCanceled);
@@ -10069,16 +10871,21 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...settleApprovalRequestReplayInputs(existing),
             status: 'rejected',
             updatedAtMs: now,
-            decision: { kind: 'reject', decidedAtMs: now },
+            decision: { kind: 'reject', decidedAtMs: now,
+              ...(existing.v === 2 && existing.requesterConfirmation && ctx.requesterApprovalDecision
+                ? { authority: 'present_user' as const, decidingAccountId: ctx.requesterApprovalDecision.actor.accountId } : {}) },
           };
           const updated = await deps.approvalsUpdate({ artifactId, request: nextRejected, serverId: effectiveServerId });
           const updateFailure = readActionFailureEnvelope(updated);
           if (updateFailure) return updateFailure;
+          const settlementFailure = await settleDiscussionReview?.();
+          if (settlementFailure) return settlementFailure;
           if (isBlockingApprovalRequest(nextRejected)) {
             await resolveBlockingDecisionIfClaimed({
               artifactId,
               decision: 'reject',
               decisionAuthority: resolveHostStampedAuthority(ctx),
+              ...(ctx.requesterApprovalDecision ? { requesterApprovalDecision: ctx.requesterApprovalDecision } : {}),
               request: nextRejected,
               serverId: effectiveServerId,
             });
@@ -10120,24 +10927,49 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             status: 'approved',
             updatedAtMs: now,
             decision: { kind: 'approve', decidedAtMs: now,
+              ...(existing.v === 2 && resolveHostStampedAuthority(ctx) === 'present_user' ? {
+                authority: 'present_user' as const,
+                ...(existing.v === 2 && !existing.requesterConfirmation
+                  && (ctx.expectedAccountId ?? ctx.runtimeAccountId ?? existing.executionOriginV1.accountId)
+                  ? { decidingAccountId: ctx.expectedAccountId ?? ctx.runtimeAccountId ?? existing.executionOriginV1.accountId } : {}),
+              } : {}),
+              ...(existing.v === 2 && existing.requesterConfirmation && ctx.requesterApprovalDecision
+                ? { authority: 'present_user' as const, decidingAccountId: ctx.requesterApprovalDecision.actor.accountId } : {}),
               ...(narrowsInput ? { narrowedInput: projectNativeJsonValueForTransport(approvedActionArgs) } : {}),
               ...(narrowsInput || (requestedSpec && requiresPresentUserDecisionForActionInputV1(requestedSpec, approvedActionArgs))
                 ? { authority: 'present_user' as const } : {}) },
           };
 
-          const approved = await deps.approvalsUpdate({
-            artifactId,
-            request: approvedRequest,
-            serverId: effectiveServerId,
-          });
+          let approved: unknown;
+          try {
+            approved = await deps.approvalsUpdate({
+              artifactId,
+              request: approvedRequest,
+              serverId: effectiveServerId,
+            });
+          } catch (error) {
+            approved = { ok: false, ...normalizeActionExecutorThrownError(error) };
+          }
           const approvalFailure = readActionFailureEnvelope(approved);
-          if (approvalFailure) return approvalFailure;
+          if (approvalFailure) {
+            // A lost acknowledgement can leave consent committed while its
+            // original live requester still waits. Reconcile the exact decision
+            // once before handing it to the existing execution-claim owner.
+            // A failed/unreadable/different write never authorizes an effect.
+            const persisted = await readMatchingApprovalRequestReceipt({
+              artifactId, serverId: effectiveServerId, request: approvedRequest,
+            });
+            if (!persisted) return approvalFailure.errorCode === 'action_failed'
+              ? approvalContextUnavailable()
+              : approvalFailure;
+            approvedRequest = persisted;
+          }
         }
 
         let preExecutionFailure: ActionExecuteFailure | undefined = readUnavailableApprovalReplayOrigin(approvedRequest) ?? undefined;
         if (approveAdmission?.status === 'unavailable') {
           preExecutionFailure = approveAdmission.reason === 'legacy_request'
-            ? { ok: false, errorCode: 'approval_stale', error: 'approval_stale' }
+            ? { ok: false, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: 'origin_version' } }
             : {
                 ok: false,
                 errorCode: 'approval_context_unavailable',
@@ -10145,8 +10977,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 details: approveAdmission.details,
               };
         } else if (!preExecutionFailure && approvedRequest.v === 2) {
+          let staleReason: ApprovalStaleReason = 'origin_not_current';
           const originIsCurrent = await isApprovalExecutionOriginCurrentForRequest({
             request: approvedRequest,
+            reportStale: reason => { staleReason = reason; },
             ...(normalizeId(data.originServerId)
               ? { expectedOriginServerId: normalizeId(data.originServerId) }
               : {}),
@@ -10156,7 +10990,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
           if (!originIsCurrent) {
-            preExecutionFailure = { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+            preExecutionFailure = { ok: false, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: staleReason } };
           }
         }
 
@@ -10175,7 +11009,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         // process-local waiter cannot bypass that admission merely by being
         // alive in the deciding app. App-owned effects return null here and
         // continue through the same incumbent blocking coordinator below.
-        if (deps.approvalRequestApprovedReplay) {
+        if (deps.approvalRequestApprovedReplay && approvedRequest.v === 2 && !approvedRequest.requesterConfirmation) {
           const replayRequestId = normalizeId(ctx.actionRequestId)
             || (approvedRequest.v === 2 ? approvedRequest.executionOriginV1.requestId : '');
           const replay = await deps.approvalRequestApprovedReplay({
@@ -10208,6 +11042,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             artifactId,
             decision: 'approve',
             decisionAuthority: resolveHostStampedAuthority(ctx),
+            ...(ctx.requesterApprovalDecision ? { requesterApprovalDecision: ctx.requesterApprovalDecision } : {}),
             request: approvedRequest,
             serverId: effectiveServerId,
           });
@@ -10271,6 +11106,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     prepared?: PreparedCoreAdmission,
     approvalReplay = false,
     approvedApiTokenExecution?: import('./blockingApprovalCoordinator.js').BlockingApprovalTokenExecution,
+    sessionTargetLeaf = false,
+    sameHome?: ActionHomeEquivalence,
   ): Promise<ActionExecuteResult> {
     const result = await executeCore(
       actionId,
@@ -10279,7 +11116,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       inputAlreadyBound,
       legacyMetadataLabel,
       { ...(prepared ? { prepared } : {}), ...(approvalReplay ? { approvalReplay: true } : {}),
-        ...(approvedApiTokenExecution ? { approvedApiTokenExecution } : {}) },
+        ...(sessionTargetLeaf ? { sessionTargetLeaf: true } : {}),
+        ...(approvedApiTokenExecution ? { approvedApiTokenExecution } : {}),
+        ...(sameHome ? { sameHome } : {}) },
     );
     if ('kind' in result) {
       throw new Error('Prepared Action invocation unexpectedly prepared twice');
@@ -10336,7 +11175,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     if (authorityFailure) {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, authorityFailure));
     }
-    const credentialFailure = await admitCredentialScope(actionId, ctx, actionId === 'session.spawn_new' ? undefined : input);
+    let selectorIntent = false;
+    if (spec.sessionTarget) {
+      try { selectorIntent = typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(input), spec.sessionTarget.field)) !== 'string'; }
+      catch { /* Canonical semantic parsing below returns invalid_parameters. */ }
+    }
+    const credentialFailure = selectorIntent
+      ? credentialScopeFailure(actionId, ctx, undefined, true)
+      : await admitCredentialScope(actionId, ctx, actionId === 'session.spawn_new' ? undefined : input);
     if (credentialFailure) return settlePrepareResult(actionId, credentialFailure);
     if (ctx.surface === 'plugin' && ctx.actionCaller?.kind !== 'plugin') {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, {
@@ -10346,7 +11192,23 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }));
     }
     if (actionId === 'session.spawn_new' && isAgentCaller(ctx)) {
-      const authored = readRecord(input);
+      const authoring = SessionSpawnNewAgentAuthoringInputV2Schema.safeParse(input ?? {});
+      if (!authoring.success) return settlePrepareResult(actionId,
+        { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
+      const authored = authoring.data;
+      if (typeof authored.profileId === 'string' && authored.roleId === undefined) {
+        const availability = hostInternal ? null : resolveAvailabilityForContext(spec, ctx);
+        const enabled = hostInternal ? isHostInternalActionEnabled(spec, ctx)
+          : availability ? availability.available : isActionEnabled(spec, ctx);
+        if (!enabled) return settlePrepareResult(actionId, actionDisabled(availability));
+        const permission = resolveAgentEffectivePermission(ctx);
+        if (!permission.ok) return settlePrepareResult(actionId, permission.error);
+        const profileAdmission = await resolveProfileSkillSeedsAtAdmissionV1(authored, deps, ctx);
+        if (!profileAdmission.ok) return settlePrepareResult(actionId, profileAdmission);
+        // A Role can replace the authored Profile. Keep native dispatch as the
+        // final seed projector after interception and deferred approval, so
+        // this early availability check cannot retain superseded seeds.
+      }
       if (authored.executionTarget === undefined || authored.agentTarget === undefined) {
         // Both intercepted and direct invocations resolve inherited choices at
         // the authenticated start owner before strict creation-input parsing.
@@ -10354,8 +11216,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (!startContext) return settlePrepareResult(actionId,
           actionStartTargetUnavailableV1(ctx, 'agent_start_context', 'agent_start_context_unavailable'));
         ctx = { ...ctx, agentStartContext: startContext };
-        const agentTarget = startContext.caller.kind === 'session'
+        const inheritedTarget = startContext.caller.kind === 'session'
           ? startContext.baseline.configuration?.agentTarget : undefined;
+        // Host baselines may carry routing refs; creation takes the canonical
+        // contribution target projected by the existing target-key owner.
+        const agentTarget = authored.agentTarget === undefined && inheritedTarget
+          ? parseBackendTargetKeyV2(buildBackendTargetKeyV2(inheritedTarget)) : undefined;
         input = { ...authored,
           ...(authored.executionTarget === undefined && ctx.serverId && startContext.baseline.machineId
             ? { executionTarget: { serverId: ctx.serverId, machineId: startContext.baseline.machineId } } : {}),
@@ -10382,12 +11248,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
       ));
     }
-    const initialCurrentSessionScopeFailure = await resolveActionCurrentSessionScopeFailure(
+    const initialCurrentSessionScopeFailure = selectorIntent || hasSessionQuestionAnswerOrigin(actionId, ctx)
+      ? null : await resolveActionCurrentSessionScopeFailure(
       actionId,
       parsedInitialInput.data,
       ctx,
       spec.contextualDefaults,
       deps,
+      resolved => { ctx = { ...ctx, agentStartContext: resolved }; },
     );
     if (initialCurrentSessionScopeFailure) {
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(

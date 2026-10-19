@@ -2,20 +2,23 @@ import { describe, expect, it } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { createArtifactAccessActionsV1 } from './executor/artifactAccessActions.js';
-import { workflowDefinitionArtifactSharingAdapterV1 } from '../artifacts/artifactSharingV1.js';
 import type { ArtifactAccessGrantRowV1 } from '../artifacts/artifactAccessV1.js';
 
 const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
 
-function createFixture() {
+function createFixture(executorDeps: Pick<ActionExecutorDeps, 'isActionApprovalRequired'> = { isActionApprovalRequired: () => false }) {
   // Authenticated storage is the external boundary; Action/kind logic stays real.
   let grants: ArtifactAccessGrantRowV1[] = [];
+  let removed = false;
+  let readFailure: Error | undefined;
   const projection = () => ({ artifactId: 'artifact-1', ownerAccountId: 'owner', access: 'owner' as const, grants });
   const artifactAccessAction = createArtifactAccessActionsV1({
-    read: async () => ({ artifactId: 'artifact-1', access: 'owner',
+    read: async () => {
+      if (readFailure) throw readFailure;
+      return removed ? null : ({ artifactId: 'artifact-1', access: 'owner',
       header: { kind: 'workflow-definition.v1', definitionId: 'artifact-1', revision: { headerVersion: 1, bodyVersion: 1 }, metadata: { title: 'Workflow' } },
-      revision: { headerVersion: 1, bodyVersion: 1 } }),
-    adapters: [workflowDefinitionArtifactSharingAdapterV1],
+      revision: { headerVersion: 1, bodyVersion: 1 } });
+    },
     transport: {
       list: async () => projection(),
       set: async (input) => {
@@ -25,11 +28,24 @@ function createFixture() {
       remove: async () => { grants = []; return { ...projection(), changed: true }; },
     },
   });
-  return { executor: createActionExecutor({ artifactAccessAction, isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps),
-    readGrants: () => grants };
+  return { executor: createActionExecutor({ artifactAccessAction, ...executorDeps } as unknown as ActionExecutorDeps),
+    readGrants: () => grants, removeArtifact: () => { removed = true; }, failRead: (error: Error) => { readFailure = error; } };
 }
 
 describe('Artifact access Action family', () => {
+  it('preserves the canonical not-found refusal when a previously readable source disappears', async () => {
+    const { executor, removeArtifact, failRead } = createFixture({});
+    const input = { artifactId: 'artifact-1' };
+    await expect(executor.execute('artifact.access.grants.list', input, context)).resolves.toMatchObject({ ok: true });
+    removeArtifact();
+    await expect(executor.execute('artifact.access.grants.list', input, context)).resolves.toEqual({
+      ok: false, errorCode: 'artifact_not_found', error: 'artifact_not_found',
+    });
+    failRead(Object.assign(new Error('unexpected_storage_failure'), { code: 'unexpected_storage_failure' }));
+    await expect(executor.execute('artifact.access.grants.list', input, context)).resolves.toEqual({
+      ok: false, errorCode: 'action_failed', error: 'unexpected_storage_failure',
+    });
+  });
   it('persists and lists semantic grants through the canonical Action and kind owners', async () => {
     const { executor, readGrants } = createFixture();
     const input = { artifactId: 'artifact-1', principal: { kind: 'team', teamId: 'team-1' }, accessLevel: 'edit' };

@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { PROVIDER_ACTION_SPECS_V1 } from './providers.js';
 import { isProviderActionMachineRequiredV1 } from '../../providers/providerActionsV1.js';
+import { createProviderErrorV1, ProviderErrorV1Schema } from '../../providers/errors.js';
 
 describe('Provider Action placement declarations', () => {
+  it('retains strict typed refusals in observations without disclosing private Provider payloads', () => {
+    const spec = PROVIDER_ACTION_SPECS_V1.find(spec => spec.id === 'providers.probe')!;
+    const error = createProviderErrorV1('provider_endpoint_rate_limited', {
+      connectionId: 'gateway', machineId: 'hub', retryAfterMs: 1000,
+    });
+    const privatePayload = { baseUrl: 'https://private.example', credential: 'secret', models: ['private-model'] };
+    const observed = spec.projectObservationOutput?.({ status: 'error', error, ...privatePayload });
+    expect(observed).toEqual({ status: 'error', error });
+    expect(ProviderErrorV1Schema.safeParse((observed as { error: unknown }).error).success).toBe(true);
+    expect(spec.projectObservationOutput?.({ status: 'success', error, ...privatePayload }))
+      .toEqual({ status: 'success' });
+    for (const invalid of [{ ...error, ...privatePayload }, { ...error, retryable: false }, 'private failure prose']) {
+      expect(spec.projectObservationOutput?.({ status: 'error', error: invalid, ...privatePayload }))
+        .toEqual({ status: 'error' });
+    }
+  });
   it('classifies validated display-only updates as safe while consequential and malformed updates stay dangerous', () => {
     const spec = PROVIDER_ACTION_SPECS_V1.find(spec => spec.id === 'providers.connections.update')!;
     const rename = { action: 'update', connectionId: 'connection', expectedRevision: 1, displayName: 'Gateway' };

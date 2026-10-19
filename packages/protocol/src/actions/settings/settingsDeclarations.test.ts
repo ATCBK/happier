@@ -2,12 +2,57 @@ import { describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '../../account/settings/accountSettings.js';
 import { isAccountSettingActionSurfaceAllowedV1, isPresentUserSettingWriteV1 } from '../accountSettingDeclarations.js';
 import { isApprovalRequiredByActionsSettings } from '../actionApprovalPolicy.js';
+import { getActionSpec } from '../actionSpecs.js';
+import { requiresPresentUserExecutionAuthorityForActionInputV1 } from '../decisionAuthority.js';
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   parseBuiltInAccountSettingValueV1, readBuiltInAccountSettingValueV1,
   buildBuiltInAccountSettingMutationV1, readPortablePlatformAccountSettingBindingV1,
   readBuiltInSettingsOperationPolicyV1 } from './settingsDeclarations.js';
 
 describe('portable built-in Settings declarations', () => {
+  it('reads and changes coordinator creation defaults through sparse Account settings intents', () => {
+    const baseline = accountSettingsParse({});
+    const cases = [
+      ['coordination.newCoordinatorRole', 'coordinationCoordinatorRoleId', 'orchestrator', 'reviewer', ['', null, false]],
+      ['coordination.newCoordinatorKeep', 'coordinationCoordinatorKeep', 'suggest', 'list_pin', ['rail', null, false]],
+      ['coordination.suggestProjectRule', 'coordinationCoordinatorSuggestProjectRule', true, false, ['yes', null, 1]],
+      ['coordination.suggestHomeRule', 'coordinationCoordinatorSuggestHomeRule', true, false, ['yes', null, 1]],
+      ['coordination.newCoordinatorAnswersWorkerQuestions', 'coordinationCoordinatorAnswersWorkerQuestions', true, false, ['yes', null, 1]],
+    ] as const;
+    for (const [anchor, key, defaultValue, changedValue, invalidValues] of cases) {
+      const declaration = readBuiltInSettingDeclarationV1(anchor);
+      expect(declaration, anchor).toMatchObject({ pageId: 'coordination', storage: { scope: 'account', key, access: 'read_write' } });
+      if (!declaration) throw new Error(`missing coordinator setting: ${anchor}`);
+      expect(readBuiltInAccountSettingValueV1(declaration, baseline)).toEqual(defaultValue);
+      const mutation = buildBuiltInAccountSettingMutationV1(declaration, baseline, changedValue);
+      expect(mutation).toEqual({ [key]: changedValue });
+      expect(readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({ ...baseline, ...mutation }))).toEqual(changedValue);
+      for (const invalidValue of invalidValues) {
+        expect(buildBuiltInAccountSettingMutationV1(declaration, baseline, invalidValue)).toBeNull();
+      }
+    }
+    const keep = readBuiltInSettingDeclarationV1('coordination.newCoordinatorKeep')!;
+    for (const value of ['suggest', 'rail_bot', 'list_pin', 'none']) {
+      expect(buildBuiltInAccountSettingMutationV1(keep, baseline, value)).toEqual({ coordinationCoordinatorKeep: value });
+    }
+  });
+  it('reads and changes the shared autonomous exchange check-in preference', () => {
+    const declaration = readBuiltInSettingDeclarationV1('coordination.autonomousCheckIn');
+    expect(declaration).toMatchObject({
+      storage: { scope: 'account', key: 'coordinationAutonomousCheckIn', access: 'read_write' },
+    });
+    if (!declaration) throw new Error('autonomous exchange preference declaration unavailable');
+    const defaults = accountSettingsParse({});
+    expect(readBuiltInAccountSettingValueV1(declaration, defaults)).toEqual({ afterTurns: 5 });
+    expect(buildBuiltInAccountSettingMutationV1(declaration, defaults, { afterTurns: null }))
+      .toEqual({ coordinationAutonomousCheckIn: { afterTurns: null } });
+    expect(buildBuiltInAccountSettingMutationV1(declaration, defaults, { afterTurns: 10_000 }))
+      .toEqual({ coordinationAutonomousCheckIn: { afterTurns: 10_000 } });
+    for (const value of [{ afterTurns: 0 }, { afterTurns: -1 }, { afterTurns: 1.5 }, { afterTurns: '5' },
+      { afterTurns: 5, other: true }]) {
+      expect(buildBuiltInAccountSettingMutationV1(declaration, defaults, value)).toBeNull();
+    }
+  });
   it('keeps Account tool visibility human-owned across settings mutation routes', () => {
     const declaration = readBuiltInSettingDeclarationV1('transcript.showToolCalls');
     expect(declaration).toMatchObject({ presentUserOnly: true, surfaces: { agent: false, mcp: false } });
@@ -121,8 +166,11 @@ describe('portable built-in Settings declarations', () => {
     expect(isPresentUserSettingWriteV1('settings.set', input)).toBe(true);
     for (const surface of ['agent', 'mcp'] as const) {
       expect(isAccountSettingActionSurfaceAllowedV1('settings.set', input, surface)).toBe(true);
-      expect(isApprovalRequiredByActionsSettings('settings.set', waived, { surface }, undefined, undefined, input)).toBe(true);
+      expect(isApprovalRequiredByActionsSettings('settings.set', accountSettingsParse({}).actionsSettingsV1,
+        { surface }, undefined, undefined, input)).toBe(true);
+      expect(isApprovalRequiredByActionsSettings('settings.set', waived, { surface }, undefined, undefined, input)).toBe(false);
     }
+    expect(requiresPresentUserExecutionAuthorityForActionInputV1(getActionSpec('settings.set'), input)).toBe(true);
   });
   it('discovers Account, device, Home and Team Settings without a UI process', () => {
     const registry = BUILT_IN_SETTINGS_DECLARATIONS_V1;
@@ -130,7 +178,7 @@ describe('portable built-in Settings declarations', () => {
     expect(registry).toEqual(expect.arrayContaining([
       expect.objectContaining({ anchor: 'appearance.avatarStyle', storage: expect.objectContaining({ scope: 'account', key: 'avatarStyle' }) }),
       expect.objectContaining({ anchor: 'appearance.themeMode', storage: expect.objectContaining({ scope: 'local' }) }),
-      expect.objectContaining({ anchor: 'notifications.autoFollowAssigned', targetKinds: ['home'] }),
+      expect.objectContaining({ anchor: 'coordination.autoFollowAssigned', targetKinds: ['home'] }),
       expect.objectContaining({ pageId: 'teams', targetKinds: ['team'] }),
     ]));
   });

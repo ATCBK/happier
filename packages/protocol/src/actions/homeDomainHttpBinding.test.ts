@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/mini';
 
-import { bindHomeDomainHttpRequestV1 } from './homeDomainHttpBinding.js';
+import { bindHomeDomainHttpRequestV1, readHomeDomainConfirmedRollbackV1 } from './homeDomainHttpBinding.js';
 import { bindHomeDomainActionHttpRequestV1 } from './homeDomainActionFamily.js';
 import { DeleteSessionOrganizationFolderRequestSchema, DeleteSessionOrganizationTagRequestSchema } from '../sessions/organization/mutations.js';
 
 describe('Home-domain HTTP binding', () => {
+  it('recognizes only the exact confirmed transaction rollback response', () => {
+    const body = { error: 'database_transaction_conflict_exhausted', statusCode: 503 };
+    expect(readHomeDomainConfirmedRollbackV1(503, body)).toEqual({
+      code: 'database_transaction_conflict_exhausted',
+      details: body,
+    });
+    expect(readHomeDomainConfirmedRollbackV1(500, body)).toBeNull();
+    expect(readHomeDomainConfirmedRollbackV1(503, { ...body, statusCode: 500 })).toBeNull();
+    expect(readHomeDomainConfirmedRollbackV1(503, { ...body, extra: true })).toBeNull();
+  });
+
   it('keeps organization deletion identities in the body required by the existing HTTP routes', () => {
     const folder = bindHomeDomainActionHttpRequestV1('session.folders.delete', {
       folderId: 'folder/a', assignmentBehavior: 'moveAssignmentsToParent',

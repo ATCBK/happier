@@ -12,7 +12,9 @@ function secretSpec<TId extends PersonalSavedSecretActionIdV1>(id: TId, title: s
     ...(typeof value.name === 'string' ? { name: value.name } : {}),
     ...(typeof value.kind === 'string' ? { kind: value.kind } : {}),
   }; };
-  return { id, title, safety: read ? 'safe' : 'danger', approval: { result: read ? 'none' : 'required' }, approvalPolicy: {},
+  return { id, title, safety: read ? 'safe' : 'danger', approval: { result: read ? 'none' : 'required' },
+    // Deleting loses the value; creating and editing your own secret are reversible.
+    approvalPolicy: id === 'secrets.create' || id === 'secrets.update' ? { uiConfirmation: 'direct' } : {},
     sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', placements: [], requiredAuthority: 'account_automation',
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false },
     bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') }, inputSchema: inputs[id], outputSchema: outputs[id], inputHints: { fields: [

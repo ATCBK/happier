@@ -35,7 +35,11 @@ describe('getActionRequiredServerFeatureId', () => {
       }));
       // V8 omits unexecuted scripts. Prove the allocation detector works with
       // one genuine validation failure, outside the measured classification.
-      z.string().safeParse(null);
+      const invalid = z.string().safeParse(null);
+      expect(invalid.success).toBe(false);
+      // Error construction is lazy; observing only `success` deliberately
+      // allocates no ZodError. Materialize the control outside the measurement.
+      if (!invalid.success) expect(invalid.error.issues).toHaveLength(1);
       const control = await inspector.post('Profiler.takePreciseCoverage');
       expect(control.result.filter(script => script.url.endsWith('/zod/v4/core/errors.js'))
         .flatMap(script => script.functions).filter(fn => fn.functionName === 'initializer')
@@ -67,8 +71,8 @@ describe('getActionRequiredServerFeatureId', () => {
     expect(getActionRequiredServerFeatureId('workflow.run.start')).toBe('workflows');
     expect(getActionRequiredServerFeatureId('workflow.definition.get')).toBe('workflows');
     expect(getActionRequiredServerFeatureId('workflow.unknown')).toBeNull();
-    expect(getActionRequiredServerFeatureId('session.discussion.list')).toBe('sessions.conversations');
-    expect(getActionRequiredServerFeatureId('session.discussion.post')).toBe('sessions.conversations');
+    expect(getActionRequiredServerFeatureId('discussion.list')).toBe('sessions.conversations');
+    expect(getActionRequiredServerFeatureId('discussion.post')).toBe('sessions.conversations');
     expect(getActionRequiredServerFeatureId('session.board.get')).toBeNull();
     expect(getActionRequiredServerFeatureId('session.board.item.upsert')).toBeNull();
     expect(getActionRequiredServerFeatureId('session.board.item.remove')).toBeNull();
@@ -81,8 +85,8 @@ describe('getActionRequiredServerFeatureId', () => {
       .toBe('teams.credentialResources.externalApi');
     expect(getActionRequiredServerFeatureId('teams.list')).toBe('teams');
     expect(getActionRequiredServerFeatureId('teams.invitations.create')).toBe('teams');
-    expect(getActionRequiredServerFeatureId('session.follow.set')).toBe('sessions.following');
-    expect(getActionRequiredServerFeatureId('session.follow.sources.list')).toBe('sessions.following');
+    expect(getActionRequiredServerFeatureId('follow.set')).toBe('sessions.following');
+    expect(getActionRequiredServerFeatureId('follow.list')).toBe('sessions.following');
     expect(getActionRequiredServerFeatureId('session.access.grant.set')).toBe('sharing.session');
     expect(getActionRequiredServerFeatureId('session.responsibility.set')).toBe('sharing.session');
     expect(getActionRequiredServerFeatureId('session.public_link.create')).toBe('sharing.public');

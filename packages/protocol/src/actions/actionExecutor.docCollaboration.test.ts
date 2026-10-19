@@ -1,0 +1,468 @@
+import { describe, expect, it } from 'vitest';
+import { createActionExecutor, type ActionExecutorDeps, type ActionExecutorContext } from './actionExecutor.js';
+import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { decideApprovalRequestTransition } from '../approvals/approvalRequestTransition.js';
+import { DocEditAcceptHostInputV1Schema, DocEditDecisionResultV1Schema } from '../artifacts/artifactCollaborationActionsV1.js';
+import { ArtifactDocumentV1Schema } from '../artifacts/artifactActionsV1.js';
+import { getActionSpec } from './actionSpecs.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
+import { isAgentInitiatedApprovalRequiredByDefault } from './actionApprovalPolicy.js';
+import { DISCUSSION_ACTION_INPUT_SCHEMAS_V1, DiscussionPostResultV1Schema, DiscussionOpenedSummaryV1Schema,
+  type DiscussionOpenedSummaryV1 } from '../discussions/actions.js';
+
+const ref = { kind: 'doc' as const, artifactId: 'doc', serverId: 'home' };
+const revision = { headerVersion: 2, bodyVersion: 3 };
+const artifact = ArtifactDocumentV1Schema.parse({ artifactId: 'doc', ownerAccountId: 'owner', access: 'view',
+  header: { title: 'Shared notes', kind: 'markdown' }, body: '# Notes\n\nRead this.', revision,
+  publicAudience: 'none', seq: 1, createdAt: 1, updatedAt: 1 });
+const context = { surface: 'agent', authority: 'account_automation', serverId: 'home', expectedAccountId: 'reader' } as const;
+const discussionRef = { serverId: 'home', discussionId: 'thread' };
+const proposalRef = { kind: 'discussion' as const, discussion: discussionRef, messageId: 'candidate' };
+const target = { ref, revision, range: { start: 9, end: 18 }, quote: 'Read this' };
+const proposal = { target, discussionRef, localId: 'propose-retry', baseRevision: revision,
+  before: target.quote, after: 'Read that', reason: 'Clarify the instruction' };
+const decisionInputs = {
+  'doc.edit.accept': { proposalRef, expectedRevision: revision },
+  'doc.edit.decline': { proposalRef },
+} as const;
+
+function fixture(value: unknown = { artifact }) {
+  // Opened authenticated Artifact transport is the boundary; catalog, admission and schemas stay real.
+  const artifactAction: NonNullable<ActionExecutorDeps['artifactAction']> = async () => value;
+  return createActionExecutor({ artifactAction });
+}
+
+const person = { ...context, surface: 'ui' as const, authority: 'present_user' as const };
+const text = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Please clarify' }] };
+const rootMessage = {
+  id: 'root', discussionId: 'thread', localId: 'root-local', seq: 1,
+  authorAccountId: 'reader', accountActor: { v: 1, accountId: 'reader', profile: null }, producerV1: null,
+  content: { kind: 'doc_passage_comment', passage: target, content: text },
+  replyTarget: { kind: 'doc_passage', doc: { ref, revision } }, mentionedAccountIds: [], createdAt: 1,
+  messageRef: { kind: 'discussion', discussion: discussionRef, messageId: 'root' },
+};
+
+function discussionFixture() {
+  // The opened Home transport is the boundary; C3 semantic/result schemas stay real.
+  const writes: unknown[] = [];
+  const discussionAction: NonNullable<ActionExecutorDeps['discussionAction']> = async ({ actionId, input }) => {
+    const request = DISCUSSION_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+    if (actionId === 'discussion.read') {
+      const read = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read'].parse(request);
+      const older = read.beforeSeq === 2;
+      return { v: 1, serverId: 'home', discussionId: 'thread',
+        messages: older ? [rootMessage] : [{ ...rootMessage, id: 'later', seq: 2,
+          messageRef: { ...rootMessage.messageRef, messageId: 'later' } }],
+        messageSeq: 2, hasMoreOlder: !older, incomplete: false };
+    }
+    if (actionId !== 'discussion.post' && actionId !== 'discussion.reply') throw new Error('Unexpected transport request');
+    const post = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.post'].parse(request);
+    writes.push(post);
+    return DiscussionPostResultV1Schema.parse({ v: 1, serverId: 'home', messageSeq: 2,
+      message: { ...rootMessage, id: 'saved', localId: post.localId, seq: 2, content: post.content,
+        replyTarget: post.replyTarget, messageRef: { ...rootMessage.messageRef, messageId: 'saved' } } });
+  };
+  return { executor: createActionExecutor({ discussionAction }), writes };
+}
+
+function countSummary(id: string, changes: Partial<DiscussionOpenedSummaryV1> = {}) {
+  return DiscussionOpenedSummaryV1Schema.parse({ id, ownerAccountId: 'reader', encryptionMode: 'plain',
+    anchor: { kind: 'doc', doc: { ref: { ...ref, serverId: 'creator-cli-only-profile' }, revision } },
+    access: 'view', keyReadiness: true, dataEncryptionKey: null, creationLocalId: null, title: 'Passage thread',
+    latestMessage: { id: `${id}-latest`, localId: null, seq: 2, authorAccountId: 'reader',
+      accountActor: rootMessage.accountActor, producerV1: null, createdAt: 1 },
+    messageSeq: 2, lastReadSeq: 2, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: ['reader'], archivedAt: null,
+    firstMessage: countRoot(id),
+    capabilities: { postMessages: false, rename: false, archive: false, restore: false, askAgent: false,
+      sendToSession: false, manageAccess: false, leave: true }, ...changes });
+}
+
+function countRoot(discussionId: string) {
+  return { ...rootMessage, id: `${discussionId}-root`, discussionId, messageRef: { ...rootMessage.messageRef, messageId: `${discussionId}-root`,
+    discussion: { ...discussionRef, discussionId } } };
+}
+
+describe('Doc collaboration Actions', () => {
+  it('counts active readable Doc threads once across every list page, excluding archived, locked and source-withheld roots', async () => {
+    let empty = false;
+    const cursors: Array<string | undefined> = [];
+    const oldRevision = { headerVersion: 1, bodyVersion: 1 };
+    const first = countSummary('first');
+    const second = countSummary('settled', { anchor: { kind: 'doc', doc: { ref, revision: oldRevision } },
+      firstMessage: { ...countRoot('settled'),
+        content: { kind: 'doc_edit_proposal', proposal: { target: { ...target, revision: oldRevision }, baseRevision: oldRevision,
+          before: target.quote, after: 'Already reviewed', reason: 'Clarify' } },
+        replyTarget: { kind: 'doc_passage', doc: { ref, revision: oldRevision } },
+        docEditProposalDispositionV1: { state: 'declined', decidedBy: { accountId: 'reader', atMs: 3 } } } });
+    const executor = createActionExecutor({
+      artifactAction: async () => ({ artifact }),
+      // Opened, authenticated C3 HTTP responses are the boundary; count, paging and source checks stay real.
+      discussionAction: async ({ actionId, input }) => {
+        if (actionId !== 'discussion.list') throw new Error('Count must use one existing batch page, not per-thread reads or writes');
+        const args = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.list'].parse(input);
+        expect(args).toMatchObject({ state: 'active', anchorDocArtifactId: 'doc' });
+        cursors.push(args.cursor);
+        if (empty) return { v: 1, serverId: 'home', discussions: [], nextCursor: null, incomplete: false };
+        const discussions = args.cursor === 'last' ? [first, second] : args.cursor === 'middle'
+          ? [countSummary('other-doc', { anchor: { kind: 'doc', doc: { ref: { ...ref, artifactId: 'other' }, revision } } })]
+          : [first, countSummary('archived', { archivedAt: 1 }),
+            countSummary('locked', { keyReadiness: false, firstMessage: null }), countSummary('denied', { firstMessage: null })];
+        return { v: 1, serverId: 'home', discussions, nextCursor: args.cursor === 'last' ? null
+          : args.cursor === 'middle' ? 'last' : 'middle', incomplete: true };
+      },
+    });
+    expect(await executor.execute('doc.read', { ref }, context)).toMatchObject({ ok: true, result: { artifact, openCommentCount: 2 } });
+    expect(cursors).toEqual([undefined, 'middle', 'last']);
+    empty = true;
+    expect(await executor.execute('doc.read', { ref }, context)).toMatchObject({ ok: true, result: { openCommentCount: 0 } });
+    expect(cursors).toEqual([undefined, 'middle', 'last', undefined]);
+  });
+
+  it.each(['later-list-failure', 'invalid-page', 'repeated-cursor', 'foreign-home', 'missing-root-fact',
+    'unopenable-root', 'later-ordinary-row', 'wrong-root'] as const)(
+    'returns an explicitly unavailable count, never a partial total, after %s', async problem => {
+      const executor = createActionExecutor({ artifactAction: async () => ({ artifact }),
+        discussionAction: async ({ actionId, input }) => {
+          if (actionId !== 'discussion.list') throw new Error('Unexpected count operation');
+          const args = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.list'].parse(input);
+          if (args.cursor && problem === 'later-list-failure') return { ok: false, errorCode: 'outcome_unknown', error: 'network' };
+          if (problem === 'invalid-page') return { discussions: [] };
+          const summary = countSummary('first');
+          const { firstMessage: _firstMessage, ...missing } = summary;
+          const root = countRoot('first');
+          const candidate = problem === 'missing-root-fact' ? missing
+            : problem === 'unopenable-root' ? { ...summary, firstMessage: { ...root, content: null } }
+              : problem === 'later-ordinary-row' ? { ...summary, firstMessage: { ...root, seq: 2, content: text, replyTarget: undefined } }
+                : problem === 'wrong-root' ? { ...summary, firstMessage: { ...root, discussionId: 'different-thread',
+                  messageRef: { ...root.messageRef, discussion: { ...discussionRef, discussionId: 'different-thread' } } } } : summary;
+          return { v: 1, serverId: problem === 'foreign-home' ? 'foreign' : 'home', discussions: [candidate],
+            nextCursor: problem === 'repeated-cursor' || problem === 'later-list-failure' ? 'next' : null, incomplete: false };
+        } });
+      expect(await executor.execute('doc.read', { ref }, context)).toMatchObject({ ok: true, result: { artifact, openCommentCount: null } });
+    });
+
+  it('propagates cancellation during comment enumeration and rejects a foreign Doc before either read owner', async () => {
+    const controller = new AbortController();
+    const operations: string[] = [];
+    const executor = createActionExecutor({ artifactAction: async () => { operations.push('artifact'); return { artifact }; },
+      discussionAction: async ({ actionId }) => { operations.push(actionId); controller.abort();
+        return { v: 1, serverId: 'home', discussions: [], nextCursor: null, incomplete: false }; } });
+    expect(await executor.execute('doc.read', { ref: { ...ref, serverId: 'foreign' } }, context))
+      .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(operations).toEqual([]);
+    expect(await executor.execute('doc.read', { ref }, { ...context, signal: controller.signal })).toMatchObject({ ok: false });
+    expect(operations).toEqual(['artifact', 'discussion.list']);
+  });
+  it('uses established Home equivalence for reads, parent replies and prepared decisions without admitting a foreign Home', async () => {
+    const portableHome = 'srv_doc_home';
+    const proposalRefOnPortableHome = { ...proposalRef, discussion: { ...discussionRef, serverId: portableHome } };
+    const accepted = { state: 'accepted', acceptedRevision: { ...revision, bodyVersion: 4 }, decidedBy: { accountId: 'editor', atMs: 5 } } as const;
+    const decisions: unknown[] = [];
+    const writes: unknown[] = [];
+    const executor = createActionExecutor({
+      resolveServerProfileScopeId: identifier => identifier === 'home' || identifier === portableHome ? portableHome : identifier,
+      // Authenticated opened Artifact/Discussion transports are the boundaries, not Home identity or preparation logic.
+      artifactAction: async request => {
+        if (request.actionId === 'artifact.get') return { artifact: { ...artifact, access: 'edit' } };
+        decisions.push(request);
+        return { proposalRef, docEditProposalDispositionV1: accepted };
+      },
+      discussionAction: async request => {
+        if (request.actionId === 'discussion.read') {
+          const isProposal = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read'].parse(request.input).beforeSeq === undefined;
+          return { v: 1, serverId: 'home', discussionId: 'thread', messageSeq: 2, hasMoreOlder: isProposal, incomplete: false,
+            messages: [isProposal ? { ...rootMessage, id: 'candidate', seq: 2, messageRef: proposalRef,
+              content: { kind: 'doc_edit_proposal', proposal: { target: { ...target,
+                ref: { ...ref, serverId: 'creator-cli-only-profile' } }, baseRevision: revision, before: target.quote,
+                after: proposal.after, reason: proposal.reason } }, replyTarget: { kind: 'doc_passage', doc: {
+                  ref: { ...ref, serverId: 'creator-cli-only-profile' }, revision,
+                } }, docEditProposalDispositionV1: { state: 'open' } } : { ...rootMessage,
+                  content: { ...rootMessage.content, passage: { ...target, ref: { ...ref, serverId: 'creator-cli-only-profile' } } },
+                  replyTarget: { kind: 'doc_passage', doc: { ref: { ...ref, serverId: 'creator-cli-only-profile' }, revision } },
+                }] };
+        }
+        const posted = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.reply'].parse(request.input);
+        writes.push(posted);
+        return { v: 1, serverId: 'home', messageSeq: 3, message: { ...rootMessage, id: 'alias-reply', seq: 3,
+          localId: posted.localId, content: posted.content, replyTarget: posted.replyTarget,
+          messageRef: { ...rootMessage.messageRef, messageId: 'alias-reply' } } };
+      },
+    });
+    const onPortableHome = { ...person, serverId: portableHome, serverIdentityId: portableHome };
+    expect(await executor.execute('doc.read', { ref }, onPortableHome)).toMatchObject({ ok: true });
+    expect(await executor.execute('doc.comment.reply', { target, localId: 'alias-reply', content: text,
+      parentMessageRef: rootMessage.messageRef }, onPortableHome)).toMatchObject({ ok: true });
+    expect(writes).toHaveLength(1);
+    const acceptedResult = await executor.execute('doc.edit.accept', { proposalRef: proposalRefOnPortableHome, expectedRevision: revision }, onPortableHome);
+    expect(acceptedResult, JSON.stringify(acceptedResult)).toMatchObject({ ok: true, result: { docEditProposalDispositionV1: accepted } });
+    expect(decisions[0]).toMatchObject({ input: { proposalRef: proposalRefOnPortableHome,
+      preparation: { doc: { ref: { ...ref, serverId: portableHome } }, body: '# Notes\n\nRead that.' } } });
+    expect(await executor.execute('doc.edit.decline', { proposalRef: { ...proposalRef,
+      discussion: { ...discussionRef, serverId: 'foreign-home' } } }, onPortableHome))
+      .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(decisions).toHaveLength(1);
+  });
+  it('prepares acceptance from the exact stored proposal and current Doc, rejoins settled decisions, and declines without a body', async () => {
+    const accepted = { state: 'accepted', acceptedRevision: { ...revision, bodyVersion: 4 }, decidedBy: { accountId: 'editor', atMs: 5 } } as const;
+    const declined = { state: 'declined', decidedBy: { accountId: 'editor', atMs: 6 } } as const;
+    let disposition: unknown = { state: 'open' };
+    const decisions: unknown[] = [];
+    let recipientWrites = 0;
+    const executor = createActionExecutor({
+      // Opened C3/Artifact transport and the host codec/decision endpoint are genuine boundaries.
+      discussionAction: async () => ({ v: 1, serverId: 'home', discussionId: 'thread', messageSeq: 1,
+        messages: [{ ...rootMessage, id: 'candidate', messageRef: proposalRef,
+          content: { kind: 'doc_edit_proposal', proposal: { target, baseRevision: revision,
+            before: target.quote, after: proposal.after, reason: proposal.reason } }, docEditProposalDispositionV1: disposition }],
+        hasMoreOlder: false, incomplete: false }),
+      artifactAction: async (request) => {
+        if (request.actionId === 'artifact.get') {
+          // Ordinary host reads may prepare envelopes; decision preparation is read-only.
+          if (!('readOnly' in request) || request.readOnly !== true) recipientWrites += 1;
+          return { artifact: { ...artifact, access: 'edit' } };
+        }
+        decisions.push(request);
+        if (typeof disposition === 'object' && disposition !== null && 'state' in disposition && disposition.state === 'open') {
+          disposition = request.actionId === 'doc.edit.accept' ? accepted : declined;
+        }
+        return { proposalRef, docEditProposalDispositionV1: disposition };
+      },
+    });
+    expect(await executor.execute('doc.edit.accept', decisionInputs['doc.edit.accept'], person))
+      .toMatchObject({ ok: true, result: { proposalRef, docEditProposalDispositionV1: accepted } });
+    expect(decisions[0]).toMatchObject({ actionId: 'doc.edit.accept', input: { ...decisionInputs['doc.edit.accept'],
+      preparation: { doc: { ref, revision }, body: '# Notes\n\nRead that.' } } });
+    expect(recipientWrites).toBe(0);
+    expect(await executor.execute('doc.edit.accept', decisionInputs['doc.edit.accept'], person)).toMatchObject({ ok: true });
+    expect(decisions[1]).toMatchObject({ actionId: 'doc.edit.accept', input: decisionInputs['doc.edit.accept'] });
+    expect(decisions[1]).not.toHaveProperty('input.preparation');
+    expect(await executor.execute('doc.edit.decline', decisionInputs['doc.edit.decline'], person))
+      .toMatchObject({ ok: true, result: { docEditProposalDispositionV1: accepted } });
+    expect(decisions[2]).toMatchObject({ actionId: 'doc.edit.decline', input: decisionInputs['doc.edit.decline'] });
+    expect(decisions[2]).not.toHaveProperty('input.preparation');
+    disposition = { state: 'open' };
+    expect(await executor.execute('doc.edit.decline', decisionInputs['doc.edit.decline'], person))
+      .toMatchObject({ ok: true, result: { docEditProposalDispositionV1: declined } });
+    const count = decisions.length;
+    for (const actionId of ['doc.edit.accept', 'doc.edit.decline'] as const) {
+      for (const executionContext of [{ ...context, bypassApprovals: true }, { ...context, actionsSettings: normalizeActionsSettingsV1({
+        v: 1, approvalWaivedSurfaces: { [actionId]: ['agent'] },
+      }) }]) {
+        expect(await executor.execute(actionId, decisionInputs[actionId], executionContext)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      }
+    }
+    expect(decisions).toHaveLength(count);
+  });
+  it('refuses stale full revisions, mismatched Doc identity and changed source quote before decision transport', async () => {
+    const stored = { ...rootMessage, id: 'candidate', messageRef: proposalRef,
+      content: { kind: 'doc_edit_proposal', proposal: { target, baseRevision: revision,
+        before: target.quote, after: proposal.after, reason: proposal.reason } }, docEditProposalDispositionV1: { state: 'open' } };
+    for (const [current, errorCode] of [
+      [{ ...artifact, revision: { ...revision, headerVersion: 3 } }, 'version_mismatch'],
+      [{ ...artifact, revision: { ...revision, bodyVersion: 4 } }, 'version_mismatch'],
+      [{ ...artifact, artifactId: 'different' }, 'doc_target_mismatch'],
+      [{ ...artifact, body: '# Notes\n\nDifferent.' }, 'doc_passage_mismatch'],
+    ] as const) {
+      let decisions = 0;
+      const executor = createActionExecutor({
+        discussionAction: async () => ({ v: 1, serverId: 'home', discussionId: 'thread', messages: [stored],
+          messageSeq: 1, hasMoreOlder: false, incomplete: false }),
+        artifactAction: async request => {
+          if (request.actionId !== 'artifact.get') decisions += 1;
+          return { artifact: current };
+        },
+      });
+      expect(await executor.execute('doc.edit.accept', decisionInputs['doc.edit.accept'], person)).toMatchObject({ ok: false, errorCode });
+      expect(decisions).toBe(0);
+    }
+    expect(DocEditAcceptHostInputV1Schema.safeParse({ ...decisionInputs['doc.edit.accept'], preparation: {
+      doc: { ref, revision: { ...revision, headerVersion: 4 } }, body: 'unreviewed',
+    } }).success).toBe(false);
+    expect(DocEditDecisionResultV1Schema.safeParse({ proposalRef, docEditProposalDispositionV1: { state: 'open' } }).success).toBe(false);
+  });
+  it('replays an approved Agent decision only through actual present-person host authority', async () => {
+    let stored: ApprovalRequest = ApprovalRequestV2Schema.parse({ v: 2, status: 'approved', createdAtMs: 1, updatedAtMs: 2,
+      createdBy: { surface: 'agent', sessionId: 'receiver' }, requestedSurface: 'agent', actionId: 'doc.edit.decline',
+      actionArgs: decisionInputs['doc.edit.decline'], summary: 'Review proposal', decision: { kind: 'approve', decidedAtMs: 2 },
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+        caller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
+        sessionId: 'receiver', serverId: 'home', accountId: 'reader', machineId: 'machine', actionId: 'doc.edit.decline', requestId: 'decision' } });
+    const effects: ActionExecutorContext[] = [];
+    const executor = createActionExecutor({
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        const next = ApprovalRequestV2Schema.parse(request);
+        const transition = decideApprovalRequestTransition(stored, next);
+        if (!transition.ok) return transition;
+        stored = next;
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+      artifactAction: async request => {
+        effects.push(request.context);
+        return { proposalRef, docEditProposalDispositionV1: { state: 'declined', decidedBy: { accountId: 'reader', atMs: 3 } } };
+      },
+    });
+    expect(await executor.replayApprovedApprovalRequest({ artifactId: 'human-decision', callerAuthority: 'account_automation' }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(effects).toHaveLength(0);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'human-decision', decision: 'approve' },
+      { ...person, runtimeAccountId: 'reader', actionCaller: { kind: 'host' } }))
+      .toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(effects).toEqual([expect.objectContaining({ authority: 'present_user', actionCaller: { kind: 'host' } })]);
+    expect(effects[0]).not.toHaveProperty('defaultSessionId');
+  });
+  it.each(['doc.comment.reply', 'doc.edit.propose'] as const)('retains the original Session and approved replay witness at the C3 publisher for %s', async actionId => {
+    const actionArgs = actionId === 'doc.comment.reply' ? { target, discussionRef, localId: 'comment-retry', content: text } : proposal;
+    let stored: ApprovalRequest = ApprovalRequestV2Schema.parse({ v: 2, status: 'approved', createdAtMs: 1, updatedAtMs: 2,
+      createdBy: { surface: 'agent', sessionId: 'receiver' }, requestedSurface: 'agent', actionId, actionArgs, summary: 'Publish',
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' },
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+        caller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
+        sessionId: 'receiver', serverId: 'home', accountId: 'reader', machineId: 'machine', actionId, requestId: 'publication' } });
+    const publications: ActionExecutorContext[] = [];
+    const executor = createActionExecutor({
+      // Approval Artifact persistence, live Session custody and opened C3 HTTP are genuine host boundaries.
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        const next = ApprovalRequestV2Schema.parse(request);
+        const transition = decideApprovalRequestTransition(stored, next);
+        if (!transition.ok) return transition;
+        stored = next;
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+      discussionAction: async ({ actionId: child, input, context: executionContext }) => {
+        if (child !== 'discussion.post') throw new Error('Unexpected C3 publication');
+        const post = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.post'].parse(input);
+        publications.push(executionContext);
+        return DiscussionPostResultV1Schema.parse({ v: 1, serverId: 'home', messageSeq: 2,
+          message: { ...rootMessage, localId: post.localId, content: post.content, replyTarget: post.replyTarget } });
+      },
+    });
+    expect(await executor.replayApprovedApprovalRequest({ artifactId: 'approved-doc' })).toMatchObject({ ok: true });
+    expect(publications).toEqual([expect.objectContaining({ authority: 'account_automation', surface: 'agent',
+      actionCaller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
+      approvedActionReplay: { artifactId: 'approved-doc' } })]);
+    expect(stored.status).toBe('executed');
+  });
+  it('posts a qualified encrypted-content passage root through the existing C3 writer', async () => {
+    const { executor, writes } = discussionFixture();
+    expect(await executor.execute('doc.comment.reply', { discussionRef, target: { ...target,
+      ref: { kind: 'doc', artifactId: 'doc' } }, localId: 'comment-retry', content: text }, person))
+      .toMatchObject({ ok: true, result: { message: { content: rootMessage.content,
+        replyTarget: rootMessage.replyTarget, messageRef: { messageId: 'saved' } } } });
+    expect(writes).toEqual([{ discussionId: 'thread', localId: 'comment-retry', content: rootMessage.content,
+      replyTarget: rootMessage.replyTarget }]);
+  });
+
+  it('uses the committed root for replies and permits a new-revision redo proposal only on the same Doc', async () => {
+    const { executor, writes } = discussionFixture();
+    const parentMessageRef = rootMessage.messageRef;
+    expect(await executor.execute('doc.comment.reply', { target, parentMessageRef, localId: 'reply-retry', content: text }, person))
+      .toMatchObject({ ok: true, result: { message: { content: text, replyTarget: { kind: 'message', messageId: 'root' } } } });
+    const nextRevision = { ...revision, bodyVersion: 4 };
+    const redo = { ...proposal, target: { ...target, revision: nextRevision }, baseRevision: nextRevision,
+      replyTo: parentMessageRef };
+    expect(await executor.execute('doc.edit.propose', redo, person)).toMatchObject({ ok: true,
+      result: { message: { content: { kind: 'doc_edit_proposal', proposal: {
+        target: redo.target, baseRevision: nextRevision, before: redo.before, after: redo.after, reason: redo.reason,
+      } }, replyTarget: { kind: 'message', messageId: 'root' } } } });
+    expect(await executor.execute('doc.comment.reply', { target: { ...target, range: { start: 0, end: 9 } },
+      parentMessageRef, localId: 'wrong-passage', content: text }, person))
+      .toMatchObject({ ok: false, errorCode: 'doc_passage_mismatch' });
+    expect(await executor.execute('doc.edit.propose', { ...redo, target: { ...redo.target, ref: { ...ref, artifactId: 'another' } } }, person))
+      .toMatchObject({ ok: false, errorCode: 'doc_passage_mismatch' });
+    expect(writes).toHaveLength(2);
+  });
+
+  it('publishes strict revision-qualified comment/proposal inputs without author-controlled decisions', () => {
+    const comment = getActionSpec('doc.comment.reply');
+    const propose = getActionSpec('doc.edit.propose');
+    expect(comment.inputSchema.safeParse({ target, localId: 'comment-retry',
+      content: { v: 1, parts: [{ t: 'text', text: 'Please clarify' }] } }).success).toBe(true);
+    expect(propose.inputSchema.safeParse(proposal).success).toBe(true);
+    expect(propose.inputSchema.safeParse({ ...proposal, baseRevision: { ...revision, headerVersion: 1 } }).success).toBe(false);
+    expect(propose.inputSchema.safeParse({ ...proposal, before: 'Different passage' }).success).toBe(false);
+    expect(propose.inputSchema.safeParse({ ...proposal, decidedBy: { accountId: 'forged', atMs: 1 } }).success).toBe(false);
+    expect(getActionSpec('doc.edit.accept').inputSchema.safeParse({
+      ...decisionInputs['doc.edit.accept'], body: 'Unreviewed replacement',
+    }).success).toBe(false);
+    expect(getActionSpec('doc.edit.decline').inputSchema.safeParse({
+      ...decisionInputs['doc.edit.decline'], authority: 'present_user',
+    }).success).toBe(false);
+    for (const id of ['doc.comment.reply', 'doc.edit.propose', 'doc.edit.accept', 'doc.edit.decline'] as const) {
+      expect(isAgentInitiatedApprovalRequiredByDefault(id), id).toBe(true);
+      expect(getActionSpec(id).surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, plugin: true });
+    }
+  });
+
+  it('requires present-person execution even when an Agent has waived prompts or bypasses approvals', async () => {
+    const executor = createActionExecutor({});
+    for (const actionId of ['doc.edit.accept', 'doc.edit.decline'] as const) {
+      expect(getActionSpec(actionId).requiredAuthority).toBe('present_user');
+      const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['agent'] } });
+      for (const authorityContext of [{ ...context, actionsSettings: settings }, { ...context, bypassApprovals: true }]) {
+        expect(await executor.execute(actionId, decisionInputs[actionId], authorityContext))
+          .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      }
+    }
+  });
+
+  it('rejects cross-Home passage and thread operands while leaving an omitted passage Home for execution scope', () => {
+    const comment = getActionSpec('doc.comment.reply').inputSchema;
+    const propose = getActionSpec('doc.edit.propose').inputSchema;
+    const commentInput = { target, discussionRef, localId: 'comment-retry',
+      content: { v: 1, parts: [{ t: 'text', text: 'Please clarify' }] } };
+    const foreignTarget = { ...target, ref: { ...ref, serverId: 'other' } };
+    expect(comment.safeParse({ ...commentInput, target: foreignTarget }).success).toBe(false);
+    const { discussionRef: _discussionRef, ...withoutDiscussion } = commentInput;
+    expect(comment.safeParse({ ...withoutDiscussion, target: foreignTarget, parentMessageRef: proposalRef }).success).toBe(false);
+    expect(propose.safeParse({ ...proposal, target: foreignTarget }).success).toBe(false);
+    const unqualifiedTarget = { ...target, ref: { kind: 'doc', artifactId: 'doc' } };
+    expect(comment.safeParse({ ...commentInput, target: unqualifiedTarget }).success).toBe(true);
+    expect(propose.safeParse({ ...proposal, target: unqualifiedTarget }).success).toBe(true);
+  });
+
+  it('returns unsupported when the safe codec/transaction host producer is absent', async () => {
+    const executor = createActionExecutor({});
+    const person = { ...context, surface: 'ui' as const, authority: 'present_user' as const };
+    for (const actionId of ['doc.edit.accept', 'doc.edit.decline'] as const) {
+      expect(await executor.execute(actionId, decisionInputs[actionId], person))
+        .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    }
+    expect(await executor.execute('doc.comment.reply', { target, localId: 'comment-retry',
+      content: { v: 1, parts: [{ t: 'text', text: 'Please clarify' }] } }, person))
+      .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(await executor.execute('doc.edit.propose', proposal, person))
+      .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+  });
+
+  it('reads canonical text and full revision through the existing authenticated Artifact reader', async () => {
+    const executor = fixture();
+    expect(await executor.execute('doc.read', { ref }, context)).toMatchObject({ ok: true,
+      result: { ref, artifact, openCommentCount: null } });
+    expect(await executor.execute('doc.read', { ref: { kind: 'doc', artifactId: 'doc' }, revision }, context))
+      .toMatchObject({ ok: true, result: { ref, artifact } });
+  });
+
+  it('fails closed for a different Home, unavailable source, or either changed revision component', async () => {
+    expect(await fixture().execute('doc.read', { ref: { ...ref, serverId: 'other' } }, context))
+      .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(await fixture({ artifact: null }).execute('doc.read', { ref }, context))
+      .toMatchObject({ ok: false, errorCode: 'not_found' });
+    for (const expected of [{ ...revision, headerVersion: 1 }, { ...revision, bodyVersion: 2 }]) {
+      expect(await fixture().execute('doc.read', { ref, revision: expected }, context))
+        .toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+    }
+    expect(await fixture({ ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' })
+      .execute('doc.read', { ref }, context)).toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
+
+  it('does not expose structured Memory, HTML, or internal content through a prose reader', async () => {
+    for (const kind of ['memory_doc.v1', 'prompt_doc.v2', 'html', 'approval_request.v1']) {
+      expect(await fixture({ artifact: { ...artifact, header: { ...artifact.header, kind } } })
+        .execute('doc.read', { ref }, context)).toMatchObject({ ok: false, errorCode: 'doc_kind_not_prose' });
+    }
+  });
+});

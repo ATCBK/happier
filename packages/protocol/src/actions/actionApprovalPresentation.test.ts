@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeApprovalActionFields, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
+import { describeApprovalActionFields, projectApprovalExecutionForObservation, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
 import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
 import { readActionSchemaTopLevelFieldNames } from './actionCliProjection.js';
@@ -20,6 +20,70 @@ import { SharedSavedSecretRefV1Schema } from '../machines/managed/providerFactsV
 import { computeWorkspaceSyncPolicyDigest } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
 describe('approval field presentation', () => {
+  it.each([
+    ['machines.managed.power.set', 'now', 'stop', 'Stop'],
+    ['machines.managed.delete', 'after-idle', 'delete', 'Delete'],
+  ] as const)('carries declared option label keys into %s review without rewriting its operands', (actionId, when, intent, label) => {
+    const actionArgs = { homeId: 'srv_home', managedId: 'managed-guest', intent, when,
+      ...(when === 'now' ? { expectedRevision: 3 } : {}), ...(intent === 'delete' ? { reviewedDependencies: true } : {}) };
+    const presentation = describeApprovalActionFields({ actionId, actionArgs });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'when', value: when === 'now' ? 'Now' : 'After idle',
+        selectedOptions: [{ label: when === 'now' ? 'Now' : 'After idle', labelKey: `actionPresentation.options.${when === 'now' ? 'now' : 'afterIdle'}` }] }),
+      expect.objectContaining({ path: 'intent', value: label, selectedOptions: [{ label, labelKey: `actionPresentation.options.${intent}` }] }),
+    ]));
+    expect(actionArgs.when).toBe(when);
+    expect(actionArgs.intent).toBe(intent);
+  });
+  it('names a managed Start target with its own Home-qualified reference without changing approved operands', () => {
+    const actionArgs = { homeId: 'srv_home', managedId: 'managed-guest', intent: 'start', when: 'now', expectedRevision: 1 };
+    const presentation = describeApprovalActionFields({ actionId: 'machines.managed.power.set', actionArgs });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'managedId', reference: { kind: 'managedMachine', id: 'managed-guest', homeId: 'srv_home' } }),
+    ]));
+    expect(actionArgs).toEqual({ homeId: 'srv_home', managedId: 'managed-guest', intent: 'start', when: 'now', expectedRevision: 1 });
+  });
+  it('reads a managed review Home by its name and keeps its concurrency revision in Technical details', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'machines.managed.power.set',
+      actionArgs: { homeId: 'srv_home', managedId: 'managed-guest', intent: 'stop', when: 'now', expectedRevision: 3 } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'homeId', reference: { kind: 'home', id: 'srv_home' } }),
+      expect.objectContaining({ path: 'expectedRevision', technical: true }),
+    ]));
+    expect(presentation.rows.find(row => row.kind === 'value' && row.path === 'intent')).not.toHaveProperty('technical');
+  });
+  it('preserves the V2 pre-effect fact in the public terminal receipt', () => {
+    const request = ApprovalRequestV2Schema.parse({
+      v: 2,
+      status: 'failed',
+      createdAtMs: 1,
+      updatedAtMs: 3,
+      createdBy: { surface: 'cli' },
+      actionId: 'session.list',
+      actionArgs: {},
+      summary: 'List sessions',
+      executionOriginV1: {
+        v: 1,
+        authority: 'account_automation',
+        caller: { kind: 'host' },
+        requestId: 'request-a',
+        surface: 'cli',
+        serverId: 'home',
+        actionId: 'session.list',
+      },
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: {
+        executedAtMs: 3,
+        effectAttempted: false,
+        ok: false,
+        errorCode: 'approval_context_unavailable',
+        error: 'approval_context_unavailable',
+      },
+    });
+
+    expect(projectApprovalExecutionForObservation(request)).toMatchObject({ effectAttempted: false });
+  });
+
   it('projects document references for every Artifact operation with an artifactId', () => {
     const spec = getActionSpec('artifact.public_link.create');
     const actionArgs = spec.inputSchema.parse({ artifactId: 'release-notes' });
@@ -845,7 +909,7 @@ describe('approval field presentation', () => {
     expect(describeApprovalActionFields({ actionId: 'machines.managed.delete', actionArgs: {
       homeId: 'home', managedId: 'managed', when: 'now', intent: 'delete', expectedRevision: 4, reviewedDependencies: true,
     } }).rows).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'managedId', value: 'managed' }),
-      expect.objectContaining({ path: 'intent', value: 'delete' }), expect.objectContaining({ path: 'reviewedDependencies', value: 'true' })]));
+      expect.objectContaining({ path: 'intent', value: 'Delete' }), expect.objectContaining({ path: 'reviewedDependencies', value: 'true' })]));
     const deferred = describeApprovalActionFields({ actionId: 'machines.managed.delete', actionArgs: {
       homeId: 'home', managedId: 'managed', when: 'after-idle', intent: 'delete', reviewedDependencies: true, afterMs: 0,
     } });

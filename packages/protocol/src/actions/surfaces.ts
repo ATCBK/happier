@@ -89,6 +89,9 @@ export function isRuntimeActionExecutorReal(actionId: RuntimeActionIdV1): boolea
 }
 
 export function resolveRuntimeActionSurfaces(actionId: RuntimeActionIdV1): PreNormalizedActionSurfaces {
+  if (ACTION_ID_FAMILIES_V1.browser_diagnostics.some((id) => id === actionId)) {
+    return { ...RUNTIME_ACTION_ENABLED_SURFACES, cli: true };
+  }
   if (actionId === 'browser.automation.cancelActive' || actionId === 'computer.target.close') {
     return { ...RUNTIME_ACTION_ENABLED_SURFACES, mcp: true };
   }

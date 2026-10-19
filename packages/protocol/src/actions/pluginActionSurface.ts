@@ -40,12 +40,7 @@ export const HUMAN_SECRET_API_EXCLUSION_REASONS = Object.freeze({
   'account.password.change': 'Password change accepts current/new password or E2EE proof material.',
   'account.password.remove': 'Password removal accepts current-password or E2EE proof material.',
   'account.email.change.request': 'Sign-in email replacement starts an interactive identity-verification ceremony.',
-  'account.apiTokens.create': 'Token creation returns a one-time bearer credential and may require trusted-device encryption material.',
-  'account.apiTokens.list': 'Token inventory is an interactive Account credential-management operation; PAT-self wrapping retrieval remains on its dedicated bearer-only HTTP route.',
-  'account.apiTokens.update': 'Token access updates are an interactive Account credential-management operation.',
   'account.security.terminalPresentUser.set': 'Terminal present-user policy is an interactive Account security-management operation.',
-  'account.apiTokens.revoke': 'Token revocation is an interactive Account credential-management operation.',
-  'account.apiTokens.revokeAll': 'Bulk token revocation is an interactive Account credential-management operation.',
 } as const satisfies Readonly<Partial<Record<ActionId, string>>>);
 
 export type HumanSecretApiExcludedActionId = keyof typeof HUMAN_SECRET_API_EXCLUSION_REASONS;

@@ -1,4 +1,4 @@
-import type { PreNormalizedActionSpec } from './actionSpecs.js';
+import type { ActionSpecProjectionMetadata, PreNormalizedActionSpec } from './actionSpecs.js';
 import { AutomationEventTestInputV1Schema, AutomationEventTestResultV1Schema } from '../automations/automationEventTestV1.js';
 import { WorkflowStartersListInputV1Schema, WorkflowStartersListResultV1Schema,
   WorkflowStartersResolveInputV1Schema, WorkflowStartersResolveResultV1Schema } from '../workflows/builtins/starterActionsV1.js';
@@ -9,7 +9,18 @@ const readMetadata = {
   toolExposure: { mcp: 'discoverable_only' },
 } as const;
 
-export const WORKFLOW_DIAGNOSTIC_ACTION_SPECS = [{
+type WorkflowDiagnosticActionSchemas = {
+  'workflow.trigger.test': { inputSchema: typeof AutomationEventTestInputV1Schema; outputSchema: typeof AutomationEventTestResultV1Schema };
+  'workflow.starters.list': { inputSchema: typeof WorkflowStartersListInputV1Schema; outputSchema: typeof WorkflowStartersListResultV1Schema };
+  'workflow.starters.resolve': { inputSchema: typeof WorkflowStartersResolveInputV1Schema; outputSchema: typeof WorkflowStartersResolveResultV1Schema };
+};
+type WorkflowDiagnosticActionSpec = {
+  [Id in keyof WorkflowDiagnosticActionSchemas]: ActionSpecProjectionMetadata & typeof readMetadata & Readonly<WorkflowDiagnosticActionSchemas[Id]> & Readonly<{
+    id: Id;
+    approval: { result: 'required' };
+  }>;
+}[keyof WorkflowDiagnosticActionSchemas];
+export const WORKFLOW_DIAGNOSTIC_ACTION_SPECS: readonly WorkflowDiagnosticActionSpec[] = [{
   ...readMetadata, id: 'workflow.trigger.test', approval: {result: 'required'}, title: 'Test workflow trigger',
   description: 'Compare supplied Event facts with a trigger using the canonical source, age and filter evaluators. This diagnostic does not admit an Event or attest retained occurrence custody.',
   bindings: { mcpToolName: 'workflow_trigger_test' },

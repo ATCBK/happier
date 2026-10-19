@@ -3,6 +3,7 @@ import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 as inputs, PROVIDER_ACTION_OUTPUT_SCHE
 import type { ActionInputFieldHint, PreNormalizedActionSpec } from '../actionSpecs.js';
 import { readRecord } from '../../inputs/inputRecords.js';
 import { ProviderEndpointUrlSyntaxSchema } from '../../providers/endpointUrlSchema.js';
+import { ProviderErrorV1Schema } from '../../providers/errors.js';
 import { CustomProviderTemplateV1Schema } from '../../providers/connections/customTemplateV1.js';
 import { ProviderClaudeHelperModelsV1Schema, ProviderConnectionPurposeBindingDefaultsV1Schema,
   ProviderGatewayPlacementV1Schema } from '../../providers/connections/v1.js';
@@ -10,8 +11,11 @@ import { ProviderClaudeHelperModelsV1Schema, ProviderConnectionPurposeBindingDef
 /** Outputs never disclose credentials, templates, endpoints or model inventories. */
 function projectProviderObservation(input: unknown): unknown {
   const value = readRecord(input);
-  return Object.fromEntries(['status', 'action', 'machineId', 'connectionId', 'agentTargetKey', 'sourceProfileId']
+  const projected: Record<string, unknown> = Object.fromEntries(['status', 'action', 'machineId', 'connectionId', 'agentTargetKey', 'sourceProfileId']
     .filter(key => typeof value[key] === 'string').map(key => [key, value[key]]));
+  const error = ProviderErrorV1Schema.safeParse(value.error);
+  if (value.status === 'error' && error.success) projected.error = error.data;
+  return projected;
 }
 
 /** The same safe operands explain execution observations and approval effects. */

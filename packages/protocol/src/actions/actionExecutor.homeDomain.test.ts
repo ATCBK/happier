@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from '../approvals/approvalRequestTransition.js';
 import type { HomeAccountRowV1 } from '../home/governance/accounts.js';
-import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { buildApprovalPreviewSummary, createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { getActionSpec } from './actionSpecs.js';
 import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES } from '../crypto/encryptedDataKeyEnvelopeFormatV1.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
@@ -446,7 +447,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
         v: 1,
         continuation: expect.objectContaining({ reference: 'explicit-prepared-reference' }),
       },
-      summary: 'Accept Team invitation',
+      summary: buildApprovalPreviewSummary(getActionSpec('teams.invitations.accept'), { v: 1, token }),
       preview: {
         actionId: 'teams.invitations.accept',
         actionArgs: {
@@ -816,7 +817,6 @@ describe('createActionExecutor (Home governance and Teams)', () => {
         return { ok: true as const };
       },
       isApprovalExecutionOriginCurrent: async () => true,
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     for (const surface of ['agent', 'mcp'] as const) {
@@ -959,6 +959,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       },
       approvalsWaitForDecision: async ({ request }: { request: ApprovalRequest }) => ({
         decision: 'approve' as const,
+        decisionAuthority: 'present_user' as const,
         request,
       }),
       isApprovalExecutionOriginCurrent: async () => true,
@@ -971,6 +972,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       serverId: 'home-1',
       runtimeAccountId: 'account-1',
       actionRequestId: `request-${actionId}`,
+      defaultSessionMachineId: 'machine-1',
       actionCaller: { kind: 'host' },
     })).resolves.toEqual({ ok: true, result: output });
     expect(homeDomainAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ actionId, input }));
@@ -993,6 +995,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       },
       approvalsWaitForDecision: async ({ request }: { request: ApprovalRequest }) => ({
         decision: scenario === 'reject' ? 'reject' as const : 'approve' as const,
+        decisionAuthority: 'present_user' as const,
         request,
       }),
       isApprovalExecutionOriginCurrent: async () => scenario !== 'stale',
@@ -1010,6 +1013,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       serverId: 'home-1',
       runtimeAccountId: 'account-1',
       actionRequestId: `request-${scenario}`,
+      defaultSessionMachineId: 'machine-1',
       actionCaller: { kind: 'host' },
     });
 
@@ -1062,6 +1066,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
     expect(homeDomainAction).toHaveBeenCalledOnce();
     expect(persisted.at(-1)?.execution).toEqual({
       executedAtMs: expect.any(Number),
+      effectAttempted: true,
       ok: true,
       result: { redacted: true },
     });

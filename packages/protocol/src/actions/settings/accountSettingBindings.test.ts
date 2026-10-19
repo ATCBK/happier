@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '../../account/settings/accountSettings.js';
 import { readPortableAccountSettingBindingV1, scmBackendDefaultDiffStorage } from './accountSettingBindings.js';
 import { prepareDefaultProviderStateSharingChangeV1, readProviderStateSharingRiskAgentIdsV1 } from './providerStateSharingMutations.js';
+import { resolveUiFeatureToggleEnabled } from './featurePreferenceMutations.js';
 
 function binding(owner: string, ...options: string[]) {
     const result = readPortableAccountSettingBindingV1({ storage: { owner, options } });
@@ -86,8 +87,28 @@ describe('portable coupled Account setting mutations', () => {
             voice: false, 'voice.agent': false, 'voice.daemonInference': false, custom: true,
         });
         expect(binding('features.experimentalFeatures').mutate(settings, true)?.featureToggles).toMatchObject({
-            'voice.agent': false, 'zen.navigation': true, custom: true,
+            'voice.agent': true, 'voice.daemonInference': true, 'zen.navigation': true, custom: true,
         });
+    });
+    it('leaves autonomous exchange transport support to the Home rather than an Account experiment toggle', () => {
+        const settings = accountSettingsParse({ experiments: false });
+        expect(resolveUiFeatureToggleEnabled(settings, 'sessions.autonomousExchange')).toBe(true);
+        expect(readPortableAccountSettingBindingV1({ storage: {
+            owner: 'featureToggle', options: ['sessions.autonomousExchange'],
+        } })).toBeNull();
+    });
+    it.each(['voice.agent', 'voice.daemonInference'] as const)('defaults %s on and preserves explicit choices across Experiments changes', featureId => {
+        const initial = accountSettingsParse({});
+        expect(binding('featureToggle', featureId).read(initial)).toBe(true);
+        for (const enabled of [false, true]) {
+            const settings = accountSettingsParse({ featureToggles: { [featureId]: enabled, custom: true } });
+            for (const experiments of [false, true]) {
+                const changed = accountSettingsParse({ ...settings, ...binding('features.experimentalFeatures').mutate(settings, experiments) });
+                expect(changed.featureToggles[featureId]).toBe(enabled);
+                expect(changed.featureToggles.custom).toBe(true);
+                expect(resolveUiFeatureToggleEnabled(changed, featureId)).toBe(enabled);
+            }
+        }
     });
     it('preserves custom glass opacity and solid surfaces when changing intensity', () => {
         const settings = accountSettingsParse({ glassBlurEnabled: true, glassSurfaceMaterials: {

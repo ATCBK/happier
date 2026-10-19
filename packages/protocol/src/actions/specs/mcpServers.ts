@@ -38,7 +38,7 @@ const mcpReviewInput = z.strictObject({
 function mcpReviewSchema(id: McpServerActionIdV1) {
   if (id === 'mcp.servers.tools.set' || id === 'mcp.servers.signIn.start') return z.required(mcpReviewInput, { serverId: true });
   if (id === 'mcp.servers.delete') return z.required(mcpReviewInput, { serverId: true, removeBindings: true });
-  if (id === 'mcp.servers.duplicate') return z.required(mcpReviewInput, { serverId: true, servers: true });
+  if (id === 'mcp.servers.duplicate') return z.required(mcpReviewInput, { serverId: true });
   if (id === 'mcp.servers.import') return z.required(mcpReviewInput, { servers: true, dryRun: true });
   if (id === 'mcp.found.adopt') return z.required(mcpReviewInput, { servers: true, machineId: true });
   const review = id === 'mcp.servers.test' ? z.required(mcpReviewInput, { machineId: true, directory: true }) : mcpReviewInput;
@@ -58,8 +58,10 @@ function reviewServer(server: McpServerCatalogEntryV1 | ImportedMcpServerDraftV1
 }
 
 function reviewOverride(override: McpServerConfigOverrideV1) {
+  const folder = override.stdio?.cwd;
   return { where: override.target, command: override.stdio?.command, arguments: override.stdio?.args, address: override.remote?.url,
-    workingFolder: override.stdio?.cwd?.path, environment: Object.keys(override.envPatch ?? {}), headers: Object.keys(override.remote?.headersPatch ?? {}) };
+    workingFolder: folder ? folder.t === 'path' ? folder.path : 'Session folder' : undefined,
+    environment: Object.keys(override.envPatch ?? {}), headers: Object.keys(override.remote?.headersPatch ?? {}) };
 }
 
 function projectMcpApprovalInput(id: McpServerActionIdV1, raw: unknown) {
@@ -77,7 +79,7 @@ function projectMcpApprovalInput(id: McpServerActionIdV1, raw: unknown) {
       machineId: value.machineId, where: value.where ?? defaultMcpWhere });
   }
   const value = readRecord(input);
-  const entry = 'entry' in value ? value.entry : value.server;
+  const entry = value.entry;
   const servers = entry ? [reviewServer(McpServerCatalogEntryV1Schema.parse(entry))] : undefined;
   // Canonical schemas above admitted each variant; narrow at its owning schema
   // rather than reading arbitrary nested configuration as review authority.
@@ -162,10 +164,10 @@ function projectMcpObservation(input: unknown): unknown {
   };
 }
 function mcpSpec<TId extends McpServerActionIdV1>(id: TId, title: string, summary: string, options: Readonly<{
-  read?: boolean; danger?: boolean; machine?: boolean; confirm?: boolean;
+  read?: boolean; danger?: boolean; machine?: boolean; confirm?: boolean; direct?: boolean;
 }>): PreNormalizedActionSpec & Readonly<{ id: TId; inputSchema: (typeof inputs)[TId]; outputSchema: (typeof outputs)[TId] }> {
   return {
-    id, approvalPolicy: options.confirm ? { uiConfirmation: 'policy' } : {},
+    id, approvalPolicy: options.confirm ? { uiConfirmation: 'policy' } : options.direct ? { uiConfirmation: 'direct' } : {},
     approval: { result: options.danger ? 'required' : 'none' }, title, safety: options.danger ? 'danger' : 'safe', sideEffectClass: options.read ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: options.machine ? 'machine' : 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
@@ -180,7 +182,7 @@ function mcpSpec<TId extends McpServerActionIdV1>(id: TId, title: string, summar
 }
 export const MCP_SERVER_ACTION_SPECS_V1 = [
   { ...mcpSpec('mcp.servers.signIn.start', 'Sign in to MCP server',
-    'Sign in once to use this remote server from your machines.', { danger: true }),
+    'Sign in once to use this remote server from your machines.', { danger: true, direct: true }),
     approvalResultCustody: 'live_only' as const,
     cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)), stepUp: z.optional(z.boolean()) }),
       bindInput: (value: unknown) => { const input = readRecord(value); return { serverId: input.itemId,
@@ -197,7 +199,7 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
       commands: [{ path: ['mcp', 'servers', 'tools'], positionals: ['itemId'], visibility: 'canonical' as const },
         { path: ['mcp', 'servers', 'tools', 'list'], positionals: ['itemId'], visibility: 'alias' as const }] } },
   { ...mcpSpec('mcp.servers.tools.set', 'Set MCP server tool settings',
-    'Change a server default or individual tool settings. The previous settings can be restored.', { danger: true }),
+    'Change a server default or individual tool settings. The previous settings can be restored.', { danger: true, direct: true }),
     cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)),
       operation: z.enum(['set', 'default']), toolName: z.string().check(z.minLength(1)),
       setting: z.optional(z.enum(['off', 'ask', 'allow', 'inherit'])) }).check(z.superRefine((input, context) => {
@@ -218,7 +220,7 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
       commands: [{ path: ['mcp', 'servers', 'tools', 'set'], positionals: ['itemId', 'operation', 'toolName', 'setting'],
         visibility: 'canonical' as const }] } },
   { ...mcpSpec('mcp.servers.create', 'Add MCP server',
-    'Add an MCP server, which gives agents extra tools.', { danger: true }),
+    'Add an MCP server, which gives agents extra tools.', { danger: true, direct: true }),
     cli: { acceptsServerId: true, inputSchema: mcpCreateCliInput,
       bindInput: (value: unknown) => {
         const input = mcpCreateCliInput.parse(value);
@@ -231,13 +233,16 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
       },
       commands: [{ path: ['mcp', 'servers', 'add'], positionals: ['name'], visibility: 'canonical' as const }] } },
   mcpSpec('mcp.servers.update', 'Update MCP server',
-    'Change how an MCP server starts or signs in.', { danger: true }),
-  mcpSpec('mcp.servers.duplicate', 'Duplicate MCP server',
-    'Make a copy of an MCP server to adjust.', { danger: true }),
+    'Change how an MCP server starts or signs in.', { danger: true, direct: true }),
+  { ...mcpSpec('mcp.servers.duplicate', 'Duplicate MCP server',
+    'Make a copy of an MCP server to adjust.', { danger: true, direct: true }),
+    cli: { acceptsServerId: true, inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)) }),
+      bindInput: (value: unknown) => ({ serverId: readRecord(value).itemId }),
+      commands: [{ path: ['mcp', 'servers', 'duplicate'], positionals: ['itemId'], visibility: 'canonical' as const }] } },
   mcpSpec('mcp.servers.delete', 'Delete MCP server',
     'Remove an MCP server. Agents lose its tools everywhere it was used.', { danger: true, confirm: true }),
   { ...mcpSpec('mcp.servers.test', 'Test MCP server connection',
-    'Start an MCP server on a machine and check that it answers with its tools.', { danger: true, machine: true }),
+    'Start an MCP server on a machine and check that it answers with its tools.', { danger: true, machine: true, direct: true }),
     cli: { acceptsServerId: true,
       inputSchema: z.strictObject({ itemId: z.string().check(z.minLength(1)), directory: z.optional(z.string().check(z.minLength(1))),
         machineId: z.optional(z.string().check(z.minLength(1))) }),
@@ -245,9 +250,9 @@ export const MCP_SERVER_ACTION_SPECS_V1 = [
         directory: input.directory, machineId: input.machineId }; },
       commands: [{ path: ['mcp', 'servers', 'test'], positionals: ['itemId'], visibility: 'canonical' as const }] } },
   { ...mcpSpec('mcp.servers.import', 'Import MCP servers',
-    'Review a config or install link and choose every named value before adding its servers.', { danger: true }), approvalInputCustody: 'live_only' as const },
+    'Review a config or install link and choose every named value before adding its servers.', { danger: true, direct: true }), approvalInputCustody: 'live_only' as const },
   { ...mcpSpec('mcp.found.adopt', 'Add a found MCP server',
-    'Add a machine configuration after choosing its environment and header values.', { danger: true }), approvalInputCustody: 'live_only' as const },
+    'Add a machine configuration after choosing its environment and header values.', { danger: true, direct: true }), approvalInputCustody: 'live_only' as const },
   { ...mcpSpec('mcp.found.list', 'Detect MCP servers on a machine',
     'Look for MCP servers already set up for the agents on a machine.', { read: true, machine: true }),
     cli: { acceptsServerId: true, flagAliases: [{ path: 'providers', aliases: ['--provider'] },

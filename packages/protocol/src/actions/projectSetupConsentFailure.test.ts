@@ -4,6 +4,15 @@ import { ProjectPrepareInputV1Schema, readProjectSetupConsentFailureV1, readProj
 describe('Project setup requested human consent scope', () => {
     const workspace = { serverId: 'home', workspaceId: 'workspace', machineId: 'machine', rootPath: '/project' };
 
+    it('binds a retained one-time or Skip decision to its operation and reviewed digest', () => {
+        const request = { workspace, phase: 'setup', heldOperationId: 'original', expectedEffectDigest: 'reviewed' };
+        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, consentScope: 'thisTime' }).success).toBe(true);
+        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, skipForInvocation: true }).success).toBe(true);
+        expect(ProjectPrepareInputV1Schema.safeParse(request).success).toBe(false);
+        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, expectedEffectDigest: undefined, consentScope: 'thisTime' }).success).toBe(false);
+        expect(ProjectPrepareInputV1Schema.safeParse({ ...request, consentScope: 'untilChanged' }).success).toBe(false);
+    });
+
     it('requires the existing reviewed effect digest when requesting either consent scope, without accepting authority input', () => {
         for (const consentScope of ['thisTime', 'untilChanged']) {
             const request = { workspace, phase: 'setup', expectedEffectDigest: 'reviewed', consentScope };
@@ -26,5 +35,23 @@ describe('Project setup requested human consent scope', () => {
             expect(readProjectSetupConsentFailureV1({ ...failure, details: { ...details, authority: 'present_user' } })).toBeNull();
             expect(readProjectSetupConsentHoldV1('projects.compute.exec', { ...failure, errorCode: 'project_script_effect_changed' })).toBeNull();
         }
+    });
+
+    it.each(['session.spawn_new', 'execution.run.start', 'execution.run.ensure_or_start'])
+    ('reads %s setup consent only from its exact original setup operation', actionId => {
+        const review = { kind: 'pendingApproval', code: 'project_setup_consent_required',
+            reviewedEffectDigest: 'reviewed', reviewedEffect: { commands: ['echo setup'] } };
+        const operation = { version: 1, operationId: 'original', revision: 2, actionId,
+            scope: { accountId: 'requester', machineId: 'machine' }, title: 'Launch', state: 'running',
+            cancellation: 'supported', createdAt: 1, startedAt: 1, setupReview: review,
+            domainRef: { kind: 'projectCommand', purpose: 'setup', serverId: 'home', machineId: 'machine',
+                workspaceRefId: 'workspace', cwd: '/project' } };
+        expect(readProjectSetupConsentHoldV1(actionId, { operation })).toEqual({ kind: review.kind,
+            code: review.code, reviewedEffectDigest: review.reviewedEffectDigest });
+        expect(readProjectSetupConsentHoldV1(actionId, review)).toBeNull();
+        expect(readProjectSetupConsentHoldV1(actionId, { operation: { ...operation, actionId: 'projects.prepare' } })).toBeNull();
+        expect(readProjectSetupConsentHoldV1(actionId, { operation: { ...operation,
+            domainRef: { ...operation.domainRef, purpose: 'script' } } })).toBeNull();
+        expect(readProjectSetupConsentHoldV1(actionId, { operation: { ...operation, state: 'cancelled', settledAt: 2 } })).toBeNull();
     });
 });

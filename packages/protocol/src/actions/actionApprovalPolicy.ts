@@ -29,6 +29,8 @@ export type ResolveActionApprovalRoutingArgs = Readonly<{
   defaultSafety?: ActionSpec['safety'];
   /** Admitted audience widening strengthens the UI default without changing Settings or authority. */
   defaultUiConfirmation?: boolean;
+  /** An admitted shared request's outward effect; still subject to Settings Require/Waive. */
+  defaultConfirmation?: boolean;
   /** Fresh computer-owner consent, never a caller-authored grant. */
   computerConsentGranted?: boolean;
   /** Exact live host operation proved by the executor's private factory port. */
@@ -75,6 +77,18 @@ export function isAgentInitiatedApprovalRequiredByDefault(actionId: ActionId): b
   const spec = getActionSpec(actionId);
   return spec.approvalPolicy?.agentDefault !== undefined
     || (spec.safety === 'danger' && spec.surfaces.agent === true && spec.approvalPolicy?.scopeAdmissionOwnsConfirmation !== true);
+}
+
+/** Whether persisted Action settings may waive this host-declared confirmation. */
+export function isActionApprovalWaivable(spec: Pick<ActionSpec, 'approvalPolicy'>): boolean {
+  return spec.approvalPolicy?.nonWaivable !== true;
+}
+
+/** Host attribution identifies the cause, not authority. Unknown people never become the Bot owner. */
+export function isSharedRequesterActionV1(context: Pick<ActionExecutorContext, 'actionRequestAttributionV1' | 'runtimeAccountId'>): boolean {
+  const cause = context.actionRequestAttributionV1;
+  return Boolean(cause && context.runtimeAccountId
+    && (!cause.requester || cause.requester.accountId !== context.runtimeAccountId));
 }
 
 function requiresDefaultApprovalFloor(
@@ -147,8 +161,10 @@ export function isApprovalRequiredByActionsSettings(
   contributedApprovalDefault?: boolean,
   input?: unknown,
   defaultUiConfirmation?: boolean,
+  defaultConfirmation?: boolean,
 ): boolean {
   const requestActionId = ActionIdSchema.safeParse(actionId);
+  if (requestActionId.success && !isActionApprovalWaivable(getActionSpec(requestActionId.data))) return true;
   const surface = resolveApprovalSurface(ctx);
   const rawSurface = ctx?.surface;
   const override: ActionSettingsOverride | undefined = settings.actions?.[actionId];
@@ -167,7 +183,7 @@ export function isApprovalRequiredByActionsSettings(
 
   const builtInActionId = ActionIdSchema.safeParse(actionId);
   return builtInActionId.success
-    ? requiresDefaultApprovalFloor(builtInActionId.data, ctx, defaultSafety, input, defaultUiConfirmation)
+    ? defaultConfirmation === true || requiresDefaultApprovalFloor(builtInActionId.data, ctx, defaultSafety, input, defaultUiConfirmation)
     : contributedApprovalDefault === true;
 }
 
@@ -199,6 +215,9 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
     .some(surface => surface === args.context?.surface) === true;
   const requiredByPolicy = computerConsent
     ? explicitComputerApproval
+    : args.defaultConfirmation === true
+    ? args.settings ? isApprovalRequiredByActionsSettings(args.actionId, args.settings, args.context,
+      args.defaultSafety, undefined, args.input, args.defaultUiConfirmation, true) : true
     : typeof args.requiredByPolicy === 'boolean'
     ? args.requiredByPolicy
     : args.settings
@@ -209,7 +228,9 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
   // Waivers choose whether to request approval; execution authority remains
   // independently enforced by the executor before preparation or effects.
   const required = !isApprovalAction(args.actionId)
-    && requiredByPolicy;
+    && (args.context?.bypassApprovals === true
+      ? false
+      : !isActionApprovalWaivable(args.spec) || requiredByPolicy);
 
   // The public Action API reports a created approval artifact to its caller;
   // it cannot retain an HTTP or server-relay request as the blocking waiter.
@@ -241,8 +262,10 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
       args.context?.surface === 'api'
       || args.context?.surface === 'cli'
       || args.context?.surface === 'ui'
+      || args.defaultConfirmation === true
     );
-  const flow = required && (args.retainHostOperationApproval === true || retainPluginSettingsFieldIntent)
+  const flow = required && (args.retainHostOperationApproval === true || retainPluginSettingsFieldIntent
+    || custodyStaysOnLiveInvocation && args.spec.approval.flow === 'blocking')
     ? 'blocking'
     : required && (mustReturnApprovalCustody
     || (presentUserRequest && args.spec.approvalInputCustody !== 'live_only'))

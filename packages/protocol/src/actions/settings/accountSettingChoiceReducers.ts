@@ -99,11 +99,12 @@ export function setUsagePersonalPaceTarget(targets: UsagePacingTargetsV1, fracti
         : [...others, { id: PERSONAL_TARGET_ID, scope: { kind: 'personal' }, utilizationFraction: fraction }];
 }
 
-export const QUOTA_GAUGE_WINDOW_MODES = SESSION_PROVIDER_USAGE_GAUGE_WINDOW_MODES;
-export type ConnectedServiceQuotaGaugeWindowMode = typeof QUOTA_GAUGE_WINDOW_MODES[number];
+// A live export avoids reading Account settings while its cyclic import graph initializes.
+export { SESSION_PROVIDER_USAGE_GAUGE_WINDOW_MODES as QUOTA_GAUGE_WINDOW_MODES };
+export type ConnectedServiceQuotaGaugeWindowMode = typeof SESSION_PROVIDER_USAGE_GAUGE_WINDOW_MODES[number];
 
 export function isQuotaGaugeWindowMode(value: string): value is ConnectedServiceQuotaGaugeWindowMode {
-    return QUOTA_GAUGE_WINDOW_MODES.some((mode) => mode === value);
+    return SESSION_PROVIDER_USAGE_GAUGE_WINDOW_MODES.some((mode) => mode === value);
 }
 
 /** An explicit choice overrides the predecessor single-window preference. */

@@ -20,6 +20,39 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** @internal Visit subschemas without interpreting defaults, examples or other literal JSON as schemas. */
+export function forEachJsonSchemaChild(node: JsonSchemaObject, visit: (child: unknown) => void): void {
+  for (const keyword of ['properties', 'patternProperties', 'dependentSchemas', '$defs', 'definitions']) {
+    const children = node[keyword];
+    if (isJsonSchemaObject(children)) Object.values(children).forEach(visit);
+  }
+  for (const keyword of ['anyOf', 'oneOf', 'allOf', 'prefixItems']) {
+    const children = node[keyword];
+    if (Array.isArray(children)) children.forEach(visit);
+  }
+  for (const keyword of ['not', 'if', 'then', 'else', 'items', 'contains', 'additionalItems', 'additionalProperties', 'unevaluatedProperties', 'unevaluatedItems', 'propertyNames']) {
+    const child = node[keyword];
+    if (child === undefined) continue;
+    // Draft-07 tuple items are an array of schemas; later drafts use prefixItems.
+    if (keyword === 'items' && Array.isArray(child)) child.forEach(visit);
+    else visit(child);
+  }
+}
+
+function projectPortableTypeUnions(value: unknown): void {
+  if (!isJsonSchemaObject(value)) return;
+  const node = value as Record<string, unknown>;
+  if (Array.isArray(node.type)) {
+    // Zod 4.6 compacts unions after its override callback. Keep the existing
+    // single-type Plugin vocabulary without changing the union's semantics.
+    const union = { anyOf: node.type.map(type => ({ type })) };
+    delete node.type;
+    if (node.anyOf === undefined) node.anyOf = union.anyOf;
+    else node.allOf = [...(Array.isArray(node.allOf) ? node.allOf : []), union];
+  }
+  forEachJsonSchemaChild(node, projectPortableTypeUnions);
+}
+
 // Zod 4.6 emits these check names as formats as well as their complete pattern
 // constraints. They are not JSON Schema formats; keep the patterns portable.
 const patternOnlyStringChecks = new Set(['starts_with', 'ends_with', 'includes', 'lowercase', 'uppercase']);
@@ -31,7 +64,7 @@ const patternOnlyStringChecks = new Set(['starts_with', 'ends_with', 'includes',
  */
 export function zodSchemaToJsonSchemaObject(
   schema: z.core.$ZodType,
-  options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7'; reused?: 'inline' | 'ref'; override?: z.core.ToJSONSchemaParams['override'] }>,
+  options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7'; reused?: 'inline' | 'ref'; unrepresentable?: 'throw' | 'any'; override?: z.core.ToJSONSchemaParams['override'] }>,
 ): JsonSchemaObject {
   try {
     // The top-level projector supplies native processors for genuine Mini/Core
@@ -40,7 +73,7 @@ export function zodSchemaToJsonSchemaObject(
       io: 'input',
       target: options?.target ?? 'draft-2020-12',
       reused: options?.reused ?? 'inline',
-      unrepresentable: 'throw',
+      unrepresentable: options?.unrepresentable ?? 'throw',
       override: context => {
         options?.override?.(context);
         const { jsonSchema } = context;
@@ -53,6 +86,8 @@ export function zodSchemaToJsonSchemaObject(
     if (!isJsonSchemaObject(projectedSchema)) {
       throw new ActionJsonSchemaProjectionError('Zod produced a non-object JSON Schema');
     }
+
+    projectPortableTypeUnions(projectedSchema);
 
     // Zod decorates the root with non-enumerable Standard Schema methods. They
     // are useful on Zod values but are not JSON and cross realm boundaries

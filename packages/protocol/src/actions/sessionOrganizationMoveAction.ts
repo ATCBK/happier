@@ -38,7 +38,7 @@ export type SessionOrganizationPinSetInput = z.infer<typeof SessionOrganizationP
 export const SESSION_ORGANIZATION_MOVE_ACTION_SPECS = [{
   id: 'session.organization.move', approval: {result: 'required'}, title: 'Move Session organization item',
   cli: { commands: [{ path: ['session', 'organization', 'move'], visibility: 'canonical' }] },
-  description: 'Move a Session, folder or workspace through the mounted Session list organization owner. Current membership, Home, Account and ordering policy are revalidated before writing. Session reporting relationships use session.reports_to.set.',
+  description: 'Move a Session, folder or workspace through the mounted Session list organization owner. Current membership, Home, Account and ordering policy are revalidated before writing. Session reporting relationships use session.manager.set.',
   safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'client',
   placements: [], bindings: { mcpToolName: 'session_organization_move' },
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },

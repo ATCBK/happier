@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { ActionIdSchema } from '../actions/actionIds.js';
+import { createProviderErrorV1 } from '../providers/errors.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
+import { projectApprovalRequestForPublicRead } from '../actions/actionApprovalPresentation.js';
 import {
   ApprovalRequestSchema,
   ApprovalExecutionOriginV1Schema,
@@ -81,9 +83,124 @@ import { parseSessionBoardActionPortResultV1 } from '../sessions/board/actions.j
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
 import { buildApprovalExecutionOriginV1 } from '../actions/actionExecutor.js';
+it.each(['discussion.create', 'discussion.post', 'discussion.reply'] as const)('retains the actual Session publisher custody for approved %s', actionId => {
+  const content = { v: 1, parts: [{ t: 'text', text: 'Approved Agent publication' }] };
+  const actionArgs = actionId === 'discussion.create' ? { title: 'Created by Agent', firstMessage: { content } }
+    : { discussionId: 'discussion', content, ...(actionId === 'discussion.reply' ? { replyTarget: { kind: 'message', messageId: 'question' } } : {}) };
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'agent', sessionId: 'receiver' }, requestedSurface: 'agent', actionId, actionArgs, summary: 'Publish',
+    executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+      caller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
+      sessionId: 'receiver', serverId: 'home', accountId: 'alice', machineId: 'machine', actionId, requestId: 'publication' } });
+  expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+});
+it.each(['create', 'post', 'propose'] as const)('retains Session publication custody for a Doc %s without moving host Account effects', operation => {
+  const discussionRef = { serverId: 'home', discussionId: 'discussion' };
+  const revision = { headerVersion: 1, bodyVersion: 2 };
+  const target = { ref: { kind: 'doc', artifactId: 'doc', serverId: 'home' }, revision,
+    range: { start: 0, end: 5 }, quote: 'basis' };
+  const actionId = operation === 'propose' ? 'doc.edit.propose' : 'doc.comment.reply';
+  const actionArgs = operation === 'propose'
+    ? { target, discussionRef, localId: 'publication', baseRevision: revision, before: 'basis', after: 'revision', reason: 'Clarify',
+      replyTo: { kind: 'discussion', discussion: discussionRef, messageId: 'root' } }
+    : { target, localId: 'publication', content: { v: 1, parts: [{ t: 'text', text: 'Approved Agent comment' }] },
+      ...(operation === 'post' ? { discussionRef } : {}) };
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'agent', sessionId: 'receiver' }, requestedSurface: 'agent', actionId, actionArgs, summary: 'Publish',
+    executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+      caller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
+      sessionId: 'receiver', serverId: 'home', accountId: 'alice', machineId: 'machine', actionId, requestId: 'publication' } });
+  expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+  expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ ...request,
+    executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, sessionId: undefined } }))).toBe(false);
+});
+it.each(['session', 'host'] as const)('preserves a protected pre-admission Discussion return from its actual %s executor without inventing a turn', executorKind => {
+  const discussionReplyReturn = { serverId: 'home', requestLocalId: 'original' };
+  const context = { serverId: 'home', actionRequestId: 'return-original', authority: 'account_automation' as const,
+    surface: 'agent' as const, defaultSessionId: 'receiver', defaultSessionMachineId: 'machine', runtimeAccountId: 'alice', discussionReplyReturn,
+    actionCaller: executorKind === 'session'
+      ? { kind: 'session' as const, sessionId: 'receiver', starterDepth: 0, turnDepth: 0 }
+      : { kind: 'host' as const } };
+  const origin = buildApprovalExecutionOriginV1({ actionId: 'discussion.reply',
+    input: { discussionId: 'discussion', content: { v: 1, parts: [{ t: 'text', text: 'Input failed' }] },
+      replyTarget: { kind: 'message', messageId: 'question' } }, targetSessionId: null, context });
+  expect(origin).toMatchObject({ sessionId: 'receiver', discussionReplyReturn });
+  expect(origin).not.toHaveProperty('sessionInputSource');
+  expect(ApprovalExecutionOriginV1Schema.safeParse(origin).success).toBe(true);
+  const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+    createdBy: { surface: 'agent', sessionId: 'receiver' }, actionId: 'discussion.reply',
+    actionArgs: { discussionId: 'discussion', content: { v: 1, parts: [{ t: 'text', text: 'Input failed' }] },
+      replyTarget: { kind: 'message', messageId: 'question' } }, summary: 'Review returned answer', executionOriginV1: origin });
+  expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+  if (executorKind === 'host') {
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin, sessionId: undefined }).success).toBe(false);
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin, machineId: undefined }).success).toBe(false);
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin, sessionInputSource: {
+      sourceSessionId: 'another-session', sourceInputId: discussionReplyReturn.requestLocalId, sourceTurnId: 'another-turn', via: 'action',
+    } }).success).toBe(false);
+    expect(buildApprovalExecutionOriginV1({ actionId: 'discussion.reply', input: { discussionId: 'discussion',
+      content: { v: 1, parts: [{ t: 'text', text: 'Ordinary post' }] }, replyTarget: { kind: 'message', messageId: 'question' } },
+      targetSessionId: null, context: { ...context, discussionReplyReturn: undefined } })).not.toHaveProperty('sessionId');
+  }
+});
+it('preserves an addressed Discussion cutoff through the canonical approval execution origin', () => {
+  const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: 'receiver' };
+  const context = { serverId: 'home', actionRequestId: 'read-question', authority: 'account_automation' as const, surface: 'agent' as const,
+    actionCaller: { kind: 'session' as const, sessionId: 'receiver', starterDepth: 0, turnDepth: 0 }, defaultSessionId: 'receiver',
+    sessionInputSource: { sourceSessionId: 'receiver', sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' as const, discussionAddressing } };
+  const { discussionAddressing: _addressing, ...existingSource } = context.sessionInputSource;
+  expect(buildApprovalExecutionOriginV1({ actionId: 'discussion.read', input: { discussionId: 'discussion' }, targetSessionId: null,
+    context: { ...context, sessionInputSource: existingSource } })).not.toBeNull();
+  const origin = buildApprovalExecutionOriginV1({ actionId: 'discussion.read', input: { discussionId: 'discussion' }, targetSessionId: null, context });
+  expect(origin).toMatchObject({ sessionInputSource: { discussionAddressing } });
+  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin, sessionInputSource: { ...context.sessionInputSource,
+    discussionAddressing: { ...discussionAddressing, participantSessionId: 'other' } } }).success).toBe(false);
+});
 import { resolveProjectActionMachineV1 } from '../actions/executor/projectActionPlacement.js';
 import { signExternalActionApprovalInputV1 } from '../actions/externalActionExecutionAuthorization.js';
 import tweetnacl from 'tweetnacl';
+import { sealExternalActionRequestV2 } from '../actions/externalActionEncryption.js';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '../actions/externalActionExecutionAuthorization.js';
+
+it.each(['projects.compute.exec', 'projects.service.relocate'] as const)('retains only the exact signed protected %s original envelope in an approval origin', actionId => {
+  const homeId = `srv_${'a'.repeat(32)}`;
+  const target = { kind: 'machine' as const, machineId: 'worker' };
+  const workspace = { serverId: 'home', refId: 'source-ref' };
+  const input = actionId === 'projects.compute.exec' ? { workspace: { serverId: 'home', workspaceId: 'source-ref', machineId: 'source', rootPath: '/source' },
+    executable: 'true', argv: [], cwd: '.' } : { workspace, serviceName: 'api', requestId: 'move',
+    currentTarget: { kind: 'managed_service', machineId: 'worker', managedServiceId: 'api-instance', workspaceId: 'source-ref',
+      cwd: '/source', declaration: { workspaceRefId: 'source-ref', selection: { kind: 'manifest', name: 'api' } } },
+    destination: { kind: 'primary' }, selectedTarget: { machineId: 'next' }, desiredPlacement: { workspace, serviceName: 'api',
+      expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: { kind: 'primary' }, unavailable: 'fail' } } };
+  const envelope = sealExternalActionRequestV2({ material: { type: 'dataKey', machineKey: new Uint8Array(32).fill(2) },
+    randomBytes: tweetnacl.randomBytes, binding: { serverIdentityId: homeId, accountId: 'requester', actionId,
+      requestId: 'finite-request', target, authentication: { kind: 'terminal', tokenEpoch: 1 } }, input });
+  const origin = { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+    serverId: 'home-profile', serverIdentityId: homeId, accountId: 'requester', machineId: 'worker', actionId,
+    requestId: 'finite-request', target, originalActionEnvelope: envelope,
+    externalActionExecutionAuthorization: { v: 1, token: 'signed-root', binding: { accountId: 'requester',
+      authentication: { kind: 'terminal', tokenEpoch: 1 }, custodianAccountId: 'worker-owner', serverIdentityId: homeId,
+      machineId: 'worker', installationId: 'worker-installation', accountEncryptionMode: 'e2ee', actionId,
+      requestId: 'finite-request', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), target } } };
+  expect(ApprovalExecutionOriginV1Schema.parse(origin).originalActionEnvelope).toEqual(envelope);
+  const authorization = ApprovalExecutionOriginV1Schema.parse(origin).externalActionExecutionAuthorization!;
+  const captured = buildApprovalExecutionOriginV1({ actionId, input, targetSessionId: null, context: {
+    surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' }, serverId: 'home-profile',
+    serverIdentityId: homeId, runtimeAccountId: 'requester', actionRequestId: 'finite-request',
+    externalActionTarget: target, externalActionExecutionAuthorization: authorization, originalActionEnvelope: envelope,
+    signExternalActionApprovalInput: request => signExternalActionApprovalInputV1({ actionId: request.actionId,
+      input: request.input, target: request.target, authorizationToken: request.authorization.token,
+      privateKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(13)).secretKey }),
+  } });
+  expect(captured?.originalActionEnvelope).toEqual(envelope);
+  for (const changed of [
+    { ...origin, originalActionEnvelope: { ...envelope, requestId: 'substituted' } },
+    { ...origin, originalActionEnvelope: { ...envelope, target: { kind: 'machine', machineId: 'another-worker' } } },
+    { ...origin, originalActionEnvelope: { ...envelope, payload: { t: 'encrypted', c: 'AAAA' } } },
+    { ...origin, actionId: 'projects.script.run' },
+    { ...origin, externalActionExecutionAuthorization: undefined },
+  ]) expect(ApprovalExecutionOriginV1Schema.safeParse(changed).success).toBe(false);
+});
 
 it('replays client Home continuations at the deciding app while retaining plugin custody', () => {
   const actionId = 'account.home_continuation.invoke';
@@ -203,6 +320,70 @@ it('retains genuine signed Account approval origins without replacing Session au
 
 describe('ApprovalRequestV1Schema', () => {
   it.each([
+    ['browser.view.open', { v: 1, commandId: 'pass56-open', status: 'failed', adapterKind: 'chromiumSidecar',
+      error: { code: 'sandbox_unavailable', message: 'Managed Chromium sandbox is unavailable.' } }, 'sandbox_unavailable'],
+    ['browser.sandbox.install', { status: 'failed', code: 'os_authorization_required' }, 'os_authorization_required'],
+    ['computer.permissions.openSettings', { status: 'failed', code: 'permission_denied' }, 'permission_denied'],
+    ['localServices.actions.forget', { v: 1, requestId: 'forget', action: 'forget', status: 'denied',
+      reasonCode: 'permission_denied', auditEvents: [] }, 'permission_denied'],
+    ['plugins.account.release.select', { kind: 'conflict', code: 'intent_revision_conflict' }, 'intent_revision_conflict'],
+  ] as const)('projects catalog-validated nested failure from executed %s history', (actionId, result, errorCode) => {
+    const output = getActionSpec(actionId).outputSchema!.parse(result);
+    const request = ApprovalRequestV1Schema.parse({ v: 1, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'system' }, actionId, actionArgs: {}, summary: 'Approved Action',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: output } });
+    expect(readApprovalExecutionFailure(request)).toEqual({ ok: false, errorCode,
+      error: 'error' in result ? result.error.message : errorCode });
+    expect(request).toMatchObject({ status: 'executed', execution: { ok: true } });
+    expect(readApprovalExecutionFailure({ ...request, execution: { ...request.execution!, result: {
+      ...result, futurePrivateDetails: { opaque: 'must not be displayed' },
+    } } })).not.toHaveProperty('details');
+  });
+
+  it.each([
+    ['action.invoke', { status: 'failed', code: 'user_data', value: 42 }],
+    ['browser.view.open', { v: 1, commandId: 'opened', status: 'dispatched', adapterKind: 'chromiumSidecar', events: [] }],
+    ['browser.sandbox.install', { status: 'installed' }],
+    ['computer.permissions.openSettings', { status: 'dispatched' }],
+  ] as const)('does not project successful %s output as a failure', (actionId, result) => {
+    const output = getActionSpec(actionId).outputSchema!.parse(result);
+    const request = ApprovalRequestV1Schema.parse({ v: 1, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'system' }, actionId, actionArgs: {}, summary: 'Approved Action',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: output } });
+    expect(readApprovalExecutionFailure(request)).toBeNull();
+  });
+
+  it.each([
+    ['plugins.install', 'plugins_install'],
+    ['plugins.uninstall', 'plugins_uninstall'],
+    ['plugins.reload', 'plugins_reload'],
+  ] as const)('surfaces a failed %s domain result without rewriting its executed receipt', (actionId, kind) => {
+    const diagnostic = { code: 'plugin_change_conflict', message: 'The daemon did not apply the approved plugin install.' };
+    const result = getActionSpec(actionId).outputSchema!.parse({
+      ok: false, kind, ...(actionId === 'plugins.install' ? { outcome: 'failed' } : {}),
+      change: { kind: 'conflict', pluginId: 'qa.home-widget' },
+      diagnostics: [{ ...diagnostic, details: { opaque: 'not displayed' } }],
+    });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'system' }, requestedSurface: 'cli', actionId,
+      actionArgs: actionId === 'plugins.install' ? { path: '/qa/widget', dev: true } : { pluginId: 'qa.home-widget' }, summary: 'Change widget',
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+        serverId: 'home', serverIdentityId: 'home-identity', accountId: 'alice', machineId: 'machine', actionId, requestId: 'install' },
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result } });
+    expect(readApprovalExecutionFailure(request)).toEqual({ ok: false, errorCode: 'plugin_change_conflict',
+      error: diagnostic.message });
+    expect(request).toMatchObject({ status: 'executed', execution: { ok: true, result } });
+    const applied = getActionSpec(actionId).outputSchema!.parse({ ok: true, kind, ...(actionId === 'plugins.install' ? { outcome: 'applied' } : {}),
+      change: { kind: 'committed', pluginId: 'qa.home-widget', desiredGeneration: null, appliedGeneration: null, pendingSurfaces: [] } });
+    expect(readApprovalExecutionFailure({ ...request, execution: { ...request.execution!, result: applied } })).toBeNull();
+    if (actionId !== 'plugins.uninstall') {
+      const pending = getActionSpec(actionId).outputSchema!.parse({ ok: false, kind, outcome: 'reviewRequired',
+        pendingReview: { kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-widget', review: {} } });
+      expect(readApprovalExecutionFailure({ ...request, execution: { ...request.execution!, result: pending } })).toBeNull();
+    }
+  });
+
+  it.each([
     ['machines.presets.create', { kind: 'refused', code: 'provider_unavailable' }, 'provider_unavailable'],
     ['machines.presets.update', { kind: 'conflict', currentRevision: 4 }, 'conflict'],
     ['machines.managed.power.set', { kind: 'refused', code: 'provider_unavailable' }, 'provider_unavailable'],
@@ -229,6 +410,9 @@ describe('ApprovalRequestV1Schema', () => {
       decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true,
         result: { kind: 'refused', code: 'provider_unavailable' } } });
     expect(readApprovalExecutionFailure(request)).toBeNull();
+    expect(readApprovalExecutionFailure({ ...request, execution: { ...request.execution!, result: {
+      status: 'failed', error: { code: 'invented', message: 'Opaque data is not a receipt' },
+    } } })).toBeNull();
     expect(readApprovalExecutionFailure({ ...request, actionId: 'machines.presets.list',
       execution: { ...request.execution!, result: { kind: 'listed', presets: [] } } })).toBeNull();
     expect(readApprovalExecutionFailure({ ...request, actionId: 'machines.presets.create',
@@ -248,6 +432,42 @@ describe('ApprovalRequestV1Schema', () => {
     }
     expect(readApprovalExecutionFailure({ ...request, actionId: 'action.operations.get',
       execution: { ...request.execution!, result: { kind: 'not_found' } } })).toBeNull();
+  });
+
+  it.each(['provider_catalog_unavailable', 'agent_timeout', 'machine_offline', 'agent_unavailable', 'agent_error',
+    'model_not_granted', 'permission_mode_not_granted'] as const)('retains request-bound Provider %s recovery facts through durable approval reads', code => {
+    const actionId = 'providers.connections.enabled.set';
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', actionId, summary: 'Enable Provider',
+      actionArgs: { action: 'setEnabled', connectionId: 'pc_one', scope: 'account', enabled: true },
+      executionOriginV1: { v: 1, authority: 'present_user', surface: 'cli', caller: { kind: 'host' },
+        serverId: 'home', accountId: 'account', machineId: 'machine', actionId, requestId: 'request' } });
+    const details = createProviderErrorV1(code, { connectionId: 'pc_one' });
+    const failure = { ok: false as const, errorCode: details.code, error: details.code, details };
+    const execution = projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 3 });
+    expect(execution).toMatchObject({ details });
+    const stored = StoredApprovalRequestSchema.parse({ ...request, status: 'failed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution });
+    expect(readApprovalExecutionFailure(stored)).toMatchObject({ details });
+    expect(projectApprovalRequestForPublicRead(stored)).toMatchObject({ execution: { details } });
+    for (const unsafe of [{ ...details, retryable: !details.retryable }, { ...details, token: 'private-fixture' },
+      { ...details, connectionId: 'pc_other' }, { ...details, machineId: 'other-machine' }, { ...details, sourceProfileId: 'profile-other' }]) {
+      expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, details: unsafe }, executedAtMs: 3 }))
+        .not.toHaveProperty('details');
+    }
+    for (const invalid of [{ ...details, connectionId: 'pc_other' }, { ...details, machineId: 'other-machine' },
+      { ...details, sourceProfileId: 'profile-other' }, { ...details, retryable: !details.retryable }]) {
+      const invalidStored = StoredApprovalRequestSchema.parse({ ...stored, execution: { ...execution, details: invalid } });
+      expect(readApprovalExecutionFailure(invalidStored)).not.toHaveProperty('details');
+    }
+    expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, errorCode: 'permission_denied' }, executedAtMs: 3 }))
+      .not.toHaveProperty('details');
+    expect(projectApprovalExecutionFailureV2({ request: { ...request, actionId: 'settings.get' }, failure, executedAtMs: 3 }))
+      .not.toHaveProperty('details');
+    const uncertain = { ok: false as const, errorCode: 'outcome_unknown', error: 'outcome_unknown',
+      details: { category: 'transport_timeout' } };
+    expect(projectApprovalExecutionFailureV2({ request, failure: uncertain, executedAtMs: 3 }))
+      .toMatchObject({ details: uncertain.details });
   });
 
   it('retains only a typed content-free approval staleness fact', () => {
@@ -377,9 +597,24 @@ describe('ApprovalRequestV1Schema', () => {
       decision: { kind: 'approve', decidedAtMs: 2 }, execution });
     expect(readApprovalExecutionFailure(stored)).toMatchObject({ details });
 
+    for (const httpStatus of [100, 409, 599]) {
+      const transported = projectApprovalExecutionFailureV2({ request,
+        failure: { ...failure, details: { ...details, httpStatus } }, executedAtMs: 3 });
+      expect(transported).toEqual(execution);
+      const transportedStored = StoredApprovalRequestSchema.parse({ ...stored, execution: transported });
+      expect(readApprovalExecutionFailure(transportedStored)).toMatchObject({ details });
+      expect(projectApprovalRequestForPublicRead(transportedStored)).toMatchObject({ execution: { details } });
+      const priorTransportedStored = StoredApprovalRequestSchema.parse({ ...stored,
+        execution: { ...execution, details: { ...details, httpStatus } } });
+      expect(readApprovalExecutionFailure(priorTransportedStored)).toMatchObject({ details });
+      expect(transported.details).not.toHaveProperty('httpStatus');
+    }
+
     for (const unsafeDetails of [
       { ...details, bearer: 'must-not-persist' },
+      { ...details, httpStatus: 409, bearer: 'must-not-persist' },
       { ...details, resources: [{ ...resource, credential: 'must-not-persist' }] },
+      { ...details, httpStatus: 409, resources: [{ ...resource, credential: 'must-not-persist' }] },
     ]) {
       expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, details: unsafeDetails }, executedAtMs: 3 })).not.toHaveProperty('details');
       const unsafeStored = StoredApprovalRequestSchema.parse({ ...stored, execution: { ...execution, details: unsafeDetails } });
@@ -394,12 +629,20 @@ describe('ApprovalRequestV1Schema', () => {
       const unsafeStored = StoredApprovalRequestSchema.parse({ ...stored, execution: { ...execution, details: invalidDetails } });
       expect(readApprovalExecutionFailure(unsafeStored)).not.toHaveProperty('details');
     }
+    for (const httpStatus of [99, 600, 409.5, '409', null, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(projectApprovalExecutionFailureV2({ request,
+        failure: { ...failure, details: { ...details, httpStatus } }, executedAtMs: 3 })).not.toHaveProperty('details');
+    }
     const unrelated = ApprovalRequestV2Schema.parse({ ...request, actionId: 'session.title.set',
       actionArgs: { sessionId: 'session-1', title: 'Title' },
       executionOriginV1: { ...request.executionOriginV1, actionId: 'session.title.set' } });
     expect(projectApprovalExecutionFailureV2({ request: unrelated, failure, executedAtMs: 3 })).not.toHaveProperty('details');
     expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, errorCode: 'permission_denied' }, executedAtMs: 3 })).not.toHaveProperty('details');
     expect(projectApprovalExecutionFailureV2({ request: { ...request, actionArgs: {} }, failure, executedAtMs: 3 })).not.toHaveProperty('details');
+    const transportedFailure = { ...failure, details: { ...details, httpStatus: 409 } };
+    expect(projectApprovalExecutionFailureV2({ request: unrelated, failure: transportedFailure, executedAtMs: 3 })).not.toHaveProperty('details');
+    expect(projectApprovalExecutionFailureV2({ request, failure: { ...transportedFailure, errorCode: 'permission_denied' }, executedAtMs: 3 })).not.toHaveProperty('details');
+    expect(projectApprovalExecutionFailureV2({ request: { ...request, actionArgs: {} }, failure: transportedFailure, executedAtMs: 3 })).not.toHaveProperty('details');
   });
 
   it('keeps confidential credential approval custody value-free and bound to its admitted Home and target', () => {
@@ -1182,6 +1425,25 @@ describe('requiresExactDaemonApprovalReplay', () => {
     });
   }
 
+  it.each([
+    { actionId: 'mcp.servers.signIn.start', input: { serverId: 'oauth-server' } },
+    { actionId: 'teams.credentials.externalKeys.create', input: {
+      resourceId: 'resource-1', teamMembershipId: 'membership-1', label: 'CLI key',
+    } },
+  ] as const)('keeps a blocking $actionId result at its originating daemon', ({ actionId, input }) => {
+    const request = hostCliRequest(actionId, input);
+    expect(getActionSpec(actionId).approvalResultCustody).toBe('live_only');
+    expect(requiresExactDaemonApprovalReplay({ ...request,
+      approval: { flow: 'blocking', result: 'required' },
+      executionOriginV1: { ...request.executionOriginV1, machineId: 'origin-machine' },
+    })).toBe(true);
+    // A deliberately deferred proposal has no original live result recipient.
+    // Its deciding human retains the existing one-shot result path.
+    expect(requiresExactDaemonApprovalReplay({ ...request,
+      approval: { flow: 'deferred', result: 'required' },
+    })).toBe(false);
+  });
+
   it('replays an unsigned host CLI Account effect at the deciding Home without inventing a Machine', () => {
     const request = ApprovalRequestV2Schema.parse({
       v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -1206,8 +1468,8 @@ describe('requiresExactDaemonApprovalReplay', () => {
       hostId: 'reviewed-host', expectedRevision: 3,
     }))).toBe(false);
     expect(requiresExactDaemonApprovalReplay(hostCliRequest('account.apiTokens.revokeAll', {}))).toBe(false);
-    expect(requiresExactDaemonApprovalReplay(hostCliRequest('session.reports_to.set', {
-      sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null,
+    expect(requiresExactDaemonApprovalReplay(hostCliRequest('session.manager.set', {
+      sessionId: 'worker', managerSessionId: 'lead', expectedManagerSessionId: null,
     }))).toBe(false);
   });
 
@@ -1260,6 +1522,7 @@ describe('requiresExactDaemonApprovalReplay', () => {
       const request = ApprovalRequestV2Schema.parse({
         v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, actionId, actionArgs, summary: 'Invitation proposal',
         createdBy: { surface: 'agent', sessionId: 'source' }, requestedSurface: 'agent',
+        approval: { flow: 'deferred', result: 'required' },
         executionOriginV1: { v: 1, surface: 'agent', authority: 'account_automation', caller,
           serverId: 'profile', serverIdentityId: 'stable-home', accountId: 'account', machineId: target.machineId,
           sessionId: 'source', target, actionId, requestId: 'proposal-request', callerPermissionMode: null,

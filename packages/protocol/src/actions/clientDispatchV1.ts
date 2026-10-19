@@ -11,6 +11,48 @@ import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFami
 import { RPC_METHODS } from '../rpc/methods.js';
 import { isWorkflowAuthoringActionId } from './workflowAuthoringActionIds.js';
 import { isAppShellActionId } from './appShellActionFamily.js';
+import { isWorkspaceActionId } from './workspaceActionFamily.js';
+import { isUpdatesActionId } from './updatesActionFamily.js';
+import { isAppUpdateActionId } from './appUpdateActionFamily.js';
+import { isAccountLifecycleActionId } from './accountLifecycleActionFamily.js';
+
+/** Existing reverse-RPC rooms select a mounted read owner, rather than an arbitrary App. */
+export function mountedWorkReadClientRpcMethod(actionId: 'session.work.get' | 'inbox.get', sessionId?: string): string {
+  return actionId === 'inbox.get' ? `${RPC_METHODS.UI_ACTION_EXECUTE}.inbox`
+    : `${RPC_METHODS.UI_ACTION_EXECUTE}.work.${encodeURIComponent(JSON.stringify(sessionId ?? ''))}`;
+}
+
+export function isMountedWorkReadClientRpcMethod(method: string): boolean {
+  if (method === mountedWorkReadClientRpcMethod('inbox.get')) return true;
+  const prefix = `${RPC_METHODS.UI_ACTION_EXECUTE}.work.`;
+  if (!method.startsWith(prefix)) return false;
+  try {
+    const sessionId: unknown = JSON.parse(decodeURIComponent(method.slice(prefix.length)));
+    return typeof sessionId === 'string' && sessionId.trim().length > 0;
+  }
+  catch { return false; }
+}
+
+/** Current UI reads advertise only from an App that can presently disclose a snapshot. */
+export function currentUiContextReadClientRpcMethod(): string {
+  return `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.read`;
+}
+
+/** Opaque command ids bind follow-up execution to the App that produced the descriptor. */
+export function currentUiContextCommandClientRpcMethod(commandId: string): string {
+  return `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.command.${encodeURIComponent(JSON.stringify(commandId))}`;
+}
+
+export function isCurrentUiContextClientRpcMethod(method: string): boolean {
+  if (method === currentUiContextReadClientRpcMethod()) return true;
+  const prefix = `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.command.`;
+  if (!method.startsWith(prefix)) return false;
+  try {
+    const commandId: unknown = JSON.parse(decodeURIComponent(method.slice(prefix.length)));
+    return typeof commandId === 'string' && commandId.trim().length > 0;
+  }
+  catch { return false; }
+}
 
 /** Private continuation of an Action admitted by the authenticated Machine host. */
 export const UiActionDispatchRequestV1Schema = lazyZodSchema(() => z.strictObject({
@@ -52,6 +94,13 @@ export const UiActionDispatchResultV1Schema = lazyZodSchema(() => z.strictObject
 
 /** Absence is a declared domain result where the Action has one, otherwise a typed failure. */
 export function clientActionUnavailable(actionId: ActionId): ActionExecuteResult {
+  if (actionId === 'session.draft.delete') return { ok: false, errorCode: 'unavailable', error: 'noClient',
+    details: { reason: 'client_unavailable', recovery: { kind: 'connect_client', rpcMethod: RPC_METHODS.UI_ACTION_EXECUTE,
+      instruction: 'Open a signed-in Happier client connected to the target Machine, then request draft deletion again.' } } };
+  if (isWorkspaceActionId(actionId) || isUpdatesActionId(actionId) || isAppUpdateActionId(actionId)
+    || isAccountLifecycleActionId(actionId) || actionId === 'bugreport.submit') {
+    return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+  }
   if (isAppShellActionId(actionId) && actionId !== 'inbox.mark_all_read') return { ok: true, result: { status: 'unavailable' } };
   if (isWorkflowAuthoringActionId(actionId)) return { ok: true, result: { status: 'unavailable' } };
   if (actionId === 'usage.sources.dismiss') return { ok: true, result: { status: 'unavailable' } };

@@ -8,13 +8,16 @@ import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.t
 import type { WidgetSurfaceRefV1 } from '../widgets/widgetInstanceV1.js';
 import { createWidgetActionInputResolverV1 } from '../widgets/widgetActionInputResolverV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
-import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
+import { buildWidgetSurfaceArtifactIdV1, createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
+import { WidgetInstanceActionOutputSchemasV1 } from '../widgets/actionsV1.js';
+import { createHomeHubArtifactPortV1 } from '../home/homeHubArtifactV1.js';
 import { ApprovalRequestSchema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { createPluginWidgetAreaHostPortV1 } from '../plugins/ui/widgetAreaHost.js';
 
 const account = { serverId: 'home', accountId: 'account' };
 
-async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, policyHook = true,
+async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean | ((artifactId: string) => boolean), policyHook = true,
   presentUserActionConfirmation?: () => Promise<boolean>, readActionsSettings?: () => ReturnType<typeof normalizeActionsSettingsV1>) {
   const boundary = createWorkBoardArtifactBoundary();
   const transport = boundary.forAccount(account.accountId);
@@ -22,7 +25,7 @@ async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, poli
   const admittedTransport = { ...transport, delete: boundary.transport.delete,
     read: async (...args: Parameters<typeof transport.read>) => {
       const row = await transport.read(...args);
-      return row ? { ...row, shared } : null;
+      return row ? { ...row, shared: typeof shared === 'function' ? shared(row.artifactId) : shared } : null;
     },
     list: async (...args: Parameters<typeof boundary.transport.list>) => {
       const page = await boundary.transport.list(...args);
@@ -41,10 +44,11 @@ async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, poli
   }, size: 'small' });
   await artifact.apply({ kind: 'group_create', groupId: 'group', instanceIds: ['two'] });
   const port = createWidgetAreaActionPortV1(artifactFor);
-  const executor = createActionExecutor({ widgetAccountScope: () => account, presentUserActionConfirmation,
+  const homeHubArtifacts = createHomeHubArtifactPortV1(admittedTransport, { accountId: account.accountId });
+  const executor = createActionExecutor({ homeHubArtifacts, widgetAccountScope: () => account, presentUserActionConfirmation,
     ...(policyHook ? { isActionApprovalRequired: (actionId: ActionId, context: ActionExecutorContext, input: unknown, defaultUiConfirmation?: boolean) => isApprovalRequiredByActionsSettings(actionId,
       readActionsSettings?.() ?? context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context, undefined, undefined, input, defaultUiConfirmation) } : {}),
-    widgetSurfaceActions: { [owner.kind]: port },
+    widgetSurfaceActions: { project: port, corePage: port, pluginArea: port },
     widgetInputs: createWidgetActionInputResolverV1({
       readDescriptor: async ({ instance }) => readBuiltinWidgetDescriptorV1(instance.definition),
       readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
@@ -60,7 +64,7 @@ async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, poli
       delete: (input, _context, signal) => layoutsFor(input.surface).delete(input, signal),
     },
   });
-  return { surface, artifact, layouts: layoutsFor(surface), executor };
+  return { surface, artifact, artifactFor, homeHubArtifacts, layouts: layoutsFor(surface), executor };
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
@@ -182,6 +186,104 @@ describe('contextual widget approval at the Action executor', () => {
     expect(stored).toMatchObject({ status: 'executed' });
     expect(JSON.stringify(stored)).not.toContain('private-session');
   });
+  it.each(['waived', 'ask'] as const)('uses live hook-only %s policy for an audience-widening move', async policy => {
+    const actionId = 'widgets.item.move';
+    const settings = normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { [actionId]: ['ui'] },
+      ...(policy === 'ask' ? { actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } } : {}),
+    });
+    let confirmations = 0;
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, true,
+      true, async () => { confirmations += 1; return false; }, () => settings);
+    const instance = { v: 1, id: 'movable', definition: { kind: 'builtin', id: 'your_home' }, bindings: {} } as const;
+    await state.homeHubArtifacts.apply({ kind: 'widget_add', instance });
+    const input = { ref: { surface: { ...account, owner: { kind: 'home' } }, instanceId: instance.id },
+      to: { surface: state.surface, index: 0 } };
+    const result = await state.executor.execute(actionId, input, { surface: 'ui', authority: 'present_user' });
+    expect(result).toMatchObject(policy === 'waived' ? { ok: true } : { ok: false, errorCode: 'approvals_not_supported' });
+    expect(confirmations).toBe(0);
+    expect((await state.artifact.read()).items.some(item => item.kind === 'widget' && item.instance.id === instance.id)).toBe(policy === 'waived');
+  });
+
+  it('confirms an admitted private-to-shared move from Home without lending authority to input audience fields', async () => {
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, true,
+      true, async () => false);
+    const instance = { v: 1, id: 'movable', definition: { kind: 'builtin', id: 'your_home' }, bindings: {} } as const;
+    await state.homeHubArtifacts.apply({ kind: 'widget_add', instance });
+    const input = { ref: { surface: { ...account, owner: { kind: 'home' } }, instanceId: instance.id },
+      to: { surface: state.surface, index: 0 } };
+    expect(await state.executor.execute('widgets.item.move', input, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+    expect((await state.homeHubArtifacts.read()).items).toContainEqual(expect.objectContaining({ instance }));
+    expect((await state.artifact.read()).items.some(item => item.kind === 'widget' && item.instance.id === instance.id)).toBe(false);
+    expect(await state.executor.execute('widgets.item.move', { ...input, isShared: false }, { surface: 'ui', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+  });
+
+  it.each(owners.filter(row => !row.shared).flatMap(row => [true, false].map(policyHook => ({ ...row, policyHook }))))(
+    'confirms an admitted private-to-shared move on $name (policy hook=$policyHook)', async row => {
+      const destination: WidgetSurfaceRefV1 = { ...account, owner: { ...row.owner, layoutId: 'other' } };
+      const destinationId = buildWidgetSurfaceArtifactIdV1(destination);
+      let approved = false;
+      let confirmations = 0;
+      const state = await fixture(row.owner, artifactId => artifactId === destinationId, row.policyHook,
+        async () => { confirmations += 1; return approved; });
+      await state.artifact.apply({ kind: 'add', instance: { v: 1, id: 'movable',
+        definition: { kind: 'builtin', id: 'your_home' }, bindings: {} }, size: 'small' });
+      const target = state.artifactFor(destination);
+      await target.apply({ kind: 'add', instance: { v: 1, id: 'existing',
+        definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} }, size: 'small' });
+      const input = { ref: { surface: state.surface, instanceId: 'movable' }, to: { surface: destination, index: 0 } };
+      const context = { surface: 'ui', authority: 'present_user' } as const;
+      const sourceBefore = (await state.artifact.read()).items;
+      const destinationBefore = (await target.read()).items;
+      expect(await state.executor.execute('widgets.item.move', input, context))
+        .toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+      expect(confirmations).toBe(1);
+      expect((await state.artifact.read()).items).toEqual(sourceBefore);
+      expect((await target.read()).items).toEqual(destinationBefore);
+      approved = true;
+      const moved = await state.executor.execute('widgets.item.move', input, context);
+      expect(moved).toMatchObject({ ok: true });
+      if (!moved.ok) throw new Error(moved.errorCode);
+      expect(WidgetInstanceActionOutputSchemasV1['widgets.item.move'].safeParse(moved.result).success).toBe(true);
+      expect(confirmations).toBe(2);
+      expect((await state.artifact.read()).items.some(item => item.kind === 'widget' && item.instance.id === 'movable')).toBe(false);
+      expect((await target.read()).items).toContainEqual(expect.objectContaining({ instance: expect.objectContaining({ id: 'movable' }) }));
+    });
+
+  it.each([{ sourceShared: false, destinationShared: false }, { sourceShared: true, destinationShared: true },
+    { sourceShared: true, destinationShared: false }])('keeps a reversible move direct without private-to-shared widening (%j)', async row => {
+    const owner = { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' } as const;
+    const destination: WidgetSurfaceRefV1 = { ...account, owner: { ...owner, layoutId: 'other' } };
+    const destinationId = buildWidgetSurfaceArtifactIdV1(destination);
+    const state = await fixture(owner, artifactId => artifactId === destinationId ? row.destinationShared : row.sourceShared,
+      true, async () => { throw new Error('Unexpected confirmation'); });
+    await state.artifact.apply({ kind: 'add', instance: { v: 1, id: 'movable',
+      definition: { kind: 'builtin', id: 'your_home' }, bindings: {} }, size: 'small' });
+    await state.artifactFor(destination).apply({ kind: 'add', instance: { v: 1, id: 'existing',
+      definition: { kind: 'builtin', id: 'session_summary' }, bindings: {} }, size: 'small' });
+    expect(await state.executor.execute('widgets.item.move', {
+      ref: { surface: state.surface, instanceId: 'movable' }, to: { surface: destination, index: 0 },
+    }, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    { authority: 'account_automation' as const },
+    { authority: 'present_user' as const, actionCaller: { kind: 'plugin' as const, pluginId: 'acme.confirmation' } },
+    { authority: 'present_user' as const, externalActionCredential: {
+      accountId: 'account', principalId: 'token', credentialId: 'token', grant: API_TOKEN_FULL_GRANT_V1,
+    } },
+  ])('never lends host UI confirmation to a non-host invocation (%j)', async context => {
+    let confirmations = 0;
+    const executor = createActionExecutor({ presentUserActionConfirmation: async () => { confirmations += 1; return false; } });
+    const result = await executor.execute('projects.trust.revoke', {
+      project: { serverId: 'home', projectId: 'project' }, expectedRevision: 1, expectedEffectDigest: 'reviewed-effect',
+    }, { surface: 'ui', ...context });
+    expect(confirmations).toBe(0);
+    expect(result).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+  });
+
   it('refuses a confirmation when current Account policy changed to Ask-first while the host was open', async () => {
     let settings = normalizeActionsSettingsV1({ v: 1 });
     const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, true, true,

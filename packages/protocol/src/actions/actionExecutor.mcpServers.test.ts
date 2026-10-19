@@ -34,7 +34,7 @@ describe('MCP catalog Actions', () => {
   it('asks CLI and Agent callers while applying reversible UI taps directly under D22', () => {
     for (const actionId of MCP_SERVER_ACTION_IDS_V1.filter(id => getActionSpec(id).safety === 'danger')) {
       const args = { actionId, spec: getActionSpec(actionId), context: { surface: 'ui', authority: 'present_user' } as const };
-      expect(resolveActionApprovalRouting(args).required, actionId).toBe(getActionSpec(actionId).approvalPolicy?.uiConfirmation === 'policy');
+      expect(resolveActionApprovalRouting(args).required, actionId).toBe(getActionSpec(actionId).approvalPolicy?.uiConfirmation !== 'direct');
       for (const surface of ['cli', 'agent', 'mcp'] as const) {
         expect(resolveActionApprovalRouting({ ...args, context: { surface, authority: 'account_automation' } }).required, `${actionId}:${surface}`).toBe(true);
       }

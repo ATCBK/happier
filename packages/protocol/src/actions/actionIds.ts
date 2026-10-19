@@ -25,7 +25,7 @@ import { PLUGIN_EXECUTION_ORIGIN_ACTION_IDS } from './pluginExecutionOriginActio
 import { NPM_REGISTRY_PROFILE_ACTION_IDS_V1 } from './npmRegistryProfileActionIds.js';
 import { PLUGIN_ACCOUNT_ADMINISTRATION_ACTION_IDS } from './pluginAccountAdministrationActionIds.js';
 import { SESSION_BOARD_ACTION_IDS_V1 } from '../sessions/board/actionIds.js';
-import { SESSION_DISCUSSION_ACTION_IDS_V1 } from '../sessions/discussions/actionIds.js';
+import { DISCUSSION_ACTION_IDS_V1 } from '../discussions/actionIds.js';
 import { SESSION_READ_STATE_ACTION_IDS_V1 } from '../sessions/readState/actionIds.js';
 import { SESSION_ATTENTION_SET_ACTION_ID } from '../sessions/organization/attentionAction.js';
 import { MACHINE_POOL_ACTION_IDS_V1 } from '../machines/pools/actionsV1.js';
@@ -41,6 +41,7 @@ import { SHARED_SAVED_SECRET_ACTION_IDS_V1 } from '../account/settings/savedSecr
 import { PERSONAL_SAVED_SECRET_ACTION_IDS_V1 } from '../account/settings/personalSavedSecretActionsV1.js';
 import { ARTIFACT_ACCESS_ACTION_IDS_V1 } from '../artifacts/artifactAccessV1.js';
 import { ARTIFACT_ACTION_IDS_V1 } from '../artifacts/artifactActionIdsV1.js';
+import { DOC_COLLABORATION_ACTION_IDS_V1 } from '../artifacts/artifactCollaborationActionIdsV1.js';
 import { WORKSPACE_ACTION_IDS } from './workspaceActionFamily.js';
 import { PROJECT_ACTION_IDS_V1 } from './projectActionIdsV1.js';
 import { PROJECT_DEFINITION_ACTION_IDS } from './projectDefinitionActionFamily.js';
@@ -144,8 +145,9 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   workspace_layout: WORKSPACE_ACTION_IDS,
   session_organization_move: ['session.organization.move', 'session.organization.pin.set'],
   composer_ingress: ['composer.transaction.apply', 'composer.attachments.pick', 'repository.upload.pick'],
-  list_reorder: ['session.pending.reorder', 'todos.reorder'],
-  todo_session_link: ['todos.session.link'],
+  list_reorder: ['session.pending.reorder', 'tasks.internal.reorder'],
+  todo_session_link: ['tasks.internal.session.link'],
+  internal_tasks: ['tasks.internal.list', 'tasks.internal.create', 'tasks.internal.edit', 'tasks.internal.transition'],
   workspace_file_search: ['workspace.files.search'],
   workflow_event_catalog: ['workflow.events.list'],
   filesystem: FILESYSTEM_ACTION_IDS,
@@ -180,6 +182,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   session_authoring: ['session.authoring.open'],
   artifact_access: ARTIFACT_ACCESS_ACTION_IDS_V1,
   artifacts: ARTIFACT_ACTION_IDS_V1,
+  doc_collaboration: DOC_COLLABORATION_ACTION_IDS_V1,
   settings_declarations: [...SETTINGS_DECLARATION_ACTION_IDS_V1, ...ACTION_POLICY_ACTION_IDS],
   app_shell: APP_SHELL_ACTION_IDS,
   notifications: ['notifications.notify_me'],
@@ -268,9 +271,11 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   ],
   messaging: [
     'session.message.send',
-    'session.worker.publish',
+    'session.message.reply',
+    'session.update.post',
   ],
   session_control: [
+    'session.pending.action.set',
     'session.pending.resetStart.set',
     'session.pending.resetStart.cancel',
     'session.pending.next',
@@ -280,17 +285,21 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.pending.sendAsNew',
     'session.turn.cancel',
     'session.stop',
+    'session.exchange.control',
+    'session.runtime.refresh',
     'session.delete',
     'session.folder.set',
     'session.tags.set',
     'session.title.set',
+    'session.status.set_reason',
+    'session.coordinator.enable',
     'session.bot.set',
     'session.memory.set',
     'session.voice.preference.set',
     'session.context.update',
     'session.instructions.set',
     'session.view.toolCalls.set',
-    'session.reports_to.set',
+    'session.manager.set',
     'session.model.set',
     'session.model.unarm',
     'session.config_option.set',
@@ -378,14 +387,16 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
    * default and user override; this family adds no approval policy of its own.
    */
   session_follow: [
-    'session.follow.get',
-    'session.follow.set',
-    'session.follow.remove',
-    'session.follow.preferences.get',
-    'session.follow.preferences.set',
-    'session.follow.sources.list',
-    'session.follow.sources.set',
-    'session.follow.sources.remove',
+    'follow.get',
+    'follow.set',
+    'follow.remove',
+    'follow.list',
+    'follow.preview',
+    'follow.preferences.get',
+    'follow.preferences.set',
+    'session.delivery.mute.set',
+    'session.delivery.mute.remove',
+    'session.delivery.mute.list',
   ],
   session_transcripts: [
     'session.transcript.get',
@@ -413,10 +424,10 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   /** The shared human and Agent Board intents; the Board schemas own their ids. */
   session_board: SESSION_BOARD_ACTION_IDS_V1,
   /**
-   * The Session-owned human discussion intents. UI, CLI, Agents and supported
+   * The Home-owned Discussion intents. UI, CLI, Agents and supported
    * SDK callers reach one family; the discussion schemas own their ids.
    */
-  session_discussion: SESSION_DISCUSSION_ACTION_IDS_V1,
+  discussion: DISCUSSION_ACTION_IDS_V1,
   session_permissions: [
     'session.approval_reviewer.set',
     'session.permission.respond',
@@ -426,6 +437,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.permission.remote.grants.list',
     'session.permission.remote.grants.revoke',
     'session.user_action.answer',
+    'session.needs_you.raise',
     'session.mode.set',
   ],
   external_sessions: [
@@ -464,7 +476,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'ui.pet.choose',
   ],
   memory: [
-    'memory.remember', 'memory.update', 'memory.forget', 'memory.read', 'memory.list',
+    'memory.remember', 'memory.decision.save', 'memory.update', 'memory.forget', 'memory.read', 'memory.list',
     'memory.search',
     'search.settings.get',
     'search.settings.set',

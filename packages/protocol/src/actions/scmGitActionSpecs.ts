@@ -61,6 +61,19 @@ import { z } from 'zod/mini';
 import { ScmHistoryEntriesInputV1Schema, ScmHistoryEntriesResponseSchema } from '../scm/entriesHistoryV1.js';
 import type { ActionId } from './actionIds.js';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
+import {
+  describeScmBranchMergeApprovalSummary,
+  describeScmBranchOperationAbortApprovalSummary,
+  describeScmBranchOperationSkipApprovalSummary,
+  describeScmBranchRebaseApprovalSummary,
+  describeScmChangeDiscardApprovalSummary,
+  describeScmRemotePullApprovalSummary,
+  describeScmRemotePushApprovalSummary,
+  isScmRemoteForcePush,
+  describeScmStashDropApprovalSummary,
+  describeScmWorktreePruneApprovalSummary,
+  describeScmWorktreeRemoveApprovalSummary,
+} from './specs/scmApprovalPresentation.js';
 
 /** Named metadata keeps declaration emission bounded without widening the wire schemas. */
 export type ScmActionSpecDefinition<
@@ -73,6 +86,19 @@ export type ScmActionSpecDefinition<
   outputSchema: TOutput;
 }>;
 
+/**
+ * Present-user UI admission (2026-10-15 owner ruling: the Action policy is the one confirmation owner;
+ * confirm once, and only irreversible effects). `approvalPolicy.uiConfirmation: 'direct'` marks a write
+ * that is reversible or recoverable; it changes only the present user's UI default (Agent, MCP, CLI and
+ * automation callers keep the danger approval, and an explicit Ask-first setting still wins). Irreversible
+ * writes keep the single in-place confirmation, each with a plain title and an `approvalPresentation`
+ * summary: discard, merge, rebase, skipping a step, aborting a merge or rebase (the resolution so far is
+ * thrown away), stash drop, worktree removal and pruning. UI callers never add a dialog in front of
+ * either kind. Remote pull and push are direct by default and become the UI-confirmed default through
+ * the person's `scmRemoteConfirmPolicy` preference, which the UI host's approval hook reads
+ * (`sync/domains/settings/actionsSettings.ts`); a force push with lease is always confirmed. Index-lock
+ * recovery is an offer the app makes after a failure, so it is not confirmed here.
+ */
 function defineScmActionSpec<
   const TId extends ActionId,
   TInput extends z.ZodMiniType,
@@ -185,6 +211,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Change include',
     description: 'Change include in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.change.include' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -207,6 +234,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Change exclude',
     description: 'Change exclude in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.change.exclude' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -226,17 +254,18 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     id: 'scm.change.discard', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","entries":[{"path":"src/app.ts","kind":"modified"}]}' } },
     workspaceWrite: true,
-    title: 'Change discard',
+    title: 'Discard changes',
     description: 'Change discard in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
     bindings: { rpcMethod: 'scm.change.discard' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'danger',
+    approvalPresentation: { summary: describeScmChangeDiscardApprovalSummary },
     inputSchema: scm.ScmChangeDiscardRequestSchema,
     outputSchema: scm.ScmChangeDiscardResponseSchema,
     inputHints: {
-      title: 'Change discard',
+      title: 'Discard changes',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'entries', title: 'entries', widget: 'json' },
@@ -250,6 +279,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Commit create',
     description: 'Commit create in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.commit.create' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -290,6 +320,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.commit.undoLast', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     examples: { voice: { argsExample: '{"cwd":"/repo","expectedHeadOid":"1111111111111111111111111111111111111111"}' } },
     workspaceWrite: true,
     title: 'Undo last commit',
@@ -316,6 +347,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Commit backout',
     description: 'Commit backout in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.commit.backout' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -397,6 +429,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Branch create',
     description: 'Branch create in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.branch.create' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -420,6 +453,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Branch checkout',
     description: 'Branch checkout in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.branch.checkout' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -440,17 +474,18 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     id: 'scm.branch.merge', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","sourceRef":"feature/example"}' } },
     workspaceWrite: true,
-    title: 'Branch merge',
+    title: 'Merge branch',
     description: 'Branch merge in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
     bindings: { rpcMethod: 'scm.branch.merge' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'write',
+    approvalPresentation: { summary: describeScmBranchMergeApprovalSummary },
     inputSchema: scm.ScmBranchIntegrationRequestSchema,
     outputSchema: scm.ScmBranchIntegrationResponseSchema,
     inputHints: {
-      title: 'Branch merge',
+      title: 'Merge branch',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'sourceRef', title: 'source Ref', widget: 'text' },
@@ -461,17 +496,18 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     id: 'scm.branch.rebase', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","sourceRef":"feature/example"}' } },
     workspaceWrite: true,
-    title: 'Branch rebase',
+    title: 'Rebase branch',
     description: 'Branch rebase in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
     bindings: { rpcMethod: 'scm.branch.rebase' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'write',
+    approvalPresentation: { summary: describeScmBranchRebaseApprovalSummary },
     inputSchema: scm.ScmBranchIntegrationRequestSchema,
     outputSchema: scm.ScmBranchIntegrationResponseSchema,
     inputHints: {
-      title: 'Branch rebase',
+      title: 'Rebase branch',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'sourceRef', title: 'source Ref', widget: 'text' },
@@ -480,6 +516,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.branch.operation.continue', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     examples: { voice: { argsExample: '{"cwd":"/repo","operation":"rebase"}' } },
     workspaceWrite: true,
     title: 'Branch operation continue',
@@ -503,17 +540,18 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     id: 'scm.branch.operation.skip', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","operation":"rebase"}' } },
     workspaceWrite: true,
-    title: 'Branch operation skip',
+    title: 'Skip this step',
     description: 'Branch operation skip in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
     bindings: { rpcMethod: 'scm.branch.operation.skip' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'write',
+    approvalPresentation: { summary: describeScmBranchOperationSkipApprovalSummary },
     inputSchema: scm.ScmBranchOperationControlRequestSchema,
     outputSchema: scm.ScmBranchIntegrationResponseSchema,
     inputHints: {
-      title: 'Branch operation skip',
+      title: 'Skip this step',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'operation', title: 'operation', widget: 'text' },
@@ -522,9 +560,10 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.branch.operation.abort', approval: {result: 'required'},
+    approvalPresentation: { summary: describeScmBranchOperationAbortApprovalSummary },
     examples: { voice: { argsExample: '{"cwd":"/repo","operation":"rebase"}' } },
     workspaceWrite: true,
-    title: 'Branch operation abort',
+    title: 'Abort in-progress operation',
     description: 'Branch operation abort in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
@@ -534,7 +573,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     inputSchema: scm.ScmBranchOperationControlRequestSchema,
     outputSchema: scm.ScmBranchIntegrationResponseSchema,
     inputHints: {
-      title: 'Branch operation abort',
+      title: 'Abort in-progress operation',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'operation', title: 'operation', widget: 'text' },
@@ -586,6 +625,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.worktree.create', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Worktree create',
     description: 'Worktree create in the explicitly selected source-control repository.',
@@ -608,8 +648,9 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.worktree.remove', approval: {result: 'required'},
+    approvalPresentation: { summary: describeScmWorktreeRemoveApprovalSummary },
     workspaceWrite: true,
-    title: 'Worktree remove',
+    title: 'Remove worktree',
     description: 'Worktree remove in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
@@ -619,7 +660,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     inputSchema: worktrees.ScmWorktreeRemoveRequestSchema,
     outputSchema: worktrees.ScmWorktreeRemoveResponseSchema,
     inputHints: {
-      title: 'Worktree remove',
+      title: 'Remove worktree',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'worktreePath', title: 'worktree Path', widget: 'text' },
@@ -631,17 +672,18 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   defineScmActionSpec({
     id: 'scm.worktree.prune', approval: {result: 'required'},
     workspaceWrite: true,
-    title: 'Worktree prune',
+    title: 'Prune worktrees',
     description: 'Worktree prune in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
     bindings: { rpcMethod: 'scm.worktree.prune' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
     sideEffectClass: 'danger',
+    approvalPresentation: { summary: describeScmWorktreePruneApprovalSummary },
     inputSchema: worktrees.ScmWorktreePruneRequestSchema,
     outputSchema: worktrees.ScmWorktreePruneResponseSchema,
     inputHints: {
-      title: 'Worktree prune',
+      title: 'Prune worktrees',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
       ],
@@ -649,6 +691,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.remote.add', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Remote add',
     description: 'Remote add in the explicitly selected source-control repository.',
@@ -671,6 +714,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.remote.setUrl', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Remote set Url',
     description: 'Remote set Url in the explicitly selected source-control repository.',
@@ -693,6 +737,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
   defineScmActionSpec({
     id: 'scm.remote.remove', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Remote remove',
     description: 'Remote remove in the explicitly selected source-control repository.',
@@ -718,6 +763,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     title: 'Remote fetch',
     description: 'Remote fetch in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.remote.fetch' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -737,9 +783,11 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     id: 'scm.remote.pull', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","remote":"origin"}' } },
     workspaceWrite: true,
-    title: 'Remote pull',
+    title: 'Pull changes',
     description: 'Remote pull in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
+    approvalPresentation: { summary: describeScmRemotePullApprovalSummary },
     placements: [],
     bindings: { rpcMethod: 'scm.remote.pull' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -759,39 +807,16 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
   }),
 ] as const;
 
-const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
-  ScmActionSpecDefinition<'scm.remote.push', typeof scm.ScmRemoteRequestSchema, typeof scm.ScmRemoteResponseSchema>,
-  ScmActionSpecDefinition<'scm.remote.publish', typeof branches.ScmRemotePublishRequestSchema, typeof branches.ScmRemotePublishResponseSchema>,
-  ScmActionSpecDefinition<'scm.stash.list', typeof stash.ScmStashListRequestSchema, typeof stash.ScmStashListResponseSchema>,
-  ScmActionSpecDefinition<'scm.stash.show', typeof stash.ScmStashShowRequestSchema, typeof stash.ScmStashShowResponseSchema>,
-  ScmActionSpecDefinition<'scm.stash.create', typeof stash.ScmStashCreateRequestSchema, typeof stash.ScmStashCreateResponseSchema>,
-  ScmActionSpecDefinition<'scm.stash.apply', typeof stash.ScmStashApplyRequestSchema, typeof stash.ScmStashApplyResponseSchema>,
-  ScmActionSpecDefinition<'scm.stash.pop', typeof stash.ScmStashPopRequestSchema, typeof stash.ScmStashPopResponseSchema>,
-  ScmActionSpecDefinition<'scm.stash.drop', typeof stash.ScmStashDropRequestSchema, typeof stash.ScmStashDropResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.list', typeof ScmPullRequestListRequestSchema, typeof ScmPullRequestListResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.get', typeof ScmPullRequestGetRequestSchema, typeof ScmPullRequestGetResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.openOrReuse', typeof ScmPullRequestOpenOrReuseRequestSchema, typeof ScmPullRequestOpenOrReuseResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.openCompose', typeof ScmPullRequestOpenComposeRequestSchema, typeof ScmPullRequestOpenComposeResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.checkout', typeof ScmPullRequestCheckoutRequestSchema, typeof ScmPullRequestCheckoutResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.prepareWorktree', typeof ScmPullRequestPrepareWorktreeRequestSchema, typeof ScmPullRequestPrepareWorktreeResponseSchema>,
-  ScmActionSpecDefinition<'scm.reviewWorkspace.materializePrepared', typeof ScmReviewWorkspaceMaterializePreparedRequestSchema, typeof ScmReviewWorkspaceMaterializePreparedResponseSchema>,
-  ScmActionSpecDefinition<'scm.pullRequest.runStacked', typeof ScmPullRequestRunStackedRequestSchema, typeof ScmPullRequestRunStackedResponseSchema>,
-  ScmActionSpecDefinition<'scm.repository.clone', typeof ScmRepositoryCloneInputSchema, typeof ScmRepositoryCloneOutputSchema>,
-  ScmActionSpecDefinition<'scm.repository.init', typeof ScmRepositoryInitRequestSchema, typeof ScmRepositoryInitResponseSchema>,
-  ScmActionSpecDefinition<'scm.repository.removeIndexLock', typeof ScmRepositoryRemoveIndexLockRequestSchema, typeof ScmRepositoryRemoveIndexLockResponseSchema>,
-  ScmActionSpecDefinition<'scm.hostingRepository.resolveAddress', typeof ScmHostingRepositoryResolveAddressRequestV1Schema, typeof ScmHostingRepositoryResolveAddressResponseV1Schema>,
-  ScmActionSpecDefinition<'scm.hostingRepository.describePublishTargets', typeof ScmHostingRepositoryDescribePublishTargetsRequestSchema, typeof ScmHostingRepositoryDescribePublishTargetsResponseSchema>,
-  ScmActionSpecDefinition<'scm.hostingRepository.publish', typeof ScmHostingRepositoryPublishRequestSchema, typeof ScmHostingRepositoryPublishResponseSchema>,
-  ScmActionSpecDefinition<'scm.diffSummary.capture', typeof ScmComparisonCaptureInputSchema, typeof ScmComparisonCaptureOutputSchema>,
-  ScmActionSpecDefinition<'scm.diffSummary.generate', typeof ScmDiffSummaryGenerateInputSchema, typeof ScmDiffSummaryGenerateOutputSchema>,
-] = [
+const SCM_GIT_ACTION_SPECS_REMOTE_AND_REVIEW = [
   defineScmActionSpec({
     id: 'scm.remote.push', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","remote":"origin"}' } },
     workspaceWrite: true,
-    title: 'Remote push',
+    title: 'Push commits',
     description: 'Remote push in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct', uiConfirmationForInput: isScmRemoteForcePush },
+    approvalPresentation: { summary: describeScmRemotePushApprovalSummary },
     placements: [],
     bindings: { rpcMethod: 'scm.remote.push' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -811,6 +836,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
   }),
   defineScmActionSpec({
     id: 'scm.remote.publish', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Remote publish',
     description: 'Remote publish in the explicitly selected source-control repository.',
@@ -874,6 +900,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
     title: 'Stash create',
     description: 'Stash create in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.stash.create' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
@@ -894,6 +921,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
     title: 'Stash apply',
     description: 'Stash apply in the explicitly selected source-control repository.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: { rpcMethod: 'scm.stash.apply' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
@@ -910,6 +938,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
   }),
   defineScmActionSpec({
     id: 'scm.stash.pop', approval: {result: 'required'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Stash pop',
     description: 'Stash pop in the explicitly selected source-control repository.',
@@ -930,8 +959,9 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
   }),
   defineScmActionSpec({
     id: 'scm.stash.drop', approval: {result: 'required'},
+    approvalPresentation: { summary: describeScmStashDropApprovalSummary },
     workspaceWrite: true,
-    title: 'Stash drop',
+    title: 'Delete stash',
     description: 'Stash drop in the explicitly selected source-control repository.',
     safety: 'danger',
     placements: [],
@@ -941,7 +971,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
     inputSchema: stash.ScmStashDropRequestSchema,
     outputSchema: stash.ScmStashDropResponseSchema,
     inputHints: {
-      title: 'Stash drop',
+      title: 'Delete stash',
       fields: [
         { path: 'cwd', title: 'cwd', widget: 'text' },
         { path: 'stashRef', title: 'stash Ref', widget: 'text' },
@@ -1025,6 +1055,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
   }),
   defineScmActionSpec({
     id: 'scm.pullRequest.openOrReuse', approval: {result: 'optional',flow: 'deferred'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     examples: { voice: { argsExample: '{"cwd":"/repo","base":"main","head":"feature/example","title":"Example change"}' } },
     title: 'Open or reuse pull request',
     description: 'Create a pull request or return an existing one for the current branch.',
@@ -1255,6 +1286,9 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
       ],
     },
   }),
+] as const;
+
+const SCM_GIT_ACTION_SPECS_REPOSITORY = [
   defineScmActionSpec({
     id: 'scm.repository.clone', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
@@ -1301,6 +1335,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
   }),
   defineScmActionSpec({
     id: 'scm.repository.init', approval: {result: 'optional',flow: 'deferred'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Initialize source-control repository',
     description: 'Initialize source control for a directory through the SCM provisioning route.',
@@ -1335,6 +1370,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
     title: 'Remove stale source-control index lock',
     description: 'Remove a confirmed stale Git index lock using backend-owned path resolution.',
     safety: 'danger',
+    approvalPolicy: { uiConfirmation: 'direct' },
     placements: [],
     bindings: {
       rpcMethod: 'scm.repository.removeIndexLock',
@@ -1415,6 +1451,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX: readonly [
   }),
   defineScmActionSpec({
     id: 'scm.hostingRepository.publish', approval: {result: 'optional',flow: 'deferred'},
+    approvalPolicy: { uiConfirmation: 'direct' },
     workspaceWrite: true,
     title: 'Publish repository to hosting provider',
     description: 'Create or bind a hosting repository and publish the active source-control state.',
@@ -1822,9 +1859,11 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
 // Preserve exact Action/schema correlations without serializing one oversized tuple.
 export const SCM_GIT_ACTION_SPECS: readonly (
   | (typeof SCM_GIT_ACTION_SPECS_PREFIX)[number]
-  | (typeof SCM_GIT_ACTION_SPECS_SUFFIX)[number]
+  | (typeof SCM_GIT_ACTION_SPECS_REMOTE_AND_REVIEW)[number]
+  | (typeof SCM_GIT_ACTION_SPECS_REPOSITORY)[number]
   | (typeof SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS)[number]
-)[] = [...SCM_GIT_ACTION_SPECS_PREFIX, ...SCM_GIT_ACTION_SPECS_SUFFIX, ...SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS];
+)[] = [...SCM_GIT_ACTION_SPECS_PREFIX, ...SCM_GIT_ACTION_SPECS_REMOTE_AND_REVIEW,
+  ...SCM_GIT_ACTION_SPECS_REPOSITORY, ...SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS];
 
 /** A projection of the declaration owner, not a separate operation taxonomy. */
 export function getScmRpcSideEffectClass(method: string) {

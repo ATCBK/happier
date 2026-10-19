@@ -14,7 +14,6 @@ import type { PluginMachineExecutionOriginV1 as CanonicalOrigin } from '../machi
 import type { ActionId, RuntimeActionIdV1 } from './actionIds.js';
 import type { RUNTIME_ACTION_INPUT_SCHEMAS, RUNTIME_ACTION_OUTPUT_SCHEMAS } from './specs/index.js';
 import type { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
-import type { ExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1 } from '../execution/runs/responseSchemas.js';
 
     import type { z } from 'zod/mini';
     import type { JsonValue } from '../json/strictJsonValue.js';
@@ -101,8 +100,6 @@ type CanonicalSupport = {
   effectiveField: CanonicalHints.EffectiveActionInputField;
   predicate: CanonicalPredicate;
   executionOrigin: CanonicalOrigin;
-  childChoice: ExecutionRunChildChoiceV1;
-  runStartFailureDetails: ExecutionRunStartFailureDetailsV1;
   linkArray: CanonicalExternalLinks.PluginAgentExternalSessionLinkDataArray;
   linkObject: CanonicalExternalLinks.PluginAgentExternalSessionLinkDataObject;
   linkValue: CanonicalExternalLinks.PluginAgentExternalSessionLinkDataValue;
@@ -116,8 +113,6 @@ type PublicSupport = {
   effectiveField: DtoSupport.EffectiveActionInputField;
   predicate: DtoSupport.ActionInputPredicate;
   executionOrigin: DtoSupport.PluginMachineExecutionOriginV1;
-  childChoice: DtoSupport.ExecutionRunChildChoiceV1;
-  runStartFailureDetails: DtoSupport.ExecutionRunStartFailureDetailsV1;
   linkArray: DtoSupport.PluginAgentExternalSessionLinkDataArray;
   linkObject: DtoSupport.PluginAgentExternalSessionLinkDataObject;
   linkValue: DtoSupport.PluginAgentExternalSessionLinkDataValue;

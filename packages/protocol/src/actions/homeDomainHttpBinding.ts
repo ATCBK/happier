@@ -1,10 +1,32 @@
-import type { z } from 'zod/mini';
+import { z } from 'zod/mini';
 
 export type HomeDomainHttpRequestV1 = Readonly<{
   method: string;
   path: string;
   body: unknown | undefined;
 }>;
+
+const HomeDomainConfirmedRollbackV1Schema = z.strictObject({
+  error: z.literal('database_transaction_conflict_exhausted'),
+  statusCode: z.literal(503),
+});
+
+/**
+ * Read the Home's global confirmation that a transaction exhausted conflict
+ * retries and rolled back. This response settles the mutation as a definite
+ * failure; it must never be collapsed into response-loss ambiguity.
+ */
+export function readHomeDomainConfirmedRollbackV1(
+  httpStatus: number,
+  value: unknown,
+): Readonly<{
+  code: 'database_transaction_conflict_exhausted';
+  details: Readonly<{ error: 'database_transaction_conflict_exhausted'; statusCode: 503 }>;
+}> | null {
+  if (httpStatus !== 503) return null;
+  const parsed = HomeDomainConfirmedRollbackV1Schema.safeParse(value);
+  return parsed.success ? { code: parsed.data.error, details: parsed.data } : null;
+}
 
 function appendQueryValue(query: URLSearchParams, key: string, value: unknown): void {
   if (value === undefined || value === null) return;

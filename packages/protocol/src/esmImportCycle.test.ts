@@ -32,6 +32,18 @@ function expectSuccessfulImport(result: ReturnType<typeof spawnSync>): void {
 }
 
 describe('protocol ESM import safety', () => {
+  it.each([
+    'actions/actionIds.ts',
+    'actions/npmRegistryProfileActionFamily.ts',
+    'plugins/contributions/ui/v2.ts',
+  ])(
+    'imports %s in a fresh process without Action catalog initialization errors',
+    (entryPath) => {
+      expectSuccessfulImport(importInFreshProcess(entryPath));
+    },
+    MODULE_IMPORT_TIMEOUT_MS + 5_000,
+  );
+
   it(
     'imports executionRuns under node + tsx without initialization errors',
     () => {

@@ -79,7 +79,7 @@ describe('Action surface resolution fails closed (INV-1 / DEC-2)', () => {
 
     // A surface the spec does not declare is denied (this already held; it keeps the
     // assertion above from passing for the wrong reason).
-    await expect(executor.execute('machines.list', {}, { surface: 'mcp' })).resolves.toMatchObject({
+    await expect(executor.execute('machines.list', {}, { surface: 'rpc' })).resolves.toMatchObject({
       ok: false,
       errorCode: 'action_disabled',
     });

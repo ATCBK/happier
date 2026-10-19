@@ -1,7 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import { TargetActionApprovalRequestV1Schema } from './targetActionApprovalRequestV1';
+import { computeActionInputApprovalDigestV1 } from '../actions/decisionAuthority';
 
 describe('TargetActionApprovalRequestV1Schema', () => {
+  it('binds shared-Bot confirmation and its deciding person without changing executor custody', () => {
+    const requesterConfirmation = {
+      requestRef: 'request-bob', requesterAccountId: 'bob',
+      personaSessionRef: { serverId: 'server-1', sessionId: 'bot-session' },
+      executionAccountId: 'alice', inputDigest: computeActionInputApprovalDigestV1('action.invoke', {
+        action: { pluginId: 'acme.alpha', localId: 'run' }, input: { value: 'x' },
+      }),
+    };
+    const request = {
+      v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent' }, requestedSurface: 'agent', qualifiedActionId: 'acme.alpha/actions/run',
+      input: { value: 'x' }, sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
+      policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'c'.repeat(64), summary: 'Run',
+      requesterConfirmation,
+      executionOriginV1: {
+        v: 1, authority: 'account_automation', surface: 'agent', caller: { kind: 'host' },
+        serverId: 'server-1', accountId: 'alice', sessionId: 'bot-session', actionId: 'action.invoke', requestId: 'request-1',
+        actionRequestAttributionV1: {
+          requestRef: 'request-bob', requester: { serverId: 'server-1', accountId: 'bob' },
+          persona: { serverId: 'server-1', sessionId: 'bot-session' }, origin: null,
+        },
+      },
+    };
+    expect(TargetActionApprovalRequestV1Schema.parse(request)).toEqual(request);
+    expect(TargetActionApprovalRequestV1Schema.safeParse({
+      ...request, status: 'approved',
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user', decidingAccountId: 'bob' },
+    }).success).toBe(true);
+    expect(TargetActionApprovalRequestV1Schema.safeParse({
+      ...request, status: 'approved', decision: { kind: 'approve', decidedAtMs: 2 },
+    }).success).toBe(false);
+    expect(TargetActionApprovalRequestV1Schema.safeParse({
+      ...request, requesterConfirmation: { ...requesterConfirmation, requesterAccountId: 'carol' },
+    }).success).toBe(false);
+  });
   it('requires an exact qualified action subject and correlation fingerprint', () => {
     const request = { v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'cli' }, requestedSurface: 'cli', qualifiedActionId: 'acme.alpha/actions/run',

@@ -76,7 +76,7 @@ describe('Machine vitals Action front door', () => {
       { machineId: 'live', state: 'reporting', attention, summary: {
         sampledAt: 30_000, stepMs: 15_000, seriesFrom: 15_000,
         cpu: { busyPct: 32, tone: 'calm', series: [{ t: 15_000, y: 25 }] },
-        memory: { availableBytes: 64, totalBytes: 1024, pressure: 'critical', tone: 'crit', series: [{ t: 15_000, y: 80 }] },
+        memory: { availableBytes: 64, totalBytes: 1024, pressure: 'critical', tone: 'crit', series: [{ t: 15_000, y: 80 / 1024 * 100 }] },
       } },
       { machineId: 'old', state: 'not_reporting' },
       { machineId: 'offline', state: 'offline', attention },

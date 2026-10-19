@@ -42,10 +42,7 @@ import type {
   ExecutionRunStopResponse,
   ExecutionRunWaitResult,
 } from '../execution/runs/index.js';
-import {
-  SessionMessageSendResultV1Schema,
-  type SessionMessageSendResultV1,
-} from '../sessions/messages/sessionInputAdmission.js';
+import type { SessionMessageSendResultV1 } from '../sessions/messages/sessionInputAdmission.js';
 import type { SessionSpawnNewInputV2 } from '../sessions/creation/sessionSpawnNewInputV2.js';
 import {
   EPHEMERAL_RUNNER_ACTION_IDS_V1,
@@ -63,6 +60,8 @@ import { RuntimeActionIdV1Schema } from './actionIds.js';
 import type { ActionExecutorDeps } from './executor/types.js';
 import { ROLE_ACTION_IDS_V1 } from '../prompts/roles/roleActionIdsV1.js';
 import { RoleActionInputSchemasV1, RoleActionOutputSchemasV1 } from '../prompts/roles/roleActionsV1.js';
+import { normalizeSessionListFilterV1 } from '../sessions/listFilter/sessionListFilterV1.js';
+import type { SessionTargetV1 } from './sessionTargetV1.js';
 
 type BrowserNavigateCommandV1 = z.infer<typeof BrowserNavigateCommandV1Schema>;
 
@@ -156,7 +155,8 @@ describe('ActionSpec-generated plugin action types', () => {
       query: {
         v: 1;
         query: string;
-        scope: { type: 'global' } | { type: 'session'; sessionId: string };
+        scope: { type: 'global' } | { type: 'session'; sessionId: string }
+          | { type: 'project'; projectRef: { serverId: string; projectKey: string } };
         mode: 'hints' | 'deep' | 'auto';
       };
     }>();
@@ -214,7 +214,7 @@ describe('ActionSpec-generated plugin action types', () => {
       .toEqualTypeOf<SessionTranscriptGetExternalShareableInputV1>();
     expectTypeOf<PluginActionResultById['session.transcript.get']>()
       .toEqualTypeOf<SessionTranscriptGetExternalShareableResultV1>();
-    expectTypeOf<PluginActionResultById['session.message.send']>()
+    expectTypeOf<Extract<PluginActionResultById['session.message.send'], { status: string }>>()
       .toEqualTypeOf<SessionMessageSendResultV1>();
     type ExternalSessionOperationResult =
       PluginActionResultById['sessions.external.operation.status.get'];
@@ -421,6 +421,15 @@ describe('ActionSpec-generated plugin action types', () => {
   });
 
   it('keeps plugin Session sends on the closed canonical admission result', () => {
+    expectTypeOf<SessionTargetV1>().toMatchTypeOf<NonNullable<PluginActionInputById['session.message.send']['sessionId']>>();
+    const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], show: 'sessions' });
+    const target: SessionTargetV1 = { selector: 'matching', filter: Object.freeze({ ...filter,
+      startedBy: Object.freeze([...filter.startedBy]), homeServerIds: Object.freeze([...filter.homeServerIds]),
+    }) };
+    const input: PluginActionInputById['session.message.send'] = {
+      sessionId: target, message: 'Continue', idempotencyKey: 'immutable-filter',
+    };
+    expect(PLUGIN_ACTION_INPUT_SCHEMAS['session.message.send'].parse(input).sessionId).toEqual(target);
     const schema = getActionSpec('session.message.send').surfaceBindings?.plugin?.outputSchema;
     const accepted = {
       status: 'accepted',
@@ -430,7 +439,9 @@ describe('ActionSpec-generated plugin action types', () => {
     expect(schema?.safeParse(accepted).success).toBe(true);
     expect(schema?.safeParse({ ...accepted, status: 'not-an-admission-result' }).success).toBe(false);
     expect(schema?.safeParse({ ...accepted, unexpected: true }).success).toBe(false);
-    expect(schema).toBe(SessionMessageSendResultV1Schema);
+    expect(schema?.safeParse({ kind: 'fanout', results: [{
+      target: { serverId: 'home', sessionId: 'worker' }, result: { ok: true, result: accepted },
+    }] }).success).toBe(true);
     expect(schema?.safeParse({
       status: 'failed',
       localId: 'plugin-input-v1:failed',
@@ -454,11 +465,18 @@ describe('ActionSpec-generated plugin action types', () => {
     expect(PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'].safeParse(invalidInput).success)
       .toBe(false);
     const schema = getActionSpec('session.message.send').surfaceBindings?.api?.outputSchema;
-    expect(schema).toBe(SessionMessageSendResultV1Schema);
-    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send']).toBe(
-      SessionMessageSendResultV1Schema,
-    );
-    expectTypeOf<PublicActionResultById['session.message.send']>()
+    const accepted = { status: 'accepted', localId: 'caller-local-id' };
+    const fanout = { kind: 'fanout', results: [{
+      target: { serverId: 'home', sessionId: 'worker' }, result: { ok: true, result: accepted },
+    }] };
+    for (const outputSchema of [schema, PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send']]) {
+      expect(outputSchema?.safeParse(accepted).success).toBe(true);
+      expect(outputSchema?.safeParse(fanout).success).toBe(true);
+      expect(outputSchema?.safeParse({ ...fanout, results: [{ ...fanout.results[0],
+        result: { ok: true, result: { status: 'not-an-admission-result' } },
+      }] }).success).toBe(false);
+    }
+    expectTypeOf<Extract<PublicActionResultById['session.message.send'], { status: string }>>()
       .toEqualTypeOf<SessionMessageSendResultV1>();
   });
 
@@ -557,7 +575,7 @@ describe('ActionSpec-generated plugin action types', () => {
           : { result: 'optional', flow: 'deferred' },
         surfaces: {
           ui: true,
-          voice: actionId.startsWith('workflow.trigger.') || actionId.startsWith('session.trigger.'),
+          voice: actionId === 'workflow.run.list' || actionId === 'workflow.run.start' || actionId.startsWith('workflow.trigger.') || actionId.startsWith('session.trigger.'),
           agent: true,
           mcp: true,
           cli: true,
@@ -616,6 +634,8 @@ describe('ActionSpec-generated plugin action types', () => {
     expect(Object.hasOwn(PUBLIC_ACTION_INPUT_SCHEMAS, 'sessions.external.materialize.start')).toBe(false);
     expect(Object.hasOwn(PUBLIC_ACTION_INPUT_SCHEMAS, 'plugins.permissions.grants.revoke')).toBe(false);
     expect(Object.hasOwn(PUBLIC_ACTION_INPUT_SCHEMAS, 'devices.simulator.input.orientation')).toBe(false);
+    expect(Object.hasOwn(PUBLIC_ACTION_INPUT_SCHEMAS, 'plugins.install')).toBe(false);
+    expect(Object.hasOwn(PUBLIC_ACTION_OUTPUT_SCHEMAS, 'plugins.install')).toBe(false);
 
     expectTypeOf<Extract<PublicActionId, 'session.spawn_new'>>().toEqualTypeOf<'session.spawn_new'>();
     expectTypeOf<Extract<PublicActionId, 'sessions.subagents.list'>>()
@@ -631,7 +651,8 @@ describe('ActionSpec-generated plugin action types', () => {
       .toEqualTypeOf<'approval.request.decide'>();
     expectTypeOf<Extract<PublicActionId, 'session.permission.respond'>>()
       .toEqualTypeOf<'session.permission.respond'>();
-    expectTypeOf<Extract<PublicActionId, 'plugins.install'>>().toEqualTypeOf<never>();
+    expectTypeOf<Extract<PublicActionId, 'plugins.install'>>()
+      .toEqualTypeOf<never>();
     expectTypeOf<Extract<PublicActionId, 'identity.providers.create'>>().toEqualTypeOf<never>();
     expectTypeOf<Extract<PublicActionId, 'identity.providers.list'>>()
       .toEqualTypeOf<'identity.providers.list'>();
@@ -688,7 +709,7 @@ describe('ActionSpec-generated plugin action types', () => {
   });
 
   it('keeps role Actions loadable and their author maps exact', () => {
-    expectTypeOf<PluginActionInputById['session.role.set']>().toEqualTypeOf<{ sessionId: string; roleId: string }>();
+    expectTypeOf<PluginActionInputById['session.role.set']>().toEqualTypeOf<{ sessionId: string; roleId?: string; answersWorkerQuestions?: boolean }>();
     expectTypeOf<PluginActionInputById['roles.create']>().toEqualTypeOf<z.input<typeof RoleActionInputSchemasV1['roles.create']>>();
     expectTypeOf<PluginActionResultById['roles.create']>().toEqualTypeOf<z.output<typeof RoleActionOutputSchemasV1['roles.create']>>();
     for (const actionId of ROLE_ACTION_IDS_V1) {

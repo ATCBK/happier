@@ -1,6 +1,6 @@
 import type { FeatureId } from '../features/catalog.js';
 import { ACTION_ID_FAMILIES_V1, WORKFLOW_ACTION_IDS_V1, isSessionAccessActionId } from './actionIds.js';
-import { isSessionDiscussionActionIdV1 } from '../sessions/discussions/actionIds.js';
+import { isDiscussionActionIdV1 } from '../discussions/actionIds.js';
 import { TEAM_CREDENTIAL_ACTION_IDS_V1 } from '../teams/credentials/actionIdsV1.js';
 import { TEAM_ACTION_IDS_V1 } from '../teams/actionsV1.js';
 import { isSessionFollowActionIdV1 } from '../sessions/follow/actions.js';
@@ -57,7 +57,7 @@ export function getActionRequiredServerFeatureId(
   // Item Actions also serve transcript visuals; their operands decide layout
   // admission at execution. Only the layout-only Action is Board availability.
   if (actionId === 'session.board.layout.update') return 'sessions.board';
-  if (isSessionDiscussionActionIdV1(actionId)) return 'sessions.conversations';
+  if (isDiscussionActionIdV1(actionId)) return 'sessions.conversations';
   if (teamCredentialActionIds.includes(actionId)) {
     return actionId.startsWith('teams.credentials.externalKeys.')
       ? 'teams.credentialResources.externalApi'

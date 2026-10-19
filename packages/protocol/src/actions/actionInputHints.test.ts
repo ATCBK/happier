@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { ActionInputHintsSchema } from './actionInputHints.js';
+import { ActionInputHintsSchema, normalizeActionInputHintsText } from './actionInputHints.js';
 import { PluginUiViewV2Schema } from '../plugins/contributions/ui/v2.js';
 import { WidgetDefinitionV1Schema } from '../widgets/widgetDefinitionV1.js';
 
 describe('Action input hint path grammar', () => {
+  it('preserves declared JSON defaults through plugin and host input-hint admission', async () => {
+    const { PluginActionInputHintsV2Schema } = await import('../plugins/actions/v2.js');
+    const hints = { fields: [
+      { path: 'enabled', title: 'Enabled', widget: 'boolean', defaultValue: true },
+      { path: 'count', title: 'Count', widget: 'integer', defaultValue: 0 },
+      { path: 'label', title: 'Label', widget: 'text', defaultValue: '' },
+    ] };
+    const admitted = PluginActionInputHintsV2Schema.parse(hints);
+    expect(ActionInputHintsSchema.parse(admitted)).toEqual(hints);
+    expect(normalizeActionInputHintsText(admitted, (text) => typeof text === 'string' ? text : text.fallback)).toEqual(hints);
+  });
+
   it.each([
     { fields: Array.from({ length: 65 }, (_, index) => ({ path: `field${index}`, title: `Field ${index}`, widget: 'text' })) },
     { fields: [{ path: 'choice', title: 'Choice', widget: 'select', options: Array.from({ length: 257 }, (_, index) => ({ value: `choice${index}`, label: `Choice ${index}` })) }] },

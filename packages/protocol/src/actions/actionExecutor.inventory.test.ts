@@ -23,7 +23,7 @@ import { ArtifactAccessActionIdV1Schema } from '../artifacts/artifactAccessV1.js
 import { ArtifactActionIdV1Schema } from '../artifacts/artifactActionsV1.js';
 import { ScopeActionIdSchema } from './scopeActionFamily.js';
 import { SessionBoardActionIdV1Schema } from '../sessions/board/actionIds.js';
-import { SessionDiscussionActionIdV1Schema } from '../sessions/discussions/actionIds.js';
+import { DiscussionActionIdV1Schema } from '../discussions/actionIds.js';
 import { ManagedMachineActionIdV1Schema } from '../machines/managed/actionsV1.js';
 import { MachinePresetActionIdV1Schema } from '../machines/managed/machinePresetActionsV1.js';
 import { MachinePoolActionIdV1Schema } from '../machines/pools/actionsV1.js';
@@ -45,6 +45,8 @@ import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescripto
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
 import { AgentStartSessionCallerV1Schema, type AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
+import { readBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
+import { SpawnCapabilitiesPreviewSuccessV1Schema } from './specs/sessionCapabilities.js';
 import {
   ExecutionRunTransportErrorCodeSchema,
   type ExecutionRunTransportErrorCode,
@@ -95,6 +97,13 @@ function createDeps(): ActionExecutorDeps {
   };
 }
 
+const emptyCapabilityPreview = SpawnCapabilitiesPreviewSuccessV1Schema.parse({
+  ok: true, machinePlatform: 'posix',
+  mcp: { strictMode: false, items: [], detected: [] },
+  skills: { items: [], plan: { plan: 'none', items: [], nativeDisables: [], diagnostics: [] } },
+  applyTiming: { mcp: { t: 'session_not_running' }, skills: { t: 'session_not_running' } },
+});
+
 function createActionExecutor(deps: ActionExecutorDeps): ReturnType<typeof createRawActionExecutor> {
   const executor = createRawActionExecutor(deps);
   return {
@@ -121,7 +130,7 @@ describe('machine Agent inventory execution', () => {
       WidgetInstanceActionIdV1Schema, WidgetDefinitionActionIdV1Schema, WidgetLayoutFragmentActionIdV1Schema,
       ArtifactAccessActionIdV1Schema, ArtifactActionIdV1Schema, WorkflowActionIdV1Schema,
       AutomationConversationActionIdV1Schema, ScopeActionIdSchema, SessionBoardActionIdV1Schema,
-      SessionDiscussionActionIdV1Schema, ManagedMachineActionIdV1Schema, MachinePresetActionIdV1Schema,
+      DiscussionActionIdV1Schema, ManagedMachineActionIdV1Schema, MachinePresetActionIdV1Schema,
       MachinePoolActionIdV1Schema, ActionOperationActionIdV1Schema, ProjectWorkerActionIdV1Schema,
       MachineAccessActionIdSchema, UsageSourceActionIdSchema, ConnectedServiceConfigurationActionIdV1Schema,
       EphemeralRunnerActionIdV1Schema, PluginWebhookActionIdV1Schema, PluginSettingsAdministrationActionIdV1Schema];
@@ -727,14 +736,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
       'session_1',
       expect.objectContaining({
         intent: 'delegate',
-        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
         permissionMode: 'workspace_write',
         launchOrigin: presentUserActionLaunchOrigin,
         intentInput: expect.objectContaining({
           backendTargetKey: 'agent:claude',
         }),
       }),
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
   });
 
@@ -769,7 +778,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.executionRunStart).toHaveBeenCalledWith(
       'session_1',
       expect.objectContaining({
-        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
         launchOrigin: presentUserActionLaunchOrigin,
         connectedServices: expect.objectContaining({
           bindingsByServiceId: expect.objectContaining({
@@ -777,10 +786,10 @@ describe('createActionExecutor (inventory/discovery)', () => {
           }),
         }),
       }),
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
-    const claudeCall = (deps.executionRunStart as ReturnType<typeof vi.fn>).mock.calls
-      .find((call) => (call[1] as { backendTarget?: { agentId?: string } }).backendTarget?.agentId === 'claude');
+    const claudeCall = vi.mocked(deps.executionRunStart).mock.calls
+      .find(([, request]) => readBackendTargetKeyV2(request.backendTarget) === 'agent:happier.agent.claude/claude');
     expect(claudeCall?.[1]).toMatchObject({
       launchOrigin: presentUserActionLaunchOrigin,
       connectedServices: {
@@ -788,7 +797,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         v: 2,
       },
     });
-    expect(claudeCall?.[2]).toEqual({ authority: 'present_user' });
+    expect(claudeCall?.[2]).toEqual({ authority: 'present_user', surface: 'ui' });
   });
 
   it('treats successful execution-run service envelopes as successful fanout results', async () => {
@@ -853,26 +862,27 @@ describe('createActionExecutor (inventory/discovery)', () => {
       'session_1',
       expect.objectContaining({
         intent: 'plan',
-        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
         launchOrigin: presentUserActionLaunchOrigin,
         intentInput: expect.objectContaining({
           backendTargetKey: 'backend:codex',
         }),
       }),
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
     expect(deps.executionRunStart).toHaveBeenNthCalledWith(
       2,
       'session_1',
       expect.objectContaining({
         intent: 'plan',
-        backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-bot' },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+          definitionId: 'review-bot' },
         launchOrigin: presentUserActionLaunchOrigin,
         intentInput: expect.objectContaining({
           backendTargetKey: 'backend:review-bot:configured:review-bot',
         }),
       }),
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
   });
 
@@ -987,7 +997,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         message: 'Continue and summarize what changed.',
         delivery: 'steer_if_supported',
       },
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
   });
 
@@ -1282,7 +1292,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         status: 'running',
         limit: 5,
       }),
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
     expect((deps.executionRunList as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).not.toHaveProperty('sessionId');
   });
@@ -1306,7 +1316,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       'session_1',
       expect.objectContaining({
         intent: 'voice_agent',
-        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
         permissionMode: 'read_only',
         retentionPolicy: 'ephemeral',
         runClass: 'long_lived',
@@ -1314,7 +1324,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         launchOrigin: presentUserActionLaunchOrigin,
         instructions: 'Start the voice agent run.',
       }),
-      { authority: 'present_user' },
+      { authority: 'present_user', surface: 'ui' },
     );
   });
 
@@ -1333,7 +1343,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
 
     const res = await executor.execute('agents.models.list', { agentId: 'claude', machineId: 'm1', limit: 3 });
     expect(res.ok).toBe(true);
-    expect(deps.agentsModelsList).toHaveBeenCalledWith({ agentId: 'claude', machineId: 'm1', limit: 3 });
+    expect(deps.agentsModelsList).toHaveBeenCalledWith({ agentId: 'claude', machineId: 'm1', limit: 3 }, { surface: 'ui', authority: 'present_user' });
   });
 
   it('routes agents.config_options.list to deps.agentsConfigOptionsList', async () => {
@@ -1459,7 +1469,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
 
       expect(result.ok).toBe(true);
       const expectedInput = expect.objectContaining({ serverId: 'host-stamped' });
-      if (dependencyName === 'spawnConnectedServicesList') {
+      if (dependencyName === 'spawnConnectedServicesList' || dependencyName === 'agentsModelsList') {
         expect(deps[dependencyName]).toHaveBeenCalledWith(expectedInput, {
           authority: 'present_user', surface: 'ui', serverId: 'host-stamped',
         });
@@ -1549,7 +1559,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       agentId: 'codex',
       machineId: 'm1',
       directory: '/repo',
-    });
+    }, { authority: 'present_user', surface: 'ui' });
   });
 
   it('rejects undeclared fields for the closed agents.models.list input before reading inventory', async () => {
@@ -1575,14 +1585,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
       backendTargetKey: 'acpBackend:review-bot',
       machineId: 'm1',
       limit: 2,
-    });
+    }, { surface: 'ui', authority: 'present_user' });
 
     expect(res.ok).toBe(true);
     expect(deps.agentsModelsList).toHaveBeenCalledWith({
       backendTargetKey: 'acpBackend:review-bot',
       machineId: 'm1',
       limit: 2,
-    });
+    }, { surface: 'ui', authority: 'present_user' });
   });
 
   it('does not forward legacy configured ACP agentId carriers when backendTargetKey is configured', async () => {
@@ -1594,14 +1604,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
       backendTargetKey: 'backend:review-bot:configured:review-bot',
       machineId: 'm1',
       limit: 2,
-    });
+    }, { surface: 'ui', authority: 'present_user' });
 
     expect(res.ok).toBe(true);
     expect(deps.agentsModelsList).toHaveBeenCalledWith({
       backendTargetKey: 'backend:review-bot:configured:review-bot',
       machineId: 'm1',
       limit: 2,
-    });
+    }, { surface: 'ui', authority: 'present_user' });
   });
 
   it('routes canonical plugin backendTargetKey plus runtime carrier through agents.models.list', async () => {
@@ -1613,7 +1623,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       backendTargetKey: 'backend:plugin-review-bot',
       machineId: 'm1',
       limit: 2,
-    });
+    }, { surface: 'ui', authority: 'present_user' });
 
     expect(res.ok).toBe(true);
     expect(deps.agentsModelsList).toHaveBeenCalledWith({
@@ -1621,7 +1631,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       backendTargetKey: 'backend:plugin-review-bot',
       machineId: 'm1',
       limit: 2,
-    });
+    }, { surface: 'ui', authority: 'present_user' });
   });
 
   it('rejects ambiguous customAcp agentId for agents.models.list without backendTargetKey', async () => {
@@ -1664,7 +1674,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.resolveSessionReference).toHaveBeenCalledWith(expect.objectContaining({
       sessionTitle: 'Target Session',
     }));
-    expect(deps.sessionOpen).toHaveBeenCalledWith({ sessionId: 's2', serverId: 'server-b' });
+    expect(deps.sessionOpen).toHaveBeenCalledWith({ sessionId: 's2', serverId: 'server-b' }, { surface: 'ui', authority: 'present_user' });
   });
 
   it('delegates deep title resolution once without imposing the former pagination cap', async () => {
@@ -1683,7 +1693,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.sessionOpen).toHaveBeenCalledWith({
       sessionId: 'after-2000',
       serverId: 'server-deep',
-    });
+    }, { surface: 'ui', authority: 'present_user' });
   });
 
   it('passes the resolved server scope when opening a session', async () => {
@@ -1705,7 +1715,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       serverId: 'server-a',
       signal,
       actionRequestId: 'plugin-call-1',
-    });
+    }, { surface: 'ui', authority: 'present_user', serverId: 'server-a', signal, actionRequestId: 'plugin-call-1' });
   });
 
   it('does not open a session when the requested title is ambiguous', async () => {
@@ -2239,13 +2249,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
     const deps = {
       ...createDeps(),
       resolveSessionSpawnAgentInventorySelection,
+      spawnCapabilitiesPreview: vi.fn(async () => emptyCapabilityPreview),
     } as ActionExecutorDeps & {
       resolveSessionSpawnAgentInventorySelection: ReturnType<typeof vi.fn>;
       agentsConfigOptionsList: ReturnType<typeof vi.fn>;
       agentsSessionModesList: ReturnType<typeof vi.fn>;
       spawnProfilesList: ReturnType<typeof vi.fn>;
       spawnConnectedServicesList: ReturnType<typeof vi.fn>;
-      spawnMcpServersPreview: ReturnType<typeof vi.fn>;
+      spawnCapabilitiesPreview: ReturnType<typeof vi.fn>;
     };
     deps.agentsBackendsList.mockResolvedValueOnce({
       items: [{ id: 'claude', label: 'Claude' }],
@@ -2274,9 +2285,11 @@ describe('createActionExecutor (inventory/discovery)', () => {
     deps.spawnConnectedServicesList.mockResolvedValueOnce({
       items: [{ id: 'openai:work', label: 'OpenAI work' }],
     });
-    deps.spawnMcpServersPreview.mockResolvedValueOnce({
-      items: [{ id: 'managed:repo', label: 'Repo MCP' }],
-    });
+    deps.spawnCapabilitiesPreview.mockResolvedValueOnce(SpawnCapabilitiesPreviewSuccessV1Schema.parse({
+      ...emptyCapabilityPreview,
+      mcp: { strictMode: false, detected: [], items: [{ kind: 'mcp_server', id: 'managed:repo', name: 'Repo MCP',
+        selected: false, selectable: true, reason: 'no_rule', decidedBy: null, sessionOverride: null, source: 'catalog' }] },
+    }));
     const executor = createActionExecutor(deps);
 
     const sessionSpawnOptionContext = {
@@ -2312,7 +2325,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
       ['sessions.spawn.servers.available', 'executionTarget.serverId', [{ value: 'local', label: 'Local' }]],
       ['sessions.spawn.profiles.available', 'profileId', [{ value: 'profile-default', label: 'Default profile' }]],
       ['sessions.spawn.connected_services.available', 'connectedServices', [{ value: 'openai:work', label: 'OpenAI work' }]],
-      ['sessions.spawn.mcp_servers.preview', 'capabilitySelection', [{ value: 'managed:repo', label: 'Repo MCP' }]],
+      ['sessions.spawn.capabilities.preview', 'capabilitySelection', [{ value: { mcp: {
+        v: 1, managedServersEnabled: true, forceIncludeServerIds: ['managed:repo'], forceExcludeServerIds: [],
+      } }, label: 'Repo MCP' }]],
     ] as const;
 
     for (const [optionsSourceId, fieldPath, options] of cases) {
@@ -2320,7 +2335,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         actionId: 'session.spawn_new',
         fieldPath,
         optionsSourceId,
-        ...sessionSpawnOptionContext,
+        draftInput: sessionSpawnOptionContext,
         limit: 10,
       });
       expect(res).toEqual({
@@ -2352,7 +2367,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
       serverId: 'local',
       limit: 10,
       includeProviderProjection: true,
-    });
+      probe: { cwd: '/repo' },
+    }, { authority: 'present_user', surface: 'ui' });
     expect(deps.agentsConfigOptionsList).toHaveBeenCalledWith({
       agentId: 'claude',
       backendTargetKey: 'backend:claude',
@@ -2362,14 +2378,63 @@ describe('createActionExecutor (inventory/discovery)', () => {
       limit: 10,
     });
     expect(deps.pathsListRecent).toHaveBeenCalledWith({ machineId: 'm1', limit: 10 });
-    expect(deps.spawnMcpServersPreview).toHaveBeenCalledWith({
+    expect(deps.spawnCapabilitiesPreview).toHaveBeenCalledWith({
       agentId: 'claude',
-      backendTargetKey: 'backend:claude',
       machineId: 'm1',
       directory: '/repo',
-      selection: sessionSpawnOptionContext.capabilitySelection.mcp,
-      limit: 10,
+      capabilitySelection: sessionSpawnOptionContext.capabilitySelection,
+    }, { authority: 'present_user', surface: 'ui', serverId: 'local' });
+  });
+
+  it('keeps equal MCP and skill ids distinct while preserving the remaining draft capability choices', async () => {
+    const item = { id: 'same', name: 'Shared name', selected: false, selectable: true,
+      reason: 'session_removed', decidedBy: null, sessionOverride: 'removed' } as const;
+    const preview = SpawnCapabilitiesPreviewSuccessV1Schema.parse({
+      ...emptyCapabilityPreview,
+      mcp: { strictMode: false, detected: [], items: [{ ...item, kind: 'mcp_server', source: 'catalog' }] },
+      skills: { ...emptyCapabilityPreview.skills, items: [{ ...item, kind: 'skill' }] },
     });
+    const capabilitySelection = {
+      mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['retained-mcp'], forceExcludeServerIds: ['same'] },
+      skills: { v: 1, forceIncludeSkillIds: ['retained-skill'], forceExcludeSkillIds: ['same'], excludeNativeSkillNames: ['native'] },
+    } as const;
+    const executor = createActionExecutor({ ...createDeps(),
+      resolveSessionSpawnAgentInventorySelection: () => ({ agentId: 'claude' }),
+      spawnCapabilitiesPreview: async () => preview,
+    });
+    const result = await executor.execute('action.options.resolve', {
+      actionId: 'session.spawn_new', fieldPath: 'capabilitySelection', draftInput: {
+        executionTarget: { serverId: 'home', machineId: 'machine' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        capabilitySelection,
+      },
+    });
+    expect(result).toMatchObject({ ok: true, result: { optionsSourceId: 'sessions.spawn.capabilities.preview', options: [
+      { label: 'Shared name', value: { ...capabilitySelection, mcp: { ...capabilitySelection.mcp,
+        forceIncludeServerIds: ['retained-mcp', 'same'], forceExcludeServerIds: [] } } },
+      { label: 'Shared name', value: { ...capabilitySelection, skills: { ...capabilitySelection.skills,
+        forceIncludeSkillIds: ['retained-skill', 'same'], forceExcludeSkillIds: [] } } },
+    ] } });
+    if (!result.ok) throw new Error('Expected capability options');
+    const output = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result);
+    for (const option of output.options) {
+      expect(getActionSpec('session.spawn_new').inputSchema.safeParse({
+        ...canonicalSessionSpawnInput, capabilitySelection: option.value,
+      }).success).toBe(true);
+    }
+  });
+
+  it('preserves a failed capability preview instead of offering an empty successful choice list', async () => {
+    const executor = createActionExecutor({ ...createDeps(),
+      resolveSessionSpawnAgentInventorySelection: () => ({ agentId: 'claude' }),
+      spawnCapabilitiesPreview: async () => ({ ok: false, reason: 'machine_unreachable' }),
+    });
+    expect(await executor.execute('action.options.resolve', {
+      actionId: 'session.spawn_new', fieldPath: 'capabilitySelection', draftInput: {
+        executionTarget: { serverId: 'home', machineId: 'machine' },
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+      },
+    })).toMatchObject({ ok: false, errorCode: 'machine_unreachable' });
   });
 
   it('returns Session spawn directory JSON options without selecting redacted or invalid paths', async () => {
@@ -2409,11 +2474,11 @@ describe('createActionExecutor (inventory/discovery)', () => {
     [{ kind: 'managed' }, undefined],
     ['/retired-flat-directory', undefined],
   ] as const)('reads Session spawn directory %j for dependent options', async (directory, expectedPath) => {
-    const spawnMcpServersPreview = vi.fn(async () => ({ items: [] }));
+    const spawnCapabilitiesPreview = vi.fn(async () => emptyCapabilityPreview);
     const executor = createActionExecutor({
       ...createDeps(),
       resolveSessionSpawnAgentInventorySelection: () => ({ agentId: 'claude', backendTargetKey: 'backend:claude' }),
-      spawnMcpServersPreview,
+      spawnCapabilitiesPreview,
     });
     await expect(executor.execute('action.options.resolve', {
       actionId: 'session.spawn_new',
@@ -2425,10 +2490,10 @@ describe('createActionExecutor (inventory/discovery)', () => {
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
       },
     })).resolves.toMatchObject({ ok: true });
-    expect(spawnMcpServersPreview).toHaveBeenCalledWith({
-      agentId: 'claude', backendTargetKey: 'backend:claude', machineId: 'm1',
+    expect(spawnCapabilitiesPreview).toHaveBeenCalledWith({
+      agentId: 'claude', machineId: 'm1',
       ...(expectedPath === undefined ? {} : { directory: expectedPath }),
-    });
+    }, { authority: 'present_user', surface: 'ui', serverId: 'local' });
   });
 
   it('retains the declared flat directory context for direct MCP preview options', async () => {
@@ -2438,7 +2503,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       optionsSourceId: 'sessions.spawn.mcp_servers.preview',
       draftInput: { agentId: 'claude', directory: '/repo' },
     })).resolves.toMatchObject({ ok: true });
-    expect(spawnMcpServersPreview).toHaveBeenCalledWith({ agentId: 'claude', directory: '/repo' });
+    expect(spawnMcpServersPreview).toHaveBeenCalledWith({ agentId: 'claude', directory: '/repo' }, { authority: 'present_user', surface: 'ui' });
   });
 
   it('resolves dependent ergonomic-run options from the canonical draftInput target', async () => {
@@ -2464,7 +2529,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.agentsModelsList).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'pi',
       backendTargetKey: 'agent:pi',
-    }));
+    }), { authority: 'present_user', surface: 'ui' });
     expect(deps.agentsConfigOptionsList).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'pi',
       backendTargetKey: 'agent:pi',

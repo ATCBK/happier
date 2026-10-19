@@ -8,7 +8,7 @@ import { encodeV2SessionListCursorV2 } from '../sessions/listing/cursor.js';
 
 const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: 'lead' } as const;
 
-describe('session.reports_to.set contract', () => {
+describe('session.manager.set contract', () => {
   it('executes in-subtree reparenting through the Session relation port after server-proved paginated membership', async () => {
     let page = 0;
     // Replace authenticated Session HTTP ports only; subtree proof, admission and result validation stay real.
@@ -20,17 +20,17 @@ describe('session.reports_to.set contract', () => {
         nextCursor: page === 1 ? encodeV2SessionListCursorV2({ sessionId: 'worker', meaningfulActivityAt: 10 }) : null, hasNext: page === 1,
         queryVersion: 1, attentionNextCursor: null, attentionHasNext: false,
       }),
-      sessionReportsToSet: async () => ({ ok: true, sessionId: 'worker', leadSessionId: 'sublead', attachedAt: 10 }),
+      sessionManagerSet: async () => ({ ok: true, sessionId: 'worker', managerSessionId: 'sublead', attachedAt: 10 }),
     } as unknown as ActionExecutorDeps);
-    await expect(executor.execute('session.reports_to.set', {
-      sessionId: 'worker', leadSessionId: 'sublead', expectedLeadSessionId: 'lead',
-    }, context)).resolves.toEqual({ ok: true, result: { ok: true, sessionId: 'worker', leadSessionId: 'sublead', attachedAt: 10 } });
+    await expect(executor.execute('session.manager.set', {
+      sessionId: 'worker', managerSessionId: 'sublead', expectedManagerSessionId: 'lead',
+    }, context)).resolves.toEqual({ ok: true, result: { ok: true, sessionId: 'worker', managerSessionId: 'sublead', attachedAt: 10 } });
   });
 
   it.each([
     ['outside child', 'outside', 'lead'],
     ['outside lead', 'worker', 'outside'],
-  ] as const)('does not waive danger confirmation for an %s or an unproved subtree result', async (_label, sessionId, leadSessionId) => {
+  ] as const)('does not waive danger confirmation for an %s or an unproved subtree result', async (_label, sessionId, managerSessionId) => {
     for (const marked of [true, false]) {
       let mutated = false;
       // Replace authenticated Session HTTP ports only; the real executor must refuse before mutation.
@@ -38,46 +38,46 @@ describe('session.reports_to.set contract', () => {
         sessionList: async () => ({ sessions: [], nextCursor: null, hasNext: false,
           ...(marked ? { queryVersion: 1, attentionNextCursor: null, attentionHasNext: false } : {}),
         }),
-        sessionReportsToSet: async () => { mutated = true; return { ok: true, sessionId, leadSessionId, attachedAt: 10 }; },
+        sessionManagerSet: async () => { mutated = true; return { ok: true, sessionId, managerSessionId, attachedAt: 10 }; },
       } as unknown as ActionExecutorDeps);
-      const result = await executor.execute('session.reports_to.set', {
-        sessionId, leadSessionId, expectedLeadSessionId: null,
+      const result = await executor.execute('session.manager.set', {
+        sessionId, managerSessionId, expectedManagerSessionId: null,
       }, context);
       expect(result).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
       expect(mutated).toBe(false);
     }
   });
   it('carries a strict CAS mutation through the declared Session relation transport', () => {
-    expect(isHomeDomainActionIdV1('session.reports_to.set')).toBe(false);
-    const spec = getActionSpec('session.reports_to.set');
-    const input = { sessionId: 'worker/1', leadSessionId: 'lead', expectedLeadSessionId: null };
+    expect(isHomeDomainActionIdV1('session.manager.set')).toBe(false);
+    const spec = getActionSpec('session.manager.set');
+    const input = { sessionId: 'worker/1', managerSessionId: 'lead', expectedManagerSessionId: null };
     expect(spec.inputSchema.parse(input)).toEqual(input);
-    expect(spec.inputSchema.safeParse({ ...input, expectedLeadSessionId: undefined }).success).toBe(false);
+    expect(spec.inputSchema.safeParse({ ...input, expectedManagerSessionId: undefined }).success).toBe(false);
     expect(spec.inputSchema.safeParse({ ...input, accountId: 'fabricated' }).success).toBe(false);
     expect(bindHomeDomainHttpRequestV1({ transport: spec.serverTransport!, inputSchema: spec.inputSchema, input })).toEqual({
-      method: 'POST', path: '/v1/sessions/worker%2F1/reports-to',
-      body: { leadSessionId: 'lead', expectedLeadSessionId: null },
+      method: 'POST', path: '/v1/sessions/worker%2F1/manager',
+      body: { managerSessionId: 'lead', expectedManagerSessionId: null },
     });
     expect(spec.surfaces).toMatchObject({ ui: true, cli: true, voice: true, agent: true, mcp: true });
-    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: 1 }).success).toBe(true);
-    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', leadSessionId: null, attachedAt: null }).success).toBe(true);
-    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: -1 }).success).toBe(false);
-    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: null }).success).toBe(false);
-    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', leadSessionId: 'lead', attachedAt: 1, accountId: 'fabricated' }).success).toBe(false);
+    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', managerSessionId: 'lead', attachedAt: 1 }).success).toBe(true);
+    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', managerSessionId: null, attachedAt: null }).success).toBe(true);
+    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', managerSessionId: 'lead', attachedAt: -1 }).success).toBe(false);
+    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', managerSessionId: 'lead', attachedAt: null }).success).toBe(false);
+    expect(spec.outputSchema.safeParse({ ok: true, sessionId: 'worker', managerSessionId: 'lead', attachedAt: 1, accountId: 'fabricated' }).success).toBe(false);
   });
 
   it('preserves closed graph refusals through the schema and Session relation port', async () => {
-    const resultSchema = getActionSpec('session.reports_to.set').outputSchema;
-    for (const error of ['reports_to_cycle', 'reports_to_cas_conflict'] as const) {
-      const executor = createActionExecutor({ sessionReportsToSet: async () => ({ ok: false, error }) } as unknown as ActionExecutorDeps);
-      expect(await executor.execute('session.reports_to.set', {
-        sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null,
+    const resultSchema = getActionSpec('session.manager.set').outputSchema;
+    for (const error of ['manager_cycle', 'manager_cas_conflict'] as const) {
+      const executor = createActionExecutor({ sessionManagerSet: async () => ({ ok: false, error }) } as unknown as ActionExecutorDeps);
+      expect(await executor.execute('session.manager.set', {
+        sessionId: 'worker', managerSessionId: 'lead', expectedManagerSessionId: null,
       }, { surface: 'ui', authority: 'present_user', bypassApprovals: true })).toMatchObject({ ok: false, errorCode: error });
       expect(resultSchema.parse({ ok: false, error })).toEqual({ ok: false, error });
       expect(readHomeDomainActionErrorV1({ ok: false, error })).toBeNull();
     }
-    expect(resultSchema.parse({ ok: false, error: 'reports_to_forbidden', reason: 'pairwise' })).toEqual({ ok: false, error: 'reports_to_forbidden', reason: 'pairwise' });
-    expect(resultSchema.safeParse({ ok: false, error: 'reports_to_forbidden', reason: 'owner' }).success).toBe(false);
-    expect(resultSchema.safeParse({ ok: false, error: 'reports_to_cycle', revision: 1 }).success).toBe(false);
+    expect(resultSchema.parse({ ok: false, error: 'manager_forbidden', reason: 'pairwise' })).toEqual({ ok: false, error: 'manager_forbidden', reason: 'pairwise' });
+    expect(resultSchema.safeParse({ ok: false, error: 'manager_forbidden', reason: 'owner' }).success).toBe(false);
+    expect(resultSchema.safeParse({ ok: false, error: 'manager_cycle', revision: 1 }).success).toBe(false);
   });
 });

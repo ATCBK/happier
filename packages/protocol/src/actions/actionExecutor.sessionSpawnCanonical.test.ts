@@ -78,7 +78,70 @@ function createExternalSpawnApprovalContext(requestId: string) {
 describe('session.spawn_new canonical execution', () => {
   const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
 
-  it.each([false, true])('resolves inherited Machine and Agent choices before parsing an installed Session spawn (observed=%s)', async observed => {
+  it('keeps a Discussion-owned slot on one birth identity across caller surfaces and uncertain replies', async () => {
+    // Native Session creation is the external boundary; Action parsing and birth identity stay real.
+    const births: Parameters<ActionExecutorDeps['sessionSpawnNew']>[0][] = [];
+    const sessionSpawnNew: ActionExecutorDeps['sessionSpawnNew'] = async args => {
+      births.push(args);
+      return { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' };
+    };
+    const executor = createActionExecutor({ sessionSpawnNew } as ActionExecutorDeps);
+    const discussionParticipant = { discussionId: 'discussion-1', participantSlotId: 'reviewer-slot' };
+    for (const surface of ['ui', 'cli', 'plugin'] as const) {
+      const response = await executor.execute('session.spawn_new', {
+        ...canonicalInput, creationKey: `lost-response-${surface}`, discussionParticipant,
+      }, { surface, authority: 'present_user', serverId: 'server-1',
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'session.spawn_new': [surface] } }),
+        ...(surface === 'plugin' ? { actionCaller: { kind: 'plugin', pluginId: 'acme.reviewers' } as const } : {}) });
+      expect(response).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'unknown' } });
+    }
+    expect(births).toHaveLength(3);
+    for (const [index, surface] of ['ui', 'cli', 'plugin'].entries()) {
+      expect(births[index]?.admittedInput).toEqual({ ...canonicalInput,
+        creationKey: `lost-response-${surface}`, discussionParticipant });
+    }
+    const expectedTag = births[0]?.sessionCreationTag;
+    expect(expectedTag).toBeTruthy();
+    for (const birth of births) {
+      expect(birth).toMatchObject({ creationKey: 'reviewer-slot', sessionCreationTag: expectedTag,
+        originKind: 'discussion', discussionParticipant });
+      expect(birth.initialInput).toBeUndefined();
+      expect(birth.originSessionId).toBeUndefined();
+      expect(birth.originRunId).toBeUndefined();
+      expect(birth.manager).toBeUndefined();
+    }
+  });
+
+  it.each([
+    { failure: new RpcError('Forbidden', RPC_ERROR_CODES.FORBIDDEN), code: 'permission_denied', retryable: false },
+    { failure: new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE), code: 'incompatible_target', retryable: false },
+    { failure: Object.assign(new Error('Machine RPC timed out'), { code: 'MACHINE_RPC_TIMEOUT' }), code: 'spawn_failed', retryable: true },
+    { failure: new Error('Target preparation failed'), code: 'spawn_failed', retryable: true },
+  ])('does not claim the daemon is offline when directory preflight fails with $code', async ({ failure, code, retryable }) => {
+    let spawned = false;
+    const deps = {
+      // The transported target read and native Session launch are system boundaries.
+      sessionSpawnNewDirectoryApprovalPreflight: async () => { throw failure; },
+      sessionSpawnNew: async () => { spawned = true; throw new Error('Must not launch'); },
+    } satisfies Partial<ActionExecutorDeps>;
+    const result = await createActionExecutor(deps as ActionExecutorDeps).execute('session.spawn_new', canonicalInput,
+      { surface: 'ui', authority: 'present_user' });
+    expect(result).toMatchObject({ ok: true, result: { type: 'error', code, retryable } });
+    if (code === 'incompatible_target') expect(result).toMatchObject({ result: {
+      incompatibleTarget: { reason: 'target_preparation_rpc_unavailable' },
+    } });
+    expect(spawned).toBe(false);
+  });
+
+  it.each([false, true].flatMap(observed => [
+    { observed, label: 'canonical', inherited: canonicalInput.agentTarget, expected: canonicalInput.agentTarget },
+    { observed, label: 'bundled routing', inherited: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, expected: canonicalInput.agentTarget },
+    { observed, label: 'configured ACP routing',
+      inherited: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
+      expected: { kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' } },
+    { observed, label: 'qualified plugin routing', inherited: { kind: 'backend', backendId: 'acme.agents/reviewer', sourceKind: 'built_in' },
+      expected: { kind: 'agent', identity: { pluginId: 'acme.agents', localId: 'reviewer' } } },
+  ] as const))('resolves inherited Machine and Agent choices before parsing an installed Session spawn ($label, observed=$observed)', async ({ observed, inherited, expected }) => {
     // Native Session creation is the process boundary; inheritance and admission stay real.
     const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
       type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
@@ -95,7 +158,8 @@ describe('session.spawn_new canonical execution', () => {
       surface: 'agent', authority: 'account_automation',
       serverId: 'server-1', runtimeAccountId: 'account-1', defaultSessionId: 'parent-session',
       actionCaller: { kind: 'session', sessionId: 'parent-session', starterDepth: 0, turnDepth: 0 },
-      agentStartContext, callerPermissionMode: 'default',
+      agentStartContext: { ...agentStartContext, baseline: { ...agentStartContext.baseline,
+        configuration: { agentTarget: inherited } } }, callerPermissionMode: 'default',
       causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
       sessionInputSource: { sourceSessionId: 'parent-session', sourceTurnId: 'parent-turn-1', via: 'action' },
       sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
@@ -103,8 +167,8 @@ describe('session.spawn_new canonical execution', () => {
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted' } });
     expect(sessionSpawnNew.mock.calls[0]?.[0]).toMatchObject({
       executionTarget: { serverId: 'server-1', machineId: 'parent-machine' },
-      agentTarget: canonicalInput.agentTarget,
-      reportsTo: { sessionId: 'parent-session' },
+      agentTarget: expected,
+      manager: { sessionId: 'parent-session' },
     });
   });
 
@@ -172,7 +236,7 @@ describe('session.spawn_new canonical execution', () => {
     });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted' } });
     expect(sessionSpawnNew.mock.calls[0]?.[0]).toMatchObject({
-      roleId, initialTriggers, reportsTo: { sessionId: 'parent-session' },
+      roleId, initialTriggers, manager: { sessionId: 'parent-session' },
     });
     expect(sessionSpawnNew.mock.calls[0]?.[0].initialTriggers?.[0]?.inputs).not.toHaveProperty('engines');
   });
@@ -918,6 +982,7 @@ describe('session.spawn_new canonical execution', () => {
     });
     expect(sessionSpawnNew).toHaveBeenCalledWith({
       ...canonicalInput,
+      admittedInput: canonicalInput,
       creationKey: 'plugin-operation-7',
       sessionCreationTag: deriveSessionCreationTagV1({
         callerCreationNamespace: 'plugin:plugin.example',
@@ -1389,6 +1454,7 @@ describe('session.spawn_new canonical execution', () => {
       artifactId: 'target-action-approval-1',
       decision: 'approve',
       signal: controller.signal,
+      context: expect.objectContaining({ surface: 'ui', authority: 'present_user', signal: controller.signal }),
     });
     expect(approvalsGet).not.toHaveBeenCalled();
   });

@@ -28,7 +28,7 @@ describe('Project worker Actions', () => {
       expect(resolveActionApprovalRouting({ actionId, spec, context: { surface } }).required).toBe(mutates);
       if (surface === 'ui') {
         expect(resolveActionApprovalRouting({ actionId, spec, context: { surface, authority: 'present_user' } }).required)
-          .toBe(mutates);
+          .toBe(mutates && id === 'projects.worker.copy.retire');
       }
       expect(resolveActionApprovalRouting({ actionId, spec, context: { surface },
         settings: { v: 1, actions: {}, approvalWaivedSurfaces: { [id]: [surface] } } }).required).toBe(false);

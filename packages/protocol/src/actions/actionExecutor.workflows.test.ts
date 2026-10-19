@@ -93,21 +93,34 @@ describe('createActionExecutor (Workflow family)', () => {
     }));
   });
 
-  it('executes a discoverable Workflow operation through the generic MCP action transport without surface rejection', async () => {
-    // The external host port returns the complete current page contract;
-    // Action admission and result validation below remain real.
-    const workflowAction = vi.fn(async () => ({ runs: [], metadataByRunId: {} }));
+  it.each(['mcp', 'voice'] as const)('reads Habits writing here through the shared Workflow owner on %s', async (surface) => {
+    const unavailable = async (): Promise<never> => { throw new Error('destination_read_uses_no_artifacts'); };
+    const definitions = createWorkflowDefinitionActions({
+      artifactStore: { list: unavailable, read: unavailable, create: unavailable, update: unavailable, delete: unavailable },
+      encodeListCursor: row => row.artifactId,
+      assertDefinitionWriteAllowed: unavailable,
+    });
+    // Only storage and Account identity/material are boundaries. Surface
+    // admission, family dispatch and destination filtering use the real owners.
+    const requests: unknown[] = [];
+    const runs = createWorkflowAccountRunActionOwner({
+      definitions, resolveAccountId: async () => 'account',
+      resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      normalizeAbsolutePath: () => null, randomBytes: () => { throw new Error('plain_read_needs_no_keys'); },
+      storage: { execute: async operation => {
+        if (operation.operation !== 'list') throw new Error('destination_read_only');
+        requests.push(operation.request);
+        return { runs: [], acceptedEnvelopesByRunId: {}, keyCensusByRunId: {} };
+      } },
+    });
     const executor = createActionExecutor({
-      workflowAction,
-      isActionApprovalRequired: () => false,
+      workflowAction: createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, definitions, runs }),
     } as unknown as ActionExecutorDeps);
 
-    // `workflow.run.list` is not a direct MCP tool, but the generic external
-    // MCP `action_execute` transport must still reach the Workflow owner
-    // instead of failing closed on surface availability.
-    await expect(executor.execute('workflow.run.list', {}, { surface: 'mcp' }))
-      .resolves.toMatchObject({ ok: true });
-    expect(workflowAction).toHaveBeenCalledOnce();
+    // Both surfaces read the same admitted destination history through Actions.
+    const result = await executor.execute('workflow.run.list', { targetSessionId: 'destination' }, { surface });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { runs: [], metadataByRunId: {} } });
+    expect(requests).toEqual([{ targetSessionId: 'destination' }]);
   });
 
   it('routes Workflow run summaries through the canonical host port', async () => {

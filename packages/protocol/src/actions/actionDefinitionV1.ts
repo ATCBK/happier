@@ -14,6 +14,7 @@ import {
 import { ActionSafetySchema } from './safety.js';
 import { ActionOperationDeclarationV1Schema } from './operations/v1.js';
 import { ActionContextualDefaultsSchema } from './contextualDefaults.js';
+import { ActionSessionTargetDeclarationV1Schema } from './sessionTargetV1.js';
 import { PluginLooseJsonObjectSchema, PluginOptionalStringSchema } from '../plugins/_shared.js';
 
 const LooseJsonObjectSchema = PluginLooseJsonObjectSchema;
@@ -36,7 +37,7 @@ function normalizeSerializedActionSurfaces(value: unknown): unknown {
   };
 }
 
-export const SerializedActionSurfaceSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeSerializedActionSurfaces), ActionSurfaceSchema));
+export const SerializedActionSurfaceSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeSerializedActionSurfaces), ActionSurfaceSchema));
 
 export const ActionDefinitionIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 export type ActionDefinitionIdV1 = z.infer<typeof ActionDefinitionIdV1Schema>;
@@ -103,6 +104,7 @@ export const ActionDefinitionSummaryV1Schema = lazyZodSchema(() => z.looseObject
     toolExposure: z.optional(ActionToolExposureSchema),
     prompting: z.optional(ActionPromptingSchema),
     contextualDefaults: z.optional(ActionContextualDefaultsSchema),
+    sessionTarget: z.optional(ActionSessionTargetDeclarationV1Schema),
     inputHints: z.nullable(ActionInputHintsSchema),
     outputSchema: z.optional(LooseJsonObjectSchema),
     execution: z.optional(ActionExecutionDescriptorV1Schema),

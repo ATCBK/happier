@@ -1,4 +1,4 @@
-import { normalizeUsageQueryBatchInput, getUsageQueryKey, UsageQueryBatchInputSchema, type UsageQueryBatchInput } from '../../inputs/usageQuery.js';
+import { normalizeUsageQuery, normalizeUsageQueryBatchInput, getUsageQueryKey, UsageQueryBatchInputSchema, type UsageQueryBatchInput } from '../../inputs/usageQuery.js';
 import { UsageQueryBatchResultSchema, type UsageQueryBatchResult } from '../../usage/resolveUsagePageAggregation.js';
 import { UsageExportInputSchema, buildUsageFileResult } from '../../usage/usageExport.js';
 import type { ActionExecuteFailure, ActionExecuteResult } from '../actionExecutionResult.js';
@@ -28,6 +28,8 @@ export type UsageActionPorts = Readonly<{
 
 const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
 
+export function executeUsageAction(actionId: 'usage.query', value: unknown, ports: UsageActionPorts | undefined, context: ActionExecutorContext): Promise<ActionExecuteFailure | Readonly<{ ok: true; result: UsageQueryBatchResult }>>;
+export function executeUsageAction(actionId: UsageActionId, value: unknown, ports: UsageActionPorts | undefined, context: ActionExecutorContext): Promise<ActionExecuteResult>;
 export async function executeUsageAction(actionId: UsageActionId, value: unknown, ports: UsageActionPorts | undefined, context: ActionExecutorContext): Promise<ActionExecuteResult> {
   if (context.signal?.aborted) return failure('cancelled');
   if (!ports) return failure('unsupported_action');
@@ -61,11 +63,15 @@ export async function executeUsageAction(actionId: UsageActionId, value: unknown
   }
   if (actionId === 'usage.recap.compose' || actionId === 'usage.recap.export') {
     const request = UsageRecapComposeInputSchema.parse(value);
-    const queried = await read({ queries: [request.query] });
+    const query = normalizeUsageQuery({ ...request.query, breakdown: [...request.query.breakdown,
+      ...(request.selectedFields.includes('agentMix') ? ['agent' as const] : []),
+      ...(request.selectedFields.includes('modelMix') ? ['model' as const] : []),
+    ] });
+    const queried = await read({ queries: [query] });
     if ('ok' in queried) return queried;
     const snapshot = queried.results[0];
     if (!snapshot) return failure('usage_query_result_invalid');
-    const compose = composeUsageRecap({ input: request, snapshot });
+    const compose = composeUsageRecap({ input: { ...request, query }, snapshot });
     if (actionId === 'usage.recap.compose') return { ok: true, result: compose };
     if (compose.kind !== 'composed') return { ok: true, result: { kind: 'unavailable', reason: 'compose_unavailable', compose } };
     if (!ports.renderRecap) return { ok: true, result: { kind: 'unavailable', reason: 'render_target_unavailable', compose } };

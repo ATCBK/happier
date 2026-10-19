@@ -60,6 +60,7 @@ function processSpec<const Id extends MachineProcessesActionId>([id, title, desc
   readonly [Id, string, string, string, string, 'read' | 'write' | 'danger', 'safe' | 'danger']): MachineProcessesActionSpec<Id> {
   return {
   id, approval: safety === 'danger' ? { result: 'required' } : { result: 'none' }, title, description, safety, sideEffectClass, placements: [], executionPlacement: 'machine',
+  ...(id === 'machines.processes.stop' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
   toolExposure: { agent: id === 'machines.processes.list' ? 'direct' : 'discoverable_only' },
   prompting: { agentGuidance: sideEffectClass === 'read'
     ? 'Read the requester-scoped census before explaining process use. Read machines.guard.get for canonical stop candidates and why other work is kept; do not invent a competing stop heuristic.'

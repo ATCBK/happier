@@ -4,6 +4,7 @@ import { ActionIdSchema } from '../actionIds.js';
 import { getActionSpec } from '../actionSpecs.js';
 import { isApprovalRequiredByActionsSettings } from '../actionApprovalPolicy.js';
 import { ActionsSettingsV1Schema } from '../actionSettings.js';
+import { ComputerTargetSelectRequestV1Schema, resolveComputerAccess } from '../../computer/v1.js';
 
 const target = { kind: 'window', displayId: ':77', pid: 123, windowId: 456 } as const;
 const nativeActionIds = [
@@ -16,6 +17,13 @@ function nativeSpec(id: string) {
 }
 
 describe('native computer Action contracts', () => {
+  it('resolves omitted selection access to use while preserving explicit see and use', () => {
+    const request = { machineId: 'machine_1', target };
+    expect(resolveComputerAccess(ComputerTargetSelectRequestV1Schema.parse(request).access)).toBe('use');
+    expect(resolveComputerAccess(ComputerTargetSelectRequestV1Schema.parse({ ...request, access: 'see' }).access)).toBe('see');
+    expect(resolveComputerAccess(ComputerTargetSelectRequestV1Schema.parse({ ...request, access: 'use' }).access)).toBe('use');
+  });
+
   it('admits only exact, value-free credential entry and bounded settlement', () => {
     const requests = {
       'computer.secret.fill': {

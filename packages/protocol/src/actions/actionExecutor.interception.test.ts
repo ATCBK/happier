@@ -292,6 +292,7 @@ describe('createActionExecutor execution interception', () => {
       {
         surface: 'plugin',
         serverId: 'server-1',
+        defaultSessionMachineId: 'machine-1',
         actionRequestId: 'deferred-title-1',
         actionCaller: {
           kind: 'plugin',

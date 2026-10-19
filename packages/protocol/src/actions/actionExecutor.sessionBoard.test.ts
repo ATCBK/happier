@@ -123,9 +123,8 @@ describe('createActionExecutor (Session Board family)', () => {
     expect(saved[2]).toMatchObject({ ...custom, item: SessionSurfaceItemV1Schema.parse(custom.item),
       reviewedVisual: { recordRevision: revision, creator: { kind: 'user' } } });
   });
-  it.each(['agent', 'ui'] as const)('requires approval for shared layout edits through both %s fronts, while a policy waiver reaches the same writer', async surface => {
+  it.each(['agent', 'ui'] as const)('admits direct UI layout edits and preserves configurable approval through both %s fronts', async surface => {
     let document: SessionBoardLayoutV1 = { v: 1, tabs: [{ id: 'overview', title: 'Overview', items: [{ itemId: 'copy', width: 'wide' }] }] };
-    const original = document;
     // The sealed Board persistence transport is the boundary; layout application stays real.
     const executor = createActionExecutor({
       widgetAccountScope: () => ({ serverId: 'home-1', accountId: 'account' }),
@@ -152,12 +151,23 @@ describe('createActionExecutor (Session Board family)', () => {
       operation: { op: 'item.frameStyle' as const, tabId: 'overview', itemId: 'copy', frameStyle: 'plain' as const } };
     const widgetInput = { ref: { surface: { serverId: 'home-1', accountId: 'account',
       owner: { kind: 'sessionBoard' as const, sessionId: 'session-1' } }, instanceId: 'copy' }, frameStyle: 'plain' as const };
-    expect(await executor.execute('widgets.item.frame.set', widgetInput, context))
+    if (surface === 'ui') {
+      expect(await executor.execute('widgets.item.frame.set', widgetInput, context)).toMatchObject({ ok: true });
+      expect(document.tabs[0]?.items[0]?.frameStyle).toBe('plain');
+      expect(await executor.execute('session.board.layout.update', { ...domainInput,
+        operation: { ...domainInput.operation, frameStyle: 'card' } }, context)).toMatchObject({ ok: true });
+      expect(document.tabs[0]?.items[0]?.frameStyle).toBe('card');
+    }
+    const beforeAsk = document;
+    const askedContext = surface === 'ui' ? { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: {
+      'session.board.layout.update': { approvalRequiredSurfaces: ['ui'] },
+      'widgets.item.frame.set': { approvalRequiredSurfaces: ['ui'] },
+    } }) } : context;
+    expect(await executor.execute('widgets.item.frame.set', widgetInput, askedContext))
       .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
-    expect(document).toEqual(original);
-    expect(await executor.execute('session.board.layout.update', domainInput, context))
+    expect(await executor.execute('session.board.layout.update', domainInput, askedContext))
       .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
-    expect(document).toEqual(original);
+    expect(document).toBe(beforeAsk);
     const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
       'session.board.layout.update': [surface], 'widgets.item.frame.set': [surface],
     } });
@@ -225,6 +235,7 @@ describe('createActionExecutor (Session Board family)', () => {
       ok: false,
       errorCode: 'unsupported_action',
       error: 'unsupported_action:session.board.item.upsert',
+      details: { cause: 'current_session_only' },
     });
     expect(sessionBoardAction).not.toHaveBeenCalled();
 
@@ -256,6 +267,7 @@ describe('createActionExecutor (Session Board family)', () => {
       ok: false,
       errorCode: 'unsupported_action',
       error: 'unsupported_action:session.board.item.upsert',
+      details: { cause: 'action_scope_restricted' },
     });
     expect(sessionBoardAction).not.toHaveBeenCalled();
   });

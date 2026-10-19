@@ -6,7 +6,7 @@ import type { TeamAdmissionModeV1 } from '../../teams/index.js';
 
 export type SettingDomainValueV1 = z.infer<typeof SettingsDeclarationValueV1Schema>;
 export type SettingsOwnerActionExecuteV1 = (request: Readonly<{
-    actionId: 'home.settings.get' | 'home.settings.set' | 'session.follow.preferences.get' | 'session.follow.preferences.set'
+    actionId: 'home.settings.get' | 'home.settings.set' | 'follow.preferences.get' | 'follow.preferences.set'
         | 'teams.get' | 'teams.policy.set' | 'teams.identity.connections.list' | 'teams.identity.connections.settings.update';
     input: unknown;
     context: ActionExecutorContext;

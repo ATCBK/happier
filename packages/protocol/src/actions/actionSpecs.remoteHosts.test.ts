@@ -6,6 +6,25 @@ import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import { describeApprovalActionFields } from './actionApprovalPresentation.js';
 
 describe('Remote host Action parity', () => {
+  it('exposes active tunnel inventory through the existing client read and approval policy', () => {
+    const spec = listActionSpecs().find(row => String(row.id) === 'remote_hosts.tunnel.list');
+    expect(spec).toBeDefined();
+    expect(spec?.executionPlacement).toBe('client');
+    expect(spec?.sideEffectClass).toBe('read');
+    expect(spec?.surfaces.agent).toBe(true);
+    expect(spec?.inputSchema.safeParse({}).success).toBe(true);
+    expect(spec?.inputSchema.safeParse({ hostId: 'unaddressed' }).success).toBe(false);
+    if (!spec) throw new Error('Tunnel inventory must be declared');
+    const existingRead = listActionSpecs().find(row => row.id === 'remote_hosts.trusted_keys.list');
+    if (!existingRead) throw new Error('Existing client read policy must be declared');
+    const context = { surface: 'agent', authority: 'account_automation' } as const;
+    expect(resolveActionApprovalRouting({ actionId: spec.id, spec, input: {}, context }).required)
+      .toBe(resolveActionApprovalRouting({ actionId: existingRead.id, spec: existingRead, input: {}, context }).required);
+  });
+  it('admits the native supervisor inventory as an immediate read rather than a fabricated desktop task', () => {
+    const spec = listActionSpecs().find(row => String(row.id) === 'remote_hosts.tunnel.list');
+    expect(spec?.outputSchema.safeParse({ status: 'listed', native: { leases: [], platformLimitations: [] } }).success).toBe(true);
+  });
   it('addresses relay access status by admitted Remote host instead of accepting SSH credentials', () => {
     const spec = listActionSpecs().find(row => String(row.id) === 'remote_hosts.relay.access.status');
     expect(spec).toBeDefined();
@@ -71,10 +90,13 @@ describe('Remote host Action parity', () => {
     const observed = spec.projectObservationInput?.(input);
     const presentation = describeApprovalActionFields({ actionId: spec.id, actionArgs: observed });
     expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'hostId', value: 'host-a' }));
-    expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'operation.kind', value: operation.kind }));
+    expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'operation.kind',
+      value: operation.kind === 'disable' ? 'Disable relay' : 'Configure relay' }));
     expect(presentation.unrepresentable).toBeNull();
     if (operation.config) {
-      expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'operation.config.providerId', value: operation.config.providerId }));
+      const providerLabels = { localOnly: 'Local only', lan: 'LAN', cloudflareNamed: 'Cloudflare named tunnel' };
+      expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'operation.config.providerId',
+        value: providerLabels[operation.config.providerId] }));
       if ('url' in operation.config) expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'operation.config.url', value: operation.config.url }));
       if ('hostname' in operation.config) expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'operation.config.hostname', value: operation.config.hostname }));
     } else {

@@ -7,7 +7,10 @@ import {
   ACCOUNT_API_TOKENS_REVOKE_HTTP_PATH_V1,
 } from '../auth/accountApiTokens.js';
 import type { ActionId } from './actionIds.js';
-import { getActionSpec } from './actionSpecs.js';
+import { getActionSpec, PublicActionIdSchema, SignedRootActionIdSchema } from './actionSpecs.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { describeApprovalActionFields } from './actionApprovalPresentation.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 
 const operations = [
@@ -19,6 +22,38 @@ const operations = [
 ] as const;
 
 describe('Account API-token Action admission', () => {
+  it('admits signed token lifecycle requests while retaining token API exclusion', () => {
+    for (const [id] of operations) {
+      expect(SignedRootActionIdSchema.safeParse(id).success, id).toBe(true);
+      expect(getActionSpec(id).surfaces.api).toBe(false);
+      expect(PublicActionIdSchema.safeParse(id).success, id).toBe(false);
+    }
+    for (const id of ['account.password.enroll', 'account.password.change', 'account.password.remove',
+      'account.email.change.request', 'account.security.terminalPresentUser.set']) {
+      expect(SignedRootActionIdSchema.safeParse(id).success, id).toBe(false);
+    }
+  });
+
+  it.each(['agent', 'mcp'] as const)('retains the requesting %s invocation for the one-time result', surface => {
+    const spec = getActionSpec('account.apiTokens.create');
+    expect(resolveActionApprovalRouting({ actionId: spec.id, spec,
+      context: { surface, authority: 'account_automation' },
+    })).toMatchObject({ required: true, flow: 'blocking', result: 'required' });
+  });
+
+  it('discloses the exact grant, expiry, encryption and unattended access in the creation review', () => {
+    const actionArgs = getActionSpec('account.apiTokens.create').inputSchema.parse({
+      tokenId: 'dd03e74b-4aae-4a0a-81ee-1c23ddc4525d', label: 'Wilson trigger',
+      expiresAt: '2026-11-20T12:00:00.000Z', authorizeUnattendedTeamAccess: false,
+      grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { ids: ['workflow.trigger.run_now'], families: [] },
+        automationIds: ['16cce218-b735-46cd-a68a-303c84743527'] },
+    });
+    const presentation = describeApprovalActionFields({ actionId: 'account.apiTokens.create', actionArgs });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'grant', value: JSON.stringify(actionArgs.grant) }));
+    expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'expiresAt', value: actionArgs.expiresAt }));
+    expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'authorizeUnattendedTeamAccess' }));
+  });
   it('keeps lifecycle operations on the Account transport with automation request surfaces and no public API', () => {
     for (const [id, authority, path] of operations) {
       const spec = getActionSpec(id as ActionId);

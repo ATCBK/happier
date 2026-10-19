@@ -93,7 +93,8 @@ type DefinitionActions = Readonly<{
     caller?: WorkflowActionExecuteArgs['context']) => Promise<WorkflowActionResult>;
   edit: (input: ReturnType<typeof WorkflowActionInputSchemasV1['workflow.definition.edit']['parse']>, context?: WorkflowIngressContextV1,
     caller?: WorkflowActionExecuteArgs['context']) => Promise<WorkflowActionResult>;
-  delete: (input: ReturnType<typeof WorkflowActionInputSchemasV1['workflow.definition.delete']['parse']>) => Promise<WorkflowActionResult>;
+  delete: (input: ReturnType<typeof WorkflowActionInputSchemasV1['workflow.definition.delete']['parse']>,
+    caller?: WorkflowActionExecuteArgs['context']) => Promise<WorkflowActionResult>;
   importDocument: (input: ReturnType<typeof WorkflowActionInputSchemasV1['workflow.definition.import']['parse']>, context?: WorkflowIngressContextV1) => Promise<WorkflowActionResult>;
   exportDocument: (input: ReturnType<typeof WorkflowActionInputSchemasV1['workflow.definition.export']['parse']>) => Promise<WorkflowActionResult>;
 }>;
@@ -194,7 +195,7 @@ export function createWorkflowActionExecutor(deps: Readonly<{
       return await deps.definitions.edit(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), context, rawArgs.context);
     }
     if (actionId === 'workflow.definition.delete') {
-      return await deps.definitions.delete(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input));
+      return await deps.definitions.delete(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context);
     }
     if (actionId === 'workflow.trigger.list') {
       return deps.triggers ? deps.triggers.list(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
@@ -213,7 +214,7 @@ export function createWorkflowActionExecutor(deps: Readonly<{
         : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
     }
     if (actionId === 'workflow.trigger.remove') {
-      return deps.triggers ? deps.triggers.remove(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input))
+      return deps.triggers ? deps.triggers.remove(parseWorkflowActionInput(WorkflowActionInputSchemasV1[actionId], rawArgs.input), rawArgs.context)
         : { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
     }
     if (actionId === 'session.trigger.list') {

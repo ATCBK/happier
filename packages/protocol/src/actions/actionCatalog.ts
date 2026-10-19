@@ -21,6 +21,8 @@ import {
 } from './actionDefinitionV1.js';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject, type JsonSchemaObject } from './actionInputJsonSchema.js';
 
+export { readCompleteActionSpecV1 } from './actionSpecSections.js';
+
 export type SerializedActionSpec = ActionDefinitionSummaryV1;
 
 export type ResolvedActionOption = Readonly<{
@@ -148,7 +150,7 @@ function resolveActionCatalogSurfaceProjection(
 
 /** Optional output metadata must not hide otherwise discoverable Actions. */
 export function projectActionOutputJsonSchema(
-  schema: ActionSpec['outputSchema'],
+  schema: Parameters<typeof zodSchemaToJsonSchemaObject>[0] | undefined,
   options?: Parameters<typeof zodSchemaToJsonSchemaObject>[1],
 ): JsonSchemaObject | undefined {
   if (!schema) return undefined;
@@ -201,6 +203,7 @@ function serializeActionSpecMetadata(
     ...(spec.toolExposure ? { toolExposure: spec.toolExposure } : {}),
     ...(spec.prompting ? { prompting: spec.prompting } : {}),
     ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
+    ...(spec.sessionTarget ? { sessionTarget: spec.sessionTarget } : {}),
     ...(spec.execution ? { execution: spec.execution } : {}),
     ...(spec.sideEffectClass ? { sideEffectClass: spec.sideEffectClass } : {}),
     ...(spec.operation ? { operation: spec.operation } : {}),

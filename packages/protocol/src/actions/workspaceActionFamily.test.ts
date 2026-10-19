@@ -14,8 +14,8 @@ describe('workspace client actions', () => {
       expect(spec.inputSchema.parse(input)).toEqual(input);
       expect(spec.inputSchema.safeParse({ ...input, accountId: 'another-account' }).success).toBe(false);
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true });
-      for (const surface of ['ui', 'agent', 'mcp'] as const) {
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+      for (const surface of ['ui', 'agent', 'mcp', 'cli'] as const) {
         const context = { surface, authority: 'account_automation' } as const;
         const required = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
         expect(resolveActionApprovalRouting({ actionId, spec, settings: required, context }).required).toBe(true);
@@ -50,11 +50,11 @@ describe('workspace client actions', () => {
       expect(ActionIdSchema.safeParse(id)).toEqual({ success: true, data: id });
     }
   });
-  it('keeps reverse-client Agent/MCP discovery while omitting standalone CLI execution', () => {
+  it('advertises CLI admission through the same reverse-client delivery', () => {
     for (const spec of WORKSPACE_ACTION_SPECS) {
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, voice: true, agent: true, mcp: true, cli: false, rpc: false });
-      expect(spec.cli).toBeUndefined();
+      expect(spec.surfaces).toMatchObject({ ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false });
+      expect(spec.cli).toEqual({ acceptsServerId: true, commands: [] });
     }
     expect(WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.split'].safeParse({ direction: 'right', availableSizePx: 1000 }).success).toBe(false);
     expect(WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.resize'].safeParse({ splitId: 'split:1', ratio: 2 }).success).toBe(false);

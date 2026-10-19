@@ -72,6 +72,15 @@ export function settleApprovalRequestDecision(request: ApprovalRequest): Approva
   ) };
 }
 
+/** Raw replay operands share one lifetime, including the original finite invocation envelope. */
+export function settleApprovalRequestReplayInputs(request: ApprovalRequest): ApprovalRequest {
+  const actionArgs = settleApprovalRequestActionArgs(request);
+  const decision = settleApprovalRequestDecision(request);
+  if (request.v !== 2) return { ...request, actionArgs, decision };
+  const { originalActionEnvelope: _envelope, ...executionOriginV1 } = request.executionOriginV1;
+  return { ...request, actionArgs, decision, executionOriginV1 };
+}
+
 /** Input admission only, shared by the transition writer and the replay executor. */
 export function resolveApprovalRequestExecutionInput(request: ApprovalRequest):
   | Readonly<{ ok: true; input: unknown }>
@@ -134,14 +143,14 @@ export function decideApprovalRequestTransition(
   next: ApprovalRequest,
 ): ApprovalRequestTransitionDecision {
   const settling = !isSettled(existing.status) && isSettled(next.status);
-  const expectedActionArgs = settling ? settleApprovalRequestActionArgs(existing) : existing.actionArgs;
-  if (!durablyEqual(immutableSubject(existing, expectedActionArgs), immutableSubject(next, next.actionArgs))) {
+  const expected = settling ? settleApprovalRequestReplayInputs(existing) : existing;
+  if (!durablyEqual(immutableSubject(expected, expected.actionArgs), immutableSubject(next, next.actionArgs))) {
     return SUBJECT_MISMATCH;
   }
   if (existing.status === 'open') {
     if (next.v === 2 && next.decision?.narrowedInput !== undefined
       && (next.status !== 'approved' || !resolveApprovalRequestExecutionInput(next).ok)) return SUBJECT_MISMATCH;
-  } else if (!durablyEqual(settling ? settleApprovalRequestDecision(existing) : existing.decision, next.decision)) {
+  } else if (!durablyEqual(expected.decision, next.decision)) {
     return SUBJECT_MISMATCH;
   }
   const isStorageRetryReceipt = existing.v === 2 && next.v === 2

@@ -21,6 +21,13 @@ import { prepareExternalActionResponseEnvelopeV1 } from './externalActionApi.js'
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 
 describe('actionCatalog action-definition adapter', () => {
+  it('offers the existing handoff operation through CLI and Voice with its normal policy', () => {
+    for (const surface of ['cli', 'voice'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).some(spec => spec.id === 'session.handoff')).toBe(true);
+    }
+    expect(getActionSpec('session.handoff').safety).toBe('safe');
+  });
+
   // Full-catalog projection is synchronous; let worker-reporting IPC complete
   // between contracts instead of starving it across the entire census.
   beforeEach(() => new Promise<void>(resolve => setImmediate(resolve)));

@@ -16,6 +16,10 @@ describe('verified invocation authority', () => {
     expect(resolveInvocationAuthority({ credential: 'terminal', surface: 'cli' })).toBe('account_automation');
     expect(resolveInvocationAuthority({ credential: 'account', surface: 'ui' })).toBe('present_user');
     expect(resolveInvocationAuthority({ credential: 'account', surface: 'voice' })).toBe('account_automation');
+    expect(resolveInvocationAuthority({ credential: 'none', surface: 'ui' })).toBe('account_automation');
+    expect(resolveInvocationAuthority({ credential: 'none', surface: 'ui', localUiInteraction: true })).toBe('present_user');
+    expect(resolveInvocationAuthority({ credential: 'terminal', surface: 'ui', localUiInteraction: true })).toBe('account_automation');
+    expect(resolveInvocationAuthority({ credential: 'none', surface: 'voice', localUiInteraction: true })).toBe('account_automation');
     for (const surface of ['plugin', 'api'] as const) expect(resolveInvocationAuthority({ credential: 'account', surface })).toBe('account_automation');
     for (const credential of ['terminal', 'api_token', 'plugin', 'agent', 'none'] as const) {
       expect(resolveInvocationAuthority({ credential, surface: 'voice', terminalPolicy: 'allowed' })).toBe('account_automation');
@@ -46,6 +50,17 @@ describe('verified invocation authority', () => {
       'computer.permissions.openSettings', 'browser.sandbox.install'] as const) {
       expect(resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId),
         authority: 'account_automation', grant: null, surface: 'agent' }), actionId).toEqual({ ok: true });
+    }
+  });
+  it('authors pass-up without accepting an answer or permission decision', () => {
+    const spec = getActionSpec('session.user_action.answer');
+    expect(spec.requiredAuthority).toBe('present_user');
+    for (const schema of [spec.inputSchema, spec.surfaceBindings?.plugin?.inputSchema]) {
+      expect(schema?.safeParse({ requestId: 'q1', disposition: 'pass_up' }).success).toBe(true);
+      for (const response of [{ decision: 'approve' }, { answers: [{ question: 'Branch?', values: ['dev'] }] },
+        { updatedPermissions: {} }, { allowedTools: ['Bash'] }]) {
+        expect(schema?.safeParse({ requestId: 'q1', disposition: 'pass_up', ...response }).success).toBe(false);
+      }
     }
   });
   it('admits automation only to request fresh-folder consent, never to supply it as human authority', () => {

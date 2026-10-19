@@ -34,6 +34,15 @@ function executor(invalidStoredHeader = false, readFailure?: unknown) {
 }
 
 describe('workflow Action refusal classification', () => {
+  it('retains a closed HTTP refusal through the family and outer Action boundary', async () => {
+    const details = { status: 400, code: 'FST_ERR_VALIDATION' };
+    const error = Object.assign(new Error('Workflow request failed (HTTP 400; FST_ERR_VALIDATION)'), {
+      code: 'workflow_http_error', details,
+    });
+    const actions = createActionExecutor({ workflowAction: executor(false, error) } as unknown as ActionExecutorDeps);
+    await expect(actions.execute('workflow.definition.get', { definitionId }, { surface: 'api' }))
+      .resolves.toEqual({ ok: false, errorCode: 'workflow_http_error', error: error.message, details });
+  });
   it('keeps typed target diagnostics through the family and outer Action failure boundary', async () => {
     const details = { code: 'target_unavailable' as const, reason: 'agent_probe_failed' as const,
       agentId: 'claude', errorCode: 'cli-detection-failed', blockId: 'writer' };

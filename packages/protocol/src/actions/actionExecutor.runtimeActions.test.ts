@@ -43,6 +43,28 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (runtime-unification actions)', () => {
+  it('retains an exchange occurrence revision instead of preparing a fresh grant on replay', async () => {
+    let currentRevision = 'session-message-row-revision:v1:0';
+    const prepare = vi.fn(async () => currentRevision);
+    const control = vi.fn(async ({ request }: Parameters<NonNullable<ActionExecutorDeps['sessionExchangeControl']>>[0]) => {
+      if (request.observedRevision !== currentRevision) return { ok: false, errorCode: 'exchange_revision_conflict' };
+      currentRevision = 'session-message-row-revision:v1:1';
+      return { state: { v: 1, observedStarts: 5, pauseAtStarts: 10, stopped: false, afterTurns: 5 },
+        observedRevision: currentRevision };
+    });
+    const executor = createActionExecutor(createDeps({ sessionExchangePrepare: prepare,
+      sessionExchangeControl: control }));
+    const input = { sessionId: 'session-1', originInputLocalId: 'root-1', decision: 'continue' };
+    const context = { surface: 'ui', authority: 'present_user', bypassApprovals: true } as const;
+    expect(await executor.execute('session.exchange.control', input, context)).toMatchObject({ ok: true });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    currentRevision = 'session-message-row-revision:v1:3'; // Later starts and a different control advanced the root.
+    expect(await executor.execute('session.exchange.control', { ...input,
+      observedRevision: 'session-message-row-revision:v1:0' }, context)).toMatchObject({ ok: false });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(control).toHaveBeenCalledTimes(2);
+    expect(control.mock.calls.at(-1)?.[0].request.observedRevision).toBe('session-message-row-revision:v1:0');
+  });
   it('opens Browser views directly for their user, while honoring Ask and Agent defaults', async () => {
     const target = { kind: 'localServicePreview', targetId: 'preview_1', machineId: 'machine_1' } as const;
     const output = { v: 1, commandId: 'open_1', status: 'dispatched', adapterKind: 'localPreview', events: [] } as const;

@@ -39,14 +39,14 @@ describe('machine and Home connection Action parity', () => {
     expect(spec.inputSchema.safeParse({ machineId: 'machine', terminalId: 'injected' }).success).toBe(false);
     const seen: unknown[] = [];
     const result = { ok: true as const, terminals: [{ terminalId: 'pty', terminalKey: 'shell', cwd: '/project', sessionId: 'other', ended: false, exit: null }] };
-    const executor = createActionExecutor({ machineTerminalList: async (input: unknown) => { seen.push(input); return result; } } as unknown as ActionExecutorDeps);
-    expect(await executor.execute(id, { machineId: 'machine' }, { surface: 'cli', authority: 'present_user', serverId: 'home' }))
+    const executor = createActionExecutor({ machineTerminalAction: async (request: unknown) => { seen.push(request); return result; } } as unknown as ActionExecutorDeps);
+    expect(await executor.execute(id, { serverId: 'home', machineId: 'machine' }, { surface: 'cli', authority: 'present_user', serverId: 'home' }))
       .toEqual({ ok: true, result });
-    expect(seen).toEqual([{ machineId: 'machine', serverId: 'home' }]);
-    const unavailable = createActionExecutor({ machineTerminalList: async () => null } as unknown as ActionExecutorDeps);
-    expect(await unavailable.execute(id, { machineId: 'machine' }, { surface: 'ui', authority: 'present_user' })).toEqual({ ok: true, result: null });
-    const refused = createActionExecutor({ machineTerminalList: async () => ({ ok: false, errorCode: 'terminal_disabled', error: 'disabled' }) } as unknown as ActionExecutorDeps);
-    expect(await refused.execute(id, { machineId: 'machine' }, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'terminal_disabled' });
+    expect(seen).toEqual([{ actionId: id, input: { machineId: 'machine', serverId: 'home' }, context: { surface: 'cli', authority: 'present_user', serverId: 'home' } }]);
+    const unavailable = createActionExecutor({ machineTerminalAction: async () => null } as unknown as ActionExecutorDeps);
+    expect(await unavailable.execute(id, { serverId: 'home', machineId: 'machine' }, { surface: 'ui', authority: 'present_user' })).toEqual({ ok: true, result: null });
+    const refused = createActionExecutor({ machineTerminalAction: async () => ({ ok: false, errorCode: 'terminal_disabled', error: 'disabled' }) } as unknown as ActionExecutorDeps);
+    expect(await refused.execute(id, { serverId: 'home', machineId: 'machine' }, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'terminal_disabled' });
   });
   it('publishes SSH task lifecycle actions instead of treating command preparation as installation', async () => {
     for (const id of ['machines.add.ssh.start', 'machines.add.ssh.status', 'machines.add.ssh.respond', 'machines.add.ssh.cancel']) {
@@ -64,24 +64,29 @@ describe('machine and Home connection Action parity', () => {
   });
   it('admits an exact saved SSH host reference while refusing competing targets and secret material', () => {
     const schema = getActionSpec('machines.add.ssh.start').inputSchema;
-    const saved = { serverId: 'home', savedHost: { hostId: 'host', expectedRevision: 4 } };
+    const saved = { serverId: 'home', savedHostId: 'host', expectedHostRevision: 4 };
     expect(schema.safeParse(saved).success).toBe(true);
     expect(schema.safeParse({ ...saved, host: 'different-target' }).success).toBe(false);
-    expect(schema.safeParse({ ...saved, savedHost: { ...saved.savedHost, accountId: 'different-account' } }).success).toBe(false);
+    expect(schema.safeParse({ ...saved, accountId: 'different-account' }).success).toBe(false);
     expect(schema.safeParse({ ...saved, password: 'secret' }).success).toBe(false);
-    expect(schema.safeParse({ ...saved, savedHost: { hostId: 'host' } }).success).toBe(false);
+    expect(schema.safeParse({ serverId: 'home', savedHostId: 'host' }).success).toBe(false);
   });
   it('returns the canonical Home connection outcome and rejects removed classifications', async () => {
     const id = ActionIdSchema.parse('homes.connect');
+    const addresses: string[] = [];
     // This port is the executing client's persisted Home and network boundary.
-    const executor = createActionExecutor({ homeConnect: async () => ({
-      kind: 'connected', serverId: 'home', serverUrl: 'https://home.example', name: 'Home',
-    }) } as unknown as ActionExecutorDeps);
+    const executor = createActionExecutor({ homeConnect: async (input: { address: string }) => {
+      addresses.push(input.address);
+      return { kind: 'connected', serverId: 'home', serverUrl: 'https://home.example', name: 'Home' };
+    } } as unknown as ActionExecutorDeps);
     expect(await executor.execute(id, { address: 'https://home.example' }, { surface: 'ui' }))
       .toEqual({ ok: true, result: { kind: 'connected', serverId: 'home', serverUrl: 'https://home.example', name: 'Home' } });
     const spec = getActionSpec(id);
     expect(spec.executionPlacement).toBe('client');
     expect(spec.inputSchema.safeParse({ address: 'https://home.example', accountId: 'other' }).success).toBe(false);
+    expect(await executor.execute(id, { address: 'https://other.example', accountId: 'other' }, { surface: 'ui' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(addresses).toEqual(['https://home.example']);
     expect(spec.outputSchema.safeParse({ kind: 'sign_in_service', endpointUrl: 'https://sign-in.example', name: 'Sign in' }).success).toBe(false);
     expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false });
     expect(listActionSpecsForCatalogSurface({ surface: 'agent' }).map((action) => action.id)).toContain(id);
@@ -89,17 +94,17 @@ describe('machine and Home connection Action parity', () => {
 
   it('opens a machine terminal through the existing request contract and preserves daemon refusal', async () => {
     const id = ActionIdSchema.parse('machines.terminal.open');
-    const request = { machineId: 'machine', terminalKey: 'shell', cwd: '/project', cols: 100, rows: 30 };
+    const request = { serverId: 'home', machineId: 'machine', terminalKey: 'shell', cwd: '/project', cols: 100, rows: 30 };
     const seen: unknown[] = [];
     // The daemon PTY adapter is the external process boundary.
-    const executor = createActionExecutor({ machineTerminalOpen: async (input: unknown) => {
-      seen.push(input);
+    const executor = createActionExecutor({ machineTerminalAction: async (request: unknown) => {
+      seen.push(request);
       return { ok: true, terminalId: 'pty', reused: false };
     } } as unknown as ActionExecutorDeps);
     expect(await executor.execute(id, request, { surface: 'ui', authority: 'present_user', serverId: 'home' }))
       .toEqual({ ok: true, result: { ok: true, terminalId: 'pty', reused: false } });
-    expect(seen).toEqual([{ ...request, serverId: 'home' }]);
-    const refused = createActionExecutor({ machineTerminalOpen: async () => ({
+    expect(seen).toEqual([{ actionId: id, input: request, context: { surface: 'ui', authority: 'present_user', serverId: 'home' } }]);
+    const refused = createActionExecutor({ machineTerminalAction: async () => ({
       ok: false, errorCode: 'terminal_disabled', error: 'Disabled',
     }) } as unknown as ActionExecutorDeps);
     expect(await refused.execute(id, request, { surface: 'ui', authority: 'present_user' }))
@@ -122,7 +127,7 @@ describe('machine and Home connection Action parity', () => {
     const executor = createActionExecutor({ machinePairingCreate: async () => ({
       pairId: 'pair', link: 'happier:///pair?payload=opaque', expiresAtMs: 1000,
     }) } as unknown as ActionExecutorDeps);
-    expect(await executor.execute(id, { serverId: 'home' }, { surface: 'ui', authority: 'present_user' }))
+    expect(await executor.execute(id, { serverId: 'home' }, { surface: 'ui', authority: 'present_user', bypassApprovals: true }))
       .toEqual({ ok: true, result: { pairId: 'pair', link: 'happier:///pair?payload=opaque', expiresAtMs: 1000 } });
     expect(getActionSpec(id).executionPlacement).toBe('client');
   });
