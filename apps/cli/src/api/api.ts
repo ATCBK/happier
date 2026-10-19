@@ -859,6 +859,9 @@ export class ApiClient {
           ...(sessionCreationOutcome ? { sessionCreationOutcome } : {}),
         };
       } catch (error) {
+        // Creation may have committed even when cancellation or response loss
+        // prevents its receipt. Do not turn that into the offline/null result.
+        if (error instanceof Error && 'code' in error && error.code === 'outcome_unknown') throw error;
         if (opts.signal?.aborted) {
           throw opts.signal.reason ?? error;
         }

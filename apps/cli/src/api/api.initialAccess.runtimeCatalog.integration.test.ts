@@ -124,6 +124,18 @@ for (const owner of ['api', 'http'] as const) {
       }
     });
 
+    it('keeps uncertain creation diagnostics free of request credentials and content', async () => {
+      const secret = 'fixture-creation-private-content';
+      vi.mocked(axios.post).mockRejectedValueOnce(Object.assign(new Error('Response lost'), {
+        isAxiosError: true, code: 'ECONNRESET',
+        config: { url: `https://home.example/v1/sessions?token=${secret}`, method: 'post',
+          headers: { Authorization: `Bearer ${secret}` }, data: { metadata: secret } },
+      }));
+      const failure = await create({}).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNRESET' } });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+    });
+
     if (owner === 'api') it('cancels daemon creation through the retained Action lifetime after the old POST cutoff', async () => {
       vi.useFakeTimers();
       const operations = createHostActionOperationRuntime({ machineId: 'machine-1', resolveAccountId: async () => 'owner-1',
