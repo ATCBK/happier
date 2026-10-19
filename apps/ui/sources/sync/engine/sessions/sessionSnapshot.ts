@@ -1620,7 +1620,8 @@ export async function fetchAndApplySessions(params: {
                     shouldStopAfterPage = !page.hasNext || !page.nextCursor || page.source === 'v1';
                     nextCursor = page.nextCursor;
                     nextCursorForMore = page.nextCursor;
-                    hasNextForMore = page.hasNext === true && typeof page.nextCursor === 'string' && page.source === 'v2';
+                    // Missing continuation is incomplete coverage, never proof that this is the last page.
+                    hasNextForMore = page.hasNext === true && page.source === 'v2';
                     if (fetchedPages === 0 && includeSessionListAttentionRows) {
                         attentionNextCursor = page.attentionNextCursor;
                         attentionHasNext = page.attentionHasNext;
