@@ -864,25 +864,16 @@ describe("account pet library services", () => {
         const secondAdmissionAttempt = createDeferred<void>();
         const originalTransaction = db.$transaction;
         let admissionAttempts = 0;
-        // Observe SQLite's real Account admission statement before it blocks
-        // behind the first writer; quota reads themselves must serialize.
+        // Observe the real contender's transaction acquisition request. SQLite
+        // can block BEGIN before its callback or Account admission SQL runs.
         db.$transaction = new Proxy(originalTransaction, {
             apply(target, receiver, args: unknown[]) {
                 const operation = args[0];
                 if (typeof operation !== "function") return Reflect.apply(target, receiver, args);
-                return Reflect.apply(target, receiver, [async (tx: object) => operation(new Proxy(tx, {
-                    get(target, property, receiver) {
-                        if (property !== "$executeRawUnsafe") return Reflect.get(target, property, receiver);
-                        const execute = Reflect.get(target, property) as (...args: unknown[]) => Promise<unknown>;
-                        return async (query: string, ...values: unknown[]) => {
-                            if (query.startsWith('UPDATE "Account" SET "settingsVersion"')) {
-                                admissionAttempts += 1;
-                                if (admissionAttempts === 2) secondAdmissionAttempt.resolve();
-                            }
-                            return Reflect.apply(execute, target, [query, ...values]);
-                        };
-                    },
-                })), ...args.slice(1)]);
+                const pending = Reflect.apply(target, receiver, args);
+                admissionAttempts += 1;
+                if (admissionAttempts === 2) secondAdmissionAttempt.resolve();
+                return pending;
             },
         });
 

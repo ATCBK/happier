@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { normalizeVerifiedEmail } from '@happier-dev/protocol';
 import { db } from '@/storage/db';
@@ -24,7 +25,10 @@ describe('fresh Account verified mailbox admission', () => {
     afterAll(async () => { await harness.close(); });
 
     it('preserves a prepared provider avatar when its Account does not exist until admission', async () => {
-        const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2Z9e8AAAAASUVORK5CYII=', 'base64');
+        const image = await sharp({ create: {
+            width: 1, height: 1, channels: 4,
+            background: { r: 0, g: 0, b: 255, alpha: 0.5 },
+        } }).png().toBuffer();
         vi.stubGlobal('fetch', vi.fn(async () => new Response(image, { status: 200 })));
         const accountId = randomUUID();
         const identityConnection = await prepareGithubConnect(Context.create(accountId), {

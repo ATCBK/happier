@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { changesRoutes } from '@/app/api/routes/changes/changesRoutes';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
-import { db } from '@/storage/db';
+import { db, withSqliteReadSnapshot } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 
@@ -133,16 +133,17 @@ function isChangesCursorRead(args: unknown, accountId: string): boolean {
 }
 
 /** Pauses the route after its first (now potentially stale) cursor read. */
-function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
+async function installPauseAfterChangesCursorRead(accountId: string): Promise<Readonly<{
     reached: Promise<void>;
     release: () => void;
     restore: () => void;
-}> {
+}>> {
     const cursorRead = deferred();
     const releaseRead = deferred();
-    const delegate = db.account;
+    // Read-only inTx uses the storage-owned DEFERRED snapshot connection,
+    // not Prisma's IMMEDIATE interactive write transaction/client.
+    const delegate = await withSqliteReadSnapshot(async reader => reader.account);
     const originalFindUnique = delegate.findUnique.bind(delegate);
-    const originalTransaction = db.$transaction;
     let paused = false;
     let restored = false;
 
@@ -160,38 +161,6 @@ function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
         },
     });
 
-    // Route reads now use inTx. Instrument its real persistence delegate too,
-    // so the pause still reaches the cursor read rather than timing out.
-    db.$transaction = new Proxy(originalTransaction, {
-        apply(target, receiver, args: unknown[]) {
-            const operation = args[0];
-            if (typeof operation !== 'function') return Reflect.apply(target, receiver, args);
-            return Reflect.apply(target, receiver, [async (tx: object) => {
-                const account = Reflect.get(tx, 'account') as object;
-                const findUnique = Reflect.get(account, 'findUnique') as (...args: unknown[]) => Promise<unknown>;
-                const wrappedAccount = new Proxy(account, {
-                    get(target, property, receiver) {
-                        if (property !== 'findUnique') return Reflect.get(target, property, receiver);
-                        return async (input: unknown) => {
-                            const result = await Reflect.apply(findUnique, target, [input]);
-                            if (!paused && isChangesCursorRead(input, accountId)) {
-                                paused = true;
-                                cursorRead.resolve();
-                                await releaseRead.promise;
-                            }
-                            return result;
-                        };
-                    },
-                });
-                return operation(new Proxy(tx, {
-                    get(target, property, receiver) {
-                        return property === 'account' ? wrappedAccount : Reflect.get(target, property, receiver);
-                    },
-                }));
-            }, ...args.slice(1)]);
-        },
-    });
-
     return {
         reached: cursorRead.promise,
         release: releaseRead.resolve,
@@ -199,7 +168,6 @@ function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
             if (restored) return;
             restored = true;
             releaseRead.resolve();
-            db.$transaction = originalTransaction;
             Object.defineProperty(delegate, 'findUnique', {
                 configurable: true,
                 writable: true,
@@ -541,7 +509,7 @@ describe('accountChangeRetentionRule', () => {
             },
         });
 
-        const pause = installPauseAfterChangesCursorRead(account.id);
+        const pause = await installPauseAfterChangesCursorRead(account.id);
         let response: Readonly<{
             statusCode: number;
             json: () => unknown;

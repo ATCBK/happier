@@ -158,7 +158,8 @@ describe("Team mutations compose Session access transitions", () => {
     async function directoryFixture() {
         const f = await fixture();
         const provider = await db.identityProviderInstance.create({ data: {
-            ownerTeamId: f.team.id, kind: "workos_sso", displayName: "Directory", config: { v: 1 },
+            ownerTeamId: f.team.id, kind: "workos_sso", displayName: "Directory", enabled: true,
+            config: { v: 1, kind: "workos_sso" },
         } });
         const connection = await db.teamIdentityConnection.create({ data: {
             teamId: f.team.id, providerInstanceId: provider.id, externalReference: { v: 1 }, settings: { v: 1 },
@@ -255,7 +256,7 @@ describe("Team mutations compose Session access transitions", () => {
             owner: { kind: "directory_source", directorySourceId: f.source.id }, externalGroupId: "group",
             target: { kind: "native_target", teamGroupId: replacement.id },
         });
-        expect(remapped, JSON.stringify(remapped)).toMatchObject({ ok: true });
+        expect(remapped).toMatchObject({ ok: true });
         await expectPersonalState(f, true);
         expect(await resolveEffectiveSessionAccess(db, { sessionId: f.session.id, accountId: f.member.id, authentication: createPresentUserSessionAccessAuthentication() }))
             .toMatchObject({ audienceContext: { kind: "group", teamId: f.team.id, groupId: replacement.id } });
