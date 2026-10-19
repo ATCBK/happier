@@ -108,7 +108,7 @@ import { admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputIn
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import type { SessionPendingEnqueueByMachineRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
 import { admitSessionFollowRuleOccurrenceInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowInputInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
-import { deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, deriveSessionFollowInputLocalIdV1, isRunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
 import { markDiscussionReadersChangedInTx } from '@/app/discussions/changes';
 import { resolveDiscussionAudienceInTx } from '@/app/discussions/access';
@@ -1005,6 +1005,9 @@ async function enqueuePendingMessageWithAdmission(
                     || (!inputAdmissionReceipt.followSources?.length && !inputAdmissionReceipt.followRelations?.length)) {
                     return { ok: false, error: 'invalid-params' } as const;
                 }
+                if (isRunFollowOriginalV1(delivery.original) && localId !== deriveSessionFollowInputLocalIdV1({
+                    destinationSessionId: sessionId, original: delivery.original,
+                })) return { ok: false, error: 'invalid-params' } as const;
                 const progresses: SessionFollowRuleProgressAdmission[] = [];
                 for (const witness of inputAdmissionReceipt.followSources ?? []) {
                     if (!('sourceSessionId' in delivery.original)) return { ok: false, error: 'invalid-params' } as const;
@@ -1806,11 +1809,13 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
 > {
     // Every provider effect rechecks the retained original, including materialized
     // inputs. Current membership after reinvitation cannot revive a withdrawn ask.
+    const originalProjection = { replyProgress: true, inputAdmissionReceipt: true, turnStartWitnessId: true,
+        autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true } as const;
     const original = await params.tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
         sessionId: params.targetSessionId, localId: params.localId,
-    } }, select: { replyProgress: true, inputAdmissionReceipt: true } }) ?? await params.tx.sessionMessage.findUnique({ where: { sessionId_localId: {
+    } }, select: originalProjection }) ?? await params.tx.sessionMessage.findUnique({ where: { sessionId_localId: {
         sessionId: params.targetSessionId, localId: params.localId,
-    } }, select: { replyProgress: true, inputAdmissionReceipt: true } });
+    } }, select: originalProjection });
     const originalProgress = SessionMessageReplyProgressV1Schema.safeParse(original?.replyProgress);
     const originalReceipt = SessionInputAdmissionReceiptV1Schema.safeParse(original?.inputAdmissionReceipt);
     if (originalProgress.success && originalProgress.data.humanOrigin) {
@@ -1851,8 +1856,18 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
         if (muted !== false) return muted ? { ok: false, rejectionCode: 'session_input_muted' }
             : { ok: false, holdReason: 'session_input_target_unavailable' };
     }
-    const sourceSession = params.validation?.sourceSession;
+    const runDelivery = originalReceipt.success && originalReceipt.data.followDeliveryV1
+        && isRunFollowOriginalV1(originalReceipt.data.followDeliveryV1.original) ? originalReceipt.data.followDeliveryV1 : undefined;
+    const sourceSession = runDelivery ? undefined : params.validation?.sourceSession;
     let exchangeRoot: { sessionId: string; localId: string } | undefined;
+    const runWake = runDelivery?.delivery === 'wake';
+    if (runWake && params.targetExecutionRunId === null) {
+        exchangeRoot = original?.turnStartWitnessId && original.autonomousExchangeRootSessionId && original.autonomousExchangeRootLocalId
+            ? { sessionId: original.autonomousExchangeRootSessionId, localId: original.autonomousExchangeRootLocalId }
+            : await readReceiverAutonomousExchangeRootInTx(params.tx, {
+                accountId: params.accountId, sessionId: params.targetSessionId, selection: 'latest_person',
+            }) ?? { sessionId: params.targetSessionId, localId: params.localId };
+    }
     if (ambientDiscussionWatch && !sourceSession && params.targetExecutionRunId === null) {
         // Opt-in consideration is an agent-started turn even when the original
         // was human conversation. Reuse the receiver's existing check-in root.
@@ -1922,7 +1937,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
             exchangeRoot = resolved.root;
         }
     }
-    const returnedAnswer = params.validation?.returnedAnswer;
+    const returnedAnswer = runDelivery ? undefined : params.validation?.returnedAnswer;
     if (returnedAnswer && !sourceSession) {
         // The original reply owner already holds the protected request and
         // destination. A caller's return annotation alone cannot create a root.
@@ -1975,7 +1990,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
             }
         }
     }
-    const automation = params.validation?.automation;
+    const automation = runDelivery ? undefined : params.validation?.automation;
     if (automation) {
         const run = await params.tx.automationRun.findUnique({
             where: { id: automation.runId },
@@ -1991,7 +2006,7 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
         }
     }
     let exchangeRootState: ReturnType<typeof createAutonomousExchangeStateV1> | undefined;
-    if (exchangeRoot && !params.validation?.returnedAnswer) {
+    if (exchangeRoot && !returnedAnswer) {
         const choice = params.validation?.autonomousCheckIn;
         if (!choice) return { ok: false, holdReason: 'session_input_target_unavailable', exchangeRoot };
         const root = await params.tx.sessionMessage.findUnique({
@@ -2037,8 +2052,30 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
     }
     return { ok: true, ...(exchangeRoot ? { exchangeRoot } : {}),
         ...(exchangeRootState ? { exchangeRootState } : {}),
-        ...(params.validation?.returnedAnswer ? { exchangeCause: 'returned_answer' as const }
+        ...(returnedAnswer ? { exchangeCause: 'returned_answer' as const }
             : exchangeRoot ? { exchangeCause: 'agent_session' as const } : {}) };
+}
+
+/** Bind prepared input custody; only an unstarted Run wake may follow a newer receiver person root. */
+async function bindAutonomousExchangeInputRootInTx(tx: Tx, input: Readonly<{
+    sessionId: string; localId: string; receipt: SessionInputAdmissionReceiptV1;
+    root: { sessionId: string; localId: string };
+    state?: ReturnType<typeof createAutonomousExchangeStateV1>;
+}>): Promise<boolean> {
+    const materialized = await tx.sessionMessage.findUnique({
+        where: { sessionId_localId: { sessionId: input.sessionId, localId: input.localId } },
+        select: { autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true, turnStartWitnessId: true },
+    });
+    const canReanchor = input.receipt.followDeliveryV1?.delivery === 'wake'
+        && isRunFollowOriginalV1(input.receipt.followDeliveryV1.original) && materialized?.turnStartWitnessId === null;
+    if (!materialized || materialized.autonomousExchangeRootSessionId !== null
+        && (materialized.autonomousExchangeRootSessionId !== input.root.sessionId
+            || materialized.autonomousExchangeRootLocalId !== input.root.localId) && !canReanchor) return false;
+    const data = { autonomousExchangeRootSessionId: input.root.sessionId, autonomousExchangeRootLocalId: input.root.localId,
+        ...(input.state ? { autonomousExchangeState: input.state } : {}) };
+    await tx.sessionMessage.update({ where: { sessionId_localId: { sessionId: input.sessionId, localId: input.localId } }, data });
+    await tx.sessionPendingMessage.updateMany({ where: { sessionId: input.sessionId, localId: input.localId }, data });
+    return true;
 }
 
 type QueuedPendingInputForRejection = Readonly<{
@@ -2241,7 +2278,7 @@ export async function settlePendingInputAdmission(params: Readonly<{
             if (!existing) {
                 const committed = await tx.sessionMessage.findUnique({
                     where: { sessionId_localId: { sessionId, localId } },
-                    select: { id: true, seq: true, localId: true, sidechainId: true, targetExecutionRunId: true, messageRole: true, content: true, inputAdmissionReceipt: true, authorAccountId: true, deliveryResolution: true, replyProgress: true, createdAt: true, updatedAt: true },
+                    select: { id: true, seq: true, localId: true, sidechainId: true, targetExecutionRunId: true, messageRole: true, content: true, inputAdmissionReceipt: true, authorAccountId: true, deliveryResolution: true, replyProgress: true, turnStartWitnessId: true, createdAt: true, updatedAt: true },
                 });
                 const state = await readCurrentPendingMutationState(tx, sessionId);
                 if (!committed) return { ok: false, error: "not-found" } as const;
@@ -2251,8 +2288,11 @@ export async function settlePendingInputAdmission(params: Readonly<{
                     || !progress && params.decision.validation?.reply !== undefined) return { ok: false, error: 'conflict' } as const;
                 // Materialization is custody, not permission for a later provider
                 // effect. Reuse the original destination admission decision here.
+                const unstartedRunWake = receipt.success && receipt.data.followDeliveryV1?.delivery === 'wake'
+                    && isRunFollowOriginalV1(receipt.data.followDeliveryV1.original) && committed.turnStartWitnessId === null
+                    && readStoredSessionMessageDeliveryResolutionV1(committed.deliveryResolution)?.kind !== 'provider_accepted';
                 if (receipt.success && (receipt.data.issuer === 'authenticatedMachine' && receipt.data.discussionAddressing
-                    || progress?.success && progress.data.humanOrigin)) {
+                    || progress?.success && progress.data.humanOrigin || unstartedRunWake)) {
                     if (!await isSessionInputTargetCurrentForPublisherInTx(tx, receipt.data, params.publisherAuthority)) {
                         return { ok: false, error: 'forbidden' } as const;
                     }
@@ -2273,8 +2313,13 @@ export async function settlePendingInputAdmission(params: Readonly<{
                             recipientCursorsMessage: [],
                         } as const;
                     }
+                    if (unstartedRunWake && validation.exchangeRoot && !await bindAutonomousExchangeInputRootInTx(tx, {
+                        sessionId, localId, receipt: receipt.data, root: validation.exchangeRoot,
+                        ...(validation.exchangeRootState ? { state: validation.exchangeRootState } : {}),
+                    })) return { ok: false, error: 'conflict' } as const;
                 }
-                const { targetExecutionRunId: _targetExecutionRunId, replyProgress: _replyProgress, ...committedMessage } = committed;
+                const { targetExecutionRunId: _targetExecutionRunId, replyProgress: _replyProgress,
+                    turnStartWitnessId: _turnStartWitnessId, ...committedMessage } = committed;
                 return {
                     ok: true,
                     result: { status: "alreadyAccepted", localId },
@@ -2415,6 +2460,11 @@ export async function settlePendingInputAdmission(params: Readonly<{
                 if (committed && isDeepStrictEqual(committed.content, finalContent)
                     && isDeepStrictEqual(createStoredReadSchema(SessionInputAdmissionReceiptV1Schema)
                         .safeParse(committed.inputAdmissionReceipt).data, receipt.data)) {
+                    if (receipt.data.followDeliveryV1?.delivery === 'wake' && isRunFollowOriginalV1(receipt.data.followDeliveryV1.original)
+                        && domainValidation.ok && domainValidation.exchangeRoot && !await bindAutonomousExchangeInputRootInTx(tx, {
+                            sessionId, localId, receipt: receipt.data, root: domainValidation.exchangeRoot,
+                            ...(domainValidation.exchangeRootState ? { state: domainValidation.exchangeRootState } : {}),
+                        })) return { ok: false, error: 'conflict' } as const;
                     const state = await readCurrentPendingMutationState(tx, sessionId);
                     return { ok: true, result: { status: "alreadyAccepted", localId }, ...state, recipientCursorsPending: [], recipientCursorsMessage: [] } as const;
                 }
@@ -2494,26 +2544,10 @@ export async function settlePendingInputAdmission(params: Readonly<{
                     data: { autonomousExchangeState: state } });
             }
             if (domainValidation.ok && domainValidation.exchangeRoot) {
-                const root = domainValidation.exchangeRoot;
-                const materialized = await tx.sessionMessage.findUnique({
-                    where: { sessionId_localId: { sessionId, localId } },
-                    select: { autonomousExchangeRootSessionId: true, autonomousExchangeRootLocalId: true },
-                });
-                if (!materialized || materialized.autonomousExchangeRootSessionId !== null
-                    && (materialized.autonomousExchangeRootSessionId !== root.sessionId
-                        || materialized.autonomousExchangeRootLocalId !== root.localId)) {
-                    return { ok: false, error: 'conflict' } as const;
-                }
-                await tx.sessionMessage.update({
-                    where: { sessionId_localId: { sessionId, localId } },
-                    data: { autonomousExchangeRootSessionId: root.sessionId, autonomousExchangeRootLocalId: root.localId,
-                        ...(domainValidation.exchangeRootState ? { autonomousExchangeState: domainValidation.exchangeRootState } : {}) },
-                });
-                await tx.sessionPendingMessage.update({
-                    where: { sessionId_localId: { sessionId, localId } },
-                    data: { autonomousExchangeRootSessionId: root.sessionId, autonomousExchangeRootLocalId: root.localId,
-                        ...(domainValidation.exchangeRootState ? { autonomousExchangeState: domainValidation.exchangeRootState } : {}) },
-                });
+                if (!await bindAutonomousExchangeInputRootInTx(tx, { sessionId, localId, receipt: receipt.data,
+                    root: domainValidation.exchangeRoot,
+                    ...(domainValidation.exchangeRootState ? { state: domainValidation.exchangeRootState } : {}),
+                })) return { ok: false, error: 'conflict' } as const;
             }
             const readyProjection = committed.didWrite
                 ? await updateSessionMessageActivityProjection(tx, {
