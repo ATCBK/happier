@@ -158,6 +158,56 @@ function storedMessage(discussionId: string, seq: number) {
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe('Discussion repository', () => {
+    it('keeps detail backfills separate from list query completion and recovers full membership', async () => {
+        let refuseList = false;
+        let archived = false;
+        let pendingList: Promise<void> | null = null;
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (url.pathname === '/v1/discussions') {
+                if (refuseList) return response({ error: 'outcome_unknown' }, 503);
+                if (pendingList) await pendingList;
+                return response({ discussions: url.searchParams.get('state') === 'archived' ? []
+                    : [storedSummary('discussion-a'), storedSummary('discussion-b')], nextCursor: null });
+            }
+            if (url.pathname.endsWith('/messages')) return response({ messages: [storedMessage('discussion-a', 1)], hasMoreOlder: false, messageSeq: 1 });
+            return response({ discussion: { ...storedSummary('discussion-a'), archivedAt: archived ? 1 : null } });
+        }) });
+
+        // A phone opens a selected thread before its Home list is demanded.
+        await repository.refreshDiscussion('discussion-a');
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'idle', items: [{ id: 'discussion-a' }] });
+        await repository.refreshList('active');
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'ready', items: [{ id: 'discussion-a' }, { id: 'discussion-b' }] });
+        await repository.refreshDiscussion('discussion-a');
+        expect(repository.getSnapshot().lists.active.status).toBe('ready');
+        expect(repository.getSnapshot().lists.active.items).toHaveLength(2);
+
+        refuseList = true;
+        await repository.refreshList('active');
+        const failed = repository.getSnapshot().lists.active;
+        expect(failed.status).not.toBe('ready');
+        await repository.refreshDiscussion('discussion-a');
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: failed.status, errorCode: failed.errorCode });
+
+        refuseList = false;
+        const responseReady = createDeferred<void>();
+        pendingList = responseReady.promise;
+        const refreshing = repository.refreshList('active');
+        await repository.refreshDiscussion('discussion-a');
+        expect(repository.getSnapshot().lists.active.status).toBe('loading');
+        responseReady.resolve();
+        await refreshing;
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'ready', errorCode: null,
+            items: [{ id: 'discussion-a' }, { id: 'discussion-b' }] });
+        expect(repository.getSnapshot().archivedExistence).toBe('empty');
+        archived = true;
+        await repository.refreshDiscussion('discussion-a');
+        expect(repository.getSnapshot().lists.active).toMatchObject({ status: 'ready', items: [{ id: 'discussion-b' }] });
+        expect(repository.getSnapshot().lists.archived).toMatchObject({ status: 'idle', items: [{ id: 'discussion-a' }] });
+        expect(repository.getSnapshot().archivedExistence).toBe('present');
+    });
+
     it('does not append an older attention page over a newer owner disposition refresh', async () => {
         const first = createDeferred<Awaited<ReturnType<DiscussionRepositoryClient['attention']>>>();
         const refreshed = createDeferred<Awaited<ReturnType<DiscussionRepositoryClient['attention']>>>();
@@ -1081,28 +1131,6 @@ describe('Discussion repository', () => {
             errorCode: 'discussion_not_tracked',
         });
         expect(repository.getSnapshot().lists.active.status).toBe('idle');
-    });
-
-    it('retires retained repository state with its canonical Account lifetime', () => {
-        clearDiscussionRepositoryRegistryForTests();
-        const scope = { serverId: address.serverId, accountId: 'account-a' } as const;
-        const retireListeners = new Set<() => void>();
-        const accountLifetime = {
-            scope,
-            isCurrent: () => true,
-            onRetire(listener: () => void) {
-                retireListeners.add(listener);
-                return { dispose: () => retireListeners.delete(listener) };
-            },
-        } as const;
-        const repositoryClient = client();
-        const first = getDiscussionRepository({ scope, address, client: repositoryClient, accountLifetime });
-
-        for (const retire of [...retireListeners]) retire();
-        const replacement = getDiscussionRepository({ scope, address, client: repositoryClient });
-
-        expect(replacement).not.toBe(first);
-        clearDiscussionRepositoryRegistryForTests();
     });
 
     it('merges an overlapping tail read into current thread state instead of its pre-await snapshot', async () => {

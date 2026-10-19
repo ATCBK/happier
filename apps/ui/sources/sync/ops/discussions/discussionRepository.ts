@@ -363,7 +363,7 @@ export function createDiscussionRepository(options: Readonly<{
         // Loaded archived rows are a stronger answer than the bounded probe, so
         // the list settling replaces it. A failed or still-loading read leaves
         // the last proven answer alone rather than inventing emptiness.
-        if (state === 'archived' && (status === 'ready' || status === 'locked')) {
+        if (state === 'archived' && (items.length > 0 || status === 'ready' || status === 'locked')) {
             updateArchivedExistence(items.length > 0 ? 'present' : pages.at(-1)?.nextCursor ? 'unknown' : 'empty', anchorSessionId);
         }
     };
@@ -418,7 +418,9 @@ export function createDiscussionRepository(options: Readonly<{
             }
             const current = getListSnapshot(anchorSessionId);
             applyListPages(other, current.lists[other].status, current.lists[other].errorCode, anchorSessionId);
-            applyListPages(state, admitted ? 'ready' : current.lists[state].status, null, anchorSessionId);
+            // A proven resource updates retained rows, not the query's freshness
+            // or completeness: an unopened list must still fetch its membership.
+            applyListPages(state, current.lists[state].status, current.lists[state].errorCode, anchorSessionId);
         }
         const thread = snapshot.threads[row.id];
         if (thread) updateThread(row.id, { ...thread, summary: row });

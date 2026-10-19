@@ -1,6 +1,9 @@
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerAccountScopesEqual, serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 
 import {
     createDiscussionRepository,
@@ -41,7 +44,7 @@ export function getDiscussionRepository(options: Readonly<{
     const existing = repositories.get(key);
     if (existing) {
         existing.repository.setClient(options.client);
-        if (!existing.retirement && options.accountLifetime) {
+        if (!existing.retirement && options.accountLifetime && isEmbedWindowContext()) {
             existing.retirement = options.accountLifetime.onRetire(() => retireRegisteredRepository(key));
         }
         return existing.repository;
@@ -50,8 +53,17 @@ export function getDiscussionRepository(options: Readonly<{
     const registered: RegisteredRepository = { repository };
     repositories.set(key, registered);
     for (const listener of [...registrationListeners.get(key) ?? []]) listener();
-    if (options.accountLifetime) {
+    // Native/app credential bindings belong to individual mounted surfaces:
+    // their cleanup is not Account retirement for this shared repository.
+    // Embedded admission, in contrast, is a genuine runtime-owned lifetime.
+    if (isEmbedWindowContext() && options.accountLifetime) {
         registered.retirement = options.accountLifetime.onRetire(() => retireRegisteredRepository(key));
+    } else if (!isEmbedWindowContext()) {
+        registered.retirement = { dispose: subscribeHomeCredentialChange(event => {
+            if (areServerProfileIdentifiersEquivalent(event.serverId, options.scope.serverId)) {
+                retireRegisteredRepository(key);
+            }
+        }) };
     }
     return repository;
 }
