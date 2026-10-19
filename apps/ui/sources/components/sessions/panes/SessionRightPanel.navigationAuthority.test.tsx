@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
     DaemonContributionRegistryProjectionDescribeResponseSchema,
     MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -62,7 +62,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
         });
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
             if (event !== 'rpc-call') throw new Error(`Unexpected sidebar transport event: ${event}`);
-            const request = z.object({ method: z.string() }).passthrough().parse(payload);
+            const request = z.looseObject({ method: z.string() }).parse(payload);
             if (request.method.endsWith(`:${RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE}`)) {
                 return { ok: true, result: DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
                     protocolVersion: 1,
@@ -82,7 +82,7 @@ const { createPluginSurfaceDestinationNavigationBinding, PluginSurfaceDestinatio
     await import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation');
 const { APP_PANE_SCOPE_ID, useAppScopeRightSidebarDestinationHandler } = await import('@/components/appShell/rightSidebar/appScopeRightSidebarNavigation');
 const { useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
-const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { normalizePluginUiProjection, isPluginUiDestinationSurfacePlacementProjection } = await import('@/sync/domains/plugins/ui/projection');
 const { readPluginUiProjectionEntryExecutionOrigin, unionPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
 
 function createProjection(binding: NonNullable<typeof destinationBinding>, descriptorId: string) {
@@ -93,8 +93,8 @@ function createProjection(binding: NonNullable<typeof destinationBinding>, descr
             renderer: { kind: 'declarative', contributionId: 'notes-renderer' },
             display: { developerFallback: 'Notes' },
             availability: { state: 'available', reason: 'available', diagnostics: [] },
-            serverIdentityId: runtime.serverIdentityId,
-            materializationRef: { pluginId, machineId: 'm1', materializationId: 'notes-install' },
+            executionOrigin: { serverIdentityId: runtime.serverIdentityId,
+                materializationRef: { pluginId, machineId: 'm1', materializationId: 'notes-install' } },
             headerActions: [],
         } } },
     } });
@@ -112,7 +112,7 @@ beforeEach(async () => {
     clearDaemonMergedProjectionCacheForTests();
     storage.getState().applyMachines([createMachineFixture({ id: 'm1', activeAt: 0 })], false, { sourceServerId: runtime.serverId });
     const session = createSessionFixture({ id: sessionId, serverId: runtime.serverId });
-    storage.getState().applySessions([{ ...session, metadata: { ...session.metadata, machineId: 'm1' } }]);
+    storage.getState().applySessions([{ ...session, metadata: { path: '/worktree', host: 'localhost', ...session.metadata, machineId: 'm1' } }]);
 });
 
 describe('SessionRightPanel standalone navigation authority', () => {
@@ -171,7 +171,8 @@ describe('SessionRightPanel standalone navigation authority', () => {
                 machineId: 'm1', serverId: runtime.serverId, projection: appProjection,
                 phase: 'current', interactionEnabled: true,
             }], new Map([[pluginId, origin]]));
-            const placements = Object.values(union.pluginUiProjection?.surfacePlacementsById ?? {});
+            const placements = Object.values(union.pluginUiProjection?.surfacePlacementsById ?? {})
+                .filter(isPluginUiDestinationSurfacePlacementProjection);
             expect(placements).toHaveLength(1);
             const appBinding = createPluginSurfaceDestinationNavigationBinding({
                 targetKind: 'app', placements, accountLifetime: lifetime,

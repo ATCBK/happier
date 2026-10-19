@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
-import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { SessionSystemRecordStoredSchema, type SessionSystemRecordStored } from '@happier-dev/protocol';
@@ -25,7 +26,7 @@ describe('SessionDetailsPanel (keep mounted tabs)', () => {
     const runtime = installSessionPaneRuntimeTestHarness();
 
     it('shows pending details until the deep-linked Session hydrates', async () => {
-        storage.setState({ sessions: {} });
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {}, sessionListIndexByServerId: {} });
         const screen = await mountPanel(runtime);
         await act(async () => runtime.pane.openDetailsTab(createSessionFileDetailsTab('a.txt'), { intent: 'pinned' }));
         expect(screen.findHostByTestId('details-surface-fallback-pending')).not.toBeNull();
@@ -89,15 +90,7 @@ function record(localId: string, kind: string, value: unknown): SessionSystemRec
 }
 
 function sessionWire(id: string) {
-    const session = createSessionFixture({ id });
-    return {
-        id, seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
-        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
-        metadataVersion: 1, metadata: JSON.stringify(session.metadata), agentState: null,
-        agentStateVersion: 1, share: null,
-        effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
-            audienceContext: null, capabilities: session.access!.capabilities },
-    };
+    return createPlainSessionCurrentProjectionRecordFixture({ id });
 }
 
 describe.each([true, false])('SessionDetailsPanel exact-Home Board action (Home enabled: %s)', (enabled) => {
@@ -122,7 +115,9 @@ describe.each([true, false])('SessionDetailsPanel exact-Home Board action (Home 
         const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
         const { SessionBoardControllerProvider, useMountedSessionBoardController } = await import('@/components/sessions/board/SessionBoardControllerProvider');
         function Probe() {
-            mounted = useMountedSessionBoardController({ serverId: runtime.serverId, sessionId: 's1' });
+            const controller = useMountedSessionBoardController({ serverId: runtime.serverId, sessionId: 's1' });
+            mounted = controller;
+            React.useEffect(() => controller?.acquireContent?.(), [controller?.acquireContent]);
             return null;
         }
         const readMounted = () => mounted;
@@ -143,7 +138,12 @@ describe.each([true, false])('SessionDetailsPanel exact-Home Board action (Home 
                     definition: { kind: 'installed', surface: { pluginId: 'acme.board', localId: 'status' } }, bindings: {} } } }),
         ];
         await act(async () => readMounted()?.binding.refresh?.());
-        await flushHookEffects({ cycles: 30 });
+        if (enabled) await waitForHomeGovernance(() => {
+            const binding = readMounted()?.binding;
+            expect(binding?.status).toBe('ready');
+            if (binding?.status === 'ready') expect(binding.snapshot.itemsById.size).toBe(1);
+        });
+        else await flushHookEffects({ cycles: 30 });
         const binding = readMounted()?.binding;
         if (enabled) {
             expect(binding?.status).toBe('ready');
@@ -152,7 +152,11 @@ describe.each([true, false])('SessionDetailsPanel exact-Home Board action (Home 
             expect(screen.findHostByTestId('session-details-open-board')).not.toBeNull();
             records = [];
             await act(async () => readMounted()?.binding.refresh?.());
-            await flushHookEffects({ cycles: 30 });
+            await waitForHomeGovernance(() => {
+                const binding = readMounted()?.binding;
+                expect(binding?.status).toBe('ready');
+                if (binding?.status === 'ready') expect(binding.snapshot.itemsById.size).toBe(0);
+            });
             const empty = readMounted()?.binding;
             expect(empty?.status).toBe('ready');
             if (empty?.status !== 'ready') throw new Error('Expected empty current Board records');

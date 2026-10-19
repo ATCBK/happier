@@ -88,7 +88,7 @@ describe('Session viewer destination continuity', () => {
             observed.bound = destination !== null;
             return <>
                 {isSessionViewerPresenting(controller, 'computer') && destination ? (
-                    <RetainedSessionViewerSource slotId="continuity-source" serverId={home.id} accountLifetime={destination.accountLifetime}>
+                    <RetainedSessionViewerSource sessionId="session-a" slotId="continuity-source" serverId={home.id} accountLifetime={destination.accountLifetime}>
                         <Source />
                     </RetainedSessionViewerSource>
                 ) : null}

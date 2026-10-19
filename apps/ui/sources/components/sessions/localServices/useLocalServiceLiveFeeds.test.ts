@@ -1,15 +1,16 @@
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
+import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { LocalServiceLaunchTargetV1Schema, type LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { RpcError, RPC_ERROR_CODES, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 import { managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { storage } from '@/sync/domains/state/storage';
 import { createLocalServiceInventoryState } from '@/sync/domains/local/services/inventory/store';
-import { resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
+import { publishLocalServiceLauncherSnapshot, resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
 import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
@@ -27,6 +28,111 @@ afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServi
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {
+  it.each([false, true])('isolates failed candidate reads from present SOURCE custody, while absence requires the full census (present=%s)', async hostPresent => {
+    home = await createPlainArtifactHomeFixture('https://project-services-copy-binding.test', { handleRequest: async path =>
+      path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify(
+        ['source', 'worker', 'paused-worker'].map(id => ({ id, revokedAt: null, replacedByMachineId: null })),
+      )) : null });
+    const serverId = home.home.id;
+    const scope = { serverId, accountId: 'artifact-account' };
+    const source = { id: 'source-ref', machineId: 'source', serverId, rootPath: '/source', createdAtMs: 1 };
+    const worker = { ...source, id: 'worker-ref', machineId: 'worker', rootPath: '/copy' };
+    const pausedWorker = { ...worker, id: 'paused-ref', machineId: 'paused-worker' };
+    const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const relationship = WorkspaceSyncRelationshipV1Schema.parse({ v: 1, relationshipId: 'committed-copy',
+      controllerMachineId: source.machineId, alphaWorkspaceRefId: source.id, betaWorkspaceRefId: worker.id,
+      mode: 'keep_synced', enabled: true, contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) },
+      provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: source.id, targetWorkspaceRefId: worker.id },
+      committedAtMs: 1, createdAtMs: 1, updatedAtMs: 1 });
+    const paused = WorkspaceSyncRelationshipV1Schema.parse({ ...relationship, relationshipId: 'paused-copy', enabled: false,
+      betaWorkspaceRefId: pausedWorker.id, provenance: { ...relationship.provenance, targetWorkspaceRefId: pausedWorker.id } });
+    const staged = WorkspaceSyncRelationshipV1Schema.parse({ ...paused, committedAtMs: null });
+    const rows = { scope, status: 'ready' as const, coverage: 'complete' as const,
+      workspaceRefs: [source, worker, pausedWorker], relationships: [relationship, staged], organizations: [], revisionsByPhysicalKey: {} };
+    storage.getState().activateProjectAccountRowsScope(scope);
+    storage.getState().applyProjectAccountRowsForScope(scope, rows);
+    const declaration = LocalServiceLaunchTargetV1Schema.parse({ id: 'source-service', source: 'managed_service', machineId: source.machineId,
+      workspaceId: source.id, workspace: { serverId, machineId: source.machineId, workspaceId: source.id, rootPath: source.rootPath },
+      declaration: { workspaceRefId: source.id, selection: { kind: 'manifest', name: 'web' } }, cwd: source.rootPath,
+      title: 'web', confidence: 'high', state: 'unavailable', unavailableReason: 'launch_unavailable', actions: [] });
+    const actual = LocalServiceLaunchTargetV1Schema.parse({ ...declaration,
+      sourceClass: { kind: 'managed_service', managedServiceId: 'source-instance' }, serviceState: 'healthy',
+      state: 'available', unavailableReason: undefined, readiness: 'ready', actions: ['manage'] });
+    let pausedAvailable = false;
+    const observedMachines = new Set<string>();
+    // The production snapshot codec, shared stores, Account rows and binding hook are real.
+    // Only the remote daemon/OS transport is substituted.
+    remote.mockImplementation(async ({ method, machineId, payload }: {
+      method: string; machineId: string; payload: { projection?: 'managed_bindings' };
+    }) => {
+      if (method.endsWith('.watch')) return new Promise(() => {});
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) {
+        if (payload.projection === 'managed_bindings') {
+          observedMachines.add(machineId);
+          if (machineId === pausedWorker.machineId && !pausedAvailable) {
+            throw new RpcError('Remote binding unavailable', RPC_ERROR_CODES.FORBIDDEN);
+          }
+        }
+        return { protocolVersion: 1, snapshot: { v: 1, machineId, updatedAt: 1,
+          targets: payload.projection ? machineId === source.machineId && hostPresent ? [actual] : [] : [declaration] } };
+      }
+      return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
+    });
+    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
+      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace', inventoryState: createLocalServiceInventoryState() }));
+    const readRows = () => buildLocalServiceRows({ inventoryRows: [],
+      launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()], sessionId: null, scope: 'workspace' });
+    try {
+      const expected = hostPresent ? { status: 'running', target: actual } : { status: 'stopped', primaryAction: { kind: 'start', target: declaration } };
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject(expected));
+      expect(observedMachines).toEqual(new Set([source.machineId, worker.machineId]));
+      await act(async () => { storage.getState().applyProjectAccountRowsForScope(scope, { ...rows, relationships: [relationship, paused] }); });
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject(hostPresent ? expected : { status: 'unavailable',
+        reasonCode: 'project_service_binding_unavailable', primaryAction: null,
+        target: { unavailableMachineId: pausedWorker.machineId } }));
+      expect(observedMachines.has(pausedWorker.machineId)).toBe(true);
+      pausedAvailable = true;
+      await act(async () => { publishLocalServiceInventorySnapshot({ serverId, machineId: pausedWorker.machineId }, {
+        v: 1, machineId: pausedWorker.machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject(expected));
+    } finally { await hook.unmount(); }
+  });
+  it.each(['retry', 'watch'] as const)('recovers a failed cold launcher through the real %s path', async recovery => {
+    home = await createPlainArtifactHomeFixture('https://project-services-recovery.test', { handleRequest: async path =>
+      path === '/v2/account/settings' ? new Response(JSON.stringify({ content: { t: 'plain', v: {} }, version: 0 })) : null });
+    await home.hydrateAccountSettings();
+    let available = false;
+    let watches = 0;
+    let rejectWatch!: (error: unknown) => void;
+    const firstWatch = new Promise((_, reject) => { rejectWatch = reject; });
+    remote.mockImplementation(async ({ method, machineId }: { method: string; machineId: string }) => {
+      const inventory = { v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] };
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+        if (++watches === 1) return firstWatch;
+        if (watches === 2 && recovery === 'watch') return { protocolVersion: 1, changed: true,
+          snapshot: { ...inventory, generatedAt: 3 } };
+        return new Promise(() => {});
+      }
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) {
+        if (!available) throw Object.assign(new Error('deadline'), { code: MACHINE_RPC_TIMEOUT_ERROR_CODE });
+        return { protocolVersion: 1, snapshot: { v: 1, machineId, updatedAt: 2, targets: [] } };
+      }
+      return { protocolVersion: 1, snapshot: inventory };
+    });
+    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: 'source', serverId: home!.home.id, scope: 'machine' }));
+    try {
+      await vi.waitFor(() => expect(hook.getCurrent().launcherState?.refreshStatus).toBe('error'));
+      await vi.waitFor(() => expect(watches).toBe(1));
+      available = true;
+      await act(async () => {
+        if (recovery === 'retry') await hook.getCurrent().refresh!();
+        else rejectWatch(Object.assign(new Error('deadline'), { code: MACHINE_RPC_TIMEOUT_ERROR_CODE }));
+      });
+      await vi.waitFor(() => expect(hook.getCurrent().launcherState).toMatchObject({ refreshStatus: 'idle', updatedAt: 2 }));
+      expect(hook.getCurrent().inventoryState.generatedAt).toBe(recovery === 'retry' ? 2 : 3);
+      expect(alert).not.toHaveBeenCalled();
+    } finally { await hook.unmount(); }
+  });
   it.each(['absent', 'failed', 'retired'] as const)('settles the first fresh binding without another Machine census or inventory watch (%s)', async outcome => {
     let censusReads = 0;
     home = await createPlainArtifactHomeFixture('https://project-services-first-binding.test', { handleRequest: async path => {
@@ -76,6 +182,18 @@ describe('Project Services source feed plus actual native binding', () => {
           : { status: 'unavailable', primaryAction: null });
         if (outcome === 'failed') expect(hook.getCurrent().launcherState!.refreshStatus).toBe('idle');
       });
+      if (outcome === 'absent') {
+        // A scan's timestamp alone does not change native bindings. Re-reading the
+        // census here can suspend an already-settled page behind another slow request.
+        await act(async () => {
+          publishLocalServiceLauncherSnapshot({ machineId: source.machineId, serverId, accountId: scope.accountId,
+            scope: 'workspace', workspaceRoot: source.rootPath, projection: 'managed_bindings' },
+          { v: 1, machineId: source.machineId, updatedAt: 2, targets: [] });
+          await flushHookEffects();
+        });
+        expect(censusReads).toBe(1);
+        expect(hook.getCurrent().launcherState!.refreshStatus).toBe('idle');
+      }
     } finally { releaseBinding(); await hook.unmount(); }
   });
   it('shows the typed daemon refusal through Refresh without exposing the transport message', async () => {

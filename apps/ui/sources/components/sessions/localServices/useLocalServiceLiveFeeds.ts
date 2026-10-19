@@ -4,9 +4,8 @@ import { storage } from '@/sync/domains/state/storage';
 import { readCurrentProjectAccountRows } from '@/sync/store/domains/projectAccountRows';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { getLocalServiceLauncherState, readLocalServiceLauncherStore, invalidateLocalServiceLauncherStore, subscribeLocalServiceLauncherStore,
+import { getLocalServiceLauncherState, readLocalServiceLauncherStore, subscribeLocalServiceLauncherStore,
     type LocalServiceLauncherStoreKeyInput } from '@/sync/domains/local/services/launch/sharedStore';
-import { getLocalServiceInventoryState, subscribeLocalServiceInventoryStore } from '@/sync/domains/local/services/inventory/sharedStore';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { readUiWorkspaceSyncChildMachineFacts } from '@/sync/ops/workspaceSyncChildMachineFacts';
 import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -69,31 +68,10 @@ export function useLocalServiceLiveFeeds(input: LocalServiceLiveFeedsInput): Loc
         workspaceRoot: input.workspaceRoot ?? null,
         enabled: input.launcherState === undefined,
         snapshotClient: input.launcherSnapshotClient,
+        inventorySnapshotClient: input.inventorySnapshotClient,
     });
-    // The rows are built from the daemon's LAUNCHER feed, and inventory entries only enrich them —
-    // so making the inventory fresh is not enough on its own for a service started after mount to
-    // appear. The launcher feed is derived from the same inventory the daemon just rescanned, so it
-    // needs no push producer of its own: one push source (the inventory watch) drives the derived
-    // read. `generatedAt` advancing is exactly "the daemon rescanned".
+    // Launcher freshness is owned by its shared store for every consumer and mutation surface.
     const inventorySupplied = input.inventoryState !== undefined;
-    const inventoryGeneratedAt = liveInventory.state.generatedAt;
-    const refreshLauncher = liveLauncher.refresh;
-    const lastSyncedInventoryGeneratedAtRef = React.useRef<number | null>(null);
-    React.useEffect(() => {
-        if (inventorySupplied || inventoryGeneratedAt === null) {
-            return;
-        }
-        if (lastSyncedInventoryGeneratedAtRef.current === inventoryGeneratedAt) {
-            return;
-        }
-        const isFirstObservation = lastSyncedInventoryGeneratedAtRef.current === null;
-        lastSyncedInventoryGeneratedAtRef.current = inventoryGeneratedAt;
-        // The launcher's own mount read already covers the first snapshot; only a later change
-        // needs a derived re-read.
-        if (!isFirstObservation) {
-            refreshLauncher?.();
-        }
-    }, [inventoryGeneratedAt, inventorySupplied, refreshLauncher]);
 
     const inventoryState = input.inventoryState ?? liveInventory.state;
     const sourceLauncherState = input.launcherState !== undefined ? input.launcherState : liveLauncher.state;
@@ -105,9 +83,8 @@ export function useLocalServiceLiveFeeds(input: LocalServiceLiveFeedsInput): Loc
             if (!bindings.binding?.isCurrent()) return;
             const refreshed = await refreshLocalServiceMachine({ machineId: input.machineId!, serverId: input.serverId!, sessionId: input.sessionId,
                 accountId: bindings.binding.accountId, isCurrent: bindings.binding.isCurrent });
-            if (refreshed) refreshLauncher?.();
             await bindings.refresh(input.machineId!, refreshed);
-        }, [inventorySupplied, liveInventory.refresh, input.machineId, input.serverId, input.sessionId, refreshLauncher, bindings.binding, bindings.refresh]);
+        }, [inventorySupplied, liveInventory.refresh, input.machineId, input.serverId, input.sessionId, bindings.binding, bindings.refresh]);
     return React.useMemo(() => ({
         inventoryState,
         launcherState,
@@ -177,24 +154,19 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                         const disposeLauncher = subscribeLocalServiceLauncherStore(key, () => {
                             const next = getLocalServiceLauncherState(key);
                             const observed = previous.updatedAt !== null || previous.refreshStatus === 'error';
-                            const changed = next.updatedAt !== previous.updatedAt || next.targetsById !== previous.targetsById
+                            const changed = next.targetsById !== previous.targetsById
                                 || next.refreshError !== previous.refreshError;
                             previous = next;
                             // This observation awaits initial hydration below. Restarting it on
                             // that same read would discard its admitted Machine census and result.
+                            // A scan timestamp alone changes no binding and must not restart
+                            // that census either; otherwise idle scans can keep it loading.
                             if (observed && changed) observeAgain();
-                        },
-                            input.launcherSnapshotClient ? { snapshotClient: input.launcherSnapshotClient } : undefined);
-                        const inventoryKey = { machineId: key.machineId, serverId: key.serverId };
-                        let generatedAt = getLocalServiceInventoryState(inventoryKey).generatedAt;
-                        const disposeInventory = subscribeLocalServiceInventoryStore(inventoryKey, () => {
-                            const next = getLocalServiceInventoryState(inventoryKey).generatedAt;
-                            if (next === generatedAt) return;
-                            const previous = generatedAt;
-                            generatedAt = next;
-                            if (previous !== null) invalidateLocalServiceLauncherStore(key);
-                        }, input.inventorySnapshotClient ? { snapshotClient: input.inventorySnapshotClient } : undefined);
-                        subscriptions.set(id, { key, dispose: () => { disposeLauncher(); disposeInventory(); } });
+                        }, {
+                            ...(input.launcherSnapshotClient ? { snapshotClient: input.launcherSnapshotClient } : {}),
+                            ...(input.inventorySnapshotClient ? { inventorySnapshotClient: input.inventorySnapshotClient } : {}),
+                        });
+                        subscriptions.set(id, { key, dispose: disposeLauncher });
                     }
                     await readLocalServiceLauncherStore(key);
                     const state = getLocalServiceLauncherState(key);
@@ -222,7 +194,8 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
             if (actual?.status === 'absent') return [target];
             // A pending read offers no Start authority, but is not a failed observation.
             return [{ ...target, state: 'unavailable' as const,
-                unavailableReason: !actual && canObserve ? 'project_service_binding_pending' : 'project_service_binding_unavailable', actions: [] }];
+                unavailableReason: !actual && canObserve ? 'project_service_binding_pending' : 'project_service_binding_unavailable',
+                ...(actual?.status === 'unavailable' && actual.machineId ? { unavailableMachineId: actual.machineId } : {}), actions: [] }];
         });
         const projected = applyLocalServiceLauncherSnapshot(sourceState, { v: 1, machineId: sourceState.machineId!,
             ...(sourceState.sessionId ? { sessionId: sourceState.sessionId } : {}), updatedAt: sourceState.updatedAt!, targets });
@@ -234,7 +207,6 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
             if (!key.serverId || !binding?.isCurrent()) return;
             if (!refreshed.has(key.machineId)) refreshed.set(key.machineId,
                 await refreshLocalServiceMachine({ ...key, serverId: key.serverId, accountId: binding.accountId, isCurrent: binding.isCurrent }));
-            if (binding.isCurrent() && refreshed.get(key.machineId)) invalidateLocalServiceLauncherStore(key);
         }
     }, [binding, subscriptions]);
     return { state, refresh, binding };

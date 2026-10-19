@@ -65,7 +65,7 @@ export function retireProjectTerminalPresentationForHome(serverId: string, previ
         if (!identity || !areServerProfileIdentifiersEquivalent(identity.serverId, serverId)) continue;
         const workspace = readSessionTerminalWorkspace(pane.bottom.tabState.terminal);
         if (previousScope) for (const tab of workspace.tabs) for (const member of tab.terminals) {
-            if (member.target.kind !== 'workspace_shell' || !member.target.workspace) continue;
+            if (member.target.kind !== 'workspace_shell' && member.target.kind !== 'terminal_view' || !member.target.workspace) continue;
             const key = buildProjectTerminalKey(previousScope, member.target.workspace, member.id);
             replaceTerminalSurfaceState(key, createEmptyTerminalSurfaceState());
             forgetTerminalSurfaceSummary(key);

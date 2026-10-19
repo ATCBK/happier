@@ -281,89 +281,87 @@ export function serializeSessionPaneUrlState(state: SessionPaneUrlState): Record
     return out;
 }
 
-export function buildActiveDetailsRouteParams(
+function readActiveDetailsUrlTarget(
     detailsTabs: readonly unknown[],
-    activeDetailsKey: string | null
-): Record<string, string> {
-    const activeTab = (detailsTabs as ReadonlyArray<any>).find((tab) => tab?.key === activeDetailsKey)
-        ?? (detailsTabs as ReadonlyArray<any>).at(-1)
+    activeDetailsKey: string | null,
+): SessionPaneUrlDetailsTarget | null {
+    const selected = detailsTabs.find((tab) => tab && typeof tab === 'object' && 'key' in tab && tab.key === activeDetailsKey)
+        ?? detailsTabs.at(-1)
         ?? null;
-    if (!activeTab) return {};
+    if (!selected || typeof selected !== 'object' || !('key' in selected) || typeof selected.key !== 'string') return null;
+    const activeTab = selected as Readonly<{ key: string; kind?: unknown; resource?: unknown }>;
+    const resource = activeTab.resource && typeof activeTab.resource === 'object'
+        ? activeTab.resource as Readonly<Record<string, unknown>>
+        : null;
 
     if (activeTab.kind === 'file') {
-        const path = typeof activeTab.resource?.path === 'string' ? activeTab.resource.path.trim() : '';
-        if (!path || !isSafeWorkspaceRelativePath(path)) return {};
+        const path = typeof resource?.path === 'string' ? resource.path.trim() : '';
+        if (!path || !isSafeWorkspaceRelativePath(path)) return null;
         const parsed = readFileTargetAnchorResource(activeTab.resource);
-        return serializeSessionPaneUrlState({ details: { kind: 'file', path, ...(parsed ? { anchor: parsed.anchor, anchorSource: parsed.source } : {}) } });
+        return { kind: 'file', path, ...(parsed ? { anchor: parsed.anchor } : {}),
+            ...(parsed?.source === 'diff' ? { anchorSource: parsed.source } : {}) };
     }
 
     if (activeTab.kind === 'commit') {
-        const rawSha = typeof activeTab.resource?.sha === 'string'
-            ? activeTab.resource.sha
-            : typeof activeTab.resource?.commitHash === 'string'
-                ? activeTab.resource.commitHash
+        const rawSha = typeof resource?.sha === 'string'
+            ? resource.sha
+            : typeof resource?.commitHash === 'string'
+                ? resource.commitHash
                 : '';
         const sha = rawSha.trim().split(/\s+/)[0] ?? '';
-        if (!sha) return {};
-        return serializeSessionPaneUrlState({ details: { kind: 'commit', sha } });
+        return sha ? { kind: 'commit', sha } : null;
     }
 
     if (activeTab.key === SESSION_DETAILS_SCM_REVIEW_TAB_KEY || activeTab.kind === 'scmReview') {
-        return serializeSessionPaneUrlState({ details: { kind: 'scmReview', ...readSessionScmReviewTarget(activeTab.resource) } });
+        return { kind: 'scmReview', ...readSessionScmReviewTarget(activeTab.resource) };
     }
-
     if (activeTab.key === SESSION_DETAILS_SCM_STASH_TAB_KEY || activeTab.kind === 'scmStash') {
-        return serializeSessionPaneUrlState({ details: { kind: 'scmStash' } });
+        return { kind: 'scmStash' };
     }
-
     if (activeTab.key === SESSION_DETAILS_SCM_PULL_REQUEST_TAB_KEY || activeTab.kind === 'scmPullRequest') {
-        return serializeSessionPaneUrlState({ details: { kind: 'scmPullRequest' } });
+        return { kind: 'scmPullRequest' };
     }
-
     if (isTerminalDetailsTab({ resource: activeTab.resource, tabKey: activeTab.key })) {
         const terminalInstanceId = resolveTerminalDetailsInstanceId({
             resource: activeTab.resource,
             tabKey: activeTab.key,
         });
-        return serializeSessionPaneUrlState({
-            details: terminalInstanceId && terminalInstanceId !== SESSION_PRIMARY_TERMINAL_INSTANCE_ID
-                ? { kind: 'terminal', terminalInstanceId }
-                : { kind: 'terminal' },
-        });
+        return terminalInstanceId && terminalInstanceId !== SESSION_PRIMARY_TERMINAL_INSTANCE_ID
+            ? { kind: 'terminal', terminalInstanceId }
+            : { kind: 'terminal' };
     }
-
     if (activeTab.kind === 'discussion') {
-        const resource = activeTab.resource as { target?: { kind?: unknown; discussionId?: unknown } } | null;
-        const discussionId = resource?.target?.kind === 'discussion'
-            && typeof resource.target.discussionId === 'string'
-            ? resource.target.discussionId.trim()
-            : '';
-        if (!discussionId) return {};
-        return serializeSessionPaneUrlState({ details: { kind: 'discussion', discussionId } });
+        const target = resource?.target as { kind?: unknown; discussionId?: unknown } | null | undefined;
+        const discussionId = target?.kind === 'discussion' && typeof target.discussionId === 'string'
+            ? target.discussionId.trim() : '';
+        return discussionId ? { kind: 'discussion', discussionId } : null;
     }
-
-
     if (activeTab.kind === 'board') {
-        const resource = activeTab.resource as { focusTarget?: unknown } | null;
-        const target = resource?.focusTarget;
-        const focusTarget = target && typeof target === 'object'
-            && (target as { kind?: unknown }).kind === 'item'
-            && typeof (target as { itemId?: unknown }).itemId === 'string'
-            ? { kind: 'item' as const, itemId: (target as { itemId: string }).itemId }
-            : undefined;
-        return serializeSessionPaneUrlState({ details: { kind: 'board', ...(focusTarget ? { focusTarget } : {}) } });
+        const target = resource?.focusTarget as { kind?: unknown; itemId?: unknown } | null | undefined;
+        const focusTarget = target?.kind === 'item' && typeof target.itemId === 'string'
+            ? { kind: 'item' as const, itemId: target.itemId } : undefined;
+        return { kind: 'board', ...(focusTarget ? { focusTarget } : {}) };
     }
-
     const computerScreen = readComputerScreenSessionSurfaceResource(activeTab.resource);
-    if (computerScreen) {
-        return serializeSessionPaneUrlState({ details: { kind: 'computerScreen', machineId: computerScreen.machineId } });
-    }
+    return computerScreen ? { kind: 'computerScreen', machineId: computerScreen.machineId } : null;
+}
 
-    return {};
+export function buildActiveDetailsRouteParams(
+    detailsTabs: readonly unknown[],
+    activeDetailsKey: string | null,
+): Record<string, string> {
+    const details = readActiveDetailsUrlTarget(detailsTabs, activeDetailsKey);
+    return details ? serializeSessionPaneUrlState({ details }) : {};
 }
 
 export function deriveSessionPaneUrlStateFromScopeState(scopeState: PaneScopeStateLike | null): SessionPaneUrlState | null {
     if (!scopeState) return null;
+    const details = scopeState.details.isOpen && scopeState.details.activeTabKey
+        ? readActiveDetailsUrlTarget(scopeState.details.tabs, scopeState.details.activeTabKey)
+        : null;
+    // Retained sidebars are not a substitute destination for a Details tab the URL cannot name.
+    if (scopeState.details.isOpen && scopeState.details.activeTabKey && !details) return null;
+
     const rightTabId =
         scopeState.right.isOpen
             ? RIGHT_SIDEBAR_BUILTIN_TABS.find((tab) => tab.id === scopeState.right.activeTabId && tab.scopes.includes('session'))?.id ?? null
@@ -372,61 +370,6 @@ export function deriveSessionPaneUrlStateFromScopeState(scopeState: PaneScopeSta
         scopeState.bottom.isOpen && scopeState.bottom.activeTabId === 'terminal'
             ? scopeState.bottom.activeTabId
             : null;
-
-    let details: SessionPaneUrlDetailsTarget | null = null;
-    if (scopeState.details.isOpen && scopeState.details.activeTabKey) {
-        const tab = scopeState.details.tabs.find((t) => t.key === scopeState.details.activeTabKey) ?? null;
-        if (tab?.kind === 'file') {
-            const path = (tab.resource as any)?.path;
-            if (typeof path === 'string' && path.trim()) {
-                const trimmedPath = path.trim();
-                if (isSafeWorkspaceRelativePath(trimmedPath)) {
-                    details = parseSessionPaneUrlState(buildActiveDetailsRouteParams([tab], tab.key))?.details ?? null;
-                }
-            }
-        } else if (tab?.kind === 'commit') {
-            const sha = (tab.resource as any)?.sha;
-            if (typeof sha === 'string' && sha.trim()) {
-                const safeSha = sha.trim().split(/\s+/)[0] ?? '';
-                if (safeSha) {
-                    details = { kind: 'commit', sha: safeSha };
-                }
-            }
-        } else if (tab?.key === SESSION_DETAILS_SCM_REVIEW_TAB_KEY || tab?.kind === 'scmReview') {
-            details = { kind: 'scmReview', ...readSessionScmReviewTarget(tab.resource) };
-        } else if (tab?.key === SESSION_DETAILS_SCM_STASH_TAB_KEY || tab?.kind === 'scmStash') {
-            details = { kind: 'scmStash' };
-        } else if (tab?.key === SESSION_DETAILS_SCM_PULL_REQUEST_TAB_KEY || tab?.kind === 'scmPullRequest') {
-            details = { kind: 'scmPullRequest' };
-        } else if (tab && isTerminalDetailsTab({ resource: tab.resource, tabKey: tab.key })) {
-            const terminalInstanceId = resolveTerminalDetailsInstanceId({
-                resource: tab.resource,
-                tabKey: tab.key,
-            });
-            details = terminalInstanceId && terminalInstanceId !== SESSION_PRIMARY_TERMINAL_INSTANCE_ID
-                ? { kind: 'terminal', terminalInstanceId }
-                : { kind: 'terminal' };
-        } else if (tab?.kind === 'discussion') {
-            const resource = tab.resource as { target?: { kind?: unknown; discussionId?: unknown } } | null;
-            const discussionId = resource?.target?.kind === 'discussion'
-                && typeof resource.target.discussionId === 'string'
-                ? resource.target.discussionId.trim()
-                : '';
-            if (discussionId) details = { kind: 'discussion', discussionId };
-        } else if (tab?.kind === 'board') {
-            const resource = tab.resource as { focusTarget?: unknown } | null;
-            const target = resource?.focusTarget;
-            const focusTarget = target && typeof target === 'object'
-                && (target as { kind?: unknown }).kind === 'item'
-                && typeof (target as { itemId?: unknown }).itemId === 'string'
-                ? { kind: 'item' as const, itemId: (target as { itemId: string }).itemId }
-                : undefined;
-            details = { kind: 'board', ...(focusTarget ? { focusTarget } : {}) };
-        } else {
-            const computerScreen = tab ? readComputerScreenSessionSurfaceResource(tab.resource) : null;
-            if (computerScreen) details = { kind: 'computerScreen', machineId: computerScreen.machineId };
-        }
-    }
 
     if (!rightTabId && !bottomTabId && !details) return null;
     return {
@@ -487,8 +430,7 @@ export function createSessionPaneDetailsTab(
 
 export function applySessionPaneUrlState(
     pane: Readonly<{
-        openRight: (options?: Readonly<{ tabId?: string }>) => void;
-        setRightTab: (tabId: string) => void;
+        openRight: AppPaneScopeApi['openRight'];
         openBottom: (options?: Readonly<{ tabId?: string }>) => void;
         setBottomTab: (tabId: string) => void;
         openDetailsTab: AppPaneScopeApi['openDetailsTab'];
@@ -497,8 +439,7 @@ export function applySessionPaneUrlState(
     address?: SessionAddress | null,
 ): void {
     if (state.rightTabId) {
-        pane.openRight({ tabId: state.rightTabId });
-        pane.setRightTab(state.rightTabId);
+        pane.openRight({ tabId: state.rightTabId, present: false });
     }
     if (state.bottomTabId) {
         pane.openBottom({ tabId: state.bottomTabId });
@@ -510,17 +451,16 @@ export function applySessionPaneUrlState(
     if (!constructed) return;
     const { isPinned: _isPinned, isPreview: _isPreview, ...tab } = constructed;
     if (state.details.kind === 'file' || state.details.kind === 'commit' || state.details.kind === 'discussion') {
-        pane.openDetailsTab(tab);
+        pane.openDetailsTab(tab, { present: false });
     } else {
-        pane.openDetailsTab(tab, { intent: 'pinned' });
+        pane.openDetailsTab(tab, { intent: 'pinned', present: false });
     }
 }
 
 export function reconcileSessionPaneScopeFromUrlState(
     pane: Readonly<{
-        openRight: (options?: Readonly<{ tabId?: string }>) => void;
+        openRight: AppPaneScopeApi['openRight'];
         closeRight: () => void;
-        setRightTab: (tabId: string) => void;
         openBottom: (options?: Readonly<{ tabId?: string }>) => void;
         closeBottom: () => void;
         setBottomTab: (tabId: string) => void;
@@ -531,8 +471,7 @@ export function reconcileSessionPaneScopeFromUrlState(
     address?: SessionAddress | null,
 ): void {
     if (state?.rightTabId) {
-        pane.openRight({ tabId: state.rightTabId });
-        pane.setRightTab(state.rightTabId);
+        pane.openRight({ tabId: state.rightTabId, present: false });
     } else {
         pane.closeRight();
     }

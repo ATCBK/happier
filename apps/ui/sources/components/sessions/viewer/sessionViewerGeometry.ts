@@ -42,3 +42,21 @@ export function resolveSessionViewerReadingInset(
   if (areaWidth - yielded < input.columnMinWidth) return { left: 0, right: 0 };
   return leftSide ? { left: yielded, right: 0 } : { left: 0, right: yielded };
 }
+
+/**
+ * How far centred content (the empty Session state) moves so it sits in the free width beside a
+ * settled floating viewer. Unlike the reading column it carries no minimum width: a centred tile
+ * wraps into whatever remains rather than sitting under the frame. Zero when it already clears.
+ */
+export function resolveSessionViewerCentredInset(
+  input: Readonly<{ areaWidth: number; rect: FrameRect }>,
+): Readonly<{ left: number; right: number }> {
+  const { areaWidth, rect } = input;
+  const leftSide = rect.x + rect.width / 2 < areaWidth / 2;
+  const reach = leftSide
+    ? areaWidth - (rect.x + rect.width + SESSION_VIEWER_EDGE)
+    : rect.x - SESSION_VIEWER_EDGE;
+  if (reach <= 0 || reach >= areaWidth) return { left: 0, right: 0 };
+  const yielded = Math.ceil(areaWidth - reach);
+  return leftSide ? { left: yielded, right: 0 } : { left: 0, right: yielded };
+}

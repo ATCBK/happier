@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { createComputerScreenDetailsTab } from '@/components/computer/computerScreenDetailsTab';
+import { computerScreenDetailsTabKey, createComputerScreenDetailsTab } from '@/components/computer/computerScreenDetailsTab';
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { t } from '@/text';
@@ -50,6 +50,8 @@ export function SessionViewerScope(
   const surfaceNavigation = useSessionCockpitSurfaceNavigation();
   const surfaceNavigationRef = React.useRef(surfaceNavigation);
   surfaceNavigationRef.current = surfaceNavigation;
+  // The right pane as it was before the Browser dock opened it, so floating returns to it.
+  const rightBeforeDockRef = React.useRef<Readonly<{ isOpen: boolean; tabId: string | null }> | null>(null);
   const openDocked = React.useCallback(
     (source: SessionViewerSource) => {
       if (phone) {
@@ -70,10 +72,29 @@ export function SessionViewerScope(
         return;
       }
       if (!machineId) return;
+      const right = paneRef.current.scopeState?.right;
+      if (!(right?.isOpen && right.activeTabId === 'browser'))
+        rightBeforeDockRef.current = { isOpen: right?.isOpen === true, tabId: right?.activeTabId ?? null };
       paneRef.current.openRight({ tabId: 'browser' });
       paneRef.current.setRightTab('browser');
     },
     [computerMachineId, machineId, phone],
+  );
+  // Floating the frame releases the pane that presented it: the Session returns to the panes it had
+  // before the dock, and the transcript reads underneath. The tab-less Details closes with its last tab.
+  const closeDocked = React.useCallback(
+    (source: SessionViewerSource) => {
+      if (source === 'computer') {
+        if (computerMachineId)
+          paneRef.current.closeDetailsTab(computerScreenDetailsTabKey(computerMachineId));
+        return;
+      }
+      const before = rightBeforeDockRef.current;
+      rightBeforeDockRef.current = null;
+      if (before?.isOpen && before.tabId) paneRef.current.setRightTab(before.tabId);
+      else paneRef.current.closeRight();
+    },
+    [computerMachineId],
   );
   return (
     <SessionViewerControllerProvider
@@ -83,6 +104,7 @@ export function SessionViewerScope(
       phone={phone}
       canPresentSource={canPresentSource}
       openDocked={openDocked}
+      closeDocked={closeDocked}
     >
       {props.children}
     </SessionViewerControllerProvider>

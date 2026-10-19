@@ -1,14 +1,13 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
-import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, V2SessionByIdResponseSchema, V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
+import { AccountSettingsV2GetResponseSchema, AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, V2SessionByIdNotFoundSchema } from '@happier-dev/protocol';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
-import { beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { beforeEach, afterEach, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { storage } from '@/sync/domains/state/storageStore';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -25,7 +24,11 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import {
+    SESSION_HUMAN_PRESENCE_VISIBLE_REPLACE_EVENT,
+    SessionHumanPresenceVisibleReplaceV1Schema,
+    SessionHumanPresenceVisibleReplaceResultV1Schema,
+} from '@happier-dev/protocol/sessions';
 
 installDisconnectedServerSocketBoundary();
 // The connected Account lifecycle must use the real store beneath transport fixtures.
@@ -57,8 +60,6 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
     let AppPaneProvider: typeof import('@/components/appShell/panes/AppPaneProvider')['AppPaneProvider'];
     let InjectedAuthProvider: typeof import('@/auth/context/AuthContext')['InjectedAuthProvider'];
     let useAppPaneScope: typeof import('@/components/appShell/panes/hooks/useAppPaneScope')['useAppPaneScope'];
-    let disposeActionModuleLoader: (() => void) | undefined;
-    afterAll(() => disposeActionModuleLoader?.());
     beforeEach(async () => {
         installDisconnectedServerSocketBoundary((socket, serverUrl) => {
             if (params.rpc) {
@@ -68,6 +69,13 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                     return socket;
                 });
                 vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
+                    if (event === SESSION_HUMAN_PRESENCE_VISIBLE_REPLACE_EVENT) {
+                        const request = SessionHumanPresenceVisibleReplaceV1Schema.parse(payload);
+                        return SessionHumanPresenceVisibleReplaceResultV1Schema.parse({
+                            v: 1, ok: true, admittedSessionIds: request.sessionIds,
+                            ...(request.locations ? { admittedLocations: request.locations } : {}),
+                        });
+                    }
                     if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [sessionId] };
                     if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {
                         throw new Error('Unexpected Socket RPC envelope');
@@ -89,7 +97,6 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
         await loadSyncSingletonForTests();
-        disposeActionModuleLoader ??= await installRealActionExecutorModuleLoader();
         ({ AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider'));
         ({ InjectedAuthProvider } = await import('@/auth/context/AuthContext'));
         ({ useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope'));
@@ -139,30 +146,14 @@ export function installSessionPaneRuntimeTestHarness(params: Readonly<{
                 const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
                 if (bootstrapResponse) return bootstrapResponse;
                 if ((init?.method ?? 'GET') === 'GET' && path === AUTHORING_MEMORY_ROUTE_V1) return json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
-                if ((init?.method ?? 'GET') === 'GET' && path === `/v2/sessions/${sessionId}`) {
-                    const session = storage.getState().sessions[sessionId];
+                const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+                if ((init?.method ?? 'GET') === 'GET' && sessionRead) {
+                    const requestedSessionId = decodeURIComponent(sessionRead[1]!);
+                    const session = storage.getState().sessions[requestedSessionId];
                     if (!session || !areServerProfileIdentifiersEquivalent(session.serverId, account?.serverId)) return Response.json(
                         V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 },
                     );
-                    const record = createPlainSessionCurrentProjectionRecordFixture({
-                            id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
-                            active: session.active, activeAt: session.activeAt, metadata: readSessionOwnerMetadataView(session),
-                            metadataVersion: session.metadataVersion, agentStateVersion: session.agentStateVersion,
-                            responsibleAccountId: session.responsibleAccountId ?? null,
-                            responsibleAccount: session.responsibleAccount ?? null,
-                        });
-                    const { ownerMetadata: _ownerMetadata, ...recipientRecord } = record;
-                    return json(V2SessionByIdResponseSchema.parse({ session: {
-                        ...(session.access && session.access.level !== 'owner' ? recipientRecord : record),
-                        ...(session.access ? {
-                            effectiveAccess: { v: 1, level: session.access.level,
-                                capabilities: session.access.capabilities, sources: session.access.sources ?? [] },
-                            ...(session.access.level !== 'owner' ? { share: { accessLevel: session.access.level,
-                                canApprovePermissions: session.access.capabilities.approveRuntimePermissions } } : {}),
-                        } : {}),
-                        pendingVersion: session.pendingVersion, pendingCount: session.pendingCount,
-                        pendingActivationAuthorization: session.pendingActivationAuthorization ?? undefined,
-                    } }));
+                    return json(createPlainSessionByIdResponseFixture(session));
                 }
                 if ((init?.method ?? 'GET') === 'GET' && path.startsWith('/v1/machines/')) {
                     const machineId = decodeURIComponent(path.slice('/v1/machines/'.length));

@@ -11,7 +11,7 @@ import { SessionBrowserContextRuntimeProvider, useSessionBrowserContextRuntimeCo
 import { isSessionViewerPresenting, SessionViewerBodyPresentation, useOptionalSessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
 import { SessionViewerPicture } from '@/components/sessions/viewer/SessionViewerPicture';
 import { SessionViewerPresentedElsewhere } from '@/components/sessions/viewer/SessionViewerPresentedElsewhere';
-import type { RetainedPresentationGeometryTransition, RetainedPresentationRect } from '@/components/ui/presentation/retainedPresentationSlots';
+import { useRetainedPresentationSlotVisible, type RetainedPresentationGeometryTransition, type RetainedPresentationRect } from '@/components/ui/presentation/retainedPresentationSlots';
 
 /**
  * The session right panel's Browser tab. It is the same host as the phone Browser tab (H-UX F-21:
@@ -35,6 +35,7 @@ export function SessionRightPanelBrowserView(props: Readonly<{
 }>): React.ReactElement {
     const accountLifetime = useSessionViewerSourceAccountLifetime();
     const viewer = useOptionalSessionViewerController();
+    const panePresented = useRetainedPresentationSlotVisible() && props.visible !== false;
     const browserContextRuntime = useSessionBrowserContextRuntimeContext();
     const preferredServerId = usePreferredServerIdForSession({
         sessionId: props.sessionId,
@@ -77,11 +78,11 @@ export function SessionRightPanelBrowserView(props: Readonly<{
         </SessionViewerBodyPresentation>
     ), [browserContextRuntime, pluginProjection, presentation, props.sessionId, scopeId, sourceServerId, visible]);
     // One body, one place: while the viewer presents the Browser, the pane does not bind it.
-    if (presentation === 'pane' && isSessionViewerPresenting(viewer, 'browser')) {
+    if (presentation === 'pane' && isSessionViewerPresenting(viewer, 'browser', panePresented)) {
         return <SessionViewerPresentedElsewhere source="browser" testID="session-rightpanel-browser" />;
     }
     return (
-        <RetainedSessionViewerSource slotId={slotId} serverId={serverId} visible={props.visible}
+        <RetainedSessionViewerSource sessionId={props.sessionId} slotId={slotId} serverId={serverId} visible={props.visible}
             windowGeometry={props.windowGeometry} transition={props.transition}
             inputPassthrough={props.inputPassthrough}>
             {body}

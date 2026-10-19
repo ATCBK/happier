@@ -1,14 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type {
-    FeatureDecision,
-    FeatureId,
-    LocalServicePublicExposureModeV1,
-    RuntimeActionExecute,
-} from '@happier-dev/protocol';
-import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import { DaemonLocalServicePublicPreviewCreateRequestV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 import {
     createMachineFixture,
     createSessionFixture,
@@ -16,32 +13,25 @@ import {
     buildLocalServiceInventoryState,
     pressTestInstanceAsync,
     renderScreen,
+    standardCleanup,
 } from '@/dev/testkit';
-import type { IModal } from '@/modal/types';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import {
     applyLocalServiceLauncherSnapshot,
     createLocalServiceLauncherState,
-    type LocalServiceLauncherSnapshot,
-    type LocalServiceLauncherSnapshotClient,
-} from '@/sync/domains/local/services/launch';
+} from '@/sync/domains/local/services/launch/store';
+import type { LocalServiceLauncherSnapshot } from '@/sync/domains/local/services/launch/types';
+import type { LocalServiceLauncherSnapshotClient } from '@/sync/domains/local/services/launch/useLocalServiceLauncherState';
 import {
     applyLocalServicePublicPreviewSnapshot,
     createLocalServicePublicPreviewState,
 } from '@/sync/domains/local/services/publicPreview/store';
 
-import { SessionRightPanelServicesView } from './SessionRightPanelServicesView';
-import { storage } from '@/sync/domains/state/storage';
-import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
-
-const useFeatureDecisionMock = vi.hoisted(() => vi.fn((featureId: FeatureId, _scope?: unknown): FeatureDecision => ({
-    featureId,
-    state: 'enabled',
-    blockedBy: null,
-    blockerCode: 'none',
-    diagnostics: [],
-    evaluatedAt: 1,
-    scope: { scopeKind: 'runtime' },
-})));
+type MachineRpcRequest = Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc')['machineRpcWithServerScope']>[0];
+const daemonRpc = vi.hoisted(() => vi.fn<(request: MachineRpcRequest) => Promise<unknown>>());
 const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
 /**
  * The public-link consequence sheet (`showLocalServiceExposureSheet`, F0 §3.D) is one `Modal.show`
@@ -59,9 +49,11 @@ const modalShowMock = vi.hoisted(() => vi.fn((config: unknown) => {
     return 'modal-id';
 }));
 
-vi.mock('@/hooks/server/useFeatureDecision', () => ({
-    useFeatureDecision: (featureId: FeatureId, scope?: unknown) => useFeatureDecisionMock(featureId, scope),
-}));
+// The daemon network port is the only substituted Action dependency; admission,
+// Account lifetime, request construction and response validation stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => (
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(daemonRpc)
+));
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -71,28 +63,39 @@ vi.mock('@/modal', async () => {
     }).module;
 });
 
-function enabledDecision(featureId: FeatureId): FeatureDecision {
-    return {
-        featureId,
-        state: 'enabled',
-        blockedBy: null,
-        blockerCode: 'none',
-        diagnostics: [],
-        evaluatedAt: 1,
-        scope: { scopeKind: 'runtime' },
-    };
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { SessionRightPanelServicesView } = await import('./SessionRightPanelServicesView');
+const { storage } = await import('@/sync/domains/state/storage');
+const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
+const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { resetLocalServiceLauncherStoreForTests } = await import('@/sync/domains/local/services/launch/sharedStore');
+const { resetLocalServicePublicPreviewStoreForTests } = await import('@/sync/domains/local/services/publicPreview/sharedStore');
+let serverId: string;
+
+async function publishFeatures(publicPreviewEnabled = true) {
+    const features = createRootLayoutFeaturesResponse({ features: { localServices: {
+        enabled: true, inventory: { enabled: true }, managed: { enabled: true }, launcher: { enabled: true },
+        actions: { enabled: true, terminate: { enabled: true } }, preview: { enabled: true },
+        publicPreview: { enabled: publicPreviewEnabled },
+    } } });
+    homes.answer(serverId, '/v1/features', { body: features });
+    homes.answer(serverId, '/v1/features/authenticated', { body: features });
+    expect((await getServerFeaturesSnapshot({ serverId, force: true })).status).toBe('ready');
 }
 
-function disabledServerDecision(featureId: FeatureId): FeatureDecision {
-    return {
-        featureId,
-        state: 'disabled',
-        blockedBy: 'server',
-        blockerCode: 'feature_disabled',
-        diagnostics: [],
-        evaluatedAt: 1,
-        scope: { scopeKind: 'spawn', serverId: 'server-a' },
-    };
+function daemonRequests(method: string) {
+    return daemonRpc.mock.calls.map(([request]) => request).filter(request => request.method === method)
+        .map(({ serverId, machineId, payload }) => ({ serverId, machineId, payload }));
+}
+
+async function defaultDaemonResponse(request: MachineRpcRequest) {
+    if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_STATUS) {
+        return { protocolVersion: 1, snapshot: publicPreviewSnapshot() };
+    }
+    throw new Error(`Unexpected Services RPC method: ${request.method}`);
 }
 
 function buildLauncherState() {
@@ -170,8 +173,8 @@ const liveStartSnapshot = {
     }],
 } satisfies LocalServiceLauncherSnapshot;
 
-function buildPublicPreviewState() {
-    return applyLocalServicePublicPreviewSnapshot(createLocalServicePublicPreviewState(), {
+function publicPreviewSnapshot(): Parameters<typeof applyLocalServicePublicPreviewSnapshot>[1] {
+    return {
         v: 1,
         machineId: 'machine-a',
         sessionId: 'session-a',
@@ -188,14 +191,32 @@ function buildPublicPreviewState() {
         },
         exposures: [],
         diagnostics: [],
-    });
+    };
+}
+
+function buildPublicPreviewState() {
+    return applyLocalServicePublicPreviewSnapshot(createLocalServicePublicPreviewState(), publicPreviewSnapshot());
 }
 
 describe('SessionRightPanelServicesView', () => {
-    beforeEach(() => {
-        useFeatureDecisionMock.mockImplementation((featureId: FeatureId): FeatureDecision => enabledDecision(featureId));
+    beforeEach(async () => {
+        await homes.reset();
+        resetLocalServiceLauncherStoreForTests();
+        resetLocalServicePublicPreviewStoreForTests();
+        daemonRpc.mockReset();
+        daemonRpc.mockImplementation(defaultDaemonResponse);
+        serverId = await homes.addHome({ name: 'Session Services', serverUrl: 'https://session-services.test',
+            accountId: 'account-services', currentAccount: true });
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 0 } });
+        await publishFeatures();
         modalConfirmMock.mockClear();
         modalShowMock.mockClear();
+    });
+    afterEach(async () => {
+        await standardCleanup();
+        resetLocalServiceLauncherStoreForTests();
+        resetLocalServicePublicPreviewStoreForTests();
+        await homes.reset();
     });
 
     it('passes supplied local service launcher state into the Services pane', async () => {
@@ -210,40 +231,30 @@ describe('SessionRightPanelServicesView', () => {
     });
 
     it('does not poll public preview status when public previews are disabled', async () => {
-        useFeatureDecisionMock.mockImplementation((featureId: FeatureId): FeatureDecision => (
-            featureId === 'localServices.publicPreview'
-                ? disabledServerDecision(featureId)
-                : enabledDecision(featureId)
-        ));
-        const publicPreviewStatusClient = vi.fn(async () => ({
-            ok: false as const,
-            reason: 'unavailable' as const,
-        }));
+        await publishFeatures(false);
 
         await renderScreen(
             <SessionRightPanelServicesView
                 sessionId="session-a"
-                serverId="server-a"
+                serverId={serverId}
                 machineId="machine-a"
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 launcherState={buildLauncherState()}
-                publicPreviewStatusClient={publicPreviewStatusClient}
             />,
         );
         await new Promise((resolve) => setTimeout(resolve, 0));
 
-        expect(publicPreviewStatusClient).not.toHaveBeenCalled();
+        expect(daemonRequests(RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_STATUS)).toEqual([]);
     });
 
 
     it('builds a terminate-detected runtime action request for eligible detected rows', async () => {
-        const runtimeActionExecute = vi.fn(async () => ({
-            v: 1,
-            requestId: 'request-terminate-detected',
-            action: 'terminate_detected',
-            status: 'succeeded',
-            auditEvents: [],
-        })) satisfies RuntimeActionExecute;
+        daemonRpc.mockImplementation(async request => {
+            if (request.method !== RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE) return defaultDaemonResponse(request);
+            const input = LocalServiceActionRequestV1Schema.parse(request.payload);
+            return { protocolVersion: 1, result: { v: 1, requestId: input.requestId,
+                action: input.action, status: 'succeeded', auditEvents: [] } };
+        });
         const launcherState = applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
             v: 1,
             machineId: 'machine-a',
@@ -270,17 +281,16 @@ describe('SessionRightPanelServicesView', () => {
                     display: { title: 'Detected app', addressLabel: 'localhost:5173' },
                 },
             }],
-        } as LocalServiceLauncherSnapshot);
+        });
         const screen = await renderScreen(
             <SessionRightPanelServicesView
                 sessionId="session-a"
-                serverId="server-a"
+                serverId={serverId}
                 machineId="machine-a"
                 inventoryState={buildLocalServiceInventoryState({
                     rows: [buildLocalServiceInventoryRow({ id: 'inventory-entry-1', state: 'listening' })],
                 })}
                 launcherState={launcherState}
-                runtimeActionExecute={runtimeActionExecute}
             />,
         );
 
@@ -300,10 +310,10 @@ describe('SessionRightPanelServicesView', () => {
             for (let i = 0; i < 8; i += 1) await Promise.resolve();
         });
 
-        expect(modalConfirmMock).toHaveBeenCalledOnce();
-        expect(runtimeActionExecute).toHaveBeenCalledExactlyOnceWith({
-            actionId: 'localServices.actions.terminateDetected',
-            input: {
+        await waitForHomeGovernance(() => expect(daemonRequests(RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE)).toEqual([{
+            serverId,
+            machineId: 'machine-a',
+            payload: {
                 requestId: expect.any(String),
                 target: {
                     kind: 'inventory_entry',
@@ -315,37 +325,26 @@ describe('SessionRightPanelServicesView', () => {
                 force: false,
                 confirmationNonce: expect.any(String),
             },
-            context: {
-                defaultSessionId: 'session-a',
-                serverId: 'server-a',
-                surface: 'ui',
-            },
-        });
+        }]));
+        expect(modalConfirmMock).toHaveBeenCalledOnce();
     });
 
 
     it('builds a launcher start runtime action request for daemon-advertised Start targets', async () => {
-        const runtimeActionExecute = vi.fn(async () => ({
-            protocolVersion: 1,
-            machineId: 'machine-a',
-            targetId: 'preview:session-feed',
-            status: 'succeeded',
-            snapshot: {
-                v: 1,
-                machineId: 'machine-a',
-                sessionId: 'session-a',
-                updatedAt: 4_000,
-                targets: [],
-            },
-        })) satisfies RuntimeActionExecute;
+        daemonRpc.mockImplementation(async request => {
+            if (request.method !== RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START) return defaultDaemonResponse(request);
+            const input = DaemonLocalServiceLauncherStartRequestV1Schema.parse(request.payload);
+            return { protocolVersion: 1, machineId: input.machineId, targetId: input.targetId,
+                status: 'succeeded', snapshot: { v: 1, machineId: input.machineId,
+                    sessionId: input.sessionId, updatedAt: 4_000, targets: [] } };
+        });
         const screen = await renderScreen(
             <SessionRightPanelServicesView
                 sessionId="session-a"
-                serverId="server-a"
+                serverId={serverId}
                 machineId="machine-a"
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 launcherState={buildLauncherState()}
-                runtimeActionExecute={runtimeActionExecute}
             />,
         );
 
@@ -354,19 +353,15 @@ describe('SessionRightPanelServicesView', () => {
             'session-rightpanel-services-row:managed:session-feed-start',
         );
 
-        expect(runtimeActionExecute).toHaveBeenCalledExactlyOnceWith({
-            actionId: 'localServices.launcher.start',
-            input: {
+        await waitForHomeGovernance(() => expect(daemonRequests(RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START)).toEqual([{
+            serverId,
+            machineId: 'machine-a',
+            payload: {
                 machineId: 'machine-a',
                 targetId: 'managed:session-feed',
                 sessionId: 'session-a',
             },
-            context: {
-                defaultSessionId: 'session-a',
-                serverId: 'server-a',
-                surface: 'ui',
-            },
-        });
+        }]));
     });
 
     it('replaces live launcher state from successful Start response snapshots', async () => {
@@ -383,21 +378,19 @@ describe('SessionRightPanelServicesView', () => {
             ok: true as const,
             snapshot: liveStartSnapshot,
         })) satisfies LocalServiceLauncherSnapshotClient;
-        const runtimeActionExecute = vi.fn(async () => ({
-            protocolVersion: 1,
-            machineId: 'machine-a',
-            targetId: 'managed:session-feed',
-            status: 'succeeded',
-            snapshot: startedSnapshot,
-        })) satisfies RuntimeActionExecute;
+        daemonRpc.mockImplementation(async request => {
+            if (request.method !== RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START) return defaultDaemonResponse(request);
+            const input = DaemonLocalServiceLauncherStartRequestV1Schema.parse(request.payload);
+            return { protocolVersion: 1, machineId: input.machineId, targetId: input.targetId,
+                status: 'succeeded', snapshot: startedSnapshot };
+        });
         const screen = await renderScreen(
             <SessionRightPanelServicesView
                 sessionId="session-a"
-                serverId="server-a"
+                serverId={serverId}
                 machineId="machine-a"
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 launcherSnapshotClient={launcherSnapshotClient}
-                runtimeActionExecute={runtimeActionExecute}
             />,
         );
 
@@ -408,7 +401,7 @@ describe('SessionRightPanelServicesView', () => {
             'session-rightpanel-services-row:managed:session-feed-start',
         );
 
-        await vi.waitFor(() => {
+        await waitForHomeGovernance(() => {
             expect(screen.findAllByTestId('session-rightpanel-services-row:managed:session-feed-start')).toHaveLength(0);
             expect(screen.findByTestId('session-rightpanel-services-row:managed:session-feed-status-starting')).toBeTruthy();
         });
@@ -418,24 +411,24 @@ describe('SessionRightPanelServicesView', () => {
         const before = storage.getState();
         const ownMachine = createMachineFixture({ id: 'machine-a', active: true });
         const otherMachine = createMachineFixture({ id: 'machine-other', active: true });
-        const ownSession = createSessionFixture({ id: 'session-a', serverId: 'server-a', active: true, metadata: { machineId: 'machine-a', path: '/a', host: 'host-a' } });
+        const ownSession = createSessionFixture({ id: 'session-a', serverId, active: true, metadata: { machineId: 'machine-a', path: '/a', host: 'host-a' } });
         const otherSession = createSessionFixture({ id: 'session-a', serverId: 'server-other', active: true, metadata: { machineId: 'machine-other', path: '/other', host: 'host-other' } });
         storage.setState({
             sessions: { 'session-a': otherSession },
             machines: { 'machine-a': ownMachine, 'machine-other': otherMachine },
-            machineListByServerId: { 'server-a': [ownMachine], 'server-other': [otherMachine] },
-            sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession(ownSession) } },
+            machineListByServerId: { [serverId]: [ownMachine], 'server-other': [otherMachine] },
+            sessionListRowsByServerId: { [serverId]: { 'session-a': buildSessionListRenderableFromSession(ownSession) } },
         });
         const launcherSnapshotClient = vi.fn(async () => ({ ok: true as const, snapshot: liveStartSnapshot })) satisfies LocalServiceLauncherSnapshotClient;
         try {
             const screen = await renderScreen(<SessionRightPanelServicesView
-                sessionId="session-a" serverId="server-a"
+                sessionId="session-a" serverId={serverId}
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 publicPreviewState={buildPublicPreviewState()}
                 launcherSnapshotClient={launcherSnapshotClient}
             />);
             expect(launcherSnapshotClient).toHaveBeenCalledWith(expect.objectContaining({
-                machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a',
+                machineId: 'machine-a', serverId, sessionId: 'session-a',
             }));
             await screen.unmount();
         } finally {
@@ -444,65 +437,38 @@ describe('SessionRightPanelServicesView', () => {
     });
 
     it('creates public preview links through the session Services runtime action host', async () => {
-        modalShowMock.mockImplementationOnce((config) => {
-            const props = (config as unknown as Readonly<{
-                props: Readonly<{
-                    modeChoices: readonly { mode: LocalServicePublicExposureModeV1 }[];
-                    ttlChoices: readonly { ttlMs: number }[];
-                    onResolve: (decision: { mode: LocalServicePublicExposureModeV1; ttlMs: number } | null) => void;
-                }>;
-            }>).props;
-            const mode = props.modeChoices[0];
-            const ttl = props.ttlChoices[0];
-            props.onResolve(mode && ttl ? { mode: mode.mode, ttlMs: ttl.ttlMs } : null);
-            return 'modal-id';
-        });
-        const runtimeActionExecute = vi.fn(async () => ({
-            protocolVersion: 1,
-            previewId: 'preview-session',
-            exposureId: 'public-preview-1',
-            status: 'created',
-            exposure: {
+        daemonRpc.mockImplementation(async request => {
+            if (request.method !== RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_CREATE) return defaultDaemonResponse(request);
+            const input = DaemonLocalServicePublicPreviewCreateRequestV1Schema.parse(request.payload);
+            return {
+                protocolVersion: 1,
+                previewId: input.previewId,
                 exposureId: 'public-preview-1',
-                previewId: 'preview-session',
-                sessionId: 'session-a',
-                machineId: 'machine-a',
-                mode: 'secret_link',
-                state: 'active',
-                publicUrl: 'https://preview.example.test/public-preview-1',
-                issuedAt: 4_000,
-                expiresAt: 604_000,
-                auditEventIds: ['audit-1'],
-                rateLimitProfileId: 'default',
-            },
-            snapshot: {
-                v: 1,
-                machineId: 'machine-a',
-                sessionId: 'session-a',
-                generatedAt: 4_000,
-                refreshState: 'idle',
-                policy: {
-                    enabled: true,
-                    allowedModes: ['secret_link'],
-                    maxTtlMs: 600_000,
-                    maxConcurrentExposures: 2,
-                    dnsTlsRequired: true,
-                    auditRequired: true,
-                    rateLimitProfileIds: ['default'],
+                status: 'created',
+                exposure: {
+                    exposureId: 'public-preview-1',
+                    previewId: input.previewId,
+                    sessionId: input.sessionId,
+                    machineId: input.machineId,
+                    mode: input.mode,
+                    state: 'active',
+                    publicUrl: 'https://preview.example.test/public-preview-1',
+                    issuedAt: 4_000,
+                    expiresAt: 604_000,
+                    auditEventIds: ['audit-1'],
+                    rateLimitProfileId: 'default',
                 },
-                exposures: [],
-                diagnostics: [],
-            },
-        })) satisfies RuntimeActionExecute;
+                snapshot: publicPreviewSnapshot(),
+            };
+        });
         const screen = await renderScreen(
             <SessionRightPanelServicesView
                 sessionId="session-a"
-                serverId="server-a"
+                serverId={serverId}
                 machineId="machine-a"
                 inventoryState={buildLocalServiceInventoryState({ rows: [] })}
                 launcherState={buildPublicPreviewLauncherState()}
                 publicPreviewState={buildPublicPreviewState()}
-                runtimeActionExecute={runtimeActionExecute}
             />,
         );
 
@@ -511,17 +477,13 @@ describe('SessionRightPanelServicesView', () => {
             'session-rightpanel-services-row:preview:session-feed-item',
         );
         await pressTestInstanceAsync(
-            screen.findByTestId('session-rightpanel-services-row:preview:session-feed-public-preview-target:preview-session-create'),
-            'session-rightpanel-services-row:preview:session-feed-public-preview-target:preview-session-create',
+            screen.findByTestId('session-rightpanel-services-row:preview:session-feed-share'),
+            'session-rightpanel-services-row:preview:session-feed-share',
         );
-        for (let index = 0; index < 8; index += 1) await Promise.resolve();
-
-        for (let i = 0; i < 8; i += 1) await Promise.resolve();
-        // The consequence sheet is the consent (one card, not a confirm plus two prompts).
-        expect(modalShowMock).toHaveBeenCalledOnce();
-        expect(runtimeActionExecute).toHaveBeenCalledExactlyOnceWith({
-            actionId: 'localServices.publicPreview.create',
-            input: {
+        await waitForHomeGovernance(() => expect(daemonRequests(RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_CREATE)).toEqual([{
+            serverId,
+            machineId: 'machine-a',
+            payload: {
                 machineId: 'machine-a',
                 sessionId: 'session-a',
                 previewId: 'preview-session',
@@ -529,11 +491,7 @@ describe('SessionRightPanelServicesView', () => {
                 ttlMs: 600_000,
                 confirmation: { acknowledged: true },
             },
-            context: {
-                defaultSessionId: 'session-a',
-                serverId: 'server-a',
-                surface: 'ui',
-            },
-        });
+        }]));
+        expect(modalShowMock).toHaveBeenCalledOnce();
     });
 });

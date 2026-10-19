@@ -50,13 +50,14 @@ describe('mounted terminal Actions', () => {
         const serverId = 'srv_project_terminal';
         const first = { id: 'accepted', serverId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };
         const second = { ...first, id: 'worktree', rootPath: '/worktree' };
+        const worker = { ...first, id: 'worker', machineId: 'worker-machine', rootPath: '/worker' };
         const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-actions.test', accountId: 'bob',
             serverIdentityId: serverId,
             settings: { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.terminal.close': ['ui'] } } } }],
             route: request => request.path === '/v1/machines'
                 ? Response.json([createPlainMachineRowFixture({ id: 'machine', accountId: 'bob' })])
                 : request.path === '/v1/account/project-rows/list'
-                    ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [first, second] })) : undefined });
+                    ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [first, second, worker] })) : undefined });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const scopeId = buildProjectPaneScopeId(first.id, serverId, 'destination');
         const workspace = { serverId, workspaceId: first.id, machineId: first.machineId, rootPath: first.rootPath };
@@ -70,7 +71,7 @@ describe('mounted terminal Actions', () => {
             await expect.poll(() => storage.getState().settings.actionsSettingsV1?.approvalWaivedSurfaces?.['machines.terminal.close'])
                 .toEqual(['ui']);
             await expect.poll(() => readCurrentProjectAccountRows(storage.getState()))
-                .toMatchObject({ status: 'ready', workspaceRefs: [first, second] });
+                .toMatchObject({ status: 'ready', workspaceRefs: [first, second, worker] });
             const unchanged = state;
             expect(await invokeSessionTerminalAction({ actionId: 'session.terminals.list', input: { scopeId } }))
                 .toMatchObject({ ok: true, workspace: { tabs: [], activeTabId: null } });
@@ -92,6 +93,16 @@ describe('mounted terminal Actions', () => {
             const closed = await invokeSessionTerminalAction({ actionId: 'session.terminals.close', input: { scopeId, terminalId: opened.terminalId } });
             expect(closed, JSON.stringify({ closed, requests: home.requests, machineCalls: machineRpc.mock.calls })).toEqual({ ok: true });
             expect(running).toBe(false);
+            const workerWorkspace = { serverId, workspaceId: worker.id, machineId: worker.machineId, rootPath: worker.rootPath };
+            const borrowed = await invokeSessionTerminalAction({ actionId: 'session.terminals.open', input: { scopeId,
+                target: { kind: 'terminal_view', workspace: workerWorkspace, machineId: worker.machineId,
+                    terminalId: 'worker-pty', terminalKey: 'worker-output', cwd: '/worker/packages/check' } } });
+            expect(borrowed).toMatchObject({ ok: true });
+            expect(await invokeSessionTerminalAction({ actionId: 'session.terminals.list', input: { scopeId } }))
+                .toMatchObject({ workspace: { tabs: expect.arrayContaining([expect.objectContaining({ terminals: [expect.objectContaining({
+                    target: { kind: 'terminal_view', workspace: workerWorkspace, machineId: worker.machineId,
+                        terminalId: 'worker-pty', terminalKey: 'worker-output', cwd: '/worker/packages/check' },
+                })] })]) } });
             const beforeRetirement = state;
             storage.getState().activateProfileScope({ serverId, accountId: 'cara' });
             expect(await invokeSessionTerminalAction({ actionId: 'session.terminals.list', input: { scopeId } }))

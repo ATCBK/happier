@@ -14,6 +14,7 @@ import { resolveSessionTerminalRequest } from './sessionTerminalRequest';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { isWorkspacePathWithinRootV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 
 export function sessionTerminalActionFailure(errorCode: string) {
     return { ok: false as const, errorCode, error: errorCode };
@@ -103,10 +104,15 @@ export async function invokeSessionTerminalAction(request: Readonly<{
                     launch: { kind: 'package_script', runTargetId: terminalData.runTargetId } };
             if (project) {
                 if (target.kind === 'session_attach') return sessionTerminalActionFailure('terminal_target_unavailable');
-                const selected = target.kind === 'workspace_shell' ? target.workspace
+                const selected = target.kind === 'workspace_shell' || target.kind === 'terminal_view' && target.workspace ? target.workspace
                     : { ...project.workspace, machineId: target.machineId, rootPath: target.cwd };
                 const admitted = resolveProjectTerminalScope(data.scopeId, selected);
                 if (!admitted) return sessionTerminalActionFailure('terminal_target_unavailable');
+                if (target.kind === 'terminal_view') {
+                    if (target.machineId !== admitted.workspace.machineId
+                        || !isWorkspacePathWithinRootV1(target.cwd, admitted.workspace.rootPath)) return sessionTerminalActionFailure('terminal_target_unavailable');
+                    target = { ...target, workspace: admitted.workspace };
+                }
                 if (target.kind === 'workspace_shell') target = { ...target, workspace: admitted.workspace };
                 else if (target.kind === 'machine_shell') {
                     target = { kind: 'workspace_shell', workspace: admitted.workspace,

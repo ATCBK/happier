@@ -41,6 +41,7 @@ export function useSessionEmbeddedTerminalPty(params: Readonly<{
         initialCommand: target?.kind === 'workspace_shell' || target?.kind === 'machine_shell' ? target.initialCommand : undefined,
         attachedTerminalId: target?.kind === 'terminal_view' ? target.terminalId : undefined,
         readOnly: target?.kind === 'terminal_view',
+        workspace: target?.kind === 'terminal_view' ? target.workspace : undefined,
         sessionId: params.sessionId,
         machineReachable: explicitMachineId ? resolveSessionMachineReachability({ machineIsKnown: explicitMachinePresence.reachability !== 'unknown', machineIsOnline: explicitMachinePresence.reachability === 'reachable' }) : machineReachable,
         machineRpcTargetAvailable: explicitMachineId ? true : machineRpcTargetAvailable,

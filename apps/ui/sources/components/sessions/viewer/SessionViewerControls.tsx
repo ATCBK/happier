@@ -23,6 +23,7 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
+import { GlassLivePictureBackdropContext } from '@/components/ui/glass/livePictureBackdrop';
 import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { CORE_CAPSULE_HOST, useCoreCapsuleColors } from '@/components/ui/status/capsuleHost';
 import { StatusDot } from '@/components/ui/status/StatusDot';
@@ -31,7 +32,7 @@ import { t } from '@/text';
 
 import { useOptionalSessionViewerController } from './SessionViewerController';
 import type { SessionViewerSource } from './sessionViewerPresentation';
-import { useSessionViewerMachine } from './useSessionViewerMachine';
+import { resolveSessionViewerSourceLabel, useSessionViewerMachine } from './useSessionViewerMachine';
 
 /** The gap between the frame's floating capsules. */
 const ROW_GAP = 6;
@@ -92,7 +93,7 @@ export function SessionViewerControls(
   const widthsRef = React.useRef({ source: 0, identity: 0, buttons: 0 });
   const onMinWidthChange = props.onMinWidthChange;
   const measure = React.useCallback(
-    (part: 'source' | 'identity' | 'buttons') => (event: LayoutChangeEvent) => {
+    (part: 'source' | 'identity' | 'buttons') => (event: Pick<LayoutChangeEvent, 'nativeEvent'>) => {
       widthsRef.current[part] = event.nativeEvent.layout.width;
       const { source, identity, buttons } = widthsRef.current;
       // The Machine chip is part of the row it has to fit in: its name shows whole (up to the chip's
@@ -130,11 +131,7 @@ export function SessionViewerControls(
   });
   const expanded = controller.state.mode === 'expanded';
   const sourceLabel = (source: SessionViewerSource) =>
-    t(
-      source === 'computer'
-        ? 'computerUse.presentation.sourceComputer'
-        : 'computerUse.presentation.sourceBrowser',
-    );
+    resolveSessionViewerSourceLabel(source, controller.facts[source]?.targetTitle);
   const choosePickerTarget = () => {
     // Desktop anchors the picker to the switch; a phone keeps the picker's own bottom sheet.
     const request = controller.phone
@@ -198,6 +195,8 @@ export function SessionViewerControls(
   };
 
   return (
+    // Its menus and the source picker open over the viewer's live picture.
+    <GlassLivePictureBackdropContext.Provider value>
     <View style={stylesheet.row}>
       <CompanionNoDragRegion>
       <View ref={sourceAnchorRef}>
@@ -368,5 +367,6 @@ export function SessionViewerControls(
         </Popover>
       ) : null}
     </View>
+    </GlassLivePictureBackdropContext.Provider>
   );
 }

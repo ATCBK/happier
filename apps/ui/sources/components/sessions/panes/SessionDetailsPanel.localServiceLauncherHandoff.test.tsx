@@ -52,7 +52,7 @@ describe('SessionDetailsPanel local service launcher handoff', () => {
         }
         expect(element.type).toBe(BrowserDetailsSurface);
         expect(element.props.launchpadRows).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'localService:preview:session-browser-feed', disabledReason: null }),
+            expect.objectContaining({ id: 'service:preview:session-browser-feed', disabledReason: null }),
         ]));
     });
 });

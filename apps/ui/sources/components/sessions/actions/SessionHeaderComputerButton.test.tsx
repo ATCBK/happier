@@ -1,10 +1,11 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { SessionViewerControllerProvider } from '@/components/sessions/viewer/SessionViewerControllerProvider';
-import { useOptionalSessionViewerController, type SessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
-import { CurrentSessionPresentationActionInputV1Schema } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
+import { SessionViewerControllerScope, type SessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
+import { Pressable } from 'react-native';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -33,24 +34,9 @@ vi.mock('@/sync/domains/state/storage', async () => {
     return createStorageModuleStub({ storage, getStorage: () => storage });
 });
 
-// The Action front door is the network boundary: the mounted viewer owner still builds the request.
-const frontDoor = vi.hoisted(() => ({ calls: [] as unknown[][] }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => async (...args: unknown[]) => {
-        frontDoor.calls.push(args);
-        return { ok: true, result: {} };
-    },
-}));
-
-import { SessionHeaderComputerButton } from './SessionHeaderComputerButton';
+import { SessionHeaderComputerButton, useSessionComputerMenuEntry } from './SessionHeaderComputerButton';
 
 const TEST_ID = 'session-header-computer-button';
-
-let viewerState: SessionViewerController['state'] | null = null;
-function ViewerStateProbe() {
-    viewerState = useOptionalSessionViewerController()?.state ?? null;
-    return null;
-}
 
 function mounted(sessionId = 'session_1') {
     return (
@@ -62,7 +48,6 @@ function mounted(sessionId = 'session_1') {
             openDocked={() => {}}
         >
             <SessionHeaderComputerButton sessionId={sessionId} serverId="server_1" />
-            <ViewerStateProbe />
         </SessionViewerControllerProvider>
     );
 }
@@ -70,24 +55,14 @@ function mounted(sessionId = 'session_1') {
 describe('SessionHeaderComputerButton', () => {
     beforeEach(() => {
         deviceTypeMock = 'desktop';
-        frontDoor.calls = [];
-        viewerState = null;
     });
 
-    it('opens the Session viewer on Computer through the mounted presentation owner', async () => {
+    it('labels the Computer entry for its source', async () => {
         const screen = await renderScreen(mounted());
         expect(screen.findByTestId(TEST_ID)?.props.accessibilityLabel).toBe('computerUse.presentation.sourceComputer');
-        await screen.pressByTestIdAsync(TEST_ID);
-
-        expect(frontDoor.calls).toHaveLength(1);
-        const [actionId, input, context] = frontDoor.calls[0] as [string, unknown, Record<string, unknown>];
-        expect(actionId).toBe('session.presentation.apply');
-        expect(CurrentSessionPresentationActionInputV1Schema.parse(input))
-            .toEqual({ intent: { kind: 'viewer.open', source: 'computer' } });
-        expect(context).toMatchObject({ serverId: 'server_1', defaultSessionId: 'session_1' });
     });
 
-    it('is absent on a phone, where Watch opens from the transcript and the presence strip', async () => {
+    it('is absent on a phone, where the session actions menu carries the Computer entry', async () => {
         deviceTypeMock = 'phone';
         const screen = await renderScreen(mounted());
         expect(screen.findByTestId(TEST_ID)).toBeNull();
@@ -103,12 +78,37 @@ describe('SessionHeaderComputerButton', () => {
         expect(screen.findByTestId(TEST_ID)).toBeNull();
     });
 
-    it('stays in the header while the Session\'s Machine is unreachable and opens the viewer there to say so', async () => {
+    it('stays in the header while the Session\'s Machine is unreachable', async () => {
         const screen = await renderScreen(mounted('session_offline'));
-        await screen.pressByTestIdAsync(TEST_ID);
+        expect(screen.findByTestId(TEST_ID)).not.toBeNull();
+    });
+    describe('phone session actions entry', () => {
+        const requestSemantic = vi.fn(async () => ({ ok: true as const }));
+        const controller = { requestSemantic } as unknown as SessionViewerController;
 
-        // The Machine cannot take the request, so the viewer opens on this client and its own state explains.
-        expect(frontDoor.calls).toHaveLength(0);
-        expect(viewerState).toMatchObject({ source: 'computer', mode: 'floating' });
+        function MenuEntryProbe(props: Readonly<{ sessionId: string }>) {
+            const open = useSessionComputerMenuEntry({ sessionId: props.sessionId, serverId: 'server_1' });
+            return open ? <Pressable testID="menu-entry" onPress={open} /> : null;
+        }
+        const withController = (sessionId = 'session_1') => (
+            <SessionViewerControllerScope controller={controller}><MenuEntryProbe sessionId={sessionId} /></SessionViewerControllerScope>
+        );
+
+        beforeEach(() => { requestSemantic.mockClear(); });
+
+        it('opens the session\'s Computer through the one viewer opener on a phone, so a fresh phone can reach it', async () => {
+            deviceTypeMock = 'phone';
+            const screen = await renderScreen(withController());
+            await act(async () => { screen.pressByTestId('menu-entry'); });
+            expect(requestSemantic).toHaveBeenCalledWith({ kind: 'viewer.open', source: 'computer' });
+        });
+
+        it('stays out of the menu where the header button already is, and where there is nothing to open', async () => {
+            deviceTypeMock = 'desktop';
+            expect((await renderScreen(withController())).findByTestId('menu-entry')).toBeNull();
+            deviceTypeMock = 'phone';
+            expect((await renderScreen(withController('session_nomachine'))).findByTestId('menu-entry')).toBeNull();
+            expect((await renderScreen(<MenuEntryProbe sessionId="session_1" />)).findByTestId('menu-entry')).toBeNull();
+        });
     });
 });

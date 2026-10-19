@@ -48,6 +48,7 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
         for (const identity of identities) {
             if (!identity.member.pendingActionApproval) {
                 await awaitPendingMachineTerminalCreation(identity.machineId, identity.terminalKey, { serverId, accountId,
+                    signal: input.signal,
                     shouldStopWaiting: () => Boolean(readSessionTerminalWorkspaceForScope(input.scopeId)?.tabs
                         .flatMap(tab => tab.terminals).find(member => member.id === identity.member.id)?.pendingActionApproval),
                 });
@@ -94,7 +95,7 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
         // authoritative even when the bounded output projection was evicted.
         const lists = new Map<string, Awaited<ReturnType<typeof machineTerminalList>>>();
         const closable: { machineId: string; terminalId: string; terminalKey: string }[] = [];
-        await Promise.all(identities.map((identity) => awaitPendingMachineTerminalCreation(identity.machineId, identity.terminalKey, { serverId, accountId })));
+        await Promise.all(identities.map((identity) => awaitPendingMachineTerminalCreation(identity.machineId, identity.terminalKey, { serverId, accountId, signal: input.signal })));
         for (const identity of identities) {
             if (input.signal?.aborted) return failed('action_cancelled');
             if (!isCurrent()) return failed('terminal_scope_unavailable');

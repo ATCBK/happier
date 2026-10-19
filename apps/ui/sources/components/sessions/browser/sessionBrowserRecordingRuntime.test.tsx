@@ -163,6 +163,7 @@ describe('session browser recording runtime', () => {
         expect(machineRpcMock.start).toHaveBeenCalledWith({
             machineId: 'machine_1',
             serverId: 'server_1',
+            signal: expect.any(AbortSignal),
             input: expect.objectContaining({
                 browserSessionId: 'browser_session_1',
                 viewId: 'view_1',

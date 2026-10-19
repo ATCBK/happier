@@ -183,7 +183,8 @@ async function mountContinuation() {
           prepares.length === 1
             ? held
             : setupOperation(serverId, workspace, {
-                operationId: 'setup-once',
+                operationId: 'held-setup',
+                revision: 2,
                 state: 'running',
                 startedAt: 101,
               }),
@@ -228,7 +229,7 @@ async function mountContinuation() {
 }
 
 describe('Service Start setup consent', () => {
-  it('offers This time as the default and runs setup once without remembering trust, then releases the held Start', async () => {
+  it.each(['thisTime', 'skip'] as const)('consumes the Service setup %s decision on its held operation without remembering trust', async choice => {
     const {
       screen,
       serverId,
@@ -244,6 +245,7 @@ describe('Service Start setup consent', () => {
       expect(
         screen.findByTestId(`${REVIEW}.scope:untilChanged`),
       ).not.toBeNull();
+      if (choice === 'skip') await act(async () => { await screen.pressByTestIdAsync(`${REVIEW}.scope:skip`); });
       await act(async () => {
         await screen.pressByTestIdAsync(`${REVIEW}-approve`);
       });
@@ -252,7 +254,8 @@ describe('Service Start setup consent', () => {
         workspace,
         phase: 'setup',
         expectedEffectDigest: DIGEST,
-        consentScope: 'thisTime',
+        ...(choice === 'skip' ? { skipForInvocation: true } : { consentScope: 'thisTime' }),
+        heldOperationId: 'held-setup',
       });
       expect(trustMutations).toEqual([]);
       expect(settled).toEqual([]);
@@ -264,17 +267,17 @@ describe('Service Start setup consent', () => {
           observation: 'available',
           snapshots: [
             setupOperation(serverId, workspace, {
-              operationId: 'setup-once',
+              operationId: 'held-setup',
               state: 'succeeded',
-              revision: 2,
+              revision: 3,
               startedAt: 101,
               settledAt: 102,
-              result: { kind: 'success', reviewedEffectDigest: DIGEST },
+              result: { kind: choice === 'skip' ? 'skippedForInvocation' : 'success', reviewedEffectDigest: DIGEST },
             } as never),
           ],
         });
       });
-      await vi.waitFor(() => expect(settled).toEqual([true]));
+      await vi.waitFor(() => expect(settled).toEqual([choice !== 'skip']));
       expect(trustMutations).toEqual([]);
       await screen.unmount();
     } finally {

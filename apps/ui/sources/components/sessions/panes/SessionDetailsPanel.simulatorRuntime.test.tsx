@@ -1,15 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import {
     DaemonSimulatorPreviewSnapshotRequestV1Schema, DaemonSimulatorPreviewSnapshotResponseV1Schema,
     DEFAULT_DEVICE_SIMULATOR_PREVIEW_CAPABILITIES, SimulatorPreviewSnapshotV1Schema,
 } from '@happier-dev/protocol';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { createMachineFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createMachineFixture, renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { SimulatorPreviewSnapshotClientInput } from '@/sync/domains/devices/simulator/machineRpc';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
@@ -28,44 +29,37 @@ const snapshot = SimulatorPreviewSnapshotV1Schema.parse({
 const rpcRequests: Array<{ method: string; params: unknown }> = [];
 const runtime = installSessionPaneRuntimeTestHarness({
     features: () => createRootLayoutFeaturesResponse({
-        features: { devices: { simulatorPreview: { enabled: true } } },
+        features: {
+            devices: { enabled: true, simulatorPreview: { enabled: true } },
+            machines: { liveStream: { enabled: true, directPeer: { enabled: true }, serverRouted: { enabled: true } } },
+            browser: { enabled: true, viewTargets: { enabled: true } },
+        },
         capabilities: { devices: { simulatorPreview: {
             ...DEFAULT_DEVICE_SIMULATOR_PREVIEW_CAPABILITIES,
             enabled: true, available: true, availableDevices: snapshot.resources,
         } } },
     }),
-    configureSocket: (socket) => {
-        // Deliver the remote handshake through the real listeners and replace only its wire.
-        vi.mocked(socket.connect).mockImplementation(() => {
-            socket.connected = true;
-            socket.id = 'simulator-viewer-socket';
-            for (const listener of socket.listeners('connect')) listener();
-            return socket;
-        });
-        vi.spyOn(socket, 'emit').mockReturnValue(socket);
-        vi.spyOn(socket, 'disconnect').mockImplementation(() => {
-            socket.connected = false;
-            for (const listener of socket.listeners('disconnect')) listener('io client disconnect');
-            return socket;
-        });
-        vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
-            if (event !== 'rpc-call') throw new Error(`Unexpected simulator transport event: ${event}`);
-            const request = z.object({ method: z.string(), params: z.unknown() }).passthrough().parse(payload);
-            const method = request.method.slice(request.method.indexOf(':') + 1);
-            rpcRequests.push({ method, params: request.params });
-            if (method === RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_SNAPSHOT) {
-                const input = DaemonSimulatorPreviewSnapshotRequestV1Schema.parse(request.params);
-                expect(input.machineId).toBe('machine-1');
-                return { ok: true, result: DaemonSimulatorPreviewSnapshotResponseV1Schema.parse({ protocolVersion: 1, snapshot }) };
-            }
-            return { ok: false, error: 'Method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
-        });
+    rpc: async (method, params) => {
+        rpcRequests.push({ method, params });
+        if (method === RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_SNAPSHOT) {
+            const input = DaemonSimulatorPreviewSnapshotRequestV1Schema.parse(params);
+            expect(input.machineId).toBe('machine-1');
+            return DaemonSimulatorPreviewSnapshotResponseV1Schema.parse({ protocolVersion: 1, snapshot });
+        }
+        throw new RpcError('Method not found', RPC_ERROR_CODES.METHOD_NOT_FOUND);
     },
 });
-beforeEach(() => {
+beforeEach(async () => {
     rpcRequests.length = 0;
     storage.getState().applySettingsLocal({ experiments: true });
-    storage.getState().applyMachines([createMachineFixture({ activeAt: Date.now() })]);
+    storage.getState().applyMachines([createMachineFixture({ storageMode: 'plain', activeAt: Date.now() })], true, { sourceServerId: runtime.serverId });
+    const { getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    const { resolveRuntimeFeatureDecisionFromSnapshot } = await import('@/sync/domains/features/featureDecisionRuntime');
+    const features = await getServerFeaturesSnapshot({ serverId: runtime.serverId });
+    expect(resolveRuntimeFeatureDecisionFromSnapshot({ featureId: 'devices.simulatorPreview',
+        settings: storage.getState().settings, snapshot: features,
+        scope: { scopeKind: 'spawn', serverId: runtime.serverId },
+    })).toMatchObject({ state: 'enabled' });
 });
 const nowMs = () => 1_000;
 const simulatorTab = {
@@ -81,7 +75,10 @@ describe('SessionDetailsPanel simulator runtime wiring', () => {
             <SessionDetailsPanel sessionId="s1" routeServerId={runtime.serverId} scopeId="session:s1" nowMs={nowMs} />
         </runtime.Wrapper>);
         await act(async () => runtime.pane.openDetailsTab(simulatorTab, { intent: 'pinned' }));
-        await flushHookEffects({ cycles: 30 });
+        await waitForHomeGovernance(() => expect(
+            screen.tree.findByType(SessionSimulatorPreviewPane).props.viewModel.devices
+                .map((device: { simulatorId: string }) => device.simulatorId),
+        ).toEqual(['sim_1', 'sim_2']));
         const initial = screen.tree.findByType(SessionSimulatorPreviewPane);
         expect(initial.props.viewModel.devices.map((device: { simulatorId: string }) => device.simulatorId)).toEqual(['sim_1', 'sim_2']);
         expect(initial.props.viewModel.selectedSimulatorId).toBe('sim_1');
@@ -110,7 +107,9 @@ describe('SessionDetailsPanel simulator runtime wiring', () => {
         }
         const screen = await renderScreen(<runtime.Wrapper><ControlledPanel /></runtime.Wrapper>);
         await act(async () => runtime.pane.openDetailsTab(simulatorTab, { intent: 'pinned' }));
-        await flushHookEffects({ cycles: 30 });
+        await waitForHomeGovernance(() => expect(requested).toEqual(expect.arrayContaining([expect.objectContaining({
+            machineId: 'machine-1', serverId: runtime.serverId,
+        })])));
         expect(requested).toEqual(expect.arrayContaining([expect.objectContaining({
             machineId: 'machine-1', serverId: runtime.serverId,
         })]));

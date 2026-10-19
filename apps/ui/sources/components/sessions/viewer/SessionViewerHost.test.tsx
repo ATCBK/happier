@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   FloatingFrame,
   resolveFloatingFrameBodyRect,
+  resolveFloatingFrameChromeHeight,
+  resolveFloatingFrameRect,
   type FrameRect,
 } from '@happier-dev/plugin-ui/presentation';
 
@@ -15,12 +17,19 @@ import {
   useOptionalSessionViewerController,
   usePublishSessionViewerPresence,
   usePublishSessionViewerSourceFacts,
+  NO_SESSION_VIEWER_INSET,
   useSessionViewerReadingInset,
   type SessionViewerController,
+  type SessionViewerReadingInset,
   type SessionViewerPresence,
 } from './SessionViewerController';
 import { SessionViewerControllerProvider } from './SessionViewerControllerProvider';
 import { SessionViewerHost } from './SessionViewerHost';
+import { SESSION_VIEWER_EDGE } from './sessionViewerGeometry';
+import {
+  SessionCockpitChromeRegistryProvider,
+  useReportSessionCockpitComposerChromeHeight,
+} from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 
 /**
  * Plan 63s2 / R1-U1–U4: the mounted viewer composition. The source's presence owner and facts are
@@ -29,7 +38,7 @@ import { SessionViewerHost } from './SessionViewerHost';
  */
 type Harness = {
   controller: SessionViewerController | null;
-  inset: Readonly<{ left: number; right: number }>;
+  inset: SessionViewerReadingInset;
 };
 
 const AGENT_PRESENCE: BrowserCopresence = {
@@ -45,14 +54,15 @@ const HUMAN_PRESENCE: BrowserCopresence = {
 };
 
 function Source(
-  props: Readonly<{ presence: BrowserCopresence; machineName?: string | null }>,
+  props: Readonly<{ presence: BrowserCopresence; machineName?: string | null; targetTitle?: string | null; aspectRatio?: number }>,
 ) {
   const watching = props.presence.kind === 'agent';
   usePublishSessionViewerSourceFacts('computer', {
+    targetTitle: props.targetTitle ?? null,
     machineName: props.machineName === undefined ? 'fly-bot-1' : props.machineName,
     personInControl: props.presence.kind === 'human',
     watching,
-    aspectRatio: 2,
+    aspectRatio: props.aspectRatio ?? 2,
   });
   const presence = React.useMemo<SessionViewerPresence>(
     () => ({
@@ -78,6 +88,8 @@ function Tree(
     harness: Harness;
     presence: BrowserCopresence;
     machineName?: string | null;
+    targetTitle?: string | null;
+    aspectRatio?: number;
   }>,
 ) {
   return (
@@ -88,7 +100,7 @@ function Tree(
       canPresentSource={() => true}
       openDocked={() => {}}
     >
-      <Source presence={props.presence} machineName={props.machineName} />
+      <Source presence={props.presence} machineName={props.machineName} targetTitle={props.targetTitle} aspectRatio={props.aspectRatio} />
       <Probe harness={props.harness} />
       <SessionViewerHost sessionId="session-a" serverId="home-a" />
     </SessionViewerControllerProvider>
@@ -100,7 +112,7 @@ async function mountOpen(
   size: Readonly<{ width: number; height: number }>,
   machineName?: string | null,
 ) {
-  const harness: Harness = { controller: null, inset: { left: 0, right: 0 } };
+  const harness: Harness = { controller: null, inset: NO_SESSION_VIEWER_INSET };
   const result = await renderWithAppProviders(
     <Tree harness={harness} presence={presence} machineName={machineName} />,
   );
@@ -119,6 +131,21 @@ async function mountOpen(
 }
 
 describe('SessionViewerHost', () => {
+  it('propagates the selected display title to the frame and source switch independently of picture or recovery state', async () => {
+    const { result, harness, frame } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 800 });
+    try {
+      await result.update(<Tree harness={harness} presence={{ kind: 'unconfirmed', controlEpoch: 2 }} targetTitle="primary" />);
+      expect(frame().props.accessibilityLabel).toContain('primary');
+      const source = () => result.tree.root.findAll(node => node.props.testID === 'session-viewer-source:computer'
+        && typeof node.props.accessibilityLabel === 'string')[0];
+      expect(source()?.props.accessibilityLabel).toBe('primary');
+      await result.update(<Tree harness={harness} presence={HUMAN_PRESENCE} targetTitle="secondary" />);
+      expect(frame().props.accessibilityLabel).toContain('secondary');
+      expect(source()?.props.accessibilityLabel).toBe('secondary');
+      await result.update(<Tree harness={harness} presence={AGENT_PRESENCE} />);
+      expect(frame().props.accessibilityLabel).not.toContain('secondary');
+    } finally { await result.unmount(); }
+  });
   it('moves by the watched picture, keeps the source’s shape and draws who acts below the picture', async () => {
     const { result, frame } = await mountOpen(AGENT_PRESENCE, {
       width: 1200,
@@ -187,6 +214,18 @@ describe('SessionViewerHost', () => {
     await result.unmount();
   });
 
+  it('centres the empty Session state in the space beside its first floating placement', async () => {
+    // The 1440 live geometry: a 946-wide transcript area. Whatever the reading column does, centred
+    // content (the empty state's headline) must not sit under the frame.
+    const { result, harness, frame } = await mountOpen(AGENT_PRESENCE, { width: 946, height: 705 });
+    const rect = frame().props.rect as FrameRect;
+    const centred = harness.inset.centred;
+    expect(centred.left).toBe(0);
+    expect(946 - centred.right).toBeLessThanOrEqual(rect.x - SESSION_VIEWER_EDGE);
+    expect(946 - centred.right).toBeGreaterThan(0);
+    await result.unmount();
+  });
+
   it('sizes the frame to hold the switch, the Machine chip and the buttons side by side', async () => {
     const { result, frame } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 800 });
     const layOut = async (testID: string, width: number) => {
@@ -209,6 +248,102 @@ describe('SessionViewerHost', () => {
     await result.unmount();
   });
 
+  it('rests above where the composer band starts in the window, not only its height up from the area bottom', async () => {
+    // Desktop: the workspace frame lifts the composer band off the window edge, so the band's
+    // height alone puts the frame over the composer's status line. The band publishes its top.
+    const { Dimensions } = await import('react-native');
+    const windowHeight = Dimensions.get('window').height;
+    const bandTopFromBottom = 200;
+    function Composer() {
+      const report = useReportSessionCockpitComposerChromeHeight(true);
+      React.useEffect(() => { report(120, bandTopFromBottom); }, [report]);
+      return null;
+    }
+    const harness: Harness = { controller: null, inset: NO_SESSION_VIEWER_INSET };
+    const result = await renderWithAppProviders(
+      <SessionCockpitChromeRegistryProvider>
+        <Composer />
+        <Tree harness={harness} presence={AGENT_PRESENCE} />
+      </SessionCockpitChromeRegistryProvider>,
+    );
+    await act(async () => {
+      harness.controller!.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
+    await act(async () => {
+      invokeTestInstanceHandler(
+        result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+        'onLayout',
+        { nativeEvent: { layout: { x: 0, y: 0, width: 1400, height: windowHeight } } },
+      );
+    });
+    const rect = result.tree.root.findByType(FloatingFrame).props.rect as FrameRect;
+    expect(rect.y + rect.height).toBeLessThanOrEqual(windowHeight - bandTopFromBottom - SESSION_VIEWER_EDGE);
+    await result.unmount();
+  });
+
+  it('keeps a live 16:10 picture floating when the room above the composer band is a sub-pixel under the controls’ ceil-rounded minimum', async () => {
+    // The controls report their width rounded up (`Math.ceil`), while the room above the composer
+    // band limits the picture by a fractional width: a shortfall below one pixel is the rounding,
+    // not a frame too small to use (live: 375 px of room, a 16:10 picture and a 453 px minimum
+    // gave 452.8 and docked the viewer the moment the live picture's footer appeared).
+    const { Dimensions } = await import('react-native');
+    const windowHeight = Dimensions.get('window').height;
+    const aspect = 16 / 10;
+    const minWidth = 453;
+    const room = resolveFloatingFrameChromeHeight({ footer: true }) + (minWidth - 0.2) / aspect;
+    const bandTopFromBottom = windowHeight - (room + SESSION_VIEWER_EDGE * 2);
+    function Composer() {
+      const report = useReportSessionCockpitComposerChromeHeight(true);
+      React.useEffect(() => { report(300, bandTopFromBottom); }, [report]);
+      return null;
+    }
+    const harness: Harness = { controller: null, inset: NO_SESSION_VIEWER_INSET };
+    const result = await renderWithAppProviders(
+      <SessionCockpitChromeRegistryProvider>
+        <Composer />
+        <Tree harness={harness} presence={AGENT_PRESENCE} aspectRatio={aspect} />
+      </SessionCockpitChromeRegistryProvider>,
+    );
+    await act(async () => {
+      harness.controller!.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
+    await act(async () => {
+      invokeTestInstanceHandler(
+        result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+        'onLayout',
+        { nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: windowHeight } } },
+      );
+    });
+    const layOut = async (testID: string, width: number) => {
+      await act(async () => {
+        invokeTestInstanceHandler(
+          result.tree.root.find((node) => node.props?.testID === testID && typeof node.props.onLayout === 'function'),
+          'onLayout',
+          { nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } },
+        );
+      });
+    };
+    await layOut('session-viewer-source-capsule', 300);
+    await layOut('session-viewer-buttons-capsule', 90);
+    await layOut('session-viewer-machine', 51);
+    expect(harness.controller!.state.mode).toBe('floating');
+    const frame = result.tree.root.findByType(FloatingFrame);
+    expect(frame.props.minWidth).toBe(minWidth);
+    // A real height shortfall is distinct from that rounding: the live 479 px composer at
+    // window y480 and host y97 leaves 351 px after the two edge gutters. At the same measured
+    // minimum, the picture plus footer cannot fit (the controls-only pending frame can).
+    const measured = { rect: frame.props.rect as FrameRect,
+      availableRect: { ...(frame.props.availableRect as FrameRect), height: 351 },
+      aspectRatio: aspect, minWidth };
+    expect(resolveFloatingFrameRect({ ...measured,
+      chromeHeight: resolveFloatingFrameChromeHeight({ footer: false }) }).fits).toBe(true);
+    const withFooter = resolveFloatingFrameRect({ ...measured,
+      chromeHeight: resolveFloatingFrameChromeHeight({ footer: true }) });
+    expect(withFooter.fits).toBe(false);
+    expect(withFooter.rect.width).toBeCloseTo(414.4);
+    await result.unmount();
+  });
+
   it('docks when the area cannot hold a usable frame beside the composer', async () => {
     const { result, harness } = await mountOpen(AGENT_PRESENCE, {
       width: 1200,
@@ -217,4 +352,29 @@ describe('SessionViewerHost', () => {
     expect(harness.controller!.state.mode).toBe('docked');
     await result.unmount();
   });
+
+  it('offers to float a docked desktop viewer again only once the area can hold the frame', async () => {
+    const { result, harness } = await mountOpen(AGENT_PRESENCE, { width: 1200, height: 70 });
+    expect(harness.controller!.state.mode).toBe('docked');
+    expect(harness.controller!.floatFits).toBe(false);
+    expect(harness.controller!.apply({ kind: 'viewer.float' }).status).toBe('unavailable');
+    // The docked viewer keeps measuring its area: room returns (the composer shrank, the window grew).
+    await act(async () => {
+      invokeTestInstanceHandler(
+        result.tree.root.findByProps({ testID: 'session-viewer-host' }),
+        'onLayout',
+        { nativeEvent: { layout: { x: 0, y: 0, width: 1200, height: 800 } } },
+      );
+    });
+    expect(harness.controller!.state.mode).toBe('docked');
+    expect(result.tree.root.findAllByType(FloatingFrame)).toHaveLength(0);
+    expect(harness.controller!.floatFits).toBe(true);
+    await act(async () => {
+      expect(harness.controller!.apply({ kind: 'viewer.float' }).status).toBe('applied');
+    });
+    expect(harness.controller!.state.mode).toBe('floating');
+    expect(result.tree.root.findAllByType(FloatingFrame)).toHaveLength(1);
+    await result.unmount();
+  });
+
 });

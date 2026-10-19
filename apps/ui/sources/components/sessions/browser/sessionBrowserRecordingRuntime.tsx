@@ -9,6 +9,7 @@ import { DEFAULT_BROWSER_CAPABILITIES } from '@happier-dev/protocol/features/pay
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { simulatorCaptureStreamFamilyV1 } from '@happier-dev/protocol/devices/simulator/v1';
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import type { BrowserShellRecordingState } from '@/components/browser/BrowserShell';
 import type { BrowserRecordingStartControlRequest } from '@/components/browser/recording';
@@ -180,14 +181,26 @@ export function useSessionBrowserRecordingRuntime(
 ): SessionBrowserRecordingRuntime | null {
     const [state, setState] = React.useState(createBrowserRecordingState);
     const startInFlightByViewIdRef = React.useRef(new Set<string>());
+    const presented = useLayoutPresentationActive();
+    const requestScope = React.useRef<AbortController | null>(null);
     const snapshot = useServerFeaturesSnapshotForServerId(params.serverId ?? null, {
         enabled: params.enabled && params.recordingCapabilities == null,
     });
 
     React.useEffect(() => {
         setState(createBrowserRecordingState());
-        startInFlightByViewIdRef.current.clear();
-    }, [params.scopeKey]);
+    }, [params.scopeKey, params.sessionId, params.machineId, params.serverId]);
+
+    React.useEffect(() => {
+        if (!params.enabled || !presented) return;
+        const controller = new AbortController();
+        requestScope.current = controller;
+        startInFlightByViewIdRef.current = new Set();
+        return () => {
+            controller.abort();
+            if (requestScope.current === controller) requestScope.current = null;
+        };
+    }, [params.scopeKey, params.sessionId, params.machineId, params.serverId, params.enabled, presented]);
 
     const sessionId = params.sessionId;
     const onUnavailable = params.onUnavailable;
@@ -197,7 +210,7 @@ export function useSessionBrowserRecordingRuntime(
     const serverId = typeof params.serverId === 'string' && params.serverId.trim().length > 0
         ? params.serverId.trim()
         : null;
-    const enabled = params.enabled && machineId != null;
+    const enabled = params.enabled && machineId != null && presented;
     const nowMs = params.nowMs ?? Date.now;
     const recordingCapabilities = params.recordingCapabilities
         ?? readRecordingCapabilitiesFromSnapshot(snapshot.status === 'ready' ? snapshot.features.capabilities.browser : null);
@@ -232,8 +245,11 @@ export function useSessionBrowserRecordingRuntime(
 
     const onStartRecording = React.useCallback(async (request: BrowserRecordingStartControlRequest) => {
         if (!enabled || !machineId) return;
-        if (startInFlightByViewIdRef.current.has(request.viewId)) return;
-        startInFlightByViewIdRef.current.add(request.viewId);
+        const signal = requestScope.current?.signal;
+        if (!signal || signal.aborted) return;
+        const pending = startInFlightByViewIdRef.current;
+        if (pending.has(request.viewId)) return;
+        pending.add(request.viewId);
         const startedAtMs = nowMs();
         const captureSource = resolveCaptureSource(request, machineId);
         const captureSourceAvailable = resolveRequestCaptureSourceAvailable({
@@ -270,6 +286,7 @@ export function useSessionBrowserRecordingRuntime(
             const result = await startBrowserRecordingViaMachineRpc({
                 machineId,
                 serverId,
+                signal,
                 input: {
                     browserSessionId: request.browserSessionId,
                     viewId: request.viewId,
@@ -292,6 +309,7 @@ export function useSessionBrowserRecordingRuntime(
                     captureSource,
                 },
             });
+            if (signal.aborted) return;
             const recording = result.ok ? readRecordingFromDaemonResult(result.result) : null;
             if (result.ok && result.result.status === 'unavailable') {
                 onUnavailable?.(mapDaemonUnavailableReasonToUi(result.result.reason));
@@ -301,7 +319,7 @@ export function useSessionBrowserRecordingRuntime(
                 setState((current) => applyBrowserRecordingSessionSnapshot(current, recording));
             }
         } finally {
-            startInFlightByViewIdRef.current.delete(request.viewId);
+            pending.delete(request.viewId);
         }
     }, [
         enabled,
@@ -317,13 +335,17 @@ export function useSessionBrowserRecordingRuntime(
 
     const onStopRecording = React.useCallback(async (recording: BrowserRecordingSessionV1) => {
         if (!enabled || !machineId) return;
+        const signal = requestScope.current?.signal;
+        if (!signal || signal.aborted) return;
         const result = await stopBrowserRecordingViaMachineRpc({
             machineId,
             serverId,
+            signal,
             recordingId: recording.recordingId,
             navigationGenerationEnd: recording.navigationGenerationEnd ?? recording.navigationGenerationStart,
             stoppedAtMs: nowMs(),
         });
+        if (signal.aborted) return;
         const updated = result.ok ? readRecordingFromDaemonResult(result.result) : null;
         if (updated) {
             setState((current) => applyBrowserRecordingSessionSnapshot(current, updated));
@@ -335,13 +357,17 @@ export function useSessionBrowserRecordingRuntime(
 
     const onCancelRecording = React.useCallback(async (recording: BrowserRecordingSessionV1) => {
         if (!enabled || !machineId) return;
+        const signal = requestScope.current?.signal;
+        if (!signal || signal.aborted) return;
         const result = await cancelBrowserRecordingViaMachineRpc({
             machineId,
             serverId,
+            signal,
             recordingId: recording.recordingId,
             atMs: nowMs(),
             reason: 'user_canceled',
         });
+        if (signal.aborted) return;
         const updated = result.ok ? readRecordingFromDaemonResult(result.result) : null;
         if (updated) {
             setState((current) => applyBrowserRecordingSessionSnapshot(current, updated));

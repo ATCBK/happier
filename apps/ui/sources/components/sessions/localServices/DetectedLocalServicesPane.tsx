@@ -74,6 +74,7 @@ function TargetServiceRow(props: React.ComponentProps<typeof ServiceRowView> & R
     const sourceRow = !sourceMachineId || target.machineId === sourceMachineId;
     const observedMachine = useMachinePresenceSummary(serverId, sourceRow ? null : target.machineId);
     const machine = sourceRow ? sourceMachine : observedMachine;
+    const unavailableMachine = useMachinePresenceSummary(serverId, target.unavailableMachineId);
     // Explicit snapshots are scoped to their Machine; a Source snapshot never supplies worker policy.
     const suppliedState = props.publicPreviewState;
     const hasSuppliedState = suppliedState !== undefined && (suppliedState === null
@@ -84,6 +85,7 @@ function TargetServiceRow(props: React.ComponentProps<typeof ServiceRowView> & R
         statusClient: publicPreviewStatusClient,
     });
     return <ServiceRowView {...rowProps} machineName={machine?.name ?? null}
+        unavailableMachineName={unavailableMachine.name}
         offline={machine?.reachability === 'unreachable'}
         publicPreviewState={hasSuppliedState ? suppliedState : publicPreviewEnabled ? preview.state : null} />;
 }

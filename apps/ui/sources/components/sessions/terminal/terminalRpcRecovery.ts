@@ -1,6 +1,6 @@
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
-import { isRpcMethodNotAvailableError, readRpcErrorCode, type RpcErrorCarrier } from '@/sync/runtime/rpcErrors';
+import { isRpcMethodNotAvailableError, readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
 
 const TERMINAL_AUTO_RETRY_BASE_DELAY_MS = 250;
@@ -15,9 +15,11 @@ export function isRecoverableTerminalRpcError(error: unknown): boolean {
     if (!error || typeof error !== 'object') {
         return false;
     }
-    const rpcError = error as RpcErrorCarrier;
-    return isRpcMethodNotAvailableError(rpcError)
-        || readRpcErrorCode(rpcError) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE;
+    const errorCode = readRpcErrorCode(error)
+        ?? ('ok' in error && error.ok === false && 'errorCode' in error && typeof error.errorCode === 'string'
+            ? error.errorCode : undefined);
+    return isRpcMethodNotAvailableError(error)
+        || errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE;
 }
 
 export function isRecoverableTerminalSessionErrorCode(errorCode: string | null | undefined): boolean {

@@ -55,7 +55,8 @@ function getStyleValue(node: renderer.ReactTestInstance, key: string): unknown {
 }
 
 
-import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
+// Install platform options before the real runtime graph resolves React Native.
+const { installSessionPaneRuntimeTestHarness } = await import('./sessionPaneRuntimeTestHarness');
 const runtime = installSessionPaneRuntimeTestHarness();
 async function renderScreen(element: React.ReactElement) {
     const screen = await renderPanelScreen(<runtime.Wrapper>{element}</runtime.Wrapper>);
