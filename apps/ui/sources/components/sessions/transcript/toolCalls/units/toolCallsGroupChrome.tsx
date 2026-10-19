@@ -133,7 +133,9 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
     const terminalStatusLabel =
         props.status === 'error'
             ? t('common.error')
-            : props.status === 'permission_denied'
+            : props.status === 'refused'
+                ? t('toolView.actionOutcome.refused')
+                : props.status === 'permission_denied'
                 ? t('errors.permissionDenied')
                 : props.status === 'permission_canceled'
                     ? t('errors.permissionCanceled')
@@ -169,6 +171,8 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                         <ActivitySpinner size={iconMatchedSpinnerSize(GROUP_STATUS_ICON_SIZE_PX)} color={workStatusGlyphColor(theme.colors, 'neutral')} />
                     ) : props.status === 'error' ? (
                         <Icon name="warning-circle" size={GROUP_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'danger')} />
+                    ) : props.status === 'refused' ? (
+                        <Icon name="minus-circle" size={16} color={theme.colors.text.secondary} />
                     ) : props.status === 'permission_denied' || props.status === 'permission_canceled' ? (
                         <Icon name="minus-circle" size={16} color={theme.colors.state.danger.foreground} />
                     ) : (
@@ -176,7 +180,7 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                         <Icon name="check-circle" size={GROUP_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'neutral')} />
                     )}
                     {terminalStatusLabel ? (
-                        <Text style={chromeStyles.terminalStatusText} numberOfLines={1}>
+                        <Text style={[chromeStyles.terminalStatusText, props.status === 'refused' ? chromeStyles.terminalStatusTextQuiet : null]} numberOfLines={1}>
                             {terminalStatusLabel}
                         </Text>
                     ) : null}
@@ -268,6 +272,9 @@ const chromeStyles = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
         ...Typography.variant('meta', 'semiBold'),
         maxWidth: 160,
+    },
+    terminalStatusTextQuiet: {
+        color: theme.colors.text.secondary,
     },
     previewMore: {
         paddingHorizontal: 0,

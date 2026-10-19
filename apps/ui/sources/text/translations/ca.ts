@@ -8721,8 +8721,6 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         actionOutcome: {
           refused: "Rebutjada",
           failed: "Fallida",
-          refusedCount: ({ count }: { count: number }) => count === 1 ? '1 rebutjada' : `${count} rebutjades`,
-          failedCount: ({ count }: { count: number }) => count === 1 ? '1 fallida' : `${count} fallides`,
           cause: {
             outsideAgentSessions: "No és una sessió d’aquest Agent",
             unverifiedAgentAccess: "No s’ha pogut confirmar l’accés d’aquest Agent",

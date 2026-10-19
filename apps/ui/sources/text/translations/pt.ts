@@ -9607,8 +9607,6 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
     actionOutcome: {
       refused: "Recusada",
       failed: "Falhou",
-      refusedCount: ({ count }: { count: number }) => count === 1 ? '1 recusada' : `${count} recusadas`,
-      failedCount: ({ count }: { count: number }) => count === 1 ? '1 falhou' : `${count} falharam`,
       cause: {
         outsideAgentSessions: "Não é uma sessão deste Agent",
         unverifiedAgentAccess: "Não foi possível confirmar o acesso deste Agent",

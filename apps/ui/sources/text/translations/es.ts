@@ -9487,8 +9487,6 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
     actionOutcome: {
       refused: "Rechazada",
       failed: "Fallida",
-      refusedCount: ({ count }: { count: number }) => count === 1 ? '1 rechazada' : `${count} rechazadas`,
-      failedCount: ({ count }: { count: number }) => count === 1 ? '1 fallida' : `${count} fallidas`,
       cause: {
         outsideAgentSessions: "No es una sesión de este Agent",
         unverifiedAgentAccess: "No se pudo confirmar el acceso de este Agent",

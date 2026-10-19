@@ -9709,8 +9709,6 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     actionOutcome: {
       refused: "Rifiutata",
       failed: "Non riuscita",
-      refusedCount: ({ count }: { count: number }) => count === 1 ? '1 rifiutata' : `${count} rifiutate`,
-      failedCount: ({ count }: { count: number }) => count === 1 ? '1 non riuscita' : `${count} non riuscite`,
       cause: {
         outsideAgentSessions: "Non è una sessione di questo Agent",
         unverifiedAgentAccess: "Impossibile confermare l’accesso di questo Agent",

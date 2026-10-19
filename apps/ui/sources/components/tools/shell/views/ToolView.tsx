@@ -22,6 +22,7 @@ import { TranscriptCollapsible } from '@/components/sessions/transcript/motion/T
 import { buildToolHeaderModel } from '@/components/tools/shell/presentation/buildToolHeaderModel';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { doesToolInlineBodyStateError, resolveToolInlineErrorDisplay } from '@/components/tools/shell/presentation/resolveToolInlineErrorDisplay';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
@@ -330,6 +331,8 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
     }
 
     const statusKind = resolveToolStatusIndicatorKind(toolForRendering);
+    // A typed refusal is the product working as designed: quiet ink, not the failure rose.
+    const isRefusal = statusKind === 'error' && resolveToolActionFailure(toolForRendering)?.outcome === 'refused';
     if (statusKind === 'permission_blocked') {
         statusIcon = <Icon name="minus-circle" size={20} color={theme.colors.text.secondary} />;
     } else if (statusKind === 'permission_pending') {
@@ -346,7 +349,9 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                 }
                 break;
             case 'error':
-                statusIcon = <Icon name="warning-circle" size={20} color={theme.colors.state.danger.foreground} />;
+                statusIcon = isRefusal
+                    ? <Icon name="minus-circle" size={20} color={theme.colors.text.secondary} />
+                    : <Icon name="warning-circle" size={20} color={theme.colors.state.danger.foreground} />;
                 break;
             case 'completed':
             case 'none':
@@ -472,7 +477,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                     {errorSummary ? (
                         <View style={styles.headerError}>
                             {/* The status glyph beside the title already marks the failure; the summary adds its words only. */}
-                            <Text style={styles.headerErrorText} numberOfLines={1}>
+                            <Text style={[styles.headerErrorText, isRefusal ? styles.headerErrorTextQuiet : null]} numberOfLines={1}>
                                 {errorSummary}
                             </Text>
                         </View>
@@ -678,6 +683,9 @@ const styles = StyleSheet.create((theme) => ({
     headerErrorText: {
         ...Typography.variant('body', 'semiBold'),
         color: theme.colors.state.danger.foreground,
+    },
+    headerErrorTextQuiet: {
+        color: theme.colors.text.secondary,
     },
     headerActionsContainer: {
         flexDirection: 'row',

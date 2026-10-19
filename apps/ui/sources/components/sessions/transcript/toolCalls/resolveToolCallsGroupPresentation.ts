@@ -1,10 +1,11 @@
 import type { ToolCallMessage } from '@happier-dev/session-core/messages';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { projectReviewToolMessage } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 
-export type ToolCallsGroupStatus = 'running' | 'completed' | 'error' | 'permission_denied' | 'permission_canceled';
+export type ToolCallsGroupStatus = 'running' | 'completed' | 'error' | 'refused' | 'permission_denied' | 'permission_canceled';
 
 export function resolveToolCallsGroupStatus(params: Readonly<{
     toolMessages: readonly ToolCallMessage[];
@@ -12,6 +13,7 @@ export function resolveToolCallsGroupStatus(params: Readonly<{
     showToolCalls?: boolean;
 }>): ToolCallsGroupStatus {
     let sawError = false;
+    let sawRefusal = false;
     let sawPermissionDenied = false;
     let sawPermissionCanceled = false;
     let sawRunning = false;
@@ -25,13 +27,18 @@ export function resolveToolCallsGroupStatus(params: Readonly<{
             if (params.showToolCalls !== false) return 'running';
             sawRunning = true;
         }
-        if (kind === 'error') sawError = true;
+        if (kind === 'error') {
+            // A refused call is the product saying no, not a break: it outranks nothing that failed.
+            if (resolveToolActionFailure(tool)?.outcome === 'refused') sawRefusal = true;
+            else sawError = true;
+        }
         if (kind === 'permission_blocked') {
             if (tool.permission?.status === 'denied') sawPermissionDenied = true;
             else sawPermissionCanceled = true;
         }
     }
     if (sawError) return 'error';
+    if (sawRefusal) return 'refused';
     if (sawPermissionDenied) return 'permission_denied';
     if (sawPermissionCanceled) return 'permission_canceled';
     if (sawRunning) return 'running';

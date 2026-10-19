@@ -1,6 +1,7 @@
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { parseToolUseError } from '@/utils/errors/toolErrorParser';
 import { getErrorMessage } from '@/utils/errors/getErrorMessage';
+import { resolveToolActionFailure, toolActionOutcomeLabel } from './resolveToolActionFailure';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -19,6 +20,9 @@ function stripErrorPrefix(text: string): string {
 }
 
 export function resolveToolErrorSummary(tool: ToolCall): string | null {
+    // A typed Action failure reads as its outcome, never as the raw code it carries.
+    const actionFailure = resolveToolActionFailure(tool);
+    if (actionFailure) return toolActionOutcomeLabel(actionFailure.outcome);
     const result = tool.result;
     const parsedError = parseToolUseError(result);
     if (!parsedError.isToolUseError && parsedError.errorMessage) return firstLine(parsedError.errorMessage);

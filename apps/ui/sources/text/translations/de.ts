@@ -9420,8 +9420,6 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         actionOutcome: {
           refused: "Abgelehnt",
           failed: "Fehlgeschlagen",
-          refusedCount: ({ count }: { count: number }) => `${count} abgelehnt`,
-          failedCount: ({ count }: { count: number }) => `${count} fehlgeschlagen`,
           cause: {
             outsideAgentSessions: "Keine Sitzung dieses Agents",
             unverifiedAgentAccess: "Zugriff dieses Agents nicht bestätigt",

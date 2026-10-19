@@ -18,6 +18,7 @@ import {
     type ToolViewDetailLevelSetting,
 } from '@/components/tools/normalization/policy/resolveToolViewDetailDefaultsForChromeMode';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { resolveToolPermissionTerminalErrorMessage } from '@/components/tools/shell/permissions/resolveToolPermissionTerminalErrorMessage';
@@ -84,6 +85,9 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
         toolViewDetailLevelDefaultLocalControl,
     ]);
 
+    const statusKind = resolveToolStatusIndicatorKind(model.toolForRendering);
+    const actionFailure = statusKind === 'error' ? resolveToolActionFailure(model.toolForRendering) : null;
+    const isRefusal = actionFailure?.outcome === 'refused';
     const headerSubtitle = collapsedDetailLevel === 'title' ? null : model.subtitle;
     const headerStatusText = collapsedDetailLevel === 'title' ? null : model.statusText;
     const { density, iconSize } = deriveToolTimelineDensity(collapsedDetailLevel);
@@ -105,7 +109,6 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
         () => readTranscriptProjectCommandCall(model.toolForRendering),
         [model.toolForRendering],
     );
-    const statusKind = resolveToolStatusIndicatorKind(model.toolForRendering);
     const terminalStatusSummary =
         statusKind === 'error'
             ? (resolveToolErrorSummary(model.toolForRendering) ?? t('common.error'))
@@ -129,11 +132,11 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
                 style={styles.terminalStatusContainer}
             >
                 <Icon
-                    name={statusKind === 'permission_blocked' ? 'minus-circle' : 'warning-circle'}
+                    name={statusKind === 'permission_blocked' || isRefusal ? 'minus-circle' : 'warning-circle'}
                     size={16}
-                    color={theme.colors.state.danger.foreground}
+                    color={isRefusal ? theme.colors.text.secondary : theme.colors.state.danger.foreground}
                 />
-                <Text style={styles.terminalStatusText} numberOfLines={1}>
+                <Text style={[styles.terminalStatusText, isRefusal ? styles.terminalStatusTextQuiet : null]} numberOfLines={1}>
                     {terminalStatusSummary}
                 </Text>
             </View>
@@ -145,6 +148,7 @@ export const ToolTimelinePreviewRow = React.memo(function ToolTimelinePreviewRow
         title: model.title,
         subtitle: headerSubtitle,
         statusText: headerStatusText,
+        causeText: actionFailure?.summary ?? null,
         onPress: props.onPress ?? null,
         canOpen: false,
         onOpen: null,
@@ -171,5 +175,8 @@ const styles = StyleSheet.create((theme) => ({
     terminalStatusText: {
         ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.state.danger.foreground,
+    },
+    terminalStatusTextQuiet: {
+        color: theme.colors.text.secondary,
     },
 }));

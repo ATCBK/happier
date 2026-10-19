@@ -202,6 +202,28 @@ describe('ToolCallsGroupUnitHeaderRow', () => {
         expect(screen.getTextContent()).toContain('errors.permissionDenied');
     });
 
+    it('reports a refused Action call as refused instead of a success check', async () => {
+        const text = JSON.stringify({ errorCode: 'unsupported_action', error: 'unsupported_action:session.stop',
+            details: { cause: 'target_outside_led_subtree' } });
+        const screen = await renderHeaderRow({
+            toolMessages: [
+                createToolCallMessageFixture({ id: 'm0', createdAt: 1, tool: { state: 'completed' } as any }),
+                createToolCallMessageFixture({
+                    id: 'm1',
+                    createdAt: 2,
+                    tool: { name: 'mcp__happier__action_execute', state: 'completed', input: { actionId: 'session.stop', input: {} },
+                        result: { content: [{ type: 'text', text }], text } } as any,
+                }),
+            ],
+        });
+
+        expect(screen.findAllByProps({ name: 'check-circle' })).toHaveLength(0);
+        expect(screen.findAllByProps({ name: 'minus-circle' }).length).toBeGreaterThan(0);
+        expect(screen.findByTestId('tool-calls-group-status:refused')).toMatchObject({
+            props: { accessible: true, accessibilityLabel: 'toolView.actionOutcome.refused' },
+        });
+    });
+
     it('reports inactive pending permissions as blocked instead of successful', async () => {
         const screen = await renderHeaderRow({
             interaction: {

@@ -128,7 +128,8 @@ function readFailureCause(details: unknown): string | null {
  * Other MCP servers' results are never read, whatever keys they carry.
  */
 export function readHappierActionToolFailure(toolName: string, input: unknown, result: unknown): HappierActionToolFailure | null {
-    if (firstPartyName(readHappierActionToolName(toolName, input).trim()) === null) return null;
+    // Persisted tool calls are read at a boundary: a record without a name is not a first-party call.
+    if (typeof toolName !== 'string' || firstPartyName(readHappierActionToolName(toolName, input).trim()) === null) return null;
     for (const candidate of readHappierActionToolResultCandidates(result, input)) {
         if (!isRecord(candidate) || candidate.ok === true) continue;
         if (typeof candidate.errorCode === 'string' && candidate.errorCode.trim() && typeof candidate.error === 'string') {

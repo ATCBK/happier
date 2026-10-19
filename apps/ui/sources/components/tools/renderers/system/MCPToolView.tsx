@@ -17,6 +17,8 @@ import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from 
 import { getActionSpec } from '@happier-dev/protocol/actions';
 import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
 import { resolveActionTitle } from '@/text/actionTitles';
+import { Typography } from '@/constants/Typography';
+import { resolveToolActionFailure, type ToolActionFailurePresentation } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 
 
 /**
@@ -144,11 +146,21 @@ export const projectMCPDisplayText: ToolDisplayTextProjector = (tool) => {
     ];
 };
 
+/** The typed code of a refused or failed Action call as a quiet fact; the outcome and cause already read on its header. */
+function ActionFailureCode({ failure }: Readonly<{ failure: ToolActionFailurePresentation }>) {
+    return (
+        <Text testID="mcp-tool-action-failure" style={styles.failureCode} selectable>
+            {failure.cause ? `${failure.code} · ${failure.cause}` : failure.code}
+        </Text>
+    );
+}
+
 export const MCPToolView = React.memo<ToolViewProps>(({ tool, detailLevel, messageId, serverId }) => {
     const find = useToolFindState(messageId);
     if (detailLevel === 'title') return null;
 
     const { title, subtitle, resultText, input, output } = getMCPDisplay(tool);
+    const actionFailure = resolveToolActionFailure(tool);
     const projectCommandCall = readTranscriptProjectCommandCall(tool);
     const machineResourcesCall = projectCommandCall ? null : readTranscriptMachineResourcesCall(tool);
 
@@ -161,7 +173,7 @@ export const MCPToolView = React.memo<ToolViewProps>(({ tool, detailLevel, messa
                             {subtitle}
                         </Text>
                     ) : null}
-                    {tool.state === 'completed' && resultText ? (
+                    {actionFailure ? <ActionFailureCode failure={actionFailure} /> : tool.state === 'completed' && resultText ? (
                         <CodeView code={truncate(resultText, 800)} />
                     ) : null}
                 </View>
@@ -217,6 +229,11 @@ const styles = StyleSheet.create((theme) => ({
     },
     section: {
         gap: theme.space.s6,
+    },
+    failureCode: {
+        color: theme.colors.text.tertiary,
+        ...Typography.variant('meta'),
+        ...Typography.mono(),
     },
     sectionTitle: {
         fontSize: 12,

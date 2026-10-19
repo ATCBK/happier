@@ -9324,8 +9324,6 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
     actionOutcome: {
       refused: "Refusé",
       failed: "Échec",
-      refusedCount: ({ count }: { count: number }) => count === 1 ? '1 refusé' : `${count} refusés`,
-      failedCount: ({ count }: { count: number }) => `${count} en échec`,
       cause: {
         outsideAgentSessions: "Pas une session de cet Agent",
         unverifiedAgentAccess: "Accès de cet Agent impossible à confirmer",

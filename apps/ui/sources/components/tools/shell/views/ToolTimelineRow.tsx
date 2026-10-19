@@ -49,6 +49,7 @@ import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveIna
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
 import { Text } from '@/components/ui/text/Text';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
 import { isAskUserQuestionToolName } from '@happier-dev/protocol/activity/agentRequestSummary';
@@ -314,6 +315,9 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
     const [headerActions, setHeaderActions] = React.useState<React.ReactNode | null>(null);
     const showTaskRunningIndicator = isSubAgentTranscriptTool;
     const statusKind = resolveToolStatusIndicatorKind(toolForRendering);
+    const actionFailure = statusKind === 'error' ? resolveToolActionFailure(toolForRendering) : null;
+    // A refusal is the product working as designed: its mark stays in the quiet ink, never the failure rose.
+    const isRefusal = actionFailure?.outcome === 'refused';
     const terminalStatusSummary =
         statusKind === 'error'
             ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error'))
@@ -337,11 +341,11 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
                     style={styles.headerTerminalStatus}
                 >
                     <Icon
-                        name={statusKind === 'permission_blocked' ? 'minus-circle' : 'warning-circle'}
+                        name={statusKind === 'permission_blocked' || isRefusal ? 'minus-circle' : 'warning-circle'}
                         size={16}
-                        color={theme.colors.state.danger.foreground}
+                        color={isRefusal ? theme.colors.text.secondary : theme.colors.state.danger.foreground}
                     />
-                    <Text style={styles.headerTerminalStatusText} numberOfLines={1}>
+                    <Text style={[styles.headerTerminalStatusText, isRefusal ? styles.headerTerminalStatusTextQuiet : null]} numberOfLines={1}>
                         {terminalStatusSummary}
                     </Text>
                 </View>
@@ -467,6 +471,7 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
         findRevealBlockId: find?.reveal?.blockId,
         subtitle: headerSubtitle,
         statusText: headerStatusText,
+        causeText: actionFailure?.summary ?? null,
         onPress: onPress,
         canOpen: canOpen,
         onOpen: handleOpen,
@@ -582,5 +587,8 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
         ...Typography.variant('meta', 'semiBold'),
         maxWidth: 220,
+    },
+    headerTerminalStatusTextQuiet: {
+        color: theme.colors.text.secondary,
     },
 }));

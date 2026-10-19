@@ -9320,8 +9320,6 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
     actionOutcome: {
       refused: "Odrzucone",
       failed: "Nieudane",
-      refusedCount: ({ count }: { count: number }) => `Odrzucone: ${count}`,
-      failedCount: ({ count }: { count: number }) => `Nieudane: ${count}`,
       cause: {
         outsideAgentSessions: "To nie jest sesja tego agenta",
         unverifiedAgentAccess: "Nie można potwierdzić dostępu tego agenta",

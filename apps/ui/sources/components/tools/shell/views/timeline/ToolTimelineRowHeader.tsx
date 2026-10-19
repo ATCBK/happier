@@ -40,6 +40,8 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
     findRevealBlockId?: string;
     subtitle?: string | null;
     statusText?: string | null;
+    /** Why a refused or failed call ended, in words: its own quiet line under the title, so a narrow row never clips it. */
+    causeText?: string | null;
     onPress?: (() => void) | null;
     canOpen?: boolean;
     onOpen?: (() => void) | null;
@@ -93,6 +95,7 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
         disclosure?.state === 'expanded' ? 'caret-up' : disclosure?.state === 'collapsed' ? 'caret-down' : null;
 
     return (
+        <>
         <View style={styles.container}>
             <Pressable
                 testID={props.testID}
@@ -196,6 +199,10 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                 </View>
             ) : null}
         </View>
+        {props.causeText ? (
+            <Text testID="tool-timeline-row-cause" style={styles.cause}>{props.causeText}</Text>
+        ) : null}
+        </>
     );
 });
 
@@ -204,6 +211,13 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s6,
+    },
+    cause: {
+        ...Typography.variant('meta'),
+        color: theme.colors.text.secondary,
+        // Under the title: the icon column and its gap, so the cause reads as part of the row.
+        paddingLeft: 18 + theme.space.s6,
+        paddingBottom: theme.space.s4,
     },
     row: {
         flex: 1,
