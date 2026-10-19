@@ -10,6 +10,11 @@ const RETIRED_LIST: DiscussionRepositoryListSnapshot = Object.freeze({
     items: [], status: 'revoked', errorCode: 'discussion_read_denied', nextCursor: null, incomplete: true,
 });
 
+export type DiscussionListSearchSnapshot = DiscussionRepositoryListSnapshot & Readonly<{
+    /** Active-query availability only, not pending work or corpus incompleteness; false when not searching. */
+    sourceLabelsUnavailable: boolean;
+}>;
+
 /** Open-list demand only: paginate the selected corpus, then search its already-opened display facts. */
 export function useDiscussionListSearch(input: Readonly<{
     repository: DiscussionRepository;
@@ -18,7 +23,7 @@ export function useDiscussionListSearch(input: Readonly<{
     query: string;
     state: 'active' | 'archived';
     anchorSessionId?: string;
-}>): DiscussionRepositoryListSnapshot {
+}>): DiscussionListSearchSnapshot {
     const { repository, scope, accountLifetime, query, state, anchorSessionId } = input;
     const readList = React.useCallback(() => repository.getListSnapshot(anchorSessionId).lists[state], [repository, anchorSessionId, state]);
     const list = React.useSyncExternalStore(repository.subscribe, readList, readList);
@@ -57,20 +62,30 @@ export function useDiscussionListSearch(input: Readonly<{
         const artifact = storage.artifacts[id];
         return artifact?.isDecrypted === true && !artifact.draft ? artifact.title : null;
     })));
-    const sourceLabels = React.useMemo(() => {
+    const sourceDisplay = React.useMemo(() => {
         const sessions = new Map(addresses.map((address, index) => [address.sessionId, sessionTitles[index]]));
         const docs = new Map(docIds.map((id, index) => [id, docTitles[index]]));
-        return new Map(visible.items.map(row => [row.id, [
-            ...(row.anchor?.kind === 'session' ? [sessions.get(row.anchor.sessionId)] : []),
-            ...(row.anchor?.kind === 'doc' && areServerProfileIdentifiersEquivalent(row.anchor.doc.ref.serverId, scope.serverId)
-                ? [docs.get(row.anchor.doc.ref.artifactId)] : []),
-            ...(row.participantSessionIds ?? []).map(id => sessions.get(id)),
-        ].filter((label): label is string => typeof label === 'string' && label.length > 0)]));
-    }, [visible.items, addresses, sessionTitles, docIds, docTitles, scope.serverId]);
-    const previous = React.useRef<DiscussionRepositoryListSnapshot | undefined>(undefined);
+        let unavailable = false;
+        const labels = new Map(visible.items.map(row => {
+            const values = [
+                ...(row.anchor?.kind === 'session' ? [sessions.get(row.anchor.sessionId)] : []),
+                ...(row.anchor?.kind === 'doc' ? [areServerProfileIdentifiersEquivalent(row.anchor.doc.ref.serverId, scope.serverId)
+                    ? docs.get(row.anchor.doc.ref.artifactId) : undefined] : []),
+                ...(row.participantSessionIds ?? []).map(id => sessions.get(id)),
+            ];
+            // Task source labels have no admitted client reader yet. That is
+            // unavailable display data, not a request to invent or fetch a title.
+            if (row.anchor?.kind === 'task' || values.some(label => !label)) unavailable = true;
+            return [row.id, values.filter((label): label is string => typeof label === 'string' && label.length > 0)] as const;
+        }));
+        return { labels, unavailable: searching && unavailable };
+    }, [searching, visible.items, addresses, sessionTitles, docIds, docTitles, scope.serverId]);
+    const previous = React.useRef<DiscussionListSearchSnapshot | undefined>(undefined);
     return React.useMemo(() => {
-        const selected = selectDiscussionListSearch(visible, query, sourceLabels, previous.current);
-        previous.current = selected;
-        return selected;
-    }, [visible, query, sourceLabels]);
+        const selected = selectDiscussionListSearch(visible, query, sourceDisplay.labels, previous.current);
+        const result = selected === previous.current && previous.current.sourceLabelsUnavailable === sourceDisplay.unavailable
+            ? previous.current : { ...selected, sourceLabelsUnavailable: sourceDisplay.unavailable };
+        previous.current = result;
+        return result;
+    }, [visible, query, sourceDisplay]);
 }

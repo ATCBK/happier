@@ -398,6 +398,9 @@ export function createDiscussionClient(options: Readonly<{ scope: ServerAccountS
             onResolvedParticipants?: (participants: readonly DiscussionInitialParticipantV1[]) => void;
             replyTarget?: DiscussionActionInputV1ById['discussion.post']['replyTarget'] }, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>> => {
             if ('kind' in input.content && input.content.kind === 'doc_passage_comment') {
+                // The Doc comment owner declares no initial-audience operand.
+                // Never acknowledge invitations that delegation would discard.
+                if (input.participants?.length) return { kind: 'failed', errorCode: 'invalid_parameters' };
                 const { passage, content } = input.content;
                 const ref = { ...passage.ref, serverId: passage.ref.serverId ?? options.scope.serverId };
                 if (ref.serverId !== options.scope.serverId) return { kind: 'failed', errorCode: 'server_target_mismatch' };
