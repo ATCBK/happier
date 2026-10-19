@@ -17,6 +17,9 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { sessionListRuntimeClock } from './sessionListRuntimeClock';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -69,14 +72,18 @@ let serverId: string;
 let previousStorageState = storage.getState();
 let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 let previousAppliedAvailability = isAppliedActiveServerRuntimeAvailable();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let singleton: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
 
 beforeEach(async () => {
     previousStorageState = storage.getState();
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousAppliedAvailability = isAppliedActiveServerRuntimeAvailable();
     await home.reset();
+    singleton = await loadSyncSingletonForTests();
     serverId = await home.addHome({ serverUrl: 'http://unified-list.test', name: 'List Home', accountId: 'account-a' });
     installPageAnswer(serverId);
+    connection = await restoreServerAccountForTest({ serverUrl: 'http://unified-list.test', accountId: 'account-a', request: home.request });
     storage.setState({
         profileScope: { serverId, accountId: 'account-a' },
         settings: { ...settingsDefaults, experiments: true, featureToggles: { automations: true },
@@ -93,6 +100,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
+    singleton?.dispose();
+    singleton = undefined;
     await home.reset();
     resetServerFeaturesClientForTests();
     clearSessionListViewFilterRetentionForTests();
@@ -149,6 +160,36 @@ function runFixture(overrides: Parameters<typeof createWorkflowRunSummaryFixture
 }
 
 describe('the mounted unified list feed', () => {
+    it('retains the Sessions pane projection when a row age advances the shared clock', async () => {
+        vi.useFakeTimers();
+        const row = createSessionListRenderableSessionFixture({ id: 'quiet-session', active: false,
+            metadata: { path: '/repo' } });
+        storage.getState().applyServerScopedSessionListRows(serverId, [row], { source: 'ordinary', mode: 'replace' });
+        const options = { workFilter: filter('sessions') };
+        let publications = 0;
+        const hook = await renderHook(() => {
+            const pane = useVisibleSessionListPaneState('all', options);
+            React.useEffect(() => { publications++; }, [pane]);
+            return pane;
+        });
+        const rowClock = {};
+        try {
+            await flushHookEffects({ cycles: 1, turns: 2 });
+            expect(hook.getCurrent().visibleSessionListIndex?.some(item => item.type === 'session' && item.sessionId === row.id)).toBe(true);
+            const before = hook.getCurrent();
+            const settledPublications = publications;
+            sessionListRuntimeClock.requestWake(rowClock, Date.now() + 60_000);
+            await flushHookEffects({ advanceTimersMs: 60_000, cycles: 1, turns: 2 });
+            expect(publications).toBe(settledPublications);
+            expect(hook.getCurrent()).toBe(before);
+            expect(home.requestsFor(route)).toEqual([]);
+        } finally {
+            sessionListRuntimeClock.clearWake(rowClock);
+            await hook.unmount();
+            vi.useRealTimers();
+        }
+    });
+
     it.each(['you', 'triggers'] as const)('switches the Sessions destination from Sessions to Runs through its shared filter controller for %s', async (starter) => {
         readPage.mockResolvedValue({ runs: [
             runFixture({ id: 'user-run', startedBy: 'user' }),
@@ -272,18 +313,21 @@ describe('the mounted unified list feed', () => {
     });
 
     it('qualifies a Run by portable Home identity when the filter names its saved alias', async () => {
+        await connection?.dispose();
         const id = await home.addHome({ serverUrl: 'http://unified-list-alias.test', name: 'Alias Home', accountId: 'account-a' });
         const profile = { id, serverUrl: 'http://unified-list-alias.test' };
         const portableId = 'srv_unified-list-alias';
         const identified = await setServerProfileIdentityForUrl(profile.serverUrl, portableId);
         expect(identified).not.toBeNull();
         expect(identified?.serverIdentityId).toBe(portableId);
+        installPageAnswer(profile.id, portableId);
+        connection = await restoreServerAccountForTest({ serverUrl: profile.serverUrl,
+            serverIdentityId: portableId, accountId: 'account-a', request: home.request });
         storage.setState({
             profileScope: { serverId: portableId, accountId: 'account-a' },
             sessionListIndexByServerId: { [profile.id]: null },
         });
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-        installPageAnswer(profile.id, portableId);
         expect(getActiveServerAccountScope()).toEqual({ serverId: portableId, accountId: 'account-a' });
         readPage.mockResolvedValue({ runs: [runFixture({ startedBy: 'user' })] });
         const workFilter = normalizeSessionListFilterV1({ homeServerIds: [profile.id], show: 'runs' });
