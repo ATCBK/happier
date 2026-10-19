@@ -189,9 +189,10 @@ function boundaries(options: Readonly<{
 }
 
 describe('createDaemonWorkspaceSyncRuntime', () => {
-  it('preserves the idle interval across equal Project refreshes while advancing graph settlement', async () => {
+  it('preserves the idle interval across equal Project refreshes without local relationships', async () => {
     const harness = boundaries();
-    harness.publishSnapshot(snapshot());
+    const foreignRelationships = [{ ...relationship, controllerMachineId: 'machine-2' }];
+    harness.publishSnapshot(snapshot(foreignRelationships));
     const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
     let now = 100;
     const inventory = createManagedActivityInventory({ producers: [runtime.managedWorkspaceSync.activity!], now: () => now });
@@ -200,13 +201,49 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
       expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
       harness.command.mockClear();
       now = 200;
-      harness.publishSnapshot({ ...snapshot(), loadedAtMs: 2 });
-      harness.publishSnapshot({ ...snapshot(undefined, 2), loadedAtMs: 3 });
+      harness.publishSnapshot({ ...snapshot(foreignRelationships), loadedAtMs: 2 });
+      harness.publishSnapshot({ ...snapshot(foreignRelationships, 2), loadedAtMs: 3 });
       await runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' });
       expect(await inventory.readDecision()).toEqual({ kind: 'idle', since: 100 });
       expect(harness.command).not.toHaveBeenCalled();
     } finally {
       inventory.dispose();
+      await runtime.stop();
+    }
+  });
+
+  it('does not advance equal Project settlement past active native Sync work', async () => {
+    const harness = boundaries();
+    harness.publishSnapshot(snapshot());
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const entering = new Promise<void>(resolve => { entered = resolve; });
+    let flushing: Promise<unknown> | undefined;
+    let settling: Promise<void> | undefined;
+    try {
+      await runtime.start();
+      const command = harness.command.getMockImplementation()!;
+      harness.command.mockImplementation(async input => {
+        if (input.t === 'flush') { entered(); await blocked; }
+        return await command(input);
+      });
+      flushing = runtime.managedWorkspaceSync.flush(relationship.relationshipId);
+      await entering;
+      harness.publishSnapshot(snapshot(undefined, 2));
+      let settled = false;
+      settling = runtime.whenProjectsSettled({ graphRevision: 2, scopeKey: 'account-1' })
+        .then(() => { settled = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(false);
+      release();
+      await flushing;
+      await settling;
+      expect(settled).toBe(true);
+    } finally {
+      release();
+      await Promise.allSettled([flushing, settling]);
       await runtime.stop();
     }
   });

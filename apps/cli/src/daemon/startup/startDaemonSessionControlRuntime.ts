@@ -66,6 +66,7 @@ import { fetchAccountProfile } from '@/api/accountProfile';
 import { fetchSessionById as fetchForegroundSessionById } from '@/session/transport/http/sessionsHttp';
 import { readSessionAccessProjectionRoleV1 as readForegroundSessionAccessRole } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { resolveAccountSettingsScopeKey as resolveForegroundAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import {
   createSpawnConnectedServicesTeamResourceCatalogResolver as createForegroundTeamResourceCatalogResolver,
   resolvePurposeTeamCredentialBindingIntentsFromHome as resolveForegroundTeamCredentialBindingIntents,
@@ -17047,6 +17048,14 @@ export async function startDaemonSessionControlRuntime(
             try {
               return await runnerExecutionRunSnapshots.dispatch(request, context);
             } catch (error) {
+              // This boundary also serves SCM and native model reads. Retain
+              // the failing operation and Home disposition before returning
+              // the deliberately narrow public snapshot refusal.
+              logger.warnLocalFile('[EXECUTION RUN] Snapshot service operation failed', {
+                sessionId,
+                operation: request.operation.kind,
+                ...classifyServerEndpointError(error),
+              });
               const code = ProviderErrorCodeV1Schema.safeParse(error && typeof error === 'object' && 'code' in error ? error.code : undefined);
               if (code.success) return { ok: false as const, error: { code: code.data, message: code.data } };
               return { ok: false as const, error: { code: 'execution_run_contribution_snapshot_unavailable',

@@ -20,6 +20,11 @@ export function getMachineSocketRoom(userId: string, machineId: string): string 
     return `machine:${machineId}:${userId}`;
 }
 
+export function getUserMachinesSocketRoom(userId: string): string {
+    if (!userId) throw new Error("getUserMachinesSocketRoom: userId is required");
+    return `user-machines:${userId}`;
+}
+
 export function getMachineInstallationSocketRoom(userId: string, machineId: string, installationId: string): string {
     if (!installationId) throw new Error('getMachineInstallationSocketRoom: installationId is required');
     return `${getMachineSocketRoom(userId, machineId)}:installation:${installationId}`;
@@ -114,7 +119,7 @@ export function getProtectedSocketRooms(params: {
         // for "all authenticated connections" events, and Bun's long-lived socket clients retain native
         // memory aggressively under websocket churn. Keep machine daemons on dedicated machine rooms.
         if (params.includeUserMachinesRoom !== false) {
-            rooms.push(`user-machines:${params.userId}`);
+            rooms.push(getUserMachinesSocketRoom(params.userId));
         }
         rooms.push(getMachineSocketRoom(params.userId, params.machineId));
     }

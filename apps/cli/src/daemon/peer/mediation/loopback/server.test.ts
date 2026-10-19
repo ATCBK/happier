@@ -11,11 +11,13 @@ import {
   createPeerMachineRpcRequestHashV1,
   PEER_MEDIATION_RECEIPTS,
   PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+  PeerMachineRpcDirectResponseV2Schema,
   type DirectRouteGrantPayloadV2,
   type IrohMachineHandshakeV1,
   type SignedDirectRouteGrantV2,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import {
   IROH_MACHINE_ADMISSION_PATH,
   IROH_MACHINE_APPLICATION_CAPABILITY_HEADER,
@@ -644,7 +646,7 @@ describe('peer mediation loopback server', () => {
     }
   });
 
-  it('executes direct machine RPC only after grant, proof, method policy, and endpoint binding verify', async () => {
+  it('composes direct machine RPC JSON with its strict consumer after grant, proof, method policy, and endpoint binding verify', async () => {
     const grantKeyPair = tweetnacl.sign.keyPair();
     const grant = createSignedMachineRpcGrant({
       signingSecretKey: grantKeyPair.secretKey,
@@ -658,7 +660,12 @@ describe('peer mediation loopback server', () => {
       publicKey: toBase64Url(grantKeyPair.publicKey),
     }];
     let currentTrustRoots = startupTrustRoots;
-    const invokeLocal = vi.fn(async (method: string, params: unknown) => ({ method, params, ok: true }));
+    const dispatched: unknown[] = [];
+    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
+    rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_MEMORY_STATUS, async params => {
+      dispatched.push(params);
+      return { method: RPC_METHODS.DAEMON_MEMORY_STATUS, params, ok: true };
+    });
     const app = createPeerMediationLoopbackApp({
       nowMs: () => 2_000,
       expected: {
@@ -670,11 +677,7 @@ describe('peer mediation loopback server', () => {
       },
       trustRoots: startupTrustRoots,
       resolveTrustRoots: () => currentTrustRoots,
-      rpc: {
-        rpcHandlerManager: {
-          invokeLocal,
-        },
-      },
+      rpc: { rpcHandlerManager },
     });
 
     currentTrustRoots = [];
@@ -696,41 +699,46 @@ describe('peer mediation loopback server', () => {
       });
       expect(unavailable.json()).toMatchObject({ ok: false, reasonCode: 'grant_unknown_key' });
     }
-    expect(invokeLocal).not.toHaveBeenCalled();
+    expect(dispatched).toEqual([]);
     currentTrustRoots = startupTrustRoots;
 
-    const response = await app.inject({
-      method: 'POST',
-      url: '/peer-mediation/v2/rpc',
-      payload: {
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    try {
+      const response = await fetch(`${address}/peer-mediation/v2/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          v: 2,
+          requestId: 'request_1',
+          method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+          params: { includeWorkers: true },
+          grant,
+          proof,
+          routeKind: 'loopback_direct',
+          flowKind: 'machine_rpc',
+          endpointFingerprint: 'loopback_endpoint_1',
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      // The UI's production reader decodes JSON and applies this exact schema.
+      expect(PeerMachineRpcDirectResponseV2Schema.parse(await response.json())).toEqual({
         v: 2,
+        ok: true,
+        receipt: 'peer.rpc.direct_call_succeeded',
         requestId: 'request_1',
         method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-        params: { includeWorkers: true },
-        grant,
-        proof,
         routeKind: 'loopback_direct',
-        flowKind: 'machine_rpc',
-        endpointFingerprint: 'loopback_endpoint_1',
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      v: 2,
-      ok: true,
-      receipt: 'peer.rpc.direct_call_succeeded',
-      requestId: 'request_1',
-      method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-      routeKind: 'loopback_direct',
-      result: {
-        method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-        params: { includeWorkers: true },
-        ok: true,
-      },
-    });
-
-    await app.close();
+        result: {
+          method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+          params: { includeWorkers: true },
+          ok: true,
+        },
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it('accepts a signed direct voice upload chunk larger than the legacy 64 KiB body limit', async () => {

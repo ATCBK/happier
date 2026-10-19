@@ -407,6 +407,7 @@ it.each(['session_close', 'planned_refresh_then_stop'] as const)('admits Session
   try {
     let inherited: unknown;
     if (retirement === 'session_close') {
+      const snapshotDiagnostics = vi.spyOn(logger, 'warnLocalFile');
       const preview = await createRunnerExecutionRunSnapshotResolver({ sessionId, machineId: 'snapshot-machine' })(backendTarget);
       try {
         const profile = preview.profileCatalog.runtimeProfilesById.get('acme.snapshot/captured-delegate');
@@ -431,6 +432,14 @@ it.each(['session_close', 'planned_refresh_then_stop'] as const)('admits Session
         }
         await expect(preview.readNativeOfferedModel({ ...nativeRequest, backendTarget: childTarget }))
           .rejects.toMatchObject({ code: 'execution_run_contribution_snapshot_unavailable' });
+        // The same public refusal covers distinct private operations. Its file
+        // diagnostic must identify which boundary refused without logging inputs.
+        expect(snapshotDiagnostics.mock.calls.map(([, details]) => details)).toContainEqual({
+          sessionId,
+          operation: 'execution_run.native_offered_model.read_v1',
+          kind: 'protocol_error',
+          retryable: false,
+        });
       } finally { await preview.release?.(); }
       const diagnostics = vi.spyOn(logger, 'infoFile');
       for (const [currentControls, reason] of [

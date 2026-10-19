@@ -308,14 +308,19 @@ export function createDaemonWorkspaceSyncRuntime(
 
   const applySnapshot = (snapshot: ActiveProjectAccountRowsSnapshot | null, force = false): Promise<void> => {
     const next = projectTail.catch(() => undefined).then(async () => {
-      // Account refreshes publish new observations even when Sync inputs have
-      // not changed. Advance graph settlement without inventing material work.
+      // Account refreshes also contain other controllers' relationships. Only
+      // an empty local controller can settle equal inputs without native work;
+      // installed relationships still need their bootstrap/custody lifecycle.
       if (!force && !reconciliationRequired && snapshot && reconciledSnapshot
+        && snapshot.relationships.every(relationship => relationship.controllerMachineId !== dependencies.localMachineId)
         && snapshot.scopeKey === reconciledSnapshot.scopeKey
         && isDeepStrictEqual(snapshot.workspaceRefs, reconciledSnapshot.workspaceRefs)
         && isDeepStrictEqual(snapshot.relationships, reconciledSnapshot.relationships)) {
-        reconciledSnapshot = snapshot;
-        return;
+        const activity = await controller.activity.read();
+        if (activity.coverage === 'complete' && activity.items.length === 0) {
+          reconciledSnapshot = snapshot;
+          return;
+        }
       }
       // Withdrawal, failures and partial recovery must remain retryable, even
       // when the next observation has the same desired inputs.
