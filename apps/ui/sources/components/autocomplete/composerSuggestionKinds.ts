@@ -695,7 +695,7 @@ async function resolveSkillSuggestions(
             }
             // A library skill cannot join a running Session whose Agent can neither reload skills live nor
             // resume (P8 F4): the row stays listed with the Session apply words and cannot be picked.
-            const newSessionsOnly = row.source === 'library' && source?.applyTiming().t === 'new_sessions_only';
+            const newSessionsOnly = row.source === 'library' && source?.applyTiming()?.t === 'new_sessions_only';
             return {
                 ...base,
                 key: `skill-${group.kind}:${row.key}`,
