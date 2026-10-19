@@ -2196,6 +2196,18 @@ const detailPageTranslations = { 'zh-Hant': {
                 system: '由 Happier 請求',
             },
             proposalsDescription: '核准後將發佈到審查中。',
+            requester: {
+                title: '由誰確認',
+                descriptionYou: '這是你請求的，所以由你確認。',
+                descriptionOther: ({ name }) => `這是 ${name} 請求的，所以只有對方可以確認。`,
+                askedBy: '請求者',
+                writesWith: '寫入方式',
+                setupOf: ({ name }) => `${name} 的設定`,
+                anotherPerson: '其他人',
+                waitingFor: ({ name }) => `等待 ${name} 確認`,
+                confirmedBy: '確認人',
+                declinedBy: '拒絕人',
+            },
         },
         runs: {
             description: '你的機器上的背景執行。',

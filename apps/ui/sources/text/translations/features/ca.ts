@@ -2201,6 +2201,18 @@ const detailPageTranslations = { ca: {
                 system: 'Demanat per Happier',
             },
             proposalsDescription: 'Es publiquen a la revisió si ho aproves.',
+            requester: {
+                title: 'Qui confirma',
+                descriptionYou: 'Ho has demanat tu, així que confirmes tu.',
+                descriptionOther: ({ name }) => `Ho ha demanat ${name}, així que només aquesta persona pot confirmar-ho.`,
+                askedBy: 'Demanat per',
+                writesWith: 'Escriu amb',
+                setupOf: ({ name }) => `Configuració de ${name}`,
+                anotherPerson: 'Una altra persona',
+                waitingFor: ({ name }) => `Esperant que ${name} confirmi`,
+                confirmedBy: 'Confirmat per',
+                declinedBy: 'Rebutjat per',
+            },
         },
         runs: {
             description: 'Execucions en segon pla a les teves màquines.',

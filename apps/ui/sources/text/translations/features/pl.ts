@@ -2212,6 +2212,18 @@ const detailPageTranslations = { pl: {
                 system: 'Poprosił Happier',
             },
             proposalsDescription: 'Zostaną opublikowane w przeglądzie, jeśli zatwierdzisz.',
+            requester: {
+                title: 'Kto potwierdza',
+                descriptionYou: 'To ty o to poprosiłeś, więc ty potwierdzasz.',
+                descriptionOther: ({ name }) => `Poprosił(a) o to ${name}, więc tylko ta osoba może potwierdzić.`,
+                askedBy: 'Poprosił(a)',
+                writesWith: 'Zapisuje przez',
+                setupOf: ({ name }) => `Konfiguracja: ${name}`,
+                anotherPerson: 'Inna osoba',
+                waitingFor: ({ name }) => `Czeka na potwierdzenie od: ${name}`,
+                confirmedBy: 'Potwierdził(a)',
+                declinedBy: 'Odrzucił(a)',
+            },
         },
         runs: {
             description: 'Uruchomienia w tle na twoich maszynach.',

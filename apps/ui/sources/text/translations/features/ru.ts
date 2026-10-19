@@ -2223,6 +2223,18 @@ const detailPageTranslations = { ru: {
                 system: 'Запрошено Happier',
             },
             proposalsDescription: 'Будут опубликованы в ревью, если вы одобрите.',
+            requester: {
+                title: 'Кто подтверждает',
+                descriptionYou: 'Вы попросили об этом, поэтому подтверждаете вы.',
+                descriptionOther: ({ name }) => `Об этом попросил(а) ${name}, поэтому подтвердить может только этот человек.`,
+                askedBy: 'Запрос от',
+                writesWith: 'Пишет через',
+                setupOf: ({ name }) => `Настройка: ${name}`,
+                anotherPerson: 'Другой человек',
+                waitingFor: ({ name }) => `Ждём подтверждения от: ${name}`,
+                confirmedBy: 'Подтвердил(а)',
+                declinedBy: 'Отклонил(а)',
+            },
         },
         runs: {
             description: 'Фоновые запуски на ваших машинах.',

@@ -2196,6 +2196,18 @@ const detailPageTranslations = { 'zh-Hans': {
                 system: '由 Happier 请求',
             },
             proposalsDescription: '批准后将发布到评审中。',
+            requester: {
+                title: '由谁确认',
+                descriptionYou: '这是你请求的，所以由你确认。',
+                descriptionOther: ({ name }) => `这是 ${name} 请求的，所以只有对方可以确认。`,
+                askedBy: '请求者',
+                writesWith: '写入方式',
+                setupOf: ({ name }) => `${name} 的设置`,
+                anotherPerson: '其他人',
+                waitingFor: ({ name }) => `等待 ${name} 确认`,
+                confirmedBy: '确认人',
+                declinedBy: '拒绝人',
+            },
         },
         runs: {
             description: '你的机器上的后台运行。',

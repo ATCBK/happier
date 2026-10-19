@@ -2201,6 +2201,18 @@ const detailPageTranslations = { pt: {
                 system: 'Pedido pelo Happier',
             },
             proposalsDescription: 'Publicados na revisão se aprovar.',
+            requester: {
+                title: 'Quem confirma',
+                descriptionYou: 'Foi você que pediu, então você confirma.',
+                descriptionOther: ({ name }) => `Foi ${name} que pediu, então só essa pessoa pode confirmar.`,
+                askedBy: 'Pedido por',
+                writesWith: 'Escreve com',
+                setupOf: ({ name }) => `Configuração de ${name}`,
+                anotherPerson: 'Outra pessoa',
+                waitingFor: ({ name }) => `À espera da confirmação de ${name}`,
+                confirmedBy: 'Confirmado por',
+                declinedBy: 'Recusado por',
+            },
         },
         runs: {
             description: 'Execuções em segundo plano nas suas máquinas.',

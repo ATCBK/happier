@@ -2201,6 +2201,18 @@ const detailPageTranslations = { ja: {
                 system: 'Happier が依頼',
             },
             proposalsDescription: '承認するとレビューに投稿されます。',
+            requester: {
+                title: '確認する人',
+                descriptionYou: 'あなたが依頼したので、あなたが確認します。',
+                descriptionOther: ({ name }) => `${name}が依頼したため、確認できるのはその人だけです。`,
+                askedBy: '依頼者',
+                writesWith: '書き込みに使う設定',
+                setupOf: ({ name }) => `${name}の設定`,
+                anotherPerson: '別のユーザー',
+                waitingFor: ({ name }) => `${name}の確認を待っています`,
+                confirmedBy: '確認した人',
+                declinedBy: '拒否した人',
+            },
         },
         runs: {
             description: 'マシン上のバックグラウンド実行です。',
