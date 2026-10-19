@@ -180,6 +180,38 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     expect(writes).toEqual([]);
   });
 
+  it('chooses Matching sessions with the shared filter editor in the same picker and writes the selector, not the rows', async () => {
+    seedRelations();
+    homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+    const { screen, writes, closes } = await renderPicker();
+    await act(async () => screen.pressByTestId('session-talk-target:matching'));
+    // An inline step of the same picker: the list gives way to the shared editor, with Back.
+    expect(screen.findByTestId('session-talk-target:manager')).toBeNull();
+    expect(screen.findByTestId('session-list-filter-editor-surface')).not.toBeNull();
+    expect(screen.findByTestId('session-talk-matching-back')).not.toBeNull();
+    // "Use these" waits for the Action's own preview to prove who the filter reaches.
+    await vi.waitFor(() => {
+      expect(screen.findByTestId('session-list-filter-done')?.props.disabled).not.toBe(true);
+    });
+    await act(async () => screen.pressByTestId('session-list-filter-done'));
+    expect(writes).toHaveLength(1);
+    const written = writes[0];
+    if (!written || written.kind !== 'ask' || typeof written.target === 'string' || written.target.selector !== 'matching') {
+      throw new Error(`expected a Matching ask, got ${JSON.stringify(written)}`);
+    }
+    expect(written.target.filter).toMatchObject({ show: 'sessions', homeServerIds: [serverId] });
+    expect(closes).toHaveLength(1);
+  });
+
+  it('leaves the Matching step with Back without choosing anything', async () => {
+    seedRelations();
+    const { screen, writes } = await renderPicker();
+    await act(async () => screen.pressByTestId('session-talk-target:matching'));
+    await act(async () => screen.pressByTestId('session-talk-matching-back'));
+    expect(screen.findByTestId('session-talk-target:manager')).not.toBeNull();
+    expect(writes).toEqual([]);
+  });
+
   it('says the whole sentence on the chip', () => {
     expect(resolveSessionTalkChipLabel(null, null)).toBe(
       'session.participants.to',

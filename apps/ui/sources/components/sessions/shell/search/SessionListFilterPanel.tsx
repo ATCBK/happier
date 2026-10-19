@@ -46,6 +46,8 @@ export type SessionListFilterPanelProps = Readonly<{
     labels: SessionListFilterPanelCopy;
     /** Sessions the list shows for the current choices (the list's own count). */
     resultCount?: number;
+    /** A host whose result isn't a plain count (a live preview that can be partial) words it itself. */
+    resultSummary?: string;
     maxHeight?: number;
     /** Hands one model option id back to the editor's single writer. */
     onSelect(optionId: string): void;
@@ -54,6 +56,8 @@ export type SessionListFilterPanelProps = Readonly<{
     audiencesAvailable?: boolean;
     onReset(): void;
     onDone?: () => void;
+    /** Done waits until the host's result can be used (a preview still checking, or nothing to use). */
+    doneDisabled?: boolean;
 }>;
 
 /**
@@ -509,7 +513,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                     numberOfLines={1}
                     accessibilityLiveRegion="polite"
                 >
-                    {props.resultCount === undefined ? '' : labels.resultCount(props.resultCount)}
+                    {props.resultSummary ?? (props.resultCount === undefined ? '' : labels.resultCount(props.resultCount))}
                 </Text>
                 <IconButton
                     testID="session-list-filter-clear"
@@ -526,6 +530,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                         label={labels.done}
                         tone="primary"
                         onPress={props.onDone}
+                        disabled={props.doneDisabled}
                         testID="session-list-filter-done"
                         style={styles.footerButton}
                     />

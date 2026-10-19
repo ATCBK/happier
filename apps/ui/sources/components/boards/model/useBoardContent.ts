@@ -43,7 +43,7 @@ import {
     type BoardWorkflowFacts,
 } from './boardCards';
 import { projectBoardMembership, type BoardMembership } from './boardMembership';
-import { fromBoardSessionFilter } from './boardSessionFilter';
+import { fromStoredSessionListFilter } from '@/components/sessions/shell/search/storedSessionListFilter';
 import { createBoardSessionSourceProjection, readBoardMachineSourceState, readBoardPagedEntitySourceState, readBoardSessionHomeObservation, shouldLoadNextBoardEntityPage } from './boardEntityBinding';
 import { useBoardTaskItems } from './useBoardTaskItems';
 
@@ -192,7 +192,7 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
     complete: boolean;
 }> {
     const filter = React.useMemo(() => board.source.filter
-        ? fromBoardSessionFilter(board.source.filter, homes.mountedServerIds)
+        ? fromStoredSessionListFilter(board.source.filter, homes.mountedServerIds)
         : null, [board.source.filter, homes.mountedServerIds]);
     const includesSessions = filter !== null && filter.show !== 'runs';
     const includesRuns = filter !== null && canSessionListFilterIncludeRunsV1(filter);

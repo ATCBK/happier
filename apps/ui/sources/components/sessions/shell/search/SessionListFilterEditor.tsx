@@ -83,7 +83,10 @@ export type SessionListFilterEditorProps = Readonly<{
     onOpenArchived?: () => void;
     /** Sessions the list currently shows for these choices, from the list's own derivation. */
     resultCount?: number;
+    /** Worded result for a host whose result is a live preview rather than the list's count. */
+    resultSummary?: string;
     onDone?: () => void;
+    doneDisabled?: boolean;
     maxHeight?: number;
     disableTransitions?: boolean;
 }>;
@@ -514,12 +517,14 @@ export const SessionListFilterEditor = React.memo(function SessionListFilterEdit
                     selectedIds={model.selection.selectedIds}
                     labels={props.labels}
                     resultCount={props.resultCount}
+                    resultSummary={props.resultSummary}
                     maxHeight={props.maxHeight}
                     onSelect={handleSelect}
                     onOpenDrill={setDrill}
                     audiencesAvailable={teamAudienceEnabled}
                     onReset={props.resetFilters}
                     onDone={props.onDone}
+                    doneDisabled={props.doneDisabled}
                 />
             )}
         </View>

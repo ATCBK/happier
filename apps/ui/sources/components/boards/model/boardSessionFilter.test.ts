@@ -3,7 +3,7 @@ import { createWorkBoardV1, normalizeSessionListFilterV1, WorkBoardsV1Schema } f
 
 import { buildSessionListFilterQueryHomes } from '@/components/sessions/shell/search/sessionListViewFilters';
 
-import { fromBoardSessionFilter, toBoardSessionFilter } from './boardSessionFilter';
+import { fromStoredSessionListFilter, toStoredSessionListFilter } from '@/components/sessions/shell/search/storedSessionListFilter';
 import { createFilteredBoardRoute, readFilteredBoardRoute } from '../boardsRoutes';
 
 describe('board Sessions filter', () => {
@@ -24,27 +24,27 @@ describe('board Sessions filter', () => {
         const saved = WorkBoardsV1Schema.parse({ v: 1, boards: [{
             ...createWorkBoardV1({ id: 'tree', name: 'Payments' }), source: { picked: [], filter }, mode: 'by_status',
         }] }).boards[0]!;
-        const editor = fromBoardSessionFilter(saved.source.filter!, ['home-a', 'home-b']);
+        const editor = fromStoredSessionListFilter(saved.source.filter!, ['home-a', 'home-b']);
         const queries = buildSessionListFilterQueryHomes(editor, {
             storage: 'active', includeInactive: false, mountedHomeServerIds: ['home-a', 'home-b'],
         });
         expect(queries.map(({ serverId, query }) => ({ serverId, underSessionId: query.underSessionId })))
             .toEqual([{ serverId: 'home-a', underSessionId: 'coordinator' }]);
-        expect(toBoardSessionFilter(editor)).toEqual(filter);
+        expect(toStoredSessionListFilter(editor)).toEqual(filter);
         expect(saved.source.picked).toEqual([]);
     });
 
     it('opens the shared editor with every mounted Home selected when the board names none', () => {
-        expect(fromBoardSessionFilter(normalizeSessionListFilterV1(), ['home-a', 'home-b'])).toMatchObject({
+        expect(fromStoredSessionListFilter(normalizeSessionListFilterV1(), ['home-a', 'home-b'])).toMatchObject({
             homeServerIds: ['home-a', 'home-b'],
             searchQuery: '',
         });
         const narrowed = normalizeSessionListFilterV1({ homeServerIds: ['home-b'], scope: 'following' });
-        expect(fromBoardSessionFilter(narrowed, ['home-a', 'home-b'])).toMatchObject({ homeServerIds: ['home-b'], scope: 'following' });
+        expect(fromStoredSessionListFilter(narrowed, ['home-a', 'home-b'])).toMatchObject({ homeServerIds: ['home-b'], scope: 'following' });
     });
 
     it('stores the editor result as the board filter: the selection only, never UI search text', () => {
-        const stored = toBoardSessionFilter({
+        const stored = toStoredSessionListFilter({
             ...normalizeSessionListFilterV1({ scope: 'all_accessible', attention: 'needs_my_attention', homeServerIds: ['home-a', 'home-a'] }),
             searchQuery: 'draft',
         });
