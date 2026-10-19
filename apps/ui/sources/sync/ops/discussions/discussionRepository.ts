@@ -197,8 +197,24 @@ export function mergeDiscussionMessages(
 ): readonly DiscussionOpenedMessageV1[] {
     const previousById = new Map(previous.map((row) => [row.id, row]));
     const byId = new Map<string, DiscussionOpenedMessageV1>();
-    for (const row of [...previous, ...incoming]) byId.set(row.id, retainStableRow(previousById, row));
+    for (const row of [...previous, ...incoming]) {
+        const current = byId.get(row.id);
+        const decision = current?.docEditProposalDispositionV1;
+        // Decisions close once. A response captured before that commit cannot
+        // reopen the proposal or restore content hidden by the settled projection.
+        // Incoming null content still hides; a current terminal read can reopen it.
+        const reconciled = decision && decision.state !== 'open' && row.docEditProposalDispositionV1?.state === 'open'
+            ? { ...row, content: current?.content === null ? null : row.content, docEditProposalDispositionV1: decision } : row;
+        byId.set(row.id, retainStableRow(previousById, reconciled));
+    }
     return [...byId.values()].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+}
+
+function olderMessageFrontier(messages: readonly DiscussionOpenedMessageV1[]): number | undefined {
+    // Scoped discovery can admit the root independently of a loaded history
+    // page. It must not move that page's older boundary to seq1. Other gaps can
+    // be intentional source withholding, so do not infer numeric contiguity.
+    return messages[0]?.seq === 1 && messages.length > 1 ? messages[1]!.seq : messages[0]?.seq;
 }
 
 function statusForFailure(errorCode: string): DiscussionRepositoryStatus {
@@ -327,9 +343,25 @@ export function createDiscussionRepository(options: Readonly<{
             && previous.errorCode === value.errorCode && previous.incomplete === value.incomplete) return;
         updateCollection({ ...current, lists: { ...current.lists, [state]: value } }, anchorSessionId);
     };
-    const updateThread = (discussionId: string, value: DiscussionRepositoryThreadSnapshot) => publish({
-        ...snapshot, threads: { ...snapshot.threads, [discussionId]: value },
-    });
+    const updateThread = (discussionId: string, value: DiscussionRepositoryThreadSnapshot) => {
+        const firstMessage = value.summary?.firstMessage;
+        const canonicalRoot = firstMessage && value.messages.find(row => row.id === firstMessage.id);
+        const summary = canonicalRoot && canonicalRoot !== firstMessage ? { ...value.summary!, firstMessage: canonicalRoot } : value.summary;
+        publish({ ...snapshot, threads: { ...snapshot.threads, [discussionId]: { ...value, summary } } });
+        if (summary !== value.summary && canonicalRoot) {
+            // Scoped discovery and ordinary lists retain the same summary facts;
+            // an updated root must not leave a second readable body/disposition there.
+            for (const anchor of [undefined, ...anchorPages.keys()]) {
+                const pages = pagesFor(anchor);
+                for (const state of ['active', 'archived'] as const) {
+                    pages[state] = pages[state].map(page => ({ ...page, rows: page.rows.map(row =>
+                        row.id === discussionId && row.firstMessage ? { ...row, firstMessage: canonicalRoot } : row) }));
+                    const list = getListSnapshot(anchor).lists[state];
+                    applyListPages(state, list.status, list.errorCode, anchor);
+                }
+            }
+        }
+    };
     const updateMutation = (localId: string, value: DiscussionRepositoryMutation | null) => {
         const mutations = { ...snapshot.mutations };
         if (value) mutations[localId] = value;
@@ -389,7 +421,13 @@ export function createDiscussionRepository(options: Readonly<{
             discussions: snapshot.attention.discussions.filter(entry => entry.discussion.id !== discussionId) }, threads: { ...snapshot.threads,
             [discussionId]: { ...emptyThread(), status: errorCode === 'discussion_content_unavailable' ? 'locked' : 'revoked', errorCode } } });
     };
-    const applySummary = (row: DiscussionOpenedSummaryV1) => {
+    const applySummary = (incoming: DiscussionOpenedSummaryV1) => {
+        const current = snapshot.threads[incoming.id];
+        const firstMessage = incoming.firstMessage === undefined ? current?.summary?.firstMessage : incoming.firstMessage;
+        const messages = firstMessage
+            ? mergeDiscussionMessages(current?.messages ?? [], [firstMessage]) : current?.messages;
+        const root = firstMessage && messages?.find(message => message.id === firstMessage.id);
+        const row = root && root !== incoming.firstMessage ? { ...incoming, firstMessage: root } : incoming;
         for (const anchorSessionId of [undefined, ...anchorPages.keys()]) {
             const pages = pagesFor(anchorSessionId);
             const admitted = anchorSessionId === undefined || (row.anchor?.kind === 'session' && row.anchor.sessionId === anchorSessionId);
@@ -423,7 +461,37 @@ export function createDiscussionRepository(options: Readonly<{
             applyListPages(state, current.lists[state].status, current.lists[state].errorCode, anchorSessionId);
         }
         const thread = snapshot.threads[row.id];
-        if (thread) updateThread(row.id, { ...thread, summary: row });
+        if (thread || row.firstMessage) updateThread(row.id, { ...(thread ?? emptyThread()), summary: row,
+            ...(messages ? { messages } : {}), messageSeq: Math.max(thread?.messageSeq ?? 0, row.messageSeq) });
+    };
+
+    /** Admit scoped discovery and its opened roots under the same custody as thread reads. */
+    const readList = async (input: DiscussionListInputV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionListResultV1>> => {
+        const operation = captureOperation();
+        const epochs = new Map(resourceEpochs);
+        const outcome = await client.list(input, signal);
+        if (signal?.aborted) return { kind: 'failed', errorCode: 'canceled' };
+        if (!isCurrentOperation(operation)) return { kind: 'failed', errorCode: 'discussion_read_denied' };
+        if (outcome.kind !== 'succeeded') {
+            if (outcome.kind === 'failed' && isExplicitAccessLoss(outcome.errorCode)) purgeAccessLost(outcome.errorCode);
+            return outcome;
+        }
+        if (outcome.value.discussions.some(row => (epochs.get(row.id) ?? 0) !== (resourceEpochs.get(row.id) ?? 0))) {
+            return { kind: 'failed', errorCode: 'discussion_read_denied' };
+        }
+        if (outcome.value.serverId !== options.scope.serverId || outcome.value.discussions.some(row => {
+            const root = row.firstMessage;
+            return (input.anchorDocArtifactId !== undefined && (row.anchor?.kind !== 'doc'
+                || row.anchor.doc.ref.artifactId !== input.anchorDocArtifactId || root === undefined))
+                || (root && (root.seq !== 1 || root.discussionId !== row.id || root.messageRef.messageId !== root.id
+                    || root.messageRef.discussion.discussionId !== row.id || root.messageRef.discussion.serverId !== options.scope.serverId));
+        })) return { kind: 'failed', errorCode: 'discussion_invalid_content' };
+        for (const row of outcome.value.discussions) {
+            if (row.firstMessage === null) purgeDiscussion(row.id, 'discussion_content_unavailable');
+            else applySummary(row);
+        }
+        return { kind: 'succeeded', value: { ...outcome.value,
+            discussions: outcome.value.discussions.map(row => snapshot.threads[row.id]?.summary ?? row) } };
     };
 
     const loadListPage = async (state: 'active' | 'archived', cursor: string | null, signal?: AbortSignal, anchorSessionId?: string) => {
@@ -519,17 +587,20 @@ export function createDiscussionRepository(options: Readonly<{
         const operationEpoch = captureOperation(discussionId);
         const retained = snapshot.threads[discussionId] ?? emptyThread();
         updateThread(discussionId, { ...retained, status: 'loading', errorCode: null });
-        let messages = retained.messages;
+        const messages = retained.messages;
         let messageSeq = retained.messageSeq;
         let observedHasMoreOlder: boolean | null = null;
         const received: DiscussionOpenedMessageV1[] = [];
-        // A retained row the resource cipher could not open kept no ciphertext, so it
-        // is completed by asking the Discussion owner for it again under the current
-        // key rather than resuming after the highest retained sequence.
-        const firstLockedIndex = messages.findIndex((row) => row.content === null);
-        let afterSeq = firstLockedIndex >= 0
-            ? (firstLockedIndex === 0 ? undefined : messages[firstLockedIndex - 1]!.seq)
-            : messages.at(-1)?.seq;
+        // Locked content and open proposal dispositions can change without a new
+        // message sequence. Revisit their earliest retained row, even when it is
+        // older than the server's default tail page.
+        const firstMutableIndex = messages.findIndex((row) => row.content === null || row.docEditProposalDispositionV1?.state === 'open');
+        const onlyImmutableRoot = firstMutableIndex < 0 && messages.length === 1 && messages[0]!.seq === 1 && retained.messageSeq > 1;
+        let afterSeq = firstMutableIndex >= 0
+            ? messages[firstMutableIndex]!.seq - 1
+            // A root is not an initial history page. Use the existing default
+            // tail read rather than eagerly downloading every immutable reply.
+            : onlyImmutableRoot ? undefined : messages.at(-1)?.seq;
         for (;;) {
             const outcome = await client.read(discussionId, afterSeq === undefined ? {} : { afterSeq }, signal);
             if (!isCurrentOperation(operationEpoch)) return;
@@ -556,10 +627,9 @@ export function createDiscussionRepository(options: Readonly<{
                 return;
             }
             received.push(...outcome.value.messages);
-            messages = mergeDiscussionMessages(messages, outcome.value.messages);
             if (afterSeq === undefined) observedHasMoreOlder = outcome.value.hasMoreOlder;
             messageSeq = Math.max(messageSeq, outcome.value.messageSeq);
-            const highest = messages.at(-1)?.seq ?? 0;
+            const highest = outcome.value.messages.reduce((highest, row) => Math.max(highest, row.seq), afterSeq ?? 0);
             if (highest >= messageSeq
                 || outcome.value.messages.length === 0
                 || (afterSeq !== undefined && highest <= afterSeq)) {
@@ -621,7 +691,7 @@ export function createDiscussionRepository(options: Readonly<{
     const loadOlderMessages = async (discussionId: string, signal?: AbortSignal): Promise<void> => {
         const retained = snapshot.threads[discussionId] ?? emptyThread();
         const operationEpoch = captureOperation(discussionId);
-        const beforeSeq = retained.messages[0]?.seq;
+        const beforeSeq = olderMessageFrontier(retained.messages);
         if (beforeSeq === undefined || !retained.hasMoreOlder) return;
         updateThread(discussionId, { ...retained, status: 'loading', errorCode: null });
         const outcome = await client.read(discussionId, { beforeSeq }, signal);
@@ -991,6 +1061,7 @@ export function createDiscussionRepository(options: Readonly<{
         subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener); },
         setClient(nextClient: DiscussionRepositoryClient) { client = nextClient; },
         refreshList,
+        readList,
         refreshAttention,
         async loadMoreAttention(signal?: AbortSignal) {
             while (attentionInFlight) await attentionInFlight;
@@ -1014,9 +1085,9 @@ export function createDiscussionRepository(options: Readonly<{
                 const found = thread.messages.find(message => message.id === ref.messageId);
                 if (found) return found;
                 if (!thread.hasMoreOlder) return null;
-                const beforeSeq = thread.messages[0]?.seq;
+                const beforeSeq = olderMessageFrontier(thread.messages);
                 await loadOlderMessages(discussionId, signal);
-                if (snapshot.threads[discussionId]?.messages[0]?.seq === beforeSeq) return null;
+                if (olderMessageFrontier(snapshot.threads[discussionId]?.messages ?? []) === beforeSeq) return null;
             }
         },
         refreshMessages,

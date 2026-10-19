@@ -42,10 +42,18 @@ describe('Doc proposal decision preparation (real SQLite)', () => {
 
     it('accepts the exact stored candidate once and rejoins the decision after a lost response and original propose retry', async () => {
         const { owner, id, request, proposalRef } = await fixture();
+        const beforeChange = await db.accountChange.findFirstOrThrow({ where: {
+            accountId: owner.id, kind: 'discussion', entityId: proposalRef.discussion.discussionId,
+        } });
         const input = { actorAccountId: owner.id, authentication, proposalRef, expectedRevision: { headerVersion: 1, bodyVersion: 1 } };
         const accepted = await inTx(tx => decideArtifactEditProposalInTx(tx, { ...input, decision: 'accept' }));
         expect(accepted).toMatchObject({ ok: true, disposition: { state: 'accepted', acceptedRevision: { headerVersion: 1, bodyVersion: 2 },
             decidedBy: { accountId: owner.id } } });
+        const committedChange = await db.accountChange.findFirstOrThrow({ where: {
+            accountId: owner.id, kind: 'discussion', entityId: proposalRef.discussion.discussionId,
+        } });
+        expect(committedChange.cursor).toBeGreaterThan(beforeChange.cursor);
+        expect(committedChange.hint).toEqual({ v: 1, discussions: true });
         const again = await inTx(tx => decideArtifactEditProposalInTx(tx, { ...input, decision: 'accept' }));
         const opposite = await inTx(tx => decideArtifactEditProposalInTx(tx, { actorAccountId: owner.id, authentication, proposalRef, decision: 'decline' }));
         expect(again).toMatchObject(accepted.ok ? { ok: true, disposition: accepted.disposition } : { ok: true });
@@ -87,8 +95,16 @@ describe('Doc proposal decision preparation (real SQLite)', () => {
 
     it('declines without a body revision and retains the actual decision on opposite retry', async () => {
         const { owner, id, request, proposalRef } = await fixture();
+        const beforeChange = await db.accountChange.findFirstOrThrow({ where: {
+            accountId: owner.id, kind: 'discussion', entityId: proposalRef.discussion.discussionId,
+        } });
         const declined = await inTx(tx => decideArtifactEditProposalInTx(tx, { actorAccountId: owner.id, authentication, proposalRef, decision: 'decline' }));
         expect(declined).toMatchObject({ ok: true, disposition: { state: 'declined', decidedBy: { accountId: owner.id } } });
+        const committedChange = await db.accountChange.findFirstOrThrow({ where: {
+            accountId: owner.id, kind: 'discussion', entityId: proposalRef.discussion.discussionId,
+        } });
+        expect(committedChange.cursor).toBeGreaterThan(beforeChange.cursor);
+        expect(committedChange.hint).toEqual({ v: 1, discussions: true });
         expect(await inTx(tx => decideArtifactEditProposalInTx(tx, { actorAccountId: owner.id, authentication, proposalRef,
             decision: 'accept', expectedRevision: { headerVersion: 1, bodyVersion: 1 } }))).toEqual(declined);
         expect(await createDiscussion({ actorAccountId: owner.id, authentication, request })).toMatchObject({ ok: true,

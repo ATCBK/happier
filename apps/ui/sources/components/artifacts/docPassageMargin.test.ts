@@ -41,7 +41,7 @@ function comment(
     content: {
       kind: 'doc_passage_comment',
       passage: target,
-      content: { parts: [{ t: 'text', text }] },
+      content: { v: 1, parts: [{ t: 'text', text }] },
     },
   };
 }

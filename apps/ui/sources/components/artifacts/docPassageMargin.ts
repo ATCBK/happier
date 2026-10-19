@@ -1,9 +1,11 @@
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+
 import { locateDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
-import type { ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactRevisionV1';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 
 import { readDiscussionContentPassage } from '@/components/discussions/discussionComposerDocument';
+
+type ArtifactRevisionV1 = DocPassageRefV1['revision'];
 
 /** The message fields the Doc margin reads; a committed opened Discussion message satisfies it. */
 export type DocPassageMarginMessage = Pick<

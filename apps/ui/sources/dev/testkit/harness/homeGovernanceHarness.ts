@@ -49,9 +49,13 @@ export function answerDiscussionThreadForTests(homes: HomeGovernanceHarness, ser
     homes.answer(serverId, 'GET /v1/discussions', { select: (_input, request) => {
         if (loseFirstRejoin) { loseFirstRejoin = false; return { dispatchThenFail: true }; }
         const url = new URL(request.url);
+        const docArtifactId = url.searchParams.get('anchorDocArtifactId');
         return { body: { discussions: stored && url.searchParams.get('state') !== 'archived'
             && (!url.searchParams.get('creationLocalId') || url.searchParams.get('creationLocalId') === stored.discussion.creationLocalId)
-            ? [stored.discussion] : [], nextCursor: null } };
+            && (!docArtifactId || (stored.discussion.anchor?.kind === 'doc'
+                && stored.discussion.anchor.doc.ref.artifactId === docArtifactId))
+            ? [docArtifactId ? { ...stored.discussion, firstMessage: stored.firstMessage } : stored.discussion]
+            : [], nextCursor: null } };
     } });
     homes.answer(serverId, 'POST /v1/discussions', { select: input => {
         const request = DiscussionCreateRequestV1Schema.parse(input);

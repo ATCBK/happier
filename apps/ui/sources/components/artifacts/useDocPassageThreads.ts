@@ -71,9 +71,10 @@ export function useDocPassageThreads(
       repository?.getSnapshot ?? emptySnapshot,
       repository?.getSnapshot ?? emptySnapshot,
     );
-  const [summaries, setSummaries] = React.useState<Readonly<{
+  React.useEffect(() => repository?.mount(), [repository]);
+  const [discovery, setDiscovery] = React.useState<Readonly<{
     key: string;
-    rows: readonly DiscussionOpenedSummaryV1[] | null;
+    ids: readonly string[] | null;
   }> | null>(null);
   const key = `${input.serverId}:${input.artifactId}`;
 
@@ -81,10 +82,10 @@ export function useDocPassageThreads(
     if (!client || !repository) return;
     const controller = new AbortController();
     void (async () => {
-      const rows: DiscussionOpenedSummaryV1[] = [];
+      const ids: string[] = [];
       let cursor: string | undefined;
       for (;;) {
-        const page = await client.list(
+        const page = await repository.readList(
           {
             state: 'active',
             anchorDocArtifactId: input.artifactId,
@@ -95,26 +96,26 @@ export function useDocPassageThreads(
         if (controller.signal.aborted) return;
         if (page.kind !== 'succeeded') {
           // Keep what was last read; an unreadable list is unavailable, never "no comments".
-          setSummaries((previous) =>
-            previous?.key === key ? previous : { key, rows: null },
+          setDiscovery((previous) =>
+            previous?.key === key ? previous : { key, ids: null },
           );
           return;
         }
-        rows.push(
+        ids.push(
           ...page.value.discussions.filter(
             (row) =>
               row.anchor?.kind === 'doc' &&
               row.anchor.doc.ref.artifactId === input.artifactId,
-          ),
+          ).map(row => row.id),
         );
         if (!page.value.nextCursor || page.value.nextCursor === cursor) break;
         cursor = page.value.nextCursor;
       }
-      setSummaries({ key, rows });
+      setDiscovery({ key, ids });
       await Promise.all(
-        rows.map((row) =>
+        ids.map((discussionId) =>
           repository
-            .refreshMessages(row.id, controller.signal)
+            .refreshMessages(discussionId, controller.signal)
             .catch(() => undefined),
         ),
       );
@@ -124,20 +125,18 @@ export function useDocPassageThreads(
 
   return React.useMemo(() => {
     if (!usable) return UNAVAILABLE;
-    if (!summaries || summaries.key !== key)
+    if (!discovery || discovery.key !== key)
       return { status: 'loading', threads: [] };
-    if (summaries.rows === null) return UNAVAILABLE;
+    if (discovery.ids === null) return UNAVAILABLE;
+    const threads: DocPassageThreadsRead['threads'][number][] = [];
+    for (const discussionId of discovery.ids) {
+      const thread = snapshot?.threads[discussionId];
+      if (!thread?.summary || thread.status === 'revoked' || thread.status === 'locked') return UNAVAILABLE;
+      threads.push({ discussionId, summary: thread.summary, messages: thread.messages });
+    }
     return {
       status: 'ready',
-      threads: summaries.rows.map((summary) => {
-        const loaded = snapshot?.threads[summary.id]?.messages ?? [];
-        const root = summary.firstMessage;
-        const messages =
-          root && !loaded.some((message) => message.id === root.id)
-            ? [root, ...loaded]
-            : loaded;
-        return { discussionId: summary.id, summary, messages };
-      }),
+      threads,
     };
-  }, [key, snapshot?.threads, summaries, usable]);
+  }, [discovery, key, snapshot?.threads, usable]);
 }
