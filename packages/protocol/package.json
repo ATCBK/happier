@@ -1530,6 +1530,11 @@
       "types": "./dist/projects/projectContextV1.d.ts",
       "default": "./dist/projects/projectContextV1.js"
     },
+    "./projects/projectListProjectionV1": {
+      "happier-source": "./src/projects/projectListProjectionV1.ts",
+      "types": "./dist/projects/projectListProjectionV1.d.ts",
+      "default": "./dist/projects/projectListProjectionV1.js"
+    },
     "./actions/sessionTerminalActionFamily": {
       "happier-source": "./src/actions/sessionTerminalActionFamily.ts",
       "types": "./dist/actions/sessionTerminalActionFamily.d.ts",
