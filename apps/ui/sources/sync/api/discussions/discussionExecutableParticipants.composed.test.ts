@@ -26,6 +26,11 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 // The person accepts the real Action policy's UI confirmation at the presentation boundary.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// Genuine third-party renderer boundary, shared with the repository lifecycle
+// and Workflow-row suites. This data-owner composition never renders Markdown.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: (text: string) => [{ text, reveal: false }],
+}));
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -173,6 +178,55 @@ it('does not resurrect a retired create intent when Session resolution finishes 
     expect(await creating).toMatchObject({ kind: 'failed', errorCode: 'discussion_read_denied' });
     expect(repository.getSnapshot()).toBe(retired);
     expect(await repository.retry('retired-create')).toEqual({ kind: 'failed', errorCode: 'discussion_retry_not_found' });
+});
+
+it.each(['create', 'reconciliation'] as const)('retains unrelated Home state and create custody after a %s readiness refusal', async phase => {
+    const secret = new Uint8Array(32).fill(17);
+    const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64url') };
+    const serverId = await homes.addHome({ name: 'Encrypted review', serverUrl: 'https://encrypted-review.test', accountId: 'alice',
+        currentAccount: true, accountEncryptionMode: 'e2ee', credentials });
+    const contentKeyFingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+        createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } }).contentPublicKeyFingerprint);
+    homes.answer(serverId, '/v1/account/encryption/currentness', { body: { mode: 'e2ee', version: 1,
+        signingKeyFingerprint: 'a'.repeat(64), contentKeyFingerprint, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } });
+    answerDiscussionThreadForTests(homes, serverId, { accountId: 'alice', mode: 'e2ee', loseCreate: false, loseFirstRejoin: false });
+    const scope = { serverId, accountId: 'alice' };
+    const repository = createDiscussionRepository({ scope, address: { serverId }, client: createDiscussionClient({ scope, availability: 'available' }) });
+    const draftSubmission = { scope, address: { kind: 'newDiscussion' as const },
+        currentness: { address: { kind: 'newDiscussion' as const }, mutationIds: {} } };
+    const input = { creationLocalId: 'unrelated-create', messageLocalId: 'unrelated-first', title: 'Keep this review',
+        content: { v: 1 as const, parts: [{ t: 'text' as const, text: 'Unrelated retained question' }] }, draftSubmission };
+    expect(await repository.create(input)).toMatchObject({ kind: 'succeeded' });
+    await repository.refreshDiscussion('committed-thread');
+    const unrelated = repository.getSnapshot().threads['committed-thread'];
+    expect(unrelated?.messages).toHaveLength(1);
+    // Real atomic server admission returns this refusal for an unprepared
+    // foreign runtime. Only the native HTTP boundary is substituted here.
+    if (phase === 'create') {
+        homes.answer(serverId, 'POST /v1/discussions', { status: 409, body: { error: 'discussion_content_unavailable' } });
+    } else {
+        let dispatched = false;
+        homes.answer(serverId, 'GET /v1/discussions', { select: () => dispatched
+            ? { status: 409, body: { error: 'discussion_content_unavailable' } }
+            : { body: { discussions: [], nextCursor: null } } });
+        homes.answer(serverId, 'POST /v1/discussions', { select: () => {
+            dispatched = true;
+            return { dispatchThenFail: true };
+        } });
+    }
+    const outcome = await repository.create({ ...input, creationLocalId: 'declined-create', messageLocalId: 'declined-first',
+        participants: [{ kind: 'session', sessionId: 'foreign-runtime' }] });
+    if (phase === 'create') expect(outcome).toEqual({ kind: 'failed', errorCode: 'discussion_content_unavailable' });
+    else {
+        expect(outcome).toEqual({ kind: 'checking' });
+        await vi.waitFor(() => expect(repository.getSnapshot().mutations['declined-create']?.status).not.toBe('checking'));
+    }
+    expect(repository.getSnapshot().threads['committed-thread']).toBe(unrelated);
+    expect(repository.getSnapshot().lists.active.items.map(row => row.id)).toContain('committed-thread');
+    expect(repository.getSnapshot().mutations['declined-create']).toMatchObject({ status: phase === 'create' ? 'failed' : 'outcome_unknown',
+        errorCode: phase === 'create' ? 'discussion_content_unavailable' : 'outcome_unknown', draftSubmission });
+    expect(await repository.retry('declined-create')).toEqual({ kind: 'failed', errorCode: 'discussion_content_unavailable' });
+    expect(repository.getSnapshot().threads['committed-thread']).toBe(unrelated);
 });
 
 it('keeps model Home admission at the canonical Action before any reservation HTTP request', async () => {
