@@ -113,8 +113,7 @@ for (const owner of ['api', 'http'] as const) {
         const pending = create(hasLifetime ? { signal: lifetime.signal } : {});
         const completed = hasLifetime ? expect(pending).resolves.toMatchObject(owner === 'api'
           ? { id: 'created-session' } : { session: { id: 'created-session' } })
-          : owner === 'api' ? expect(pending).resolves.toBeNull()
-            : expect(pending).rejects.toMatchObject({ code: 'ECONNABORTED' });
+          : expect(pending).rejects.toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNABORTED' } });
         void completed.catch(() => undefined);
         await vi.advanceTimersByTimeAsync(60_001);
         await completed;
@@ -156,7 +155,7 @@ for (const owner of ['api', 'http'] as const) {
         expect(settled).toBe(false);
         expect(operations.runner.cancel({ accountId: 'owner-1', machineId: 'machine-1' }, 'creation-operation'))
           .toEqual({ kind: 'requested' });
-        await expect(pending).rejects.toThrow('Action operation cancellation requested');
+        await expect(pending).rejects.toMatchObject({ code: 'outcome_unknown' });
         expect(axios.post).toHaveBeenCalledTimes(1);
       } finally {
         operations.runner.cancel({ accountId: 'owner-1', machineId: 'machine-1' }, 'creation-operation');

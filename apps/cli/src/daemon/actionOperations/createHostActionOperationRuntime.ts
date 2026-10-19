@@ -1,5 +1,6 @@
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { ManagedMachineActionInputSchemasV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ActionExecuteResult, ActionExecutorDeps, ActionOperationDomainRefV1, ActionOperationSnapshotV1, ActionOperationDeclarationV1 } from '@happier-dev/protocol/actions';
 import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
 import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
@@ -39,6 +40,13 @@ function readInitialDomainRef(
   input: unknown,
   requestId: string | undefined,
 ): ActionOperationDomainRefV1 | undefined {
+  if (actionId === 'machines.managed.power.set' || actionId === 'machines.managed.delete' || actionId === 'machines.managed.rebuild') {
+    // The Home-scoped operation concerns this guest even when controller admission
+    // fails before the native owner can publish its admitted/enriched reference.
+    const parsed = ManagedMachineActionInputSchemasV1[actionId].safeParse(input);
+    if (!parsed.success) return undefined;
+    return { kind: 'managedMachine', id: 'managedMachineId' in parsed.data ? parsed.data.managedMachineId : parsed.data.managedId };
+  }
   if (!requestId) return undefined;
   if (actionId === 'session.spawn_new') return { kind: 'spawnAttempt' as const, id: requestId };
   if (actionId !== 'session.fork') return undefined;

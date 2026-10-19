@@ -232,27 +232,39 @@ describe('unused Stop through guest drain and controller operation custody', () 
         expect(refused.readMachine().submittedNativeEffect).toBeUndefined();
         expect(refused.effects).toEqual([role]);
     });
-    it.each(['admit-control', 'submit-intent'] as const)('distinguishes an unavailable %s from an already committed power intent', async boundary => {
-        const test = setup(undefined, undefined, 'start');
+    it.each([
+        { boundary: 'admit-control', intent: 'start', action: 'machines.managed.power.set', code: 'database_connection_unavailable' },
+        { boundary: 'admit-control', intent: 'start', action: 'machines.managed.power.set', code: 'database_transaction_conflict_exhausted' },
+        { boundary: 'admit-control', intent: 'delete', action: 'machines.managed.delete', code: 'database_transaction_conflict_exhausted' },
+        { boundary: 'admit-control', intent: 'rebuild', action: 'machines.managed.rebuild', code: 'database_transaction_conflict_exhausted' },
+        { boundary: 'submit-intent', intent: 'start', action: 'machines.managed.power.set', code: 'database_connection_unavailable' },
+    ] as const)('retains the managed target through $action $boundary $code', async ({ boundary, intent, action, code }) => {
+        const test = setup(undefined, undefined, intent);
         const machine = test.readMachine();
         const home = test.post.getMockImplementation()!;
         test.post.mockImplementation(async (url, body, config) => String(url).endsWith(`/${boundary}`)
-            ? { status: 503, data: { error: 'database_connection_unavailable' } }
+            ? { status: 503, data: { error: code } }
             : await home(url, body, config));
+        const snapshots: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1[] = [];
         const operations = createHostActionOperationRuntime({ machineId: machine.controller.machineId,
-            resolveAccountId: async () => 'owner', generateOperationId: () => `unavailable-${boundary}` });
-        const input = { homeId: machine.homeId, managedId: machine.id, intent: 'start' as const,
-            when: 'now' as const, expectedRevision: machine.intentRevision };
+            resolveAccountId: async () => 'owner', generateOperationId: () => `unavailable-${boundary}`,
+            publishSnapshot: snapshot => { snapshots.push(snapshot); } });
+        const input = intent === 'rebuild'
+            ? { homeId: machine.homeId, managedMachineId: machine.id, kind: 'rebuild', expectedRevision: machine.intentRevision,
+                reviewedEffectDigest: 'reviewed-effects' }
+            : { homeId: machine.homeId, managedId: machine.id, intent, when: 'now', expectedRevision: machine.intentRevision,
+                ...(intent === 'delete' ? { reviewedDependencies: true } : {}) };
         let work: ReturnType<typeof test.driver.execute> | undefined;
-        const observed = operations.observeExecution({ actionId: 'machines.managed.power.set', input, actionRequestId: 'control',
+        const observed = operations.observeExecution({ actionId: action, input,
+            ...(intent === 'start' ? { actionRequestId: 'control' } : {}),
             execute: async context => {
-                work = test.driver.execute('machines.managed.power.set', input, { requestId: 'control', context, signal: context.signal });
+                work = test.driver.execute(action, input, { requestId: context.actionRequestId!, context, signal: context.signal });
                 const result = await work;
                 const failure = ActionExecuteFailureSchema.safeParse(result);
                 return failure.success ? failure.data : { ok: true, result };
             } });
         if (boundary === 'admit-control') {
-            await expect(observed).rejects.toMatchObject({ code: 'database_connection_unavailable' });
+            await expect(observed).rejects.toMatchObject({ code });
         } else {
             await expect(observed).resolves.toMatchObject({ ok: true, result: { kind: 'accepted', managedId: machine.id } });
             await expect(work).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown', details: {
@@ -260,11 +272,17 @@ describe('unused Stop through guest drain and controller operation custody', () 
             } });
         }
         expect(test.effects).toEqual([]);
-        expect(await operations.handlers.getV2({ operationId: `unavailable-${boundary}` })).toMatchObject({ kind: 'found', operation:
-            boundary === 'submit-intent' ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' },
-                domainRef: { kind: 'managedMachine', id: machine.id } }
-                : { state: 'failed', error: { errorCode: 'database_connection_unavailable' } },
-        });
+        expect(ActionOperationGetV1ResponseSchema.parse(await operations.handlers.getV2({ operationId: `unavailable-${boundary}` })))
+            .toMatchObject({ kind: 'found', operation: {
+                domainRef: { kind: 'managedMachine', id: machine.id },
+                ...(boundary === 'submit-intent'
+                    ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' } }
+                    : { state: 'failed', error: { errorCode: code } }),
+            } });
+        expect(snapshots[0]).toMatchObject({ state: 'accepted', domainRef: { kind: 'managedMachine', id: machine.id } });
+        for (const snapshot of snapshots) {
+            expect(snapshot.domainRef).toMatchObject({ kind: 'managedMachine', id: machine.id });
+        }
     });
     it('does not recreate unused Stop operations after observed settlement and resumes the policy after observed Start', async () => {
         const test = setup(undefined, undefined, 'stop', {
