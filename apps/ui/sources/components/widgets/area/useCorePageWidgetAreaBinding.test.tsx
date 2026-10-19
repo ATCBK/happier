@@ -37,6 +37,7 @@ let disposeActionLoader: (() => void) | undefined;
 let useCorePageWidgetAreaBinding: typeof import('./useCorePageWidgetAreaBinding')['useCorePageWidgetAreaBinding'];
 let useWidgetAreaLayouts: typeof import('@/components/projects/overview/useProjectDashboards')['useWidgetAreaLayouts'];
 let useWidgetAreaLayout: typeof import('./useWidgetAreaLayout')['useWidgetAreaLayout'];
+let WidgetArea: typeof import('./WidgetArea')['WidgetArea'];
 let WidgetAreaPresetLine: typeof import('./WidgetAreaPresetLine')['WidgetAreaPresetLine'];
 let useUsageWidgetAreaBinding: typeof import('@/components/settings/usage/useUsageWidgetAreaBinding')['useUsageWidgetAreaBinding'];
 beforeAll(async () => {
@@ -45,6 +46,7 @@ beforeAll(async () => {
     ({ useCorePageWidgetAreaBinding } = await import('./useCorePageWidgetAreaBinding'));
     ({ useWidgetAreaLayouts } = await import('@/components/projects/overview/useProjectDashboards'));
     ({ useWidgetAreaLayout } = await import('./useWidgetAreaLayout'));
+    ({ WidgetArea } = await import('./WidgetArea'));
     ({ WidgetAreaPresetLine } = await import('./WidgetAreaPresetLine'));
     ({ useUsageWidgetAreaBinding } = await import('@/components/settings/usage/useUsageWidgetAreaBinding'));
 });
@@ -65,25 +67,43 @@ it('retains an admitted core-page area through a transient Artifact HTTP failure
             v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
         } }] },
     ] };
-    const hook = await renderHook(() => {
+    let current!: { binding: ReturnType<typeof useCorePageWidgetAreaBinding>; layout: ReturnType<typeof useWidgetAreaLayout> };
+    function Composition() {
         const binding = useCorePageWidgetAreaBinding(input);
-        return { binding, layout: useWidgetAreaLayout(binding.port!, input.context) };
-    });
+        const layout = useWidgetAreaLayout(binding.port!, input.context);
+        current = { binding, layout };
+        return <WidgetArea port={binding.port} context={input.context} layout={layout} geometry="grid"
+            title="Overview" surfaceName="Overview" dashboard={{ addLabel: 'Add widget', emptyTitle: 'No widgets' }} testID="core.area" />;
+    }
+    const screen = await renderScreen(<Composition />);
     try {
-        await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { id: 'displayed' } }] }));
-        const admitted = hook.getCurrent().layout.state;
+        await vi.waitFor(() => expect(current.layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { id: 'displayed' } }] }));
+        const admitted = current.layout.state;
+        const body = screen.findByTestId('core.area.widget.displayed.body');
+        expect(body).not.toBeNull();
         artifactReadFails = true;
-        await act(async () => { await hook.getCurrent().layout.reload(); });
-        expect(hook.getCurrent().layout.state).toBe(admitted);
-        expect(admitted.status === 'ready' && admitted.isCurrent()).toBe(true);
-        artifactReadFails = false;
         await act(async () => {
-            expect(await hook.getCurrent().binding.port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Recovered' }))
-                .toMatchObject({ ok: true });
-            await hook.getCurrent().layout.reload();
+            expect(await current.layout.reload()).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable' });
         });
-        await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { displayName: 'Recovered' } }] }));
-    } finally { artifactReadFails = false; await hook.unmount(); }
+        const failed = current.layout.state;
+        expect(failed).toMatchObject({ status: 'ready', readFailure: { reasonCode: 'widget_area_unavailable' } });
+        expect(failed.status === 'ready' && admitted.status === 'ready' && failed.placements === admitted.placements).toBe(true);
+        expect(failed.status === 'ready' && failed.isReadPending()).toBe(false);
+        expect(admitted.status === 'ready' && admitted.isCurrent()).toBe(true);
+        expect(screen.findByTestId('core.area.widget.displayed.body')).toBe(body);
+        expect(screen.findByTestId('core.area.readFailed')).not.toBeNull();
+        artifactReadFails = false;
+        await screen.pressByTestIdAsync('core.area.retry');
+        await vi.waitFor(() => expect(screen.findByTestId('core.area.readFailed')).toBeNull());
+        expect(screen.findByTestId('core.area.widget.displayed.body')).toBe(body);
+        expect(current.layout.state).not.toHaveProperty('readFailure');
+        await act(async () => {
+            expect(await current.binding.port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Recovered' }))
+                .toMatchObject({ ok: true });
+            expect(await current.layout.reload()).toMatchObject({ status: 'ready' });
+        });
+        await vi.waitFor(() => expect(current.layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { displayName: 'Recovered' } }] }));
+    } finally { artifactReadFails = false; await screen.unmount(); }
 });
 
 it('renews named layouts after same-Account activation without a Profile scope change', async () => {

@@ -35,6 +35,8 @@ type WidgetAreaWriteSettlement =
 export type WidgetAreaWriteOutcome = WidgetAreaWriteSettlement
     | Readonly<{ kind: 'approvalPending'; artifactId: string; settled: Promise<WidgetAreaWriteSettlement> }>;
 
+type WidgetAreaReadFailure = Readonly<{ reasonCode: string; reason?: string }>;
+
 export type WidgetAreaLayoutState<C> =
     | Readonly<{ status: 'loading' }>
     /** The host refused the area itself (scope retired, context invalid, Project source unavailable). */
@@ -49,14 +51,16 @@ export type WidgetAreaLayoutState<C> =
         isCurrent: () => boolean;
         /** A new observation is pending under the same authority; mounted reads still require isCurrent. */
         isReadPending: () => boolean;
+        /** A settled retryable read failed; the admitted layout remains current. */
+        readFailure?: WidgetAreaReadFailure;
         /** The page context this read was admitted with; widgets follow only an admitted context. */
         context: C;
     }>;
 
 export type WidgetAreaLayout<C> = Readonly<{
     state: WidgetAreaLayoutState<C>;
-    /** Retry the same bound document; this never resets its saved edits. */
-    reload: () => Promise<void>;
+    /** Retry the same bound document and return its observation, even when the layout is retained. */
+    reload: () => Promise<WidgetAreaLayoutState<C> | void>;
     /** One semantic write through the port, then a fresh read of the acknowledged layout. */
     write: (operation: PluginUiWidgetAreaOperationV1) => Promise<WidgetAreaWriteOutcome>;
 }>;
@@ -92,6 +96,7 @@ function reconcile<C>(previous: WidgetAreaLayoutState<C>, next: WidgetAreaLayout
     if (samePlacements && previous.isCurrent === next.isCurrent && previous.canEdit === next.canEdit && previous.isShared === next.isShared && sameStrictJsonValue(previous.admittedViewer, next.admittedViewer)
         && sameItems && previous.documentState === next.documentState && sameStrictJsonValue(previous.dashboard ?? null, next.dashboard ?? null)
         && sameStrictJsonValue(previous.preset ?? null, next.preset ?? null)
+        && sameStrictJsonValue(previous.readFailure ?? null, next.readFailure ?? null)
         && previous.context === next.context && sameStrictJsonValue(previous.surface, next.surface)) return previous;
     return { ...next, items: sameItems ? previous.items : items, placements: samePlacements ? previous.placements : placements };
 }
@@ -134,6 +139,13 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         const admittedViewer = getActiveServerAccountScope();
         const admittedLifetime = captureActiveServerAccountScopeLifetime();
         const current = ++generation.current;
+        const hasAuthority = () => mounted.current && (admittedLifetime ? admittedLifetime.isCurrent() : getActiveServerAccountScope() === null);
+        const readPendingFor = (surface: WidgetSurfaceRefV1) => {
+            const id = surface.artifactId ?? buildWidgetSurfaceArtifactIdV1(surface);
+            const publication = publications[id];
+            return () => hasAuthority() && (current !== generation.current || binding.current !== capturedBinding
+                || storage.getState().artifacts[id] !== publication);
+        };
         let next: WidgetAreaLayoutState<C>;
         try {
             const result = await port.execute({ actionId: 'widgets.item.list' }, signal);
@@ -145,17 +157,14 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
             const admittedPublication = publications[admittedArtifactId];
             // A pending observation does not retire admitted facts. Actual scope retirement or
             // a new Artifact publication does; late read results are still rejected below.
-            const hasAuthority = () => mounted.current && (admittedLifetime ? admittedLifetime.isCurrent() : getActiveServerAccountScope() === null);
             const isCurrent = () => hasAuthority()
                 && storage.getState().artifacts[admittedArtifactId] === admittedPublication;
-            const isReadPending = () => hasAuthority() && (current !== generation.current || binding.current !== capturedBinding
-                || storage.getState().artifacts[admittedArtifactId] !== admittedPublication);
             const refusedReason = refused !== null ? failureReason(result, refused) : undefined;
             next = refused === 'plugin_surface_connection_pending' ? { status: 'loading' }
                 : refused !== null ? { status: 'unavailable', reasonCode: refused, ...(refusedReason ? { reason: refusedReason } : {}) }
                 : parsed?.success && area?.success ? { status: 'ready', surface: area.data.surface, items: area.data.items,
                     placements: parsed.data.instances, canEdit: parsed.data.canEdit,
-                    isShared: parsed.data.isShared === true, admittedViewer, context, isCurrent, isReadPending, documentState: parsed.data.state ?? 'present',
+                    isShared: parsed.data.isShared === true, admittedViewer, context, isCurrent, isReadPending: readPendingFor(area.data.surface), documentState: parsed.data.state ?? 'present',
                     ...(parsed.data.dashboard ? { dashboard: parsed.data.dashboard } : {}), ...(parsed.data.preset ? { preset: parsed.data.preset } : {}) }
                 : { status: 'unavailable', reasonCode: 'invalid_widget_area_result' };
         } catch {
@@ -166,8 +175,17 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         // A retryable read failure says nothing new about the admitted layout. Keep it while
         // its Account and exact Artifact publication are still current; explicit refusal or
         // retired authority still clears it through the normal unavailable state.
-        setState(previous => (next.status === 'loading' || next.status === 'unavailable' && next.reasonCode === 'widget_area_unavailable')
-            && previous.status === 'ready' && previous.isCurrent() ? previous : reconcile(previous, next));
+        setState(previous => {
+            if (previous.status === 'ready' && previous.isCurrent()) {
+                if (next.status === 'loading') return previous;
+                if (next.status === 'unavailable' && next.reasonCode === 'widget_area_unavailable') {
+                    const { status: _status, ...readFailure } = next;
+                    return { ...previous, readFailure, isReadPending: readPendingFor(previous.surface) };
+                }
+            }
+            return reconcile(previous, next);
+        });
+        return next;
     }, [context, port]);
 
     // The native Host API keeps its identity through Machine readiness changes. Re-observe its
@@ -189,7 +207,7 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
     const reload = React.useCallback(async () => {
         if (!mounted.current || binding.current.port !== port || binding.current.context !== context) return;
         setState(previous => previous.status === 'unavailable' ? { status: 'loading' } : previous);
-        await read();
+        return read();
     }, [context, port, read]);
 
     const write = React.useCallback(async (operation: PluginUiWidgetAreaOperationV1): Promise<WidgetAreaWriteOutcome> => {

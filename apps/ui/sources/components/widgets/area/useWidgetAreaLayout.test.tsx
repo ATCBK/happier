@@ -22,13 +22,14 @@ it('keeps a connecting plugin area loading, retains authorized data, and clears 
             v: 1, id: 'vitals', definition: { kind: 'builtin', id: 'machine_vitals' }, bindings: {},
         } }] }],
     }));
-    let readiness: 'pending' | 'ready' | 'denied' = 'pending';
+    let readiness: 'pending' | 'ready' | 'failed' | 'denied' = 'pending';
     let retireOnRead = false;
     const port: WidgetAreaPort = { execute: async () => {
         if (retireOnRead) retireActiveServerAccountScopeLifetime();
         return readiness === 'ready'
             ? PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(surface, {}) })
-            : { ok: false, errorCode: readiness === 'pending' ? 'plugin_surface_connection_pending' : 'plugin_action_caller_forbidden', error: readiness };
+            : { ok: false, errorCode: readiness === 'pending' ? 'plugin_surface_connection_pending'
+                : readiness === 'failed' ? 'widget_area_unavailable' : 'plugin_action_caller_forbidden', error: readiness };
     } };
     const context = {};
     const hook = await renderHook(() => useWidgetAreaLayout(port, context));
@@ -42,6 +43,13 @@ it('keeps a connecting plugin area loading, retains authorized data, and clears 
         readiness = 'pending';
         await act(async () => { await hook.getCurrent().reload(); });
         expect(hook.getCurrent().state).toBe(admitted);
+        readiness = 'failed';
+        await act(async () => {
+            expect(await hook.getCurrent().reload()).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable', reason: 'failed' });
+        });
+        const retained = hook.getCurrent().state;
+        expect(retained).toMatchObject({ status: 'ready', readFailure: { reasonCode: 'widget_area_unavailable', reason: 'failed' } });
+        expect(retained.status === 'ready' && retained.isReadPending()).toBe(false);
         readiness = 'denied';
         await act(async () => { await hook.getCurrent().reload(); });
         expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_action_caller_forbidden' });

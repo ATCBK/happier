@@ -255,6 +255,21 @@ it('retries the same edited area after a failed layout read without resetting it
     await vi.waitFor(() => expect(screen.findByTestId(`prs.pinned.widget.${follow.id}`)).not.toBeNull());
     expect(flattenWidgetLayoutWidgetsV1((await fixture.store.read()).items).map(row => row.instance))
         .toEqual([{ ...follow, displayName: 'My checks' }]);
+    const retainedBody = screen.findByTestId(`prs.pinned.widget.${follow.id}`);
+    fail = true;
+    await screen.update(page(fixture.hostApi, 'repo-b'));
+    await flushHookEffects({ cycles: 8 });
+    expect(screen.findByTestId(`prs.pinned.widget.${follow.id}`)).toBe(retainedBody);
+    expect(widgetDemand.active.has('repo-a')).toBe(true);
+    expect(screen.findByTestId('prs.pinned.readFailed')).not.toBeNull();
+    expect(screen.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'prs.pinned.readFailed')?.props)
+        .toMatchObject({ title: 'widgetAdd.areaUnavailableTitle', diagnosticCode: 'widget_area_unavailable' });
+    expect(screen.findByTestId('prs.pinned.retry')).not.toBeNull();
+    fail = false;
+    await screen.pressByTestIdAsync('prs.pinned.retry');
+    await vi.waitFor(() => expect(widgetDemand.active.has('repo-b')).toBe(true));
+    expect(screen.findByTestId('prs.pinned.readFailed')).toBeNull();
+    expect(screen.findByTestId('prs.pinned.retry')).toBeNull();
 });
 
 it('offers page readmission rather than Retry on an area whose Account scope was refused', async () => {

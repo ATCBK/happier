@@ -204,6 +204,21 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         || state.reasonCode === 'widget_area_scope_retired' || state.reasonCode === 'account_target_mismatch'
         || state.reasonCode === 'server_target_mismatch');
     const ready = state.status === 'ready' ? state : null;
+    const readFailure = state.status === 'unavailable' ? state : ready?.readFailure;
+    const readFailureNotice = readFailure ? (
+        <DashboardAreaEdge active={!!props.dashboard}>
+            <SurfaceStateCard
+                testID={`${props.testID}.${ready ? 'readFailed' : 'unavailable'}`}
+                kind="unavailable"
+                size="line"
+                layout="inline"
+                title={t('widgetAdd.areaUnavailableTitle')}
+                {...(readFailure.reason || scopeRefused ? { reason: readFailure.reason ?? t('widgetAdd.areaScopeRecovery') } : {})}
+                diagnosticCode={readFailure.reasonCode}
+                {...(!scopeRefused ? { action: { label: t('common.retry'), onPress: () => { void layout.reload(); }, testID: `${props.testID}.retry` } } : {})}
+            />
+        </DashboardAreaEdge>
+    ) : null;
     const areaFailure = notice?.kind === 'failed' && !ready?.placements.some(entry => entry.instance.id === notice.instanceId) ? notice : null;
     const canAdd = ready?.canEdit === true;
     // An open Add surface outlives a re-read that finds the area unavailable: it keeps the layout it was opened on, so a
@@ -309,18 +324,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     body={{ kind: 'loading', accessibilityLabel: t('common.loading') }}
                 />
             ) : state.status === 'unavailable' ? (
-                <DashboardAreaEdge active={!!props.dashboard}>
-                <SurfaceStateCard
-                    testID={`${props.testID}.unavailable`}
-                    kind="unavailable"
-                    size="line"
-                    layout="inline"
-                    title={t('widgetAdd.areaUnavailableTitle')}
-                    {...(state.reason || scopeRefused ? { reason: state.reason ?? t('widgetAdd.areaScopeRecovery') } : {})}
-                    diagnosticCode={state.reasonCode}
-                    {...(!scopeRefused ? { action: { label: t('common.retry'), onPress: layout.reload, testID: `${props.testID}.retry` } } : {})}
-                />
-                </DashboardAreaEdge>
+                readFailureNotice
             ) : ready && ready.placements.length === 0 && props.dashboard ? (
                 <Text testID={`${props.testID}.empty`} style={styles.dashboardEmpty}>{props.dashboard.emptyTitle}</Text>
             ) : ready && ready.placements.length === 0 ? (
@@ -343,6 +347,7 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
                     failed={notice?.kind === 'failed' ? notice : null}
                     pendingInstanceId={notice?.kind === 'pending' ? notice.instanceId ?? null : null} />
             ) : null}
+            {props.display !== 'add' && ready?.readFailure ? readFailureNotice : null}
             {areaFailure && props.dashboard ? <SurfaceStateCard testID={`${props.testID}.writeFailed`} kind="error" size="line" layout="inline"
                 title={resolveActionExecutionErrorMessage({ errorCode: areaFailure.errorCode }, t('widgetAdd.areaWriteFailed'))}
                 diagnosticCode={areaFailure.errorCode} action={{ label: t('common.retry'), onPress: () => { void areaFailure.retry(); } }} /> : null}
