@@ -21,6 +21,7 @@ export const en = {
         reconciling: 'Checking whether this agent conversation started…',
         unresolved: 'We couldn’t confirm whether this agent conversation started. Starting another may create a second conversation.',
         targetChanged: 'The machine for this session changed before the conversation could start. Nothing was started.',
+        submittedUnknown: 'We couldn’t confirm whether it started. Check Runs. If the runner is no longer active, resume the session.',
         secretReferenceOverlayUpdateRequired: 'Using shared secrets in an agent conversation needs an updated machine. Nothing was started.',
     },
     status: {

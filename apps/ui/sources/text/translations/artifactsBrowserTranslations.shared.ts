@@ -46,13 +46,14 @@ export type ArtifactsBrowserTranslations = Readonly<{
         moveTo: string;
         moveItemTo: (params: Readonly<{ name: string }>) => string;
         newFolderEllipsis: string;
-        moveVerb: string;
+        moveVerb: (params: { name: string }) => string;
         topLevel: string;
         moveToTopLevel: string;
         deleteFolder: string;
         deleteTitle: (params: Readonly<{ name: string }>) => string;
         deleteBody: string;
         nameHelp: string;
+        emptyFolder: string;
         namePlaceholder: string;
         create: string;
         options: (params: Readonly<{ name: string }>) => string;
@@ -65,6 +66,7 @@ export type ArtifactsBrowserTranslations = Readonly<{
         saveFailed: string;
         refusedCycle: string;
         refusedUnavailable: string;
+        lastKnown: string;
         refusedOther: string;
         showAllKinds: string;
         promptSearch: string;
@@ -133,6 +135,33 @@ export type ArtifactsBrowserTranslations = Readonly<{
     facts: Readonly<{
         edited: (params: Readonly<{ age: string }>) => string;
     }>;
+    passage: Readonly<{
+        comment: string;
+    }>;
+    proposal: Readonly<{
+        title: string;
+        basedOn: (params: Readonly<{ n: number }>) => string;
+        current: (params: Readonly<{ n: number }>) => string;
+        before: string;
+        after: string;
+        accept: string;
+        decline: string;
+        accepting: string;
+        declining: string;
+        movedOn: string;
+        compare: string;
+        cantEdit: string;
+        failed: string;
+        acceptedByYou: (params: Readonly<{ n: number }>) => string;
+        acceptedBy: (params: Readonly<{ who: string; n: number }>) => string;
+        declinedByYou: string;
+        declinedBy: (params: Readonly<{ who: string }>) => string;
+        undo: string;
+        undone: (params: Readonly<{ n: number }>) => string;
+        undoConflict: string;
+        openDocument: string;
+        someone: string;
+    }>;
 }>;
 
 
@@ -182,13 +211,14 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             moveTo: 'Move to folder…',
             moveItemTo: ({ name }) => `Move “${name}” to`,
             newFolderEllipsis: 'New folder…',
-            moveVerb: 'Move to',
+            moveVerb: ({ name }) => `Move to ${name}`,
             topLevel: 'Top level',
             moveToTopLevel: 'Move to the top level',
             deleteFolder: 'Delete folder',
             deleteTitle: ({ name }) => `Delete “${name}”?`,
             deleteBody: 'Its items and folders move up one level. Nothing is deleted.',
             nameHelp: 'Folders are yours alone. Filing something never changes it for the people it’s shared with.',
+            emptyFolder: 'Empty',
             namePlaceholder: 'Folder name',
             create: 'Create',
             options: ({ name }) => `${name} options`,
@@ -201,6 +231,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
             saveFailed: 'That change didn’t save. Try again.',
             refusedCycle: 'A folder can’t move into itself',
             refusedUnavailable: 'Folders are unavailable right now',
+            lastKnown: 'Showing your last known folders',
             refusedOther: 'It can’t move there',
             showAllKinds: 'Show every kind in Artifacts',
             promptSearch: 'Search prompts and skills',
@@ -270,5 +301,32 @@ export const artifactsBrowserTranslationsEnglish = { en: {
         },
         facts: {
             edited: ({ age }) => `Edited ${age}`,
+        },
+        passage: {
+            comment: 'Comment',
+        },
+        proposal: {
+            title: 'Suggested edit',
+            basedOn: ({ n }) => `Based on version ${n}`,
+            current: ({ n }) => `Version ${n} · current`,
+            before: 'Before',
+            after: 'After',
+            accept: 'Accept',
+            decline: 'Decline',
+            accepting: 'Accepting… checking the document hasn’t changed',
+            declining: 'Declining…',
+            movedOn: 'The document changed after this suggestion. Nothing was applied.',
+            compare: 'Compare',
+            cantEdit: 'Only people who can edit this document can accept it.',
+            failed: 'Couldn’t save your decision. Try again.',
+            acceptedByYou: ({ n }) => `You accepted the edit · now version ${n}`,
+            acceptedBy: ({ who, n }) => `${who} accepted the edit · now version ${n}`,
+            declinedByYou: 'You declined the suggestion · the document didn’t change',
+            declinedBy: ({ who }) => `${who} declined the suggestion · the document didn’t change`,
+            undo: 'Undo',
+            undone: ({ n }) => `Undone · now version ${n}`,
+            undoConflict: 'The document changed after this edit, so Undo can’t restore it. Open its history to pick a version.',
+            openDocument: 'Open document',
+            someone: 'Someone',
         },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "en">;

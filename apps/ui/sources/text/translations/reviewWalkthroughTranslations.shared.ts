@@ -16,7 +16,7 @@ export type ReviewWalkthroughTranslations = {
     fromReviewAt: (params: Readonly<{ time: string }>) => string;
     reviewLabel: string;
     enginesOf: (params: Readonly<{ count: number; total: number }>) => string;
-    enginesFinished: string;
+    enginesFinished: (params: Count) => string;
     enginesRunning: (params: Count) => string;
     fromEngines: (params: Readonly<{ engines: string; inStory: number }>) => string;
     and: string;
@@ -36,7 +36,6 @@ export type ReviewWalkthroughTranslations = {
         reviewedAt: (params: Readonly<{ time: string }>) => string;
         reviewAt: (params: Readonly<{ time: string }>) => string;
         partial: (params: Count) => string;
-        ready: string;
         readyShort: string;
         failed: string;
         narrating: string;
@@ -106,7 +105,7 @@ export const en: ReviewWalkthroughTranslations = {
     fromReviewAt: ({ time }) => `from the ${time} review`,
     reviewLabel: 'Review:',
     enginesOf: ({ count, total }) => `${count} of ${total}`,
-    enginesFinished: 'engines finished',
+    enginesFinished: ({ count }) => count === 1 ? 'engine finished' : 'engines finished',
     enginesRunning: ({ count }) => (count === 1 ? '1 engine still running' : `${count} engines still running`),
     fromEngines: ({ engines, inStory }) => `from ${engines} · ${inStory} in the story`,
     and: ' and ',
@@ -128,8 +127,7 @@ export const en: ReviewWalkthroughTranslations = {
         engineReviewed: ({ engine, count }) => (count === 1 ? `${engine} · 1 finding` : `${engine} · ${count} findings`),
         reviewedAt: ({ time }) => `Reviewed ${time}`,
         reviewAt: ({ time }) => `Review ${time}`,
-        partial: ({ count }) => (count === 1 ? 'Partial review · 1 finding' : `Partial review · ${count} findings`),
-        ready: 'Walkthrough ready',
+        partial: ({ count }) => (count === 1 ? 'Partial · 1 finding' : `Partial · ${count} findings`),
         readyShort: 'Walkthrough',
         failed: 'Walkthrough failed',
         narrating: 'Narrating',

@@ -1671,6 +1671,66 @@ const enMemoryContext = {
     addedByYou: 'added by you',
     remember: 'Remember something',
     rememberSave: 'Remember',
+    sheetTitle: 'Save as decision',
+    sheetTarget: 'Saves to this session’s memory',
+    sheetDecisionLabel: 'Decision',
+    sheetReasonLabel: 'Reason',
+    sheetReasonPlaceholder: 'Why this was decided',
+    sheetSource: 'Source · this answer',
+    sheetExpires: 'Expires',
+    sheetExpiresNever: 'Never',
+    sheetExpiresOnDate: 'On a date',
+    sheetExpiryDate: 'Date',
+    sheetExpiryTime: 'Time',
+    sheetExpiryPast: 'Pick a moment in the future.',
+    sheetApprovedByYouNow: 'Approved by you, now',
+    sheetSave: 'Save decision',
+    sheetSaveUpdate: 'Update decision',
+    sheetSaveReplace: 'Replace decision',
+    sheetConflict: 'This memory changed while you were saving. Nothing was saved; what you typed is still here.',
+    sheetRefused: 'Couldn’t save this decision. What you typed is still here.',
+    saveAsDecision: 'Save as decision',
+    savedAsDecision: 'Saved as a decision',
+    searchingEverything: 'Searching all your memory, not just this project',
+    searchOnlyProject: 'Only this project',
+    thisMachine: 'This machine',
+    projectSearchUnsupported: ({ machine }: { machine: string }) => `${machine} can’t search one project yet. Update Happier there, or search everything.`,
+    searchEverything: 'Search everything',
+    duplicateTitle: 'This memory already has something similar',
+    duplicateTitleMany: ({ count }: { count: number }) => `This memory already has ${count} similar facts`,
+    duplicateExact: 'Same words',
+    duplicateRelated: 'Similar',
+    duplicateSaved: 'Saved',
+    duplicateNew: 'New',
+    duplicateChoice: 'With the saved fact',
+    duplicateUpdate: 'Update it',
+    duplicateUpdateHint: 'Corrects the saved fact. Its source and approval stay.',
+    duplicateReplace: 'Replace it',
+    duplicateReplaceHint: 'The saved fact moves to history. Agents only see the new one.',
+    duplicateKeepBoth: 'Keep both',
+    duplicateKeepBothHint: 'Saves the new fact next to the saved one.',
+    duplicateSaveUpdate: 'Update fact',
+    duplicateSaveReplace: 'Replace fact',
+    decision: 'Decision',
+    decisionNotApproved: 'Not approved by a person',
+    decisionApprovedByYou: 'approved by you',
+    decisionApproved: ({ date }: { date: string }) => `approved ${date}`,
+    note: 'Note',
+    detailDecidedIn: 'Decided in',
+    detailCameFrom: 'Came from',
+    detailApprovedBy: 'Approved by',
+    detailApprovedByYou: ({ date }: { date: string }) => `You · ${date}`,
+    detailApprovedOn: ({ date }: { date: string }) => `A person · ${date}`,
+    detailSaved: 'Saved',
+    detailExpired: ({ date }: { date: string }) => `Expired ${date}`,
+    whatAgentsSee: 'What agents see',
+    whatAgentsSeeLoaded: 'Sessions that use this memory load this line. The reason and source stay here.',
+    whatAgentsSeeNotLoaded: 'Agents don’t load this fact. It stays searchable.',
+    historyTitle: 'History',
+    historyReplaced: ({ date }: { date: string }) => `Replaced ${date}`,
+    detailIdle: 'Choose a fact to see its reason, source and history.',
+    youCanEdit: 'You can edit',
+    youCanView: 'You can view',
     rememberPlaceholder: 'A fact worth keeping',
     topicPlaceholder: 'Topic (optional)',
     forget: 'Forget',
@@ -1721,6 +1781,9 @@ const enMemoryContext = {
     yourMemory: 'Your memory',
     projectMemory: 'Project memory',
     offForSession: 'Off for this session',
+    usePlan: 'Use as its plan',
+    stopPlan: 'Stop using as its plan',
+    planNote: 'Its plan',
     offAtSource: 'Off',
     memoryOff: 'Not loaded · memory is off',
     skill: 'Skill instructions',
@@ -2760,6 +2823,8 @@ const enWebCryptoGate = {
 };
 
 const enCommon = {
+  stop: "Stop",
+  unknown: 'Unknown',
   decrease: 'Decrease',
   increase: 'Increase',
   // Simple string constants
@@ -4732,7 +4797,7 @@ const enConnectedServices = {
       post_switch_verification_failed:
         'Happier could not verify that the provider adopted the selected account. Review connected accounts or retry the switch.',
       connected_service_credential_reconnect_required:
-        'The selected connected account needs to be reconnected before this session can resume. Reconnect the profile, then retry.',
+        'The selected connected account needs to be reconnected before use. Reconnect the profile, then retry.',
       connected_service_credential_refresh_unavailable:
         'Happier could not refresh the selected connected account. Try again in a moment.',
       claude_subscription_missing_claude_code_scope:
@@ -5940,6 +6005,7 @@ const enSettingsPets = {
 };
 
 const enSettingsNotifications = {
+  machineOfflineTitle: "Machine offline alerts",
   mutePhoneWhenComputerFocusedTitle: 'Mute phone while a computer is focused',
   mutePhoneWhenComputerFocusedSubtitle:
     'Mute Ready, request, and Home activity push alerts while any Happier computer window is focused. New alerts resume when no Happier computer window is focused.',
@@ -6784,7 +6850,7 @@ const enSettingsProviders = {
       'Happier received an unexpected response from the selected machine. Try again.',
     mutationOutcomeUnknownTitle: 'Provider change needs review',
     mutationOutcomeUnknownDescription:
-      'The selected machine may have applied this change, but Happier could not confirm the result. Review the current settings before changing it again.',
+      'This change may have been applied, but Happier could not confirm the result. Review the current settings before changing it again.',
     notFoundTitle: 'Provider not found',
     notFoundDescription:
       'This provider was removed. Choose another provider or model.',
@@ -7814,6 +7880,13 @@ const enSettingsAppearance = {
   showLineNumbersInToolViews: 'Line numbers in tool views',
   showLineNumbersInToolViewsDescription:
     'Display line numbers in tool view diffs',
+  chatCodeBlocks: {
+      title: 'Chat code blocks',
+      showWrapControls: 'Show wrap controls',
+      showWrapControlsDescription: 'Show a wrap toggle on each chat code block',
+      wrapByDefault: 'Wrap code blocks by default',
+      wrapByDefaultDescription: 'Wrap long lines in chat code blocks unless you choose otherwise for a block',
+  },
   wrapLinesInDiffs: 'Wrap lines in code views',
   wrapLinesInDiffsDescription:
     'Wrap long lines instead of horizontal scrolling in diffs, file previews, and editors',
@@ -8356,6 +8429,14 @@ const enNewSession = {
   selectMachineDescription: 'Choose where this session runs.',
   selectPathTitle: 'Select path',
   selectWorkingDirectoryTitle: 'Select working directory',
+  recipeComposerTitle: "Session recipe",
+  recipeComposerSubmit: "Use recipe",
+  recipeComposerMachine: "Machine",
+  recipeComposerMachineNotReady: "Offline or not set up for sessions right now. The recipe keeps this Machine.",
+  recipeComposerFolderRetained: "Kept as saved. This folder can't be loaded here right now.",
+  recipeComposerDirectory: "Working directory",
+  profileUnavailableTurnedOff: "Profiles are off. Turn them on in Settings → Features to choose one.",
+  profileUnavailableNoneYet: "No profiles yet. Add one in Settings → Profiles to choose it here.",
   selectWorkingDirectoryDescription:
     'Pick the folder used for commands and context.',
   selectPermissionModeTitle: 'Select permission mode',
@@ -11335,11 +11416,24 @@ const enTools = {
       description:
         'Answer the dialog where the agent is asking, in its own terminal.',
     },
-    submit: 'Submit Answer',
+    submit: 'Submit answer',
     multipleQuestions: ({ count }: { count: number }) => `${count} questions`,
     other: 'Other',
     otherDescription: 'Type your own answer',
-    otherPlaceholder: 'Type your answer...',
+    otherPlaceholder: 'Type your answer…',
+    notBlocking: 'Not blocking',
+    handledBy: ({ name }: { name: string }) => `${name} is handling this`,
+    handlerOffline: ({ name }: { name: string }) => `${name} is offline · waiting for you`,
+    handlerStopped: ({ name }: { name: string }) => `${name} is stopped · waiting for you`,
+    hintNextTurn: 'Your answer starts its next turn',
+    hintNextStep: 'It picks up your answer at its next step',
+    progress: ({ answered, total }: { answered: number, total: number }) => `${answered} of ${total} answered`,
+    answered: 'Answered',
+    answeredElsewhere: 'on another device',
+    withdrawn: 'No longer needed',
+    lasting: 'Applies from now on',
+    rememberThis: 'Remember this',
+    remembered: 'Saved',
   },
   exitPlanMode: {
     approve: 'Approve Plan',
@@ -12353,6 +12447,7 @@ const enLocalServices = {
     },
     unavailableReason: {
       launchUnavailable: "This service can't be started from here.",
+      bindingUnavailableOnMachine: ({ machine }: { machine: string }) => `Can't check services on ${machine}. Reconnect it and try again.`,
       previewRegistrationUnavailable: "This service can't register a preview.",
       nativeStateUnknown: "Happier can't tell whether this service is still running. Stop it to clean up.",
       nativeCleanupUnconfirmed: "This service stopped, but its processes may still be running. Stop it to clean up.",
@@ -14577,8 +14672,8 @@ const enSettingsSession = {
     expandedStyleDefaultSubtitle: 'Cards: Full. Tool feed: Summary.',
   },
   sessionPlacement: {
-    title: 'Folder',
-    description: 'Where these sessions appear in your list.',
+    title: 'Session folder',
+    description: 'Where these sessions are filed in your list.',
   },
   toolPolicy: {
     sectionTitle: 'Tools',
@@ -18110,6 +18205,7 @@ const enMessage = {
   contextCompactionFailed: 'Context compaction failed',
   contextCompactionCancelled: 'Context compaction cancelled',
   contextCompactionPaused: 'Context compacted; send a message to continue',
+  goalChanged: 'Goal updated',
   usageLimitUntil: ({ time }: { time: string }) =>
     `Usage limit reached until ${time}`,
   connectedServiceAccountSwitch: ({
@@ -20612,6 +20708,7 @@ const enSettingsPlugins = {
     replaced: 'Replaced. Choose the replacement explicitly.',
     revoked: 'Access revoked. Choose another machine.',
     selectionRequired: 'Choose where this plugin runs.',
+    noMachine: 'Add or connect a machine to use this here.',
     differentVersions: 'Different versions. Choose the release to run.',
     pluginMismatch:
       'This selection belongs to a different plugin. Clear it to choose again.',
@@ -20678,7 +20775,6 @@ const enSettingsPlugins = {
     machine: string;
     server: string;
   }) =>
-    noMachine: 'Add or connect a machine to use this here.',
     `Happier will build and run code from:\n\n${path} on ${machine} (${server})\n\nFor a project folder, Happier may install its declared dependencies. Only continue if you trust this source and its dependencies.`,
   developmentTrustProjectSourceConfirm: 'Trust source',
   pendingChangesTitle: 'Waiting for your decision',
@@ -21307,6 +21403,7 @@ const enExternalSessions = {
   browseContentPreviewOpens: ({ query }: { query: string }) =>
     `Opens the conversation at this message with Find on “${query}”.`,
   browseContentPreviewEmpty: 'The matching message appears here.',
+  browseContentPreviewElided: ({ count }: { count: number }) => count === 1 ? '1 step in between' : `${count} steps in between`,
   browseContentMore: 'Search more conversations',
   browseContentBack: 'Back to Search',
   browseNoSearchResults: 'No loaded sessions match this search yet.',
@@ -21516,10 +21613,130 @@ const enConversationSearch = {
 };
 
 export const en: TranslationStructure = {
+    sessionCoordinator: {
+        make: {
+            title: "Make this session a coordinator",
+            subtitle: "It hears about sessions by a rule and keeps them moving for you",
+            subtitleProject: ({ project }: { project: string }) => `In project ${project}`,
+            role: "Role",
+            roleDescription: "What it does for you",
+            managedBy: "Managed by",
+            managedByDescription: "Its summaries go up to it",
+            managedByNone: "None",
+            managedByNoneDescription: "It reports to you",
+            managedByChoose: "Several sessions coordinate this Home. Choose one, or keep None.",
+            unknownSession: "A session you can’t open",
+            keepTitle: "Where to keep it",
+            fromSetting: "From your setting",
+            keepRailCaption: "A Bot in the left rail, with its own memory",
+            keepListCaption: "Pinned at the top of your session list",
+            keepNoneCaption: "Stays where it is in your session list",
+            hearsAbout: "Hears about",
+            ruleProject: ({ project }: { project: string }) => `Sessions in project ${project}`,
+            thisProject: "this project",
+            ruleHome: "Every session I start in this Home",
+            count: ({ count, level }: { count: number, level: string }) => `Matches ${count} now · ${level}`,
+            countAtLeast: ({ count, level }: { count: number, level: string }) => `Matches at least ${count} now · ${level}`,
+            countLoading: ({ level }: { level: string }) => `Counting… · ${level}`,
+            countUnavailable: ({ level }: { level: string }) => `Can’t count right now · ${level}`,
+            overlap: ({ count, name }: { count: number, name: string }) => `${count} of these are also followed by ${name}`,
+            overlapBoth: "Both hear about them until you choose.",
+            leaveToThis: "Leave them to this one",
+            leaveToThisDescription: ({ name, project }: { name: string, project: string }) => `Adds “not in project ${project}” to ${name}’s rule`,
+            leftNotice: ({ name, project }: { name: string, project: string }) => `${name}’s rule now skips project ${project}`,
+            leaveFailed: "Couldn’t change that rule. Nothing changed.",
+            undoFailed: "Couldn’t undo: the rule changed since.",
+            machineOnline: ({ machine }: { machine: string }) => `Runs on ${machine}, online now`,
+            machineOnlineDescription: "It hears about updates while its machine is on.",
+            moveMachine: "Move…",
+            machineOffline: ({ machine }: { machine: string }) => `${machine} is offline`,
+            machineOfflineDescription: "Updates wait for it and arrive when the machine is back.",
+            submit: "Make coordinator",
+            noRulesHint: "With no rule on, it hears only from sessions it manages.",
+            failed: "Couldn’t make it a coordinator. Nothing changed.",
+            waitingApproval: "Waiting for your approval in Inbox.",
+            partialApproval: "Some steps wait for your approval in Inbox; the rest is done.",
+            partial: ({ count }: { count: number }) => `${count} steps didn’t finish; the rest is done. Try again to finish them.`,
+            done: ({ name }: { name: string }) => `${name} is now a coordinator`,
+        },
+        menu: {
+            make: "Make coordinator…",
+            makeAlready: "It already is one",
+            edit: "Edit what it follows",
+            editSubtitle: "Opens its People pane",
+            answers: "Answers questions",
+            answersSubtitle: "From sessions it manages · approvals stay yours",
+            stop: "Stop coordinating",
+            stopSubtitle: "Removes its rules. Sessions it manages stay until you detach them.",
+            stopOnlyManages: "It only manages sessions; detach them to stop",
+            stopped: ({ name }: { name: string }) => `${name} stopped coordinating`,
+            stopPartial: ({ name }: { name: string }) => `Some of ${name}’s rules couldn’t be removed`,
+            stopFailed: "Couldn’t read its rules. Nothing changed.",
+            undoStopFailed: "Couldn’t bring its rules back.",
+        },
+    },
+    settingsCoordination: {
+      autonomousCheckIn: "Check in after agent turns",
+      checkInPaused: "Paused for your check-in. Choose whether to continue or stop.",
+      inputMuted: "This delivery is muted. Unmute it to allow future messages.",
+      newCoordinatorDefaults: 'New coordinator defaults',
+      newCoordinatorRole: 'Role for new coordinators',
+      newCoordinatorKeep: 'Where to keep new coordinators',
+      suggestProjectRule: 'Suggest following its project',
+      suggestHomeRule: 'Suggest following sessions I start in this Home',
+      answersWorkerQuestions: 'Answers its workers’ questions',
+      title: "Coordination",
+      pageDescription: "How your sessions follow, report to and pause for each other.",
+      keywords: "coordinator, manager, lead, orchestrator, follow, rule, check-in, pause, bot, rail, levels",
+      showCoordinators: "Show coordinators",
+      showCoordinatorsDescription: "Sessions that manage others or follow by a rule, in your session list",
+      newCoordinatorsDescription: "What Make coordinator suggests. Afterwards it is an ordinary session: change its role in Info and what it follows in People.",
+      roleDescription: "The role a new coordinator starts with",
+      keepDescription: "What Make coordinator selects. You can still change it for each coordinator.",
+      keepSuggest: "Suggest from what it follows",
+      keepSuggestDescription: "A Home-wide coordinator goes to the left rail, as a Bot. A project coordinator goes to the top of your list.",
+      keepAlways: "Or always keep new coordinators",
+      keepRail: "Left rail, as a Bot",
+      keepList: "Top of your list",
+      keepNone: "Just in the list",
+      suggestProjectRuleDescription: "The session’s project, when it has one",
+      suggestHomeRuleDescription: "Every session you start in the Home",
+      answersWorkerQuestionsDescription: "Questions from the sessions it manages reach it first. Approvals still come to you.",
+      defaultLevelsTitle: "Default levels",
+      defaultLevelsDescription: "Used when a follow is created for you. Follows you already have keep their level.",
+      levelUnderLead: "Putting a session under a lead",
+      levelUnderLeadDescription: "How much the lead hears about it",
+      levelRunReport: "A run that reports back",
+      levelRunReportDescription: "How much the session that started it hears",
+      levelDiscussion: "Adding an agent to a Discussion",
+      levelDiscussionDescription: "How much the agent hears about the Discussion",
+      levelEverythingHint: "Every update, as it happens",
+      levelImportantHint: "Interrupts only when something needs you, fails or stalls",
+      levelQuietHint: "Updates arrive without interrupting",
+      checkInTitle: "Check-in",
+      checkInDescription: "When agents keep asking each other with no person involved, they pause and ask you before going on.",
+      pauseAfter: "Pause after",
+      pauseAfterDescription: "Turns agents start in each other since you last wrote",
+      pauseAfterOff: "Off while Never pause is on",
+      neverPause: "Never pause",
+      neverPauseDescription: "Agents keep going until you stop them",
+      neverPauseWarning: "Agents can keep asking each other until you stop them",
+      previewCoordinator: "Daily coordinator",
+      checkInPreview: 'What you’ll see',
+      checkInBanner: {
+        title: ({ count }: { count: number }) => count === 1 ? 'Agents asked each other once' : `Agents asked each other ${count} times`,
+        body: 'Writing here yourself starts a fresh count.',
+        since: 'Since you last wrote',
+        stop: 'Stop',
+        continueMore: 'Continue 10 more',
+        continue: 'Continue',
+        unavailable: 'Couldn’t read this check-in',
+        failed: 'Couldn’t apply that. Try again.',
+      },
+    },
     resourceProposal: resourceProposalTranslations.en,
     actionPresentation: actionPresentationTranslations.en,
     conversationSearch: enConversationSearch,
-  sessions: { workspace: { noFolder: 'No folder' } },
   ...machineSharing,
   machineResources: { ask: machineResourceUiTranslations.en.ask, askSuggestions: machineResourceUiTranslations.en.askSuggestions },
   machines: { ...machineSharing.machines, widgets: machineResourceUiTranslations.en.widgets },
@@ -22198,7 +22415,6 @@ type EnglishNamespaces10 = TranslationOverlay<
     readonly server: typeof enServer;
     readonly sessionTags: typeof enSessionTags;
     readonly sessionsList: typeof enSessionsList;
-    readonly sessions: { readonly workspace: { readonly noFolder: string } };
     readonly directSessions: typeof enDirectSessions;
     readonly sessionInfo: typeof enSessionInfo;
     readonly workspacePresentation: typeof enWorkspacePresentation;
@@ -22368,6 +22584,127 @@ type EnglishNamespaces27 = TranslationOverlay<
     readonly identityAdministration: typeof enIdentityAdministration;
     readonly personalHome: typeof enPersonalHome;
     readonly settingsSearch: typeof enSettingsSearch;
+    readonly sessionCoordinator: {
+      readonly make: {
+        readonly title: string;
+        readonly subtitle: string;
+        readonly subtitleProject: (params: { project: string }) => string;
+        readonly role: string;
+        readonly roleDescription: string;
+        readonly managedBy: string;
+        readonly managedByDescription: string;
+        readonly managedByNone: string;
+        readonly managedByNoneDescription: string;
+        readonly managedByChoose: string;
+        readonly unknownSession: string;
+        readonly keepTitle: string;
+        readonly fromSetting: string;
+        readonly keepRailCaption: string;
+        readonly keepListCaption: string;
+        readonly keepNoneCaption: string;
+        readonly hearsAbout: string;
+        readonly ruleProject: (params: { project: string }) => string;
+        readonly thisProject: string;
+        readonly ruleHome: string;
+        readonly count: (params: { count: number; level: string }) => string;
+        readonly countAtLeast: (params: { count: number; level: string }) => string;
+        readonly countLoading: (params: { level: string }) => string;
+        readonly countUnavailable: (params: { level: string }) => string;
+        readonly overlap: (params: { count: number; name: string }) => string;
+        readonly overlapBoth: string;
+        readonly leaveToThis: string;
+        readonly leaveToThisDescription: (params: { name: string; project: string }) => string;
+        readonly leftNotice: (params: { name: string; project: string }) => string;
+        readonly leaveFailed: string;
+        readonly undoFailed: string;
+        readonly machineOnline: (params: { machine: string }) => string;
+        readonly machineOnlineDescription: string;
+        readonly moveMachine: string;
+        readonly machineOffline: (params: { machine: string }) => string;
+        readonly machineOfflineDescription: string;
+        readonly submit: string;
+        readonly noRulesHint: string;
+        readonly failed: string;
+        readonly waitingApproval: string;
+        readonly partialApproval: string;
+        readonly partial: (params: { count: number }) => string;
+        readonly done: (params: { name: string }) => string;
+      };
+      readonly menu: {
+        readonly make: string;
+        readonly makeAlready: string;
+        readonly edit: string;
+        readonly editSubtitle: string;
+        readonly stop: string;
+        readonly stopSubtitle: string;
+        readonly answers: string;
+        readonly answersSubtitle: string;
+        readonly stopOnlyManages: string;
+        readonly stopped: (params: { name: string }) => string;
+        readonly stopPartial: (params: { name: string }) => string;
+        readonly stopFailed: string;
+        readonly undoStopFailed: string;
+      };
+    };
+    readonly settingsCoordination: {
+      readonly autonomousCheckIn: string;
+      readonly checkInPaused: string;
+      readonly inputMuted: string;
+      readonly newCoordinatorDefaults: string;
+      readonly newCoordinatorRole: string;
+      readonly newCoordinatorKeep: string;
+      readonly suggestProjectRule: string;
+      readonly suggestHomeRule: string;
+      readonly answersWorkerQuestions: string;
+      readonly title: string;
+      readonly pageDescription: string;
+      readonly keywords: string;
+      readonly showCoordinators: string;
+      readonly showCoordinatorsDescription: string;
+      readonly newCoordinatorsDescription: string;
+      readonly roleDescription: string;
+      readonly keepDescription: string;
+      readonly keepSuggest: string;
+      readonly keepSuggestDescription: string;
+      readonly keepAlways: string;
+      readonly keepRail: string;
+      readonly keepList: string;
+      readonly keepNone: string;
+      readonly suggestProjectRuleDescription: string;
+      readonly suggestHomeRuleDescription: string;
+      readonly answersWorkerQuestionsDescription: string;
+      readonly defaultLevelsTitle: string;
+      readonly defaultLevelsDescription: string;
+      readonly levelUnderLead: string;
+      readonly levelUnderLeadDescription: string;
+      readonly levelRunReport: string;
+      readonly levelRunReportDescription: string;
+      readonly levelDiscussion: string;
+      readonly levelDiscussionDescription: string;
+      readonly levelEverythingHint: string;
+      readonly levelImportantHint: string;
+      readonly levelQuietHint: string;
+      readonly checkInTitle: string;
+      readonly checkInDescription: string;
+      readonly pauseAfter: string;
+      readonly pauseAfterDescription: string;
+      readonly pauseAfterOff: string;
+      readonly neverPause: string;
+      readonly neverPauseDescription: string;
+      readonly neverPauseWarning: string;
+      readonly previewCoordinator: string;
+      readonly checkInPreview: string;
+      readonly checkInBanner: {
+        readonly title: (params: { count: number }) => string;
+        readonly body: string;
+        readonly since: string;
+        readonly stop: string;
+        readonly continueMore: string;
+        readonly continue: string;
+        readonly unavailable: string;
+        readonly failed: string;
+      };
+    };
     readonly onboardingJourney: typeof enOnboardingJourney;
     readonly capabilities: typeof capabilityKitTranslations.en;
   }

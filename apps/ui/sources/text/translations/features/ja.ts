@@ -1,4 +1,5 @@
 // Locale-owned feature copy; each domain retains its own initialization scope.
+import { discussionQuoteCopy } from '../discussionQuoteTranslations.shared';
 import * as EnglishFeatures from './en';
 import * as Shared_accountDisplayTranslations from '../accountDisplayTranslations.shared';
 import * as Shared_accountEncryptionRecoveryTranslations from '../accountEncryptionRecoveryTranslations.shared';
@@ -414,7 +415,7 @@ const actionFamilyTranslations = { ja: translated({
             session_read_state: '既読状態',
             session_attention: '要対応',
             session_board: 'セッションボード',
-            session_discussion: 'ディスカッション',
+            discussion: 'ディスカッション',
             session_permissions: 'セッションの権限',
             external_sessions: '外部セッション',
             voice_controls: '音声操作',
@@ -1008,6 +1009,33 @@ const artifactsBrowserTranslations = { ja: {
         facts: {
             edited: ({ age }) => `${age} に編集`,
         },
+        passage: {
+            comment: 'コメント',
+        },
+        proposal: {
+            title: '編集の提案',
+            basedOn: ({ n }) => `バージョン ${n} に基づく`,
+            current: ({ n }) => `バージョン ${n} · 最新`,
+            before: '変更前',
+            after: '変更後',
+            accept: '承認',
+            decline: '却下',
+            accepting: '承認中… ドキュメントが変わっていないか確認しています',
+            declining: '却下中…',
+            movedOn: 'この提案の後にドキュメントが変更されました。何も適用されていません。',
+            compare: '比較',
+            cantEdit: 'このドキュメントを編集できる人だけが承認できます。',
+            failed: '決定を保存できませんでした。もう一度お試しください。',
+            acceptedByYou: ({ n }) => `編集を承認しました · 現在バージョン ${n}`,
+            acceptedBy: ({ who, n }) => `${who} が編集を承認しました · 現在バージョン ${n}`,
+            declinedByYou: '提案を却下しました · ドキュメントは変わっていません',
+            declinedBy: ({ who }) => `${who} が提案を却下しました · ドキュメントは変わっていません`,
+            undo: '元に戻す',
+            undone: ({ n }) => `元に戻しました · 現在バージョン ${n}`,
+            undoConflict: 'この編集の後にドキュメントが変更されたため、元に戻せません。履歴を開いてバージョンを選んでください。',
+            openDocument: 'ドキュメントを開く',
+            someone: '誰か',
+        },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "ja">;
 
 return { artifactsBrowserTranslations };
@@ -1184,6 +1212,7 @@ const ja: BoardsTranslations = {
     kinds: {
         session: 'セッション',
         workflow_run: 'ワークフロー実行',
+        task: 'タスク',
         workflow: 'ワークフロー',
         machine: 'マシン',
     },
@@ -1663,6 +1692,11 @@ const computerUseTranslations = { ja: {
             denied: '未許可',
             opened: ({ machine }) => `${machine} で開きました。そこで Happier を許可してから、もう一度確認してください。`,
             openFailed: 'そこでシステム設定を開けませんでした。そのコンピュータで開いてください。',
+            capture: '画面収録',
+            captureFor: 'ウインドウを見るため',
+            inputFor: 'クリックと入力のため',
+            granted: '許可済み',
+            unknown: '未確認',
             checkAgain: 'もう一度確認',
             captureTitle: ({ machine }) => `${machine}のウィンドウやディスプレイを表示するには、そこで画面収録を許可してください。`,
             inputTitle: ({ machine }) => `${machine}のマウスとキーボードを使うには、そこでアクセシビリティを許可してください。`,
@@ -1678,6 +1712,8 @@ const computerUseTranslations = { ja: {
             onMachine: ({ machine }) => `${machine} 上`,
             connectingTitle: ({ target }) => `${target} に接続中`,
             unavailableTitle: '今はこのウインドウを表示できません',
+            stopFailed: '共有を停止できませんでした',
+            stopping: '共有を停止しています…',
             unavailableBody: ({ agent }) => `ここから ${agent} を止めることはできます。`,
             endedTitle: ({ target }) => `${target} が閉じられました`,
             endedBody: ({ agent }) => `${agent} はもう見ることも使うこともできません。続けるには別のウインドウを選んでください。`,
@@ -1694,6 +1730,7 @@ const computerUseTranslations = { ja: {
             expandView: 'ビューを拡大',
             restoreView: 'ビューを元に戻す',
             dockView: 'ビューをドック',
+            floatView: 'ビューをフロート表示',
             closeView: 'ビューを閉じる',
             moveView: 'ビューを移動',
             resizeView: 'ビューのサイズを変更',
@@ -1710,7 +1747,10 @@ const computerUseTranslations = { ja: {
             agentWorkingOn: ({ agent, machine }) => `${agent}が${machine}で作業中`,
             watchingSourceA11y: ({ source }) => `${source}を表示中`,
             controlNotAllowed: 'マウスとキーボードの操作は許可されていません',
-            seeOnly: ({ agent }) => `${agent} は表示のみで、クリックや入力はできません`,
+            seeOnly: 'クリックや入力はできません',
+            unconfirmedWarning: ({ agent, target, machine }) => `${machine} が ${agent} のマウスとキーの解放を確認するまで、Happier から ${target} を使うことはできません。`,
+            unconfirmedWarningCompact: ({ agent, machine }) => `${machine} が ${agent} のマウスとキーの解放を確認するまでロック中です。`,
+            unconfirmedStuckHint: ({ machine }) => `止まっているように見える場合は、${machine} 本体でウインドウを一度クリックしてください。`,
             driverMissing: 'コンピューターのドライバーを利用できません',
             driverInvalid: 'コンピューターのドライバーの修復が必要です',
             driverRepairBody: 'このマシンのネイティブドライバーを再インストールし、現在の権限とソースを確認してください。',
@@ -1721,6 +1761,7 @@ const computerUseTranslations = { ja: {
             offlineTitle: ({ machine }) => `${machine}が応答していません`,
             offlineBody: '表示するには再接続してください。表示してもマシンは起動しません。',
             openingTitle: ({ target, machine }) => `${machine}で${target}を開いています…`,
+            openingBody: '最初の画像が届くとすぐにここに表示されます。',
         },
         strip: {
             using: ({ target }) => `${target} を使用中`,
@@ -2993,7 +3034,7 @@ const effectiveTranslations = { "ja": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-クリック・${modifier}⇧Lでライトとダークを切り替え`
     } } as const;
 
-const glassAppearanceTranslations = { ja: { sameAsHome: "ホームと同じ", ...Shared_glassAppearanceTranslations.atmosphereTranslations['ja'], iosReduceTransparencyPath: "設定 › アクセシビリティ › 画面表示とテキストサイズ › 透明度を下げる", title: 'ガラス', material: '素材', solid: '不透明', auto: '自動', everywhere: '全体', custom: 'カスタム', blur: 'ぼかし', tint: '色味', tintSubtle: '控えめ', tintMedium: '中', tintStrong: '強', off: 'オフ', opacity: '不透明度', customize: 'カスタマイズ', sidebar: 'サイドバー', content: 'コンテンツ', appearance: '外観', moreSettings: '外観の詳細設定…', customizeLink: 'カスタマイズ…', toolbarTitle: '外観ボタン', toolbarDescription: 'ツールバーに外観を表示します。修飾キーを押しながらクリックするとライトとダークを切り替えます。', reduceTransparency: '「透明度を下げる」が有効なため不透明です', osSettings: 'アクセシビリティ設定を開く', themeCommand: 'ライトとダークを切り替える', autoDescription: "このデバイスに合わせます。対応デスクトップでは各面に層状のガラス、スマートフォンではフローティング画面にガラスを使います。", osSettingsUnavailable: "アクセシビリティ設定を開けませんでした。デバイスの設定から開いてください。", ...effectiveTranslations["ja"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ja">;
+const glassAppearanceTranslations = { ja: { sameAsHome: "ホームと同じ", ...Shared_glassAppearanceTranslations.atmosphereTranslations['ja'], iosReduceTransparencyPath: "設定 › アクセシビリティ › 画面表示とテキストサイズ › 透明度を下げる", title: 'ガラス', material: '素材', solid: '不透明', auto: '自動', everywhere: '全体', custom: 'カスタム', blur: 'ぼかし', tint: '色味', off: 'オフ', opacity: '不透明度', customize: 'カスタマイズ', sidebar: 'サイドバー', content: 'コンテンツ', appearance: '外観', moreSettings: '外観の詳細設定…', customizeLink: 'カスタマイズ…', toolbarTitle: '外観ボタン', toolbarDescription: 'ツールバーに外観を表示します。修飾キーを押しながらクリックするとライトとダークを切り替えます。', reduceTransparency: '「透明度を下げる」が有効なため不透明です', osSettings: 'アクセシビリティ設定を開く', themeCommand: 'ライトとダークを切り替える', autoDescription: "このデバイスに合わせます。対応デスクトップでは各面に層状のガラス、スマートフォンではフローティング画面にガラスを使います。", osSettingsUnavailable: "アクセシビリティ設定を開けませんでした。デバイスの設定から開いてください。", ...effectiveTranslations["ja"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ja">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -5277,15 +5318,19 @@ const Domain_inboxWorkTranslations = (() => {
 const en = Shared_inboxWorkTranslations.en;
 
 const ja: typeof en = {
-    pageDescription: 'あなたを待っているものを、属する作業ごとにまとめています。',
-    tabs: { a11y: '受信トレイの表示', needsYou: '対応が必要', updates: '更新' },
+    pageDescription: "あなたを待っていること、変わったこと、あなたをメンションした人。",
+    needsYouSummary: ({ approvals, decisions, blocked }: { approvals: number; decisions: number; blocked: number }) => {
+        const parts = [
+            approvals > 0 ? `承認 ${approvals} 件` : null,
+            decisions > 0 ? `判断 ${decisions} 件` : null,
+            blocked > 0 ? `ブロック中のセッション ${blocked} 件` : null,
+        ].filter((part): part is string => part !== null);
+        return `${parts.join('、')}があなたを待っています。`;
+    },
+    quickDecision: { deny: '拒否', allowOnce: '今回のみ許可' },
+    keyHints: { move: '移動', fullPage: 'ページ全体', close: '閉じる', answering: '回答すると次が開きます' },
+    tabs: { a11y: '受信トレイの表示', needsYou: '対応が必要', updates: '更新', mentions: "メンション" },
     groups: {
-        unknownLead: 'セッション',
-        leadMeta: ({ count }) => `サブセッション ${count} 件`,
-        runMeta: 'ワークフロー実行',
-        otherTitle: 'その他のセッション',
-        otherMeta: 'オーケストレーターにも実行にも属していません',
-        runsTitle: 'ワークフローの実行',
         openSession: 'セッションを開く',
         openRun: '実行を開く',
     },
@@ -5301,10 +5346,17 @@ const ja: typeof en = {
         more: 'その他の操作',
         approvalNeeded: '承認が必要です',
         approvalUntitled: 'アクションを承認',
+        mentionedYou: "あなたをメンションしました",
+        newMessage: "新しいメッセージ",
     },
     popover: {
-        moreInOther: ({ count }) => `その他のセッションにあと ${count} 件`,
         updates: ({ count }) => `更新 ${count} 件`,
+    },
+    types: { approval: "承認", decision: "判断", blocked: "ブロック中" },
+    days: { today: "今日", earlier: "それ以前" },
+    mentionsEmpty: {
+        title: "メンションはありません",
+        description: "ディスカッションであなたがメンションされると、ここに届きます。",
     },
     empty: {
         title: '対応が必要なものはありません',
@@ -5554,14 +5606,13 @@ const machineDetailPageTranslations = { ja: translated({
             },
             fleet: {
                 calm: "すべて安定",
-                calmOne: "安定",
                 count: ({ count }) => `${count} 台のマシンを確認してください`,
                 sentenceOne: ({ phrase }) => `${phrase}。`,
                 sentenceTwo: ({ first, second }) => `${first}。${second}。`,
                 sentenceMore: ({ first, second, count }) => `${first}。${second}。ほか ${count} 台。`,
                 sameReason: ({ word, count }) => `${count} 台で${word}。`,
                 otherOnlineCalm: ({ count }) => `オンラインの他の ${count} 台は安定しています。`,
-                allOnlineCalm: ({ count }) => `オンラインのマシンはすべて安定しています。`,
+                allOnlineCalm: ({ count }) => count === 1 ? "オンラインの1台は安定しています。" : `オンラインのマシンはすべて安定しています。`,
             },
             machine: {
                 calmLead: "安定。",
@@ -5670,7 +5721,6 @@ const machineDetailPageTranslations = { ja: translated({
             customize: "概要をカスタマイズ",
             appearanceSettings: "外観の設定",
             done: "完了",
-            staleReason: "これらのマシンが応答しなくなりました",
             slowReason: "応答が遅れています",
             update: "更新",
             previewCalmName: "ラップトップ",
@@ -5849,6 +5899,9 @@ const machineDetailPageTranslations = { ja: translated({
             },
             states: {
                 offlineEmpty: ({ machine }) => `${machine} は、Happier を開いてからリソースを報告していません。`,
+                offlineTitle: ({ machine }) => `${machine} はオフラインです`,
+                offlineLastReported: ({ machine }) => `これは最後に報告された内容です。戻るとセッションは再開します。それまで ${machine} のアラートは一時停止します。`,
+                offlineNeverReported: 'Happier を開いてからリソースの報告がありません。戻るとセッションは再開します。',
                 olderTitle: ({ machine }) => `${machine} の状況を見る`,
                 olderReason: ({ machine }) => `CPU、メモリプレッシャー、ディスク、セッションの使用状況をライブで表示します。報告には ${machine} で Happier 0.3 が必要です。`,
                 askOwner: ({ machine }) => `${machine} の更新を依頼するメモをコピー`,
@@ -6758,6 +6811,17 @@ const machineDetailPageTranslations = { ja: translated({
                     approved_proposal: "あなたが承認しました",
                     idle_terminals: "スクロールバックは残ります",
                     kept_running: "警告で「実行を続ける」を選びました。",
+                },
+                startFailure: {
+                    too_many_open_files: "マシンで開いているファイルが多すぎました",
+                    no_ptys: "マシンに空いているターミナルがありませんでした",
+                    process_limit: "マシンがこれ以上プロセスを実行できませんでした",
+                    out_of_memory: "起動に必要なメモリが足りませんでした",
+                    other: "今回は起動できませんでした",
+                },
+                nextStep: {
+                    close_idle_terminals: "使っていないターミナルを閉じて、もう一度お試しください",
+                    review_processes: "実行中のものを確認して、もう一度お試しください",
                 },
             },
             session: {
@@ -8430,7 +8494,7 @@ const ja: ReviewWalkthroughTranslations = {
     fromReviewAt: ({ time }) => `${time}のレビューから`,
     reviewLabel: 'レビュー:',
     enginesOf: ({ count, total }) => `${total}件中${count}件`,
-    enginesFinished: 'のエンジンが完了',
+    enginesFinished: () => 'のエンジンが完了',
     enginesRunning: ({ count }) => `${count}件のエンジンがレビュー中`,
     fromEngines: ({ engines, inStory }) => `${engines}から · ${inStory}件がウォークスルー内`,
     and: '、',
@@ -8453,7 +8517,6 @@ const ja: ReviewWalkthroughTranslations = {
         reviewedAt: ({ time }) => `${time}にレビュー済み`,
         reviewAt: ({ time }) => `${time}のレビュー`,
         partial: ({ count }) => `部分的なレビュー · 指摘${count}件`,
-        ready: 'ウォークスルー完成',
         readyShort: 'ウォークスルー',
         failed: 'ウォークスルー失敗',
         narrating: 'ナレーション中',
@@ -8587,8 +8650,10 @@ const rolesTranslations = { ja: {
             secondOpinionDescription: '「推奨」にすると、プルリクエストや完了の前にセカンドオピニオンを検討するよう求めます。',
             secondOpinionOff: 'オフ',
             secondOpinionEncouraged: '推奨',
+            canDelegateToOtherRolesTitle: '他のロールに委任できる',
+            canDelegateToOtherRolesDescription: '利用可能なロールとその開始方法を指示に含めます。',
             enabledTitle: '利用可能',
-            enabledDescription: 'ロール一覧とオーケストレーターに表示されます。',
+            enabledDescription: 'ロール一覧と委任できるロールに表示されます。',
             advancedTitle: '詳細',
             launchProfileTitle: '起動プロファイル',
             launchProfileDescription: '環境、権限、マシン',
@@ -9415,6 +9480,15 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkUnavailable: "このHomeでは公開リンクを利用できません。Homeの所有者に、独立した共有ドメインの設定か、このホスト名でのリンクの許可を依頼してください。公開リンクのリクエスト制限も設定する必要があります。",
         configurePublicLinks: "公開リンクを設定",
         justYouTitle: 'このセッションで一緒に作業しましょう',
+        followersTitle: 'フォロワー',
+        followersDescription: 'このセッションの通知を受け取る人と、その受け取り方。ほかの人のレベルは非公開です。',
+        followersYou: 'あなた',
+        followersPeople: ({ count }: { count: number }) => `${count} 人`,
+        followersPeopleNote: '各自のレベルは本人のもの',
+        followersSessionMeaning: { everything: '更新のたびに起こす', important: '必要なときに起こす', quiet: '次のターンで' },
+        followersManager: 'マネージャー',
+        followersSessions: ({ count }: { count: number }) => `${count} セッション`,
+        followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'がフォロー中' : 'がフォロー中'}`,
         justYouBody: ({ home }) => `${home}のメンバーと共有しましょう。見守ったり、ここで話し合ったり、あなたが不在の間に引き継いだりできます。`,
         share: '共有',
         justYouNote: '誰でも閲覧できる公開リンクを作成することもできます。',
@@ -9432,7 +9506,11 @@ const sessionCollaborationPaneTranslations = {...Domain_sessionCollaborationPane
 
 const en = Shared_sessionCollaborationTranslations.en;
 
-const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "ja"> = { ja: { pane: sessionCollaborationPaneTranslations['ja'], title: 'コラボレーション', viewingNow: '現在閲覧中', justYou: 'あなただけ', typing: '入力中…', stale: '最新ではない可能性があります', unavailable: 'リアルタイムの在席情報を取得できません', connecting: '接続中…', unnamed: 'Happierメンバー', open: 'コラボレーションを開く', conversations: '会話', accessUnavailable: 'セッションのアクセス権を利用できません', accessUnavailableReason: 'この Home はセッションを他の人と共有する機能に対応していません。', discussion: { featureUnavailable: "この Home では会話が有効になっていません。", bindingUnavailable: "会話を表示するには、この Home に再度サインインしてください。", scopeMismatch: "これらの会話は、この Home の別のアカウントに属しています。", modeMismatch: "内容がセッションの暗号化モードと一致しません。再試行するか、セッション管理者にアクセスの確認を依頼してください。",  title: '会話', newDiscussion: '新しい会話', create: '会話を作成', titlePlaceholder: '会話のタイトル', messagePlaceholder: 'メッセージを書く…', active: '進行中', activeDisclosure: '進行中の会話を表示', archived: 'アーカイブ済み', archivedDisclosure: 'アーカイブ済みの会話を表示', emptyActive: '進行中の会話はまだありません。', emptyArchived: 'アーカイブ済みの会話はありません。', loading: '会話を読み込み中…', loadError: '会話を読み込めませんでした。', retry: 'もう一度試す', checking: '更新を確認中…', deliveryUnknown: '配信結果が不明です — 再試行する前に確認してください。', locked: 'この会話は読めますが、投稿はできません。', offline: 'オフラインです。再接続して続けてください。', unavailable: 'この会話は利用できません。', unreadCount: ({ count }) => `未読${count.toLocaleString()}件`, unreadMentionCount: ({ count }) => `未読のメンション${count.toLocaleString()}件`,
+const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "ja"> = { ja: { pane: sessionCollaborationPaneTranslations['ja'], title: 'メンバー', viewingNow: '現在閲覧中', justYou: 'あなただけ', typing: '入力中…', stale: '最新ではない可能性があります', unavailable: 'リアルタイムの在席情報を取得できません', connecting: '接続中…', unnamed: 'Happierメンバー', open: 'コラボレーションを開く', conversations: "ディスカッション", accessUnavailable: 'セッションのアクセス権を利用できません', accessUnavailableReason: 'この Home はセッションを他の人と共有する機能に対応していません。', discussion: { participants: { title: "参加者", loading: "参加中のメンバーを確認中…", peopleGroup: "メンバー", agentsGroup: "エージェント", agentsNote: "それぞれ自分のセッション、マシン、承認を保持します", owner: "オーナー", you: "あなた", hereNow: "参加中", canPost: "投稿可", canRead: "閲覧可", teamAccess: "チームのアクセス", noAgents: "まだエージェントはいません", model: "モデル", session: "セッション", modelStarting: "モデルを起動中", policyWhenAddressed: "メンションされたら回答", policyReadsOnly: "閲覧のみ", policyDrafts: "承認用の下書き", policyWatches: "見守って発言", privateNote: "招待されたメンバーだけが閲覧できます。メンションで権限が付与されることはありません。", inheritedNote: "招待されたメンバーとそのチームが閲覧できます。メンションで権限が付与されることはありません。", leave: "退出", invitedOnly: "招待のみ", teamCanRead: "チームが閲覧可", people: ({ count }) => count === 1 ? 'あなただけ' : `${count.toLocaleString()} 人`, peopleAndAgents: ({ people, agents }) => `${people.toLocaleString()} 人、エージェント ${agents.toLocaleString()}` }, home: { needsYou: "対応が必要", today: "今日", thisWeek: "今週", earlier: "それ以前", columnEmpty: "招待されたディスカッションがここに表示されます", inviteTitle: "人やエージェントと話し合う", inviteBody: "チームメイト、セッション、ボット、モデルを 1 つの会話に集めましょう。エージェントにメンションすると、そのエージェント自身のセッションと承認で回答します。", idleTitle: "ディスカッションを開く", idleBody: "一覧から選ぶか、人やエージェントと新しく始めましょう。", audience: "招待した人だけ", draftWaiting: "下書きがあなたを待っています", approvalPending: "承認が必要です" }, manage: { startAgain: "もう一度開始", startAgainBody: "セッションが開始されていません。同じ設定でもう一度試します。", invitePlaceholder: "人、セッション、モデルを検索", policyWhenAddressedBody: "メンション、またはそれへの返信。既定。", policyReadsOnlyBody: "読むだけで、ここでは答えません。", policyDraftsBody: "回答はあなたが投稿するか破棄します。", policyWatchesBody: "すべてのメッセージを読み、答えることがあります。黙っていてもターンを使います。", answersGroup: "回答", operationsGroup: "セッション", openSession: "セッションを開く", removeModel: "削除してセッションをアーカイブ", removeModelBody: "このディスカッション用に開始されました。履歴は残ります。", removeSession: "このディスカッションから外す", removeSessionBody: "セッションはそのまま動き続けます。", rowHint: "回答方法を選ぶ、開く、または外す", working: "保存中…", checking: "完了したか確認中…", failed: "うまくいきませんでした。", leaveTitle: "このディスカッションを退出", leaveBody: "所有者が必要です。ここにいる人に渡すか、アーカイブしてください。何も削除されません。", transferGroup: "別の人を所有者にする", transferSubtitle: "所有者になり、その後あなたが退出します", noTransferCandidates: "渡すには、まず誰かを招待してください。", archiveInstead: "代わりにアーカイブ", archiveInsteadBody: "所有者のままです。復元するまで誰も投稿できません。", inviteSubtitle: "招待した人だけが読めます", sessionsGroup: "あなたのセッション", modelsGroup: "モデル", sessionCandidate: "セッション · メンションされると回答", modelOn: ({ machine }: { machine: string }) => `${machine} のモデル`, modelCandidate: "あなたの新しいセッション · エージェントとモデルを選択" }, invite: { button: "招待", title: ({ title }: { title: string }) => `${title} に招待`, canManage: "管理できる", ownerOnly: "招待する相手を変更できるのはオーナーだけです。", failed: "招待を保存できませんでした。" }, composer: { mention: "メンション", mentionHint: "エージェントをメンションすると回答します" }, newPage: { namePlaceholder: "このディスカッションに名前を付ける", emptyTitle: "回答してほしい相手をメンション", emptyBody: "エージェントはメンションされたときだけ回答します。誰もメンションしないメッセージは人だけに届きます。" }, secondOpinion: { title: "セカンドオピニオンを求める", discussTitle: "この回答について話し合う", discussionTitle: "セカンドオピニオン", discussDiscussionTitle: "この回答について", defaultQuestion: "これで合っていますか？どこを変えますか？", subtitle: ({ session }: { session: string }) => `${session} の回答について`, subtitleUntitled: "この回答について", answer: "この回答", open: "ディスカッションを開く", askQuoteOnly: "引用だけで質問", shareAndAsk: "共有して質問", ask: "質問する", askGroup: "質問先", freshOpinionsHint: "質問する相手を1つ選んでください", noReviewers: "このHomeにはまだ他のセッションがありません", yourSession: "セッション", moreSessions: "さらにセッションを表示", question: "質問", freshOpinionsUnavailableTitle: "複数への同時質問はまだ利用できません", freshOpinionsUnavailableReason: "独立した意見は1つずつ別々に質問します。今は1つ選んで質問してください。", thisSession: "このセッション", cannotAskTitle: ({ name }: { name: string }) => `${name} にはここで質問できません`, quoteOnlyTitle: ({ name }: { name: string }) => `${name} には引用だけが見えます`, quoteOnlyBody: "このセッションの残りは開けません。", grantTitle: ({ name }: { name: string }) => `${name} にこのセッションの閲覧を許可`, grantBody: ({ name, session }: { name: string; session: string }) => `${name} は取り消すまで ${session} を閲覧できます。`, grantUnavailable: "このセッションは共有できないため、引用だけが送られます。", readsAsYouTitle: ({ name }: { name: string }) => `${name} はあなたとしてこのセッションを読みます`, readsTitle: ({ name }: { name: string }) => `${name} はすでにこのセッションを読めます`, readsAsYouBody: "新たに共有されるものはありません。", discussionTitleRow: "新しいディスカッション", discussionOnlyYou: "誰かを招待するまで、あなただけです。", discussionPeople: ({ count }: { count: number }) => `あなたと他 ${count} 人が読めます`, readsGroup: "閲覧できる範囲", disclosure: { sameSession: "この回答を書いたセッションです。", broader: "今この回答を読める人より多くの人に見えてしまいます。", public: "公開されてしまいます。", notAllowed: "このHomeの共有ルールでは許可されていません。", unavailable: "今はこの回答を読めません。" }, discussDone: "ディスカッションを開始しました", asked: ({ name }: { name: string }) => `${name} に質問しました`, askedBody: "回答はディスカッションに届きます。", failed: "完了できませんでした。", pending: "まだ終わっていません。もう一度試すと続きから再開します。", previewChanged: "閲覧できる人が変わりました。確認してからもう一度質問してください。" },
+        quote: discussionQuoteCopy.ja,
+        heldParticipant: "セッション参加者",
+        participantHeld: ({ participant }: { participant: string }) => `${participant}は保留中です。別のアカウントからの依頼にはまだ対応していません。`,
+        featureUnavailable: "この Home では会話が有効になっていません。", bindingUnavailable: "会話を表示するには、この Home に再度サインインしてください。", scopeMismatch: "これらの会話は、この Home の別のアカウントに属しています。", modeMismatch: "内容がセッションの暗号化モードと一致しません。再試行するか、セッション管理者にアクセスの確認を依頼してください。",  title: "ディスカッション", newDiscussion: "新しいディスカッション", create: '会話を作成', titlePlaceholder: '会話のタイトル', messagePlaceholder: 'メッセージを書く…', active: '進行中', activeDisclosure: '進行中の会話を表示', archived: 'アーカイブ済み', archivedDisclosure: 'アーカイブ済みの会話を表示', emptyActive: '進行中の会話はまだありません。', emptyArchived: 'アーカイブ済みの会話はありません。', loading: '会話を読み込み中…', loadError: '会話を読み込めませんでした。', retry: 'もう一度試す', checking: '更新を確認中…', deliveryUnknown: '配信結果が不明です — 再試行する前に確認してください。', locked: 'この会話は読めますが、投稿はできません。', offline: 'オフラインです。再接続して続けてください。', unavailable: 'この会話は利用できません。', unreadCount: ({ count }) => `未読${count.toLocaleString()}件`, unreadMentionCount: ({ count }) => `未読のメンション${count.toLocaleString()}件`,
         mentioned: 'あなたがメンションされました', unreadConversations: '未読の会話', messageCount: ({ count }) => `${count.toLocaleString()}件のメッセージ`, viaAgent: 'Agent経由', collaborator: '共同作業者', contentUnavailable: 'メッセージを利用できません', rename: '会話名を変更', archive: '会話をアーカイブ', restore: '会話を復元', selection: { copy: 'コピー', askAgent: 'Agentに質問', sendToSession: 'セッションに送信', handoffError: '選択したメッセージをセッションの入力欄に追加できませんでした。' }, titleRequired: 'この会話を始めるにはタイトルを追加してください。', encryptedTitle: '暗号化された会話', archivedNotice: 'この会話はアーカイブされています。', sessionArchived: 'このセッションはアーカイブされています。', postDenied: 'このセッションには投稿できなくなりました。', invalidMention: 'メンションした相手はこのセッションを読めなくなりました。', invalidContent: 'このメッセージはこのままでは送信できません。空か、長すぎる可能性があります。', idempotencyConflict: 'この識別子では別のメッセージがすでに送信されています。', sendFailed: 'このメッセージを送信できませんでした。', dismiss: '閉じる', loadOlder: '以前のメッセージを読み込む', loadMore: 'さらに会話を読み込む' } } };
 
 return { sessionCollaborationTranslations };
@@ -9567,6 +9645,7 @@ const ja: typeof en = {
         reconciling: 'このエージェントとの会話が開始されたか確認しています…',
         unresolved: 'このエージェントとの会話が開始されたか確認できませんでした。もう一度開始すると会話が二重になる可能性があります。',
         targetChanged: '会話を開始する前に、このセッションのマシンが変わりました。何も開始されていません。',
+        submittedUnknown: '開始されたか確認できませんでした。実行一覧を確認してください。ランナーが動作していない場合は、セッションを再開してください。',
         secretReferenceOverlayUpdateRequired: 'エージェントとの会話で共有シークレットを使うには、更新されたマシンが必要です。何も開始されていません。',
     },
     status: {
@@ -9657,6 +9736,66 @@ const sessionFollowTranslations: Pick<Record<
             "important": "重要な更新",
             "all_messages": "新しいメッセージすべて"
         },
+        "policyEditor": {
+            "presetLabel": "受け取る量",
+            "presetDescription": {
+                "everything": "何かあるたびに通知します。メッセージは受信箱に静かに届きます。",
+                "important": "対応が必要なとき、失敗や停滞のときだけ通知します。それ以外は受信箱で静かに待ちます。",
+                "quiet": "通知はしません。更新は受信箱で静かに待ちます。",
+                "custom": "通知するもの、静かに届くもの、含めないものを選びます。"
+            },
+            "customTitle": "イベントごと",
+            "group": {
+                "interrupt": "通知する",
+                "quiet": "静かに届く",
+                "off": "含めない"
+            },
+            "channel": {
+                "interrupt": "プッシュ",
+                "quiet": "受信箱"
+            },
+            "delivery": {
+                "off": "オフ",
+                "quiet": "受信箱",
+                "interrupt": "プッシュ"
+            },
+            "session": {
+                "presetLabel": "どこまで受け取るか",
+                "presetDescription": {
+                    "everything": "何かが起きるたびに起こします。メッセージは次のターンまで待ちます。",
+                    "important": "用事があるとき、失敗したとき、止まったときだけ起こします。それ以外は次のターンまで待ちます。",
+                    "quiet": "何も起こしません。更新は次のターンまで待ちます。",
+                    "custom": "何で起こすか、次のターンまで待つか、対象外にするかを選びます。"
+                },
+                "group": { "interrupt": "起こす", "quiet": "次のターンまで待つ" },
+                "channel": { "interrupt": "起こす", "quiet": "次のターン" },
+                "delivery": { "interrupt": "起こす", "quiet": "次のターン" }
+            },
+            "events": {
+                "needsYou": "対応が必要",
+                "decision": "判断が必要",
+                "approval": "承認が必要",
+                "blocked": "ブロック中",
+                "finished": "完了",
+                "failedOrStopped": "失敗または停止",
+                "stalled": "停滞",
+                "updatePosted": "更新を投稿",
+                "personWrote": "誰かが書き込み",
+                "goalChanged": "目標を変更",
+                "message": "すべてのメッセージ"
+            },
+            "eventDescriptions": {
+                "needsYou": "判断、承認、またはブロック中",
+                "failedOrStopped": "実行が何も言わずに終わったときも",
+                "personWrote": "通知とリンクだけ。本文は含めません"
+            }
+        },
+        "policy": {
+            "everything": "すべて",
+            "important": "重要",
+            "quiet": "静かに",
+            "custom": "カスタム"
+        },
         "voice": {
             "title": "Voiceに含める",
             "subtitle": "Voiceでこのセッションの状況を把握できます。",
@@ -9666,6 +9805,7 @@ const sessionFollowTranslations: Pick<Record<
             "waitingEncrypted": "このセッションのロックを解除してVoiceに含めてください。",
             "initialSnapshotPending": "次のVoiceのターンで、現在の状況の短い要約を含めます。"
         },
+        "once": { "title": "一度だけ通知", "subtitle": "通知レベルに加えて一度だけ届き、その後は終了します。", "off": "オフ", "turn": "このターンが終わったとき", "attention": "次に対応が必要になったとき" },
         "footer": "フォローしても、このセッションにアクセスできる人は変わりません。",
         "settingsLink": "通知設定…",
         "assignedExplanation": "担当に割り当てられたためフォロー中",
@@ -9676,7 +9816,7 @@ const sessionFollowTranslations: Pick<Record<
         "offline": "オフラインです。再接続してフォロー設定を変更してください。",
         "archived": "このセッションのアーカイブ中はフォローが一時停止します。",
         "sources": {
-            "title": "セッションの更新",
+            "title": "フォロー中",
             "waitingRuntime": "宛先セッションの再接続を待っています。",
             "unsupported": "更新を受信するには、宛先マシンの CLI を更新するか再接続してください。",
             "pausedArchived": "送信元または宛先がアーカイブされている間、更新は一時停止されます。",
@@ -9690,6 +9830,7 @@ const sessionFollowTranslations: Pick<Record<
             "stop": "更新を停止",
             "stopForSource": ({ title }) => `「${title}」からの更新を停止`,
             "includeNextTurn": "宛先の次のターンに更新を含めます。",
+            "empty": "フォロー中のセッションがここに表示されます",
             "sourceKeyPreparing": "暗号化アクセスを準備しています…",
             "sourceKeyWaiting": "暗号化アクセスを待っています。",
             "sourceKeyUnavailable": "このコンピューターでは暗号化アクセスを提供できません。",
@@ -10060,6 +10201,8 @@ const sessionListFilterTranslations = { ja: translated({
         filtersHomes: 'Home', filtersSharedWith: '共有先', filtersOutsideTeams: '個人・直接',
         filtersTags: 'タグ', filtersSource: 'ソース', filtersSourceAll: 'すべて',
         filtersSourceDirect: '外部',
+        filtersOnlyCoordinators: 'コーディネーターのみ', filtersOnlyCoordinatorsDescription: '他のセッションを管理するか、ルールでフォローするセッション',
+        filtersCoordinatorsChip: 'コーディネーター', filtersCoordinatorsChipClear: 'コーディネーターのみの表示を解除',
         filtersNoOptions: '利用できるフィルターはありません', filtersClear: 'フィルターをクリア', filtersDone: '完了', filtersArchived: 'アーカイブ済み',
         filtersNeedsMeOnly: '自分の対応が必要なもののみ', filtersNeedsMeOnlyDescription: 'あなたを待っているセッション', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `他 ${count} 件`,
@@ -10109,7 +10252,7 @@ const sessionPageTranslations = { ja: translated({
                 continueDescription: 'このセッションの現在の状態から新しい作業を始めます。',
                 organizeTitle: '整理',
                 organizeDescription: 'このセッションがリストのどこに表示されるか。',
-                activityDescription: 'エージェントが何をしているか、そして通知を受け取るかどうか。',
+                activityDescription: 'エージェントがいま何をしているか。',
                 detailsTitle: '詳細',
                 detailsDescription: 'サポートやスクリプト用の識別子と履歴。',
                 environmentTitle: '環境',
@@ -10261,6 +10404,10 @@ const ja: typeof en = {
             finished: "完了",
         },
         peek: "プレビュー",
+        mute: 'ミュート',
+        muted: 'ここではミュート中',
+        unmute: '元に戻す',
+        muteFailed: 'ミュートできませんでした',
         truncated: "結果を短縮しました。",
         wokenBy: ({ count }) => (count === 1 ? '更新により再開' : `${count} 件の更新により再開`),
         notFromYou: 'あなたからのメッセージではありません',
@@ -10287,9 +10434,6 @@ const ja: typeof en = {
     },
     actions: {
         showInTranscript: '会話記録に表示',
-        makeOrchestrator: 'オーケストレーターにする',
-        makeOrchestratorSubtitle: 'このセッションが計画・委任・報告を行います',
-        makeOrchestratorFailed: "このセッションをオーケストレーターにできませんでした",
     },
     putUnder: {
         title: "配下に移動…",
@@ -10329,6 +10473,8 @@ const ja: typeof en = {
         a11y: ({ summary }) => `作業: ${summary}`,
     },
     leadArchived: ({ count }) => `このセッションはアーカイブ済み · ${count} 件が作業中`,
+    managedBy: '管理元',
+    plan: '計画',
     runsStale: 'ワークフローの実行が最新でない可能性があります',
     list: {
         level: ({ level }) => `レベル ${level}`,
@@ -10353,7 +10499,7 @@ const ja: typeof en = {
         orAskFor: "または依頼:",
     },
     peek: {
-        reportsTo: ({ lead }) => `${lead} に報告`,
+        manager: ({ lead }) => `${lead} に報告`,
         repliesGoHere: '返信はこのセッションに送られます',
     },
 };
@@ -10380,6 +10526,7 @@ const ja = {
     directOffDescription: 'すべて Happier を経由します。マシンへ直接接続することはありません。同じネットワークでは少し遅くなります。',
     serverDenied: 'この Home のサーバーはすべて Happier を経由させるため、ここで選べることはありません。',
     machineTitle: ({ machine }: MachineParams) => `${machine} への接続`,
+    machineSettingTitle: 'このマシンの接続',
     machineOptionDefault: 'デフォルト',
     machineOptionDirect: '直接',
     machineOptionRelay: 'Happier 経由',
@@ -11061,6 +11208,7 @@ const surfaceStateTranslations = { ja: {
         paneFailedReason: '描画中に問題が発生しました。セッションには影響ありません。',
         opening: ({ name }) => `${name} を開いています`,
         couldNotOpen: ({ name }) => `${name} を開けませんでした`,
+        couldNotUpdate: '更新できませんでした。前回の内容を表示しています',
     } } as const satisfies Pick<Record<string, SurfaceStateTranslations>, "ja">;
 
 return { surfaceStateTranslations };
@@ -12714,6 +12862,7 @@ const voiceRealtimeProviderSetupTranslations = { ja: defineVoiceRealtimeProvider
     },
     catalog: {
       credentialRequired: 'API キーを追加すると音声を読み込めます',
+      loadFailed: '音声を読み込めませんでした',
       retry: '音声を読み込めませんでした — 再試行',
       empty: 'このアカウントで利用できる音声はありません',
       preview: ({ voice }) => `${voice} を試聴`,
@@ -13315,6 +13464,7 @@ const widgetAddTranslations = { ja: {
         areaApprovalPending: '承認待ち',
         refusals: {
             areaUnavailable: "ここでは現在ウィジェットを利用できません。しばらくしてからもう一度お試しください。",
+            writeUnconfirmed: "Home から確認が返りませんでした。エリアを確認して、もう一度お試しください。",
             inputsInvalid: "無効な入力があります。内容を確認して、もう一度お試しください。",
             typeUnavailable: "このウィジェットは利用できなくなりました。別のものを選んでください。",
             sizeUnsupported: "このウィジェットではそのサイズを利用できません。別のサイズを選んでください。",
@@ -13353,7 +13503,6 @@ const widgetDefinitionTranslations = { ja: {
         edited: ({ time }) => `${time} に編集`,
         readsOnly: "読み取りのみ",
         runsOn: ({ machine }) => `${machine} で実行`,
-            writeUnconfirmed: "Home から確認が返りませんでした。エリアを確認して、もう一度お試しください。",
         withYourConnection: "あなた自身の接続を使用",
         readsResource: ({ read, plugin }) => `${plugin} の ${read}`,
         cannotRunAnythingElse: "このウィジェットはこれ以外を実行できません。",
@@ -13399,7 +13548,6 @@ const widgetDefinitionTranslations = { ja: {
         becomesViewerInput: "入力になります: 各場所であなたの接続を使用",
         becomesContextInput: "入力になります: 各場所で個別に選択",
         alsoAddTo: "追加先",
-        alsoAddToNamed: ({ place }) => `${place} にも追加`,
         anotherPlace: "別の場所…",
         snapshotMenu: "このボードにスナップショットを投稿…",
         snapshotMenuSubtitle: "ここにいる全員に今の数値が見えます",
@@ -13658,8 +13806,12 @@ const en = Shared_workflowBuiltinTranslations.en;
 
 const ja: WorkflowBuiltinTranslations = {
     keepGoing: { title: '完了まで続ける', description: '目標を達成するまで続けます' },
-    reviewAndConverge: { title: 'レビューして収束', description: 'レビュアーが合意するまでレビュー', apply: '適用', verifyAndFix: '検証して修正', verifyOnly: '検証のみ', rounds: '停止までのラウンド数' },
-    planWithAPanel: { title: 'パネルで計画', description: '複数のエージェントが並行して計画し、計画はあなたのレビューを待ちます。', inputs: { request: '依頼内容', requestPlaceholder: 'パネルに何を計画させますか？', engines: '計画するエージェント' } },
+    reviewAndConverge: { title: 'レビューして収束', description: 'レビュアーが合意するまでレビュー', apply: '適用', verifyAndFix: '検証して修正', verifyOnly: '検証のみ', rounds: '停止までのラウンド数', inputs: { engines: "レビュアー", reviewSession: "レビューするセッション" } },
+    planWithAPanel: { title: "パネル", description: '複数のエージェントが並行して計画し、計画はあなたのレビューを待ちます。', inputs: { request: '依頼内容', requestPlaceholder: 'パネルに何を計画させますか？', engines: '計画するエージェント' } },
+    freshOpinions: { title: '独立した意見', description: '同じ質問にそれぞれ独立して回答します。必要に応じて要約も作成します。' },
+    answerAndReview: { title: '回答 + レビュー', description: '1人のエージェントが回答し、別のエージェントがその回答をレビューします。' },
+    debate: { title: '討論', description: '選んだラウンド数で意見を比較し、各ラウンドの後に要約します。' },
+    patternInputs: { question: '質問', participants: '参加者', synthesis: '回答を要約する', synthesizer: '要約するエージェント', answerer: '回答するエージェント', reviewer: 'レビューするエージェント', rounds: 'ラウンド数', digestAuthor: '各ラウンドを要約するエージェント', previousRoundContext: '前のラウンド' },
     openAPullRequest: { title: 'プルリクエストを開く', description: 'セカンドオピニオンを求めてからプルリクエストを開きます。意見が合わない場合はあなたを待ちます。', inputs: { base: 'ベースブランチ', title: 'プルリクエストのタイトル', body: '説明', question: 'セカンドオピニオンへの質問' } },
 };
 
@@ -14001,7 +14153,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ja"> = { ja: { ...workflowRunRoleTranslations.ja, ...workflowRunCompositionTranslations.ja, shortcutStarts: '開始', neededNamed: ({ name }) => `入力 · ${name}が必要`, addToStart: ({ name }) => `開始するには${name}を追加してください`, workflow: 'ワークフロー', inputs: '入力', start: '開始', starting: '開始中…', stillStarting: '引き続き開始中…', needed: ({ count }) => `入力 · あと${count}項目`, required: '開始に必要', preview: '実行する内容', unsaved: '未保存の変更を含む', remove: '通常のセッションに戻る', search: 'ワークフローを検索', builtin: '組み込み', library: 'あなたのライブラリ', noInputs: '入力は不要', asksFor: ({ names }) => `必要な入力：${names}`, optional: '任意 — 空欄', defaultValue: ({ value }) => `既定値：${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ja"> = { ja: { ...workflowRunRoleTranslations.ja, ...workflowRunCompositionTranslations.ja, runPattern: '実行…', runPatternTitle: 'パターンを実行', anotherRound: 'もう1ラウンド', participantTitle: '参加者を選択', participantSearch: 'セッションまたはモデルを検索', participantSession: 'あなたのセッション · 自身の設定で回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} の新しい ${agent} セッション`, participantDone: '完了', shortcutStarts: '開始', neededNamed: ({ name }) => `入力 · ${name}が必要`, addToStart: ({ name }) => `開始するには${name}を追加してください`, workflow: 'ワークフロー', inputs: '入力', start: '開始', starting: '開始中…', stillStarting: '引き続き開始中…', needed: ({ count }) => `入力 · あと${count}項目`, required: '開始に必要', preview: '実行する内容', unsaved: '未保存の変更を含む', remove: '通常のセッションに戻る', search: 'ワークフローを検索', builtin: '組み込み', library: 'あなたのライブラリ', noInputs: '入力は不要', asksFor: ({ names }) => `必要な入力：${names}`, optional: '任意 — 空欄', defaultValue: ({ value }) => `既定値：${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -14594,7 +14746,7 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
         typeString: 'テキスト',
         typeNumber: '数値',
         typeBoolean: 'はい / いいえ',
-        typeJson: '構造化データ',
+        typeJson: '構造化データ', typeParticipant: '参加者', typeParticipants: '参加者（複数）',
         runSheetTitle: 'このワークフローを実行',
         runSheetBody: 'このワークフローが求める値を入力してから実行してください。',
         missingRequired: 'この値は必須です。',
@@ -14794,8 +14946,11 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
             machine: 'マシン',
             machineId: 'マシン ID',
             revision: 'リビジョン',
+            failureCode: '失敗コード',
+            failureCause: '原因',
         },
         usageUnavailable: '使用量を取得できません',
+        usageNotReported: '報告なし',
         startedAt: ({ time }: { time: string }) => `${time} に開始`,
         timeRange: ({ start, end }) => `${start} – ${end}`,
         openConversation: '会話を開く',
@@ -14810,6 +14965,7 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
         attentionWaitSentence: ({ step }: { step: string }) => `${step} があなたを待っています。`,
         attentionParkedSentence: ({ step }: { step: string }) => `${step}。`,
         failedStepSentence: ({ step }: { step: string }) => `${step} が失敗しました。完了した作業は保持されます。`,
+        stepNumber: ({ ordinal }: { ordinal: string }) => `ステップ ${ordinal}`,
         failedSentence: '完了した作業は保持されます。',
         consequenceLanes: ({ lanes }: { lanes: readonly string[] }) => `${lanes.join('と')}は続行します。`,
         consequenceJoin: ({ step, count }: { step: string; count: number }) => `${count}個のレーンがすべて完了すると、${step}が始まります。`,
@@ -14820,6 +14976,7 @@ const ja = translated(workflowValueReferenceTranslations.ja, {
         completedCount: ({ count }) => count === 1 ? '1つのステップを終えました。' : `すべての ${count} ステップを終えました。`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${total} ステップ中 ${completed} 件が完了。`,
         notAnswered: '未回答',
+        waitContinued: '続行しました',
         answeredBy: ({ name }) => `${name}が回答`,
         answeredByYou: 'あなたが回答',
         answeredByPerson: '他のユーザーが回答',

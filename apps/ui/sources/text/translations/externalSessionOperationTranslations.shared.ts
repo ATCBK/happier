@@ -9,9 +9,11 @@ export function translated(value: typeof en): typeof en {
 export const en = {
     browseLinked: 'Linked',
     browseImported: 'Imported',
-    browseAgentUnavailable: 'Happier could not start or reach the selected Agent on this machine. Check that its CLI is installed there, then try again.',
+    browseAgentUnavailable: 'Happier could not reach the selected Agent or its history on this machine. Check that its CLI is installed and open a session with the selected account, then try again.',
     browseAgentTimedOut: 'The selected Agent on this machine didn’t answer in time. It may be busy or still indexing, so try again.',
-    browseAgentFailed: 'Happier couldn’t read the selected Agent’s sessions on this machine. Try again; if it keeps failing, update Happier on that machine.',
+    browseAgentFailed: 'Happier couldn’t read the selected Agent’s sessions on this machine. Try again; if it keeps failing, check the Agent and daemon logs on that machine.',
+    browseAgentFailedNoRetry: 'Happier couldn’t read this source’s session data. Check the Agent and daemon logs on that machine before searching again.',
+    browseSourceInvalid: 'This history source could not be read. Check the selected account and Agent home on this machine, then choose the source again.',
     operationTitleMaterialize: 'Import into Happier',
     operationTitleTakeoverLinked: 'Take over and continue linked',
     operationTitleTakeoverPersisted: 'Import and take over',

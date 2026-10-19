@@ -1,4 +1,5 @@
 // Locale-owned feature copy; each domain retains its own initialization scope.
+import { discussionQuoteCopy } from '../discussionQuoteTranslations.shared';
 import * as EnglishFeatures from './en';
 import * as Shared_accountDisplayTranslations from '../accountDisplayTranslations.shared';
 import * as Shared_accountEncryptionRecoveryTranslations from '../accountEncryptionRecoveryTranslations.shared';
@@ -414,7 +415,7 @@ const actionFamilyTranslations = { fr: translated({
             session_read_state: 'État de lecture',
             session_attention: 'À traiter',
             session_board: 'Tableau des sessions',
-            session_discussion: 'Discussions de session',
+            discussion: 'Discussions de session',
             session_permissions: 'Autorisations de session',
             external_sessions: 'Sessions externes',
             voice_controls: 'Commandes vocales',
@@ -1008,6 +1009,33 @@ const artifactsBrowserTranslations = { fr: {
         facts: {
             edited: ({ age }) => `Modifié ${age}`,
         },
+        passage: {
+            comment: 'Commenter',
+        },
+        proposal: {
+            title: 'Modification suggérée',
+            basedOn: ({ n }) => `D’après la version ${n}`,
+            current: ({ n }) => `Version ${n} · actuelle`,
+            before: 'Avant',
+            after: 'Après',
+            accept: 'Accepter',
+            decline: 'Refuser',
+            accepting: 'Acceptation… vérification que le document n’a pas changé',
+            declining: 'Refus…',
+            movedOn: 'Le document a changé après cette suggestion. Rien n’a été appliqué.',
+            compare: 'Comparer',
+            cantEdit: 'Seules les personnes pouvant modifier ce document peuvent l’accepter.',
+            failed: 'Impossible d’enregistrer votre décision. Réessayez.',
+            acceptedByYou: ({ n }) => `Vous avez accepté la modification · version ${n}`,
+            acceptedBy: ({ who, n }) => `${who} a accepté la modification · version ${n}`,
+            declinedByYou: 'Vous avez refusé la suggestion · le document n’a pas changé',
+            declinedBy: ({ who }) => `${who} a refusé la suggestion · le document n’a pas changé`,
+            undo: 'Annuler',
+            undone: ({ n }) => `Annulé · version ${n}`,
+            undoConflict: 'Le document a changé après cette modification ; impossible d’annuler. Ouvrez son historique pour choisir une version.',
+            openDocument: 'Ouvrir le document',
+            someone: 'Quelqu’un',
+        },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "fr">;
 
 return { artifactsBrowserTranslations };
@@ -1184,6 +1212,7 @@ const fr: BoardsTranslations = {
     kinds: {
         session: 'Session',
         workflow_run: 'Exécution de workflow',
+        task: 'Tâche',
         workflow: 'Workflow',
         machine: 'Machine',
     },
@@ -1663,6 +1692,11 @@ const computerUseTranslations = { fr: {
             denied: 'Non autorisé',
             opened: ({ machine }) => `Ouvert sur ${machine}. Autorise Happier là-bas, puis vérifie à nouveau.`,
             openFailed: 'Impossible d’ouvrir les Réglages Système là-bas. Ouvre-les sur cet ordinateur.',
+            capture: 'Enregistrement de l’écran',
+            captureFor: 'Pour voir les fenêtres',
+            inputFor: 'Pour cliquer et taper',
+            granted: 'Autorisé',
+            unknown: 'Non vérifié',
             checkAgain: 'Vérifier à nouveau',
             captureTitle: ({ machine }) => `Autorise l’enregistrement de l’écran sur ${machine} pour regarder ses fenêtres ou son écran.`,
             inputTitle: ({ machine }) => `Autorise l’accessibilité sur ${machine} pour utiliser sa souris et son clavier.`,
@@ -1678,6 +1712,8 @@ const computerUseTranslations = { fr: {
             onMachine: ({ machine }) => `Sur ${machine}`,
             connectingTitle: ({ target }) => `Connexion à ${target}`,
             unavailableTitle: 'Impossible d’afficher cette fenêtre pour le moment',
+            stopFailed: 'Impossible d’arrêter le partage',
+            stopping: 'Arrêt du partage…',
             unavailableBody: ({ agent }) => `Tu peux toujours arrêter ${agent} ici.`,
             endedTitle: ({ target }) => `${target} a été fermée`,
             endedBody: ({ agent }) => `${agent} ne peut plus la voir ni l’utiliser. Choisis une autre fenêtre pour continuer.`,
@@ -1694,6 +1730,7 @@ const computerUseTranslations = { fr: {
             expandView: 'Agrandir la vue',
             restoreView: 'Restaurer la vue',
             dockView: 'Ancrer la vue',
+            floatView: 'Détacher la vue',
             closeView: 'Fermer la vue',
             moveView: 'Déplacer la vue',
             resizeView: 'Redimensionner la vue',
@@ -1710,7 +1747,10 @@ const computerUseTranslations = { fr: {
             agentWorkingOn: ({ agent, machine }) => `${agent} travaille sur ${machine}`,
             watchingSourceA11y: ({ source }) => `Tu regardes ${source}`,
             controlNotAllowed: 'Le contrôle de la souris et du clavier n’est pas autorisé',
-            seeOnly: ({ agent }) => `${agent} peut voir, mais ne peut ni cliquer ni taper`,
+            seeOnly: 'Ne peut ni cliquer ni taper',
+            unconfirmedWarning: ({ agent, target, machine }) => `Personne ne peut utiliser ${target} depuis Happier tant que ${machine} n’a pas confirmé que la souris et le clavier de ${agent} sont libérés.`,
+            unconfirmedWarningCompact: ({ agent, machine }) => `Verrouillé tant que ${machine} n’a pas confirmé que la souris et le clavier de ${agent} sont libérés.`,
+            unconfirmedStuckHint: ({ machine }) => `Si quelque chose semble bloqué, clique une fois dans la fenêtre sur ${machine} même.`,
             driverMissing: 'Le pilote de l’ordinateur n’est pas disponible',
             driverInvalid: 'Le pilote de l’ordinateur doit être réparé',
             driverRepairBody: 'Réinstalle le pilote natif sur cette machine, puis vérifie ses autorisations et sa source actuelles.',
@@ -1721,6 +1761,7 @@ const computerUseTranslations = { fr: {
             offlineTitle: ({ machine }) => `${machine} ne répond pas`,
             offlineBody: 'Reconnecte-la pour la regarder. Regarder ne la démarre pas.',
             openingTitle: ({ target, machine }) => `Ouverture de ${target} sur ${machine}…`,
+            openingBody: 'Elle apparaît ici dès que la première image arrive.',
         },
         strip: {
             using: ({ target }) => `Utilise ${target}`,
@@ -2993,7 +3034,7 @@ const effectiveTranslations = { "fr": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-clic · ${modifier}⇧L alterne clair et sombre`
     } } as const;
 
-const glassAppearanceTranslations = { fr: { sameAsHome: "Comme l’accueil", ...Shared_glassAppearanceTranslations.atmosphereTranslations['fr'], iosReduceTransparencyPath: "Réglages › Accessibilité › Affichage et taille du texte › Réduire la transparence", title: 'Verre', material: 'Matériau', solid: 'Opaque', auto: 'Auto', everywhere: 'Partout', custom: 'Personnalisé', blur: 'Flou', tint: 'Teinte', tintSubtle: 'Subtile', tintMedium: 'Moyenne', tintStrong: 'Forte', off: 'Désactivé', opacity: 'Opacité', customize: 'Personnaliser', sidebar: 'Barre latérale', content: 'Contenu', appearance: 'Apparence', moreSettings: 'Plus de réglages d’apparence…', customizeLink: 'Personnaliser…', toolbarTitle: 'Bouton Apparence', toolbarDescription: 'Affiche Apparence dans la barre. Un clic avec une touche modificatrice alterne clair et sombre.', reduceTransparency: 'Opaque car Réduire la transparence est activé', osSettings: 'Ouvrir les réglages d’accessibilité', themeCommand: 'Alterner clair et sombre', autoDescription: "S’adapte à cet appareil : verre en couches dans les fenêtres compatibles et surfaces flottantes sur téléphone.", osSettingsUnavailable: "Impossible d’ouvrir les réglages d’accessibilité. Ouvre-les dans les réglages de ton appareil.", ...effectiveTranslations["fr"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "fr">;
+const glassAppearanceTranslations = { fr: { sameAsHome: "Comme l’accueil", ...Shared_glassAppearanceTranslations.atmosphereTranslations['fr'], iosReduceTransparencyPath: "Réglages › Accessibilité › Affichage et taille du texte › Réduire la transparence", title: 'Verre', material: 'Matériau', solid: 'Opaque', auto: 'Auto', everywhere: 'Partout', custom: 'Personnalisé', blur: 'Flou', tint: 'Teinte', off: 'Désactivé', opacity: 'Opacité', customize: 'Personnaliser', sidebar: 'Barre latérale', content: 'Contenu', appearance: 'Apparence', moreSettings: 'Plus de réglages d’apparence…', customizeLink: 'Personnaliser…', toolbarTitle: 'Bouton Apparence', toolbarDescription: 'Affiche Apparence dans la barre. Un clic avec une touche modificatrice alterne clair et sombre.', reduceTransparency: 'Opaque car Réduire la transparence est activé', osSettings: 'Ouvrir les réglages d’accessibilité', themeCommand: 'Alterner clair et sombre', autoDescription: "S’adapte à cet appareil : verre en couches dans les fenêtres compatibles et surfaces flottantes sur téléphone.", osSettingsUnavailable: "Impossible d’ouvrir les réglages d’accessibilité. Ouvre-les dans les réglages de ton appareil.", ...effectiveTranslations["fr"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "fr">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -5279,15 +5320,20 @@ const Domain_inboxWorkTranslations = (() => {
 const en = Shared_inboxWorkTranslations.en;
 
 const fr: typeof en = {
-    pageDescription: 'Tout ce qui t’attend, regroupé par le travail auquel il appartient.',
-    tabs: { a11y: 'Vue de la boîte de réception', needsYou: 'T’attend', updates: 'Nouveautés' },
+    pageDescription: "Ce qui vous attend, ce qui a changé et qui vous a mentionné.",
+    needsYouSummary: ({ approvals, decisions, blocked }: { approvals: number; decisions: number; blocked: number }) => {
+        const parts = [
+            approvals > 0 ? `${approvals} ${approvals === 1 ? 'approbation' : 'approbations'}` : null,
+            decisions > 0 ? `${decisions} ${decisions === 1 ? 'décision' : 'décisions'}` : null,
+            blocked > 0 ? `${blocked} ${blocked === 1 ? 'session bloquée' : 'sessions bloquées'}` : null,
+        ].filter((part): part is string => part !== null);
+        const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} et ${parts[parts.length - 1]}` : parts[0] ?? '';
+        return `${list} ${approvals + decisions + blocked === 1 ? 'a besoin de vous' : 'ont besoin de vous'}.`;
+    },
+    quickDecision: { deny: 'Refuser', allowOnce: 'Autoriser une fois' },
+    keyHints: { move: 'naviguer', fullPage: 'page entière', close: 'fermer', answering: 'Répondre ouvre la suivante' },
+    tabs: { a11y: 'Vue de la boîte de réception', needsYou: 'T’attend', updates: 'Nouveautés', mentions: "Mentions" },
     groups: {
-        unknownLead: 'Session',
-        leadMeta: ({ count }) => (count === 1 ? '1 sous-session' : `${count} sous-sessions`),
-        runMeta: 'Exécution de workflow',
-        otherTitle: 'Autres sessions',
-        otherMeta: 'Hors orchestrateur et hors exécution',
-        runsTitle: 'Exécutions de workflows',
         openSession: 'Ouvrir la session',
         openRun: 'Ouvrir l’exécution',
     },
@@ -5303,10 +5349,17 @@ const fr: typeof en = {
         more: 'Plus d’actions',
         approvalNeeded: 'Attend ton approbation',
         approvalUntitled: 'Approuver une action',
+        mentionedYou: "Vous a mentionné",
+        newMessage: "Nouveau message",
     },
     popover: {
-        moreInOther: ({ count }) => `${count} de plus dans Autres sessions`,
         updates: ({ count }) => (count === 1 ? '1 nouveauté' : `${count} nouveautés`),
+    },
+    types: { approval: "Approbations", decision: "Décisions", blocked: "Bloqué" },
+    days: { today: "Aujourd’hui", earlier: "Plus tôt" },
+    mentionsEmpty: {
+        title: "Aucune mention",
+        description: "Quand quelqu’un vous mentionne dans une discussion, elle arrive ici.",
     },
     empty: {
         title: 'Rien ne t’attend',
@@ -5556,14 +5609,13 @@ const machineDetailPageTranslations = { fr: translated({
             },
             fleet: {
                 calm: "Tout est calme",
-                calmOne: "Calme",
                 count: ({ count }) => `${count} machines demandent un coup d’œil`,
                 sentenceOne: ({ phrase }) => `${phrase}.`,
                 sentenceTwo: ({ first, second }) => `${first} et ${second}.`,
                 sentenceMore: ({ first, second, count }) => `${first}, ${second} et ${count} autres.`,
                 sameReason: ({ word, count }) => `${word} sur ${count} machines.`,
                 otherOnlineCalm: ({ count }) => `Les ${count} autres en ligne sont calmes.`,
-                allOnlineCalm: ({ count }) => `Toutes les machines en ligne sont calmes.`,
+                allOnlineCalm: ({ count }) => count === 1 ? "La seule en ligne est calme." : `Toutes les machines en ligne sont calmes.`,
             },
             machine: {
                 calmLead: "Calme.",
@@ -5672,7 +5724,6 @@ const machineDetailPageTranslations = { fr: translated({
             customize: "Personnaliser le résumé",
             appearanceSettings: "Réglages d’apparence",
             done: "Terminé",
-            staleReason: "Ces machines ne répondent plus",
             slowReason: "Lent à répondre",
             update: "Mettre à jour",
             previewCalmName: "portable",
@@ -5851,6 +5902,9 @@ const machineDetailPageTranslations = { fr: translated({
             },
             states: {
                 offlineEmpty: ({ machine }) => `${machine} n’a pas communiqué ses ressources depuis que tu as ouvert Happier.`,
+                offlineTitle: ({ machine }) => `${machine} est hors ligne`,
+                offlineLastReported: ({ machine }) => `Voici ce qu’elle a signalé en dernier. Ses sessions reprennent à son retour ; les alertes pour ${machine} sont en pause d’ici là.`,
+                offlineNeverReported: 'Elle n’a signalé aucune ressource depuis l’ouverture de Happier. Ses sessions reprennent à son retour.',
                 olderTitle: ({ machine }) => `Voir ce que fait ${machine}`,
                 olderReason: ({ machine }) => `CPU, pression mémoire, disque et ce qu’utilisent tes sessions, en direct. ${machine} nécessite Happier 0.3 pour les communiquer.`,
                 askOwner: ({ machine }) => `Copier un message demandant de mettre à jour ${machine}`,
@@ -6760,6 +6814,17 @@ const machineDetailPageTranslations = { fr: translated({
                     approved_proposal: "Tu l’as approuvé",
                     idle_terminals: "Son historique reste",
                     kept_running: "Tu as choisi Laisser tourner dans l’avertissement.",
+                },
+                startFailure: {
+                    too_many_open_files: "Trop de fichiers étaient ouverts sur la machine",
+                    no_ptys: "Aucun terminal n’était libre sur la machine",
+                    process_limit: "La machine ne pouvait pas lancer un autre processus",
+                    out_of_memory: "Il n’y avait pas assez de mémoire pour démarrer",
+                    other: "Le démarrage n’a pas abouti cette fois",
+                },
+                nextStep: {
+                    close_idle_terminals: "Ferme les terminaux inactifs, puis réessaie",
+                    review_processes: "Regarde ce qui tourne, puis réessaie",
                 },
             },
             session: {
@@ -8437,7 +8502,7 @@ const fr: ReviewWalkthroughTranslations = {
     fromReviewAt: ({ time }) => `de la revue de ${time}`,
     reviewLabel: 'Revue :',
     enginesOf: ({ count, total }) => `${count} sur ${total}`,
-    enginesFinished: 'moteurs terminés',
+    enginesFinished: ({ count }) => count === 1 ? 'moteur terminé' : 'moteurs terminés',
     enginesRunning: ({ count }) => (count === 1 ? '1 moteur relit encore' : `${count} moteurs relisent encore`),
     fromEngines: ({ engines, inStory }) => `de ${engines} · ${inStory} dans le parcours`,
     and: ' et ',
@@ -8460,7 +8525,6 @@ const fr: ReviewWalkthroughTranslations = {
         reviewedAt: ({ time }) => `Relu à ${time}`,
         reviewAt: ({ time }) => `Revue de ${time}`,
         partial: ({ count }) => (count === 1 ? 'Revue partielle · 1 constat' : `Revue partielle · ${count} constats`),
-        ready: 'Parcours prêt',
         readyShort: 'Parcours',
         failed: 'Le parcours a échoué',
         narrating: 'Narration',
@@ -8596,8 +8660,10 @@ const rolesTranslations = { fr: {
             secondOpinionDescription: 'Encouragé lui demande d’envisager un deuxième avis avant une pull request ou avant de terminer.',
             secondOpinionOff: 'Désactivé',
             secondOpinionEncouraged: 'Encouragé',
+            canDelegateToOtherRolesTitle: 'Peut déléguer à d’autres rôles',
+            canDelegateToOtherRolesDescription: 'Inclut les rôles disponibles et comment les démarrer dans ses instructions.',
             enabledTitle: 'Disponible',
-            enabledDescription: 'Proposé dans le rail Rôles et aux orchestrateurs.',
+            enabledDescription: 'Proposé dans le rail Rôles et aux rôles qui délèguent.',
             advancedTitle: 'Avancé',
             launchProfileTitle: 'Profil de lancement',
             launchProfileDescription: 'Environnement, permissions, machine',
@@ -9426,6 +9492,15 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkUnavailable: "Les liens publics ne sont pas disponibles sur ce Home. Demande au propriétaire de configurer un domaine de partage isolé ou d’autoriser les liens sur ce nom d’hôte. La limitation des requêtes des liens publics doit aussi être configurée.",
         configurePublicLinks: "Configurer les liens publics",
         justYouTitle: 'Travaille ensemble sur cette session',
+        followersTitle: 'Abonnés',
+        followersDescription: 'Qui est averti de cette session, et comment. Les niveaux des autres restent privés.',
+        followersYou: 'Toi',
+        followersPeople: ({ count }: { count: number }) => count === 1 ? '1 personne' : `${count} personnes`,
+        followersPeopleNote: 'Leurs niveaux leur restent propres',
+        followersSessionMeaning: { everything: 'La réveille à chaque mise à jour', important: 'La réveille quand elle est requise', quiet: 'À son prochain tour' },
+        followersManager: 'Son responsable',
+        followersSessions: ({ count }: { count: number }) => count === 1 ? '1 session' : `${count} sessions`,
+        followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'la suit' : 'la suivent'}`,
         justYouBody: ({ home }) => `Partage-la avec des personnes de ${home}. Elles pourront la suivre, en discuter ici et prendre le relais en ton absence.`,
         share: 'Partager',
         justYouNote: 'Ou crée un lien public que tout le monde peut voir.',
@@ -9443,7 +9518,11 @@ const sessionCollaborationPaneTranslations = {...Domain_sessionCollaborationPane
 
 const en = Shared_sessionCollaborationTranslations.en;
 
-const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "fr"> = { fr: { pane: sessionCollaborationPaneTranslations['fr'], title: 'Collaboration', viewingNow: 'Présents maintenant', justYou: 'T’uniquement', typing: 'Écrit…', stale: 'Peut ne plus être à jour', unavailable: 'Présence en direct indisponible', connecting: 'Connexion…', unnamed: 'Membre Happier', open: 'Ouvrir la collaboration', conversations: 'Conversations', accessUnavailable: 'Accès à la session indisponible', accessUnavailableReason: 'Ce Home ne prend pas en charge le partage de sessions avec des personnes.', discussion: { featureUnavailable: "Les conversations ne sont pas activées sur ce Home.", bindingUnavailable: "Reconnecte-toi à ce Home pour voir les conversations.", scopeMismatch: "Ces conversations appartiennent à un autre compte sur ce Home.", modeMismatch: "Ce contenu ne correspond pas au mode de chiffrement de la session. Réessaie ou demande à une personne qui gère la session de vérifier l’accès.",  title: 'Conversations', newDiscussion: 'Nouvelle conversation', create: 'Créer la conversation', titlePlaceholder: 'Titre de la conversation', messagePlaceholder: 'Écris un message…', active: 'Actives', activeDisclosure: 'Afficher les conversations actives', archived: 'Archivées', archivedDisclosure: 'Afficher les conversations archivées', emptyActive: 'Aucune conversation active pour le moment.', emptyArchived: 'Aucune conversation archivée.', loading: 'Chargement des conversations…', loadError: 'Impossible de charger les conversations.', retry: 'Réessayer', checking: 'Recherche de nouveautés…', deliveryUnknown: 'Livraison incertaine — vérifie avant de réessayer.', locked: 'Tu peux lire cette conversation, mais pas y publier.', offline: 'Tu es hors ligne. Reconnecte-toi pour continuer.', unavailable: 'Cette conversation est indisponible.', unreadCount: ({ count }) => count === 1 ? '1 non lu' : `${count.toLocaleString()} non lus`, unreadMentionCount: ({ count }) => count === 1 ? '1 mention non lue' : `${count.toLocaleString()} mentions non lues`,
+const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "fr"> = { fr: { pane: sessionCollaborationPaneTranslations['fr'], title: 'Personnes', viewingNow: 'Présents maintenant', justYou: 'T’uniquement', typing: 'Écrit…', stale: 'Peut ne plus être à jour', unavailable: 'Présence en direct indisponible', connecting: 'Connexion…', unnamed: 'Membre Happier', open: 'Ouvrir la collaboration', conversations: "Discussions", accessUnavailable: 'Accès à la session indisponible', accessUnavailableReason: 'Ce Home ne prend pas en charge le partage de sessions avec des personnes.', discussion: { participants: { title: "Participants", loading: "Vérification des présents…", peopleGroup: "Personnes", agentsGroup: "Agents", agentsNote: "Chacun garde sa session, sa machine et ses approbations", owner: "Propriétaire", you: "Vous", hereNow: "Présent", canPost: "Peut publier", canRead: "Peut lire", teamAccess: "Accès d’équipe", noAgents: "Aucun agent pour l’instant", model: "Modèle", session: "Session", modelStarting: "Modèle en démarrage", policyWhenAddressed: "Répond quand on le mentionne", policyReadsOnly: "Lit seulement", policyDrafts: "Brouillons à approuver", policyWatches: "Suit et intervient", privateNote: "Seules les personnes invitées peuvent lire ceci. Une mention n’accorde jamais d’autorisation.", inheritedNote: "Les personnes invitées et leur équipe peuvent lire ceci. Une mention n’accorde jamais d’autorisation.", leave: "Quitter", invitedOnly: "Sur invitation", teamCanRead: "L’équipe peut lire", people: ({ count }) => count === 1 ? 'Vous seul' : `${count.toLocaleString()} personnes`, peopleAndAgents: ({ people, agents }) => `${people === 1 ? '1 personne' : `${people.toLocaleString()} personnes`}, ${agents === 1 ? '1 agent' : `${agents.toLocaleString()} agents`}` }, home: { needsYou: "Vous attend", today: "Aujourd’hui", thisWeek: "Cette semaine", earlier: "Plus tôt", columnEmpty: "Les discussions auxquelles vous êtes invité apparaissent ici", inviteTitle: "Discutez-en avec des personnes et des agents", inviteBody: "Réunissez coéquipiers, sessions, bots et modèles dans une même conversation. Mentionnez un agent et il répond depuis sa propre session, avec ses propres approbations.", idleTitle: "Ouvrir une discussion", idleBody: "Choisissez-en une dans la liste ou lancez-en une nouvelle avec des personnes et des agents.", audience: "Seulement les personnes que vous invitez", draftWaiting: "Un brouillon t’attend", approvalPending: "Attend ton approbation" }, manage: { startAgain: "Relancer", startAgainBody: "Sa session n’a pas démarré. Réessayez avec la même configuration.", invitePlaceholder: "Rechercher des personnes, sessions ou modèles", policyWhenAddressedBody: "Une mention ou une réponse à celle-ci. Par défaut.", policyReadsOnlyBody: "Lit sans jamais répondre ici.", policyDraftsBody: "Vous publiez sa réponse, ou la supprimez.", policyWatchesBody: "Lit chaque message et peut répondre. Consomme des tours même s’il reste silencieux.", answersGroup: "Répond", operationsGroup: "Session", openSession: "Ouvrir sa session", removeModel: "Retirer et archiver sa session", removeModelBody: "Elle a été démarrée pour cette discussion ; son historique reste.", removeSession: "Retirer de cette discussion", removeSessionBody: "La session continue de son côté.", rowHint: "Choisir comment il répond, l’ouvrir ou le retirer", working: "Enregistrement…", checking: "Vérification en cours…", failed: "Ça n’a pas abouti.", leaveTitle: "Quitter cette discussion", leaveBody: "Quelqu’un doit en être propriétaire. Confiez-la à quelqu’un ici ou archivez-la ; rien n’est supprimé.", transferGroup: "Nommer un autre propriétaire", transferSubtitle: "Devient propriétaire, puis vous partez", noTransferCandidates: "Invitez d’abord quelqu’un pour la lui confier.", archiveInstead: "Archiver plutôt", archiveInsteadBody: "Vous restez propriétaire. Personne ne peut publier tant qu’elle n’est pas restaurée.", inviteSubtitle: "Seules les personnes invitées peuvent la lire", sessionsGroup: "Vos sessions", modelsGroup: "Modèles", sessionCandidate: "Session · répond quand on la mentionne", modelOn: ({ machine }: { machine: string }) => `Un modèle sur ${machine}`, modelCandidate: "Une nouvelle session à vous · choisissez l’agent et le modèle" }, invite: { button: "Inviter", title: ({ title }: { title: string }) => `Inviter à ${title}`, canManage: "Peut gérer", ownerOnly: "Seul le propriétaire peut modifier les invitations.", failed: "L’invitation n’a pas pu être enregistrée." }, composer: { mention: "Mentionner", mentionHint: "Mentionnez un agent pour qu’il réponde" }, newPage: { namePlaceholder: "Nommer cette discussion", emptyTitle: "Mentionnez qui doit répondre", emptyBody: "Un agent ne répond que s’il est mentionné. Un message qui ne mentionne personne n’atteint que les personnes." }, secondOpinion: { title: "Demander un second avis", discussTitle: "Discuter de cette réponse", discussionTitle: "Second avis", discussDiscussionTitle: "À propos de cette réponse", defaultQuestion: "Est-ce juste ? Que changerais-tu ?", subtitle: ({ session }: { session: string }) => `Sur une réponse dans ${session}`, subtitleUntitled: "Sur cette réponse", answer: "Cette réponse", open: "Ouvrir la discussion", askQuoteOnly: "Demander avec la citation seule", shareAndAsk: "Partager et demander", ask: "Demander", askGroup: "Demander à", freshOpinionsHint: "Choisis-en un à qui demander", noReviewers: "Aucune autre session sur ce Home pour l’instant", yourSession: "Session", moreSessions: "Afficher plus de sessions", question: "Question", freshOpinionsUnavailableTitle: "Demander à plusieurs à la fois n’est pas encore disponible", freshOpinionsUnavailableReason: "Avis indépendants interroge chacun séparément. Choisis-en un pour demander maintenant.", thisSession: "cette session", cannotAskTitle: ({ name }: { name: string }) => `${name} ne peut pas être interrogé ici`, quoteOnlyTitle: ({ name }: { name: string }) => `${name} ne voit que la citation`, quoteOnlyBody: "Le reste de cette session lui reste fermé.", grantTitle: ({ name }: { name: string }) => `Laisser ${name} lire cette session`, grantBody: ({ name, session }: { name: string; session: string }) => `${name} garde l’accès en lecture à ${session} jusqu’à ce que tu le révoques.`, grantUnavailable: "Tu ne peux pas partager cette session, seule la citation est envoyée.", readsAsYouTitle: ({ name }: { name: string }) => `${name} lit cette session en ton nom`, readsTitle: ({ name }: { name: string }) => `${name} peut déjà lire cette session`, readsAsYouBody: "Rien de nouveau n’est partagé.", discussionTitleRow: "La nouvelle discussion", discussionOnlyYou: "Toi seul, jusqu’à ce que tu invites quelqu’un.", discussionPeople: ({ count }: { count: number }) => `Toi et ${count} autres pouvez la lire`, readsGroup: "Ce qu’ils peuvent lire", disclosure: { sameSession: "C’est la session qui a écrit cette réponse.", broader: "Plus de personnes la verraient que celles qui peuvent lire la réponse.", public: "Elle deviendrait publique.", notAllowed: "Les règles de partage de ce Home ne le permettent pas.", unavailable: "Cette réponse est illisible pour le moment." }, discussDone: "Discussion lancée", asked: ({ name }: { name: string }) => `Demandé à ${name}`, askedBody: "La réponse arrivera dans la discussion.", failed: "Ça n’a pas abouti.", pending: "Pas encore terminé. Réessaie pour reprendre là où ça s’est arrêté.", previewChanged: "Qui peut lire ceci a changé. Vérifie, puis redemande." },
+        quote: discussionQuoteCopy.fr,
+        heldParticipant: "Participant de session",
+        participantHeld: ({ participant }: { participant: string }) => `${participant} est en attente. Les demandes d’un autre compte ne sont pas encore disponibles.`,
+        featureUnavailable: "Les conversations ne sont pas activées sur ce Home.", bindingUnavailable: "Reconnecte-toi à ce Home pour voir les conversations.", scopeMismatch: "Ces conversations appartiennent à un autre compte sur ce Home.", modeMismatch: "Ce contenu ne correspond pas au mode de chiffrement de la session. Réessaie ou demande à une personne qui gère la session de vérifier l’accès.",  title: "Discussions", newDiscussion: "Nouvelle discussion", create: 'Créer la conversation', titlePlaceholder: 'Titre de la conversation', messagePlaceholder: 'Écris un message…', active: 'Actives', activeDisclosure: 'Afficher les conversations actives', archived: 'Archivées', archivedDisclosure: 'Afficher les conversations archivées', emptyActive: 'Aucune conversation active pour le moment.', emptyArchived: 'Aucune conversation archivée.', loading: 'Chargement des conversations…', loadError: 'Impossible de charger les conversations.', retry: 'Réessayer', checking: 'Recherche de nouveautés…', deliveryUnknown: 'Livraison incertaine — vérifie avant de réessayer.', locked: 'Tu peux lire cette conversation, mais pas y publier.', offline: 'Tu es hors ligne. Reconnecte-toi pour continuer.', unavailable: 'Cette conversation est indisponible.', unreadCount: ({ count }) => count === 1 ? '1 non lu' : `${count.toLocaleString()} non lus`, unreadMentionCount: ({ count }) => count === 1 ? '1 mention non lue' : `${count.toLocaleString()} mentions non lues`,
         mentioned: 'Tu as été mentionné', unreadConversations: 'Conversations non lues', messageCount: ({ count }) => count === 1 ? '1 message' : `${count.toLocaleString()} messages`, viaAgent: 'Via l’Agent', collaborator: 'Collaborateur', contentUnavailable: 'Message indisponible', rename: 'Renommer la conversation', archive: 'Archiver la conversation', restore: 'Restaurer la conversation', selection: { copy: 'Copier', askAgent: 'Demander à l’Agent', sendToSession: 'Envoyer à la session', handoffError: 'Les messages sélectionnés n’ont pas pu être ajoutés à l’éditeur de la session.' }, titleRequired: 'Ajoute un titre pour démarrer cette conversation.', encryptedTitle: 'Conversation chiffrée', archivedNotice: 'Cette conversation est archivée.', sessionArchived: 'Cette session est archivée.', postDenied: 'Tu ne peux plus publier dans cette session.', invalidMention: 'Une personne mentionnée ne peut plus lire cette session.', invalidContent: 'Ce message ne peut pas être envoyé tel quel. Il est peut-être vide ou trop long.', idempotencyConflict: 'Un autre message a déjà été envoyé sous cette identité.', sendFailed: 'Ce message n’a pas pu être envoyé.', dismiss: 'Ignorer', loadOlder: 'Charger les messages précédents', loadMore: 'Charger plus de conversations' } } };
 
 return { sessionCollaborationTranslations };
@@ -9578,6 +9657,7 @@ const fr: typeof en = {
         reconciling: 'Vérification du démarrage de cette conversation avec l’agent…',
         unresolved: 'Nous n’avons pas pu confirmer si cette conversation avec l’agent a démarré. En lancer une autre peut en créer une seconde.',
         targetChanged: 'La machine de cette session a changé avant que la conversation puisse démarrer. Rien n’a été lancé.',
+        submittedUnknown: 'Nous n’avons pas pu confirmer le démarrage. Consultez les exécutions. Si le processus de session n’est plus actif, reprenez la session.',
         secretReferenceOverlayUpdateRequired: 'Utiliser des secrets partagés dans une conversation avec l’agent nécessite une machine à jour. Rien n’a été lancé.',
     },
     status: {
@@ -9668,6 +9748,66 @@ const sessionFollowTranslations: Pick<Record<
             "important": "Mises à jour importantes",
             "all_messages": "Chaque nouveau message"
         },
+        "policyEditor": {
+            "presetLabel": "Ce que vous suivez",
+            "presetDescription": {
+                "everything": "Vous interrompt dès qu’il se passe quelque chose. Les messages arrivent en silence dans la boîte.",
+                "important": "Vous interrompt seulement quand il a besoin de vous, échoue ou se bloque. Le reste attend en silence dans la boîte.",
+                "quiet": "Rien ne vous interrompt. Les nouvelles attendent en silence dans la boîte.",
+                "custom": "Choisissez ce qui vous interrompt, ce qui arrive en silence et ce qui est exclu."
+            },
+            "customTitle": "Chaque événement",
+            "group": {
+                "interrupt": "Vous interrompt",
+                "quiet": "Arrive en silence",
+                "off": "Non inclus"
+            },
+            "channel": {
+                "interrupt": "Push",
+                "quiet": "Boîte"
+            },
+            "delivery": {
+                "off": "Non",
+                "quiet": "Boîte",
+                "interrupt": "Push"
+            },
+            "session": {
+                "presetLabel": "Ce qu’elle entend",
+                "presetDescription": {
+                    "everything": "La réveille à chaque événement. Les messages attendent son prochain tour.",
+                    "important": "La réveille seulement quand quelque chose a besoin d’elle, échoue ou cale. Le reste attend son prochain tour.",
+                    "quiet": "Rien ne la réveille. Les nouveautés attendent son prochain tour.",
+                    "custom": "Choisissez ce qui la réveille, ce qui attend son prochain tour et ce qui est écarté."
+                },
+                "group": { "interrupt": "La réveille", "quiet": "Attend son prochain tour" },
+                "channel": { "interrupt": "Réveil", "quiet": "Prochain tour" },
+                "delivery": { "interrupt": "Réveil", "quiet": "Prochain tour" }
+            },
+            "events": {
+                "needsYou": "Vous attend",
+                "decision": "Attend une décision",
+                "approval": "Attend une approbation",
+                "blocked": "Bloquée",
+                "finished": "Terminée",
+                "failedOrStopped": "Échouée ou arrêtée",
+                "stalled": "Bloquée en cours",
+                "updatePosted": "Nouvelle publiée",
+                "personWrote": "Quelqu’un y a écrit",
+                "goalChanged": "Objectif modifié",
+                "message": "Chaque message"
+            },
+            "eventDescriptions": {
+                "needsYou": "Une décision, une approbation, ou c’est bloqué",
+                "failedOrStopped": "Aussi quand une exécution se termine sans un mot",
+                "personWrote": "Une notification et un lien, jamais leurs mots"
+            }
+        },
+        "policy": {
+            "everything": "Tout",
+            "important": "Important",
+            "quiet": "Discret",
+            "custom": "Personnalisé"
+        },
         "voice": {
             "title": "Inclure dans Voice",
             "subtitle": "Voice peut garder cette session en contexte.",
@@ -9677,6 +9817,7 @@ const sessionFollowTranslations: Pick<Record<
             "waitingEncrypted": "Déverrouille cette session pour l’inclure dans Voice.",
             "initialSnapshotPending": "Lors de ton prochain tour Voice, inclure un bref résumé de l’état actuel."
         },
+        "once": { "title": "Me prévenir une fois", "subtitle": "En plus de ton niveau, puis c’est terminé.", "off": "Désactivé", "turn": "À la fin de ce tour", "attention": "Quand elle aura de nouveau besoin de toi" },
         "footer": "Le suivi ne change jamais qui peut accéder à cette session.",
         "settingsLink": "Paramètres de notification…",
         "assignedExplanation": "Tu suis cette session car elle t’a été attribuée",
@@ -9687,7 +9828,7 @@ const sessionFollowTranslations: Pick<Record<
         "offline": "Tu es hors ligne. Reconnecte-toi pour modifier le suivi.",
         "archived": "Le suivi est suspendu tant que cette session est archivée.",
         "sources": {
-            "title": "Mises à jour des sessions",
+            "title": "Suit",
             "waitingRuntime": "En attente de la reconnexion de la session de destination.",
             "unsupported": "Mets à jour ou reconnecte le CLI sur la machine de destination pour recevoir les mises à jour.",
             "pausedArchived": "Les mises à jour sont en pause tant que la source ou la destination est archivée.",
@@ -9701,6 +9842,7 @@ const sessionFollowTranslations: Pick<Record<
             "stop": "Arrêter les mises à jour",
             "stopForSource": ({ title }) => `Arrêter les mises à jour de «${title}»`,
             "includeNextTurn": "Inclure les mises à jour au prochain tour de la destination.",
+            "empty": "Les sessions qu’elle suit apparaissent ici",
             "sourceKeyPreparing": "Préparation de l’accès chiffré…",
             "sourceKeyWaiting": "En attente de l’accès chiffré.",
             "sourceKeyUnavailable": "Cet ordinateur ne peut pas fournir d’accès chiffré.",
@@ -10071,6 +10213,8 @@ const sessionListFilterTranslations = { fr: translated({
         filtersHomes: 'Homes', filtersSharedWith: 'Partagées avec', filtersOutsideTeams: 'Personnel et direct',
         filtersTags: 'Tags', filtersSource: 'Source', filtersSourceAll: 'Toutes',
         filtersSourceDirect: 'Externes',
+        filtersOnlyCoordinators: 'Coordinateurs seulement', filtersOnlyCoordinatorsDescription: 'Sessions qui en gèrent d’autres ou suivent par une règle',
+        filtersCoordinatorsChip: 'Coordinateurs', filtersCoordinatorsChipClear: 'Ne plus afficher que les coordinateurs',
         filtersNoOptions: 'Aucun filtre disponible', filtersClear: 'Effacer les filtres', filtersDone: 'Terminé', filtersArchived: 'Archivées',
         filtersNeedsMeOnly: 'Seulement pour moi', filtersNeedsMeOnlyDescription: 'Sessions qui t’attendent', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} de plus`,
@@ -10120,7 +10264,7 @@ const sessionPageTranslations = { fr: translated({
                 continueDescription: 'Démarre un nouveau travail là où en est cette session.',
                 organizeTitle: 'Organiser',
                 organizeDescription: 'Où cette session apparaît dans tes listes.',
-                activityDescription: 'Ce que fait l’agent, et si tu en es averti.',
+                activityDescription: 'Ce que fait l’agent en ce moment.',
                 detailsTitle: 'Détails',
                 detailsDescription: 'Identifiants et historique, pour le support et les scripts.',
                 environmentTitle: 'Environnement',
@@ -10273,6 +10417,10 @@ const fr: typeof en = {
             finished: "terminé",
         },
         peek: "Aperçu",
+        mute: 'Masquer',
+        muted: 'Masqué ici',
+        unmute: 'Annuler',
+        muteFailed: 'Impossible de masquer',
         truncated: "Résultat abrégé.",
         wokenBy: ({ count }) => (count === 1 ? 'Réveillé par une mise à jour' : `Réveillé par ${count} mises à jour`),
         notFromYou: 'pas un message de ta part',
@@ -10299,9 +10447,6 @@ const fr: typeof en = {
     },
     actions: {
         showInTranscript: 'Afficher dans la transcription',
-        makeOrchestrator: 'En faire un orchestrateur',
-        makeOrchestratorSubtitle: 'Cette session planifie, délègue et rend compte',
-        makeOrchestratorFailed: "Impossible de faire de cette session un orchestrateur",
     },
     putUnder: {
         title: "Placer sous…",
@@ -10341,6 +10486,8 @@ const fr: typeof en = {
         a11y: ({ summary }) => `Travail : ${summary}`,
     },
     leadArchived: ({ count }) => `Cette session est archivée · ${count} encore en cours`,
+    managedBy: 'Gérée par',
+    plan: 'Plan',
     runsStale: 'Les exécutions de workflows ne sont peut-être pas à jour',
     list: {
         level: ({ level }) => `Niveau ${level}`,
@@ -10365,7 +10512,7 @@ const fr: typeof en = {
         orAskFor: "Ou demande",
     },
     peek: {
-        reportsTo: ({ lead }) => `Rend compte à ${lead}`,
+        manager: ({ lead }) => `Rend compte à ${lead}`,
         repliesGoHere: 'Les réponses vont à cette session',
     },
 };
@@ -10392,6 +10539,7 @@ const fr = {
     directOffDescription: 'Tout passe par Happier. Rien ne se connecte directement à tes machines ; sur le même réseau, c’est un peu plus lent.',
     serverDenied: 'Le serveur de ton Home fait tout passer par Happier : il n’y a rien à choisir ici.',
     machineTitle: ({ machine }: MachineParams) => `Connexion à ${machine}`,
+    machineSettingTitle: 'Connexion de cette machine',
     machineOptionDefault: 'Par défaut',
     machineOptionDirect: 'Directement',
     machineOptionRelay: 'Par Happier',
@@ -11119,6 +11267,7 @@ const surfaceStateTranslations = { fr: {
         paneFailedReason: 'Un problème est survenu pendant l’affichage. Ta session n’est pas affectée.',
         opening: ({ name }) => `Ouverture de ${name}`,
         couldNotOpen: ({ name }) => `Impossible d’ouvrir ${name}`,
+        couldNotUpdate: 'Mise à jour impossible ; dernière version affichée',
     } } as const satisfies Pick<Record<string, SurfaceStateTranslations>, "fr">;
 
 return { surfaceStateTranslations };
@@ -12773,6 +12922,7 @@ const voiceRealtimeProviderSetupTranslations = { fr: defineVoiceRealtimeProvider
     },
     catalog: {
       credentialRequired: 'Ajoute une clé API pour charger les voix',
+      loadFailed: 'Impossible de charger les voix',
       retry: 'Impossible de charger les voix — réessayer',
       empty: 'Aucune voix n’est disponible pour ce compte',
       preview: ({ voice }) => `Écouter ${voice}`,
@@ -13374,6 +13524,7 @@ const widgetAddTranslations = { fr: {
         areaApprovalPending: 'En attente d’approbation',
         refusals: {
             areaUnavailable: "Les widgets ne sont pas disponibles ici pour le moment. Réessaie dans un instant.",
+            writeUnconfirmed: "Ton Home ne l’a pas confirmé. Vérifie la zone, puis réessaie.",
             inputsInvalid: "Certaines entrées ne sont pas valides. Vérifie-les et réessaie.",
             typeUnavailable: "Ce widget n’est plus disponible. Choisis-en un autre.",
             sizeUnsupported: "Cette taille n’est pas disponible pour ce widget. Choisis-en une autre.",
@@ -13412,7 +13563,6 @@ const widgetDefinitionTranslations = { fr: {
         edited: ({ time }) => `modifié ${time}`,
         readsOnly: "Lecture seule",
         runsOn: ({ machine }) => `s’exécute sur ${machine}`,
-            writeUnconfirmed: "Ton Home ne l’a pas confirmé. Vérifie la zone, puis réessaie.",
         withYourConnection: "avec ta propre connexion",
         readsResource: ({ read, plugin }) => `${read} depuis ${plugin}`,
         cannotRunAnythingElse: "Le widget ne peut rien exécuter d’autre.",
@@ -13458,7 +13608,6 @@ const widgetDefinitionTranslations = { fr: {
         becomesViewerInput: "Devient une entrée : chaque emplacement utilise ta connexion",
         becomesContextInput: "Devient une entrée : chaque emplacement choisit la sienne",
         alsoAddTo: "Ajouter aussi à",
-        alsoAddToNamed: ({ place }) => `Ajouter aussi à ${place}`,
         anotherPlace: "Autre endroit…",
         snapshotMenu: "Publier un instantané sur ce tableau…",
         snapshotMenuSubtitle: "Tout le monde ici voit tes chiffres actuels",
@@ -13717,8 +13866,12 @@ const en = Shared_workflowBuiltinTranslations.en;
 
 const fr: WorkflowBuiltinTranslations = {
     keepGoing: { title: 'Continuer jusqu’au bout', description: 'Continue jusqu’à atteindre l’objectif' },
-    reviewAndConverge: { title: 'Relire et converger', description: 'Réviser jusqu’à l’accord des relecteurs', apply: 'Appliquer', verifyAndFix: 'Vérifier et corriger', verifyOnly: 'Vérifier uniquement', rounds: 'Tours avant l’arrêt' },
-    planWithAPanel: { title: 'Planifier avec un panel', description: 'Plusieurs agents planifient côte à côte, puis le plan attend ta relecture.', inputs: { request: 'Demande', requestPlaceholder: 'Que doit planifier le panel ?', engines: 'Planificateurs' } },
+    reviewAndConverge: { title: 'Relire et converger', description: 'Réviser jusqu’à l’accord des relecteurs', apply: 'Appliquer', verifyAndFix: 'Vérifier et corriger', verifyOnly: 'Vérifier uniquement', rounds: 'Tours avant l’arrêt', inputs: { engines: "Relecteurs", reviewSession: "Session à relire" } },
+    planWithAPanel: { title: "Panel", description: 'Plusieurs agents planifient côte à côte, puis le plan attend ta relecture.', inputs: { request: 'Demande', requestPlaceholder: 'Que doit planifier le panel ?', engines: 'Planificateurs' } },
+    freshOpinions: { title: 'Avis indépendants', description: 'Des réponses indépendantes à la même question, avec un résumé facultatif.' },
+    answerAndReview: { title: 'Réponse + relecture', description: 'Un agent répond, puis un autre relit cette réponse précise.' },
+    debate: { title: 'Débat', description: 'Compare les points de vue sur le nombre de tours choisi, avec un résumé après chaque tour.' },
+    patternInputs: { question: 'Question', participants: 'Participants', synthesis: 'Résumer les réponses', synthesizer: 'Qui résume', answerer: 'Qui répond', reviewer: 'Qui relit', rounds: 'Tours', digestAuthor: 'Qui résume chaque tour', previousRoundContext: 'Tour précédent' },
     openAPullRequest: { title: 'Ouvrir une pull request', description: 'Demande un second avis, puis ouvre une pull request. Si le second avis n’est pas d’accord, il t’attend.', inputs: { base: 'Branche de base', title: 'Titre de la pull request', body: 'Description', question: 'Question pour le second avis' } },
 };
 
@@ -14060,7 +14213,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "fr"> = { fr: { ...workflowRunRoleTranslations.fr, ...workflowRunCompositionTranslations.fr, shortcutStarts: 'démarre', neededNamed: ({ name }) => `Entrées · ${name} manquant`, addToStart: ({ name }) => `Ajoute ${name} pour démarrer`, workflow: 'Workflow', inputs: 'Entrées', start: 'Démarrer', starting: 'Démarrage…', stillStarting: 'Démarrage toujours en cours…', needed: ({ count }) => `Entrées · ${count} manquantes`, required: 'Requis pour démarrer', preview: 'Ce qui sera fait', unsaved: 'Inclut les modifications non enregistrées', remove: 'Revenir à une session simple', search: 'Trouver un workflow', builtin: 'Intégrés', library: 'Ta bibliothèque', noInputs: 'Aucune entrée requise', asksFor: ({ names }) => `Demande ${names}`, optional: 'Facultatif — laissé vide', defaultValue: ({ value }) => `Par défaut : ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "fr"> = { fr: { ...workflowRunRoleTranslations.fr, ...workflowRunCompositionTranslations.fr, runPattern: 'Lancer…', runPatternTitle: 'Lancer un modèle', anotherRound: 'Nouveau tour', participantTitle: 'Choisir qui participe', participantSearch: 'Chercher une session ou un modèle', participantSession: 'Ta session · répond avec sa propre configuration', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nouvelle session ${agent} sur ${machine}`, participantDone: 'Terminé', shortcutStarts: 'démarre', neededNamed: ({ name }) => `Entrées · ${name} manquant`, addToStart: ({ name }) => `Ajoute ${name} pour démarrer`, workflow: 'Workflow', inputs: 'Entrées', start: 'Démarrer', starting: 'Démarrage…', stillStarting: 'Démarrage toujours en cours…', needed: ({ count }) => `Entrées · ${count} manquantes`, required: 'Requis pour démarrer', preview: 'Ce qui sera fait', unsaved: 'Inclut les modifications non enregistrées', remove: 'Revenir à une session simple', search: 'Trouver un workflow', builtin: 'Intégrés', library: 'Ta bibliothèque', noInputs: 'Aucune entrée requise', asksFor: ({ names }) => `Demande ${names}`, optional: 'Facultatif — laissé vide', defaultValue: ({ value }) => `Par défaut : ${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -14653,7 +14806,7 @@ const fr = translated(workflowValueReferenceTranslations.fr, {
         typeString: 'Texte',
         typeNumber: 'Nombre',
         typeBoolean: 'Oui ou non',
-        typeJson: 'Données structurées',
+        typeJson: 'Données structurées', typeParticipant: 'Participant', typeParticipants: 'Participants',
         runSheetTitle: 'Exécuter ce flux de travail',
         runSheetBody: 'Fournis les valeurs déclarées par ce flux de travail, puis exécute-le.',
         missingRequired: 'Cette valeur est obligatoire.',
@@ -14853,8 +15006,11 @@ const fr = translated(workflowValueReferenceTranslations.fr, {
             machine: 'Machine',
             machineId: 'Identifiant de la machine',
             revision: 'Révision',
+            failureCode: "Code d'échec",
+            failureCause: 'Cause',
         },
         usageUnavailable: 'Consommation indisponible',
+        usageNotReported: 'Non communiqué',
         startedAt: ({ time }: { time: string }) => `Démarré ${time}`,
         timeRange: ({ start, end }) => `${start} – ${end}`,
         openConversation: 'Ouvrir la conversation',
@@ -14869,6 +15025,7 @@ const fr = translated(workflowValueReferenceTranslations.fr, {
         attentionWaitSentence: ({ step }: { step: string }) => `${step} t’attend.`,
         attentionParkedSentence: ({ step }: { step: string }) => `${step}.`,
         failedStepSentence: ({ step }: { step: string }) => `${step} a échoué. Le travail terminé est conservé.`,
+        stepNumber: ({ ordinal }: { ordinal: string }) => `Étape ${ordinal}`,
         failedSentence: 'Le travail terminé est conservé.',
         consequenceLanes: ({ lanes }: { lanes: readonly string[] }) => `${lanes.join(' et ')} ${lanes.length === 1 ? 'continue' : 'continuent'}.`,
         consequenceJoin: ({ step, count }: { step: string; count: number }) => `${step} commence lorsque les ${count} branches sont terminées.`,
@@ -14879,6 +15036,7 @@ const fr = translated(workflowValueReferenceTranslations.fr, {
         completedCount: ({ count }) => count === 1 ? 'Son unique étape est terminée.' : `Les ${count} étapes sont toutes terminées.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `${completed} sur ${total} ${total === 1 ? 'étape terminée' : 'étapes terminées'}.`,
         notAnswered: 'Sans réponse',
+        waitContinued: 'Poursuivi',
         answeredBy: ({ name }) => `Réponse de ${name}`,
         answeredByYou: 'Réponse de toi',
         answeredByPerson: 'Réponse d’une autre personne',

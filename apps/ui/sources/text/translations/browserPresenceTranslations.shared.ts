@@ -38,10 +38,22 @@ export type BrowserPresenceTranslations = Readonly<{
     stream: Readonly<{
         connectingTitle: (params: AgentParams) => string;
         connectingBody: (params: Readonly<{ machine: string }>) => string;
+        preparingTitle: string;
+        preparingBody: string;
+        openingPage: string;
+        pageOpened: string;
+        installFailedTitle: string;
+        sandboxAllow: string;
+        sandboxAllowedTitle: string;
+        sandboxAllowedBody: (params: AgentParams) => string;
+        sandboxPermissionTitle: string;
+        sandboxPermissionBody: string;
+        sandboxFailedBody: string;
         stalled: string;
         endedTitle: (params: AgentParams) => string;
         endedBody: string;
         openPageHere: string;
+        setupTitle: (params: AgentParams) => string;
         unavailableTitle: (params: AgentParams) => string;
         unavailableBody: (params: AgentParams) => string;
         tryAgain: string;
@@ -90,10 +102,22 @@ export const browserPresenceTranslationsEnglish = { en: {
         stream: {
             connectingTitle: ({ agent }) => `Connecting to ${agent}’s browser`,
             connectingBody: ({ machine }) => `It runs on ${machine}. The page appears here as soon as the first frame arrives.`,
+            preparingTitle: 'Preparing the browser…',
+            preparingBody: 'Downloading Chromium on this machine. This only happens once. Your page will open when it’s ready.',
+            openingPage: 'Opening the page…',
+            pageOpened: 'The page opened.',
+            installFailedTitle: 'Couldn’t prepare the browser',
+            sandboxAllow: 'Allow the browser sandbox',
+            sandboxAllowedTitle: 'The browser sandbox is allowed',
+            sandboxAllowedBody: ({ agent }) => `${agent}’s browser can start now. Ask ${agent} to open the page again.`,
+            sandboxPermissionTitle: 'Waiting for a system permission',
+            sandboxPermissionBody: 'Someone needs to approve the system permission on that machine. Then allow the sandbox again.',
+            sandboxFailedBody: 'The sandbox couldn’t be allowed on this machine. Try again in a moment.',
             stalled: 'Showing the last frame · reconnecting',
             endedTitle: ({ agent }) => `${agent} closed this browser`,
             endedBody: 'The page is no longer being shown here.',
             openPageHere: "Open page here",
+            setupTitle: ({ agent }) => `${agent}’s browser isn’t set up yet`,
             unavailableTitle: ({ agent }) => `Can’t show ${agent}’s browser here`,
             unavailableBody: ({ agent }) => `${agent} keeps browsing; its actions still appear in the chat.`,
             tryAgain: 'Try again',

@@ -31,6 +31,7 @@ export type BoardsTranslations = Readonly<{
         settings: string;
     }>;
     kinds: Readonly<{
+        task: string;
         session: string;
         workflow_run: string;
         workflow: string;
@@ -170,6 +171,7 @@ export const en: BoardsTranslations = {
     kinds: {
         session: 'Session',
         workflow_run: 'Workflow run',
+        task: 'Task',
         workflow: 'Workflow',
         machine: 'Machine',
     },

@@ -72,6 +72,7 @@ export type VoiceRealtimeProviderSetupCopy = Readonly<{
   }>;
   catalog: Readonly<{
     credentialRequired: string;
+    loadFailed: string;
     retry: string;
     empty: string;
     preview: (args: { voice: string }) => string;

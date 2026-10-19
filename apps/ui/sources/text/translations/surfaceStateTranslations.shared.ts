@@ -10,6 +10,8 @@ export type SurfaceStateTranslations = Readonly<{
     paneFailedReason: string;
     opening: (params: Readonly<{ name: string }>) => string;
     couldNotOpen: (params: Readonly<{ name: string }>) => string;
+    /** Last-known content stays on screen after a failed re-read. */
+    couldNotUpdate: string;
 }>;
 
 
@@ -23,4 +25,5 @@ export const surfaceStateTranslationsEnglish = { en: {
         paneFailedReason: 'Something went wrong while drawing it. Your session isn’t affected.',
         opening: ({ name }) => `Opening ${name}`,
         couldNotOpen: ({ name }) => `Couldn’t open ${name}`,
+        couldNotUpdate: 'Couldn’t update; showing the last version',
     } } as const satisfies Pick<Record<string, SurfaceStateTranslations>, "en">;

@@ -18,6 +18,7 @@ export const machineSharing = createMachineSharingTranslations({
     plain: 'I dati non sono cifrati end-to-end e possono essere letti dal Home.', saved: 'Condivisione aggiornata', yourAccess: 'Il tuo accesso',
     ownHistory: "Le sessioni che avvii qui restano tue in Happier, anche quando il tuo accesso termina.", through: "Tramite {audience}",
     leave: 'Lascia la condivisione', inherited: 'Hai ancora accesso tramite {audience}. Chiedi al responsabile di modificare il tuo accesso.', unavailable: 'Impossibile verificare l’accesso a {machine}.',
+    saveFailed: 'Impossibile salvare «{draft}» per {person}. Ha ancora «{current}».',
     effectiveLoss: 'Per chi perde l’ultimo accesso vengono interrotti sessioni, script, esecuzioni, lavoro in coda o in preparazione, terminali e servizi. La cronologia Happier resta di sua proprietà; i dati già ottenuti non possono essere ritirati.',
     overlap: 'Resta valido un altro accesso. Il lavoro proseguirà.', custodianProtected: 'Il proprietario originale della macchina non può essere rimosso o sostituito qui.',
 });

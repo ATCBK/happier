@@ -1,4 +1,5 @@
 // Locale-owned feature copy; each domain retains its own initialization scope.
+import { discussionQuoteCopy } from '../discussionQuoteTranslations.shared';
 import * as EnglishFeatures from './en';
 import * as Shared_accountDisplayTranslations from '../accountDisplayTranslations.shared';
 import * as Shared_accountEncryptionRecoveryTranslations from '../accountEncryptionRecoveryTranslations.shared';
@@ -414,7 +415,7 @@ const actionFamilyTranslations = { ru: translated({
             session_read_state: 'Статус прочтения',
             session_attention: 'Внимание',
             session_board: 'Доска сессий',
-            session_discussion: 'Обсуждения',
+            discussion: 'Обсуждения',
             session_permissions: 'Разрешения сессий',
             external_sessions: 'Внешние сессии',
             voice_controls: 'Голосовое управление',
@@ -1008,6 +1009,33 @@ const artifactsBrowserTranslations = { ru: {
         facts: {
             edited: ({ age }) => `Изменено ${age}`,
         },
+        passage: {
+            comment: 'Комментировать',
+        },
+        proposal: {
+            title: 'Предложенная правка',
+            basedOn: ({ n }) => `На основе версии ${n}`,
+            current: ({ n }) => `Версия ${n} · текущая`,
+            before: 'До',
+            after: 'После',
+            accept: 'Принять',
+            decline: 'Отклонить',
+            accepting: 'Принимаем… проверяем, что документ не изменился',
+            declining: 'Отклоняем…',
+            movedOn: 'Документ изменился после этого предложения. Ничего не применено.',
+            compare: 'Сравнить',
+            cantEdit: 'Принять может только тот, кто может редактировать этот документ.',
+            failed: 'Не удалось сохранить решение. Повторите попытку.',
+            acceptedByYou: ({ n }) => `Вы приняли правку · теперь версия ${n}`,
+            acceptedBy: ({ who, n }) => `${who} принял(а) правку · теперь версия ${n}`,
+            declinedByYou: 'Вы отклонили предложение · документ не изменился',
+            declinedBy: ({ who }) => `${who} отклонил(а) предложение · документ не изменился`,
+            undo: 'Отменить',
+            undone: ({ n }) => `Отменено · теперь версия ${n}`,
+            undoConflict: 'Документ изменился после этой правки, поэтому отменить нельзя. Откройте историю, чтобы выбрать версию.',
+            openDocument: 'Открыть документ',
+            someone: 'Кто-то',
+        },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "ru">;
 
 return { artifactsBrowserTranslations };
@@ -1206,6 +1234,7 @@ const ru: BoardsTranslations = {
     kinds: {
         session: 'Сессия',
         workflow_run: 'Запуск воркфлоу',
+        task: 'Задача',
         workflow: 'Воркфлоу',
         machine: 'Машина',
     },
@@ -1685,6 +1714,11 @@ const computerUseTranslations = { ru: {
             denied: 'Не разрешено',
             opened: ({ machine }) => `Открыто на ${machine}. Разрешите там Happier и проверьте снова.`,
             openFailed: 'Не удалось открыть Системные настройки там. Откройте их на том компьютере.',
+            capture: 'Запись экрана',
+            captureFor: 'Чтобы видеть окна',
+            inputFor: 'Чтобы нажимать и вводить',
+            granted: 'Разрешено',
+            unknown: 'Не проверено',
             checkAgain: 'Проверить снова',
             captureTitle: ({ machine }) => `Разрешите запись экрана на ${machine}, чтобы видеть его окна или экран.`,
             inputTitle: ({ machine }) => `Разрешите универсальный доступ на ${machine}, чтобы управлять мышью и клавиатурой.`,
@@ -1700,6 +1734,8 @@ const computerUseTranslations = { ru: {
             onMachine: ({ machine }) => `На ${machine}`,
             connectingTitle: ({ target }) => `Подключаемся к ${target}`,
             unavailableTitle: 'Сейчас это окно не показать',
+            stopFailed: 'Не удалось остановить показ',
+            stopping: 'Показ останавливается…',
             unavailableBody: ({ agent }) => `Вы всё равно можете остановить ${agent} здесь.`,
             endedTitle: ({ target }) => `${target} закрыто`,
             endedBody: ({ agent }) => `${agent} больше не видит и не использует его. Выберите другое окно, чтобы продолжить.`,
@@ -1716,6 +1752,7 @@ const computerUseTranslations = { ru: {
             expandView: 'Развернуть вид',
             restoreView: 'Восстановить вид',
             dockView: 'Закрепить вид',
+            floatView: 'Открепить вид',
             closeView: 'Закрыть вид',
             moveView: 'Переместить вид',
             resizeView: 'Изменить размер вида',
@@ -1732,7 +1769,10 @@ const computerUseTranslations = { ru: {
             agentWorkingOn: ({ agent, machine }) => `${agent} работает на ${machine}`,
             watchingSourceA11y: ({ source }) => `Просмотр: ${source}`,
             controlNotAllowed: 'Управление мышью и клавиатурой не разрешено',
-            seeOnly: ({ agent }) => `${agent} может смотреть, но не может нажимать и вводить текст`,
+            seeOnly: 'Не может нажимать и вводить текст',
+            unconfirmedWarning: ({ agent, target, machine }) => `Никто не может использовать ${target} из Happier, пока ${machine} не подтвердит, что мышь и клавиатура ${agent} освобождены.`,
+            unconfirmedWarningCompact: ({ agent, machine }) => `Заблокировано, пока ${machine} не подтвердит, что мышь и клавиатура ${agent} освобождены.`,
+            unconfirmedStuckHint: ({ machine }) => `Если что-то зависло, щёлкните один раз в окне прямо на ${machine}.`,
             driverMissing: 'Драйвер компьютера недоступен',
             driverInvalid: 'Драйвер компьютера требует восстановления',
             driverRepairBody: 'Переустановите нативный драйвер на этом компьютере, затем проверьте текущие разрешения и источник.',
@@ -1743,6 +1783,7 @@ const computerUseTranslations = { ru: {
             offlineTitle: ({ machine }) => `${machine} не отвечает`,
             offlineBody: 'Подключите её снова, чтобы смотреть. Просмотр её не запускает.',
             openingTitle: ({ target, machine }) => `Открываем ${target} на ${machine}…`,
+            openingBody: 'Оно появится здесь, как только придёт первое изображение.',
         },
         strip: {
             using: ({ target }) => `Использует ${target}`,
@@ -3015,7 +3056,7 @@ const effectiveTranslations = { "ru": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-щелчок · ${modifier}⇧L переключает светлую и тёмную темы`
     } } as const;
 
-const glassAppearanceTranslations = { ru: { sameAsHome: "Как на главной", ...Shared_glassAppearanceTranslations.atmosphereTranslations['ru'], iosReduceTransparencyPath: "Настройки › Универсальный доступ › Дисплей и размер текста › Понижение прозрачности", title: 'Стекло', material: 'Материал', solid: 'Непрозрачный', auto: 'Авто', everywhere: 'Везде', custom: 'Свой', blur: 'Размытие', tint: 'Оттенок', tintSubtle: 'Лёгкий', tintMedium: 'Средний', tintStrong: 'Сильный', off: 'Выкл.', opacity: 'Непрозрачность', customize: 'Настроить', sidebar: 'Боковая панель', content: 'Содержимое', appearance: 'Оформление', moreSettings: 'Другие настройки оформления…', customizeLink: 'Настроить…', toolbarTitle: 'Кнопка оформления', toolbarDescription: 'Показывает Оформление на панели. Щелчок с модификатором переключает светлую и тёмную темы.', reduceTransparency: 'Непрозрачный: включено уменьшение прозрачности', osSettings: 'Открыть настройки универсального доступа', themeCommand: 'Переключить светлую и тёмную темы', autoDescription: "Подстраивается под устройство: слои стекла в совместимых окнах и плавающие поверхности на телефоне.", osSettingsUnavailable: "Не удалось открыть настройки универсального доступа. Откройте их в настройках устройства.", ...effectiveTranslations["ru"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ru">;
+const glassAppearanceTranslations = { ru: { sameAsHome: "Как на главной", ...Shared_glassAppearanceTranslations.atmosphereTranslations['ru'], iosReduceTransparencyPath: "Настройки › Универсальный доступ › Дисплей и размер текста › Понижение прозрачности", title: 'Стекло', material: 'Материал', solid: 'Непрозрачный', auto: 'Авто', everywhere: 'Везде', custom: 'Свой', blur: 'Размытие', tint: 'Оттенок', off: 'Выкл.', opacity: 'Непрозрачность', customize: 'Настроить', sidebar: 'Боковая панель', content: 'Содержимое', appearance: 'Оформление', moreSettings: 'Другие настройки оформления…', customizeLink: 'Настроить…', toolbarTitle: 'Кнопка оформления', toolbarDescription: 'Показывает Оформление на панели. Щелчок с модификатором переключает светлую и тёмную темы.', reduceTransparency: 'Непрозрачный: включено уменьшение прозрачности', osSettings: 'Открыть настройки универсального доступа', themeCommand: 'Переключить светлую и тёмную темы', autoDescription: "Подстраивается под устройство: слои стекла в совместимых окнах и плавающие поверхности на телефоне.", osSettingsUnavailable: "Не удалось открыть настройки универсального доступа. Откройте их в настройках устройства.", ...effectiveTranslations["ru"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "ru">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -5303,15 +5344,25 @@ const Domain_inboxWorkTranslations = (() => {
 const en = Shared_inboxWorkTranslations.en;
 
 const ru: typeof en = {
-    pageDescription: 'Всё, что ждёт вас, сгруппировано по работе, к которой относится.',
-    tabs: { a11y: 'Вид входящих', needsYou: 'Ждёт вас', updates: 'Новое' },
+    pageDescription: "Что ждёт вас, что изменилось и кто вас упомянул.",
+    needsYouSummary: ({ approvals, decisions, blocked }: { approvals: number; decisions: number; blocked: number }) => {
+        const plural = (count: number, one: string, few: string, many: string) => {
+            const ten = count % 10;
+            const hundred = count % 100;
+            return `${count} ${count === 1 ? one : ten >= 2 && ten <= 4 && (hundred < 12 || hundred > 14) ? few : many}`;
+        };
+        const parts = [
+            approvals > 0 ? plural(approvals, 'одобрение', 'одобрения', 'одобрений') : null,
+            decisions > 0 ? plural(decisions, 'решение', 'решения', 'решений') : null,
+            blocked > 0 ? plural(blocked, 'заблокированная сессия', 'заблокированные сессии', 'заблокированных сессий') : null,
+        ].filter((part): part is string => part !== null);
+        const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} и ${parts[parts.length - 1]}` : parts[0] ?? '';
+        return `Ждут вас: ${list}.`;
+    },
+    quickDecision: { deny: 'Отклонить', allowOnce: 'Разрешить один раз' },
+    keyHints: { move: 'перейти', fullPage: 'вся страница', close: 'закрыть', answering: 'Ответ открывает следующий' },
+    tabs: { a11y: 'Вид входящих', needsYou: 'Ждёт вас', updates: 'Новое', mentions: "Упоминания" },
     groups: {
-        unknownLead: 'Сессия',
-        leadMeta: ({ count }) => `Подсессий: ${count}`,
-        runMeta: 'Запуск рабочего процесса',
-        otherTitle: 'Другие сессии',
-        otherMeta: 'Не относятся к оркестратору или запуску',
-        runsTitle: 'Запуски рабочих процессов',
         openSession: 'Открыть сессию',
         openRun: 'Открыть запуск',
     },
@@ -5327,10 +5378,17 @@ const ru: typeof en = {
         more: 'Другие действия',
         approvalNeeded: 'Нужно ваше одобрение',
         approvalUntitled: 'Одобрите действие',
+        mentionedYou: "Упоминание вас",
+        newMessage: "Новое сообщение",
     },
     popover: {
-        moreInOther: ({ count }) => `Ещё ${count} в «Других сессиях»`,
         updates: ({ count }) => `Нового: ${count}`,
+    },
+    types: { approval: "Подтверждения", decision: "Решения", blocked: "Заблокировано" },
+    days: { today: "Сегодня", earlier: "Ранее" },
+    mentionsEmpty: {
+        title: "Нет упоминаний",
+        description: "Когда вас упоминают в обсуждении, это появляется здесь.",
     },
     empty: {
         title: 'Вас ничего не ждёт',
@@ -5580,14 +5638,13 @@ const machineDetailPageTranslations = { ru: translated({
             },
             fleet: {
                 calm: "Всё спокойно",
-                calmOne: "Спокойно",
                 count: ({ count }) => `${count} машины требуют внимания`,
                 sentenceOne: ({ phrase }) => `${phrase}.`,
                 sentenceTwo: ({ first, second }) => `${first}, и ${second}.`,
                 sentenceMore: ({ first, second, count }) => `${first}, ${second} и ещё ${count}.`,
                 sameReason: ({ word, count }) => `${word}: ${count} машин.`,
                 otherOnlineCalm: ({ count }) => `Остальные ${count} в сети в порядке.`,
-                allOnlineCalm: ({ count }) => `Все машины в сети в порядке.`,
+                allOnlineCalm: ({ count }) => count === 1 ? "Единственная машина в сети в порядке." : `Все машины в сети в порядке.`,
             },
             machine: {
                 calmLead: "Спокойно.",
@@ -5696,7 +5753,6 @@ const machineDetailPageTranslations = { ru: translated({
             customize: "Настроить сводку",
             appearanceSettings: "Настройки оформления",
             done: "Готово",
-            staleReason: "Эти машины перестали отвечать",
             slowReason: "Отвечает медленно",
             update: "Обновить",
             previewCalmName: "ноутбук",
@@ -5875,6 +5931,9 @@ const machineDetailPageTranslations = { ru: translated({
             },
             states: {
                 offlineEmpty: ({ machine }) => `${machine} не сообщала о своих ресурсах с тех пор, как вы открыли Happier.`,
+                offlineTitle: ({ machine }) => `${machine} не в сети`,
+                offlineLastReported: ({ machine }) => `Это последнее, что она сообщила. Её сессии продолжатся, когда она вернётся; оповещения для ${machine} до тех пор приостановлены.`,
+                offlineNeverReported: 'Она не сообщала о ресурсах с момента открытия Happier. Её сессии продолжатся, когда она вернётся.',
                 olderTitle: ({ machine }) => `Посмотрите, что делает ${machine}`,
                 olderReason: ({ machine }) => `CPU, давление на память, диск и то, что используют ваши сессии, в реальном времени. Чтобы ${machine} их сообщала, нужен Happier 0.3.`,
                 askOwner: ({ machine }) => `Скопировать просьбу обновить ${machine}`,
@@ -6784,6 +6843,17 @@ const machineDetailPageTranslations = { ru: translated({
                     approved_proposal: "Вы это одобрили",
                     idle_terminals: "Его история остаётся",
                     kept_running: "В предупреждении вы выбрали «Не останавливать».",
+                },
+                startFailure: {
+                    too_many_open_files: "На машине было открыто слишком много файлов",
+                    no_ptys: "На машине не осталось свободных терминалов",
+                    process_limit: "Машина не смогла запустить ещё один процесс",
+                    out_of_memory: "Для запуска не хватило памяти",
+                    other: "В этот раз запустить не удалось",
+                },
+                nextStep: {
+                    close_idle_terminals: "Закройте неиспользуемые терминалы и попробуйте снова",
+                    review_processes: "Посмотрите, что запущено, и попробуйте снова",
                 },
             },
             session: {
@@ -8458,7 +8528,7 @@ const ru: ReviewWalkthroughTranslations = {
     fromReviewAt: ({ time }) => `из ревью в ${time}`,
     reviewLabel: 'Ревью:',
     enginesOf: ({ count, total }) => `${count} из ${total}`,
-    enginesFinished: 'движков завершили',
+    enginesFinished: ({ count }) => count === 1 ? 'движка завершено' : 'движков завершено',
     enginesRunning: ({ count }) => (count === 1 ? '1 движок ещё проверяет' : `Ещё проверяют движков: ${count}`),
     fromEngines: ({ engines, inStory }) => `от ${engines} · ${inStory} в разборе`,
     and: ' и ',
@@ -8481,7 +8551,6 @@ const ru: ReviewWalkthroughTranslations = {
         reviewedAt: ({ time }) => `Проверено в ${time}`,
         reviewAt: ({ time }) => `Ревью в ${time}`,
         partial: ({ count }) => (count === 1 ? 'Частичное ревью · 1 замечание' : `Частичное ревью · ${count} замечаний`),
-        ready: 'Разбор готов',
         readyShort: 'Разбор',
         failed: 'Разбор не удался',
         narrating: 'Пересказ',
@@ -8617,8 +8686,10 @@ const rolesTranslations = { ru: {
             secondOpinionDescription: '«Рекомендуется» просит обдумать второе мнение перед pull request или завершением работы.',
             secondOpinionOff: 'Выкл.',
             secondOpinionEncouraged: 'Рекомендуется',
+            canDelegateToOtherRolesTitle: 'Может делегировать другим ролям',
+            canDelegateToOtherRolesDescription: 'Включает в инструкции доступные роли и способы их запуска.',
             enabledTitle: 'Доступна',
-            enabledDescription: 'Предлагается в панели ролей и оркестраторам.',
+            enabledDescription: 'Предлагается в панели ролей и ролям, которые делегируют.',
             advancedTitle: 'Дополнительно',
             launchProfileTitle: 'Профиль запуска',
             launchProfileDescription: 'Окружение, разрешения, машина',
@@ -9445,6 +9516,15 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkUnavailable: "Публичные ссылки недоступны в этом Home. Попросите владельца настроить изолированный домен или разрешить ссылки на этом имени хоста. Также нужно настроить ограничение частоты запросов для публичных ссылок.",
         configurePublicLinks: "Настроить публичные ссылки",
         justYouTitle: 'Работайте над сессией вместе',
+        followersTitle: 'Подписчики',
+        followersDescription: 'Кто узнаёт об этой сессии и как. Уровни других людей скрыты.',
+        followersYou: 'Вы',
+        followersPeople: ({ count }: { count: number }) => count === 1 ? '1 человек' : `${count} чел.`,
+        followersPeopleNote: 'Их уровни остаются при них',
+        followersSessionMeaning: { everything: 'Будит её при каждом обновлении', important: 'Будит её, когда она нужна', quiet: 'На её следующем ходу' },
+        followersManager: 'Её руководитель',
+        followersSessions: ({ count }: { count: number }) => count === 1 ? '1 сессия' : `${count} сесс.`,
+        followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? 'следит за ней' : 'следят за ней'}`,
         justYouBody: ({ home }) => `Поделитесь ею с людьми в ${home}. Они смогут следить за ней, обсуждать её здесь и продолжить, пока вас нет.`,
         share: 'Поделиться',
         justYouNote: 'Или создайте публичную ссылку, которую может открыть любой.',
@@ -9462,7 +9542,11 @@ const sessionCollaborationPaneTranslations = {...Domain_sessionCollaborationPane
 
 const en = Shared_sessionCollaborationTranslations.en;
 
-const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "ru"> = { ru: { pane: sessionCollaborationPaneTranslations['ru'], title: 'Совместная работа', viewingNow: 'Сейчас просматривают', justYou: 'Только вы', typing: 'Печатает…', stale: 'Данные могут быть устаревшими', unavailable: 'Данные о присутствии недоступны', connecting: 'Подключение…', unnamed: 'Участник Happier', open: 'Открыть совместную работу', conversations: 'Разговоры', accessUnavailable: 'Доступ к сессии недоступен', accessUnavailableReason: 'Этот Home не поддерживает предоставление доступа к сессиям другим людям.', discussion: { featureUnavailable: "Разговоры не включены на этом Home.", bindingUnavailable: "Войдите в этот Home снова, чтобы увидеть разговоры.", scopeMismatch: "Эти разговоры принадлежат другой учётной записи на этом Home.", modeMismatch: "Содержимое не соответствует режиму шифрования сессии. Повторите попытку или попросите администратора сессии проверить доступ.",  title: 'Разговоры', newDiscussion: 'Новый разговор', create: 'Создать разговор', titlePlaceholder: 'Название разговора', messagePlaceholder: 'Напишите сообщение…', active: 'Активные', activeDisclosure: 'Показать активные разговоры', archived: 'В архиве', archivedDisclosure: 'Показать архивные разговоры', emptyActive: 'Активных разговоров пока нет.', emptyArchived: 'Архивных разговоров нет.', loading: 'Загрузка разговоров…', loadError: 'Не удалось загрузить разговоры.', retry: 'Повторить', checking: 'Проверка обновлений…', deliveryUnknown: 'Результат доставки неизвестен — проверьте перед повтором.', locked: 'Вы можете читать этот разговор, но не можете публиковать в нём.', offline: 'Вы не в сети. Подключитесь, чтобы продолжить.', unavailable: 'Этот разговор недоступен.', unreadCount: ({ count }) => `${count.toLocaleString()} непрочит.`, unreadMentionCount: ({ count }) => `${count.toLocaleString()} непрочит. упомин.`,
+const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "ru"> = { ru: { pane: sessionCollaborationPaneTranslations['ru'], title: 'Люди', viewingNow: 'Сейчас просматривают', justYou: 'Только вы', typing: 'Печатает…', stale: 'Данные могут быть устаревшими', unavailable: 'Данные о присутствии недоступны', connecting: 'Подключение…', unnamed: 'Участник Happier', open: 'Открыть совместную работу', conversations: "Обсуждения", accessUnavailable: 'Доступ к сессии недоступен', accessUnavailableReason: 'Этот Home не поддерживает предоставление доступа к сессиям другим людям.', discussion: { participants: { title: "Участники", loading: "Проверяем, кто здесь…", peopleGroup: "Люди", agentsGroup: "Агенты", agentsNote: "У каждого своя сессия, машина и подтверждения", owner: "Владелец", you: "Вы", hereNow: "Сейчас здесь", canPost: "Может писать", canRead: "Может читать", teamAccess: "Доступ команды", noAgents: "Агентов пока нет", model: "Модель", session: "Сессия", modelStarting: "Модель запускается", policyWhenAddressed: "Отвечает, когда упомянут", policyReadsOnly: "Только читает", policyDrafts: "Черновики на подтверждение", policyWatches: "Следит и высказывается", privateNote: "Читать могут только приглашённые. Упоминание никогда не даёт доступ.", inheritedNote: "Читать могут приглашённые и их команда. Упоминание никогда не даёт доступ.", leave: "Выйти", invitedOnly: "Только приглашённые", teamCanRead: "Команда может читать", people: ({ count }) => count === 1 ? 'Только вы' : `Людей: ${count.toLocaleString()}`, peopleAndAgents: ({ people, agents }) => `Людей: ${people.toLocaleString()}, агентов: ${agents.toLocaleString()}` }, home: { needsYou: "Ждут вас", today: "Сегодня", thisWeek: "На этой неделе", earlier: "Раньше", columnEmpty: "Здесь появятся обсуждения, в которые вас пригласили", inviteTitle: "Обсудите с людьми и агентами", inviteBody: "Соберите коллег, сессии, ботов и модели в одном разговоре. Упомяните агента, и он ответит из своей сессии, со своими подтверждениями.", idleTitle: "Откройте обсуждение", idleBody: "Выберите его в списке или начните новое с людьми и агентами.", audience: "Только приглашённые вами", draftWaiting: "Вас ждёт черновик", approvalPending: "Нужно ваше одобрение" }, manage: { startAgain: "Запустить снова", startAgainBody: "Его сессия не запустилась. Попробуйте ещё раз с теми же настройками.", invitePlaceholder: "Искать людей, сессии или модели", policyWhenAddressedBody: "Упоминание или ответ на него. По умолчанию.", policyReadsOnlyBody: "Читает; здесь никогда не отвечает.", policyDraftsBody: "Вы публикуете его ответ или отклоняете.", policyWatchesBody: "Читает каждое сообщение и может ответить. Тратит ходы, даже когда молчит.", answersGroup: "Отвечает", operationsGroup: "Сессия", openSession: "Открыть его сессию", removeModel: "Удалить и архивировать его сессию", removeModelBody: "Она была запущена для этого обсуждения; история сохранится.", removeSession: "Убрать из обсуждения", removeSessionBody: "Сессия продолжит работать сама.", rowHint: "Выберите, как он отвечает, откройте или уберите", working: "Сохранение…", checking: "Проверяем, прошло ли…", failed: "Не получилось.", leaveTitle: "Покинуть обсуждение", leaveBody: "У обсуждения должен быть владелец. Передайте его кому-то здесь или архивируйте; ничего не удаляется.", transferGroup: "Сделать владельцем другого", transferSubtitle: "Станет владельцем, затем вы выйдете", noTransferCandidates: "Сначала пригласите кого-нибудь, чтобы передать.", archiveInstead: "Архивировать вместо этого", archiveInsteadBody: "Вы остаётесь владельцем. Никто не сможет писать, пока его не восстановят.", inviteSubtitle: "Читать могут только приглашённые", sessionsGroup: "Ваши сессии", modelsGroup: "Модели", sessionCandidate: "Сессия · отвечает при упоминании", modelOn: ({ machine }: { machine: string }) => `Модель на ${machine}`, modelCandidate: "Ваша новая сессия · выберите агента и модель" }, invite: { button: "Пригласить", title: ({ title }: { title: string }) => `Пригласить в ${title}`, canManage: "Может управлять", ownerOnly: "Только владелец может менять список приглашённых.", failed: "Не удалось сохранить приглашение." }, composer: { mention: "Упомянуть", mentionHint: "Упомяните агента, чтобы он ответил" }, newPage: { namePlaceholder: "Назовите обсуждение", emptyTitle: "Упомяните, кто должен ответить", emptyBody: "Агент отвечает, только когда его упомянули. Сообщение без упоминаний получают только люди." }, secondOpinion: { title: "Спросить второе мнение", discussTitle: "Обсудить этот ответ", discussionTitle: "Второе мнение", discussDiscussionTitle: "Об этом ответе", defaultQuestion: "Это верно? Что бы вы изменили?", subtitle: ({ session }: { session: string }) => `Об ответе в ${session}`, subtitleUntitled: "Об этом ответе", answer: "Этот ответ", open: "Открыть обсуждение", askQuoteOnly: "Спросить только с цитатой", shareAndAsk: "Поделиться и спросить", ask: "Спросить", askGroup: "Кого спросить", freshOpinionsHint: "Выберите одного", noReviewers: "На этом Home пока нет других сессий", yourSession: "Сессия", moreSessions: "Показать ещё сессии", question: "Вопрос", freshOpinionsUnavailableTitle: "Спрашивать нескольких сразу пока нельзя", freshOpinionsUnavailableReason: "Независимые мнения спрашивают каждого отдельно. Выберите одного сейчас.", thisSession: "эта сессия", cannotAskTitle: ({ name }: { name: string }) => `${name} нельзя спросить здесь`, quoteOnlyTitle: ({ name }: { name: string }) => `${name} видит только цитату`, quoteOnlyBody: "Остальная часть сессии ему недоступна.", grantTitle: ({ name }: { name: string }) => `Разрешить ${name} читать эту сессию`, grantBody: ({ name, session }: { name: string; session: string }) => `${name} сохранит доступ на чтение к ${session}, пока вы его не отзовёте.`, grantUnavailable: "Вы не можете поделиться этой сессией, поэтому уйдёт только цитата.", readsAsYouTitle: ({ name }: { name: string }) => `${name} читает эту сессию от вашего имени`, readsTitle: ({ name }: { name: string }) => `${name} уже может читать эту сессию`, readsAsYouBody: "Ничего нового не открывается.", discussionTitleRow: "Новое обсуждение", discussionOnlyYou: "Только вы, пока никого не пригласите.", discussionPeople: ({ count }: { count: number }) => `Вы и ещё ${count} можете его читать`, readsGroup: "Что они смогут прочитать", disclosure: { sameSession: "Это сессия, которая написала ответ.", broader: "Его увидит больше людей, чем сейчас может прочитать ответ.", public: "Оно станет публичным.", notAllowed: "Правила доступа этого Home этого не разрешают.", unavailable: "Сейчас этот ответ нельзя прочитать." }, discussDone: "Обсуждение начато", asked: ({ name }: { name: string }) => `Вы спросили ${name}`, askedBody: "Ответ придёт в обсуждение.", failed: "Не получилось.", pending: "Ещё не завершено. Повторите, чтобы продолжить с места остановки.", previewChanged: "Изменилось, кто может это читать. Проверьте и спросите снова." },
+        quote: discussionQuoteCopy.ru,
+        heldParticipant: "Участник сессии",
+        participantHeld: ({ participant }: { participant: string }) => `${participant} ожидает. Запросы из другой учётной записи пока недоступны.`,
+        featureUnavailable: "Разговоры не включены на этом Home.", bindingUnavailable: "Войдите в этот Home снова, чтобы увидеть разговоры.", scopeMismatch: "Эти разговоры принадлежат другой учётной записи на этом Home.", modeMismatch: "Содержимое не соответствует режиму шифрования сессии. Повторите попытку или попросите администратора сессии проверить доступ.",  title: "Обсуждения", newDiscussion: "Новое обсуждение", create: 'Создать разговор', titlePlaceholder: 'Название разговора', messagePlaceholder: 'Напишите сообщение…', active: 'Активные', activeDisclosure: 'Показать активные разговоры', archived: 'В архиве', archivedDisclosure: 'Показать архивные разговоры', emptyActive: 'Активных разговоров пока нет.', emptyArchived: 'Архивных разговоров нет.', loading: 'Загрузка разговоров…', loadError: 'Не удалось загрузить разговоры.', retry: 'Повторить', checking: 'Проверка обновлений…', deliveryUnknown: 'Результат доставки неизвестен — проверьте перед повтором.', locked: 'Вы можете читать этот разговор, но не можете публиковать в нём.', offline: 'Вы не в сети. Подключитесь, чтобы продолжить.', unavailable: 'Этот разговор недоступен.', unreadCount: ({ count }) => `${count.toLocaleString()} непрочит.`, unreadMentionCount: ({ count }) => `${count.toLocaleString()} непрочит. упомин.`,
         mentioned: 'Вас упомянули', unreadConversations: 'Непрочитанные разговоры', messageCount: ({ count }) => count === 1 ? '1 сообщение' : `${count.toLocaleString()} сообщений`, viaAgent: 'Через агента', collaborator: 'Участник', contentUnavailable: 'Сообщение недоступно', rename: 'Переименовать разговор', archive: 'Архивировать разговор', restore: 'Восстановить разговор', selection: { copy: 'Копировать', askAgent: 'Спросить агента', sendToSession: 'Отправить в сессию', handoffError: 'Не удалось добавить выбранные сообщения в редактор сессии.' }, titleRequired: 'Добавьте название, чтобы начать этот разговор.', encryptedTitle: 'Зашифрованный разговор', archivedNotice: 'Этот разговор в архиве.', sessionArchived: 'Эта сессия в архиве.', postDenied: 'Вы больше не можете публиковать в этой сессии.', invalidMention: 'Упомянутый участник больше не может читать эту сессию.', invalidContent: 'Это сообщение нельзя отправить в таком виде. Возможно, оно пустое или слишком длинное.', idempotencyConflict: 'С этим идентификатором уже отправлено другое сообщение.', sendFailed: 'Не удалось отправить это сообщение.', dismiss: 'Закрыть', loadOlder: 'Загрузить более ранние сообщения', loadMore: 'Загрузить ещё разговоры' } } };
 
 return { sessionCollaborationTranslations };
@@ -9597,6 +9681,7 @@ const ru: typeof en = {
         reconciling: 'Проверяем, начался ли этот разговор с агентом…',
         unresolved: 'Не удалось подтвердить, начался ли этот разговор с агентом. Повторный запуск может создать второй разговор.',
         targetChanged: 'Машина этой сессии сменилась до того, как разговор успел начаться. Ничего не запущено.',
+        submittedUnknown: 'Не удалось подтвердить запуск. Проверьте запуски. Если процесс сессии больше не активен, возобновите сессию.',
         secretReferenceOverlayUpdateRequired: 'Для общих секретов в разговоре с агентом нужна обновлённая машина. Ничего не запущено.',
     },
     status: {
@@ -9687,6 +9772,66 @@ const sessionFollowTranslations: Pick<Record<
             "important": "Важные обновления",
             "all_messages": "Каждое новое сообщение"
         },
+        "policyEditor": {
+            "presetLabel": "Сколько вы узнаёте",
+            "presetDescription": {
+                "everything": "Прерывает вас при любом событии. Сообщения тихо приходят во входящие.",
+                "important": "Прерывает вас, только когда вы нужны, при сбое или зависании. Остальное тихо ждёт во входящих.",
+                "quiet": "Ничто вас не прерывает. Новости тихо ждут во входящих.",
+                "custom": "Выберите, что вас прерывает, что приходит тихо и что не включено."
+            },
+            "customTitle": "Каждое событие",
+            "group": {
+                "interrupt": "Прерывает вас",
+                "quiet": "Приходит тихо",
+                "off": "Не включено"
+            },
+            "channel": {
+                "interrupt": "Push",
+                "quiet": "Входящие"
+            },
+            "delivery": {
+                "off": "Выкл.",
+                "quiet": "Входящие",
+                "interrupt": "Push"
+            },
+            "session": {
+                "presetLabel": "Что до неё доходит",
+                "presetDescription": {
+                    "everything": "Будит её при любом событии. Сообщения ждут её следующего хода.",
+                    "important": "Будит её, только когда она нужна, что-то сломалось или зависло. Остальное ждёт её следующего хода.",
+                    "quiet": "Ничто её не будит. Обновления ждут её следующего хода.",
+                    "custom": "Выберите, что будит её, что ждёт её следующего хода и что не включено."
+                },
+                "group": { "interrupt": "Будит её", "quiet": "Ждёт её следующего хода" },
+                "channel": { "interrupt": "Будить", "quiet": "Следующий ход" },
+                "delivery": { "interrupt": "Будить", "quiet": "Следующий ход" }
+            },
+            "events": {
+                "needsYou": "Нужны вы",
+                "decision": "Нужно решение",
+                "approval": "Нужно подтверждение",
+                "blocked": "Заблокировано",
+                "finished": "Завершено",
+                "failedOrStopped": "Сбой или остановка",
+                "stalled": "Зависло",
+                "updatePosted": "Опубликована новость",
+                "personWrote": "Кто-то написал",
+                "goalChanged": "Цель изменена",
+                "message": "Каждое сообщение"
+            },
+            "eventDescriptions": {
+                "needsYou": "Решение, подтверждение или блокировка",
+                "failedOrStopped": "Также когда запуск завершился молча",
+                "personWrote": "Уведомление и ссылка, без их слов"
+            }
+        },
+        "policy": {
+            "everything": "Всё",
+            "important": "Важное",
+            "quiet": "Тихо",
+            "custom": "Своя настройка"
+        },
         "voice": {
             "title": "Включить в Voice",
             "subtitle": "Voice сможет учитывать контекст этой сессии.",
@@ -9696,6 +9841,7 @@ const sessionFollowTranslations: Pick<Record<
             "waitingEncrypted": "Разблокируйте сессию, чтобы включить её в Voice.",
             "initialSnapshotPending": "На следующем ходу Voice включить краткое описание текущего состояния."
         },
+        "once": { "title": "Уведомить один раз", "subtitle": "В дополнение к вашему уровню, затем отключится.", "off": "Выкл.", "turn": "Когда закончится этот ход", "attention": "Когда снова понадобитесь" },
         "footer": "Подписка не меняет права доступа к этой сессии.",
         "settingsLink": "Настройки уведомлений…",
         "assignedExplanation": "Вы подписаны, потому что сессия назначена вам",
@@ -9706,7 +9852,7 @@ const sessionFollowTranslations: Pick<Record<
         "offline": "Вы не в сети. Подключитесь, чтобы изменить подписку.",
         "archived": "Подписка приостановлена, пока сессия в архиве.",
         "sources": {
-            "title": "Обновления сессий",
+            "title": "Подписки",
             "waitingRuntime": "Ожидание повторного подключения целевой сессии.",
             "unsupported": "Обновите или переподключите CLI на целевой машине, чтобы получать обновления.",
             "pausedArchived": "Обновления приостановлены, пока исходная или целевая сессия находится в архиве.",
@@ -9720,6 +9866,7 @@ const sessionFollowTranslations: Pick<Record<
             "stop": "Остановить обновления",
             "stopForSource": ({ title }) => `Остановить обновления из «${title}»`,
             "includeNextTurn": "Добавить обновления в следующий ход целевой сессии.",
+            "empty": "Сессии, за которыми она следит, появятся здесь",
             "sourceKeyPreparing": "Подготовка зашифрованного доступа…",
             "sourceKeyWaiting": "Ожидание зашифрованного доступа.",
             "sourceKeyUnavailable": "Этот компьютер не может предоставить зашифрованный доступ.",
@@ -10090,6 +10237,8 @@ const sessionListFilterTranslations = { ru: translated({
         filtersHomes: 'Home', filtersSharedWith: 'Общий доступ', filtersOutsideTeams: 'Личные и прямые',
         filtersTags: 'Теги', filtersSource: 'Источник', filtersSourceAll: 'Все',
         filtersSourceDirect: 'Внешние',
+        filtersOnlyCoordinators: 'Только координаторы', filtersOnlyCoordinatorsDescription: 'Сессии, которые управляют другими или следят по правилу',
+        filtersCoordinatorsChip: 'Координаторы', filtersCoordinatorsChipClear: 'Перестать показывать только координаторов',
         filtersNoOptions: 'Нет доступных фильтров', filtersClear: 'Сбросить фильтры', filtersDone: 'Готово', filtersArchived: 'Архив',
         filtersNeedsMeOnly: 'Только ждущие меня', filtersNeedsMeOnlyDescription: 'Сессии, которые ждут вас', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} ещё`,
@@ -10139,7 +10288,7 @@ const sessionPageTranslations = { ru: translated({
                 continueDescription: 'Начните новую работу с того места, где сейчас эта сессия.',
                 organizeTitle: 'Упорядочить',
                 organizeDescription: 'Где эта сессия показывается в ваших списках.',
-                activityDescription: 'Что делает агент и узнаете ли вы об этом.',
+                activityDescription: 'Что агент делает сейчас.',
                 detailsTitle: 'Подробности',
                 detailsDescription: 'Идентификаторы и история для поддержки и скриптов.',
                 environmentTitle: 'Окружение',
@@ -10292,6 +10441,10 @@ const ru: typeof en = {
             finished: "завершено",
         },
         peek: "Быстрый просмотр",
+        mute: 'Заглушить',
+        muted: 'Заглушено здесь',
+        unmute: 'Отменить',
+        muteFailed: 'Не удалось заглушить',
         truncated: "Результат сокращён.",
         wokenBy: ({ count }) => (count === 1 ? 'Разбужено обновлением' : `Разбужено обновлениями: ${count}`),
         notFromYou: 'это не ваше сообщение',
@@ -10318,9 +10471,6 @@ const ru: typeof en = {
     },
     actions: {
         showInTranscript: 'Показать в переписке',
-        makeOrchestrator: 'Сделать оркестратором',
-        makeOrchestratorSubtitle: 'Эта сессия планирует, делегирует и отчитывается',
-        makeOrchestratorFailed: "Не удалось сделать сессию оркестратором",
     },
     putUnder: {
         title: "Подчинить…",
@@ -10360,6 +10510,8 @@ const ru: typeof en = {
         a11y: ({ summary }) => `Работа: ${summary}`,
     },
     leadArchived: ({ count }) => `Эта сессия в архиве · в работе: ${count}`,
+    managedBy: 'Управляет',
+    plan: 'План',
     runsStale: 'Запуски рабочих процессов могут быть неактуальны',
     list: {
         level: ({ level }) => `Уровень ${level}`,
@@ -10384,7 +10536,7 @@ const ru: typeof en = {
         orAskFor: "Или попросите",
     },
     peek: {
-        reportsTo: ({ lead }) => `Отчитывается перед ${lead}`,
+        manager: ({ lead }) => `Отчитывается перед ${lead}`,
         repliesGoHere: 'Ответы уходят в эту сессию',
     },
 };
@@ -10411,6 +10563,7 @@ const ru = {
     directOffDescription: 'Всё идёт через Happier. Ничто не подключается к вашим машинам напрямую; в одной сети это немного медленнее.',
     serverDenied: 'Сервер вашего Home направляет всё через Happier, поэтому здесь нечего выбирать.',
     machineTitle: ({ machine }: MachineParams) => `Подключение к ${machine}`,
+    machineSettingTitle: 'Подключение к этому компьютеру',
     machineOptionDefault: 'По умолчанию',
     machineOptionDirect: 'Напрямую',
     machineOptionRelay: 'Через Happier',
@@ -11098,6 +11251,7 @@ const surfaceStateTranslations = { ru: {
         paneFailedReason: 'При отрисовке что-то пошло не так. Ваша сессия не затронута.',
         opening: ({ name }) => `Открываем ${name}`,
         couldNotOpen: ({ name }) => `Не удалось открыть ${name}`,
+        couldNotUpdate: 'Не удалось обновить; показана последняя версия',
     } } as const satisfies Pick<Record<string, SurfaceStateTranslations>, "ru">;
 
 return { surfaceStateTranslations };
@@ -12752,6 +12906,7 @@ const voiceRealtimeProviderSetupTranslations = { ru: defineVoiceRealtimeProvider
     },
     catalog: {
       credentialRequired: 'Добавьте ключ API, чтобы загрузить голоса',
+      loadFailed: 'Не удалось загрузить голоса',
       retry: 'Не удалось загрузить голоса — повторить',
       empty: 'Для этого аккаунта нет доступных голосов',
       preview: ({ voice }) => `Прослушать ${voice}`,
@@ -13353,6 +13508,7 @@ const widgetAddTranslations = { ru: {
         areaApprovalPending: 'Ожидает одобрения',
         refusals: {
             areaUnavailable: "Виджеты сейчас здесь недоступны. Попробуйте ещё раз через минуту.",
+            writeUnconfirmed: "Ваш Home не подтвердил это. Проверьте область и повторите попытку.",
             inputsInvalid: "Некоторые значения недопустимы. Проверьте их и попробуйте ещё раз.",
             typeUnavailable: "Этот виджет больше недоступен. Выберите другой.",
             sizeUnsupported: "Этот размер недоступен для виджета. Выберите другой размер.",
@@ -13391,7 +13547,6 @@ const widgetDefinitionTranslations = { ru: {
         edited: ({ time }) => `изменено ${time}`,
         readsOnly: "Только чтение",
         runsOn: ({ machine }) => `работает на ${machine}`,
-            writeUnconfirmed: "Ваш Home не подтвердил это. Проверьте область и повторите попытку.",
         withYourConnection: "с вашим собственным подключением",
         readsResource: ({ read, plugin }) => `${read} из ${plugin}`,
         cannotRunAnythingElse: "Виджет не может запускать ничего другого.",
@@ -13437,7 +13592,6 @@ const widgetDefinitionTranslations = { ru: {
         becomesViewerInput: "Станет входным параметром: каждое место использует ваше подключение",
         becomesContextInput: "Станет входным параметром: каждое место выбирает своё",
         alsoAddTo: "Также добавить в",
-        alsoAddToNamed: ({ place }) => `Также добавить в ${place}`,
         anotherPlace: "Другое место…",
         snapshotMenu: "Опубликовать снимок на этой доске…",
         snapshotMenuSubtitle: "Все здесь увидят ваши текущие цифры",
@@ -13696,8 +13850,12 @@ const en = Shared_workflowBuiltinTranslations.en;
 
 const ru: WorkflowBuiltinTranslations = {
     keepGoing: { title: 'Продолжать до готовности', description: 'Продолжает, пока цель не достигнута' },
-    reviewAndConverge: { title: 'Проверить и свести', description: 'Проверять, пока рецензенты не согласятся', apply: 'Применить', verifyAndFix: 'Проверить и исправить', verifyOnly: 'Только проверить', rounds: 'Раунды до остановки' },
-    planWithAPanel: { title: 'Спланировать с панелью', description: 'Несколько агентов планируют параллельно, затем план ждёт вашей проверки.', inputs: { request: 'Запрос', requestPlaceholder: 'Что должна спланировать панель?', engines: 'Планировщики' } },
+    reviewAndConverge: { title: 'Проверить и свести', description: 'Проверять, пока рецензенты не согласятся', apply: 'Применить', verifyAndFix: 'Проверить и исправить', verifyOnly: 'Только проверить', rounds: 'Раунды до остановки', inputs: { engines: "Рецензенты", reviewSession: "Сессия для проверки" } },
+    planWithAPanel: { title: "Панель", description: 'Несколько агентов планируют параллельно, затем план ждёт вашей проверки.', inputs: { request: 'Запрос', requestPlaceholder: 'Что должна спланировать панель?', engines: 'Планировщики' } },
+    freshOpinions: { title: 'Независимые мнения', description: 'Независимые ответы на один вопрос с необязательным обобщением.' },
+    answerAndReview: { title: 'Ответ + рецензия', description: 'Один агент отвечает, а другой рецензирует именно этот ответ.' },
+    debate: { title: 'Дебаты', description: 'Сравните мнения за выбранное число раундов с обобщением после каждого раунда.' },
+    patternInputs: { question: 'Вопрос', participants: 'Участники', synthesis: 'Обобщить ответы', synthesizer: 'Кто обобщает', answerer: 'Кто отвечает', reviewer: 'Кто рецензирует', rounds: 'Раунды', digestAuthor: 'Кто обобщает каждый раунд', previousRoundContext: 'Предыдущий раунд' },
     openAPullRequest: { title: 'Открыть pull request', description: 'Запрашивает второе мнение, затем открывает pull request. Если второе мнение не согласно, ждёт вас.', inputs: { base: 'Базовая ветка', title: 'Заголовок pull request', body: 'Описание', question: 'Вопрос для второго мнения' } },
 };
 
@@ -14039,7 +14197,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ru"> = { ru: { ...workflowRunRoleTranslations.ru, ...workflowRunCompositionTranslations.ru, shortcutStarts: 'запускает', neededNamed: ({ name }) => `Входные данные · нужно: ${name}`, addToStart: ({ name }) => `Добавьте ${name}, чтобы запустить`, workflow: 'Рабочий процесс', inputs: 'Входные данные', start: 'Запустить', starting: 'Запуск…', stillStarting: 'Запуск ещё продолжается…', needed: ({ count }) => `Входные данные · не хватает ${count}`, required: 'Нужно для запуска', preview: 'Что будет сделано', unsaved: 'Включает несохранённые изменения', remove: 'Вернуться к обычной сессии', search: 'Найти рабочий процесс', builtin: 'Встроенные', library: 'Ваша библиотека', noInputs: 'Входные данные не нужны', asksFor: ({ names }) => `Запрашивает: ${names}`, optional: 'Необязательно — оставлено пустым', defaultValue: ({ value }) => `По умолчанию: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ru"> = { ru: { ...workflowRunRoleTranslations.ru, ...workflowRunCompositionTranslations.ru, runPattern: 'Запустить…', runPatternTitle: 'Запустить шаблон', anotherRound: 'Ещё раунд', participantTitle: 'Выберите участников', participantSearch: 'Найти сессию или модель', participantSession: 'Ваша сессия · отвечает со своими настройками', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Новая сессия ${agent} на ${machine}`, participantDone: 'Готово', shortcutStarts: 'запускает', neededNamed: ({ name }) => `Входные данные · нужно: ${name}`, addToStart: ({ name }) => `Добавьте ${name}, чтобы запустить`, workflow: 'Рабочий процесс', inputs: 'Входные данные', start: 'Запустить', starting: 'Запуск…', stillStarting: 'Запуск ещё продолжается…', needed: ({ count }) => `Входные данные · не хватает ${count}`, required: 'Нужно для запуска', preview: 'Что будет сделано', unsaved: 'Включает несохранённые изменения', remove: 'Вернуться к обычной сессии', search: 'Найти рабочий процесс', builtin: 'Встроенные', library: 'Ваша библиотека', noInputs: 'Входные данные не нужны', asksFor: ({ names }) => `Запрашивает: ${names}`, optional: 'Необязательно — оставлено пустым', defaultValue: ({ value }) => `По умолчанию: ${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -14632,7 +14790,7 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
         typeString: 'Текст',
         typeNumber: 'Число',
         typeBoolean: 'Да или нет',
-        typeJson: 'Структурированные данные',
+        typeJson: 'Структурированные данные', typeParticipant: 'Участник', typeParticipants: 'Участники',
         runSheetTitle: 'Запустить этот рабочий процесс',
         runSheetBody: 'Укажите значения, которые объявляет этот рабочий процесс, и запустите его.',
         missingRequired: 'Это значение обязательно.',
@@ -14832,8 +14990,11 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
             machine: 'Компьютер',
             machineId: 'ID компьютера',
             revision: 'Версия',
+            failureCode: 'Код ошибки',
+            failureCause: 'Причина',
         },
         usageUnavailable: 'Данные о расходе недоступны',
+        usageNotReported: 'Не сообщено',
         startedAt: ({ time }: { time: string }) => `Запущен ${time}`,
         timeRange: ({ start, end }) => `${start} – ${end}`,
         openConversation: 'Открыть беседу',
@@ -14848,6 +15009,7 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
         attentionWaitSentence: ({ step }: { step: string }) => `${step} ждёт вас.`,
         attentionParkedSentence: ({ step }: { step: string }) => `${step}.`,
         failedStepSentence: ({ step }: { step: string }) => `${step}: ошибка. Завершённая работа сохранена.`,
+        stepNumber: ({ ordinal }: { ordinal: string }) => `Шаг ${ordinal}`,
         failedSentence: 'Завершённая работа сохранена.',
         consequenceLanes: ({ lanes }: { lanes: readonly string[] }) => `${lanes.join(' и ')} ${lanes.length === 1 ? 'продолжает' : 'продолжают'} работу.`,
         consequenceJoin: ({ step, count }: { step: string; count: number }) => `${step} начнётся после завершения всех веток (${count}).`,
@@ -14859,6 +15021,7 @@ const ru = translated(workflowValueReferenceTranslations.ru, {
             count === 1 ? 'Единственный шаг завершён.' : `Все шаги (${count}) завершены.`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `Завершено шагов: ${completed} из ${total}.`,
         notAnswered: 'Без ответа',
+        waitContinued: 'Продолжено',
         answeredBy: ({ name }) => `Ответ от ${name}`,
         answeredByYou: 'Ваш ответ',
         answeredByPerson: 'Ответ от другого человека',

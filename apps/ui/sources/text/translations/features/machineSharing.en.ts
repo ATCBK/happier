@@ -20,6 +20,7 @@ export const machineSharing = createMachineSharingTranslations({
     plain: 'Its data is not end-to-end encrypted, so the Home can read it.', saved: 'Sharing updated', yourAccess: 'Your access',
     ownHistory: "Sessions you start here stay yours in Happier, even after your access ends.", through: "Through {audience}",
     leave: 'Leave this share', inherited: 'You still have access through {audience}. Ask its manager to change your access.', unavailable: 'Access to {machine} could not be checked.',
+    saveFailed: 'Couldn’t save “{draft}” for {person}. They still have “{current}”.',
     effectiveLoss: 'People losing their last access will have their running sessions, scripts and runs, queued and preparing work, terminals and services stopped. Their Happier history stays theirs; already obtained data cannot be retracted.',
     overlap: 'Other valid access remains. Their work will keep running.', custodianProtected: 'The original machine owner cannot be removed or replaced here.',
 });

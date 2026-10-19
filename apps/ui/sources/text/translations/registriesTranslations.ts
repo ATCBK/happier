@@ -76,7 +76,8 @@ export type RegistriesTranslation = Readonly<{
     cancel: string;
     organisation: string;
     unknownFormat: string;
-    needsToken: string;
+    needsToken: (params: Readonly<{ host: string }>) => string;
+    tokenRejected: string;
     unreachable: string;
     alreadyAdded: string;
     failed: string;
@@ -176,8 +177,9 @@ const en: RegistriesTranslation = {
     organisation: 'This is an organisation. Add one of its repositories.',
     unknownFormat:
       'This link isn’t a Git repository, a Claude marketplace, an MCP Registry or an ACP Registry.',
-    needsToken:
-      'This registry asked for a token. Add it from the CLI for now: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `This registry asked for a token. It’s sent only to ${host}.`,
+    tokenRejected: 'That token was rejected. Choose another.',
     unreachable: 'Couldn’t reach this link. Check it and try again.',
     alreadyAdded: 'Already in your registries',
     failed: 'Couldn’t add this registry. Try again.',
@@ -523,8 +525,9 @@ const ca: RegistriesTranslation = {
     organisation: 'Això és una organització. Afegeix-ne un dels repositoris.',
     unknownFormat:
       'Aquest enllaç no és un repositori Git, un marketplace de Claude, un registre MCP ni un registre ACP.',
-    needsToken:
-      'Aquest registre ha demanat un token. De moment, afegeix-lo des de la CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Aquest registre ha demanat un token. Només s’enviarà a ${host}.`,
+    tokenRejected: 'S’ha rebutjat aquest token. Tria’n un altre.',
     unreachable: 'No s’ha pogut contactar amb aquest enllaç. Comprova’l i torna-ho a provar.',
     alreadyAdded: 'Ja és als teus registres',
     failed: 'No s’ha pogut afegir aquest registre. Torna-ho a provar.',
@@ -735,8 +738,9 @@ const de: RegistriesTranslation = {
       'Das ist eine Organisation. Füge eines ihrer Repositories hinzu.',
     unknownFormat:
       'Dieser Link ist weder ein Git-Repository noch ein Claude-Marketplace, eine MCP Registry oder eine ACP Registry.',
-    needsToken:
-      'Diese Registry verlangt ein Token. Füge es vorerst über die CLI hinzu: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Diese Registry verlangt ein Token. Es wird nur an ${host} gesendet.`,
+    tokenRejected: 'Dieses Token wurde abgelehnt. Wähle ein anderes.',
     unreachable:
       'Dieser Link ist nicht erreichbar. Prüfe ihn und versuche es erneut.',
     alreadyAdded: 'Schon in deinen Registries',
@@ -952,8 +956,9 @@ const es: RegistriesTranslation = {
     organisation: 'Esto es una organización. Añade uno de sus repositorios.',
     unknownFormat:
       'Este enlace no es un repositorio Git, un marketplace de Claude, un registro MCP ni un registro ACP.',
-    needsToken:
-      'Este registro ha pedido un token. Por ahora, añádelo desde la CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Este registro ha pedido un token. Solo se envía a ${host}.`,
+    tokenRejected: 'Se ha rechazado ese token. Elige otro.',
     unreachable: 'No se pudo acceder a este enlace. Revísalo y vuelve a intentarlo.',
     alreadyAdded: 'Ya está en tus registros',
     failed: 'No se pudo añadir este registro. Vuelve a intentarlo.',
@@ -1167,8 +1172,9 @@ const fr: RegistriesTranslation = {
       'Il s’agit d’une organisation. Ajoutez l’un de ses dépôts.',
     unknownFormat:
       'Ce lien n’est ni un dépôt Git, ni un marketplace Claude, ni un registre MCP, ni un registre ACP.',
-    needsToken:
-      'Ce registre demande un jeton. Pour l’instant, ajoutez-le depuis la CLI : happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Ce registre demande un jeton. Il n’est envoyé qu’à ${host}.`,
+    tokenRejected: 'Ce jeton a été refusé. Choisissez-en un autre.',
     unreachable: 'Impossible de joindre ce lien. Vérifiez-le et réessayez.',
     alreadyAdded: 'Déjà dans vos registres',
     failed: 'Impossible d’ajouter ce registre. Réessayez.',
@@ -1378,8 +1384,9 @@ const it: RegistriesTranslation = {
     organisation: 'Questa è un’organizzazione. Aggiungi uno dei suoi repository.',
     unknownFormat:
       'Questo link non è un repository Git, un marketplace di Claude, un registro MCP né un registro ACP.',
-    needsToken:
-      'Questo registro ha richiesto un token. Per ora aggiungilo dalla CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Questo registro ha richiesto un token. Viene inviato solo a ${host}.`,
+    tokenRejected: 'Token rifiutato. Scegline un altro.',
     unreachable: 'Impossibile raggiungere questo link. Controllalo e riprova.',
     alreadyAdded: 'Già nei tuoi registri',
     failed: 'Impossibile aggiungere questo registro. Riprova.',
@@ -1589,8 +1596,9 @@ const ja: RegistriesTranslation = {
     organisation: 'これは組織です。その中のリポジトリを追加してください。',
     unknownFormat:
       'このリンクは、Git リポジトリ、Claude マーケットプレイス、MCP レジストリ、ACP レジストリのいずれでもありません。',
-    needsToken:
-      'このレジストリにはトークンが必要です。当面は CLI から追加してください: happier registries add <link> --token-secret <name>',
+    needsToken: ({ host }) =>
+      `このレジストリにはトークンが必要です。${host} にのみ送信されます。`,
+    tokenRejected: 'このトークンは拒否されました。別のトークンを選んでください。',
     unreachable:
       'このリンクに接続できませんでした。確認してからもう一度お試しください。',
     alreadyAdded: 'すでにレジストリにあります',
@@ -1825,8 +1833,9 @@ const pl: RegistriesTranslation = {
     organisation: 'To organizacja. Dodaj jedno z jej repozytoriów.',
     unknownFormat:
       'Ten link nie jest repozytorium Git, marketplace’em Claude, rejestrem MCP ani rejestrem ACP.',
-    needsToken:
-      'Ten rejestr wymaga tokenu. Na razie dodaj go z poziomu CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Ten rejestr wymaga tokenu. Zostanie wysłany tylko do ${host}.`,
+    tokenRejected: 'Ten token został odrzucony. Wybierz inny.',
     unreachable:
       'Nie można połączyć się z tym linkiem. Sprawdź go i spróbuj ponownie.',
     alreadyAdded: 'Już w Twoich rejestrach',
@@ -2040,8 +2049,9 @@ const pt: RegistriesTranslation = {
     organisation: 'Isto é uma organização. Adicione um dos repositórios dela.',
     unknownFormat:
       'Este link não é um repositório Git, um marketplace do Claude, um registro MCP nem um registro ACP.',
-    needsToken:
-      'Este registro pediu um token. Por enquanto, adicione-o pela CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Este registro pediu um token. Ele é enviado só para ${host}.`,
+    tokenRejected: 'Esse token foi recusado. Escolha outro.',
     unreachable: 'Não foi possível acessar este link. Confira-o e tente de novo.',
     alreadyAdded: 'Já está nos seus registros',
     failed: 'Não foi possível adicionar este registro. Tente de novo.',
@@ -2279,8 +2289,9 @@ const ru: RegistriesTranslation = {
     organisation: 'Это организация. Добавьте один из её репозиториев.',
     unknownFormat:
       'Эта ссылка не ведёт ни на Git-репозиторий, ни на маркетплейс Claude, ни на реестр MCP, ни на реестр ACP.',
-    needsToken:
-      'Этому реестру нужен токен. Пока добавьте его через CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Этому реестру нужен токен. Он отправляется только на ${host}.`,
+    tokenRejected: 'Токен отклонён. Выберите другой.',
     unreachable:
       'Не удалось открыть ссылку. Проверьте её и повторите попытку.',
     alreadyAdded: 'Уже в ваших реестрах',
@@ -2504,8 +2515,9 @@ const zhHans: RegistriesTranslation = {
     organisation: '这是一个组织。请添加它的某个仓库。',
     unknownFormat:
       '此链接不是 Git 仓库、Claude 插件市场、MCP 注册表或 ACP 注册表。',
-    needsToken:
-      '此注册表需要令牌。目前请通过 CLI 添加：happier registries add <link> --token-secret <name>',
+    needsToken: ({ host }) =>
+      `此注册表需要令牌。仅会发送到 ${host}。`,
+    tokenRejected: '该令牌被拒绝。请选择另一个。',
     unreachable: '无法访问此链接。请检查后重试。',
     alreadyAdded: '已在你的注册表中',
     failed: '无法添加此注册表。请重试。',
@@ -2705,8 +2717,9 @@ const zhHant: RegistriesTranslation = {
     organisation: '這是一個組織。請新增它的其中一個儲存庫。',
     unknownFormat:
       '此連結不是 Git 儲存庫、Claude 外掛程式市集、MCP 註冊表或 ACP 註冊表。',
-    needsToken:
-      '此註冊表需要權杖。目前請透過 CLI 新增：happier registries add <link> --token-secret <name>',
+    needsToken: ({ host }) =>
+      `此註冊表需要權杖。僅會傳送到 ${host}。`,
+    tokenRejected: '該權杖被拒絕。請選擇另一個。',
     unreachable: '無法連線到此連結。請檢查後重試。',
     alreadyAdded: '已在你的註冊表中',
     failed: '無法新增此註冊表。請重試。',

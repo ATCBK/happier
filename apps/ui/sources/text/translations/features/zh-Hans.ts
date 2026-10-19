@@ -1,4 +1,5 @@
 // Locale-owned feature copy; each domain retains its own initialization scope.
+import { discussionQuoteCopy } from '../discussionQuoteTranslations.shared';
 import * as EnglishFeatures from './en';
 import * as Shared_accountDisplayTranslations from '../accountDisplayTranslations.shared';
 import * as Shared_accountEncryptionRecoveryTranslations from '../accountEncryptionRecoveryTranslations.shared';
@@ -414,7 +415,7 @@ const actionFamilyTranslations = { 'zh-Hans': translated({
             session_read_state: '已读状态',
             session_attention: '待关注',
             session_board: '会话看板',
-            session_discussion: '讨论',
+            discussion: '讨论',
             session_permissions: '会话权限',
             external_sessions: '外部会话',
             voice_controls: '语音控制',
@@ -1008,6 +1009,33 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
         facts: {
             edited: ({ age }) => `${age}编辑`,
         },
+        passage: {
+            comment: '评论',
+        },
+        proposal: {
+            title: '建议的修改',
+            basedOn: ({ n }) => `基于版本 ${n}`,
+            current: ({ n }) => `版本 ${n} · 当前`,
+            before: '修改前',
+            after: '修改后',
+            accept: '接受',
+            decline: '拒绝',
+            accepting: '正在接受… 正在确认文档未变更',
+            declining: '正在拒绝…',
+            movedOn: '此建议之后文档已变更。未应用任何内容。',
+            compare: '比较',
+            cantEdit: '只有能编辑此文档的人才能接受。',
+            failed: '无法保存你的决定。请重试。',
+            acceptedByYou: ({ n }) => `你接受了修改 · 现为版本 ${n}`,
+            acceptedBy: ({ who, n }) => `${who} 接受了修改 · 现为版本 ${n}`,
+            declinedByYou: '你拒绝了建议 · 文档未变更',
+            declinedBy: ({ who }) => `${who} 拒绝了建议 · 文档未变更`,
+            undo: '撤销',
+            undone: ({ n }) => `已撤销 · 现为版本 ${n}`,
+            undoConflict: '此修改之后文档已变更，无法撤销。打开历史记录选择一个版本。',
+            openDocument: '打开文档',
+            someone: '某人',
+        },
     } } satisfies Pick<Record<'en' | 'fr' | 'de' | 'es' | 'it' | 'pt' | 'ca' | 'ru' | 'pl' | 'ja' | 'zh-Hans' | 'zh-Hant', ArtifactsBrowserTranslations>, "zh-Hans">;
 
 return { artifactsBrowserTranslations };
@@ -1179,6 +1207,7 @@ const zhHans: BoardsTranslations = {
     kinds: {
         session: '会话',
         workflow_run: '工作流运行',
+        task: '任务',
         workflow: '工作流',
         machine: '设备',
     },
@@ -1658,6 +1687,11 @@ const computerUseTranslations = { 'zh-Hans': {
             denied: '未允许',
             opened: ({ machine }) => `已在 ${machine} 上打开。请在那里允许 Happier，然后再检查一次。`,
             openFailed: '无法在那里打开系统设置。请在那台电脑上打开。',
+            capture: '屏幕录制',
+            captureFor: '用于查看窗口',
+            inputFor: '用于点击和输入',
+            granted: '已允许',
+            unknown: '未检查',
             checkAgain: '再次检查',
             captureTitle: ({ machine }) => `请在 ${machine} 上允许屏幕录制，以观看它的窗口或显示器。`,
             inputTitle: ({ machine }) => `请在 ${machine} 上允许辅助功能，以使用它的鼠标和键盘。`,
@@ -1673,6 +1707,8 @@ const computerUseTranslations = { 'zh-Hans': {
             onMachine: ({ machine }) => `在 ${machine} 上`,
             connectingTitle: ({ target }) => `正在连接 ${target}`,
             unavailableTitle: '现在无法显示这个窗口',
+            stopFailed: '无法停止共享',
+            stopping: '正在停止共享…',
             unavailableBody: ({ agent }) => `你仍然可以在这里停止 ${agent}。`,
             endedTitle: ({ target }) => `${target} 已关闭`,
             endedBody: ({ agent }) => `${agent} 不能再查看或使用它。请选择其他窗口以继续。`,
@@ -1689,6 +1725,7 @@ const computerUseTranslations = { 'zh-Hans': {
             expandView: '展开视图',
             restoreView: '还原视图',
             dockView: '停靠视图',
+            floatView: '浮动视图',
             closeView: '关闭视图',
             moveView: '移动视图',
             resizeView: '调整视图大小',
@@ -1705,7 +1742,10 @@ const computerUseTranslations = { 'zh-Hans': {
             agentWorkingOn: ({ agent, machine }) => `${agent} 正在 ${machine} 上工作`,
             watchingSourceA11y: ({ source }) => `正在观看${source}`,
             controlNotAllowed: '不允许控制鼠标和键盘',
-            seeOnly: ({ agent }) => `${agent} 只能查看，不能点击或输入`,
+            seeOnly: '不能点击或输入',
+            unconfirmedWarning: ({ agent, target, machine }) => `在 ${machine} 确认已释放 ${agent} 的鼠标和键盘之前，任何人都无法从 Happier 使用 ${target}。`,
+            unconfirmedWarningCompact: ({ agent, machine }) => `已锁定，直到 ${machine} 确认已释放 ${agent} 的鼠标和键盘。`,
+            unconfirmedStuckHint: ({ machine }) => `如果看起来卡住了，请直接在 ${machine} 上的窗口中点击一次。`,
             driverMissing: '计算机驱动程序不可用',
             driverInvalid: '计算机驱动程序需要修复',
             driverRepairBody: '在此机器上重新安装原生驱动程序，然后检查当前权限和来源。',
@@ -1716,6 +1756,7 @@ const computerUseTranslations = { 'zh-Hans': {
             offlineTitle: ({ machine }) => `${machine} 没有响应`,
             offlineBody: '重新连接后即可观看。观看不会启动它。',
             openingTitle: ({ target, machine }) => `正在 ${machine} 上打开${target}…`,
+            openingBody: '第一帧画面到达后会立即显示在这里。',
         },
         strip: {
             using: ({ target }) => `正在使用 ${target}`,
@@ -2988,7 +3029,7 @@ const effectiveTranslations = { "zh-Hans": {
         "shortcutHint": ({ modifier }: { modifier: string }) => `${modifier}-点击 · ${modifier}⇧L 切换浅色和深色`
     } } as const;
 
-const glassAppearanceTranslations = { 'zh-Hans': { sameAsHome: "与首页相同", ...Shared_glassAppearanceTranslations.atmosphereTranslations['zh-Hans'], iosReduceTransparencyPath: "设置 › 辅助功能 › 显示与文字大小 › 降低透明度", title: '玻璃', material: '材质', solid: '不透明', auto: '自动', everywhere: '全局', custom: '自定义', blur: '模糊', tint: '着色', tintSubtle: '轻微', tintMedium: '中等', tintStrong: '强', off: '关闭', opacity: '不透明度', customize: '自定义', sidebar: '侧边栏', content: '内容', appearance: '外观', moreSettings: '更多外观设置…', customizeLink: '自定义…', toolbarTitle: '外观按钮', toolbarDescription: '在工具栏中显示外观。按住修饰键点击可切换浅色和深色。', reduceTransparency: '已开启降低透明度，因此显示不透明材质', osSettings: '打开辅助功能设置', themeCommand: '切换浅色和深色', autoDescription: "适应当前设备：支持的桌面窗口使用分层玻璃，手机仅在浮动界面使用玻璃。", osSettingsUnavailable: "无法打开辅助功能设置。请在设备设置中打开。", ...effectiveTranslations["zh-Hans"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "zh-Hans">;
+const glassAppearanceTranslations = { 'zh-Hans': { sameAsHome: "与首页相同", ...Shared_glassAppearanceTranslations.atmosphereTranslations['zh-Hans'], iosReduceTransparencyPath: "设置 › 辅助功能 › 显示与文字大小 › 降低透明度", title: '玻璃', material: '材质', solid: '不透明', auto: '自动', everywhere: '全局', custom: '自定义', blur: '模糊', tint: '着色', off: '关闭', opacity: '不透明度', customize: '自定义', sidebar: '侧边栏', content: '内容', appearance: '外观', moreSettings: '更多外观设置…', customizeLink: '自定义…', toolbarTitle: '外观按钮', toolbarDescription: '在工具栏中显示外观。按住修饰键点击可切换浅色和深色。', reduceTransparency: '已开启降低透明度，因此显示不透明材质', osSettings: '打开辅助功能设置', themeCommand: '切换浅色和深色', autoDescription: "适应当前设备：支持的桌面窗口使用分层玻璃，手机仅在浮动界面使用玻璃。", osSettingsUnavailable: "无法打开辅助功能设置。请在设备设置中打开。", ...effectiveTranslations["zh-Hans"] } } satisfies Pick<Record<string, Record<keyof typeof englishTranslations, string | ((params: { modifier: string }) => string)>>, "zh-Hans">;
 
 return { effectiveTranslations, glassAppearanceTranslations };
 })();
@@ -5272,15 +5313,19 @@ const Domain_inboxWorkTranslations = (() => {
 const en = Shared_inboxWorkTranslations.en;
 
 const zhHans: typeof en = {
-    pageDescription: '所有等你处理的事项，按所属工作分组。',
-    tabs: { a11y: '收件箱视图', needsYou: '需要你', updates: '动态' },
+    pageDescription: "需要你处理的、发生变化的，以及提及你的人。",
+    needsYouSummary: ({ approvals, decisions, blocked }: { approvals: number; decisions: number; blocked: number }) => {
+        const parts = [
+            approvals > 0 ? `${approvals} 个审批` : null,
+            decisions > 0 ? `${decisions} 个决定` : null,
+            blocked > 0 ? `${blocked} 个受阻会话` : null,
+        ].filter((part): part is string => part !== null);
+        return `有 ${parts.join('、')}需要你处理。`;
+    },
+    quickDecision: { deny: '拒绝', allowOnce: '允许一次' },
+    keyHints: { move: '移动', fullPage: '完整页面', close: '关闭', answering: '回答后会打开下一个' },
+    tabs: { a11y: '收件箱视图', needsYou: '需要你', updates: '动态', mentions: "提及" },
     groups: {
-        unknownLead: '会话',
-        leadMeta: ({ count }) => `${count} 个子会话`,
-        runMeta: '工作流运行',
-        otherTitle: '其他会话',
-        otherMeta: '不属于任何编排者或运行',
-        runsTitle: '工作流运行',
         openSession: '打开会话',
         openRun: '打开运行',
     },
@@ -5296,10 +5341,17 @@ const zhHans: typeof en = {
         more: '更多操作',
         approvalNeeded: '需要你的批准',
         approvalUntitled: '批准一项操作',
+        mentionedYou: "提及了你",
+        newMessage: "新消息",
     },
     popover: {
-        moreInOther: ({ count }) => `其他会话中还有 ${count} 项`,
         updates: ({ count }) => `${count} 条动态`,
+    },
+    types: { approval: "审批", decision: "决定", blocked: "受阻" },
+    days: { today: "今天", earlier: "更早" },
+    mentionsEmpty: {
+        title: "没有提及",
+        description: "有人在讨论中提及你时，会出现在这里。",
     },
     empty: {
         title: '没有需要你处理的事项',
@@ -5549,14 +5601,13 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
             },
             fleet: {
                 calm: "一切平稳",
-                calmOne: "平稳",
                 count: ({ count }) => `${count} 台机器需要查看`,
                 sentenceOne: ({ phrase }) => `${phrase}。`,
                 sentenceTwo: ({ first, second }) => `${first}，${second}。`,
                 sentenceMore: ({ first, second, count }) => `${first}，${second}，另有 ${count} 台。`,
                 sameReason: ({ word, count }) => `${count} 台：${word}。`,
                 otherOnlineCalm: ({ count }) => `其余 ${count} 台在线机器都很平稳。`,
-                allOnlineCalm: ({ count }) => `所有在线机器都很平稳。`,
+                allOnlineCalm: ({ count }) => count === 1 ? "唯一在线的机器很平稳。" : `所有在线机器都很平稳。`,
             },
             machine: {
                 calmLead: "平稳。",
@@ -5665,7 +5716,6 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
             customize: "自定义概览",
             appearanceSettings: "外观设置",
             done: "完成",
-            staleReason: "这些机器已停止响应",
             slowReason: "响应较慢",
             update: "更新",
             previewCalmName: "笔记本",
@@ -5844,6 +5894,9 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
             },
             states: {
                 offlineEmpty: ({ machine }) => `自你打开 Happier 以来，${machine} 一直没有上报资源。`,
+                offlineTitle: ({ machine }) => `${machine} 已离线`,
+                offlineLastReported: ({ machine }) => `这是它最后报告的内容。它回来后会话会继续；在此之前 ${machine} 的提醒已暂停。`,
+                offlineNeverReported: '自你打开 Happier 以来，它尚未报告资源。它回来后会话会继续。',
                 olderTitle: ({ machine }) => `查看 ${machine} 正在做什么`,
                 olderReason: ({ machine }) => `实时显示 CPU、内存压力、磁盘以及会话的占用。${machine} 需要 Happier 0.3 才能上报。`,
                 askOwner: ({ machine }) => `复制请求更新 ${machine} 的留言`,
@@ -6753,6 +6806,17 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                     approved_proposal: "你已批准",
                     idle_terminals: "滚动历史会保留",
                     kept_running: "你在警告中选择了保持运行。",
+                },
+                startFailure: {
+                    too_many_open_files: "这台机器打开的文件过多",
+                    no_ptys: "这台机器上没有空闲的终端",
+                    process_limit: "这台机器无法再运行更多进程",
+                    out_of_memory: "内存不足，无法启动",
+                    other: "这次没能启动",
+                },
+                nextStep: {
+                    close_idle_terminals: "关闭空闲的终端，然后重试",
+                    review_processes: "查看正在运行的内容，然后重试",
                 },
             },
             session: {
@@ -8425,7 +8489,7 @@ const zhHans: ReviewWalkthroughTranslations = {
     fromReviewAt: ({ time }) => `来自 ${time} 的审查`,
     reviewLabel: '审查：',
     enginesOf: ({ count, total }) => `${total} 个中的 ${count} 个`,
-    enginesFinished: '引擎已完成',
+    enginesFinished: () => '引擎已完成',
     enginesRunning: ({ count }) => `${count} 个引擎仍在审查`,
     fromEngines: ({ engines, inStory }) => `来自 ${engines} · ${inStory} 条在导读中`,
     and: '和',
@@ -8448,7 +8512,6 @@ const zhHans: ReviewWalkthroughTranslations = {
         reviewedAt: ({ time }) => `${time} 已审查`,
         reviewAt: ({ time }) => `${time} 的审查`,
         partial: ({ count }) => `部分审查 · ${count} 条发现`,
-        ready: '导读已就绪',
         readyShort: '导读',
         failed: '导读失败',
         narrating: '正在讲述',
@@ -8582,8 +8645,10 @@ const rolesTranslations = { 'zh-Hans': {
             secondOpinionDescription: '“建议”会让它在提交拉取请求或宣布完成前考虑征求第二意见。',
             secondOpinionOff: '关闭',
             secondOpinionEncouraged: '建议',
+            canDelegateToOtherRolesTitle: '可委派给其他角色',
+            canDelegateToOtherRolesDescription: '在指令中包含可用角色及其启动方式。',
             enabledTitle: '可用',
-            enabledDescription: '在角色栏中和向编排者提供。',
+            enabledDescription: '在角色栏中和向可委派的角色提供。',
             advancedTitle: '高级',
             launchProfileTitle: '启动配置',
             launchProfileDescription: '环境、权限、机器',
@@ -9410,6 +9475,15 @@ const sessionCollaborationPaneTranslations: Pick<Record<'en' | 'ca' | 'de' | 'es
         linkUnavailable: "此 Home 不支持公开链接。请 Home 所有者配置独立分享域名，或允许在此主机名上使用链接。还必须配置公开链接请求频率限制。",
         configurePublicLinks: "配置公开链接",
         justYouTitle: '一起处理这个会话',
+        followersTitle: '关注者',
+        followersDescription: '谁会收到这个会话的消息，以及如何收到。其他人的级别保持私密。',
+        followersYou: '你',
+        followersPeople: ({ count }: { count: number }) => `${count} 人`,
+        followersPeopleNote: '他们的级别由各自保留',
+        followersSessionMeaning: { everything: '每次更新都唤醒它', important: '需要它时唤醒它', quiet: '在它的下一轮' },
+        followersManager: '它的管理者',
+        followersSessions: ({ count }: { count: number }) => `${count} 个会话`,
+        followedBy: ({ facts, count }: { facts: string; count: number }) => `${facts} ${count === 1 ? '在关注' : '在关注'}`,
         justYouBody: ({ home }) => `与 ${home} 上的人共享。他们可以关注进展、在这里讨论,并在你离开时接手。`,
         share: '共享',
         justYouNote: '或创建任何人都能查看的公开链接。',
@@ -9427,7 +9501,11 @@ const sessionCollaborationPaneTranslations = {...Domain_sessionCollaborationPane
 
 const en = Shared_sessionCollaborationTranslations.en;
 
-const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "zh-Hans"> = { 'zh-Hans': { pane: sessionCollaborationPaneTranslations['zh-Hans'], title: '协作', viewingNow: '正在查看', justYou: '只有你', typing: '正在输入…', stale: '可能不是最新', unavailable: '实时在线状态不可用', connecting: '连接中…', unnamed: 'Happier 成员', open: '打开协作', conversations: '对话', accessUnavailable: '会话访问权限不可用', accessUnavailableReason: '此 Home 不支持将会话共享给其他人。', discussion: { featureUnavailable: "此 Home 未启用对话。", bindingUnavailable: "请重新登录此 Home 以查看对话。", scopeMismatch: "这些对话属于此 Home 上的其他账户。", modeMismatch: "内容与会话的加密模式不匹配。请重试，或请会话管理员检查访问权限。",  title: '对话', newDiscussion: '新建对话', create: '创建对话', titlePlaceholder: '对话标题', messagePlaceholder: '写下消息…', active: '进行中', activeDisclosure: '显示进行中的对话', archived: '已归档', archivedDisclosure: '显示已归档的对话', emptyActive: '还没有进行中的对话。', emptyArchived: '没有已归档的对话。', loading: '正在加载对话…', loadError: '无法加载对话。', retry: '重试', checking: '正在检查更新…', deliveryUnknown: '发送结果未知 — 重试前请先检查。', locked: '你可以阅读此对话，但不能发布消息。', offline: '你当前离线。重新连接后即可继续。', unavailable: '此对话不可用。', unreadCount: ({ count }) => `${count.toLocaleString()} 条未读`, unreadMentionCount: ({ count }) => `${count.toLocaleString()} 条未读提及`,
+const sessionCollaborationTranslations: Pick<Record<'en'|'ca'|'de'|'es'|'fr'|'it'|'ja'|'pl'|'pt'|'ru'|'zh-Hans'|'zh-Hant', typeof en>, "zh-Hans"> = { 'zh-Hans': { pane: sessionCollaborationPaneTranslations['zh-Hans'], title: '成员', viewingNow: '正在查看', justYou: '只有你', typing: '正在输入…', stale: '可能不是最新', unavailable: '实时在线状态不可用', connecting: '连接中…', unnamed: 'Happier 成员', open: '打开协作', conversations: "讨论", accessUnavailable: '会话访问权限不可用', accessUnavailableReason: '此 Home 不支持将会话共享给其他人。', discussion: { participants: { title: "参与者", loading: "正在查看谁在这里…", peopleGroup: "成员", agentsGroup: "智能体", agentsNote: "每个都保留自己的会话、机器和审批", owner: "所有者", you: "你", hereNow: "在线", canPost: "可发言", canRead: "可阅读", teamAccess: "团队访问", noAgents: "还没有智能体", model: "模型", session: "会话", modelStarting: "模型启动中", policyWhenAddressed: "被提及时回答", policyReadsOnly: "只读", policyDrafts: "起草待审批", policyWatches: "关注并发言", privateNote: "只有受邀的人可以阅读。提及永远不会授予权限。", inheritedNote: "受邀的人及其团队可以阅读。提及永远不会授予权限。", leave: "离开", invitedOnly: "仅限受邀", teamCanRead: "团队可阅读", people: ({ count }) => count === 1 ? '只有你' : `${count.toLocaleString()} 人`, peopleAndAgents: ({ people, agents }) => `${people.toLocaleString()} 人，${agents.toLocaleString()} 个智能体` }, home: { needsYou: "需要你处理", today: "今天", thisWeek: "本周", earlier: "更早", columnEmpty: "你受邀参与的讨论会显示在这里", inviteTitle: "与人和智能体一起讨论", inviteBody: "把队友、会话、机器人和模型拉进同一个对话。提及某个智能体，它会在自己的会话中、按自己的审批回答。", idleTitle: "打开一个讨论", idleBody: "从列表中选择一个，或与人和智能体开始新的讨论。", audience: "仅限你邀请的人", draftWaiting: "有草稿等你处理", approvalPending: "需要你的批准" }, manage: { startAgain: "重新启动", startAgainBody: "它的会话尚未启动。用相同设置再试一次。", invitePlaceholder: "搜索人员、会话或模型", policyWhenAddressedBody: "提及或回复它时。默认。", policyReadsOnlyBody: "只阅读；从不在这里回答。", policyDraftsBody: "由你发布它的回答，或丢弃。", policyWatchesBody: "阅读每条消息并可能回答。即使不说话也会消耗轮次。", answersGroup: "回答方式", operationsGroup: "会话", openSession: "打开它的会话", removeModel: "移除并归档它的会话", removeModelBody: "它是为此讨论启动的；历史会保留。", removeSession: "从此讨论中移除", removeSessionBody: "该会话会继续独立运行。", rowHint: "选择回答方式、打开或移除", working: "正在保存…", checking: "正在确认是否完成…", failed: "未能完成。", leaveTitle: "离开此讨论", leaveBody: "必须有人拥有它。把它交给这里的某人，或将其归档；不会删除任何内容。", transferGroup: "让其他人成为所有者", transferSubtitle: "成为所有者，然后你离开", noTransferCandidates: "请先邀请某人再转交。", archiveInstead: "改为归档", archiveInsteadBody: "你仍是所有者。恢复之前任何人都不能发言。", inviteSubtitle: "只有你邀请的人可以阅读", sessionsGroup: "你的会话", modelsGroup: "模型", sessionCandidate: "会话 · 被提及时回答", modelOn: ({ machine }: { machine: string }) => `${machine} 上的模型`, modelCandidate: "你的新会话 · 选择代理和模型" }, invite: { button: "邀请", title: ({ title }: { title: string }) => `邀请加入 ${title}`, canManage: "可管理", ownerOnly: "只有所有者可以更改受邀者。", failed: "无法保存邀请。" }, composer: { mention: "提及", mentionHint: "提及一个智能体，让它来回答" }, newPage: { namePlaceholder: "为这个讨论命名", emptyTitle: "提及应该回答的对象", emptyBody: "智能体只有被提及时才会回答。不提及任何人的消息只会发给人。" }, secondOpinion: { title: "征求第二意见", discussTitle: "讨论这个回答", discussionTitle: "第二意见", discussDiscussionTitle: "关于这个回答", defaultQuestion: "这样对吗？你会改什么？", subtitle: ({ session }: { session: string }) => `关于 ${session} 中的一个回答`, subtitleUntitled: "关于这个回答", answer: "这个回答", open: "打开讨论", askQuoteOnly: "仅附引用提问", shareAndAsk: "共享并提问", ask: "提问", askGroup: "提问对象", freshOpinionsHint: "选择一个提问对象", noReviewers: "这个 Home 上还没有其他会话", yourSession: "会话", moreSessions: "显示更多会话", question: "问题", freshOpinionsUnavailableTitle: "暂不支持同时询问多个", freshOpinionsUnavailableReason: "独立意见会分别询问每一个。现在请选择一个。", thisSession: "这个会话", cannotAskTitle: ({ name }: { name: string }) => `无法在这里询问 ${name}`, quoteOnlyTitle: ({ name }: { name: string }) => `${name} 只能看到引用`, quoteOnlyBody: "无法打开这个会话的其余内容。", grantTitle: ({ name }: { name: string }) => `允许 ${name} 读取这个会话`, grantBody: ({ name, session }: { name: string; session: string }) => `${name} 会保留 ${session} 的读取权限，直到你撤销。`, grantUnavailable: "你不能共享这个会话，因此只发送引用。", readsAsYouTitle: ({ name }: { name: string }) => `${name} 以你的身份读取这个会话`, readsTitle: ({ name }: { name: string }) => `${name} 已经可以读取这个会话`, readsAsYouBody: "不会新增共享任何内容。", discussionTitleRow: "新的讨论", discussionOnlyYou: "只有你，直到你邀请他人。", discussionPeople: ({ count }: { count: number }) => `你和另外 ${count} 人可以阅读`, readsGroup: "他们能读到什么", disclosure: { sameSession: "这就是写出这个回答的会话。", broader: "看到它的人会比现在能读这个回答的人更多。", public: "它会变成公开的。", notAllowed: "这个 Home 的共享规则不允许。", unavailable: "现在无法读取这个回答。" }, discussDone: "讨论已开始", asked: ({ name }: { name: string }) => `已询问 ${name}`, askedBody: "回答会出现在讨论中。", failed: "没有成功。", pending: "尚未完成。再试一次即可从中断处继续。", previewChanged: "可读取的人发生了变化。确认后再提问。" },
+        quote: discussionQuoteCopy['zh-Hans'],
+        heldParticipant: "会话参与者",
+        participantHeld: ({ participant }: { participant: string }) => `${participant}已暂缓。暂不支持来自其他账户的请求。`,
+        featureUnavailable: "此 Home 未启用对话。", bindingUnavailable: "请重新登录此 Home 以查看对话。", scopeMismatch: "这些对话属于此 Home 上的其他账户。", modeMismatch: "内容与会话的加密模式不匹配。请重试，或请会话管理员检查访问权限。",  title: "讨论", newDiscussion: "新讨论", create: '创建对话', titlePlaceholder: '对话标题', messagePlaceholder: '写下消息…', active: '进行中', activeDisclosure: '显示进行中的对话', archived: '已归档', archivedDisclosure: '显示已归档的对话', emptyActive: '还没有进行中的对话。', emptyArchived: '没有已归档的对话。', loading: '正在加载对话…', loadError: '无法加载对话。', retry: '重试', checking: '正在检查更新…', deliveryUnknown: '发送结果未知 — 重试前请先检查。', locked: '你可以阅读此对话，但不能发布消息。', offline: '你当前离线。重新连接后即可继续。', unavailable: '此对话不可用。', unreadCount: ({ count }) => `${count.toLocaleString()} 条未读`, unreadMentionCount: ({ count }) => `${count.toLocaleString()} 条未读提及`,
         mentioned: '有人提到了你', unreadConversations: '未读对话', messageCount: ({ count }) => `${count.toLocaleString()} 条消息`, viaAgent: '由 Agent 发送', collaborator: '协作者', contentUnavailable: '消息不可用', rename: '重命名对话', archive: '归档对话', restore: '恢复对话', selection: { copy: '复制', askAgent: '询问 Agent', sendToSession: '发送到会话', handoffError: '无法将所选消息添加到会话编辑器。' }, titleRequired: '添加标题以开始此对话。', encryptedTitle: '加密对话', archivedNotice: '此对话已归档。', sessionArchived: '此会话已归档。', postDenied: '你已无法在此会话中发布消息。', invalidMention: '你提及的人已无法读取此会话。', invalidContent: '此消息无法按当前内容发送。它可能为空或过长。', idempotencyConflict: '此标识已用于发送另一条不同的消息。', sendFailed: '此消息无法发送。', dismiss: '关闭', loadOlder: '加载更早的消息', loadMore: '加载更多对话' } } };
 
 return { sessionCollaborationTranslations };
@@ -9562,6 +9640,7 @@ const zhHans: typeof en = {
         reconciling: '正在检查这次代理对话是否已启动…',
         unresolved: '无法确认这次代理对话是否已启动。再次启动可能会创建第二次对话。',
         targetChanged: '在对话启动之前，此会话的机器发生了变化。未启动任何内容。',
+        submittedUnknown: '无法确认是否已启动。请检查运行列表。如果运行器已不再活动，请恢复会话。',
         secretReferenceOverlayUpdateRequired: '在代理对话中使用共享密钥需要已更新的机器。未启动任何内容。',
     },
     status: {
@@ -9652,6 +9731,66 @@ const sessionFollowTranslations: Pick<Record<
             "important": "重要更新",
             "all_messages": "每条新消息"
         },
+        "policyEditor": {
+            "presetLabel": "接收多少",
+            "presetDescription": {
+                "everything": "有任何动静都会提醒你。消息会安静地进入收件箱。",
+                "important": "只在需要你、失败或停滞时提醒你。其他内容在收件箱中安静等待。",
+                "quiet": "不会提醒你。更新在收件箱中安静等待。",
+                "custom": "选择哪些会提醒你、哪些安静送达、哪些不包含。"
+            },
+            "customTitle": "每个事件",
+            "group": {
+                "interrupt": "提醒你",
+                "quiet": "安静送达",
+                "off": "不包含"
+            },
+            "channel": {
+                "interrupt": "推送",
+                "quiet": "收件箱"
+            },
+            "delivery": {
+                "off": "关",
+                "quiet": "收件箱",
+                "interrupt": "推送"
+            },
+            "session": {
+                "presetLabel": "它能听到多少",
+                "presetDescription": {
+                    "everything": "每次有动静都会唤醒它。消息会等到它的下一轮。",
+                    "important": "只有在需要它、失败或停滞时才唤醒它。其余内容等到它的下一轮。",
+                    "quiet": "不会唤醒它。更新会等到它的下一轮。",
+                    "custom": "选择哪些会唤醒它、哪些等到它的下一轮，以及哪些不包含。"
+                },
+                "group": { "interrupt": "唤醒它", "quiet": "等到它的下一轮" },
+                "channel": { "interrupt": "唤醒", "quiet": "下一轮" },
+                "delivery": { "interrupt": "唤醒", "quiet": "下一轮" }
+            },
+            "events": {
+                "needsYou": "需要你",
+                "decision": "需要决定",
+                "approval": "需要审批",
+                "blocked": "受阻",
+                "finished": "已完成",
+                "failedOrStopped": "失败或停止",
+                "stalled": "停滞",
+                "updatePosted": "发布了更新",
+                "personWrote": "有人写了内容",
+                "goalChanged": "目标已更改",
+                "message": "每条消息"
+            },
+            "eventDescriptions": {
+                "needsYou": "需要决定、审批或已受阻",
+                "failedOrStopped": "运行无声结束时也算",
+                "personWrote": "只有通知和链接，不含原文"
+            }
+        },
+        "policy": {
+            "everything": "全部",
+            "important": "重要",
+            "quiet": "安静",
+            "custom": "自定义"
+        },
         "voice": {
             "title": "纳入 Voice",
             "subtitle": "Voice 可以保留此会话的上下文。",
@@ -9661,6 +9800,7 @@ const sessionFollowTranslations: Pick<Record<
             "waitingEncrypted": "解锁此会话以将其纳入 Voice。",
             "initialSnapshotPending": "在下一轮 Voice 对话中，提供简短的当前状态摘要。"
         },
+        "once": { "title": "仅通知一次", "subtitle": "在你的通知级别之外额外通知一次，然后结束。", "off": "关闭", "turn": "本轮结束时", "attention": "下次需要你时" },
         "footer": "关注不会改变谁可以访问此会话。",
         "settingsLink": "通知设置…",
         "assignedExplanation": "因分配给你而关注",
@@ -9671,7 +9811,7 @@ const sessionFollowTranslations: Pick<Record<
         "offline": "你已离线。请重新连接以更改关注设置。",
         "archived": "此会话归档期间，关注将暂停。",
         "sources": {
-            "title": "会话更新",
+            "title": "关注中",
             "waitingRuntime": "正在等待目标会话重新连接。",
             "unsupported": "请更新或重新连接目标机器上的 CLI 以接收更新。",
             "pausedArchived": "源会话或目标会话归档期间，更新会暂停。",
@@ -9685,6 +9825,7 @@ const sessionFollowTranslations: Pick<Record<
             "stop": "停止更新",
             "stopForSource": ({ title }) => `停止来自“${title}”的更新`,
             "includeNextTurn": "在目标会话的下一轮中包含更新。",
+            "empty": "它关注的会话会显示在这里",
             "sourceKeyPreparing": "正在准备加密访问…",
             "sourceKeyWaiting": "正在等待加密访问。",
             "sourceKeyUnavailable": "此计算机无法提供加密访问。",
@@ -10055,6 +10196,8 @@ const sessionListFilterTranslations = { zhHans: translated({
         filtersHomes: 'Home', filtersSharedWith: '共享对象', filtersOutsideTeams: '个人和直接共享',
         filtersTags: '标签', filtersSource: '来源', filtersSourceAll: '全部',
         filtersSourceDirect: '外部',
+        filtersOnlyCoordinators: '仅协调者', filtersOnlyCoordinatorsDescription: '管理其他会话或按规则关注的会话',
+        filtersCoordinatorsChip: '协调者', filtersCoordinatorsChipClear: '不再仅显示协调者',
         filtersNoOptions: '没有可用的筛选条件', filtersClear: '清除筛选条件', filtersDone: '完成', filtersArchived: '已归档',
         filtersNeedsMeOnly: '仅需要我处理的', filtersNeedsMeOnlyDescription: '等待你处理的会话', filtersSourceHappier: 'Happier',
         filtersMoreTags: ({ count }: { count: number }) => `+ ${count} 更多`,
@@ -10104,7 +10247,7 @@ const sessionPageTranslations = { 'zh-Hans': translated({
                 continueDescription: '从此会话的当前进度开始新的工作。',
                 organizeTitle: '整理',
                 organizeDescription: '此会话在你的列表中出现的位置。',
-                activityDescription: '代理正在做什么，以及你是否会收到通知。',
+                activityDescription: '代理现在正在做什么。',
                 detailsTitle: '详情',
                 detailsDescription: '用于支持和脚本的标识符与历史。',
                 environmentTitle: '环境',
@@ -10257,6 +10400,10 @@ const zhHans: typeof en = {
             finished: "已完成",
         },
         peek: "速览",
+        mute: '静音',
+        muted: '已在此静音',
+        unmute: '撤销',
+        muteFailed: '无法静音',
         truncated: "结果已缩短。",
         wokenBy: ({ count }) => (count === 1 ? '由一条更新唤醒' : `由 ${count} 条更新唤醒`),
         notFromYou: '不是你发送的消息',
@@ -10283,9 +10430,6 @@ const zhHans: typeof en = {
     },
     actions: {
         showInTranscript: '在对话记录中显示',
-        makeOrchestrator: '设为编排者',
-        makeOrchestratorSubtitle: '此会话负责规划、委派并汇报',
-        makeOrchestratorFailed: "无法将此会话设为编排者",
     },
     putUnder: {
         title: "置于…之下",
@@ -10325,6 +10469,8 @@ const zhHans: typeof en = {
         a11y: ({ summary }) => `工作：${summary}`,
     },
     leadArchived: ({ count }) => `此会话已归档 · ${count} 项仍在进行`,
+    managedBy: '管理者',
+    plan: '计划',
     runsStale: '工作流运行可能不是最新的',
     list: {
         level: ({ level }) => `第 ${level} 级`,
@@ -10349,7 +10495,7 @@ const zhHans: typeof en = {
         orAskFor: "或请求",
     },
     peek: {
-        reportsTo: ({ lead }) => `向 ${lead} 汇报`,
+        manager: ({ lead }) => `向 ${lead} 汇报`,
         repliesGoHere: '回复会发送到此会话',
     },
 };
@@ -10376,6 +10522,7 @@ const zhHans = {
     directOffDescription: '所有内容都通过 Happier。不会直接连接到你的机器；在同一网络中会稍慢一些。',
     serverDenied: '你的 Home 服务器让所有内容都通过 Happier，因此这里无需选择。',
     machineTitle: ({ machine }: MachineParams) => `连接到 ${machine}`,
+    machineSettingTitle: '此机器的连接',
     machineOptionDefault: '默认',
     machineOptionDirect: '直接',
     machineOptionRelay: '通过 Happier',
@@ -11057,6 +11204,7 @@ const surfaceStateTranslations = { 'zh-Hans': {
         paneFailedReason: '绘制时出了问题。你的会话不受影响。',
         opening: ({ name }) => `正在打开 ${name}`,
         couldNotOpen: ({ name }) => `无法打开 ${name}`,
+        couldNotUpdate: '无法更新，正在显示上一版本',
     } } as const satisfies Pick<Record<string, SurfaceStateTranslations>, "zh-Hans">;
 
 return { surfaceStateTranslations };
@@ -12710,6 +12858,7 @@ const voiceRealtimeProviderSetupTranslations = { 'zh-Hans': defineVoiceRealtimeP
     },
     catalog: {
       credentialRequired: '添加 API 密钥以加载语音',
+      loadFailed: '无法加载语音',
       retry: '无法加载语音 — 重试',
       empty: '此账户没有可用的语音',
       preview: ({ voice }) => `试听 ${voice}`,
@@ -13311,6 +13460,7 @@ const widgetAddTranslations = { 'zh-Hans': {
         areaApprovalPending: '等待批准',
         refusals: {
             areaUnavailable: "此处暂时无法使用小组件。请稍后重试。",
+            writeUnconfirmed: "你的 Home 没有确认这项操作。请检查此区域，然后重试。",
             inputsInvalid: "部分输入无效。请检查后重试。",
             typeUnavailable: "此小组件已不可用。请选择其他小组件。",
             sizeUnsupported: "此小组件不支持该尺寸。请选择其他尺寸。",
@@ -13349,7 +13499,6 @@ const widgetDefinitionTranslations = { 'zh-Hans': {
         edited: ({ time }) => `${time} 编辑`,
         readsOnly: "只读",
         runsOn: ({ machine }) => `在 ${machine} 上运行`,
-            writeUnconfirmed: "你的 Home 没有确认这项操作。请检查此区域，然后重试。",
         withYourConnection: "使用你自己的连接",
         readsResource: ({ read, plugin }) => `来自 ${plugin} 的 ${read}`,
         cannotRunAnythingElse: "此小组件不能运行其他任何内容。",
@@ -13395,7 +13544,6 @@ const widgetDefinitionTranslations = { 'zh-Hans': {
         becomesViewerInput: "变为输入：每个位置使用你的连接",
         becomesContextInput: "变为输入：每个位置各自选择",
         alsoAddTo: "同时添加到",
-        alsoAddToNamed: ({ place }) => `同时添加到 ${place}`,
         anotherPlace: "其他位置…",
         snapshotMenu: "在此看板发布快照…",
         snapshotMenuSubtitle: "这里的每个人都能看到你此刻的数字",
@@ -13654,8 +13802,12 @@ const en = Shared_workflowBuiltinTranslations.en;
 
 const zhHans: WorkflowBuiltinTranslations = {
     keepGoing: { title: '持续直到完成', description: '持续进行，直到达成目标' },
-    reviewAndConverge: { title: '审查并收敛', description: '审查直到审阅者达成一致', apply: '应用', verifyAndFix: '验证并修复', verifyOnly: '仅验证', rounds: '停止前的轮数' },
-    planWithAPanel: { title: '由小组规划', description: '多个代理并行规划，然后计划等待你的审查。', inputs: { request: '请求', requestPlaceholder: '小组应规划什么？', engines: '规划者' } },
+    reviewAndConverge: { title: '审查并收敛', description: '审查直到审阅者达成一致', apply: '应用', verifyAndFix: '验证并修复', verifyOnly: '仅验证', rounds: '停止前的轮数', inputs: { engines: "审阅者", reviewSession: "要审查的会话" } },
+    planWithAPanel: { title: "规划小组", description: '多个代理并行规划，然后计划等待你的审查。', inputs: { request: '请求', requestPlaceholder: '小组应规划什么？', engines: '规划者' } },
+    freshOpinions: { title: '独立意见', description: '针对同一问题独立作答，也可汇总各方回答。' },
+    answerAndReview: { title: '回答 + 审阅', description: '由一个代理回答，再由另一个代理审阅该回答。' },
+    debate: { title: '辩论', description: '按你选择的轮数比较观点，并在每轮结束后汇总。' },
+    patternInputs: { question: '问题', participants: '参与者', synthesis: '汇总回答', synthesizer: '汇总代理', answerer: '回答代理', reviewer: '审阅代理', rounds: '轮数', digestAuthor: '每轮汇总代理', previousRoundContext: '上一轮' },
     openAPullRequest: { title: '打开拉取请求', description: '先征求第二意见，再打开拉取请求。如果第二意见不同意，它会等待你。', inputs: { base: '基础分支', title: '拉取请求标题', body: '描述', question: '给第二意见的问题' } },
 };
 
@@ -13997,7 +14149,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHans"> = { zhHans: { ...workflowRunRoleTranslations.zhHans, ...workflowRunCompositionTranslations.zhHans, shortcutStarts: '开始', neededNamed: ({ name }) => `输入 · 需要${name}`, addToStart: ({ name }) => `添加${name}后即可开始`, workflow: '工作流', inputs: '输入', start: '开始', starting: '正在开始…', stillStarting: '仍在开始…', needed: ({ count }) => `输入 · 还需 ${count} 项`, required: '开始前必填', preview: '将执行的内容', unsaved: '包含未保存的更改', remove: '返回普通会话', search: '查找工作流', builtin: '内置', library: '你的库', noInputs: '无需输入', asksFor: ({ names }) => `需要：${names}`, optional: '可选 — 留空', defaultValue: ({ value }) => `默认值：${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHans"> = { zhHans: { ...workflowRunRoleTranslations.zhHans, ...workflowRunCompositionTranslations.zhHans, runPattern: '运行…', runPatternTitle: '运行模式', anotherRound: '再来一轮', participantTitle: '选择参与者', participantSearch: '查找会话或模型', participantSession: '你的会话 · 按自身设置回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 会话`, participantDone: '完成', shortcutStarts: '开始', neededNamed: ({ name }) => `输入 · 需要${name}`, addToStart: ({ name }) => `添加${name}后即可开始`, workflow: '工作流', inputs: '输入', start: '开始', starting: '正在开始…', stillStarting: '仍在开始…', needed: ({ count }) => `输入 · 还需 ${count} 项`, required: '开始前必填', preview: '将执行的内容', unsaved: '包含未保存的更改', remove: '返回普通会话', search: '查找工作流', builtin: '内置', library: '你的库', noInputs: '无需输入', asksFor: ({ names }) => `需要：${names}`, optional: '可选 — 留空', defaultValue: ({ value }) => `默认值：${value}` } };
 
 return { workflowStartTranslations };
 })();
@@ -14590,7 +14742,7 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         typeString: '文本',
         typeNumber: '数字',
         typeBoolean: '是或否',
-        typeJson: '结构化数据',
+        typeJson: '结构化数据', typeParticipant: '参与者', typeParticipants: '参与者（多个）',
         runSheetTitle: '运行这个工作流',
         runSheetBody: '填写这个工作流声明的值，然后运行它。',
         missingRequired: '这个值是必填的。',
@@ -14790,8 +14942,11 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
             machine: '机器',
             machineId: '机器 ID',
             revision: '版本',
+            failureCode: '失败代码',
+            failureCause: '原因',
         },
         usageUnavailable: '用量不可用',
+        usageNotReported: '未报告',
         startedAt: ({ time }: { time: string }) => `开始于 ${time}`,
         timeRange: ({ start, end }) => `${start} – ${end}`,
         openConversation: '打开对话',
@@ -14806,6 +14961,7 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         attentionWaitSentence: ({ step }: { step: string }) => `${step} 正在等你。`,
         attentionParkedSentence: ({ step }: { step: string }) => `${step}。`,
         failedStepSentence: ({ step }: { step: string }) => `${step} 失败了。已完成的工作会保留。`,
+        stepNumber: ({ ordinal }: { ordinal: string }) => `步骤 ${ordinal}`,
         failedSentence: '已完成的工作会保留。',
         consequenceLanes: ({ lanes }: { lanes: readonly string[] }) => `${lanes.join('和')}继续运行。`,
         consequenceJoin: ({ step, count }: { step: string; count: number }) => `全部 ${count} 条分支完成后，${step}开始。`,
@@ -14816,6 +14972,7 @@ const zhHans = translated(workflowValueReferenceTranslations.zh, {
         completedCount: ({ count }) => count === 1 ? '唯一的步骤已完成。' : `全部 ${count} 个步骤已完成。`,
         stoppedCount: ({ completed, total }: { completed: number; total: number }) => `已完成 ${completed}/${total} 个步骤。`,
         notAnswered: '未回答',
+        waitContinued: '已继续',
         answeredBy: ({ name }) => `由${name}回答`,
         answeredByYou: '由你回答',
         answeredByPerson: '由其他人回答',

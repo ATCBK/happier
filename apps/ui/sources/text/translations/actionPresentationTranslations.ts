@@ -1,4 +1,8 @@
 // English titles are copied verbatim from the first-party Action specs.
+const englishOptionLabels = {
+    now: 'Now', afterIdle: 'After idle', start: 'Start', stop: 'Stop', suspend: 'Suspend', resume: 'Resume', delete: 'Delete',
+};
+
 const en = {
     ...copy({ named: name => `Create a public link for “${name}”?` }, {
         change: ({ name, kind }) => `Change “${name}” (${kind}) for all your work.`,
@@ -953,9 +957,10 @@ const en = {
         session_pending_dismiss: "Dismiss uncertain pending delivery",
         session_pending_sendAsNew: "Send pending delivery as new",
         session_pending_withdraw: "Withdraw queued message",
+        session_pending_action_set: "Change when a queued message runs",
         session_pending_resetStart_set: "Start queued work after quota reset",
         session_pending_resetStart_cancel: "Cancel reset-bound queued work",
-        session_worker_publish: "Publish a worker report",
+        session_update_post: "Post an update",
         session_presentation_apply: "Present in the current Session",
         session_board_get: "Read Session visuals",
         session_board_item_upsert: "Show or update a Session visual",
@@ -990,19 +995,19 @@ const en = {
         session_access_grant_set: "Set Session access",
         session_access_grant_remove: "Remove Session access",
         session_access_context_set: "Set the Team a Session belongs to",
-        session_reports_to_set: "Set Session lead",
+        session_manager_set: "Set Session lead",
         session_responsibility_set: "Assign Session to someone",
         session_responsibility_candidates_list: "Find who can take a Session",
         session_public_link_get: "Read Session public link",
         session_public_link_create: "Create Session public link",
         session_public_link_remove: "Remove Session public link",
-        session_follow_get: "Get Session Follow",
-        session_follow_set: "Set Session Follow",
-        session_follow_remove: "Remove Session Follow",
-        session_follow_preferences_get: "Get Follow defaults",
-        session_follow_preferences_set: "Set Follow defaults",
-        session_follow_sources_list: "List followed sessions",
-        session_follow_sources_remove: "Stop updates from another session",
+        follow_get: "Get Session Follow",
+        follow_set: "Set Session Follow",
+        follow_remove: "Remove Session Follow",
+        follow_preferences_get: "Get Follow defaults",
+        follow_preferences_set: "Set Follow defaults",
+        follow_list: "List followed sessions",
+        follow_preview: "Preview Follow rule",
         session_read_state_set: "Mark a session read",
         session_usageLimit_waitResume_enable: "Enable usage-limit wait resume",
         session_usageLimit_waitResume_cancel: "Cancel usage-limit wait resume",
@@ -1175,13 +1180,16 @@ export type ActionTitleTranslation = Readonly<Record<keyof typeof en.titles, str
 type RoleIdentity = Readonly<{ name: string; kind: string }>;
 type ActionCopyInput = Readonly<{ actionId: string; source: string; subject?: string | null; role?: RoleIdentity }>;
 type ActionCopy = Readonly<{
+    options: Readonly<Record<keyof typeof englishOptionLabels, string>>;
     title: (input: ActionCopyInput) => string;
     summary: (input: ActionCopyInput) => string;
 }>;
 
 function copy(publicLink: Readonly<{ title?: string; named: (name: string) => string; summary?: string }>,
-    roles: Readonly<{ change: (role: RoleIdentity) => string; reset: (role: RoleIdentity) => string }>): ActionCopy {
+    roles: Readonly<{ change: (role: RoleIdentity) => string; reset: (role: RoleIdentity) => string }>,
+    options: ActionCopy['options'] = englishOptionLabels): ActionCopy {
     return {
+        options,
         title: ({ actionId, source, subject }) => actionId === 'artifact.public_link.create'
             ? subject ? publicLink.named(subject) : publicLink.title ?? source
             : subject ? `${source} · ${subject}` : source,
@@ -1193,15 +1201,15 @@ function copy(publicLink: Readonly<{ title?: string; named: (name: string) => st
 
 export const actionPresentationTranslations = {
     en,
-    ca: copy({ title: 'Crea un enllaç públic al document', named: name => `Vols crear un enllaç públic per a «${name}»?`, summary: 'Qualsevol persona que tingui aquest enllaç podrà llegir el document.' }, { change: ({ name, kind }) => `Canvia «${name}» (${kind}) per a tota la teva feina.`, reset: ({ name, kind }) => `Elimina els teus canvis a «${name}» (${kind}) i fes servir la configuració original.` }),
-    de: copy({ title: 'Öffentlichen Dokumentlink erstellen', named: name => `Öffentlichen Link für „${name}“ erstellen?`, summary: 'Jeder mit diesem Link kann das Dokument lesen.' }, { change: ({ name, kind }) => `„${name}“ (${kind}) für deine gesamte Arbeit ändern.`, reset: ({ name, kind }) => `Deine Änderungen an „${name}“ (${kind}) entfernen und die ursprünglichen Einstellungen verwenden.` }),
-    es: copy({ title: 'Crear enlace público al documento', named: name => `¿Crear un enlace público para «${name}»?`, summary: 'Cualquier persona que tenga este enlace podrá leer el documento.' }, { change: ({ name, kind }) => `Cambiar «${name}» (${kind}) para todo tu trabajo.`, reset: ({ name, kind }) => `Eliminar tus cambios en «${name}» (${kind}) y usar su configuración original.` }),
-    fr: copy({ title: 'Créer un lien public vers le document', named: name => `Créer un lien public pour « ${name} » ?`, summary: 'Toute personne disposant de ce lien pourra lire le document.' }, { change: ({ name, kind }) => `Modifier « ${name} » (${kind}) pour tout votre travail.`, reset: ({ name, kind }) => `Supprimer vos modifications de « ${name} » (${kind}) et utiliser ses réglages d’origine.` }),
-    it: copy({ title: 'Crea un link pubblico al documento', named: name => `Creare un link pubblico per «${name}»?`, summary: 'Chiunque abbia questo link potrà leggere il documento.' }, { change: ({ name, kind }) => `Modifica «${name}» (${kind}) per tutto il tuo lavoro.`, reset: ({ name, kind }) => `Rimuovi le tue modifiche a «${name}» (${kind}) e usa le impostazioni originali.` }),
-    ja: copy({ title: 'ドキュメントの公開リンクを作成', named: name => `「${name}」の公開リンクを作成しますか？`, summary: 'このリンクを知っている人は誰でもドキュメントを読めます。' }, { change: ({ name, kind }) => `「${name}」（${kind}）をすべての作業で変更します。`, reset: ({ name, kind }) => `「${name}」（${kind}）への変更を削除し、元の設定を使用します。` }),
-    pl: copy({ title: 'Utwórz publiczny link do dokumentu', named: name => `Utworzyć publiczny link do „${name}”?`, summary: 'Każdy, kto ma ten link, będzie mógł przeczytać dokument.' }, { change: ({ name, kind }) => `Zmień „${name}” (${kind}) dla całej swojej pracy.`, reset: ({ name, kind }) => `Usuń swoje zmiany w „${name}” (${kind}) i użyj oryginalnych ustawień.` }),
-    pt: copy({ title: 'Criar link público para o documento', named: name => `Criar um link público para «${name}»?`, summary: 'Qualquer pessoa com este link poderá ler o documento.' }, { change: ({ name, kind }) => `Alterar «${name}» (${kind}) para todo o seu trabalho.`, reset: ({ name, kind }) => `Remover as suas alterações a «${name}» (${kind}) e usar as definições originais.` }),
-    ru: copy({ title: 'Создать общедоступную ссылку на документ', named: name => `Создать общедоступную ссылку на «${name}»?`, summary: 'Любой, у кого есть эта ссылка, сможет прочитать документ.' }, { change: ({ name, kind }) => `Изменить «${name}» (${kind}) для всей вашей работы.`, reset: ({ name, kind }) => `Удалить ваши изменения в «${name}» (${kind}) и использовать исходные настройки.` }),
-    zhHans: copy({ title: '创建文档公开链接', named: name => `为“${name}”创建公开链接？`, summary: '任何拥有此链接的人都可以阅读该文档。' }, { change: ({ name, kind }) => `为所有工作更改“${name}”（${kind}）。`, reset: ({ name, kind }) => `移除对“${name}”（${kind}）的更改并使用原始设置。` }),
-    zhHant: copy({ title: '建立文件公開連結', named: name => `為「${name}」建立公開連結？`, summary: '任何擁有此連結的人都可以閱讀該文件。' }, { change: ({ name, kind }) => `為所有工作變更「${name}」（${kind}）。`, reset: ({ name, kind }) => `移除對「${name}」（${kind}）的變更並使用原始設定。` }),
+    ca: copy({ title: 'Crea un enllaç públic al document', named: name => `Vols crear un enllaç públic per a «${name}»?`, summary: 'Qualsevol persona que tingui aquest enllaç podrà llegir el document.' }, { change: ({ name, kind }) => `Canvia «${name}» (${kind}) per a tota la teva feina.`, reset: ({ name, kind }) => `Elimina els teus canvis a «${name}» (${kind}) i fes servir la configuració original.` }, { now: 'Ara', afterIdle: 'Després d’estar inactiva', start: 'Inicia', stop: 'Atura', suspend: 'Suspèn', resume: 'Represa', delete: 'Elimina' }),
+    de: copy({ title: 'Öffentlichen Dokumentlink erstellen', named: name => `Öffentlichen Link für „${name}“ erstellen?`, summary: 'Jeder mit diesem Link kann das Dokument lesen.' }, { change: ({ name, kind }) => `„${name}“ (${kind}) für deine gesamte Arbeit ändern.`, reset: ({ name, kind }) => `Deine Änderungen an „${name}“ (${kind}) entfernen und die ursprünglichen Einstellungen verwenden.` }, { now: 'Jetzt', afterIdle: 'Nach Inaktivität', start: 'Starten', stop: 'Stoppen', suspend: 'Anhalten', resume: 'Fortsetzen', delete: 'Löschen' }),
+    es: copy({ title: 'Crear enlace público al documento', named: name => `¿Crear un enlace público para «${name}»?`, summary: 'Cualquier persona que tenga este enlace podrá leer el documento.' }, { change: ({ name, kind }) => `Cambiar «${name}» (${kind}) para todo tu trabajo.`, reset: ({ name, kind }) => `Eliminar tus cambios en «${name}» (${kind}) y usar su configuración original.` }, { now: 'Ahora', afterIdle: 'Tras la inactividad', start: 'Iniciar', stop: 'Detener', suspend: 'Suspender', resume: 'Reanudar', delete: 'Eliminar' }),
+    fr: copy({ title: 'Créer un lien public vers le document', named: name => `Créer un lien public pour « ${name} » ?`, summary: 'Toute personne disposant de ce lien pourra lire le document.' }, { change: ({ name, kind }) => `Modifier « ${name} » (${kind}) pour tout votre travail.`, reset: ({ name, kind }) => `Supprimer vos modifications de « ${name} » (${kind}) et utiliser ses réglages d’origine.` }, { now: 'Maintenant', afterIdle: 'Après inactivité', start: 'Démarrer', stop: 'Arrêter', suspend: 'Suspendre', resume: 'Reprendre', delete: 'Supprimer' }),
+    it: copy({ title: 'Crea un link pubblico al documento', named: name => `Creare un link pubblico per «${name}»?`, summary: 'Chiunque abbia questo link potrà leggere il documento.' }, { change: ({ name, kind }) => `Modifica «${name}» (${kind}) per tutto il tuo lavoro.`, reset: ({ name, kind }) => `Rimuovi le tue modifiche a «${name}» (${kind}) e usa le impostazioni originali.` }, { now: 'Ora', afterIdle: 'Dopo l’inattività', start: 'Avvia', stop: 'Arresta', suspend: 'Sospendi', resume: 'Riprendi', delete: 'Elimina' }),
+    ja: copy({ title: 'ドキュメントの公開リンクを作成', named: name => `「${name}」の公開リンクを作成しますか？`, summary: 'このリンクを知っている人は誰でもドキュメントを読めます。' }, { change: ({ name, kind }) => `「${name}」（${kind}）をすべての作業で変更します。`, reset: ({ name, kind }) => `「${name}」（${kind}）への変更を削除し、元の設定を使用します。` }, { now: '今すぐ', afterIdle: 'アイドル後', start: '開始', stop: '停止', suspend: '一時停止', resume: '再開', delete: '削除' }),
+    pl: copy({ title: 'Utwórz publiczny link do dokumentu', named: name => `Utworzyć publiczny link do „${name}”?`, summary: 'Każdy, kto ma ten link, będzie mógł przeczytać dokument.' }, { change: ({ name, kind }) => `Zmień „${name}” (${kind}) dla całej swojej pracy.`, reset: ({ name, kind }) => `Usuń swoje zmiany w „${name}” (${kind}) i użyj oryginalnych ustawień.` }, { now: 'Teraz', afterIdle: 'Po bezczynności', start: 'Uruchom', stop: 'Zatrzymaj', suspend: 'Wstrzymaj', resume: 'Wznów', delete: 'Usuń' }),
+    pt: copy({ title: 'Criar link público para o documento', named: name => `Criar um link público para «${name}»?`, summary: 'Qualquer pessoa com este link poderá ler o documento.' }, { change: ({ name, kind }) => `Alterar «${name}» (${kind}) para todo o seu trabalho.`, reset: ({ name, kind }) => `Remover as suas alterações a «${name}» (${kind}) e usar as definições originais.` }, { now: 'Agora', afterIdle: 'Após inatividade', start: 'Iniciar', stop: 'Parar', suspend: 'Suspender', resume: 'Retomar', delete: 'Eliminar' }),
+    ru: copy({ title: 'Создать общедоступную ссылку на документ', named: name => `Создать общедоступную ссылку на «${name}»?`, summary: 'Любой, у кого есть эта ссылка, сможет прочитать документ.' }, { change: ({ name, kind }) => `Изменить «${name}» (${kind}) для всей вашей работы.`, reset: ({ name, kind }) => `Удалить ваши изменения в «${name}» (${kind}) и использовать исходные настройки.` }, { now: 'Сейчас', afterIdle: 'После простоя', start: 'Запустить', stop: 'Остановить', suspend: 'Приостановить', resume: 'Возобновить', delete: 'Удалить' }),
+    zhHans: copy({ title: '创建文档公开链接', named: name => `为“${name}”创建公开链接？`, summary: '任何拥有此链接的人都可以阅读该文档。' }, { change: ({ name, kind }) => `为所有工作更改“${name}”（${kind}）。`, reset: ({ name, kind }) => `移除对“${name}”（${kind}）的更改并使用原始设置。` }, { now: '立即', afterIdle: '空闲后', start: '启动', stop: '停止', suspend: '挂起', resume: '恢复', delete: '删除' }),
+    zhHant: copy({ title: '建立文件公開連結', named: name => `為「${name}」建立公開連結？`, summary: '任何擁有此連結的人都可以閱讀該文件。' }, { change: ({ name, kind }) => `為所有工作變更「${name}」（${kind}）。`, reset: ({ name, kind }) => `移除對「${name}」（${kind}）的變更並使用原始設定。` }, { now: '立即', afterIdle: '閒置後', start: '啟動', stop: '停止', suspend: '暫停', resume: '恢復', delete: '刪除' }),
 } as const;

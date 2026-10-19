@@ -39,6 +39,7 @@ export type SkillDetailTranslation = Readonly<{
     lintMissingDescription: string;
     lintNoFrontmatter: string;
     readOnly: string;
+    readOnlyPlugin: string;
   }>;
   files: Readonly<{
     title: string;
@@ -167,6 +168,7 @@ const en: SkillDetailTranslation = {
     lintMissingDescription: 'Add a description, so agents know when to use it',
     lintNoFrontmatter: 'Start with a frontmatter block: name and description',
     readOnly: 'Ships with Happier and follows its version.',
+    readOnlyPlugin: 'Ships with its plugin and follows its version.',
   },
   files: {
     title: 'Files',
@@ -301,6 +303,7 @@ const ca: SkillDetailTranslation = {
       'Afegeix una descripció perquè els agents sàpiguen quan fer-la servir',
     lintNoFrontmatter: 'Comença amb un bloc frontmatter: nom i descripció',
     readOnly: 'Ve amb Happier i en segueix la versió.',
+    readOnlyPlugin: 'Ve amb el seu connector i en segueix la versió.',
   },
   files: {
     title: 'Fitxers',
@@ -438,6 +441,7 @@ const de: SkillDetailTranslation = {
       'Füge eine Beschreibung hinzu, damit Agenten wissen, wann sie ihn nutzen',
     lintNoFrontmatter: 'Beginne mit einem Frontmatter-Block: Name und Beschreibung',
     readOnly: 'Wird mit Happier geliefert und folgt dessen Version.',
+    readOnlyPlugin: 'Wird mit seinem Plugin geliefert und folgt dessen Version.',
   },
   files: {
     title: 'Dateien',
@@ -577,6 +581,7 @@ const es: SkillDetailTranslation = {
       'Añade una descripción para que los agentes sepan cuándo usarla',
     lintNoFrontmatter: 'Empieza con un bloque frontmatter: nombre y descripción',
     readOnly: 'Viene con Happier y sigue su versión.',
+    readOnlyPlugin: 'Viene con su plugin y sigue su versión.',
   },
   files: {
     title: 'Archivos',
@@ -714,6 +719,7 @@ const fr: SkillDetailTranslation = {
       'Ajoutez une description pour que les agents sachent quand l’utiliser',
     lintNoFrontmatter: 'Commencez par un bloc frontmatter : nom et description',
     readOnly: 'Fourni avec Happier, il suit sa version.',
+    readOnlyPlugin: 'Fourni avec son plugin, il suit sa version.',
   },
   files: {
     title: 'Fichiers',
@@ -852,6 +858,7 @@ const it: SkillDetailTranslation = {
       'Aggiungi una descrizione, così gli agenti sanno quando usarla',
     lintNoFrontmatter: 'Inizia con un blocco frontmatter: nome e descrizione',
     readOnly: 'Inclusa in Happier, ne segue la versione.',
+    readOnlyPlugin: 'Inclusa nel suo plugin, ne segue la versione.',
   },
   files: {
     title: 'File',
@@ -989,6 +996,7 @@ const ja: SkillDetailTranslation = {
       'エージェントが使うタイミングを判断できるよう、説明を追加してください',
     lintNoFrontmatter: 'frontmatter ブロックで始めてください：名前と説明',
     readOnly: 'Happier に付属し、そのバージョンに従います。',
+    readOnlyPlugin: 'プラグインに付属し、そのバージョンに従います。',
   },
   files: {
     title: 'ファイル',
@@ -1125,6 +1133,7 @@ const pl: SkillDetailTranslation = {
       'Dodaj opis, żeby agenci wiedzieli, kiedy jej użyć',
     lintNoFrontmatter: 'Zacznij od bloku frontmatter: nazwa i opis',
     readOnly: 'Jest częścią Happier i podąża za jego wersją.',
+    readOnlyPlugin: 'Jest częścią swojej wtyczki i podąża za jej wersją.',
   },
   files: {
     title: 'Pliki',
@@ -1260,6 +1269,7 @@ const pt: SkillDetailTranslation = {
       'Adicione uma descrição, para os agentes saberem quando a usar',
     lintNoFrontmatter: 'Comece com um bloco frontmatter: nome e descrição',
     readOnly: 'Vem com o Happier e acompanha a sua versão.',
+    readOnlyPlugin: 'Vem com o seu plug-in e acompanha a sua versão.',
   },
   files: {
     title: 'Ficheiros',
@@ -1398,6 +1408,7 @@ const ru: SkillDetailTranslation = {
       'Добавьте описание, чтобы агенты знали, когда его использовать',
     lintNoFrontmatter: 'Начните с блока frontmatter: имя и описание',
     readOnly: 'Входит в Happier и следует его версии.',
+    readOnlyPlugin: 'Входит в свой плагин и следует его версии.',
   },
   files: {
     title: 'Файлы',
@@ -1531,6 +1542,7 @@ const zhHans: SkillDetailTranslation = {
     lintMissingDescription: '添加描述，让智能体知道何时使用',
     lintNoFrontmatter: '以 frontmatter 块开头：名称和描述',
     readOnly: '随 Happier 提供，并跟随其版本。',
+    readOnlyPlugin: '随其插件提供，并跟随插件版本。',
   },
   files: {
     title: '文件',
@@ -1658,6 +1670,7 @@ const zhHant: SkillDetailTranslation = {
     lintMissingDescription: '新增說明，讓代理知道何時使用',
     lintNoFrontmatter: '以 frontmatter 區塊開頭：名稱和說明',
     readOnly: '隨 Happier 提供，並跟隨其版本。',
+    readOnlyPlugin: '隨其外掛提供，並跟隨外掛版本。',
   },
   files: {
     title: '檔案',

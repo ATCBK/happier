@@ -15,6 +15,7 @@ export const en = {
         state: {
             settled: "finished its turn",
             needsYou: "needs you",
+            neededYou: "needed you",
             stalled: "stalled",
             published: "published",
             failed: "failed",
@@ -23,6 +24,10 @@ export const en = {
             finished: "finished",
         },
         peek: "Peek",
+        mute: 'Mute',
+        muted: 'Muted here',
+        unmute: 'Undo',
+        muteFailed: 'Couldn’t mute it',
         truncated: "Result shortened.",
         wokenBy: ({ count }: { count: number }) => (count === 1 ? 'Woken by an update' : `Woken by ${count} updates`),
         notFromYou: 'not a message from you',
@@ -49,9 +54,6 @@ export const en = {
     },
     actions: {
         showInTranscript: 'Show in transcript',
-        makeOrchestrator: 'Make this an orchestrator',
-        makeOrchestratorSubtitle: 'This session plans, delegates and reports back',
-        makeOrchestratorFailed: "Couldn't make this session an orchestrator",
     },
     putUnder: {
         title: "Put under…",
@@ -91,10 +93,13 @@ export const en = {
         a11y: ({ summary }: { summary: string }) => `Work: ${summary}`,
     },
     leadArchived: ({ count }: { count: number }) => `This session is archived · ${count} still working`,
+    managedBy: 'Managed by',
+    plan: 'Plan',
     runsStale: 'Workflow runs may be out of date',
     list: {
         level: ({ level }: { level: number }) => `Level ${level}`,
         subSessions: ({ count }: { count: number }) => (count === 1 ? '1 sub-session' : `${count} sub-sessions`),
+        transcriptSessions: ({ count }: { count: number }) => `Sessions · ${count}`,
         showReports: ({ name, count }: { name: string; count: number }) => (count > 0 ? `Show ${count} sessions under ${name}` : `Show sessions under ${name}`),
         hideReports: ({ name }: { name: string }) => `Hide sessions under ${name}`,
         reportsWorking: ({ count }: { count: number }) => `${count} working`,
@@ -114,7 +119,7 @@ export const en = {
         orAskFor: "Or ask for",
     },
     peek: {
-        reportsTo: ({ lead }: { lead: string }) => `Reports to ${lead}`,
+        manager: ({ lead }: { lead: string }) => `Reports to ${lead}`,
         repliesGoHere: 'Replies go to this session',
     },
 };

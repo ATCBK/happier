@@ -17,6 +17,8 @@ export const en = {
     filtersHomes: 'Homes', filtersSharedWith: 'Shared with', filtersOutsideTeams: 'Personal & direct',
     filtersTags: 'Tags', filtersSource: 'Source', filtersSourceAll: 'All',
     filtersSourceDirect: 'External',
+    filtersOnlyCoordinators: 'Only coordinators', filtersOnlyCoordinatorsDescription: 'Sessions that manage others or follow by a rule',
+    filtersCoordinatorsChip: 'Coordinators', filtersCoordinatorsChipClear: 'Stop showing only coordinators',
     filtersNoOptions: 'No filters available', filtersClear: 'Clear filters', filtersDone: 'Done', filtersArchived: 'Archived',
     filtersNeedsMeOnly: 'Needs me only', filtersNeedsMeOnlyDescription: 'Sessions waiting on you', filtersSourceHappier: 'Happier',
     filtersMoreTags: ({ count }: { count: number }) => `+ ${count} more`,

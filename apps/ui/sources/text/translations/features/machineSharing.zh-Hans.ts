@@ -18,6 +18,7 @@ export const machineSharing = createMachineSharingTranslations({
     plain: '其数据没有端到端加密，因此 Home 可以读取。', saved: '共享已更新', yourAccess: '你的访问权限',
     ownHistory: "你在这里启动的会话在 Happier 中仍归你所有，即使访问权限结束。", through: "通过 {audience}",
     leave: '退出此共享', inherited: '你仍通过 {audience} 拥有访问权限。请联系管理员更改权限。', unavailable: '无法检查 {machine} 的访问权限。',
+    saveFailed: '无法为 {person} 保存“{draft}”。当前仍为“{current}”。',
     effectiveLoss: '失去最后一项访问权限的人，其正在运行的会话、脚本、运行任务、排队及准备中的工作、终端和服务将被停止。Happier 历史记录仍归本人所有；已获取的数据无法收回。',
     overlap: '其他有效访问权限仍然保留。工作将继续运行。', custodianProtected: '无法在这里移除或替换机器的原始所有者。',
 });

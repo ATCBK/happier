@@ -36,6 +36,7 @@ export type ShareSheetTranslations = Readonly<{
     documents: Readonly<{
         title: string;
         shareTitle: (params: Readonly<{ name: string }>) => string;
+        shareMenu: string;
         levels: Readonly<{ canUse: string; canRead: string; canEdit: string; admin: string }>;
         help: Readonly<{
             workflowUse: string;
@@ -97,6 +98,7 @@ export const shareSheetTranslationsEnglish = { en: {
         documents: {
             title: 'Sharing',
             shareTitle: ({ name }) => `Share ${name}`,
+            shareMenu: 'Share…',
             levels: { canUse: 'Can use', canRead: 'Can read', canEdit: 'Can edit', admin: 'Admin' },
             help: {
                 workflowUse: 'see and run it',

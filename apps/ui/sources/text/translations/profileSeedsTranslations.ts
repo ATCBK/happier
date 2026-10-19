@@ -14,6 +14,8 @@ export type ProfileSeedsTranslation = Readonly<{
   missing: string;
   /** The row of a seed whose library has not answered: never the raw id. */
   pending: string;
+  /** A seed the library knows but cannot open right now: named, never called missing. */
+  unreadableItem: string;
   remove: ({ skill }: { skill: string }) => string;
   reading: string;
   unreadable: string;
@@ -32,6 +34,7 @@ const en: ProfileSeedsTranslation = {
   openSkills: 'Open Skills',
   missing: 'Not in your library',
   pending: 'Skill',
+  unreadableItem: 'Can’t be read right now',
   remove: ({ skill }) => `Remove ${skill}`,
   reading: 'Reading your skills…',
   unreadable: 'Couldn’t read your skills',
@@ -49,6 +52,7 @@ const ca: ProfileSeedsTranslation = {
   openSkills: 'Obre Habilitats',
   missing: 'No és a la teva biblioteca',
   pending: 'Habilitat',
+  unreadableItem: 'Ara no es pot llegir',
   remove: ({ skill }) => `Treu ${skill}`,
   reading: 'Llegint les teves habilitats…',
   unreadable: 'No s’han pogut llegir les teves habilitats',
@@ -66,6 +70,7 @@ const de: ProfileSeedsTranslation = {
   openSkills: 'Skills öffnen',
   missing: 'Nicht in deiner Bibliothek',
   pending: 'Skill',
+  unreadableItem: 'Lässt sich gerade nicht lesen',
   remove: ({ skill }) => `${skill} entfernen`,
   reading: 'Deine Skills werden gelesen …',
   unreadable: 'Deine Skills konnten nicht gelesen werden',
@@ -83,6 +88,7 @@ const es: ProfileSeedsTranslation = {
   openSkills: 'Abrir Skills',
   missing: 'No está en tu biblioteca',
   pending: 'Skill',
+  unreadableItem: 'No se puede leer ahora',
   remove: ({ skill }) => `Quitar ${skill}`,
   reading: 'Leyendo tus skills…',
   unreadable: 'No se pudieron leer tus skills',
@@ -100,6 +106,7 @@ const fr: ProfileSeedsTranslation = {
   openSkills: 'Ouvrir Skills',
   missing: 'Absent de votre bibliothèque',
   pending: 'Skill',
+  unreadableItem: 'Illisible pour le moment',
   remove: ({ skill }) => `Retirer ${skill}`,
   reading: 'Lecture de vos skills…',
   unreadable: 'Impossible de lire vos skills',
@@ -117,6 +124,7 @@ const it: ProfileSeedsTranslation = {
   openSkills: 'Apri Skill',
   missing: 'Non è nella tua libreria',
   pending: 'Skill',
+  unreadableItem: 'Al momento non si può leggere',
   remove: ({ skill }) => `Rimuovi ${skill}`,
   reading: 'Lettura delle tue skill…',
   unreadable: 'Impossibile leggere le tue skill',
@@ -134,6 +142,7 @@ const ja: ProfileSeedsTranslation = {
   openSkills: 'スキルを開く',
   missing: 'ライブラリにありません',
   pending: 'スキル',
+  unreadableItem: 'いまは読み込めません',
   remove: ({ skill }) => `${skill} を削除`,
   reading: 'スキルを読み込み中…',
   unreadable: 'スキルを読み込めませんでした',
@@ -151,6 +160,7 @@ const pl: ProfileSeedsTranslation = {
   openSkills: 'Otwórz Umiejętności',
   missing: 'Brak w twojej bibliotece',
   pending: 'Umiejętność',
+  unreadableItem: 'Teraz nie można go odczytać',
   remove: ({ skill }) => `Usuń ${skill}`,
   reading: 'Wczytywanie twoich umiejętności…',
   unreadable: 'Nie udało się wczytać twoich umiejętności',
@@ -168,6 +178,7 @@ const pt: ProfileSeedsTranslation = {
   openSkills: 'Abrir Skills',
   missing: 'Não está na sua biblioteca',
   pending: 'Skill',
+  unreadableItem: 'Não é possível ler agora',
   remove: ({ skill }) => `Remover ${skill}`,
   reading: 'A ler as suas skills…',
   unreadable: 'Não foi possível ler as suas skills',
@@ -185,6 +196,7 @@ const ru: ProfileSeedsTranslation = {
   openSkills: 'Открыть навыки',
   missing: 'Нет в вашей библиотеке',
   pending: 'Навык',
+  unreadableItem: 'Сейчас не удаётся прочитать',
   remove: ({ skill }) => `Убрать ${skill}`,
   reading: 'Чтение ваших навыков…',
   unreadable: 'Не удалось прочитать ваши навыки',
@@ -202,6 +214,7 @@ const zhHans: ProfileSeedsTranslation = {
   openSkills: '打开技能',
   missing: '不在你的库中',
   pending: '技能',
+  unreadableItem: '暂时无法读取',
   remove: ({ skill }) => `移除 ${skill}`,
   reading: '正在读取你的技能…',
   unreadable: '无法读取你的技能',
@@ -219,6 +232,7 @@ const zhHant: ProfileSeedsTranslation = {
   openSkills: '開啟技能',
   missing: '不在你的資料庫中',
   pending: '技能',
+  unreadableItem: '暫時無法讀取',
   remove: ({ skill }) => `移除 ${skill}`,
   reading: '正在讀取你的技能…',
   unreadable: '無法讀取你的技能',

@@ -18,6 +18,7 @@ export const machineSharing = createMachineSharingTranslations({
     plain: '其資料未使用端對端加密，因此 Home 可以讀取。', saved: '共享已更新', yourAccess: '你的存取權',
     ownHistory: "你在這裡啟動的工作階段在 Happier 中仍歸你所有，即使存取權限結束。", through: "透過 {audience}",
     leave: '退出此共享', inherited: '你仍透過 {audience} 擁有存取權。請聯絡管理者變更權限。', unavailable: '無法檢查 {machine} 的存取權。',
+    saveFailed: '無法為 {person} 儲存「{draft}」。目前仍為「{current}」。',
     effectiveLoss: '失去最後一項存取權的人，其執行中的工作階段、指令碼、執行任務、排隊及準備中的工作、終端機和服務將停止。Happier 歷程記錄仍歸本人所有；已取得的資料無法收回。',
     overlap: '其他有效存取權仍然保留。工作將繼續執行。', custodianProtected: '無法在這裡移除或取代機器的原始擁有者。',
 });
