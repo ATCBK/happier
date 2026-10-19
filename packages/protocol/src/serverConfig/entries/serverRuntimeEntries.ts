@@ -436,7 +436,7 @@ export const SERVER_RUNTIME_SERVER_CONFIG = defineServerConfigRegistry({
         section: 'server',
         group: 'errorReporting',
         aliases: ['HAPPIER_SENTRY_PROFILE_SESSION_SAMPLE_RATE'],
-        description: 'Share of sessions profiled by Sentry, from 0 to 1.',
+        description: 'Share of sessions profiled by Sentry on Node, from 0 to 1. Bun servers skip native profiling with a warning; error capture remains enabled.',
     },
     SENTRY_ENABLE_LOGS: {
         type: 'boolean',
