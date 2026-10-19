@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventSchema, type AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type {
   ManagedServiceHandle,
   ManagedServiceRequest,
@@ -182,6 +182,114 @@ describe('native V2 terminal transcript through the server runtime', () => {
       await runtime.dispose();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('native V1 prompt correspondence through the public Session runtime', () => {
+  it.each([false, true])('retains native input custody while identity persistence yields to idle (foreign idle: %s)', async (foreignIdle) => {
+    const nativeSessionId = 'ses_correspondence';
+    const messages: unknown[] = [];
+    let promptCount = 0;
+    let messageReads = 0;
+    let eventController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const client = createClient({
+      directory: '/repo',
+      // Only the managed native HTTP boundary is substituted. Prompt projection, transport,
+      // response parsing, correlation, input custody and event schemas are production code.
+      request: async (request) => {
+        const path = new URL(request.pathAndQuery, 'http://localhost').pathname;
+        if (path === '/global/event') return createSseResponse([], { keepOpen: true });
+        if (path === '/event') return {
+          ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'text/event-stream' },
+          body: new ReadableStream<Uint8Array>({ start(controller) {
+            eventController = controller;
+            controller.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'));
+          } }),
+        };
+        if (path === '/session' && request.method === 'POST') return createJsonResponse({ id: nativeSessionId });
+        if (path.endsWith('/message') && request.method === 'POST') {
+          promptCount += 1;
+          const created = Date.now();
+          const input = JSON.parse(new TextDecoder().decode(request.body));
+          const user = { info: { id: `native-user-${promptCount}`, role: 'user', sessionID: nativeSessionId,
+            time: { created } }, parts: input.parts };
+          const assistant = { info: { id: `native-assistant-${promptCount}`, role: 'assistant',
+            sessionID: nativeSessionId, parentID: user.info.id,
+            time: { created, completed: created }, finish: 'stop' },
+            parts: [{ type: 'text', text: `NATIVE_REPLY_${promptCount}` }] };
+          messages.push(user, assistant);
+          return foreignIdle ? createNoContentResponse() : createJsonResponse(assistant);
+        }
+        if (path.endsWith('/message')) {
+          messageReads += 1;
+          return createJsonResponse(messages);
+        }
+        if (path === '/session/status') return createJsonResponse({});
+        return createJsonResponse([]);
+      },
+    });
+    const ctx = createContextFixture({ managedServerBaseUrl: 'http://localhost' });
+    const identityWrite: { release?: () => void } = {};
+    const persist = vi.mocked(ctx.storage.daemonSession.set).getMockImplementation();
+    vi.mocked(ctx.storage.daemonSession.set).mockImplementation(async (key, value) => {
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)
+        && 'ids' in value && Array.isArray(value.ids) && value.ids.length > 0 && !identityWrite.release) {
+        await new Promise<void>(resolve => { identityWrite.release = resolve; });
+      }
+      await persist?.(key, value);
+    });
+    const operations = createOpenCodeServerRuntime({
+      ctx, directory: '/repo', happierSessionId: 'happy_correspondence', client,
+      mcpRegistration: Promise.resolve({ requiredHappier: { status: 'ready' }, registeredServers: [] }),
+      mcpProjection: { registrations: [], requiredHappierServerName: null, requiredHappierConfigurationPresent: false },
+    });
+    const runtime = createOpenCodeSessionRuntime({
+      operations, request: { kind: 'create', sessionId: 'happy_correspondence', cwd: '/repo' },
+      disposeOperations: async () => { await operations.resetOrDisposeRuntime(); },
+      runtimeCapabilities: { sessionCapabilities: {}, tools: { delivery: 'native_mcp', support: 'supported' } },
+    });
+    const events: AgentSessionRuntimeEvent[] = [];
+    runtime.watch(event => events.push(event));
+    try {
+      await operations.openSession({ kind: 'create' });
+      await expect.poll(() => eventController !== null && messageReads > 0).toBe(true);
+      const dispatch = runtime.send({
+        inputIds: ['first-input'], input: { text: 'Original first marker' },
+        delivery: { kind: 'newTurn', turnId: 'first-turn' },
+      });
+      await expect.poll(() => identityWrite.release !== undefined).toBe(true);
+      const priorReads = messageReads;
+      const emitIdle = (sessionID: string) => operations.handleProviderEvent({
+        type: 'session.idle', properties: { sessionID },
+      });
+      if (foreignIdle) {
+        await emitIdle('ses_other');
+        expect(messageReads).toBe(priorReads);
+      }
+      await emitIdle(nativeSessionId);
+      expect(messageReads).toBeGreaterThan(priorReads);
+      // Persistence is still pending: completion must not erase the exact native
+      // identity that the outer send is about to return to the host.
+      expect(events.some(event => event.kind === 'input-custody-unknown')).toBe(false);
+      identityWrite.release?.();
+      await expect(dispatch).resolves.toMatchObject({ status: 'admitted' });
+      await runtime.waitForTurnCompletion();
+      await expect(runtime.send({
+        inputIds: ['second-input'], input: { text: 'Original second marker' },
+        delivery: { kind: 'newTurn', turnId: 'second-turn' },
+      })).resolves.toMatchObject({ status: 'admitted' });
+      await runtime.waitForTurnCompletion();
+      expect(events.filter(event => event.kind === 'input-accepted')).toHaveLength(2);
+      expect(events.filter(event => event.kind === 'turn-complete')).toHaveLength(2);
+      expect(events.filter(event => event.kind === 'transcript-message-committed')).toEqual([
+        expect.objectContaining({ role: 'assistant', text: 'NATIVE_REPLY_1' }),
+        expect.objectContaining({ role: 'assistant', text: 'NATIVE_REPLY_2' }),
+      ]);
+      for (const event of events) expect(AgentSessionRuntimeEventSchema.safeParse(event).success).toBe(true);
+    } finally {
+      identityWrite.release?.();
+      await runtime.dispose();
     }
   });
 });
@@ -1507,6 +1615,7 @@ describe('createOpenCodeServerClient (OpenCode V2 beta dialect)', () => {
           id: 'msg_2',
           role: 'assistant',
           sessionID: 'ses-1',
+          providerID: 'anthropic',
           // V2 carries no parentID; the ordered preceding user message is the
           // only evidence for the anchor the current projection requires.
           parentID: 'msg_1',

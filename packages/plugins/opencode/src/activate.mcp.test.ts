@@ -2,31 +2,37 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { McpDiscoveredEndpoint as PluginMcpDiscoveredEndpoint } from '@happier-dev/plugin-sdk/mcp';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 
 import { activate } from './activate.js';
 import { PLUGIN_MANIFEST } from './manifest.js';
 
 describe('OpenCode plugin activation MCP discovery', () => {
-  it('maps recovered remote OpenCode MCP config entries into endpoint MCP specs', async () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('exposes native OpenCode MCP detections including disabled servers', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'opencode-activate-mcp-'));
+    vi.stubEnv('XDG_CONFIG_HOME', join(projectRoot, 'empty-user-config'));
+    vi.stubEnv('OPENCODE_CONFIG', '');
+    vi.stubEnv('OPENCODE_CONFIG_DIR', '');
     const opencodeDir = join(projectRoot, '.opencode');
     await import('node:fs/promises').then(({ mkdir }) => mkdir(opencodeDir, { recursive: true }));
     await writeFile(
       join(opencodeDir, 'opencode.json'),
       JSON.stringify({
-        mcpServers: {
+        mcp: {
           docs: {
+            type: 'remote',
             url: 'https://mcp.example.test/http',
           },
           stream: {
-            endpoint: 'https://mcp.example.test/sse',
-            transport: 'sse',
+            type: 'remote',
+            url: 'https://mcp.example.test/sse',
           },
           disabledDocs: {
+            type: 'remote',
             url: 'https://mcp.example.test/disabled',
             enabled: false,
           },
@@ -42,38 +48,39 @@ describe('OpenCode plugin activation MCP discovery', () => {
       directory: projectRoot,
     }]);
 
-    expect(result.warnings).toEqual([]);
-    expect(result.endpoints).toEqual(expect.arrayContaining<PluginMcpDiscoveredEndpoint>([
-      expect.objectContaining({
-        id: 'opencode.config.docs',
-        name: 'docs',
-        kind: 'http',
-        url: 'https://mcp.example.test/http',
-      }),
-      expect.objectContaining({
-        id: 'opencode.config.stream',
-        name: 'stream',
-        kind: 'sse',
-        url: 'https://mcp.example.test/sse',
-      }),
-    ]));
-    expect(result.endpoints).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'opencode.config.disabledDocs',
-      }),
-    ]));
+    expect(result).toEqual({
+      items: [],
+      detectedServers: [
+        ['docs', 'https://mcp.example.test/http', null],
+        ['stream', 'https://mcp.example.test/sse', null],
+        ['disabledDocs', 'https://mcp.example.test/disabled', false],
+      ].map(([name, url, enabled]) => ({
+        provider: 'opencode',
+        name,
+        transport: 'http',
+        remote: { url, headers: [] },
+        envKeys: [],
+        enabled,
+        source: { kind: 'project', path: join(opencodeDir, 'opencode.json') },
+      })),
+      warnings: [],
+    });
     await activation.dispose();
   });
 
-  it('normalizes discovered OpenCode MCP server names before using them in spec ids', async () => {
+  it('preserves a detected OpenCode MCP server name', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'opencode-activate-mcp-id-'));
+    vi.stubEnv('XDG_CONFIG_HOME', join(projectRoot, 'empty-user-config'));
+    vi.stubEnv('OPENCODE_CONFIG', '');
+    vi.stubEnv('OPENCODE_CONFIG_DIR', '');
     const opencodeDir = join(projectRoot, '.opencode');
     await import('node:fs/promises').then(({ mkdir }) => mkdir(opencodeDir, { recursive: true }));
     await writeFile(
       join(opencodeDir, 'opencode.json'),
       JSON.stringify({
-        mcpServers: {
+        mcp: {
           'Team Docs': {
+            type: 'remote',
             url: 'https://mcp.example.test/team-docs',
           },
         },
@@ -90,29 +97,39 @@ describe('OpenCode plugin activation MCP discovery', () => {
 
     expect(result).toEqual({
       items: [],
-      endpoints: [
-        expect.objectContaining({
-          id: 'opencode.config.team-docs',
+      detectedServers: [
+        {
+          provider: 'opencode',
           name: 'Team Docs',
-        }),
+          transport: 'http',
+          remote: { url: 'https://mcp.example.test/team-docs', headers: [] },
+          envKeys: [],
+          enabled: null,
+          source: { kind: 'project', path: join(opencodeDir, 'opencode.json') },
+        },
       ],
       warnings: [],
     });
     await activation.dispose();
   });
 
-  it('skips OpenCode MCP config entries whose normalized ids collide', async () => {
+  it('keeps distinct native names that would collide under endpoint id normalization', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'opencode-activate-mcp-collision-'));
+    vi.stubEnv('XDG_CONFIG_HOME', join(projectRoot, 'empty-user-config'));
+    vi.stubEnv('OPENCODE_CONFIG', '');
+    vi.stubEnv('OPENCODE_CONFIG_DIR', '');
     const opencodeDir = join(projectRoot, '.opencode');
     await import('node:fs/promises').then(({ mkdir }) => mkdir(opencodeDir, { recursive: true }));
     await writeFile(
       join(opencodeDir, 'opencode.json'),
       JSON.stringify({
-        mcpServers: {
+        mcp: {
           'Team Docs': {
+            type: 'remote',
             url: 'https://mcp.example.test/team-docs',
           },
           'team--docs': {
+            type: 'remote',
             url: 'https://mcp.example.test/team-docs-shadow',
           },
         },
@@ -129,7 +146,18 @@ describe('OpenCode plugin activation MCP discovery', () => {
 
     expect(result).toEqual({
       items: [],
-      endpoints: [],
+      detectedServers: [
+        ['Team Docs', 'https://mcp.example.test/team-docs'],
+        ['team--docs', 'https://mcp.example.test/team-docs-shadow'],
+      ].map(([name, url]) => ({
+        provider: 'opencode',
+        name,
+        transport: 'http',
+        remote: { url, headers: [] },
+        envKeys: [],
+        enabled: null,
+        source: { kind: 'project', path: join(opencodeDir, 'opencode.json') },
+      })),
       warnings: [],
     });
     await activation.dispose();

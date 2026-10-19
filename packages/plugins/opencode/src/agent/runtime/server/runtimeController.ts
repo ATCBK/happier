@@ -2,7 +2,7 @@ import { readOpenCodeNativeChildOutcome, type OpenCodeNativeChildStatus } from '
 import { randomUUID } from 'node:crypto';
 import { normalizeOpenCodePaidUsage } from '../../usage/paidUsage.js';
 import { isOpenCodeModelSelectable } from '../../models/eligibility.js';
-import { buildOpenCodePreflightModels } from '../../preflight/models.js';
+import { buildOpenCodeModelsFromProviders } from '../../preflight/models.js';
 import type { OpenCodeModelCatalogSnapshot, OpenCodeModeCatalogSnapshot } from './operations.js';
 import { publishOpenCodeNativeTodosWorkState } from '../workState.js';
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
@@ -425,11 +425,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     try {
       const providers = await client.providersList();
       const observedAt = Date.now();
-      const blocks = providers.flatMap((provider) => Object.entries(provider.models ?? {}).flatMap(([id, raw]) => {
-        const record = asRecord(raw);
-        return record ? [{ fullId: `${provider.id}/${normalizeString(record.id) || id}`, record }] : [];
-      }));
-      modelCatalog = { observedAt, models: buildOpenCodePreflightModels(blocks, observedAt) };
+      modelCatalog = { observedAt, models: buildOpenCodeModelsFromProviders(providers, observedAt) };
       publishRuntimeEvent({ kind: 'model-catalog-observed', ...projectOpenCodeRuntimeScope(params.scope), emittedAtMs: observedAt });
     } catch {
       // A failed observation is not an authoritative withdrawal of the last usable inventory.
@@ -1034,6 +1030,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     status: unknown,
     historyProjection: AssistantHistoryProjectionResult = EMPTY_ASSISTANT_HISTORY_PROJECTION_RESULT,
   ): Promise<void> => {
+    // Native idle can arrive while the accepted user identity is being persisted.
+    // Admission still owns that identity until sendTurnPrompt can return it.
+    if (state.currentTurnPromptAcceptedAtMs === null) return;
     const hasTerminalAssistantHistory = historyProjection.terminalAssistantMessageCount > 0
       || state.currentTurnTerminalAssistantMessageIds.size > 0;
     if (!hasTerminalAssistantHistory) {
@@ -2334,6 +2333,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       if (!nativeCommand) {
         state.currentTurnProviderPromptTexts.clear();
         state.currentTurnProviderPromptTexts.add(prompt);
+        state.currentTurnPromptAcceptedAtMs = null;
       }
       const promptSubmittedAtMs = Date.now();
       state.currentTurnPromptSubmittedAtMs = promptSubmittedAtMs;
@@ -2500,11 +2500,16 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           publishRuntimeEvent({ kind: 'mode-catalog-observed', ...projectOpenCodeRuntimeScope(params.scope), emittedAtMs: state.currentTurnPromptAcceptedAtMs });
         }
         queueMicrotask(() => {
-          void inspectPromptSubmissionResponseForFinality(
-            promptSubmission,
-            providerUserMessageId,
-            turnId,
-          ).catch((error: unknown) => {
+          void (async () => {
+            await inspectPromptSubmissionResponseForFinality(
+              promptSubmission,
+              providerUserMessageId,
+              turnId,
+            );
+            if (ownsActiveHostTurn(turnId) && state.currentTurnIdleObserved) {
+              await settleCurrentTurnFromAuthoritativeInventoryAfterIdle(true);
+            }
+          })().catch((error: unknown) => {
             params.ctx.logger.debug('[OpenCodeServer] failed to inspect prompt response evidence', { error });
           });
         });

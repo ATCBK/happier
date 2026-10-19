@@ -33,7 +33,14 @@ export async function detectOpenCodeCliAuthStatus(params: Readonly<{
     };
   }
 
-  if (!command.stdout.trim()) {
+  // Native auth list prints its heading even with no stored credentials;
+  // environment credentials are reported as a separate inventory.
+  const inventoryCounts = Array.from(
+    command.stdout.matchAll(/\b(\d+)\s+(?:credentials?|environment variables?)\b/giu),
+    (match) => Number(match[1]),
+  );
+  const emptyInventory = inventoryCounts.length > 0 && inventoryCounts.every((count) => count === 0);
+  if (!command.stdout.trim() || emptyInventory) {
     return {
       state: 'logged_out',
       reason: 'missing_credentials',

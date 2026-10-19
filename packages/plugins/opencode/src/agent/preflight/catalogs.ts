@@ -3,7 +3,7 @@ import { resolveOpenCodeBackendMode } from '../runtime/mode.js';
 import { resolveOpenCodeManagedServerDialect } from '../runtime/server/managedServerDialect.js';
 import { buildOpenCodeManagedServerSpawnSpec } from '../runtime/server/spawnSpec.js';
 import { createOpenCodeServerTransport } from '../runtime/server/transport.js';
-import { createOpenCodeServerClient } from '../runtime/server/openCodeServerClient.js';
+import { createOpenCodeServerClient, type OpenCodeServerClient } from '../runtime/server/openCodeServerClient.js';
 import { normalizeOpenCodeSkills } from '../runtime/server/skills.js';
 import { resolveOpenCodeSystemToolId } from '../systemTool.js';
 
@@ -20,6 +20,19 @@ export async function probeOpenCodePreflightCatalogs(context: AgentPreflightSess
     accountSettings: context.accountSettings,
   });
   if (backendMode === 'acp') return await context.probeDeclaredAcpCatalogs({ toolId, args: ['acp'] });
+  return await withOpenCodePreflightServer(context, async client => {
+    const [commands, skills] = await Promise.all([
+      client.appCommands({ directory: context.cwd }), client.appSkills({ directory: context.cwd }),
+    ]);
+    return { commands, skills: normalizeOpenCodeSkills(skills) };
+  });
+}
+
+export async function withOpenCodePreflightServer<T>(
+  context: AgentPreflightSessionControlsProbeContextV1,
+  inspect: (client: OpenCodeServerClient) => Promise<T>,
+): Promise<T> {
+  const toolId = resolveOpenCodeSystemToolId(context.accountSettings?.opencodeCliGeneration);
   const resolution = await resolveOpenCodeManagedServerDialect({
     exec: { systemTools: { resolve: ({ toolId }) => context.resolveDeclaredSystemTool({ toolId }) } },
     cwd: context.cwd, signal: context.signal, systemToolId: toolId, requireKnownGeneration: true,
@@ -33,9 +46,6 @@ export async function probeOpenCodePreflightCatalogs(context: AgentPreflightSess
   return await context.withDeclaredManagedService(spec, async (service, signal) => {
     const transport = createOpenCodeServerTransport({ managedService: service, signal });
     const client = createOpenCodeServerClient({ transport, directory: context.cwd, dialect: resolution.dialect, signal });
-    const [commands, skills] = await Promise.all([
-      client.appCommands({ directory: context.cwd }), client.appSkills({ directory: context.cwd }),
-    ]);
-    return { commands, skills: normalizeOpenCodeSkills(skills) };
+    return await inspect(client);
   });
 }

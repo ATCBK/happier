@@ -126,17 +126,20 @@ describe('activate', () => {
     await writeFile(
       configPath,
       JSON.stringify({
-        mcpServers: {
+        mcp: {
           review: {
-            command: 'review-mcp',
-            args: ['--stdio'],
+            type: 'local',
+            command: ['review-mcp', '--stdio'],
           },
         },
       }),
       'utf8',
     );
     vi.stubEnv('HOME', root);
+    vi.stubEnv('USERPROFILE', root);
     vi.stubEnv('XDG_CONFIG_HOME', '');
+    vi.stubEnv('OPENCODE_CONFIG', '');
+    vi.stubEnv('OPENCODE_CONFIG_DIR', '');
 
     const activation = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     const agent = activation.registration('agents', 'opencode');
@@ -199,7 +202,15 @@ describe('activate', () => {
     if (!discovery) throw new Error('Missing OpenCode MCP discovery registration');
     await expect(Reflect.apply(discovery, undefined, [{}])).resolves.toEqual({
       items: [],
-      endpoints: [],
+      detectedServers: [{
+        provider: 'opencode',
+        name: 'review',
+        transport: 'stdio',
+        stdio: { command: 'review-mcp', args: ['--stdio'] },
+        envKeys: [],
+        enabled: null,
+        source: { kind: 'user', path: configPath },
+      }],
       warnings: [],
     });
     await activation.dispose();

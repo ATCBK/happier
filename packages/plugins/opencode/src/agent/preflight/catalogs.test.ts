@@ -28,6 +28,13 @@ function fixture(options: Readonly<{ generation?: string; version?: string; vers
             return { ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify({ data: [] })).body };
           }
           if (options.failSkills && route.pathname.endsWith('/skill')) throw new Error('skill transport failed');
+          if (route.pathname === '/provider' || route.pathname === '/api/provider' || route.pathname === '/api/model') {
+            const model = { id: 'native-selected', providerID: 'native', name: 'Selected account model', capabilities: { input: ['text'] } };
+            const value = route.pathname === '/provider'
+              ? { all: [{ id: 'native', models: { 'native-selected': model } }], connected: ['native'], default: {} }
+              : { data: route.pathname === '/api/model' ? [model] : [{ id: 'native', name: 'Native' }] };
+            return { ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(value)).body };
+          }
           const items = route.pathname.endsWith('/command')
             ? [{ name: 'review', description: 'Review project', template: 'native template' }]
             : [{ ...(v2 ? { id: 'native-project-skill' } : {}), name: 'project-skill', description: 'Use project skill', location: '/repo/.opencode/skills/project-skill/SKILL.md' }];
@@ -47,6 +54,17 @@ async function probe(context: AgentPreflightSessionControlsProbeContextV1) {
 }
 
 describe('OpenCode before-session native catalogs', () => {
+  it.each([{ generation: 'stable', version: '1.18.33' }, { generation: 'v2', version: '2.0.20' }])('reads the same native provider catalog as a bound Session ($generation)', async (selection) => {
+    const f = fixture(selection);
+    const contribution: AgentPreflightSessionControlsContributionV1 = OPENCODE_PREFLIGHT_SESSION_CONTROLS;
+    expect(contribution.probeModels, 'models must use the managed native server, not the standalone CLI catalog').toBeTypeOf('function');
+    await expect(contribution.probeModels!(f.context)).resolves.toMatchObject([
+      { id: 'native/native-selected', name: 'Selected account model' },
+    ]);
+    expect(f.requests.some(request => request.pathAndQuery.startsWith(selection.generation === 'v2' ? '/api/model?' : '/provider'))).toBe(true);
+    expect(f.disposed()).toBe(true);
+  });
+
   it('reads project-scoped V1 commands and skills through the managed native client without creating a session', async () => {
     const f = fixture();
     await expect(probe(f.context)).resolves.toEqual({
@@ -88,6 +106,19 @@ describe('OpenCode before-session native catalogs', () => {
     const f = fixture();
     const context = { ...f.context, accountSettings: { opencodeBackendMode: 'acp' } };
     await expect(probe(context)).resolves.toEqual({ commands: [{ name: 'acp-only' }], skills: null });
+    expect(f.services).toEqual([]);
+  });
+
+  it('reads ACP models through the host native Session-controls owner and preserves an empty catalog', async () => {
+    const f = fixture();
+    const contribution: AgentPreflightSessionControlsContributionV1 = OPENCODE_PREFLIGHT_SESSION_CONTROLS;
+    let models: readonly unknown[] = [{ id: 'acp/model', name: 'ACP model' }];
+    const context = { ...f.context, accountSettings: { opencodeBackendMode: 'acp' },
+      probeDeclaredAcpSessionControls: async () => ({ models, modes: null, configOptions: null }) };
+    await expect(contribution.probeModels!(context)).resolves.toEqual(models);
+    models = [];
+    await expect(contribution.probeModels!(context)).resolves.toEqual([]);
+    await expect(contribution.probeModels!({ ...context, probeDeclaredAcpSessionControls: undefined })).resolves.toBeNull();
     expect(f.services).toEqual([]);
   });
 });

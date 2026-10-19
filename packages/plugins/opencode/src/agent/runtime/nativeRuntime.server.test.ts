@@ -564,12 +564,7 @@ describe('createOpenCodeAgentRuntime server dispatch', () => {
       launchEnvironment: {
         values: {
           HAPPIER_OPENCODE_BACKEND_MODE: 'server',
-          OPENCODE_AUTH_CONTENT: JSON.stringify({
-            anthropic: {
-              type: 'api',
-              key: buildOpenCodeRequestAuthMarker('anthropic'),
-            },
-          }),
+          HAPPIER_CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH: join(tmpdir(), 'opencode-mixed-capability.json'),
           OPENAI_API_KEY: '',
           ANTHROPIC_API_KEY: '',
         },
@@ -616,6 +611,7 @@ describe('createOpenCodeAgentRuntime server dispatch', () => {
       expect.anything(),
       expect.any(Function),
     );
+    await opened.dispose();
   });
 
   it('does not reinterpret an unselected Claude materialization refusal as request auth', async () => {
@@ -912,6 +908,8 @@ describe('createOpenCodeAgentRuntime server dispatch', () => {
       status: 'ok',
       kind: 'skills',
       items: [{
+        v: 1,
+        origin: 'vendor',
         id: 'reviewer',
         name: 'reviewer',
         displayName: 'reviewer',

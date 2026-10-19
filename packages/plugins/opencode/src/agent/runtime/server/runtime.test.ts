@@ -5433,7 +5433,9 @@ describe('createOpenCodeServerRuntime', () => {
     } satisfies Pick<ConnectedAccountsService, 'getBinding' | 'materialize' | 'watch'>;
     const sourceContext = { signal: new AbortController().signal, services: { connectedAccounts } } as unknown as AgentRuntimeContext;
     const isRun = 'scope' in row && row.scope === 'run';
-    const launchEnvironment = { values: { OPENCODE_AUTH_CONTENT: JSON.stringify({ [row.slot]: { type: 'api', key: buildOpenCodeRequestAuthMarker(row.slot) } }) }, unset: [] };
+    const launchEnvironment = { values: {
+      HAPPIER_CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH: '/fixture/request-auth/capability.json',
+    }, unset: [] };
     const runRequest = { kind: 'create' as const, runId: 'native-account-run', cwd: '/repo',
       profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' }, input: { text: 'hello' }, localInputId: 'native-account-input', launchEnvironment };
     const prepared = isRun
