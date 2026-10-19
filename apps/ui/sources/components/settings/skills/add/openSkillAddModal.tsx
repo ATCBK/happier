@@ -10,7 +10,8 @@ import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesC
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { deriveSkillTrustV1 } from '@happier-dev/protocol/prompts/library/skills/skillTrustV1';
 import { estimateSkillCostV1 } from '@happier-dev/protocol/prompts/library/skills/skillCostV1';
-import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
+import { readSiblingSkillPathsV1, readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
+import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -24,6 +25,7 @@ import {
   type CapabilityTrust,
 } from '@/components/capabilities/facts/CapabilityFacts';
 import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
+import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import {
   useDraftReachRules,
   WhereItsOnControl,
@@ -48,11 +50,12 @@ import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
-import { SkillOutsideReferencesItem } from '../outsideReferences';
+import { remainingOutsideReferences, SkillAlsoAddsNote, SkillOutsideReferencesItem } from '../outsideReferences';
 import { useSkillPlaces } from '../useSkillPlaces';
-import { installSkills, retrySkillRules } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillRules } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
 import { SkillUploadInput } from './SkillUploadInput';
+import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 
 export type SkillAddModeKey = 'browse' | 'link' | 'upload' | 'write';
 
@@ -181,6 +184,10 @@ export function SkillAddModal(
   const wheres = React.useRef(
     new Map<string, ReachRulesChangeV1 | undefined>(),
   );
+  // The skills a detail adds: its own path and the referenced siblings the person kept (undefined: nothing to choose).
+  const selections = React.useRef(
+    new Map<string, readonly string[] | undefined>(),
+  );
   const [adds, setAdds] = React.useState<ReadonlyMap<string, AddState>>(
     () => new Map(),
   );
@@ -204,6 +211,7 @@ export function SkillAddModal(
       row: Row,
       version: string,
       where: ReachRulesChangeV1 | undefined,
+      selectPaths?: readonly string[],
     ) => {
       const key = rowKey(row);
       setAdd(key, { status: 'adding' });
@@ -214,6 +222,7 @@ export function SkillAddModal(
           itemId: row.itemId,
           version,
         },
+        ...(selectPaths ? { selectPaths } : {}),
         ...(where ? { where } : {}),
       });
       if (!outcome.ok) {
@@ -455,8 +464,12 @@ export function SkillAddModal(
           sourceTitle={sourceTitle(row.sourceId)}
           state={adds.get(rowKey(row)) ?? null}
           onRead={onRead}
+          execute={execute}
           onWhereChange={(key, where) => {
             wheres.current.set(key, where);
+          }}
+          onSelectionChange={(key, selectPaths) => {
+            selections.current.set(key, selectPaths);
           }}
           onRetryRules={async (skillId, where) => {
             const ok = await retrySkillRules(execute, {
@@ -516,6 +529,7 @@ export function SkillAddModal(
                 row,
                 version!,
                 wheres.current.get(key),
+                selections.current.get(key),
               );
               // A partial add stays open on the item, so its Try again is right there (IR-70).
               return result.rulesMissing
@@ -585,8 +599,10 @@ function SkillAddDetail(
     row: Row;
     sourceTitle: string;
     state: AddState | null;
+    execute: MountedAuthoringActionExecute;
     onRead: (key: string, item: RegistryItemV1) => void;
     onWhereChange: (key: string, where: ReachRulesChangeV1 | undefined) => void;
+    onSelectionChange: (key: string, selectPaths: readonly string[] | undefined) => void;
     onRetryRules: (
       skillId: string,
       where: ReachRulesChangeV1,
@@ -636,6 +652,48 @@ function SkillAddDetail(
           )
         : [],
     [skill],
+  );
+  // Sibling skills of the same repository that its instructions refer to: looked up once (a dry run, nothing written)
+  // and added with it unless unticked.
+  const { execute, onSelectionChange } = props;
+  const version = read.item?.summary.version;
+  const siblingKey = skill ? readSiblingSkillPathsV1(skill.ref.path, outsideReferences).join('\n') : '';
+  const primaryPath = skill?.ref.path;
+  const [offered, setOffered] = React.useState<Readonly<{ primary: SkillInstallPreviewV1; siblings: readonly SkillInstallPreviewV1[] }> | null>(null);
+  const [unticked, setUnticked] = React.useState<ReadonlySet<string>>(() => new Set());
+  React.useEffect(() => {
+    setOffered(null);
+    setUnticked(new Set());
+    if (!siblingKey || !version || primaryPath === undefined) return;
+    let current = true;
+    void previewSkillInstall(execute, {
+      kind: 'registry',
+      sourceId: props.row.sourceId,
+      itemId: props.row.itemId,
+      version,
+    }).then((preview) => {
+      const primary = preview.ok ? preview.items.find((item) => item.path === primaryPath) : undefined;
+      if (!current || !preview.ok || !primary) return;
+      const siblings = preview.items.filter((item) => item.path !== primaryPath);
+      if (siblings.length > 0) setOffered({ primary, siblings });
+    });
+    return () => {
+      current = false;
+    };
+  }, [execute, primaryPath, props.row.itemId, props.row.sourceId, siblingKey, version]);
+  const keptSiblings = React.useMemo(
+    () => new Set((offered?.siblings ?? []).map((item) => item.path).filter((path) => !unticked.has(path))),
+    [offered, unticked],
+  );
+  React.useEffect(() => {
+    onSelectionChange(key, offered && primaryPath !== undefined ? [primaryPath, ...keptSiblings] : undefined);
+  }, [key, keptSiblings, offered, onSelectionChange, primaryPath]);
+  const stillOutside = React.useMemo(
+    () =>
+      offered
+        ? remainingOutsideReferences({ outsideReferences, siblingSkills: offered.primary.siblingSkills }, keptSiblings)
+        : outsideReferences,
+    [keptSiblings, offered, outsideReferences],
   );
   const ref = skill
     ? skill.ref.commit.slice(0, 7)
@@ -792,9 +850,39 @@ function SkillAddDetail(
           }
         />
         <SkillOutsideReferencesItem
-          references={outsideReferences}
+          references={stillOutside}
           testID={`${TEST_ID}.detail.outsideReferences`}
         />
+        {offered?.siblings.map((sibling) => (
+          <CapabilityRow
+            key={sibling.path}
+            testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
+            title={sibling.name}
+            description={sibling.description}
+            facts={{
+              presentation: 'row',
+              trust: sibling.trust,
+              cost: { tokensWhenUsed: sibling.cost.bodyTokens },
+            }}
+            checked={keptSiblings.has(sibling.path)}
+            note={
+              keptSiblings.has(sibling.path) ? (
+                <SkillAlsoAddsNote
+                  name={sibling.name}
+                  skill={offered.primary.name}
+                  testID={`${TEST_ID}.detail.sibling.${sibling.name}.alsoAdds`}
+                />
+              ) : undefined
+            }
+            onPress={() =>
+              setUnticked((previous) => {
+                const next = new Set(previous);
+                if (!next.delete(sibling.path)) next.add(sibling.path);
+                return next;
+              })
+            }
+          />
+        ))}
         {cost ? (
           <Item
             icon={

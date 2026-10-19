@@ -4,7 +4,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
 import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
-import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -13,21 +12,9 @@ import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAu
 import { describeRegistrySourceStatus } from '@/registries/describeRegistrySourceStatus';
 import { t } from '@/text';
 
-import { skillOutsideReferencesNote } from '../outsideReferences';
+import { previewRef, SkillPreviewRows } from './SkillPreviewRows';
+import { tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
-
-/** The preview's identity facts: where it was found, pinned. */
-export function previewRef(item: SkillInstallPreviewV1): string | undefined {
-  const provenance = item.provenance;
-  if (provenance.kind === 'link' && provenance.ref.kind === 'gitTree')
-    return provenance.ref.commit.slice(0, 7);
-  if (
-    provenance.kind === 'registry' &&
-    provenance.registry.ref.kind === 'gitTree'
-  )
-    return provenance.registry.ref.commit.slice(0, 7);
-  return undefined;
-}
 
 /**
  * From a link (lab sa L): paste a repository or folder, look (`skills.install` dry run, nothing written), tick the
@@ -78,7 +65,7 @@ export function SkillLinkInput(
       return;
     }
     setState({ kind: 'found', items: preview.items });
-    setTicked(new Set(preview.items.map((item) => item.path)));
+    setTicked(tickAllSkillPreviews(preview.items));
   }, [props.execute, url]);
 
   const add = React.useCallback(async () => {
@@ -149,34 +136,22 @@ export function SkillLinkInput(
             }
             surface="none"
           >
-            {found.map((item) => (
-              <CapabilityRow
-                key={item.path}
-                testID={`${props.testID}.item.${item.name}`}
-                title={item.name}
-                description={item.description}
-                facts={{
-                  presentation: 'row',
-                  source: {
-                    kind: 'git',
-                    label: item.path || '/',
-                    ...(previewRef(item) ? { ref: previewRef(item)! } : {}),
-                  },
-                  trust: item.trust,
-                  cost: { tokensWhenUsed: item.cost.bodyTokens },
-                }}
-                checked={ticked.has(item.path)}
-                note={skillOutsideReferencesNote(item.outsideReferences, `${props.testID}.item.${item.name}.outsideReferences`)}
-                onPress={() =>
-                  setTicked((previous) => {
-                    const next = new Set(previous);
-                    if (next.has(item.path)) next.delete(item.path);
-                    else next.add(item.path);
-                    return next;
-                  })
-                }
-              />
-            ))}
+            <SkillPreviewRows
+              testID={props.testID}
+              items={found}
+              ticked={ticked}
+              onToggle={(path) => setTicked((previous) => toggleSkillPreview(found, previous, path))}
+              facts={(item) => ({
+                presentation: 'row',
+                source: {
+                  kind: 'git',
+                  label: item.path || '/',
+                  ...(previewRef(item) ? { ref: previewRef(item)! } : {}),
+                },
+                trust: item.trust,
+                cost: { tokensWhenUsed: item.cost.bodyTokens },
+              })}
+            />
           </ItemGroup>
         ) : null}
       </ScrollView>

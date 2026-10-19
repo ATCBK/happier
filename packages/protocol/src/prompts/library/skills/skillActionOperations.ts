@@ -13,11 +13,11 @@ import type { RegistryItemPointerV1, RegistryItemV1, RegistryContentRefV1 } from
 import type { RegistrySourceDescriptorV1 } from '../../../registries/registrySourcesV1.js';
 import { RegistryUpstreamV1Schema, registryUpstreamEqualV1, type RegistryUpstreamV1 } from '../../../registries/registryUpstreamV1.js';
 import type { RegistryProvenanceV1 } from '../../../registries/registryItemsV1.js';
-import { encodeSkillRevisionV1, readSkillLockV1, isSkillModifiedV1, readSkillFrontmatterV1, writeSkillFrontmatterV1, SKILL_NAME_PATTERN_V1, isPluginSkillIdV1,
+import { encodeSkillRevisionV1, readSkillLockV1, readSkillUploadRootsV1, isSkillModifiedV1, readSkillFrontmatterV1, writeSkillFrontmatterV1, SKILL_NAME_PATTERN_V1, isPluginSkillIdV1,
   type SkillListItemV1, type SkillUnavailableItemV1, type SkillLockV1, type SkillProvenanceV1 } from './skillLibraryItemV1.js';
 import { deriveSkillTrustV1 } from './skillTrustV1.js';
 import { estimateSkillCostV1 } from './skillCostV1.js';
-import { readSkillOutsideReferencesV1 } from './skillReferencesV1.js';
+import { readSiblingSkillPathsV1, readSkillOutsideReferencesV1 } from './skillReferencesV1.js';
 import { deriveSkillAccountStatusesV1 } from './skillStatusV1.js';
 import { readSkillUsageRowV1, skillUsageObservedSinceV1, type SkillUsageRowV1 } from './skillUsageV1.js';
 import { exportSkillBundlesAsZipV1, skillFileFromBytesV1 } from './skillZipV1.js';
@@ -83,6 +83,26 @@ function outsideReferences(markdown: string, files: readonly SkillFileInputV1[])
   const found = readSkillOutsideReferencesV1(markdown, files.map(file => file.path));
   return found.length ? { outsideReferences: found } : {};
 }
+/** Where an imported skill came from, for telling whether the library already holds it. */
+function importedSourceKey(provenance: SkillProvenanceV1): string | null {
+  const ref = provenance.kind === 'registry' ? provenance.registry.ref : provenance.kind === 'link' ? provenance.ref : null;
+  return ref?.kind === 'gitTree' ? `${ref.repo}\0${ref.path}` : null;
+}
+/**
+ * Marks, on each previewed skill, the other previewed skills of the same source tree its instructions refer to
+ * (`../b/SKILL.md` with `b` in the set) and the outside references each one covers.
+ */
+function withSiblingSkills<T extends Readonly<{ path: string; outsideReferences?: string[] }>>(previews: readonly T[]):
+  (T & Readonly<{ siblingSkills?: { path: string; references: string[] }[] }>)[] {
+  const paths = new Set(previews.map(item => item.path));
+  return previews.map(item => {
+    const covered = new Map<string, string[]>();
+    for (const reference of item.outsideReferences ?? [])
+      for (const sibling of readSiblingSkillPathsV1(item.path, [reference]))
+        if (paths.has(sibling)) covered.set(sibling, [...covered.get(sibling) ?? [], reference]);
+    return covered.size ? { ...item, siblingSkills: [...covered].map(([path, references]) => ({ path, references })) } : item;
+  });
+}
 function renameMarkdown(files: readonly SkillFileInputV1[], name?: string, description?: string): SkillFileInputV1[] {
   if (name !== undefined && !SKILL_NAME_PATTERN_V1.test(name)) fail('invalid_skill_name');
   if (name === undefined && description === undefined) return [...files];
@@ -124,7 +144,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     let cursor: string | undefined;
     do {
       signal?.throwIfAborted();
-      const page = await port.store.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
+      const page = await port.store.list({ limit: 500, coarseKind: 'skill', ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
       signal?.throwIfAborted();
       if (page.coverage === 'unavailable' || page.coverage === 'partial' && !page.nextCursor) return fail('library_unavailable');
       yield page.items.flatMap(item => item.header?.kind === 'prompt_bundle.v2'
@@ -259,6 +279,17 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
       throw error;
     }
   }
+  /** The imported sources the library already holds, read from Artifact headers without opening content. */
+  async function librarySourceKeys(signal?: AbortSignal): Promise<Set<string>> {
+    const keys = new Set<string>();
+    for await (const headers of skillHeaderPages(signal)) for (const header of headers) {
+      try {
+        const key = importedSourceKey(readSkillLockV1(header.header).provenance);
+        if (key) keys.add(key);
+      } catch { /* A lock this reader cannot parse is not a known import. */ }
+    }
+    return keys;
+  }
   async function preview(item: RegistryItemV1, provenance: SkillProvenanceV1, source: RegistryItemPointerV1 | string) {
     if (item.summary.problem) fail(item.summary.problem.code);
     if (item.payload.kind !== 'skill') return fail('unsupported_source');
@@ -268,6 +299,29 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
     validateFiles(normalized, nowMs()); const md = skillMarkdown(normalized), fm = readSkillFrontmatterV1(md);
     return { path: item.payload.skill.ref.path, name: fm.name!, description: fm.description ?? null, files: normalized,
       provenance, trust: deriveSkillTrustV1(normalized), cost: estimateSkillCostV1(md), ...outsideReferences(md, normalized) };
+  }
+  /**
+   * A registry item lists one skill, but its instructions may refer to sibling skill folders of its repository. Each is
+   * read at the commit the item is pinned to and previewed as an imported link; one the library already holds is left out.
+   */
+  async function registrySiblingPreviews(primary: Awaited<ReturnType<typeof preview>>, wanted: readonly string[] | undefined, signal?: AbortSignal) {
+    const ref = primary.provenance.kind === 'registry' && primary.provenance.registry.ref.kind === 'gitTree' ? primary.provenance.registry.ref : null;
+    const readLinkSkills = port.readLinkSkills;
+    if (!ref || !primary.outsideReferences || !readLinkSkills) return [];
+    const candidates = readSiblingSkillPathsV1(ref.path, primary.outsideReferences).filter(path => !wanted || wanted.includes(path));
+    if (!candidates.length) return [];
+    const held = await librarySourceKeys(signal);
+    const previews = await Promise.all(candidates.filter(path => !held.has(`${ref.repo}\0${path}`)).map(async path => {
+      try {
+        const item = (await readLinkSkills(ref.repo, { ...ref, path })).find(listed => listed.payload.kind === 'skill' && listed.payload.skill.ref.path === path);
+        return item?.payload.kind === 'skill' ? await preview(item, { kind: 'link', url: ref.repo, ref: item.payload.skill.ref }, ref.repo) : null;
+      } catch {
+        // A sibling that cannot be read is simply not offered; the item's own advisory still names the reference.
+        signal?.throwIfAborted();
+        return null;
+      }
+    }));
+    return previews.filter(sibling => sibling !== null);
   }
   async function upstream(opened: Awaited<ReturnType<typeof current>>) {
     const provenance = opened.lock.provenance;
@@ -384,7 +438,7 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
           let previews: Awaited<ReturnType<typeof preview>>[];
           if (input.source.kind === 'upload') {
             const uploaded = input.source.files;
-            const roots = uploaded.some(file => file.path === 'SKILL.md') ? [''] : uploaded.filter(file => file.path.endsWith('/SKILL.md')).map(file => file.path.slice(0, -'/SKILL.md'.length));
+            const roots = readSkillUploadRootsV1(uploaded.map(file => file.path));
             if (!roots.length) return fail('missing_required_entry');
             previews = roots.map(path => {
               const files = uploaded.filter(file => !path || file.path.startsWith(path + '/')).map(file => ({ ...file, path: path ? file.path.slice(path.length + 1) : file.path }));
@@ -397,17 +451,28 @@ export function createSkillActionExecuteV1(port: SkillActionPortV1) {
             if (item.payload.kind !== 'skill') return fail('unsupported_source');
             if (item.payload.skill.ref.commit !== pointer.version) return fail('registry_version_mismatch');
             const source = await port.readRegistrySource(pointer.sourceId);
-            previews = [await preview(item, { kind: 'registry', registry: { sourceId: pointer.sourceId, itemId: pointer.itemId,
+            const primary = await preview(item, { kind: 'registry', registry: { sourceId: pointer.sourceId, itemId: pointer.itemId,
               sourceUrl: source.url, format: source.format, ref: item.payload.skill.ref, importedAt: nowMs() } },
-              { sourceId: pointer.sourceId, itemId: pointer.itemId, version: pointer.version })]; }
+              { sourceId: pointer.sourceId, itemId: pointer.itemId, version: pointer.version });
+            previews = [primary, ...await registrySiblingPreviews(primary, input.selectPaths, signal)]; }
           else { if (!port.readLinkSkills) return fail('unsupported_source'); const url = input.source.url;
             previews = await Promise.all((await port.readLinkSkills(url)).map(item => {
               if (item.payload.kind !== 'skill') return fail('unsupported_source');
               return preview(item, { kind: 'link', url, ref: item.payload.skill.ref }, url);
             })); }
-          previews = previews.filter(item => !input.selectPaths || input.selectPaths.includes(item.path));
-          if (input.dryRun) result = { items: previews };
-          else result = await createMany(previews, caller, input.where, signal); break; }
+          const selected = withSiblingSkills(previews.filter(item => !input.selectPaths || input.selectPaths.includes(item.path)));
+          // A sibling the library already holds is neither offered as "also added" nor added a second time.
+          const referred = new Set(selected.flatMap(item => item.siblingSkills?.map(sibling => sibling.path) ?? []));
+          const held = referred.size ? await librarySourceKeys(signal) : new Set<string>();
+          const heldSibling = (item: Readonly<{ path: string; provenance: SkillProvenanceV1 }>) => referred.has(item.path) && held.has(importedSourceKey(item.provenance) ?? '');
+          if (input.dryRun) {
+            const heldPaths = new Set(selected.filter(heldSibling).map(item => item.path));
+            result = { items: selected.map(({ siblingSkills, ...item }) => {
+              const offered = siblingSkills?.filter(sibling => !heldPaths.has(sibling.path));
+              return offered?.length ? { ...item, siblingSkills: offered } : item;
+            }) }; break;
+          }
+          result = await createMany(selected.filter(item => !heldSibling(item)), caller, input.where, signal); break; }
         case 'skills.export': { const input = inputs[actionId].parse(raw); const items = await Promise.all(input.skillIds.map(async id => { const opened = await read(id, signal); return { name: opened.content.frontmatter.name, files: projectPromptBundleActionEntriesV1(opened.content.body.entries) }; })); result = await exportSkillBundlesAsZipV1(items); break; }
         case 'skills.updates.diff': { const input = inputs[actionId].parse(raw), diff = await upstream(await current(input.skillId, signal)); result = { files: diff.files, costDelta: diff.costDelta }; break; }
         case 'skills.updates.apply': { const input = inputs[actionId].parse(raw), opened = await reviewed(input.skillId, input.expectedRevision, signal), diff = await upstream(opened);

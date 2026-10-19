@@ -249,6 +249,7 @@ export type SkillAddTranslation = Readonly<{
   via: (params: Readonly<{ source: string }>) => string;
   outsideReferences: (params: Count) => string;
   outsideReferencesMore: (params: Count) => string;
+  alsoAdds: (params: Readonly<{ name: string; skill: string }>) => string;
   detail: Readonly<{
     whereTitle: string;
     whereBody: string;
@@ -329,6 +330,7 @@ const enSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Refers to one file that won’t be included.' : `Refers to ${count} files that won’t be included.`,
   outsideReferencesMore: ({ count }) => `and ${count} more`,
+  alsoAdds: ({ name, skill }) => `Also adds ${name}, which ${skill} refers to`,
   detail: {
     whereTitle: 'Where it’s on',
     whereBody: 'Every machine and agent, unless you narrow it now.',
@@ -606,6 +608,7 @@ const caSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Fa referència a un fitxer que no s’inclourà.' : `Fa referència a ${count} fitxers que no s’inclouran.`,
   outsideReferencesMore: ({ count }) => `i ${count} més`,
+  alsoAdds: ({ name, skill }) => `També afegeix ${name}, a què fa referència ${skill}`,
   detail: {
     whereTitle: 'On està activada',
     whereBody:
@@ -828,6 +831,7 @@ const deSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Verweist auf eine Datei, die nicht enthalten ist.' : `Verweist auf ${count} Dateien, die nicht enthalten sind.`,
   outsideReferencesMore: ({ count }) => `und ${count} weitere`,
+  alsoAdds: ({ name, skill }) => `Fügt außerdem ${name} hinzu, auf das ${skill} verweist`,
   detail: {
     whereTitle: 'Wo er an ist',
     whereBody:
@@ -1044,6 +1048,7 @@ const esSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Hace referencia a un archivo que no se incluirá.' : `Hace referencia a ${count} archivos que no se incluirán.`,
   outsideReferencesMore: ({ count }) => `y ${count} más`,
+  alsoAdds: ({ name, skill }) => `También añade ${name}, a la que hace referencia ${skill}`,
   detail: {
     whereTitle: 'Dónde está activada',
     whereBody:
@@ -1264,6 +1269,7 @@ const frSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Renvoie à un fichier qui ne sera pas inclus.' : `Renvoie à ${count} fichiers qui ne seront pas inclus.`,
   outsideReferencesMore: ({ count }) => `et ${count} de plus`,
+  alsoAdds: ({ name, skill }) => `Ajoute aussi ${name}, auquel ${skill} fait référence`,
   detail: {
     whereTitle: 'Où il est activé',
     whereBody:
@@ -1477,6 +1483,7 @@ const itSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Rimanda a un file che non sarà incluso.' : `Rimanda a ${count} file che non saranno inclusi.`,
   outsideReferencesMore: ({ count }) => `e altri ${count}`,
+  alsoAdds: ({ name, skill }) => `Aggiunge anche ${name}, a cui rimanda ${skill}`,
   detail: {
     whereTitle: 'Dove è attiva',
     whereBody:
@@ -1693,6 +1700,7 @@ const jaSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     `含まれない ${count} 件のファイルを参照しています。`,
   outsideReferencesMore: ({ count }) => `ほか ${count} 件`,
+  alsoAdds: ({ name, skill }) => `${skill} が参照する ${name} も追加します`,
   detail: {
     whereTitle: 'オンになっている場所',
     whereBody:
@@ -1932,6 +1940,7 @@ const plSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Odwołuje się do jednego pliku, który nie zostanie dołączony.' : `Odwołuje się do ${count} plików, które nie zostaną dołączone.`,
   outsideReferencesMore: ({ count }) => `i ${count} więcej`,
+  alsoAdds: ({ name, skill }) => `Dodaje też ${name}, do którego odwołuje się ${skill}`,
   detail: {
     whereTitle: 'Gdzie jest włączona',
     whereBody:
@@ -2152,6 +2161,7 @@ const ptSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     count === 1 ? 'Faz referência a um arquivo que não será incluído.' : `Faz referência a ${count} arquivos que não serão incluídos.`,
   outsideReferencesMore: ({ count }) => `e mais ${count}`,
+  alsoAdds: ({ name, skill }) => `Também adiciona ${name}, a que ${skill} faz referência`,
   detail: {
     whereTitle: 'Onde está ativada',
     whereBody:
@@ -2396,6 +2406,7 @@ const ruSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     `Не включены файлы, на которые есть ссылки: ${count}.`,
   outsideReferencesMore: ({ count }) => `и ещё ${count}`,
+  alsoAdds: ({ name, skill }) => `Также добавит ${name}, на который ссылается ${skill}`,
   detail: {
     whereTitle: 'Где включён',
     whereBody:
@@ -2623,6 +2634,7 @@ const zhHansSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     `引用了 ${count} 个不会被包含的文件。`,
   outsideReferencesMore: ({ count }) => `另外 ${count} 个`,
+  alsoAdds: ({ name, skill }) => `同时添加 ${name}，${skill} 引用了它`,
   detail: {
     whereTitle: '在哪里开启',
     whereBody: '所有机器和智能体，除非你现在就限定范围。',
@@ -2828,6 +2840,7 @@ const zhHantSkillAdd: SkillAddTranslation = {
   outsideReferences: ({ count }) =>
     `參照了 ${count} 個不會被包含的檔案。`,
   outsideReferencesMore: ({ count }) => `另有 ${count} 個`,
+  alsoAdds: ({ name, skill }) => `同時新增 ${name}，${skill} 引用了它`,
   detail: {
     whereTitle: '在哪裡開啟',
     whereBody: '所有機器和代理，除非你現在就限定範圍。',

@@ -55,4 +55,30 @@ describe('readSkillUpload', () => {
         await expect(readSkillUpload({ kind: 'folder', files: [{ path: 'a/readme.md', bytes: text('x') }] }))
             .resolves.toEqual({ ok: false, error: { code: 'no_skill' } });
     });
+
+    it('reads a folder or zip of several skills as one file set, each skill folder keeping its own SKILL.md', async () => {
+        const second = text('---\nname: orm-setup\ndescription: Set up the ORM.\n---\nSet it up.\n');
+        const folder = await readSkillUpload({ kind: 'folder', files: [
+            { path: 'skills/release-notes/SKILL.md', bytes: SKILL_MD },
+            { path: 'skills/release-notes/template.md', bytes: text('# Notes\n') },
+            { path: 'skills/orm-setup/SKILL.md', bytes: second },
+        ] });
+        expect(folder.ok && folder.files.map((file) => file.path).sort()).toEqual(
+            ['orm-setup/SKILL.md', 'release-notes/SKILL.md', 'release-notes/template.md']);
+        const zipped = await readSkillUpload({ kind: 'zip', name: 'pack.zip', bytes: await zipOf([
+            { path: 'release-notes/SKILL.md', body: SKILL_MD },
+            { path: 'orm-setup/SKILL.md', body: second },
+            { path: 'README.md', body: text('A pack') },
+        ]) });
+        expect(zipped.ok && zipped.files.map((file) => file.path).sort()).toEqual(
+            ['README.md', 'orm-setup/SKILL.md', 'release-notes/SKILL.md']);
+    });
+
+    it('names the file of a skill inside a several-skill upload that cannot be saved everywhere', async () => {
+        await expect(readSkillUpload({ kind: 'folder', files: [
+            { path: 'a/SKILL.md', bytes: SKILL_MD },
+            { path: 'b/SKILL.md', bytes: SKILL_MD },
+            { path: 'b/notes:draft.md', bytes: text('x') },
+        ] })).resolves.toEqual({ ok: false, error: { code: 'invalid_name', file: 'b/notes:draft.md' } });
+    });
 });

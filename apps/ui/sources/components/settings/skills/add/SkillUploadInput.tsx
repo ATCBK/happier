@@ -7,9 +7,9 @@ import type {
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
 import { CapabilityAddFooter } from '@/components/capabilities/add/CapabilityAddModal';
-import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import {
@@ -23,7 +23,8 @@ import { applyWebDirectoryInputAttributes } from '@/utils/files/applyWebDirector
 import { nativePickFiles } from '@/utils/files/nativePickFiles';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
-import { skillOutsideReferencesNote } from '../outsideReferences';
+import { SkillPreviewRows } from './SkillPreviewRows';
+import { tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 function describeUploadError(error: SkillUploadError): string {
@@ -73,10 +74,11 @@ export function SkillUploadInput(
     | Readonly<{
         kind: 'ready';
         files: readonly SkillFileInputV1[];
-        preview: SkillInstallPreviewV1;
+        items: readonly SkillInstallPreviewV1[];
       }>
     | Readonly<{ kind: 'error'; message: string }>
   >({ kind: 'idle' });
+  const [ticked, setTicked] = React.useState<ReadonlySet<string>>(() => new Set());
   const [adding, setAdding] = React.useState(false);
   const [dragging, setDragging] = React.useState(false);
 
@@ -99,11 +101,8 @@ export function SkillUploadInput(
         });
         return;
       }
-      setState({
-        kind: 'ready',
-        files: read.files,
-        preview: preview.items[0]!,
-      });
+      setTicked(tickAllSkillPreviews(preview.items));
+      setState({ kind: 'ready', files: read.files, items: preview.items });
     },
     [props.execute],
   );
@@ -183,11 +182,29 @@ export function SkillUploadInput(
     [accept, acceptWebFiles],
   );
 
+  const previewRows = (items: readonly SkillInstallPreviewV1[], ticks: ReadonlySet<string> | null) => (
+    <SkillPreviewRows
+      testID={`${props.testID}.preview`}
+      items={items}
+      ticked={ticks}
+      onToggle={(path) => setTicked((previous) => toggleSkillPreview(items, previous, path))}
+      facts={(item) => ({
+        presentation: 'row',
+        source: { kind: 'you' },
+        trust: item.trust,
+        cost: { tokensWhenUsed: item.cost.bodyTokens },
+      })}
+    />
+  );
+
   const add = React.useCallback(async () => {
     if (state.kind !== 'ready') return;
     setAdding(true);
+    // One skill is added as it is; a folder of several adds the ticked ones.
+    const several = state.items.length > 1;
     const outcome = await installSkills(props.execute, {
       source: { kind: 'upload', files: state.files },
+      ...(several ? { selectPaths: state.items.filter((item) => ticked.has(item.path)).map((item) => item.path) } : {}),
     });
     setAdding(false);
     if (!outcome.ok) {
@@ -195,7 +212,7 @@ export function SkillUploadInput(
       return;
     }
     props.onAdded(outcome.skillIds[0]!);
-  }, [props, state]);
+  }, [props, state, ticked]);
 
   return (
     <View style={styles.fill}>
@@ -254,26 +271,26 @@ export function SkillUploadInput(
           </Text>
         ) : null}
         {state.kind === 'ready' ? (
-          <CapabilityRow
-            testID={`${props.testID}.preview`}
-            title={state.preview.name}
-            description={state.preview.description}
-            facts={{
-              presentation: 'row',
-              source: { kind: 'you' },
-              trust: state.preview.trust,
-              cost: { tokensWhenUsed: state.preview.cost.bodyTokens },
-            }}
-            note={skillOutsideReferencesNote(state.preview.outsideReferences, `${props.testID}.preview.outsideReferences`)}
-          />
+          state.items.length > 1 ? (
+            <ItemGroup title={t('capabilities.skillAdd.link.found', { count: state.items.length })} surface="none">
+              {previewRows(state.items, ticked)}
+            </ItemGroup>
+          ) : (
+            previewRows(state.items, null)
+          )
         ) : null}
       </ScrollView>
       {state.kind === 'ready' ? (
         <CapabilityAddFooter testID={`${props.testID}.footer`} start={null}>
           <RoundButton
             size="normal"
-            title={t('capabilities.skillAdd.addToLibrary')}
+            title={
+              state.items.length > 1
+                ? t('capabilities.skillAdd.link.addSelected', { count: ticked.size })
+                : t('capabilities.skillAdd.addToLibrary')
+            }
             loading={adding}
+            disabled={state.items.length > 1 && ticked.size === 0}
             onPress={() => void add()}
             testID={`${props.testID}.add`}
           />

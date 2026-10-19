@@ -175,3 +175,12 @@ export function writeSkillFrontmatterV1(markdown: string, fields: Readonly<{ nam
     return `---\n${opened.document.toString()}---\n${opened.body}`;
   } catch { return null; }
 }
+
+/**
+ * The skill folders in an uploaded file set: the set itself when it has a root `SKILL.md`, else each folder holding
+ * one (`''` is the root). The one reading of an upload's roots, shared by the install preview and the upload reader.
+ */
+export function readSkillUploadRootsV1(paths: readonly string[]): string[] {
+  if (paths.includes('SKILL.md')) return [''];
+  return paths.filter(path => path.endsWith('/SKILL.md')).map(path => path.slice(0, -'/SKILL.md'.length));
+}

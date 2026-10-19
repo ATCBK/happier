@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
@@ -18,17 +19,61 @@ function referencePaths(references: readonly string[]): string {
     : references.join(', ');
 }
 
+/** The previewed skill's references that no kept sibling brings along: the only ones left to warn about. */
+export function remainingOutsideReferences(
+  item: Pick<SkillInstallPreviewV1, 'outsideReferences' | 'siblingSkills'>,
+  included: ReadonlySet<string>,
+): readonly string[] {
+  const covered = new Set(
+    (item.siblingSkills ?? [])
+      .filter((sibling) => included.has(sibling.path))
+      .flatMap((sibling) => sibling.references),
+  );
+  return (item.outsideReferences ?? []).filter((reference) => !covered.has(reference));
+}
+
 /**
- * A skill's instructions point at relative files its bundle will not have (an advisory, never a block). On a
- * preview row it is one quiet line under the facts, through `CapabilityRow` `note`.
+ * A previewed skill's instructions point at other files: the siblings the person keeps ("Also adds X, which Y refers
+ * to") and the relative files its bundle will not have (an advisory, never a block). On a preview row it is quiet
+ * lines under the facts, through `CapabilityRow` `note`.
  */
-export function skillOutsideReferencesNote(
-  references: readonly string[] | undefined,
+export function skillReferencesNote(
+  item: Pick<SkillInstallPreviewV1, 'name' | 'outsideReferences' | 'siblingSkills'>,
+  included: ReadonlySet<string>,
+  nameByPath: ReadonlyMap<string, string>,
   testID: string,
 ): React.ReactElement | undefined {
-  return references?.length ? (
-    <SkillOutsideReferencesNote count={references.length} testID={testID} />
-  ) : undefined;
+  const siblings = (item.siblingSkills ?? []).filter((sibling) => included.has(sibling.path));
+  const remaining = remainingOutsideReferences(item, included);
+  if (siblings.length === 0 && remaining.length === 0) return undefined;
+  return (
+    <View style={styles.notes}>
+      {siblings.map((sibling) => (
+        <SkillAlsoAddsNote
+          key={sibling.path}
+          skill={item.name}
+          name={nameByPath.get(sibling.path) ?? sibling.path}
+          testID={`${testID}.sibling.${sibling.path}`}
+        />
+      ))}
+      {remaining.length > 0 ? (
+        <SkillOutsideReferencesNote count={remaining.length} testID={`${testID}.outsideReferences`} />
+      ) : null}
+    </View>
+  );
+}
+
+/** "Also adds <name>, which <skill> refers to": the one line that says why a sibling comes along. */
+export function SkillAlsoAddsNote(props: Readonly<{ name: string; skill: string; testID: string }>) {
+  const { theme } = useUnistyles();
+  return (
+    <View style={styles.note} testID={props.testID}>
+      <Icon name="plus-circle" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
+      <Text variant="meta" style={styles.noteText}>
+        {t('capabilities.skillAdd.alsoAdds', { name: props.name, skill: props.skill })}
+      </Text>
+    </View>
+  );
 }
 
 function SkillOutsideReferencesNote(props: Readonly<{ count: number; testID: string }>) {
@@ -73,6 +118,7 @@ export function SkillOutsideReferencesItem(
 }
 
 const styles = StyleSheet.create((theme) => ({
+  notes: { gap: theme.space.s4, minWidth: 0 },
   note: {
     flexDirection: 'row',
     alignItems: 'center',

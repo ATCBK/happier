@@ -133,3 +133,51 @@ describe('SkillLinkInput outside references', () => {
     expect(screen.findHostByTestId('link.item.grill-me.outsideReferences')).toBeNull();
   });
 });
+
+describe('SkillLinkInput referenced siblings', () => {
+  const sibling = { ...PREVIEW, path: 'skills/orm-setup', name: 'orm-setup', description: 'Set up the ORM.' };
+  const referrer = {
+    ...PREVIEW,
+    path: 'skills/prisma-cli',
+    name: 'prisma-cli',
+    outsideReferences: ['../orm-setup/SKILL.md', '../README.md'],
+    siblingSkills: [{ path: 'skills/orm-setup', references: ['../orm-setup/SKILL.md'] }],
+  };
+
+  async function renderFoundPair() {
+    const installs: unknown[] = [];
+    const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
+      const dryRun = (input as { dryRun?: boolean }).dryRun === true;
+      if (dryRun) return { ok: true, result: { items: [referrer, sibling] } };
+      installs.push(input);
+      return { ok: true, result: { skillIds: ['skill-1'], includedInSessionId: null } };
+    };
+    const { SkillLinkInput } = await import('./SkillLinkInput');
+    const screen = await renderScreen(<SkillLinkInput execute={answer} onAdded={() => {}} testID="link" />);
+    await act(async () => {
+      screen.changeTextByTestId('link.url', 'https://github.com/acme/agent-skills');
+    });
+    await screen.pressByTestIdAsync('link.find');
+    return { screen, installs };
+  }
+
+  it('names the sibling a ticked skill brings, leaves only the other file as the warning, and adds both', async () => {
+    const { screen, installs } = await renderFoundPair();
+    expect(screen.findHostByTestId('link.item.prisma-cli.sibling.skills/orm-setup')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('Also adds orm-setup, which prisma-cli refers to');
+    expect(screen.getTextContent()).toContain('one file');
+    await screen.pressByTestIdAsync('link.add');
+    expect(installs).toEqual([
+      expect.objectContaining({ selectPaths: ['skills/prisma-cli', 'skills/orm-setup'] }),
+    ]);
+  });
+
+  it('lets the sibling be unticked: its line goes, the reference counts as left behind, and only the skill is added', async () => {
+    const { screen, installs } = await renderFoundPair();
+    await screen.pressByTestIdAsync('link.item.orm-setup');
+    expect(screen.findHostByTestId('link.item.prisma-cli.sibling.skills/orm-setup')).toBeNull();
+    expect(screen.getTextContent()).toContain('2 files');
+    await screen.pressByTestIdAsync('link.add');
+    expect(installs).toEqual([expect.objectContaining({ selectPaths: ['skills/prisma-cli'] })]);
+  });
+});
