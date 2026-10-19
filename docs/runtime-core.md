@@ -1589,6 +1589,12 @@ Queueing does not publish a synthetic Goal. Session retirement refuses queued
 mutations before they reach the Agent. Loaded-runtime replay remains required
 before this development-source correction is certified.
 
+Native controls demand the existing Session event subscription before reading
+the admitted native identity. Get immediately after Resume can therefore use a
+replayed startup identity even before a transcript subscriber opens.
+The host retains that accepted identity snapshot for the later subscriber;
+observing it does not admit another turn or Goal transition.
+
 Codex's App Server path opens and persists its zero-turn native thread during Session startup,
 including when no startup instructions are supplied. The existing native
 attachment owner makes that thread readable by the separate Goal-control

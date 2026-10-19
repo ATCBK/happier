@@ -1826,8 +1826,9 @@ those visibility prerequisites hold.
 Lean Run cards receive the server's `attentionRequired` membership without
 opening invocation content. This public boolean adds no result, prompt or
 decision content and is refreshed independently of the parent control revision.
-Membership requires a non-cancelled Run with an indexed approval, review,
-needs-attention or uncertain-outcome invocation. An interrupted state or pending
+Membership includes failed Runs, even when they have no Session or invocation,
+and non-cancelled Runs with an indexed approval, review, needs-attention or
+uncertain-outcome invocation. An interrupted state or pending
 physical Stop custody alone does not request human attention; Stop custody
 continues through the existing exact-Machine recovery index.
 
@@ -1975,6 +1976,24 @@ need no fabricated encryption material. Inner title/message schemas remain under
 `packages/protocol/src/discussions/**`, and codec adapters reuse the shared envelope
 logic. Resource grants and recipient envelopes consume the same policy owner as
 Artifacts, with Discussion-specific persistence.
+
+Development Discussion append uses the existing per-attempt audience preparation
+and ReadCommitted transaction boundary, shared by HTTP and trusted Session
+publishers. Ordered Account admission precedes the captured Session and source
+Artifact guards, then the Discussion parent serializes retry/sequence and current
+grant/lifecycle decisions. Audience expansion replays the whole attempt through
+`inTx`; it never extends that captured lock set after the parent. Ordinary Account
+content admission remains compatible with unrelated cursor publications. The
+prepared append writer consumes this fence once. PostgreSQL append opts into
+locking reads at the existing authority readers after those resource parents:
+SHARE on the Team/Group membership tuples used by Discussion access, and, for a
+trusted Session publisher, SHARE on its Machine and exact AccessKey tuple. These
+locks stabilize membership updates/deletes and Machine revoke/key deletion until
+commit; a withdrawal that commits first is evaluated from current facts instead.
+They do not lock Team/Group lifecycle parents or replace inherited Machine-access
+policy. Creation
+retains its Serializable identity-race boundary; append does not change resource
+mode, grant, key or source-disclosure policy.
 
 The development Account-mode migration includes every owned Discussion, including
 archived conversations, in its existing signed atomic request. Its owner-only
@@ -2215,8 +2234,25 @@ Unbound, malformed, or mismatched encrypted envelopes fail closed with
 call id, it can return only a plain typed refusal. Such a refusal conveys no
 authenticated success; a relay can already deny delivery. After authentication,
 handler results and errors use the bound encrypted response. Plain-mode RPC and
-reserved server-origin Session start, Action API, and Automation reply-handoff
-methods retain their existing plain transport and inner-envelope contracts.
+reserved server-origin Session start, Action API, Automation reply-handoff,
+Machine access-loss, and Local Services preview admission methods retain their
+existing plain transport and inner-envelope contracts.
+
+Current 0.3 development also permits Home-origin Machine reads through the closed
+`machine.read.serverOrigin` authorization context. The Protocol-owned
+`SOCKET_RPC_SERVER_ORIGIN_MACHINE_READ_METHODS` list covers Provider connection
+description, model projection, Team-credential request-policy support, resource
+test candidates and broker eligibility, plus broker Run-authority and Follow
+Run-frontier reads. `createServerRpcForwarder` stamps only these exact
+Machine-prefixed methods with the target Account and Machine. The daemon's single
+server-origin family table admits their plain request/response transport only
+at the local Machine scope with an installed authorization callback;
+`authorizeMachineRpcRequest` checks the stamp against that Machine's current
+custodian Account before handler execution. Resource, source and Run inputs
+remain validated by their existing owners. This is not a generic plaintext RPC
+option: client `CALL` cannot supply the stamp, other methods remain encrypted,
+and these dual-use reads still accept ordinary bound E2EE client calls. Missing
+or retired RPC material remains a refusal, including for server-origin reads.
 
 ### Machine metadata + daemon state
 

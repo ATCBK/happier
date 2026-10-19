@@ -54,9 +54,17 @@ with `auth_enrollment_timeout` or `auth_request_expired` and a request to Retry
 setup; late consent cannot authorize the expired request. Finite `auth wait`
 failures project a credential-free code through the buffered enrollment error,
 including local expiry and argument/state validation. These are development
-source changes. A wait process without a usable diagnostic code reports
-`AUTH_WAIT_DIAGNOSTIC_UNAVAILABLE`, retaining its exit without exposing native
-output or inferring an authentication cause. Controller and guest CLI reloads
+source changes. Transient Home HTTP, network and timeout failures are classified
+as `AUTH_WAIT_HOME_UNAVAILABLE`; the wait does not replay the one-shot claim.
+Shared offline warnings use stderr, keeping finite command stdout valid JSON
+when post-claim machine registration fails.
+A failed wait process without a usable diagnostic code reports
+`AUTH_WAIT_PROCESS_FAILED`, distinguishing absent output from an invalid
+diagnostic envelope. An invalid envelope identifies the first failed check
+(`parse`, `v`, `ok`, `kind`, or `code`) without copying rejected values. Safe
+unrecognised error codes remain reportable data; they do not need a controller
+allowlist. The recipe retains the exit without exposing native output or
+inferring an authentication cause. Controller and guest CLI reloads
 are required; the server's
 terminal-request TTL policy is unchanged.
 

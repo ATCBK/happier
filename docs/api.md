@@ -1763,6 +1763,10 @@ Session messages retain their admitted projection. Account Voice uses its own
 explicit snippet-disclosure policy. Loaded-runtime validation of the development
 publication and delivery journey remains separate from these source contracts.
 
+Receiver catch-up stops a source range when an original's route or admission
+cannot be confirmed. Its later originals wait for the next existing reconciliation
+boundary, so their accepted progress cannot skip that original.
+
 The development Session router also registers
 `GET /v2/sessions/:destinationSessionId/follows/sessions` and
 `PUT`/`DELETE /v2/sessions/:destinationSessionId/follows/sessions/:sourceSessionId`.
