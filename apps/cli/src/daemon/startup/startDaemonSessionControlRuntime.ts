@@ -4263,7 +4263,9 @@ export async function startDaemonSessionControlRuntime(
         if (!snapshot || snapshot.scopeKey !== resolveForegroundAccountSettingsScopeKey(credentials) || !await isCurrent()) {
           throw new Error('execution_run_contribution_snapshot_unavailable');
         }
-        const result = await withSessionAccountHome(requester, () => read({ accountSettings: snapshot.settings, promptCredentials: credentials }));
+        const result = await withSessionAccountHome(requester, () => read({ accountSettings: snapshot.settings, promptCredentials: credentials,
+          preflightDependencies: { createApiClient: async () => requester ? requester.api : params.api,
+            activatePurposeBindings: requester ? requester.activatePurposeBindings : params.activatePurposeBindings } }));
         await assertSessionAccountCurrent(context.sessionId, requester);
         if (!await isCurrent()) throw new Error('execution_run_contribution_snapshot_unavailable');
         return result;
