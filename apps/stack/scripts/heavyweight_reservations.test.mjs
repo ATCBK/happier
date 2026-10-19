@@ -224,10 +224,6 @@ esac
     await assert.rejects(readFile(secondMarker), { code: 'ENOENT' }, 'a second 21 GiB class must wait while the first reservation consumes its headroom');
     assert.match(contenderErr, new RegExp(`reserved-memory=${compilationKiB}`), 'an unobserved owner retains the full class reservation');
     const fullFloorKiB = Number(/ reserved-memory=(\d+)/.exec(contenderErr)?.[1]);
-    // Keep the real disk owner's measured envelope for the manual live-owner
-    // RSS phase below. A live process/class without disk custody is unavailable.
-    const ownerToken = (await readFile(`/proc/${owner.pid}/stat`, 'utf8')).split(') ').at(-1).split(' ')[19];
-    const measuredDiskEnvelope = await readFile(join(admission, `owners/${owner.pid}-${ownerToken}`, 'disk'), 'utf8');
     await writeFile(release, '');
     assert.equal(await exited, 0, stderr);
     assert.equal(await contenderExited, 0, contenderErr);
@@ -239,7 +235,6 @@ esac
     await mkdir(reserved);
     await writeFile(join(reserved, 'process'), `${process.pid} ${token}\n`);
     await writeFile(join(reserved, 'class'), 'compilation\n');
-    await writeFile(join(reserved, 'disk'), measuredDiskEnvelope);
     await writeFile(observedPidsPath, JSON.stringify([process.pid]));
     const blocked = probe();
     assert.equal(blocked.status, 1, blocked.stderr);
@@ -359,45 +354,43 @@ process.stdout.write(renderWorkerMemoryReservationRows(readWorkerMemoryReservati
   await assert.rejects(readFile(waiter), { code: 'ENOENT' });
 });
 
-test('reaps a disk reservation after its process incarnation is lost between cleanup and accounting', { skip: process.platform !== 'linux' }, async t => {
-  const fixture = await createTempFixture(t, { prefix: 'hstack-retired-disk-owner-' });
+test('reclaims a reservation when its recorded PID belongs to another process incarnation', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-retired-owner-' });
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
-  const token = (await readFile(`/proc/${process.pid}/stat`, 'utf8')).split(') ').at(-1).split(' ')[19];
-  const owner = join(admissionRoot, 'owners', `${process.pid}-${token}`);
+  const currentToken = (await readFile(`/proc/${process.pid}/stat`, 'utf8')).split(') ').at(-1).split(' ')[19];
+  const retiredToken = String(BigInt(currentToken) + 1n);
+  const owner = join(admissionRoot, 'owners', `${process.pid}-${retiredToken}`);
   await mkdir(owner, { recursive: true });
-  await writeFile(join(owner, 'process'), `${process.pid} ${token}\n`);
-  await writeFile(join(owner, 'class'), 'validation\n');
-  await writeFile(join(owner, 'disk'), 'owned disk reservation\n');
-  // Only the OS fingerprint observation changes: the first cleanup sees this
-  // real incarnation; the accounting observation no longer sees that identity.
+  await writeFile(join(owner, 'process'), `${process.pid} ${retiredToken}\n`);
+  await writeFile(join(owner, 'class'), 'compilation\n');
+  const floor = resolveHeavyweightMemoryFloorKiB('validation');
+  // An existing PID alone cannot retain an earlier incarnation's reservation.
+  // The available memory fits validation only if the stale envelope is ignored.
   writeFakeBin({ root: fixture.root, name: 'awk', content: `#!/bin/sh
 case "$*" in
-  */proc/${process.pid}/stat)
-    if [ -f "$FIXTURE_IDENTITY_READ" ]; then printf '0\\n';
-    else : > "$FIXTURE_IDENTITY_READ"; exec /usr/bin/awk "$@"; fi ;;
-  */proc/meminfo*) printf '37748736 47185920\\n' ;;
+  */proc/meminfo*) printf '${floor} ${floor * 3}\\n' ;;
   */proc/loadavg*|*/proc/pressure/*) printf '0\\n' ;;
   *) exec /usr/bin/awk "$@" ;;
 esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission-check', '--class=validation', '--machine=fixture'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
-      FIXTURE_IDENTITY_READ: fixture.path('identity-read'), HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+      HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   assert.equal(result.status, 0, result.stderr);
-  await assert.rejects(access(owner), { code: 'ENOENT' }, 'a verified retired owner must not leave its disk record orphaned');
+  await assert.rejects(access(owner), { code: 'ENOENT' }, 'a stale process incarnation must release its reservation');
+  assert.match(result.stderr, /reclaimed heavyweight owner/);
 });
 
-test('observes a released owner record without a shell open error or new deletion authority', { skip: process.platform !== 'linux' }, async t => {
+test('reclaims a released owner record without a shell open error', { skip: process.platform !== 'linux' }, async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-released-owner-read-' });
   const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
   const releasedOwner = join(admissionRoot, 'owners', '99999999-1');
   await mkdir(releasedOwner, { recursive: true });
-  // Model the existing owner release having already unlinked its process file.
-  // No fingerprint is available, so this probe may not delete the remainder.
-  await writeFile(join(releasedOwner, 'disk'), 'owned disk reservation\n');
+  // Model owner release having unlinked its process file before its class file.
+  await writeFile(join(releasedOwner, 'class'), 'validation\n');
   writeFakeBin({ root: fixture.root, name: 'awk', content: `#!/bin/sh
 case "$*" in
   */proc/meminfo*) printf '37748736 47185920\\n' ;;
@@ -407,10 +400,10 @@ esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission-check', '--class=validation', '--machine=fixture'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stderr, /cannot open.*\/process/);
-  await access(join(releasedOwner, 'disk'));
+  await assert.rejects(access(releasedOwner), { code: 'ENOENT' });
 });

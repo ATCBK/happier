@@ -6,7 +6,7 @@ import { performance } from 'node:perf_hooks';
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 
 const custody = new URL('./remote_execution_custody.sh', import.meta.url).pathname;
@@ -352,7 +352,7 @@ test('control input survives the native admitted process tree', { skip: process.
     console.log('READY');
     process.stdin.once('data', chunk => { console.log('BODY:' + chunk.toString().trim()); process.exit(0); });
     process.stdin.once('end', () => process.exit(91));
-  `], { env: { ...process.env, PATH: join(root,'bin') + ':' + process.env.PATH, HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '', HAPPIER_REMOTE_EXEC_LIFELINE: '1', HAPPIER_REMOTE_EXEC_CONTROL_STDIN: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
+  `], { env: { ...buildNativeAdmissionFixtureEnv(), PATH: join(root,'bin') + ':' + process.env.PATH, HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_REMOTE_EXEC_LIFELINE: '1', HAPPIER_REMOTE_EXEC_CONTROL_STDIN: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => child.kill('SIGTERM'));
   let output = '', error = '';
   child.stdout.on('data', chunk => { output += chunk; });

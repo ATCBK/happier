@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
-import { installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
 import { resolveWorkspacePackageBuildLockPath } from '../../../scripts/workspaces/workspacePackageBuildLock.mjs';
 import { terminateProcessTreeByPid } from '../../../scripts/testing/process/processTree.mjs';
 
@@ -101,7 +101,7 @@ esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   const env = {
-    ...process.env,
+    ...buildNativeAdmissionFixtureEnv(),
     PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
     HAPPIER_DEV_TARGET_EXECUTION: '1',
     HAPPIER_PREFERRED_EXECUTION: '',

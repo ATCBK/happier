@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import { resolveStackEnvPath } from '../paths/paths.mjs';
 import {
@@ -500,6 +500,21 @@ export function resolveDevTargetExecutionPolicy(
 export function resolveDevTargetsConfigPath({ stackName, env = process.env }) {
   const resolvedStack = requireNonEmptyString(stackName, 'stackName');
   return join(resolveStackEnvPath(resolvedStack, env).baseDir, 'dev-targets.json');
+}
+
+/** Explicit command policy cannot silently become another Stack's defaults.
+ * Require a cwd-independent path before package managers can change cwd.
+ * Runtime/service placement continues to load its own Stack configuration.
+ */
+export async function loadDevTargetExecutionConfig({ stackName, env = process.env } = {}) {
+  const path = env.HAPPIER_EXEC_CONFIG_PATH;
+  if (path && !isAbsolute(path)) {
+    throw new Error('[dev-targets] HAPPIER_EXEC_CONFIG_PATH must be an absolute path');
+  }
+  if (path && /[\0\r\n]/.test(path)) {
+    throw new Error('[dev-targets] invalid HAPPIER_EXEC_CONFIG_PATH');
+  }
+  return await loadDevTargetsConfig({ stackName, path: path ? resolve(path) : undefined, env, allowMissing: !path });
 }
 
 export async function loadDevTargetsConfig({ stackName, path: configPath, env = process.env, allowMissing = true,

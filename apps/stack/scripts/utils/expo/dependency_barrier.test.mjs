@@ -131,6 +131,7 @@ test('cold dependency bootstrap imports and refreshes from source with no compil
     'paths/paths.mjs', 'paths/canonical_home.mjs',
     'dev_targets/stack_paths.mjs',
     '../../../../packages/cli-common/fileChangeObserver.mjs',
+    '../../../../packages/cli-common/processInstance.mjs',
   ]) {
     const target = join(sourceDir, source);
     await mkdir(join(target, '..'), { recursive: true });

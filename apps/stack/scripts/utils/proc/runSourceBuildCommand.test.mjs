@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { withDependencyRefreshLock } from './dependency_refresh.mjs';
 
 test('finite source preparation uses the native memory queue and releases it on completion and cancellation',
@@ -36,8 +36,7 @@ case "$*" in
 esac
 `);
     await chmod(awk, 0o755);
-    const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
-    for (const key of Object.keys(env)) if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete env[key];
+    const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
     await mkdir(join(native.admissionRoot, 'waiters'), { recursive: true });
     await mkdir(join(native.admissionRoot, 'owners'), { recursive: true });
     const marker = fixture.path('executed');

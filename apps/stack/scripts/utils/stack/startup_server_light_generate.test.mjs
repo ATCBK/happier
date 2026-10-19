@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { ensureServerLightSchemaReady } from './startup.mjs';
 import { buildServerLightEnv, createServerLightFixture } from './startup_server_light_testkit.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 async function writeJson(path, obj) {
   await writeFile(path, JSON.stringify(obj, null, 2) + '\n', 'utf-8');
@@ -88,7 +89,7 @@ test('ensureServerLightSchemaReady builds source server internal workspace depen
   );
   await chmod(yarnPath, 0o755);
 
-  const env = buildServerLightEnv({ binDir, root });
+  const { env } = await installWorkspaceAdmissionProcessFixture(t, root, { env: buildServerLightEnv({ binDir, root }) });
   const res = await ensureServerLightSchemaReady({ serverDir, env });
 
   assert.equal(res.ok, true);

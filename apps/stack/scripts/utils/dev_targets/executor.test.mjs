@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { resolveDevTargetMutagenRuntime } from './mutagen_runtime.mjs';
+import { readyDevTargetSyncResult as readyListResult } from '../../testkit/core/dev_target_sync.mjs';
 
 import {
   inspectDevTargetSync,
@@ -29,6 +30,26 @@ const target = {
   repoDir: '/home/dev/happier',
   cliHomeDir: '/home/dev/.happier/linux',
 };
+
+test('workspace aliases prepare their manifest component before remote payload admission', async t => {
+  const sourceDir = mkdtempSync(join(tmpdir(), 'happier-workspace-alias-executor-'));
+  t.after(() => rmSync(sourceDir, { recursive: true, force: true }));
+  mkdirSync(join(sourceDir, 'apps', 'viewer'), { recursive: true });
+  writeFileSync(join(sourceDir, 'package.json'), JSON.stringify({ workspaces: ['apps/*'] }));
+  writeFileSync(join(sourceDir, 'apps', 'viewer', 'package.json'), JSON.stringify({
+    name: '@fixture/viewer', scripts: { build: 'node compile.mjs' },
+  }));
+  let request;
+  const result = await runDevTargetCommand({ target, sourceDir, stackBaseDir: '/tmp/stack',
+    syncAlreadyVerified: true, provenance: 'skip', commandArgs: ['yarn', 'workspace', '@fixture/viewer', 'build'] }, {
+    spawnProcess: input => { request = input; return { completion: Promise.resolve({ code: 0, signal: null }) }; },
+  });
+  assert.equal(result.code, 0);
+  const command = request.args.at(-1);
+  assert.match(command, /remote_validation_preparation\.mjs/);
+  assert.match(command, /--component-relative-dir=apps\/viewer/);
+  assert.ok(command.indexOf('remote_validation_preparation.mjs') < command.indexOf('--heavyweight-admission'));
+});
 
 test('remote preparation retries refused multiplex admission but never an ambiguous command disconnect', async () => {
   for (const refused of [true, false]) {
@@ -98,19 +119,6 @@ test('try admission reports owner denial only when exit 75 and its stderr sentin
     assert.equal(result.code, scenario.code);
   }
 });
-
-function readyListResult(sessionName = 'happier-linux') {
-  return {
-    ok: true,
-    exitCode: 0,
-    out: JSON.stringify([{
-      name: sessionName, paused: false, status: 'watching', successfulCycles: 3,
-      alpha: { connected: true, scanned: true },
-      beta: { connected: true, scanned: true },
-    }]),
-    err: '',
-  };
-}
 
 test('explicit sync rescans scan-only problems through the existing flush before admission', async () => {
   const initial = readyListResult();

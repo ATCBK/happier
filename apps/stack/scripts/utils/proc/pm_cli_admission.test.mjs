@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withWorkspaceBundleLock } from '../../../../../scripts/workspaces/workspaceBundleLock.mjs';
-import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
 import { readHappyCliRuntimeInputFreshness } from './cli_runtime_inputs.mjs';
@@ -55,7 +55,7 @@ else if (process.argv.includes('build:prepared')) {
   const holder = withWorkspaceBundleLock(async () => { entered(); await new Promise(resolveRelease => { release = resolveRelease; }); }, { lockPath });
   await ready;
   const env = {
-    ...process.env, PATH: `${join(root, 'bin')}:${dirname(process.execPath)}:/usr/bin:/bin`, NODE_OPTIONS: `--experimental-loader=${loader}`,
+    ...buildNativeAdmissionFixtureEnv(), PATH: `${join(root, 'bin')}:${dirname(process.execPath)}:/usr/bin:/bin`, NODE_OPTIONS: `--experimental-loader=${loader}`,
     FIXTURE_MEMORY: memoryPath, FIXTURE_OBSERVED: observedPath, CI: '', HAPPIER_DEV_TARGET_EXECUTION: '1',
     HAPPIER_STACK_CLI_BUILD_MODE: 'always', HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',

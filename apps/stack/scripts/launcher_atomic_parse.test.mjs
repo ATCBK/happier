@@ -27,7 +27,7 @@ async function fixture(t) {
     commandExecution: { mode: 'auto', targets: ['fixture'], includeLocal: false, fallback: 'error' },
   };
   await writeFile(configPath, JSON.stringify(config));
-  await writeFile(join(root, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(config, { repoRoot: checkout }));
+  await writeFile(join(root, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(config, { repoRoot: checkout, configPath }));
   // Only host telemetry and the SSH/Mutagen transports are substituted. Both
   // the launcher and the command's real remote custody lifecycle execute.
   writeFakeBin({ root, name: 'uname', content: '#!/bin/sh\nprintf "Darwin\\n"\n' });

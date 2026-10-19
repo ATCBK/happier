@@ -11,6 +11,7 @@ import { ensureDevExpoServer } from './expo_dev.mjs';
 import { getExpoStatePaths, writePidState } from '../expo/expo.mjs';
 import { withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
 import { sanitizeStackTestRunnerEnv } from '../test/test_env.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 async function createExpoWorkspaceFixture({ workspaceBuildFails = false } = {}) {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-expo-preflight-'));
@@ -111,10 +112,11 @@ async function startFixtureExpo({ tmp, uiDir, spawnOptions = undefined, ...overr
   return result;
 }
 
-test('ensureDevExpoServer rejects a fresh workspace build failure before starting Expo', async () => {
+test('ensureDevExpoServer rejects a fresh workspace build failure before starting Expo', async t => {
   const fixture = await createExpoWorkspaceFixture({ workspaceBuildFails: true });
   try {
-    await assert.rejects(startFixtureExpo(fixture), /fixture workspace build failed/);
+    const { env } = await installWorkspaceAdmissionProcessFixture(t, fixture.tmp, { env: createExpoBaseEnv(fixture.tmp) });
+    await assert.rejects(startFixtureExpo({ ...fixture, baseEnv: env }), /fixture workspace build failed/);
     await assert.rejects(readFile(fixture.expoStartedMarker), { code: 'ENOENT' });
   } finally {
     await rm(fixture.tmp, { recursive: true, force: true });

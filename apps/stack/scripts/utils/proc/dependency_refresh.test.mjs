@@ -106,7 +106,7 @@ test('queued dependency writers retain FIFO priority over new finite readers', {
   } finally { release(); await Promise.allSettled(pending); }
 });
 
-test('dependency refresh waits for its live owner beyond the former acquisition cutoff', async (t) => {
+for (const writerPriority of [true, false]) test(`dependency refresh waits for its live ${writerPriority ? 'writer' : 'reader'} beyond the former acquisition cutoff`, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dependency-owner-lifetime-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   let clock = Date.now();
@@ -119,7 +119,7 @@ test('dependency refresh waits for its live owner beyond the former acquisition 
   let markOwnerStarted;
   const held = new Promise(resolve => { releaseOwner = resolve; });
   const started = new Promise(resolve => { markOwnerStarted = resolve; });
-  const owner = withDependencyRefreshLock({ installDir: root, env }, async () => {
+  const owner = withDependencyRefreshLock({ installDir: root, env, writerPriority }, async () => {
     markOwnerStarted();
     await held;
   });
@@ -130,7 +130,7 @@ test('dependency refresh waits for its live owner beyond the former acquisition 
     .then(() => { outcome = 'completed'; }, error => { outcome = error.message; });
   try {
     // OS clock/timer boundaries advance the waiting duration while retaining
-    // the real owner's fresh heartbeat and real filesystem lock.
+    // the real live owner and its real filesystem lock.
     clock += 240_001;
     t.mock.timers.tick(5_000);
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -138,8 +138,9 @@ test('dependency refresh waits for its live owner beyond the former acquisition 
     assert.equal(payloadStarts, 0, 'a waiting contender must not start authoritative installation');
     assert.match(notices, new RegExp(`dependency refresh lock.*pid=${process.pid}.*heldMs=.*heartbeatAgeMs=`),
       'dependency consumers must see the existing owner diagnostic while waiting');
-    // The real bootstrap uses synchronous Yarn subprocesses, which can delay
-    // this owner's JavaScript heartbeat without ending its installation.
+    // Synchronous Yarn can delay an exclusive holder's JavaScript heartbeat;
+    // shared-reader timestamps change only on membership changes. Neither
+    // timestamp becoming old proves that the real owner has departed.
     clock += 240_001;
     await new Promise(resolve => setTimeout(resolve, 300));
     assert.equal(outcome, 'pending', 'a delayed heartbeat must not let a contender replace a live installer');

@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { buildStackStableScopeId } from '../auth/stable_scope_id.mjs';
+import { decodeJwtPayloadUnsafe } from '../auth/decode_jwt_payload_unsafe.mjs';
 import { REQUIRED_MANAGED_LIMA_GUEST_TOOLCHAIN } from '../managed_lima/provisioner.mjs';
 import { resolveEffectiveDbProvider } from '../server/effective_db_provider.mjs';
 import { renderNativeHeavyweightPressureCadence } from './heavyweight_pressure_cadence.mjs';
@@ -19,7 +20,7 @@ export { resolveHeavyweightPressureRetryMilliseconds } from './heavyweight_press
 // while argv and path normalization remain thin transport adapters.
 export const REMOTE_COMMAND_CLASSIFICATION = Object.freeze({
   packageManagerCommands: Object.freeze(['npm', 'npx', 'pnpm', 'yarn']),
-  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/app-context']),
+  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/app-context', 'packages/plugins/inspector', 'packages/plugins/linear', 'packages/plugins/jira', 'packages/plugins/sentry', 'packages/plugins/posthog']),
   sourceTestConfigs: Object.freeze(['vitest.config.ts']),
   sourceTestScripts: Object.freeze(['vitest', 'vitest:local']),
 });
@@ -99,6 +100,7 @@ const COMMAND_RULES = [
   { when: { command: ['tsc'] }, set: { kind: 'typecheck', workerTool: 'typescript-native' } },
   { when: { family: ['tsc', 'typecheck'] }, set: { kind: 'typecheck', workerTool: 'typescript-native' } },
   { when: { command: ['node', 'nodejs'], entry: ['runTypeScriptCli.mjs'] }, set: { ...validation, kind: 'typecheck', workerTool: 'typescript-native' } },
+  { when: { command: ['node', 'nodejs'], entryRepositoryPath: ['packages/tests/scripts/run-extended-db-docker.mjs'] }, set: { requiredTools: 'docker' } },
   { when: { command: ['node', 'nodejs'], entry: ['buildTypeScriptPackageDist.mjs', 'build.mjs'] }, set: { ...validation, heavyClass: 'compilation' } },
   { when: { command: ['node', 'nodejs'], entryPath: ['packages/cli-common/scripts/build.mjs'] }, set: { componentOverride: 'packages/cli-common' } },
   // These finite owners acquire their declared dist leases jointly with native
@@ -137,9 +139,11 @@ const COMMAND_RULES = [
   { when: { command: ['node', 'nodejs'], nativeTest: ['1'] }, set: { ...validation, componentFromNative: '1' } },
   { when: { command: ['node', 'nodejs'], nativeTest: ['1'], nativeTestPath: ['packages/plugin-sdk/scripts/generateActionTypeMap.test.mjs'] }, set: { kind: 'source-test' } },
   { when: { command: ['node', 'nodejs'], nativeTest: ['1'], stackScope: ['1'] }, set: { kind: 'runtime', componentOverride: 'apps/stack' } },
-  // These preparation/policy owner suites import repository source tools and
-  // construct isolated dependency fixtures, not Stack's emitted runtime closure.
+  // These tool owner suites import repository source and construct isolated
+  // dependency fixtures, not emitted workspace runtime closures.
   { when: { command: ['node', 'nodejs'], nativeTest: ['1'], nativeTestPath: [
+    'apps/ui/scripts/runVitestShards.test.mjs',
+    'apps/ui/scripts/activitySurfacesValidationContract.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.test.mjs',
     'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs',
     'apps/stack/scripts/utils/proc/workspace_build_admission.test.mjs',
@@ -197,7 +201,8 @@ const FINAL_COMMAND_RULES = [
   { when: { nativeTest: ['1'] }, set: { preparationBuildMode: 'qa-runtime' } },
   { when: { runnerKnown: ['1'] }, set: { preparationBuildMode: 'qa-runtime' } },
   { when: { family: ['test', 'vitest'] }, set: { preparationBuildMode: 'qa-runtime' } },
-  // CLI Vitest global setup compiles the process-custody component with Go.
+  // Artifact-consuming CLI setup retains its existing publication custody.
+  // Source-only readers release that resource after preparation below.
   { when: { component: ['apps/cli'], workerTool: ['vitest'], generatorCheck: ['0'] }, set: {
     requiredTools: 'go', workspaceLock: '.project/tmp/cli-dist-build.lock',
   } },
@@ -244,8 +249,18 @@ const FINAL_COMMAND_RULES = [
   { when: { kind: ['runtime'], component: ['apps/cli'], script: ['test', 'test:local', 'test:unit', 'test:unit:local', 'test:unit:vitest', 'test:unit:vitest:local'], config: ['vitest.config.ts'], resolverOverride: ['0'] }, set: { kind: 'source-test' } },
   { when: { kind: ['runtime'], runnerKnown: ['1'], component: REMOTE_COMMAND_CLASSIFICATION.sourceTestComponents, config: REMOTE_COMMAND_CLASSIFICATION.sourceTestConfigs, resolverOverride: ['0'] }, set: { kind: 'source-test' } },
   { when: { kind: ['runtime'], runnerKnown: ['1'], component: ['apps/cli'], config: ['vitest.source.integration.config.ts'], resolverOverride: ['0'] }, set: { kind: 'source-test' } },
-  // UI integration keeps the base workspace-source plugins and aliases.
-  { when: { kind: ['runtime'], runnerKnown: ['1'], component: ['apps/ui'], config: ['vitest.integration.config.ts'], resolverOverride: ['0'] }, set: { kind: 'source-test' } },
+  // Native source prerequisites are staged under their own admitted producer
+  // lease before the payload. Retaining it through tests prevents a nested
+  // compiler from waiting for its legitimate larger resource envelope.
+  { when: { kind: ['source-test'], component: ['apps/cli'], workerTool: ['vitest'] }, set: { workspaceLock: '', requiredTools: '' } },
+  // The complete source-unit lane executes real compiler owners. Explicit
+  // file requests retain validation; compiler-consuming focused requests use
+  // the existing explicit admission-class wrapper, not a filename registry.
+  { when: { kind: ['source-test'], component: ['apps/cli'], workerTool: ['vitest'],
+    config: ['vitest.config.ts'], generatorCheck: ['0'], testFileSelected: ['0'] },
+    set: { heavyClass: 'compilation' } },
+  // UI and server integration keep their workspace-source plugins and aliases.
+  { when: { kind: ['runtime'], runnerKnown: ['1'], component: ['apps/ui', 'apps/server'], config: ['vitest.integration.config.ts'], resolverOverride: ['0'] }, set: { kind: 'source-test' } },
   { when: { heavyClass: HEAVYWEIGHT_COMPILE_CLASSES }, set: { localCompile: '1' } },
 ];
 function commandBasename(value) {
@@ -375,7 +390,8 @@ function normalizeCommandArguments(commandArgs, cwd, repoRoot = COMMAND_REPO_ROO
   }));
   const nativeCwd = slashCwd === normalizedRepoRoot ? '.'
     : slashCwd.startsWith(normalizedRepoRoot + '/') ? slashCwd.slice(normalizedRepoRoot.length + 1) : slashCwd;
-  const testPaths = args.slice(1).filter(arg => !arg.startsWith('-') && /\.(?:[cm]?[jt]s)$/u.test(arg)).map(arg => {
+  const testArgumentStart = command === 'node' || command === 'nodejs' ? entryIndex : 1;
+  const testPaths = args.slice(testArgumentStart).filter(arg => !arg.startsWith('-') && /\.(?:[cm]?[jt]s)$/u.test(arg)).map(arg => {
     const path = arg.replaceAll('\\', '/');
     return posix.normalize(path.startsWith(normalizedRepoRoot + '/') ? path.slice(normalizedRepoRoot.length + 1)
       : path.startsWith('/') ? path : posix.join(nativeCwd, path));
@@ -401,10 +417,31 @@ function normalizeCommandArguments(commandArgs, cwd, repoRoot = COMMAND_REPO_ROO
     workerRequest: args.some(arg => arg.startsWith('--worker-request=') && arg.length > '--worker-request='.length) ? '1' : '0',
     component: normalizeCommandPath(slashCwd), managerCwd, project, mixedProjects: projectScopes.size > 1 ? '1' : '0',
     nativeTestPath: testPaths.length === 1 ? testPaths[0] : '',
+    testFileSelected: args.some(arg => !arg.startsWith('-') && /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg)) ? '1' : '0',
     nativeComponent: testComponents.length && testComponents.every(component => component === testComponents[0]) ? testComponents[0] : '',
     stackScope: /^apps\/stack(?:\/|$)/u.test(posix.normalize(slashCwd))
       || args.some(arg => /(?:^|\/)apps\/stack\//u.test(arg.replaceAll('\\', '/'))) ? '1' : '0',
   };
+}
+
+function readCommandPackageJson(packageDir) {
+  return JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+}
+
+function resolveSourceTestRequiredTools(repoRoot, component, existingTools = '') {
+  let metadata;
+  try {
+    metadata = readCommandPackageJson(resolve(repoRoot, component));
+  } catch (error) {
+    if (error.code === 'ENOENT') return existingTools;
+    throw error;
+  }
+  if (!Object.hasOwn(metadata, 'happierSourceTestTools')) return existingTools;
+  const tools = metadata.happierSourceTestTools;
+  if (!Array.isArray(tools) || tools.some(tool => typeof tool !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(tool))) {
+    throw new Error(`[command-policy] ${component}/package.json#happierSourceTestTools must be an array of executable names`);
+  }
+  return [...new Set([...existingTools.split(/\s+/u).filter(Boolean), ...tools])].join(' ');
 }
 
 /** Resolve package-manager references against synchronized repository manifests.
@@ -418,13 +455,13 @@ async function resolvePackageCommandManifest(commandArgs, { repoRoot = COMMAND_R
     if (facts.workspace) {
       packageDir = '';
       for (const path of await collectWorkspacePackageJsonPaths(repoRoot)) {
-        if (JSON.parse(await readFile(path, 'utf8')).name === facts.workspace) { packageDir = dirname(path); break; }
+        if (readCommandPackageJson(dirname(path)).name === facts.workspace) { packageDir = dirname(path); break; }
       }
       if (!packageDir) return null;
     }
     const packagePath = relative(resolve(repoRoot), packageDir);
     if (packagePath === '..' || packagePath.startsWith(`..${sep}`) || isAbsolute(packagePath)) return null;
-    return { packageDir, packageJson: JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8')), scriptName: facts.script };
+    return { packageDir, packageJson: readCommandPackageJson(packageDir), scriptName: facts.script };
   } catch (error) {
     if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
     throw error;
@@ -470,6 +507,9 @@ export function resolveRemoteCommandPolicy(commandArgs, { cwd = '.', repoRoot = 
   else if (facts.component.startsWith(normalizedRepoRoot + '/')) facts.component = facts.component.slice(normalizedRepoRoot.length + 1);
   facts.packageComponent = facts.component.startsWith('packages/') ? '1' : '0';
   applyCommandRules(facts, FINAL_COMMAND_RULES, policy);
+  if (policy.kind === 'source-test' && policy.workerTool === 'vitest' && policy.generatorCheck === '0') {
+    policy.requiredTools = resolveSourceTestRequiredTools(repoRoot, facts.component, policy.requiredTools);
+  }
   if (['node', 'nodejs'].includes(facts.command) && facts.nativeTest === '1'
     && facts.nativeTestPath && facts.nativeLoader === '0' && !env.NODE_OPTIONS
     && readNativeTestSourceInputs(repoRoot, facts.nativeTestPath) !== null) {
@@ -487,8 +527,8 @@ export function resolveRemoteCommandPolicy(commandArgs, { cwd = '.', repoRoot = 
   return { ...policy, component: normalizeCommandPath(facts.component) };
 }
 
-/** Source-test native setup consumes the same mutable publication as CLI builds.
- * Declare it before payload admission so setup inherits the authenticated lease.
+/** Artifact-consuming validation retains its declared publication custody.
+ * Source-test native preparation releases its producer lease before payload admission.
  */
 export function resolveCommandWorkspaceLocks(policy, repoRoot) {
   return policy.workspaceLock ? [{ path: resolve(repoRoot, policy.workspaceLock) }] : [];
@@ -678,7 +718,10 @@ export function renderNativeCommandPolicy() {
     'native_command_policy_base() {',
     ...Object.entries(DEFAULT_COMMAND_POLICY).map(([key, value]) => '  policy_' + key + '=' + posixQuote(value)),
     renderShellCommandRules(COMMAND_RULES), '}',
-    'native_command_policy_finish() {', renderShellCommandRules(FINAL_COMMAND_RULES), '}',
+    'native_command_policy_finish() {', renderShellCommandRules(FINAL_COMMAND_RULES),
+    '  if [ "$policy_kind" = source-test ] && [ "$policy_workerTool" = vitest ] && [ "$policy_generatorCheck" = 0 ]; then',
+    '    policy_requiredTools=$(node "${projection_command_policy:-$repo_root/apps/stack/scripts/utils/dev_targets/remote_commands.mjs}" --source-test-tools "$repo_root" "$policy_component" "$policy_requiredTools") || return $?',
+    '  fi', '}',
     'native_package_manager() { case "$1" in ' + REMOTE_COMMAND_CLASSIFICATION.packageManagerCommands.join('|') + ') return 0 ;; *) return 1 ;; esac; }',
     NATIVE_COMMAND_NORMALIZATION,
   ].join('\n');
@@ -709,6 +752,7 @@ native_command_basename() {
   native_basename=\${native_basename##*/}
 }
 native_node_entry() {
+  native_node_prefix_count=$#
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -721,6 +765,7 @@ native_node_entry() {
       *) break ;;
     esac
   done
+  native_node_prefix_count=$((native_node_prefix_count - $#))
   native_entry_path=\${1-}
   native_command_basename "$native_entry_path"; policy_entry=$native_basename
 }
@@ -759,11 +804,11 @@ native_try_admission_payload() {
         [ "$#" -gt 0 ] || return 1
         # Positional custody preserves this wrapper's class through recursion.
         set -- "$native_wrapper_class" "$@"
-        native_resolve_admission_payload "$@"
+        native_resolve_admission_payload "$@" || return 2
         [ "$policy_bootstrap" = 1 ] || return 1
         policy_admissionWrapper=1
         policy_admissionClass=$1
-        native_command_policy_finish
+        native_command_policy_finish || return 2
         return 0
         ;;
       *) return 1 ;;
@@ -777,7 +822,11 @@ resolve_native_command_policy() {
   case "\${1-}" in --script=*) native_script=\${1#--script=}; shift; [ "\${1-}" = -- ] && shift; set -- corepack yarn -s "$native_script" "$@" ;; esac
   native_command_basename "\${1-}"; policy_command=$native_basename
   if [ "$policy_command" = hstack-exec ] && [ "\${2-}" = --heavyweight-admission ]; then
-    if native_try_admission_payload "$@"; then return; fi
+    if native_try_admission_payload "$@"; then return
+    else
+      native_wrapper_status=$?
+      [ "$native_wrapper_status" -eq 1 ] || return "$native_wrapper_status"
+    fi
     # An unsupported payload retains the original wrapper's policy.
     native_command_basename "\${1-}"; policy_command=$native_basename
   fi
@@ -786,6 +835,7 @@ resolve_native_command_policy() {
   native_manager_cwd=; native_project=; policy_mode=write
   policy_nativeTest=0; policy_config=vitest.config.ts; policy_resolverOverride=0
   policy_nativeLoader=0
+  policy_testFileSelected=0
   policy_project=; policy_projectPaths=; policy_workerRequest=0
   policy_noCheck=0
   policy_declarations=0; policy_runScript=0
@@ -805,6 +855,7 @@ resolve_native_command_policy() {
   policy_stackScope=0
   case "$policy_component" in apps/stack|apps/stack/*) policy_stackScope=1 ;; esac
   native_entry_path=\${2-}
+  native_node_prefix_count=0
   case "$policy_command" in
     node|nodejs) native_node_entry "$@" ;;
     *) if [ "\${2-}" = --experimental-strip-types ]; then policy_stripTypes=1; native_entry_path=\${3-}; native_command_basename "$native_entry_path"; policy_entry=$native_basename; fi ;;
@@ -845,11 +896,18 @@ resolve_native_command_policy() {
       --mode=*) policy_mode=\${native_arg#--mode=} ;;
     esac
     case "$native_arg" in apps/stack/*|./apps/stack/*|*/apps/stack/*) policy_stackScope=1 ;; esac
+    case "$native_arg" in
+      -*) ;;
+      *.test.js|*.test.ts|*.test.mjs|*.test.mts|*.test.cjs|*.test.cts|*.test.jsx|*.test.tsx|*.spec.js|*.spec.ts|*.spec.mjs|*.spec.mts|*.spec.cjs|*.spec.cts|*.spec.jsx|*.spec.tsx) policy_testFileSelected=1 ;;
+    esac
   done
   native_normalize_path "$policy_config"; policy_config=$native_result
   policy_project=$native_project
   policy_nativeTestPath=; native_test_count=0; native_test_component=; native_test_component_mixed=0
+  native_test_argument_index=0
   for native_arg in "$@"; do
+    native_test_argument_index=$((native_test_argument_index + 1))
+    [ "$native_test_argument_index" -gt "$native_node_prefix_count" ] || continue
     case "$native_arg" in -*) continue ;; *.mjs|*.cjs|*.js|*.ts|*.mts|*.cts) ;; *) continue ;; esac
     native_normalize_path "$native_arg"; native_test_path=$native_result
     case "$native_test_path" in "$repo_root"/*) native_test_path=\${native_test_path#"$repo_root"/} ;; *) native_normalize_path "$policy_component/$native_test_path"; native_test_path=$native_result ;; esac
@@ -900,7 +958,7 @@ resolve_native_command_policy() {
   [ -n "$policy_componentOverride" ] && policy_component=$policy_componentOverride
   if [ -z "$policy_componentOverride" ] && [ "$policy_componentFromNative" = 1 ] && [ -n "$native_test_component" ]; then policy_component=$native_test_component; fi
   case "$policy_component" in packages/*) policy_packageComponent=1 ;; *) policy_packageComponent=0 ;; esac
-  native_command_policy_finish
+  native_command_policy_finish || return $?
   case "$policy_command:$policy_nativeTest:$policy_nativeLoader" in
     node:1:0|nodejs:1:0)
       if [ -n "$policy_nativeTestPath" ] && [ -f "$repo_root/$policy_nativeTestPath" ]; then
@@ -1008,15 +1066,18 @@ export function buildRemoteExecCommand(
   const pidFile = resolveRemoteExecutionPidFile(target, normalizedExecutionId);
   if (target.platform !== 'windows' && (preparation || admissionClass)) {
     const repoDir = requireRemoteRelativeWorkingDirectory(target, '.');
+    const policy = commandPolicy ?? resolveRemoteCommandPolicy(args, { cwd: workingDirectory, repoRoot: repoDir, env: environment });
     const body = ['set -euo pipefail', `cd -- ${posixQuote(repoDir)}`];
-    const defaultBuildMode = preparation?.defaultBuildMode ?? resolveRemoteCommandPolicy(commandArgs, { cwd }).preparationBuildMode;
+    const defaultBuildMode = environment.HAPPIER_WORKSPACE_BUILD_MODE ?? preparation?.defaultBuildMode
+      ?? policy.preparationBuildMode;
+    body.push(`export HAPPIER_WORKSPACE_BUILD_MODE=${posixQuote(defaultBuildMode)}`);
     const cacheEnv = `env ${posixQuote(`HAPPIER_STACK_PM_CACHE_BASE_DIR=${String(target.cliHomeDir).replace(/[\\/]+$/, '')}/cache`)}`;
     if (preparation?.bootstrap) {
       body.push(`${cacheEnv} node ./apps/stack/scripts/utils/dev_targets/remote_dependency_bootstrap.mjs --execution-placement=remote ${posixQuote(`--validation-kind=${preparation.validationKind}`)} ${posixQuote(`--component-relative-dir=${preparation.bootstrapComponentRelativeDir ?? '.'}`)} ${posixQuote(`--default-build-mode=${defaultBuildMode}`)}`);
     }
     if (preparation?.componentRelativeDir != null) {
       requireRemoteRelativeWorkingDirectory(target, preparation.componentRelativeDir);
-      body.push(`${cacheEnv} node ./apps/stack/scripts/utils/dev_targets/remote_validation_preparation.mjs ${posixQuote(`--component-relative-dir=${preparation.componentRelativeDir}`)} ${posixQuote(`--validation-kind=${preparation.validationKind}`)} ${posixQuote(`--default-build-mode=${defaultBuildMode}`)}`);
+      body.push(`${cacheEnv} node ./apps/stack/scripts/utils/dev_targets/remote_validation_preparation.mjs ${posixQuote(`--component-relative-dir=${preparation.componentRelativeDir}`)} ${posixQuote(`--validation-kind=${preparation.validationKind}`)} ${posixQuote(`--required-tools=${policy.requiredTools}`)} ${posixQuote(`--default-build-mode=${defaultBuildMode}`)}`);
     }
     body.push(`cd -- ${posixQuote(workingDirectory)}`);
     let payloadCommand = '';
@@ -1024,7 +1085,6 @@ export function buildRemoteExecCommand(
       // Dependency/build lock holders can need admission themselves. Only
       // reserve the payload envelope once preparation has released its locks;
       // dist compilers acquire their own canonical admission before their lock.
-      const policy = commandPolicy ?? resolveRemoteCommandPolicy(args, { cwd: workingDirectory, repoRoot: repoDir, env: environment });
       const workspaceLocks = resolveCommandWorkspaceLocks(policy, repoDir);
       const admittedArgs = ['env', `HAPPIER_STACK_PM_CACHE_BASE_DIR=${String(target.cliHomeDir).replace(/[\\/]+$/, '')}/cache`, `${repoDir}/apps/stack/bin/hstack-exec`, '--heavyweight-admission',
         `--class=${admissionClass}`, `--machine=${target.name}`, `--failure-id=${normalizedExecutionId}`,
@@ -1197,20 +1257,39 @@ export function buildRemoteDoctorCommand(target) {
 }
 
 export function buildRemoteInstallCredentialCommand(target, { stagedPath, finalPath }) {
-  // Startup seeds an unpaired target. Its enrolled credential is target-owned;
-  // replacing it belongs to the explicit auth flow, not controller startup.
+  // Preserve target enrollment within an Account, but carry an explicit
+  // controller re-login across Accounts. CLI auth owns selecting the Machine
+  // for the new token subject; do not copy or rewrite its settings here.
+  // Inline the existing decoder: credential seeding can precede mirror refresh.
+  const expression = [
+    "const fs = require('node:fs'), path = require('node:path');",
+    `const decodeJwtPayloadUnsafe = ${decodeJwtPayloadUnsafe.toString()};`,
+    `const stagedPath = ${JSON.stringify(stagedPath)}, finalPath = ${JSON.stringify(finalPath)};`,
+    "const seed = fs.readFileSync(stagedPath, 'utf8');",
+    "const existing = fs.existsSync(finalPath) ? fs.readFileSync(finalPath, 'utf8') : '';",
+    'const accountId = raw => {',
+    '  try {',
+    '    const sub = decodeJwtPayloadUnsafe(JSON.parse(raw).token)?.sub;',
+    "    return typeof sub === 'string' && sub.trim() ? sub.trim() : null;",
+    '  } catch { return null; }',
+    '};',
+    'const seedAccountId = accountId(seed), existingAccountId = accountId(existing);',
+    'if (!existing || (seedAccountId && existingAccountId && seedAccountId !== existingAccountId)) {',
+    '  fs.mkdirSync(path.dirname(finalPath), { recursive: true, mode: 0o700 });',
+    "  if (process.platform !== 'win32') {",
+    '    fs.chmodSync(path.dirname(finalPath), 0o700);',
+    '    fs.chmodSync(stagedPath, 0o600);',
+    '  }',
+    '  fs.renameSync(stagedPath, finalPath);',
+    '} else { fs.unlinkSync(stagedPath); }',
+  ].join('\n');
   if (target.platform === 'windows') {
     return wrapRemoteScript(
       target,
       [
         '$ErrorActionPreference = "Stop"',
-        `$destination = ${powershellQuote(finalPath)}`,
-        'New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null',
-        'if (!(Test-Path -LiteralPath $destination) -or (Get-Item -LiteralPath $destination).Length -eq 0) {',
-        `Move-Item -Force -LiteralPath ${powershellQuote(stagedPath)} -Destination $destination`,
-        '} else {',
-        `Remove-Item -LiteralPath ${powershellQuote(stagedPath)}`,
-        '}',
+        `node -e ${powershellNativeArgument(expression)}`,
+        'exit $LASTEXITCODE',
       ].join('; '),
     );
   }
@@ -1218,9 +1297,7 @@ export function buildRemoteInstallCredentialCommand(target, { stagedPath, finalP
     target,
     [
       'set -euo pipefail',
-      `install -d -m 700 -- ${posixQuote(finalPath.slice(0, finalPath.lastIndexOf('/')))}`,
-      `if [ ! -s ${posixQuote(finalPath)} ]; then install -m 600 -- ${posixQuote(stagedPath)} ${posixQuote(finalPath)}; fi`,
-      `rm -f -- ${posixQuote(stagedPath)}`,
+      `exec node -e ${posixQuote(expression)}`,
     ].join('; '),
   );
 }
@@ -1506,6 +1583,7 @@ export function buildRemoteRuntimeSnapshotProbeCommand(target, { stackName, snap
     'const daemonServerUrl = s.serverConnection?.internalServerUrl ?? (s.ports?.server ? `http://127.0.0.1:${s.ports.server}` : null);',
     "if (typeof daemonServerUrl !== 'string' || !daemonServerUrl) fail('daemon_server_endpoint_missing');",
     'observed.daemonServerUrl = daemonServerUrl;',
+    'observed.serverPort = s.ports?.server ?? null;',
   ] : [];
   const sourceProbe = [
     'const sourceRuntimeIdentities = {};',
@@ -2006,12 +2084,17 @@ export async function runRemoteCommandPolicyCli(argv = process.argv.slice(2)) {
     process.stdout.write(!process.env.NODE_OPTIONS && readNativeTestSourceInputs(args[1], args[2]) !== null ? '1\n' : '0\n');
     return 0;
   }
+  const sourceTestTools = args[0] === '--source-test-tools';
   const selfPublishing = args[0] === '--self-publishing';
   const publisherPolicy = args[0] === '--publisher-policy';
   const packagePolicy = args[0] === '--package-policy';
-  if (selfPublishing || publisherPolicy || packagePolicy) args.shift();
+  if (sourceTestTools || selfPublishing || publisherPolicy || packagePolicy) args.shift();
   const [repoRoot, cwd, ...commandArgs] = args;
   try {
+    if (sourceTestTools) {
+      process.stdout.write(resolveSourceTestRequiredTools(repoRoot, cwd, commandArgs[0] ?? '') + '\n');
+      return 0;
+    }
     if (packagePolicy) {
       const policy = await resolvePackageCommandPolicy(commandArgs, { repoRoot, cwd });
       process.stdout.write(Object.entries(policy).map(([key, value]) => `policy_${key}=${posixQuote(value)}`).join('\n') + '\n');

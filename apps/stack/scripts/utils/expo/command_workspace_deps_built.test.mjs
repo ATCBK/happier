@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 
 import { expoExec, expoSpawn, resolveExpoBin, hasUsableExpoWorkspaceLastGreen, ensureExpoWorkspacePrepared } from './command.mjs';
 import { withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -335,12 +336,13 @@ test('expoExec builds workspace dist deps for the projectDir (not the runnerDir)
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
   });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
 
   await expoExec({
     dir: root,
     projectDir: join(root, 'apps', 'ui'),
     args: ['export', '--platform', 'web', '--output-dir', join(root, 'out')],
-    env: process.env,
+    env: native.env,
     ensureDepsLabel: 'happy',
     quiet: true,
   });
@@ -405,12 +407,13 @@ test('expoExec falls back to the monorepo root expo bin when runnerDir lacks nod
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
   });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
 
   await expoExec({
     dir: join(root, 'apps', 'ui'),
     projectDir: join(root, 'apps', 'ui'),
     args: ['export', '--platform', 'web', '--output-dir', join(root, 'out')],
-    env: process.env,
+    env: native.env,
     ensureDepsLabel: 'happy',
     quiet: true,
   });

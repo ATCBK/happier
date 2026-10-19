@@ -1,17 +1,68 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installCliNativeCustodySourceFixture, installNativeAdmissionFixture, installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { ensureWorkspacePackagesBuiltForComponent } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { withWorkspaceBundleLock } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from '../../../../../scripts/workspaces/workspacePackageBuildLock.mjs';
 
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { resolveCliBundledWorkspacePackageNames } from '../../../../cli/scripts/buildSharedDeps.mjs';
+
+test('CLI source preparation stages admitted native custody and releases publication before the reader', { skip: process.platform !== 'linux' }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-cli-source-native-preparation-' });
+  await installNativeAdmissionFixture({ root });
+  const repoDir = join(root, 'native-owner');
+  const source = await installCliNativeCustodySourceFixture(repoDir);
+  const cliDir = join(repoDir, 'apps/cli');
+  mkdirSync(join(cliDir, 'native/processcustody'), { recursive: true });
+  const nativeSource = join(cliDir, 'native/processcustody/main.go');
+  writeFileSync(nativeSource, 'native-custody');
+  writeFileSync(join(repoDir, 'package.json'), '{"private":true}');
+  writeFileSync(join(repoDir, 'yarn.lock'), '# source fixture');
+  const buildRecord = join(root, 'native-build');
+  // Go and physical capacity are OS boundaries. The real source setup,
+  // native admission, authenticated lease and staging owner remain live.
+  writeFakeBin({ root, name: 'go', content: `#!/bin/sh
+[ -n "$HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN" ] || exit 91
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '-o' ]; then shift; output=$1; fi
+  shift
+done
+cat '${nativeSource}' > "$output"
+printf 'compiled\\n' >> '${buildRecord}'
+` });
+  writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "33554432 33554432\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
+  writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${join(root, 'bin')}:${process.env.PATH}`,
+    HAPPIER_EXEC_CONFIG_PATH: '', HAPPIER_DEV_TARGET_EXECUTION: '1' };
+  const prepare = (requiredTools = 'go') => prepareRemoteValidationWorkspace({ repoDir,
+    componentRelativeDir: 'apps/cli', validationKind: 'source-test', requiredTools, env });
+
+  await prepare('');
+  assert.throws(() => readFileSync(buildRecord), { code: 'ENOENT' },
+    'projection-only source checks do not acquire a new native prerequisite');
+
+  await prepare();
+  assert.deepEqual(new Set(readFileSync(source.tracePath, 'utf8').trim().split('\n').map(value => JSON.parse(value))),
+    new Set([source.runtimeTarget, source.setupTarget].map(value => pathToFileURL(value).href)),
+    'the selected checkout owns both the source loader and native staging implementation');
+  assert.equal(readFileSync(join(cliDir, 'tools/unpacked/happier-process-custody'), 'utf8'), 'native-custody');
+  assert.throws(() => readFileSync(join(repoDir, '.project/tmp/cli-dist-build.lock')), { code: 'ENOENT' });
+  assert.throws(() => readFileSync(join(cliDir, 'dist/index.mjs')), { code: 'ENOENT' });
+  writeFileSync(nativeSource, 'native-custody-current-source');
+  await prepare();
+  assert.equal(readFileSync(join(cliDir, 'tools/unpacked/happier-process-custody'), 'utf8'), 'native-custody-current-source',
+    'an existing binary is not proof that the public preparation consumed current Go source');
+  assert.equal(readFileSync(buildRecord, 'utf8'), 'compiled\ncompiled\n');
+  assert.throws(() => readFileSync(join(repoDir, '.project/tmp/cli-dist-build.lock')), { code: 'ENOENT' });
+});
 
 test('typecheck readers consume last-green declarations while publication leases remain held', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-typecheck-held-publication-' });
@@ -132,6 +183,7 @@ test('runtime preparation publishes captured inputs and preserves last-green aft
 
 test('cold CLI artifact publication builds the selected plugin before invoking its artifact consumer', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-cold-plugin-dist-' });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, type: 'module', workspaces: ['apps/*', 'packages/plugins/*'] }));
   writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
   const cli = join(root, 'apps/cli');
@@ -163,7 +215,7 @@ if (result.error) throw result.error; process.exit(result.status ?? 1);`);
 const root = process.argv[process.argv.indexOf('--root') + 1];
 const dist = readFileSync(root + '/packages/plugins/claude/dist/index.js', 'utf8');
 writeFileSync(root + '/published-plugin', dist);`);
-  const prepare = () => prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/cli', validationKind: 'runtime' });
+  const prepare = () => prepareRemoteValidationWorkspace({ repoDir: root, componentRelativeDir: 'apps/cli', validationKind: 'runtime', env: native.env });
   assert.deepEqual(resolveCliBundledWorkspacePackageNames({ repoRoot: root }), ['plugins-claude']);
   await prepare();
   assert.equal(readFileSync(join(root, 'published-plugin'), 'utf8'), 'export const generation = 1;\n');
@@ -242,6 +294,7 @@ export default { plugins: [createWorkspacePackageSourcesPlugin([{ packageName: '
 
 test('artifact-consuming preparation publishes cold outputs, reuses current outputs and rebuilds stale outputs', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-artifact-preparation-' });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
   writeFileSync(join(root, 'yarn.lock'), '# fixture\n');
   for (const name of ['ui', 'cli', 'server']) {
@@ -260,13 +313,20 @@ test('artifact-consuming preparation publishes cold outputs, reuses current outp
   const prepare = () => prepareRemoteValidationWorkspace({
     repoDir: root, componentRelativeDir: 'packages/plugin-sdk', validationKind: 'runtime',
     // The fixture owns both the physical inputs and canonical checkout identity.
-    env: { ...process.env, HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root },
+    env: { ...native.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict',
+      HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root },
   });
   writeFileSync(source, 'export const value = 1;\n');
   await prepare();
   assert.equal(readFileSync(join(protocol, 'dist/index.js'), 'utf8'), 'export const value = 1;\n');
   await prepare();
   assert.equal(readFileSync(count, 'utf8'), 'build\n');
+  // A public build's prebuild repeats ordinary strict preparation after the
+  // remote producer has released its capture/publication custody.
+  await ensureWorkspacePackagesBuiltForComponent(sdk, {
+    env: { ...native.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_STACK_REPO_DIR: root },
+  });
+  assert.equal(readFileSync(count, 'utf8'), 'build\n', 'the admitted payload must reuse its captured strict prerequisites');
   writeFileSync(source, 'export const value = 2;\n');
   await prepare();
   assert.equal(readFileSync(join(protocol, 'dist/index.js'), 'utf8'), 'export const value = 2;\n');

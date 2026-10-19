@@ -11,7 +11,7 @@ import { coerceHappyMonorepoRootFromPath, getDefaultAutostartPaths, getHappyStac
 import { resolveInstalledPath, resolveInstalledCliRoot } from '../paths/runtime.mjs';
 import { expandHome } from '../paths/canonical_home.mjs';
 import { resolveCliDistBuildLockPath, withCliDistBuildLock } from './cliDistBuildLock.mjs';
-import { assertDependenciesReady, inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyRefresh } from './dependency_refresh.mjs';
+import { inspectDependencyRefresh, resolveDependencyInstallRoot, withDependencyRefresh } from './dependency_refresh.mjs';
 export { resolveDependencyInstallRoot } from './dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs as prepareUiPostinstallOutputs, inspectUiPostinstallOutputs } from './ui_postinstall.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
@@ -748,6 +748,14 @@ async function ensureComponentDependenciesInstalled(
     // cannot prove changed patches or generated worker/webview assets are current.
     await ensureUiPostinstallOutputs(uiDir, installDir, { quiet, env, pm, force: true });
   };
+  const refreshDependencies = async () => {
+    await ensureCanonicalYarnReady();
+    if (!quiet) {
+      // eslint-disable-next-line no-console
+      console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json/workspace package.json/patches changed)...`);
+    }
+    await installAndPrepare();
+  };
 
   if (await pathExists(nodeModules)) {
     const skipRefresh =
@@ -783,9 +791,10 @@ async function ensureComponentDependenciesInstalled(
         // Startup is not a dependency mutation merely because it also prepares
         // first-party component outputs. Healthy installed bytes are verified
         // read-only; the component's existing generation owner remains separate.
-        // Inspection does not consume installed modules. Builders and Metro
-        // hold their own read custody; this readiness check stays non-queuing.
-        await assertDependenciesReady({ installDir, componentDir, env });
+        // A concurrent installer may hold this healthy tree while preparing
+        // its next admission. Reuse refresh custody and recheck after it exits;
+        // healthy uncontended trees still take the owner's read-only fast path.
+        await withDependencyRefresh({ installDir, componentDir, env }, refreshDependencies);
         if (prepareComponentOutputs) await ensureComponentPrerequisites(componentDir, label, { quiet, env, pm });
         return;
       }
@@ -797,14 +806,7 @@ async function ensureComponentDependenciesInstalled(
         componentDir,
         env,
         onDependenciesReady: guardedDependencyReadyAction,
-      }, async () => {
-        await ensureCanonicalYarnReady();
-        if (!quiet) {
-          // eslint-disable-next-line no-console
-          console.log(`[local] refreshing ${label} dependencies (yarn.lock/package.json/workspace package.json/patches changed)...`);
-        }
-        await installAndPrepare();
-      });
+      }, refreshDependencies);
     }
 
     if (prepareComponentOutputs && pm.name !== 'yarn') {

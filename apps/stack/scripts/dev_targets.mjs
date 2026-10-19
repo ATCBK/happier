@@ -11,6 +11,7 @@ import { parseArgs } from './utils/cli/args.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import {
   loadDevTargetsConfig,
+  loadDevTargetExecutionConfig,
   parseDevTargetsConfig,
   resolveDevTargetsConfigPath,
   upgradeDevTargetsConfigToVersion3,
@@ -386,7 +387,10 @@ async function main() {
     return;
   }
 
-  let loaded = await loadDevTargetsConfig({ stackName, env: process.env, allowMissing: true });
+  let loaded = command === 'exec'
+    ? await loadDevTargetExecutionConfig({ stackName, env: process.env })
+    : await loadDevTargetsConfig({ stackName, env: process.env, allowMissing: true });
+  if (command === 'exec') path = loaded.path;
   if (commandRepoRoot !== executorRepoRoot) {
     if (!['placement', 'status', 'sync', 'path', 'list', 'show'].includes(command)
       || (command === 'placement' && positionals[1] === 'set' && positionals[2] !== 'commands')) {

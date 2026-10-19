@@ -7,9 +7,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
-import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { inspectDependencyRefresh, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
 import { resolveRemoteCommandPolicy } from './remote_commands.mjs';
 import { ensureWorkspacePackagesBuiltForComponent, inspectWorkspaceQaStalePackages, WORKSPACE_BUILD_MODE_ENV } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
@@ -51,6 +52,86 @@ test('remote dev startup refreshes a stale installed tree before publishing read
 // These fixtures model worker mirrors. Local validation opts in explicitly;
 // the real bootstrap entry point defaults to read-only primary admission.
 const bootstrapRemoteDependencies = options => bootstrapDependencies({ executionPlacement: 'remote', ...options });
+
+test('warm worker bootstrap waits for a live refresh instead of refusing the admitted tree', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-warm-worker-refresh-' });
+  const lockPath = fixture.path('.project', 'tmp', 'dependency-install.lock');
+  const markerPath = fixture.path('node_modules', '.happier-stack-dependencies-ready');
+  await writeFile(fixture.path('package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  await writeFile(fixture.path('yarn.lock'), '# warm fixture\n');
+  for (const name of ['stack', 'cli', 'ui', 'server']) {
+    await mkdir(fixture.path('apps', name), { recursive: true });
+    await writeFile(fixture.path('apps', name, 'package.json'), JSON.stringify({ name: `fixture-${name}` }));
+  }
+  for (const domain of ['workspaces', 'process']) {
+    await mkdir(fixture.path('packages', 'cli-common', 'dist', domain), { recursive: true });
+    await writeFile(fixture.path('packages', 'cli-common', 'dist', domain, 'index.js'), 'export {};\n');
+  }
+  await mkdir(fixture.path('node_modules'));
+  const binDir = fixture.path('bin');
+  await mkdir(binDir);
+  // Only the package-manager executable is substituted. Any installation or
+  // lifecycle mutation of this healthy tree is a failure at that OS boundary.
+  const packageManager = `#!${process.execPath}\nconst args=process.argv.slice(2); if(args[0]==='yarn')args.shift(); if(args[0]==='--version') console.log('1.22.22'); else throw new Error('Unexpected package mutation: '+args.join(' '));\n`;
+  for (const name of ['corepack', 'yarn']) {
+    await writeFile(join(binDir, name), packageManager);
+    await chmod(join(binDir, name), 0o755);
+    await writeFile(join(binDir, `${name}.cmd`), `@"${process.execPath}" "${join(binDir, name)}" %*\r\n`);
+  }
+  const env = { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`, npm_execpath: '', npm_node_execpath: '',
+    HAPPIER_STACK_ENV_FILE: '', HAPPIER_STACK_PM_CACHE_BASE_DIR: fixture.path('cache'),
+    HAPPIER_STACK_SKIP_REFRESH_DEPS: '', HAPPIER_STACK_DISABLE_REFRESH_DEPS: '', HAPPIER_STACK_SERVICE_MODE: '' };
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  const admittedBytes = await readFile(markerPath, 'utf8');
+  let preparation;
+  const observation = new AbortController();
+  try {
+    await withDependencyRefreshLock({ installDir: fixture.root, env }, async () => {
+      preparation = bootstrapRemoteDependencies({ repoDir: fixture.root, componentRelativeDir: 'apps/cli', env });
+      const queued = (async () => {
+        while (!observation.signal.aborted) {
+          const names = await readdir(`${lockPath}.waiters`).catch(error => {
+            if (error.code === 'ENOENT') return [];
+            throw error;
+          });
+          if (names.some(name => /^\d+\.json$/.test(name))) return 'queued';
+          await delay(5, undefined, { signal: observation.signal });
+        }
+      })();
+      assert.equal(await Promise.race([preparation, queued]), 'queued',
+        'worker preparation must wait for the live writer before validating installed bytes');
+      observation.abort();
+    });
+    await preparation;
+    assert.equal(await readFile(markerPath, 'utf8'), admittedBytes, 'a healthy warm tree needs no install');
+    await assert.rejects(stat(lockPath), { code: 'ENOENT' });
+    let outcome;
+    const observing = new AbortController();
+    await withDependencyConsumption({ installDir: fixture.root, env }, async () => {
+      // An independent warm source-test preparation reads the same installed
+      // bytes as this finite consumer. It must not enqueue a needless writer.
+      preparation = bootstrapRemoteDependencies({ repoDir: fixture.root, toolsOnly: true, env });
+      const queuedWriter = (async () => {
+        while (!observing.signal.aborted) {
+          for (const name of await readdir(`${lockPath}.waiters`)) {
+            if (!/^\d+\.json$/.test(name)) continue;
+            const ticket = JSON.parse(await readFile(join(`${lockPath}.waiters`, name), 'utf8'));
+            if (ticket.priority === 'writer') return 'queued-writer';
+          }
+          await delay(5, undefined, { signal: observing.signal });
+        }
+      })().catch(error => { if (error.name !== 'AbortError') throw error; });
+      try { outcome = await Promise.race([preparation.then(() => 'ready'), queuedWriter]); }
+      finally { observing.abort(); await queuedWriter; }
+    });
+    await preparation;
+    assert.equal(outcome, 'ready', 'warm source tests must share existing consumption without withdrawing admission');
+    assert.equal(await readFile(markerPath, 'utf8'), admittedBytes);
+  } finally {
+    observation.abort();
+    await preparation?.catch(() => {});
+  }
+});
 
 const runDependencyRefreshImmediately = async (_options, refresh) => await refresh({});
 
@@ -366,6 +447,7 @@ async function copyColdPreparationSourceGraph(repoDir) {
 test('runtime worker bootstrap retains coherent last-green output in explicit QA mode while release stays strict', async (t) => {
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-runtime-bootstrap-qa-'));
   t.after(async () => rm(repoDir, { recursive: true, force: true }));
+  const native = await installWorkspaceAdmissionProcessFixture(t, repoDir);
   await writeFile(join(repoDir, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*', 'packages/*'] }));
   for (const name of ['cli', 'ui', 'server', 'stack']) {
     await mkdir(join(repoDir, 'apps', name), { recursive: true });
@@ -392,7 +474,7 @@ const result = spawnSync(${JSON.stringify(compiler.command)}, [...${JSON.stringi
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
 `);
-  await ensureWorkspacePackagesBuiltForComponent(join(repoDir, 'apps/stack'), { quiet: true, env: { ...process.env, [WORKSPACE_BUILD_MODE_ENV]: 'strict' } });
+  await ensureWorkspacePackagesBuiltForComponent(join(repoDir, 'apps/stack'), { quiet: true, env: { ...native.env, [WORKSPACE_BUILD_MODE_ENV]: 'strict' } });
   const recordPath = join(packageDir, 'dist/.happier-build-inputs.json');
   const greenRecord = JSON.parse(await readFile(recordPath, 'utf8'));
   for (const domain of ['workspaces', 'process']) {
@@ -403,7 +485,7 @@ process.exitCode = result.status ?? 1;
   await writeFile(source, 'export const value: string = 1;\n');
   // Installed dependency admission is separate from package compilation. The
   // real bootstrap, Stack package-manager adapter and compiler all run below it.
-  const env = { ...process.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '1' };
+  const env = { ...native.env, HAPPIER_STACK_SKIP_REFRESH_DEPS: '1' };
   delete env[WORKSPACE_BUILD_MODE_ENV];
   const bootstrap = (extraEnv = {}) => bootstrapRemoteDependencies({ repoDir, componentRelativeDir: 'apps/stack', defaultBuildMode: 'qa-runtime', env: { ...env, ...extraEnv } });
   await bootstrap();
@@ -675,6 +757,7 @@ if (args[0] === '--version') {
 test('source-test bootstrap admits installed tools without requiring a compiled Stack owner', async (t) => {
   const repoDir = await mkdtemp(join(tmpdir(), 'happier-source-test-bootstrap-'));
   t.after(async () => rm(repoDir, { recursive: true, force: true }));
+  const native = await installWorkspaceAdmissionProcessFixture(t, repoDir);
   await mkdir(join(repoDir, 'apps/stack'), { recursive: true });
   for (const name of ['ui', 'cli', 'server']) {
     await mkdir(join(repoDir, 'apps', name), { recursive: true });
@@ -688,7 +771,7 @@ test('source-test bootstrap admits installed tools without requiring a compiled 
   await writeFile(join(repoDir, 'yarn.lock'), '# first\n');
   let installs = 0;
   const options = {
-    repoDir, validationKind: 'source-test',
+    repoDir, validationKind: 'source-test', env: native.env,
     // Package installation is the OS boundary; freshness/locking remains real.
     installInitialDependencies: async () => {
       installs += 1;

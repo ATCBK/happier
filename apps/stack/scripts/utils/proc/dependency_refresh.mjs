@@ -57,6 +57,15 @@ function readInheritedDependencyCustody(lockPath, env) {
   return null;
 }
 
+/** Admission must not wait for more capacity while a containing consumer
+ * retains the installed tree. Reuse the same authenticated custody check. */
+export function callerHoldsDependencyConsumption(env = process.env) {
+  let custody;
+  try { custody = JSON.parse(env[BUILD_DEPENDENCY_CUSTODY_ENV] ?? 'null'); } catch { return false; }
+  return Array.isArray(custody) && typeof custody[0] === 'string'
+    && readInheritedDependencyCustody(custody[0], env) !== null;
+}
+
 // Parallel compiler children consume one containing finite build. Reuse its
 // live lock identity instead of queuing them behind their own parent. Writers
 // must prepare before this consumption rather than upgrade inherited reads.
@@ -419,7 +428,8 @@ export async function withDependencyRefresh({
   }
   const shouldRunDependencyReadyAction = onDependenciesReady !== null;
   const beforeLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
-  if (!force && !beforeLock.required && !shouldRunDependencyReadyAction) return { refreshed: false, reason: 'up-to-date' };
+  if (!force && !beforeLock.required && !shouldRunDependencyReadyAction
+    && !isDependencyRefreshMutationActive({ installDir, env })) return { refreshed: false, reason: 'up-to-date' };
 
   return await withDependencyRefreshLock({ installDir, env }, async () => {
     const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });

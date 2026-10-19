@@ -5,8 +5,9 @@ import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
-import { installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
 import { withWorkspaceBundleLock } from '../../../packages/cli-common/workspaceBundleLock.mjs';
+import { resolveDependencyRefreshLockPath } from './utils/proc/dependency_refresh.mjs';
 
 async function waitForJointAdmission(condition, child, diagnostic) {
   for (let attempt = 0; attempt < 500; attempt++) {
@@ -34,7 +35,7 @@ esac
   // Sleep is the OS boundary for capacity retry. Keep the production decision
   // and FIFO accounting real while allowing this fixture's pressure to change.
   writeFakeBin({ root: fixture.root, name: 'sleep', content: realRetry ? '#!/bin/sh\nexec /bin/sleep "$@"\n' : '#!/bin/sh\nexec /bin/sleep 0.02\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_MEMORY: memory,
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_MEMORY: memory,
     HAPPIER_STACK_PM_CACHE_BASE_DIR: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '',
     HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
@@ -52,7 +53,14 @@ esac
     t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await exited; });
     return { child, exited, stdout: () => stdout, stderr: () => stderr };
   };
-  return { ...fixture, launcher, admissionRoot, memory, env, entries, start };
+  const readWaiter = name => {
+    // Native decisions rewrite queue state while holding this OS mutex. Read
+    // the same synchronized snapshot instead of racing an in-place rewrite.
+    const result = spawnSync('/usr/bin/flock', [`${admissionRoot}/lock`, '/bin/cat', `${admissionRoot}/waiters/${name}`], { env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  return { ...fixture, launcher, admissionRoot, memory, env, entries, start, readWaiter };
 }
 
 test('real mixed publisher/plain contention uses one custody worker and drains on release', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
@@ -83,7 +91,7 @@ exec '${realNode}' "$@"
   try {
     await waitForJointAdmission(() => head.stderr().includes('workspace-lease-busy'), head.child, head.stderr);
     const first = (await fixture.entries('waiters'))[0];
-    const identity = (await readFile(`${fixture.admissionRoot}/waiters/${first}`, 'utf8')).split(' ').slice(0, 3);
+    const identity = fixture.readWaiter(first).split(' ').slice(0, 3);
     const plain = fixture.start(null);
     assert.deepEqual(await plain.exited, { status: 0, signal: null }, plain.stderr());
     await new Promise(resolve => setTimeout(resolve, 3_500));
@@ -92,7 +100,7 @@ exec '${realNode}' "$@"
     const samples = (await readFile(cpu, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     const latest = new Map(samples.map(sample => [sample.pid, sample]));
     t.diagnostic(`waiter lease-worker CPU: ${Math.round([...latest.values()].reduce((sum, sample) => sum + sample.user + sample.system, 0) / 1000)}ms`);
-    assert.deepEqual((await readFile(`${fixture.admissionRoot}/waiters/${first}`, 'utf8')).split(' ').slice(0, 3), identity);
+    assert.deepEqual(fixture.readWaiter(first).split(' ').slice(0, 3), identity);
     const releasedAt = performance.now();
     release(); await holder;
     const outcome = await Promise.race([head.exited, new Promise(resolve => setTimeout(() => resolve('retry-sleep delay'), 1_000))]);
@@ -137,10 +145,10 @@ test('joint workspace admission releases dist leases before waiting for capacity
   await waitForJointAdmission(() => run.stderr().includes('waiting for heavyweight admission'), run.child, run.stderr);
   const [waiter] = await fixture.entries('waiters');
   assert.ok(waiter);
-  const firstWaiter = await readFile(`${fixture.admissionRoot}/waiters/${waiter}`, 'utf8');
+  const firstWaiter = fixture.readWaiter(waiter).split(' ').slice(0, 3);
   assert.deepEqual(await fixture.entries('owners'), []);
   await withWorkspaceBundleLock(async () => {
-    assert.equal(await readFile(`${fixture.admissionRoot}/waiters/${waiter}`, 'utf8'), firstWaiter);
+    assert.deepEqual(fixture.readWaiter(waiter).split(' ').slice(0, 3), firstWaiter);
     assert.equal(run.stdout(), '');
     await writeFile(fixture.memory, '9437184 73400320\n');
   }, { lockPath });
@@ -208,11 +216,13 @@ test('a lease-blocked workspace head allows the lease holder to obtain admission
   try {
     await waitForJointAdmission(() => head.stderr().includes(lockPath), head.child, head.stderr);
     const [name] = await fixture.entries('waiters');
-    const identity = (await readFile(`${fixture.admissionRoot}/waiters/${name}`, 'utf8')).split(' ').slice(0,3);
+    const identity = fixture.readWaiter(name).split(' ').slice(0,3);
+    assert.equal(identity[0], String(head.child.pid));
+    assert.equal(name, `${identity[0]}-${identity[1]}`);
     const successor = fixture.start(null);
     await waitForJointAdmission(() => successor.stdout() === 'payload', successor.child, successor.stderr);
     assert.deepEqual(await successor.exited, { status: 0, signal: null }, successor.stderr());
-    assert.deepEqual((await readFile(`${fixture.admissionRoot}/waiters/${name}`, 'utf8')).split(' ').slice(0,3), identity);
+    assert.deepEqual(fixture.readWaiter(name).split(' ').slice(0,3), identity);
     assert.equal(head.stdout(), '');
     release(); await holder;
     assert.deepEqual(await head.exited, { status: 0, signal: null }, head.stderr());
@@ -337,6 +347,37 @@ test('inherited workspace leases reject capacity waiting in both joint and bare 
   }, { lockPath });
 });
 
+for (const joint of [false, true]) test(`inherited dependency readers reject ${joint ? 'joint' : 'bare'} capacity escalation instead of blocking their writer`, { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+  const fixture = await createJointAdmissionFixture(t);
+  fixture.env.HAPPIER_STACK_HOME_DIR = fixture.root;
+  const lockPath = resolveDependencyRefreshLockPath(fixture.root, fixture.env);
+  const script = fixture.path('nested-reader.mjs');
+  await writeFile(script, `import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { readFile } from 'node:fs/promises';
+const child = spawn('/bin/sh', [${JSON.stringify(fixture.launcher)}, '--heavyweight-admission', '--class=compilation', '--machine=worker',
+  ...${JSON.stringify(joint ? [`--workspace-locks=${JSON.stringify([{ path: fixture.path('nested.lock') }])}`] : [])}, '--', process.execPath, '-e', 'process.stdout.write("forbidden")'], {stdio:['ignore','pipe','inherit']});
+let output = '';
+child.stdout.on('data', chunk => { output += chunk; });
+const [status] = await once(child, 'exit');
+const ownerPath = process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT + '/owners/' + process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN.replace(':', '-');
+console.log(JSON.stringify({status, output, ownerClass:(await readFile(ownerPath + '/class', 'utf8')).trim()}));
+`);
+  const run = fixture.start([{ kind: 'dependency', installDir: fixture.root, path: lockPath }], [process.execPath, script], 'validation');
+  await waitForJointAdmission(() => run.stdout().includes('ownerClass') || run.stderr().includes('inherited owner'), run.child, run.stderr);
+  const waited = !run.stdout().includes('ownerClass');
+  // Drain the incorrect escalation for a deciding assertion, retaining the
+  // containing reader until the child returns rather than timing out the test.
+  if (waited) await writeFile(fixture.memory, '31457280 73400320\n');
+  assert.deepEqual(await run.exited, { status: 0, signal: null }, run.stderr());
+  assert.equal(waited, false, 'capacity waiting while retaining a dependency reader blocks the installer needed by its peers');
+  assert.deepEqual(JSON.parse(run.stdout()), { status: 1, output: '', ownerClass: 'validation' });
+  assert.match(run.stderr(), /HSTACK_WORKSPACE_ADMISSION_ORDER/);
+  assert.deepEqual(await fixture.entries('owners'), []);
+  assert.deepEqual(await fixture.entries('waiters'), []);
+  await assert.rejects(access(lockPath), { code: 'ENOENT' });
+});
+
 test('joint workspace same-class inherited reentry does not wait for the native decision mutex', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
   const fixture = await createJointAdmissionFixture(t);
   const lockPath = fixture.path('package.lock');
@@ -454,7 +495,7 @@ esac
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait', '--class=validation',
     '--machine=worker', '--', '/bin/sh', '-c', 'printf "%s" "$HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT"'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_CURRENT_ROOT: currentRoot,
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_CURRENT_ROOT: currentRoot,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   assert.equal(result.status, 0, result.stderr);
@@ -476,7 +517,7 @@ printf observed >> "$FIXTURE_OBSERVED"
 printf 'service 0\\n'
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_OBSERVED: marker,
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_OBSERVED: marker,
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
   for (let queued = 0; queued < 40; queued++) {
     const check = queued % 4 < 2;
@@ -512,7 +553,7 @@ test('a contended admission decision waits in the kernel instead of polling the 
   writeFakeBin({ root: fixture.root, name: 'sleep', content: '#!/bin/sh\ntouch "$FIXTURE_POLLING"\nexec /bin/sleep "$@"\n' });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
-    env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
+    env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   childExited = new Promise(resolve => child.once('exit', resolve));
@@ -533,7 +574,7 @@ test('a contended admission decision waits in the kernel instead of polling the 
   child.kill('SIGTERM');
   assert.equal(await childExited, 130);
   child = spawn('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--machine=worker', '--', '/usr/bin/true'], {
-    env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
+    env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, FIXTURE_POLLING: polling,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   childExited = new Promise(resolve => child.once('exit', resolve));
@@ -569,7 +610,7 @@ assert.equal(child.status, 0, child.stderr);
     [ "$before" = "$(cat "$owner/process")" ]
     printf '%s' "$before" > "$2"
     `, 'nested-package', launcher, fixture.path('parent'), process.execPath, sanitizedChild], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   assert.equal(result.status, 0, result.stderr);
@@ -590,7 +631,7 @@ case "$*" in
 esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
   const privateOne = fixture.path('private-one');
   const privateTwo = fixture.path('private-two');
@@ -653,7 +694,7 @@ esac
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait', '--class=validation',
     '--machine=new-worker-alias', '--', '/bin/sh', '-c',
     'printf "%s|%s\\n" "$HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN" "$HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT"'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: `${process.pid}:${token}`,
       HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: legacyRoot, HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: 'old-private-alias' },
   });
@@ -728,7 +769,7 @@ if [ "$1" = -c ] && [ "$2" = %u ]; then printf '${process.getuid() + 1}\\n'; els
   const privateRoot = fixture.path('private');
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--no-wait',
     `--admission-root=${privateRoot}`, '--class=validation', '--machine=other-account', '--', '/usr/bin/true'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
   assert.equal(result.status, 1, result.stderr);
@@ -742,7 +783,7 @@ test('native non-Linux execution preserves its existing path without resolving L
   writeFakeBin({ root: fixture.root, name: 'uname', content: '#!/bin/sh\nprintf "Darwin\\n"\n' });
   writeFakeBin({ root: fixture.root, name: 'stat', content: '#!/bin/sh\nexit 1\n' });
   const result = spawnSync('/bin/sh', [launcher, '--heavyweight-admission', '--class=validation', '--', '/bin/sh', '-c', 'exit 42'], {
-    encoding: 'utf8', env: { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin` },
+    encoding: 'utf8', env: { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin` },
   });
   assert.equal(result.status, 42, result.stderr);
   await assert.rejects(access(admissionRoot), { code: 'ENOENT' });

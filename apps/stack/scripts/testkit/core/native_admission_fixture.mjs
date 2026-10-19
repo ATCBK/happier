@@ -7,6 +7,42 @@ import { withDependencyRefresh } from '../../utils/proc/dependency_refresh.mjs';
 
 const sourceRoot = resolve(import.meta.dirname, '../../../../..');
 
+/** Keep the selected checkout's real setup implementation, with dependency
+ * endpoints forwarded to this source tree. The trace observes Node's module
+ * loading boundary; native staging and readiness logic are not replaced.
+ */
+export async function installCliNativeCustodySourceFixture(repoDir) {
+  const setupSource = join(sourceRoot, 'apps/cli/src/test-setup.ts');
+  const setupTarget = join(repoDir, 'apps/cli/src/test-setup.ts');
+  const runtimeTarget = join(repoDir, 'packages/cli-common/registerSourceRuntime.mjs');
+  const tracePath = join(repoDir, 'native-source-loads.jsonl');
+  await Promise.all([mkdir(join(repoDir, 'apps/cli/src'), { recursive: true }),
+    mkdir(join(repoDir, 'packages/cli-common'), { recursive: true })]);
+  const manifestPath = join(repoDir, 'apps/cli/package.json');
+  const manifest = await readFile(manifestPath, 'utf8').then(value => JSON.parse(value)).catch(error => {
+    if (error.code === 'ENOENT') return {};
+    throw error;
+  });
+  const { type, happierSourceTestTools } = JSON.parse(await readFile(join(sourceRoot, 'apps/cli/package.json'), 'utf8'));
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, type, happierSourceTestTools }));
+  const source = await readFile(setupSource, 'utf8');
+  await writeFile(setupTarget, source.replace(/from '(\.[^']+)'/gu,
+    (_match, specifier) => `from '${new URL(specifier, pathToFileURL(setupSource)).href}'`));
+  const hook = `import { appendFileSync } from 'node:fs';
+export async function load(url, context, nextLoad) {
+  const result = await nextLoad(url, context);
+  if (url.endsWith('/test-setup.ts')) appendFileSync(${JSON.stringify(tracePath)}, JSON.stringify(url) + '\\n');
+  return result;
+}`;
+  await writeFile(runtimeTarget, `import ${JSON.stringify(pathToFileURL(join(sourceRoot, 'packages/cli-common/registerSourceRuntime.mjs')).href)};
+import { register } from 'node:module';
+import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(tracePath)}, JSON.stringify(import.meta.url) + '\\n');
+register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hook)}`)}, import.meta.url);
+`);
+  return { setupTarget, runtimeTarget, tracePath };
+}
+
 /** A simulated physical worker cannot inherit the runner's custody or CPU budget.
  * Layer intentional fixture worker settings onto the returned environment.
  */
@@ -15,7 +51,8 @@ export function buildNativeAdmissionFixtureEnv(env = process.env) {
     !key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')
     && !key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')
     && !['HAPPIER_BUILD_DEPENDENCY_CUSTODY', 'VITEST_MAX_THREADS', 'VITEST_MIN_THREADS',
-      'VITEST_MAX_FORKS', 'VITEST_MIN_FORKS', 'GOMAXPROCS'].includes(key)));
+      'VITEST_MAX_FORKS', 'VITEST_MIN_FORKS', 'HAPPIER_VITEST_GOVERNOR_MAX_WORKERS',
+      'HAPPIER_VITEST_MAX_WORKERS', 'VITEST_UI_MAX_FORKS', 'GOMAXPROCS'].includes(key)));
 }
 
 /** Remap only the fixed OS-state filesystem boundary, never a production flag.
@@ -125,12 +162,49 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   return { launcher, admissionRoot };
 }
 
+/** Adapt only the OS launch boundary, retaining foreground IPC/tree custody. */
+export function installWorkspaceAdmissionProcessAdapter({ launcher, binDir = null }) {
+  const childProcess = createRequire(import.meta.url)('node:child_process');
+  const originalSpawn = childProcess.spawn;
+  const originalFork = childProcess.fork;
+  const canonicalLauncher = join(sourceRoot, 'apps/stack/bin/hstack-exec');
+  const custodyModule = join(sourceRoot, 'apps/stack/scripts/utils/proc/proc.mjs');
+  const remapCommand = command => command === canonicalLauncher ? launcher : command;
+  // A real package build prepends its Node/tool bins. Restore the fixture's
+  // physical OS executables at the final launch boundary, including custody
+  // forks, so capacity observations do not fall through to the runner's host.
+  const remapOptions = options => binDir && options?.env
+    ? { ...options, env: { ...options.env, PATH: `${binDir}:${options.env.PATH ?? ''}` } }
+    : options;
+  const remapArgs = args => {
+    const mapped = args?.map(remapCommand);
+    if (!mapped) return mapped;
+    for (let index = 0; index < mapped.length - 2; index += 1) {
+      if (mapped[index] !== custodyModule || mapped[index + 1] !== '--happier-foreground-custody') continue;
+      const invocation = JSON.parse(mapped[index + 2]);
+      mapped[index + 2] = JSON.stringify({ ...invocation,
+        command: remapCommand(invocation.command), args: invocation.args?.map(remapCommand) });
+    }
+    return mapped;
+  };
+  childProcess.spawn = (command, args, options) => originalSpawn(remapCommand(command), Array.isArray(args) ? remapArgs(args) : args, remapOptions(options));
+  childProcess.fork = (modulePath, args, options) => originalFork(modulePath,
+    Array.isArray(args) ? remapArgs([modulePath, ...args]).slice(1) : args, remapOptions(options));
+  syncBuiltinESMExports();
+  return () => {
+    childProcess.spawn = originalSpawn;
+    childProcess.fork = originalFork;
+    syncBuiltinESMExports();
+  };
+}
+
 /** Independent fixture worker: redirect only process launch and OS memory
- * observation. Native admission, authenticated leases and publication stay real.
+ * observation. Its child preload consumes the same adapter; native admission,
+ * authenticated leases, resolver options and foreground custody stay real.
  */
-export async function installWorkspaceAdmissionProcessFixture(t, root) {
-  if (process.platform !== 'linux') return { env: buildNativeAdmissionFixtureEnv(), launcher: null };
-  const { launcher } = await installNativeAdmissionFixture({ root });
+export async function installWorkspaceAdmissionProcessFixture(t, root, { env: baseEnv = process.env } = {}) {
+  if (process.platform !== 'linux') return { env: buildNativeAdmissionFixtureEnv(baseEnv), launcher: null, binDir: null, admissionRoot: null };
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root });
   const { binDir } = writeFakeBin({ root, binDirName: 'native-owner/node_modules/.bin', name: 'awk', content: `#!/bin/sh
 case "$*" in
   */proc/meminfo*) printf '73400320 73400320\\n' ;;
@@ -138,15 +212,10 @@ case "$*" in
   *) exec /usr/bin/awk "$@" ;;
 esac
 ` });
-  const childProcess = createRequire(import.meta.url)('node:child_process');
-  const originalSpawn = childProcess.spawn;
-  const canonicalLauncher = join(sourceRoot, 'apps/stack/bin/hstack-exec');
-  childProcess.spawn = (command, args, options) => originalSpawn(
-    command === canonicalLauncher ? launcher : command,
-    args?.map(value => value === canonicalLauncher ? launcher : value), options,
-  );
-  syncBuiltinESMExports();
-  t.after(() => { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); });
-  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ''}`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
-  return { env, launcher };
+  t.after(installWorkspaceAdmissionProcessAdapter({ launcher }));
+  const preloadPath = join(root, 'workspace-admission-process.mjs');
+  await writeFile(preloadPath, `import { installWorkspaceAdmissionProcessAdapter } from ${JSON.stringify(import.meta.url)};\ninstallWorkspaceAdmissionProcessAdapter({ launcher: ${JSON.stringify(launcher)} });\n`);
+  const env = { ...buildNativeAdmissionFixtureEnv(baseEnv), PATH: `${binDir}:${baseEnv.PATH ?? ''}`, HAPPIER_DEV_TARGET_EXECUTION: '1',
+    NODE_OPTIONS: `${baseEnv.NODE_OPTIONS ?? ''} --import=${pathToFileURL(preloadPath).href}`.trim() };
+  return { env, launcher, binDir, admissionRoot };
 }
