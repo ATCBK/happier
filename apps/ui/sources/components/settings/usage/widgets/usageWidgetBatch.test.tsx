@@ -12,6 +12,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
@@ -188,8 +189,7 @@ describe('Usage page batch', () => {
     expect(seen.at(-1)).toBe(false);
   });
   it.each(['usage_daily', 'usage_outcomes', 'usage_footprint'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widget-demand.test', accountId: 'account-a' }],
-      route: request => {
+    const sessionReads = createSessionReadBatchHttpBoundary(request => {
         if (request.path === '/v2/usage/query') return Response.json(accounting);
         if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
           signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
@@ -203,31 +203,47 @@ describe('Usage page batch', () => {
           turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 }] });
         if (request.path === '/v1/sessions/work/messages') return Response.json({ messages: [], hasMore: false });
         return undefined;
-      } });
+      });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widget-demand.test', accountId: 'account-a' }],
+      route: sessionReads.handle });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
     storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' },
       profile: AccountProfileSchema.parse({ id: 'account-a' }),
       sessions: { work: createSessionFixture({ id: 'work', serverId: home.homes.a!.id, encryptionMode: 'plain' }) } });
+    let slices: ReturnType<typeof useUsageWidgetBatchSlices> = [];
+    function EvidenceProbe() { slices = useUsageWidgetBatchSlices(); return null; }
     const body = (id: typeof narrowId | 'usage_period_summary' | 'usage_coach') => <InjectedAuthProvider credentials={credentials}>
-      <CoreCollectionScope><UsageWidgetBatchProvider clauses={clauses}><UsageWidgetBody id={id}
+      <CoreCollectionScope><UsageWidgetBatchProvider clauses={clauses}><EvidenceProbe /><UsageWidgetBody id={id}
         input={{ ...scope, period: { startMs: 0, endMs: 1000 }, metric: 'tokens', breakdown: [] }}
         serverId={home!.homes.a!.id} testID="widget-demand" /></UsageWidgetBatchProvider></CoreCollectionScope>
     </InjectedAuthProvider>;
     const screen = await renderScreen(body(narrowId));
     await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').length).toBeGreaterThan(0);
     await flushHookEffects({ cycles: 30 });
-    expect(home.requests.filter(request => request.path === '/v2/sessions/work'
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch' || request.path === '/v2/sessions/work'
       || request.path.startsWith('/v1/sessions/work/'))).toEqual([]);
     await screen.update(body('usage_period_summary'));
-    await expect.poll(() => home!.requests.filter(request => request.path === '/v1/sessions/work/turns').length).toBe(1);
+    await expect.poll(() => sessionReads.componentRequests.filter(request => request.path === '/v1/sessions/work/turns').length).toBe(1);
     await flushHookEffects({ cycles: 30 });
-    expect(home.requests.filter(request => request.path === '/v1/sessions/work/messages')).toHaveLength(0);
+    expect(sessionReads.componentRequests.filter(request => request.path === '/v1/sessions/work/messages')).toHaveLength(0);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch').map(request => [request.method, request.body]))
+      .toEqual([['POST', expect.objectContaining({ sessionIds: ['work'], includeSnapshot: true, includeMessages: false })]]);
+    await expect.poll(() => slices.find(slice => slice.howYouWork)?.howYouWork?.intervals?.agentTimeMs).toBe(300);
+    expect(slices.find(slice => slice.howYouWork)?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'not_loaded' });
     await screen.update(body('usage_coach'));
-    await expect.poll(() => home!.requests.filter(request => request.path === '/v1/sessions/work/messages').length).toBe(1);
+    await expect.poll(() => sessionReads.componentRequests.filter(request => request.path === '/v1/sessions/work/messages').length).toBe(1);
     await flushHookEffects({ cycles: 30 });
-    expect(home.requests.filter(request => request.path === '/v2/sessions/work')).toHaveLength(1);
+    expect(sessionReads.componentRequests.filter(request => request.path === '/v2/sessions/work')).toHaveLength(1);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch').map(request => [request.method, request.body]))
+      .toEqual([
+        ['POST', expect.objectContaining({ sessionIds: ['work'], includeSnapshot: true, includeMessages: false })],
+        ['POST', expect.objectContaining({ sessionIds: ['work'], includeSnapshot: false, includeMessages: true })],
+      ]);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/work' || request.path.startsWith('/v1/sessions/work/'))).toEqual([]);
+    await expect.poll(() => slices.find(slice => slice.howYouWork)?.sources)
+      .toContainEqual({ source: 'how_you_work:transcripts', status: 'available' });
   });
 
   it.each([false, true])('requests both consumed activity sections despite route includeActivity=%s and partial resolution, preserving independently pinned scope', async includeActivity => {
