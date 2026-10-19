@@ -26,7 +26,7 @@ import {
     type ServerAccountScopeLifetime,
 } from '@/sync/domains/scope/serverAccountScope';
 import {
-    getSessionDraftSnapshot,
+    getSessionComposerDraftSnapshot,
     subscribeSessionDraft,
     writeExistingSessionDraft,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -136,8 +136,8 @@ function readStructuredMentions(
         return [];
     }
     const value = scope
-        ? getSessionDraftSnapshot(scope, { kind: 'session', sessionId: owner.sessionId })
-            ?.document.composer.mentions.value
+        ? getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: owner.sessionId })
+            ?.composer.mentions.value
         : [];
     if (typeof text === 'string') {
         return parseComposerStructuredInputMentionsForText(value, text).mentions;
@@ -235,8 +235,8 @@ export function useSessionAgentInputComposerPersistence({
     const readStructuredMentionsSignature = React.useCallback(() => {
         if (!scope || !scopeIsCurrent() || owner?.kind !== 'session') return 'disabled';
         return JSON.stringify(
-            getSessionDraftSnapshot(scope, { kind: 'session', sessionId: owner.sessionId })
-                ?.document.composer.mentions.value ?? [],
+            getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: owner.sessionId })
+                ?.composer.mentions.value ?? [],
         );
     }, [owner, scope, scopeIsCurrent]);
     React.useSyncExternalStore(
