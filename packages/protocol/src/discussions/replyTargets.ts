@@ -1,6 +1,6 @@
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { DiscussionIdSchema, DiscussionMessageIdSchema } from './content.js';
+import { DiscussionIdSchema, DiscussionMessageIdSchema } from './references.js';
 import { PromptDocArtifactRefV1Schema } from '../prompts/library/promptArtifactRefsV1.js';
 import { ArtifactRevisionV1Schema } from '../artifacts/artifactRevisionV1.js';
 

@@ -17,21 +17,9 @@ import { ResourceCallerAccessV1Schema } from '../teams/resourceGrantAccessV1.js'
 import { SessionDataKeyEnvelopeBytesV1Schema } from '../sessions/encryption/sessionDataKeyEnvelopes.js';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from './replyTargets.js';
 import { DiscussionMessageAddressingV1Schema, DiscussionSessionParticipantRefV1Schema } from './references.js';
-import { ArtifactRevisionV1Schema } from '../artifacts/artifactRevisionV1.js';
-
-/** Host-authenticated decision output, never part of an authored message or its retry equality. */
-export const DocEditProposalDispositionV1Schema = lazyZodSchema(() => {
-  const decidedBy = z.strictObject({
-    accountId: DiscussionAccountIdSchema,
-    atMs: z.number().check(z.int(), z.nonnegative()),
-  });
-  return z.discriminatedUnion('state', [
-    z.strictObject({ state: z.literal('open') }),
-    z.strictObject({ state: z.literal('accepted'), acceptedRevision: ArtifactRevisionV1Schema, decidedBy }),
-    z.strictObject({ state: z.literal('declined'), decidedBy }),
-  ]);
-});
-export type DocEditProposalDispositionV1 = z.infer<typeof DocEditProposalDispositionV1Schema>;
+import { DocEditProposalDispositionV1Schema } from './docEditProposalDispositionV1.js';
+export { DocEditProposalDispositionV1Schema } from './docEditProposalDispositionV1.js';
+export type { DocEditProposalDispositionV1 } from './docEditProposalDispositionV1.js';
 
 /**
  * Effective, server-evaluated capabilities for one discussion and viewer. The
