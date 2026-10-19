@@ -6,8 +6,72 @@ import { buildWidgetDefinitionArtifactHeaderV1, createWidgetDefinitionArtifactPo
 import { readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 import { createWorkBoardArtifactBoundary } from '../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
 import { createWorkBoardArtifactPortV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { createHomeHubArtifactPortV1 } from '@happier-dev/protocol/home/homeHubArtifactV1';
+import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { readInputPath } from '@happier-dev/protocol/inputs/inputPredicates';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import { captureWidgetLayoutFragmentGroupV1, instantiateWidgetLayoutFragmentGroupV1, WidgetSurfaceReadV1Schema, type WidgetInputBindingsV1, type WidgetLayoutGroupV1 } from '@happier-dev/protocol/widgets';
 
 describe('Widget Action input transport authority', () => {
+    it.each(['cli', 'mcp', 'agent', 'ui'] as const)('admits destination Project context through real %s Actions while Home requires a pin', async caller => {
+        const scope = { serverId: 'home', accountId: 'viewer' };
+        const project = { ...scope, owner: { kind: 'project' as const, projectId: 'destination-project' } };
+        const home = { ...scope, owner: { kind: 'home' as const } };
+        const boundary = createWorkBoardArtifactBoundary();
+        const transport = boundary.forAccount(scope.accountId);
+        const area = createCliWidgetAreaActionDepsV1({ scope, isCurrent: () => true, transport });
+        let deps: ActionExecutorDeps = { ...createUnavailableActionTransportDeps(), ...area,
+            widgetAccountScope: () => scope, homeHubArtifacts: createHomeHubArtifactPortV1(transport, { accountId: scope.accountId }) };
+        deps = { ...deps, ...createCliWidgetInputActionDepsV1({ ...scope, getDeps: () => deps,
+            readCandidates: async () => [], validateSession: async () => false }) };
+        const executor = createActionExecutor(deps);
+        const context = { surface: caller, bypassApprovals: true };
+        const definition = { kind: 'builtin' as const, id: 'usage_period_summary' };
+        const descriptor = readBuiltinWidgetDescriptorV1(definition)!;
+        const query = normalizeUsageQuery({ period: { startMs: 1000 }, projects: ['original-project'] });
+        const bindings: WidgetInputBindingsV1 = Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
+            field.path === 'projects' ? { kind: 'context', slot: 'projects' }
+                : { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }]));
+        const instance = { v: 1 as const, id: 'usage-copy', definition, bindings };
+        const group: WidgetLayoutGroupV1 = { kind: 'group', id: 'copied-band', width: 'full', frameStyle: 'card', dividers: 'hairline',
+            context: { projects: { kind: 'context', slot: 'projects' } }, children: [{ kind: 'widget', instance }] };
+        const added = await executor.execute('widgets.group.add', { surface: project, group }, context);
+        expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: project, instanceId: instance.id }, bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { projects: ['destination-project'] } } });
+        // An attached layout retains its document owner's identity while its mounted
+        // Project can supply a different authorized viewing context.
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: project, instanceId: instance.id }, bindings }, {
+            ...context, widgetAreaContext: { surface: project, values: { projects: [['mounted-project']] } },
+        })).toMatchObject({ ok: true, result: { status: 'ready', input: { projects: ['mounted-project'] } } });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: project, instanceId: instance.id }, bindings }, {
+            ...context, widgetAreaContext: { surface: project, values: { projects: [] } },
+        })).toMatchObject({ ok: true, result: { status: 'selection_required', fields: [{ path: 'projects', reasonCode: 'widget_context_missing' }] } });
+        const stored = await executor.execute('widgets.item.list', { surface: project }, context);
+        if (!stored.ok) throw new Error(stored.errorCode);
+        expect(WidgetSurfaceReadV1Schema.parse(stored.result).items).toContainEqual(group);
+        const missing = { ok: false, errorCode: 'widget_inputs_invalid', details: { status: 'selection_required',
+            fields: [{ path: 'projects', reasonCode: 'widget_context_missing' }] } };
+        expect(await executor.execute('widgets.group.add', { surface: home, group }, context)).toMatchObject(missing);
+        expect(await executor.execute('widgets.item.add', { surface: home, instance }, context)).toMatchObject(missing);
+        const pinned = { ...instance, id: 'pinned-copy', bindings: { ...bindings, projects: { kind: 'value' as const, value: [] } } };
+        expect(await executor.execute('widgets.item.add', { surface: home, instance: pinned }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.add', { surface: project, instance: { ...instance, id: 'standalone-copy' } }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.add', { surface: project, instance: pinned }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: project, instanceId: pinned.id }, bindings: pinned.bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { projects: [] } } });
+        const fragmentCopy = instantiateWidgetLayoutFragmentGroupV1(captureWidgetLayoutFragmentGroupV1(group), {
+            groupId: 'fragment-band', childIds: ['fragment-copy'],
+        });
+        expect(await executor.execute('widgets.group.add', { surface: project, group: fragmentCopy }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: project, instanceId: 'fragment-copy' }, bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { projects: ['destination-project'] } } });
+        expect(await executor.execute('widgets.group.inputs.set', { ref: { surface: project, instanceId: group.id },
+            bindings: { projects: { kind: 'value', value: [] } } }, context)).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.inputs.validate', { ref: { surface: project, instanceId: instance.id }, bindings }, context))
+            .toMatchObject({ ok: true, result: { status: 'ready', input: { projects: [] } } });
+    });
     it('admits a local Session profile pin only when the captured Home owner proves equivalence', async () => {
         const scope = { serverId: 'srv_widget_home', accountId: 'viewer',
             isSameServerId: (id: string) => ['srv_widget_home', 'local-profile'].includes(id) };

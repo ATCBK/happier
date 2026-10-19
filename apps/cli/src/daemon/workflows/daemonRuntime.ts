@@ -6,24 +6,16 @@ import type {
 } from '@happier-dev/protocol';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import { resolveSessionRuntimeSnapshot } from '@/daemon/sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
-import { resolveSessionConfigOptionOverridesFromMetadataSnapshot } from '@/agent/runtime/sessionConfigOptionOverrideSync';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
-import { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS, WorkflowSessionAuthoringSelectionSchema } from '@happier-dev/protocol/workflows/workflowV1';
-import { SessionOwnerCompatibilityViewV1Schema, readSessionModesMetadata } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionInputCancelExactTurnResultV1Schema } from '@happier-dev/protocol/sessions/control/exactTurnCancellationV1';
 import { readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { admitAgentStartV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { formatWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionRefV1';
 import { readWorkflowRunLeafStartRequestV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
-import { readAppliedSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { freezeActionCompletionContractV1, readActionCompletionRunObservationV1 } from '@happier-dev/protocol/actions/actionCompletion';
 import type { ActionCompletionOperation } from '@happier-dev/protocol/actions/actionCompletion';
@@ -44,10 +36,9 @@ import {
 } from '@/plugins/runtime/reload/runtimeLease';
 import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import { createCommittedContributedActionDefinitionLister, createCommittedContributedActionInvoker } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
-import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/approvals/credentialedTargetActionCurrentIntent';
-import { createCredentialedWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
+import { createCredentialedWorkflowMaterializationHostV1, projectWorkflowConversationRoleSelection } from '@/session/actions/workflowMaterializationHost';
 import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
@@ -66,10 +57,10 @@ import {
 import {
   createWorkflowRunRecoveryReader,
 } from './recovery';
-import { createWorkflowInvocationRecoveryObserver, resolveWorkflowAuthorizedSession } from './invocationRecoveryObserver';
+import { createWorkflowInvocationRecoveryObserver, resolveWorkflowAuthorizedSession, resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
 import { createWorkflowRunStorageClient } from './workflowRunStorageClient';
 import { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
-import { WorkflowSessionCompositionError, type WorkflowSessionConversation } from './sessionStepExecutor';
+import { WorkflowSessionCompositionError } from './sessionStepExecutor';
 import { deriveWorkflowSessionCreationTag } from './workflowSessionStartup';
 import { lookupSessionsByTags } from '@/session/transport/http/sessionsHttp';
 
@@ -158,80 +149,7 @@ export async function cancelDispatchedWorkflowOriginSessionInput(params: Readonl
   }
 }
 
-/** Authorized owner metadata supplies identity and applied Session state, never list presentation. */
-export async function resolveWorkflowSessionConversation(params: Readonly<{
-  credentials: StoredCredentials;
-  sessionId: string;
-  machineId: string;
-  signal?: AbortSignal;
-  onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
-}>): Promise<WorkflowSessionConversation | null> {
-  const authorized = await resolveWorkflowAuthorizedSession(params);
-  if (!authorized) return null;
-  const { target, metadata } = authorized;
-  if (typeof metadata.path !== 'string' || !metadata.path.trim()) {
-    params.onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: 'workspace_unavailable',
-      expected: { kind: 'object' }, observed: { kind: 'unset' } });
-    return null;
-  }
-  const backend = resolveBackendTargetFromSessionMetadata(metadata);
-  const declaredTarget = backend ? parseBackendTargetKeyV2(buildBackendTargetKeyV2(backend)) : null;
-  const agentTarget = declaredTarget?.kind === 'agent' ? declaredTarget : undefined;
-  const selection: Record<string, unknown> = {};
-  // Reuse the portable selection schema and field inventory. Metadata-only
-  // fields and secrets never become a Workflow witness.
-  for (const field of WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS) {
-    if (metadata[field] === undefined) continue;
-    const parsed = createStoredReadSchema(WorkflowSessionAuthoringSelectionSchema.shape[field]).safeParse(metadata[field]);
-    if (parsed.success) selection[field] = parsed.data;
-  }
-  if (agentTarget) selection.agentTarget = agentTarget;
-  const modes = readSessionModesMetadata(metadata);
-  if (modes?.currentModeId && modes.agentId === backend?.backendId) {
-    selection.acpSessionModeId = modes.currentModeId;
-  } else {
-    delete selection.acpSessionModeId;
-  }
-  const config = createStoredReadSchema(SessionOwnerCompatibilityViewV1Schema.shape.sessionConfigOptionsV1).safeParse(metadata.sessionConfigOptionsV1 ?? metadata.acpConfigOptionsV1);
-  // Reuse compares the retained launch configuration that Session Pending will
-  // carry into the next input. Native Agents may publish models without an ACP
-  // config catalog; absence of that optional catalog must not erase this intent.
-  const configIntent = resolveSessionConfigOptionOverridesFromMetadataSnapshot({ metadata });
-  if (configIntent.length > 0) {
-    selection.sessionConfigOptionOverrides = {
-      v: 1, updatedAt: Math.max(...configIntent.map(option => option.updatedAt)),
-      overrides: Object.fromEntries(configIntent.map(option => [option.configId, {
-        updatedAt: option.updatedAt, value: option.valueId,
-      }])),
-    };
-  }
-  if (config.success && config.data && config.data.agentId === backend?.backendId) {
-    selection.sessionConfigOptionOverrides = {
-      v: 1, updatedAt: config.data.updatedAt,
-      overrides: Object.fromEntries(config.data.configOptions.map((option) => [option.id, {
-        updatedAt: config.data!.updatedAt, value: option.currentValue,
-      }])),
-    };
-  }
-  // Pending capability intent is not applied runtime state; its existing owner retains
-  // the exact applied selection when a restart is required.
-  selection.capabilitySelection = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
-  const { permissionMode, modelSelection } = resolveSessionRuntimeSnapshot({
-    incomingOptions: { existingSessionId: target.sessionId, directory: metadata.path },
-    persistedMetadata: metadata,
-  }).snapshot;
-  const sessionRoles = readSessionRolesV1(metadata);
-  return {
-    sessionId: target.sessionId, machineId: params.machineId, directory: metadata.path,
-    ...(target.rawSession.origin ? { origin: target.rawSession.origin } : {}),
-    ...(target.rawSession.workDepth === undefined ? {} : { workDepth: target.rawSession.workDepth }),
-    ...(agentTarget ? { agentTarget } : {}),
-    runtimeSelection: WorkflowSessionAuthoringSelectionSchema.parse(selection),
-    ...(modes && modes.agentId === backend?.backendId ? { sessionModes: modes } : {}),
-    ...(sessionRoles ? { sessionRoles } : {}),
-    runtimeSnapshot: { permissionMode, modelSelection },
-  };
-}
+export { resolveWorkflowSessionConversation } from './invocationRecoveryObserver';
 
 async function resolveAvailableEncryption(credentials: StoredCredentials, signal?: AbortSignal) {
   const resolved = await resolveAutomationWorkerAccountEncryption({
@@ -480,14 +398,8 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         if (claim.originSessionId && !origin) {
           throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
         }
-        const modelId = origin?.runtimeSnapshot?.modelSelection?.value?.modelId;
         const materialization = await resolveMaterializer({ machineId: input.machineId, directory: claim.directory,
-          ...(origin ? { roleSelection: {
-            sessionRoles: origin.sessionRoles,
-            defaultConnectedServices: origin.runtimeSelection?.connectedServices,
-            ...(origin.agentTarget ? { defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(origin.agentTarget),
-              ...(modelId ? { modelId } : {}) } } : {}),
-          } } : {}),
+          ...(origin ? { roleSelection: projectWorkflowConversationRoleSelection(origin) } : {}),
           ...(claim.signal ? { signal: claim.signal } : {}) });
         const current = materialization.agentStartPolicySnapshot;
         return { ...materialization, admitLeaf: async (leaf, facts) => admitAgentStartV1(current.policy,

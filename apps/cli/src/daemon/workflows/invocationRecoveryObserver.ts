@@ -1,4 +1,14 @@
 import type { StoredCredentials } from '@/persistence';
+import { resolveSessionRuntimeSnapshot } from '@/daemon/sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
+import { resolveSessionConfigOptionOverridesFromMetadataSnapshot } from '@/agent/runtime/sessionConfigOptionOverrideSync';
+import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS, WorkflowSessionAuthoringSelectionSchema } from '@happier-dev/protocol/workflows/workflowV1';
+import { SessionOwnerCompatibilityViewV1Schema, readSessionModesMetadata } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { readAppliedSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
+import type { WorkflowSessionConversation } from './sessionStepExecutor';
 import { isAxiosError } from 'axios';
 import { discardPendingQueueV2Messages } from '@/api/session/pendingQueueV2Transport';
 import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
@@ -76,6 +86,81 @@ export async function resolveWorkflowAuthorizedSession(params: Readonly<{
       || correspondence.data.recipe.execution.machineId !== metadata.machineId) return null;
   }
   return { target, metadata, machineId: metadata.machineId };
+}
+
+/** Authorized owner metadata supplies identity and applied Session state, never list presentation. */
+export async function resolveWorkflowSessionConversation(params: Readonly<{
+  credentials: StoredCredentials;
+  sessionId: string;
+  machineId?: string;
+  signal?: AbortSignal;
+  onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
+}>): Promise<WorkflowSessionConversation | null> {
+  const authorized = await resolveWorkflowAuthorizedSession(params);
+  if (!authorized) return null;
+  const { target, metadata } = authorized;
+  if (typeof metadata.path !== 'string' || !metadata.path.trim()) {
+    params.onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: 'workspace_unavailable',
+      expected: { kind: 'object' }, observed: { kind: 'unset' } });
+    return null;
+  }
+  const backend = resolveBackendTargetFromSessionMetadata(metadata);
+  const declaredTarget = backend ? parseBackendTargetKeyV2(buildBackendTargetKeyV2(backend)) : null;
+  const agentTarget = declaredTarget?.kind === 'agent' ? declaredTarget : undefined;
+  const selection: Record<string, unknown> = {};
+  // Reuse the portable selection schema and field inventory. Metadata-only
+  // fields and secrets never become a Workflow witness.
+  for (const field of WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS) {
+    if (metadata[field] === undefined) continue;
+    const parsed = createStoredReadSchema(WorkflowSessionAuthoringSelectionSchema.shape[field]).safeParse(metadata[field]);
+    if (parsed.success) selection[field] = parsed.data;
+  }
+  if (agentTarget) selection.agentTarget = agentTarget;
+  const modes = readSessionModesMetadata(metadata);
+  if (modes?.currentModeId && modes.agentId === backend?.backendId) {
+    selection.acpSessionModeId = modes.currentModeId;
+  } else {
+    delete selection.acpSessionModeId;
+  }
+  const config = createStoredReadSchema(SessionOwnerCompatibilityViewV1Schema.shape.sessionConfigOptionsV1).safeParse(metadata.sessionConfigOptionsV1 ?? metadata.acpConfigOptionsV1);
+  // Reuse compares the retained launch configuration that Session Pending will
+  // carry into the next input. Native Agents may publish models without an ACP
+  // config catalog; absence of that optional catalog must not erase this intent.
+  const configIntent = resolveSessionConfigOptionOverridesFromMetadataSnapshot({ metadata });
+  if (configIntent.length > 0) {
+    selection.sessionConfigOptionOverrides = {
+      v: 1, updatedAt: Math.max(...configIntent.map(option => option.updatedAt)),
+      overrides: Object.fromEntries(configIntent.map(option => [option.configId, {
+        updatedAt: option.updatedAt, value: option.valueId,
+      }])),
+    };
+  }
+  if (config.success && config.data && config.data.agentId === backend?.backendId) {
+    selection.sessionConfigOptionOverrides = {
+      v: 1, updatedAt: config.data.updatedAt,
+      overrides: Object.fromEntries(config.data.configOptions.map((option) => [option.id, {
+        updatedAt: config.data!.updatedAt, value: option.currentValue,
+      }])),
+    };
+  }
+  // Pending capability intent is not applied runtime state; its existing owner retains
+  // the exact applied selection when a restart is required.
+  selection.capabilitySelection = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
+  const { permissionMode, modelSelection } = resolveSessionRuntimeSnapshot({
+    incomingOptions: { existingSessionId: target.sessionId, directory: metadata.path },
+    persistedMetadata: metadata,
+  }).snapshot;
+  const sessionRoles = readSessionRolesV1(metadata);
+  return {
+    sessionId: target.sessionId, machineId: authorized.machineId, directory: metadata.path,
+    ...(target.rawSession.origin ? { origin: target.rawSession.origin } : {}),
+    ...(target.rawSession.workDepth === undefined ? {} : { workDepth: target.rawSession.workDepth }),
+    ...(agentTarget ? { agentTarget } : {}),
+    runtimeSelection: WorkflowSessionAuthoringSelectionSchema.parse(selection),
+    ...(modes && modes.agentId === backend?.backendId ? { sessionModes: modes } : {}),
+    ...(sessionRoles ? { sessionRoles } : {}),
+    runtimeSnapshot: { permissionMode, modelSelection },
+  };
 }
 
 /** Fresh exact native facts only; the Protocol owner decides which controls they permit. */

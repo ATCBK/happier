@@ -189,7 +189,7 @@ export function createSessionListActionDeps(params: Readonly<{
     includeLastMessagePreview,
     signal,
   }: Parameters<ActionExecutorDeps['sessionList']>[0], filterCandidates?: Parameters<typeof listSessions>[0]['filterCandidates'],
-  workspaceRefs?: readonly WorkspaceRefV1[]): Promise<Awaited<ReturnType<ActionExecutorDeps['sessionList']>>> => {
+  workspaceRefs?: readonly WorkspaceRefV1[]) => {
     const normalizedActiveOnly = activeOnly === true;
     const normalizedArchivedOnly = archivedOnly === true;
     if (context?.serverId && context.serverId !== serverId) {

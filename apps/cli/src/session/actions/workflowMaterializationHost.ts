@@ -22,10 +22,22 @@ import type { WorkflowTargetUnavailableDetailsV1 } from '@happier-dev/protocol/w
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { ActionSessionAddressV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import type { WorkflowSessionConversation } from '@/daemon/workflows/sessionStepExecutor';
 
 type Materialization = Pick<Parameters<typeof materializeWorkflowAcceptedSnapshotV1>[0], 'roleSelection' | 'effects'>;
 type RoleSelection = NonNullable<Materialization['roleSelection']>;
 type MachineTarget = Readonly<{ machineId: string; directory: string; signal?: AbortSignal; roleSelection?: RoleSelection }>;
+
+/** Origin selection is a contextual fallback; Role and explicit engine overrides remain Protocol-owned. */
+export function projectWorkflowConversationRoleSelection(origin: WorkflowSessionConversation): RoleSelection {
+  const modelId = origin.runtimeSnapshot?.modelSelection?.value?.modelId;
+  return {
+    sessionRoles: origin.sessionRoles,
+    defaultConnectedServices: origin.runtimeSelection?.connectedServices,
+    ...(origin.agentTarget ? { defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(origin.agentTarget),
+      ...(modelId ? { modelId } : {}) } } : {}),
+  };
+}
 
 export type WorkflowMaterializationHostDeps = Readonly<{
   credentials: StoredCredentials;

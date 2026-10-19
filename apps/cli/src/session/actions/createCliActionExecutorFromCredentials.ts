@@ -1202,6 +1202,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.machineActionDirectTargetTransport
         ? { machineActionDirectTargetTransport: params.machineActionDirectTargetTransport }
         : {}),
+      ...(params.machineId ? { explicitMachineId: params.machineId } : {}),
       ...(params.sessionActionRpcTransport ? { sessionActionRpcTransport: params.sessionActionRpcTransport } : {}),
       ...(params.externalSessionPluginAdmissionOwner
         ? {

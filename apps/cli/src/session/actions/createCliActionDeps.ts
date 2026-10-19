@@ -264,15 +264,16 @@ import { createWorkflowActionExecutor, normalizeWorkflowActionThrownError } from
 import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
 import { createWorkflowRunActionOwner } from './workflowRunActions';
 import { createCommittedInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
-import { createCredentialedWorkflowMaterializationHostV1 } from './workflowMaterializationHost';
+import { createCredentialedWorkflowMaterializationHostV1, projectWorkflowConversationRoleSelection } from './workflowMaterializationHost';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
-import { createWorkflowInvocationRecoveryObserver, observeWorkflowInvocationRecoveryEvidence } from '@/daemon/workflows/invocationRecoveryObserver';
+import { createWorkflowInvocationRecoveryObserver, observeWorkflowInvocationRecoveryEvidence, resolveWorkflowSessionConversation } from '@/daemon/workflows/invocationRecoveryObserver';
 import { createWorkflowInvocationRecoveryFactWriter } from '@/daemon/workflows/recovery';
 import { createWorkflowRunPushNotificationClient } from '@/daemon/workflows/production';
 import { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
 import type { WorkflowAccountRunActionDeps } from '@happier-dev/protocol';
 import { isWorkflowRuntimeEnabled } from '@/daemon/automation/workflowFeatureGate';
-import { listCurrentAccountMachines, resolveCurrentAccountAdministrationMachine, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import { listCurrentAccountAdministrationMachines, listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import { isMachineRequestReachabilityFailureV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { prepareWorkflowAcceptedWorkspaceTarget, restoreRecordedWorkflowWorkspace } from '@/daemon/workflows/resolveWorkflowWorkspace';
@@ -896,6 +897,8 @@ export function createCliActionDeps(params: Readonly<{
   >;
   sessionSpawnDirectTargetTransport?: SessionSpawnDirectTargetTransport;
   machineActionDirectTargetTransport?: MachineActionDirectTargetTransport;
+  /** The CLI's explicit `--machine-id`; the one Machine an Account-owned read goes through when the host has no Session or daemon of its own. */
+  explicitMachineId?: string;
   sessionActionRpcTransport?: SessionActionRpcTransport;
   /**
    * Read at dispatch time so the plugin runtime's declared Composer attachments
@@ -1833,32 +1836,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     return transport;
   };
-  // Home, Project and plugin-area widgets belong to the Account, not to a Session or this process's
-  // Machine. A host with neither (a standalone CLI replaying an approved Action) reads the plugin
-  // projection from a reachable Account daemon, the selection Account administration already uses.
-  let accountWidgetMachineId: Promise<string> | undefined;
-  const readAccountWidgetMachineId = async (signal?: AbortSignal): Promise<string | null> => {
-    if (!accountWidgetMachineId) {
-      const selected = resolveCurrentAccountAdministrationMachine({ token: params.token,
-        ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}) })
-        .then(machineId => machineId ?? Promise.reject(new Error('widget_account_machine_unavailable')));
-      accountWidgetMachineId = selected;
-      // Only a selected Machine is kept; an unreachable Account is asked again by the next read.
-      void selected.catch(() => { if (accountWidgetMachineId === selected) accountWidgetMachineId = undefined; });
-    }
-    signal?.throwIfAborted();
-    const machineId = await accountWidgetMachineId.catch(() => null);
-    signal?.throwIfAborted();
-    return machineId;
-  };
-  const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
-    signal?.throwIfAborted();
-    const transport = sessionRef ? await resolveWidgetSessionTransport(sessionRef, signal) : null;
-    const machineId = transport?.ok
-      ? normalizeStringValue(readTransportSessionOwnerMetadata(transport)?.machineId)
-      : params.machineActionDirectTargetTransport?.machineId ?? normalizeStringValue(await resolveCurrentSessionValue('machineId'))
-        ?? await readAccountWidgetMachineId(signal);
-    if (!machineId) return null;
+  const describeWidgetProjection = async (machineId: string, signal?: AbortSignal) => {
     const result = DaemonContributionRegistryProjectionDescribeResponseSchema.safeParse(await callMachineAction({
       machineId, serverId: params.serverId ?? configuration.activeServerId,
       method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
@@ -1867,6 +1845,49 @@ export function createCliActionDeps(params: Readonly<{
     signal?.throwIfAborted();
     if (!result.success) throw Object.assign(new Error('widget_catalog_unavailable'), { code: 'widget_catalog_unavailable' });
     return result.data.projection;
+  };
+  // Home, Project and plugin-area widgets belong to the Account, not to a Session or this process's
+  // Machine. A host with neither (a standalone CLI replaying an approved Action) reads the plugin
+  // projection from the Machine the CLI names with its explicit selector, otherwise from a reachable
+  // Account daemon. Account presence also lists daemons connected to other servers on a shared Account, so a
+  // target-unavailable verdict moves to the next one; the Machine that answered is reused.
+  let answeringAccountWidgetMachineId: string | undefined;
+  const readAccountWidgetProjection = async (signal?: AbortSignal) => {
+    if (answeringAccountWidgetMachineId) {
+      try { return await describeWidgetProjection(answeringAccountWidgetMachineId, signal); }
+      catch (error) {
+        signal?.throwIfAborted();
+        if (!isMachineRequestReachabilityFailureV1(error)) throw error;
+        answeringAccountWidgetMachineId = undefined;
+      }
+    }
+    const candidates = await listCurrentAccountAdministrationMachines({ token: params.token,
+      ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
+      ...(params.explicitMachineId ? { requestedMachineId: params.explicitMachineId } : {}) }).catch(() => []);
+    signal?.throwIfAborted();
+    let unavailable: unknown;
+    for (const machineId of candidates) {
+      try {
+        const projection = await describeWidgetProjection(machineId, signal);
+        answeringAccountWidgetMachineId = machineId;
+        return projection;
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!isMachineRequestReachabilityFailureV1(error)) throw error;
+        unavailable = error;
+      }
+    }
+    if (unavailable) throw unavailable;
+    return null;
+  };
+  const readWidgetProjection = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
+    signal?.throwIfAborted();
+    const transport = sessionRef ? await resolveWidgetSessionTransport(sessionRef, signal) : null;
+    const machineId = transport?.ok
+      ? normalizeStringValue(readTransportSessionOwnerMetadata(transport)?.machineId)
+      : params.machineActionDirectTargetTransport?.machineId ?? normalizeStringValue(await resolveCurrentSessionValue('machineId'));
+    if (machineId) return await describeWidgetProjection(machineId, signal);
+    return transport ? null : await readAccountWidgetProjection(signal);
   };
   const readWidgetCandidates = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>) => {
     const projection = await readWidgetProjection(signal, sessionRef);
@@ -1884,6 +1905,14 @@ export function createCliActionDeps(params: Readonly<{
     }))];
   };
 
+  // One admission for every read of the Account's Project rows by a widget input: the validator and the choices.
+  const readAdmittedProjectRows = async (signal: AbortSignal | undefined, context: ActionExecutorContext | undefined, fallbackActionId: string) => {
+    if (await projectAccountAdmission(widgetHomeId, context)) return null;
+    const rows = await readProjectRows(signal, context, context?.externalActionExecutionAuthorization?.binding.actionId ?? fallbackActionId);
+    await assertProjectRequesterCurrent(context);
+    signal?.throwIfAborted();
+    return await projectAccountAdmission(widgetHomeId, context) ? null : rows;
+  };
   const inventoryDeps = createCliActionInventoryDeps({ ...params, callMachineAction,
     localMachineId: params.machineActionDirectTargetTransport?.machineId,
     authorizeConnectedAccountRequest: (context, request) => resolveServerRequestHeaders(context,
@@ -2152,6 +2181,25 @@ export function createCliActionDeps(params: Readonly<{
           inputTypeDeps: createCommittedInputTypeDeps(),
           resolveMaterializationContext: async (args, target) => {
             if (!resolveWorkflowMaterializer) throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
+            if (args.context.surface !== 'agent'
+              && (!args.context.actionCaller || args.context.actionCaller.kind === 'host')
+              && args.context.defaultSessionId) {
+              const sessionId = args.context.defaultSessionId;
+              const requester = readRequesterAccountActionContext(args.context.externalActionExecutionAuthorization);
+              const credentials = requester?.credentials ?? params.credentials;
+              if (!credentials || args.context.externalActionCredential && !requester) {
+                throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+              }
+              const origin = await runWithServerHttpBaseUrl(requester?.serverHttpBaseUrl ?? workflowRunServerHttpBaseUrl,
+                () => resolveWorkflowSessionConversation({ credentials, sessionId,
+                  ...(args.context.signal ? { signal: args.context.signal } : {}),
+                }));
+              if (!origin || requester && !await requester.isCurrent()) {
+                throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
+              }
+              return await resolveWorkflowMaterializer({ ...target, signal: args.context.signal,
+                roleSelection: projectWorkflowConversationRoleSelection(origin) });
+            }
             const metadata = await readCurrentSessionMetadata();
             const baseline = (await resolveActionAgentStartContextV1({ resolveAgentStartContext }, args.context))?.baseline.configuration;
             return await resolveWorkflowMaterializer({ ...target, signal: args.context.signal,
@@ -3388,8 +3436,10 @@ export function createCliActionDeps(params: Readonly<{
     if (directTargetTransport?.machineId === executionTarget.machineId) {
       return true;
     }
-    const activeServerId = String(configuration.activeServerId ?? '').trim();
-    return Boolean(activeServerId && executionTarget.serverId === activeServerId);
+    // Retained plugin recipes carry portable Home identities too. Use the
+    // same captured Home equivalence as other Actions before target I/O.
+    return isSameActionHomeId(executionTarget.serverId)
+      && (params.serverId !== undefined || configuration.activeServerId === projectHomeId);
   };
 
   /**
@@ -3793,13 +3843,7 @@ export function createCliActionDeps(params: Readonly<{
     ...createCliWidgetInputActionDepsV1({
       serverId: widgetHomeId, accountId: homeAccountId,
       getDeps: () => readEffectiveDeps?.() ?? actionDeps, readCandidates: readWidgetCandidates,
-      readWorkspaceRefs: async (signal, context) => {
-        if (await projectAccountAdmission(widgetHomeId, context)) return null;
-        const rows = await readProjectRows(signal, context, context.externalActionExecutionAuthorization?.binding.actionId ?? 'widgets.item.inputs.validate');
-        await assertProjectRequesterCurrent(context);
-        signal?.throwIfAborted();
-        return await projectAccountAdmission(widgetHomeId, context) ? null : rows.workspaceRefs;
-      },
+      readWorkspaceRefs: async (signal, context) => (await readAdmittedProjectRows(signal, context, 'widgets.item.inputs.validate'))?.workspaceRefs ?? null,
       readInputTypes: async (signal, session) => (await readWidgetProjection(signal, session))?.familiesById.inputTypes,
       readResources: async (signal, session) => {
         const projection = await readWidgetProjection(signal, session);
@@ -6425,6 +6469,12 @@ export function createCliActionDeps(params: Readonly<{
         });
         return { items, truncated: projected.truncated, coverage: projected.coverage };
       });
+    },
+    projectWorkspaceRefs: async (_args, context) => {
+      const rows = await readAdmittedProjectRows(context?.signal, context, 'action.options.resolve');
+      if (!rows) return { ok: false, errorCode: 'project_account_access_denied', error: 'project_account_access_denied' };
+      const projected = projectProjectListV1({ serverId: widgetHomeId, workspaceRefs: rows.workspaceRefs, organizations: rows.organizations });
+      return { workspaceRefs: projected.items.map(item => item.ref) };
     },
     projectWorkerAction: async (args) => {
       const { actionId, input, context, signal } = args;
