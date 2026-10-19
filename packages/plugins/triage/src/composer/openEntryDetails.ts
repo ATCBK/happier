@@ -43,6 +43,10 @@ import {
  * the navigation call and the declaration cannot drift into two spellings.
  */
 export const TRIAGE_APP_PAGE_LOCAL_ID_V1 = 'triage';
+export const TRIAGE_TASKS_PAGE_LOCAL_ID_V1 = 'tasks';
+export const TRIAGE_TASK_DETAIL_DESTINATION_V1 = Object.freeze({
+    pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: TRIAGE_TASKS_PAGE_LOCAL_ID_V1,
+});
 
 /** The one qualified destination View details opens. */
 export const TRIAGE_ENTRY_DETAIL_DESTINATION_V1 = Object.freeze({

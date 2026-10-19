@@ -8,10 +8,13 @@ import {
   type TriageListEntriesResultV1,
 } from '../../actions/listEntriesProtocol.js';
 import { TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
+import type { TriageListWindowStoreV1 } from '../../projection/listWindowStore.js';
 import {
   acquireTriageListWindow,
   loadMoreTriageListWindow,
   readTriageListWindowSnapshot,
+  readTriageMountedWindowReadState,
+  setTriageListWindowReadiness,
   refreshTriageListWindow,
   setTriageListWindowLens,
   type TriageListWindowHostV1,
@@ -202,6 +205,42 @@ afterEach(() => {
 });
 
 describe('the mounted PRs & Issues window is scoped by its host-owned lifetime', () => {
+  it('forwards readiness from the actual read client and ignores another artifact without acquiring data', () => {
+    const first = createHostStub(INSTANCE_A);
+    const second = createHostStub(INSTANCE_B);
+    const scope = createSharedScope();
+    const pending = Object.freeze({ pending: true, revision: 0 });
+    const ready = Object.freeze({ pending: false, revision: 1 });
+    const firstLease = acquireTriageListWindow(first.host, scope, pending);
+    leases.push(firstLease, acquireTriageListWindow(second.host, scope, ready));
+    expect(readTriageMountedWindowReadState(second.host, scope).readiness).toBe(pending);
+    setTriageListWindowReadiness(second.host, scope, Object.freeze({ pending: false, revision: 2 }));
+    expect(readTriageMountedWindowReadState(second.host, scope).readiness).toBe(pending);
+    setTriageListWindowReadiness(first.host, scope, ready);
+    expect(readTriageMountedWindowReadState(second.host, scope).readiness).toBe(ready);
+    firstLease.release();
+    expect(readTriageMountedWindowReadState(second.host, scope).readiness).toEqual({ pending: false, revision: 2 });
+    expect(first.calls).toHaveLength(0);
+    expect(second.calls).toHaveLength(0);
+  });
+
+  it('retains the last observation when the final client retires instead of manufacturing re-admission', () => {
+    const first = createHostStub(INSTANCE_A);
+    const scope = createSharedScope();
+    const pending = Object.freeze({ pending: true, revision: 0 });
+    const lease = acquireTriageListWindow(first.host, scope, pending);
+    const observer = scope.acquire<Readonly<{ readState(): Readonly<{ readiness: typeof pending }> }>>('triage.list-window.v1', () => {
+      throw new Error('The mounted window already owns the slot');
+    });
+    if (!observer) throw new Error('Expected the current shared slot');
+    try {
+      lease.release();
+      expect(observer.value.readState().readiness).toBe(pending);
+      expect(first.calls).toHaveLength(0);
+    } finally { observer.release(); }
+  });
+
+
   it('does not let a second Account join the first Account window', async () => {
     const accountA = createHostStub(INSTANCE_A);
     const accountB = createHostStub(INSTANCE_B);

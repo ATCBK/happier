@@ -59,7 +59,7 @@ describe('the mounted configured entry action controls', () => {
         actions={actions}
         workflowSubject="pullRequest"
         viewerIsAuthor={false}
-        preparesReviewWorkspace
+        reviewPreparation="ready"
         onAction={(request) => { requests.push(request); }}
       />
     ));
@@ -96,7 +96,7 @@ describe('the mounted configured entry action controls', () => {
         actions={[formalAction('formal-review-one', 'Security review')]}
         workflowSubject="pullRequest"
         viewerIsAuthor={false}
-        preparesReviewWorkspace
+        reviewPreparation="ready"
         // The catalog changed between render and press: the action is gone.
         onAction={async () => ({ kind: 'missing' as const })}
       />
@@ -123,19 +123,24 @@ describe('the one primary entry action', () => {
 
   it('is what the entry asks of the reader: review someone else\'s change, fix your own, fix an issue or an error', () => {
     const offered = [ask, fix, review];
-    expect(readTriagePrimaryActionIdV1(offered, true, { workflowSubject: 'pullRequest', viewerIsAuthor: false })).toBe('review');
-    expect(readTriagePrimaryActionIdV1(offered, true, { workflowSubject: 'pullRequest', viewerIsAuthor: true })).toBe('fix');
-    expect(readTriagePrimaryActionIdV1([ask, fix], true, { workflowSubject: 'issue', viewerIsAuthor: false })).toBe('fix');
-    expect(readTriagePrimaryActionIdV1([ask, fix], true, { workflowSubject: 'errorIssue', viewerIsAuthor: false })).toBe('fix');
+    expect(readTriagePrimaryActionIdV1(offered, 'ready', { workflowSubject: 'pullRequest', viewerIsAuthor: false })).toBe('review');
+    expect(readTriagePrimaryActionIdV1(offered, 'ready', { workflowSubject: 'pullRequest', viewerIsAuthor: true })).toBe('fix');
+    expect(readTriagePrimaryActionIdV1([ask, fix], 'ready', { workflowSubject: 'issue', viewerIsAuthor: false })).toBe('fix');
+    expect(readTriagePrimaryActionIdV1([ask, fix], 'ready', { workflowSubject: 'errorIssue', viewerIsAuthor: false })).toBe('fix');
   });
 
   it('never makes Ask primary while a working action exists, and never a blocked one', () => {
     const security = formalAction('formal-review-one', 'Security review');
     const pr = { workflowSubject: 'pullRequest' as const, viewerIsAuthor: false };
     // A review the source cannot prepare is blocked; the next action that does work leads.
-    expect(readTriagePrimaryActionIdV1([ask, security, fix], false, pr)).toBe('fix');
-    expect(readTriagePrimaryActionIdV1([ask, security], false, pr)).toBe('ask');
-    expect(readTriagePrimaryActionIdV1([security], false, pr)).toBeNull();
-    expect(readTriagePrimaryActionIdV1([], true, pr)).toBeNull();
+    expect(readTriagePrimaryActionIdV1([ask, security, fix], 'unsupported', pr)).toBe('fix');
+    expect(readTriagePrimaryActionIdV1([ask, security], 'unsupported', pr)).toBe('ask');
+    expect(readTriagePrimaryActionIdV1([security], 'unsupported', pr)).toBeNull();
+    expect(readTriagePrimaryActionIdV1([], 'ready', pr)).toBeNull();
+  });
+
+  it('keeps a review that only waits on this entry\'s read in its place, so the kind\'s verb does not flip when the read lands', () => {
+    const pr = { workflowSubject: 'pullRequest' as const, viewerIsAuthor: false };
+    expect(readTriagePrimaryActionIdV1([ask, fix, review], 'pending', pr)).toBe('review');
   });
 });

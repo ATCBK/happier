@@ -113,10 +113,11 @@ describe('registered GitHub detail read dispatch', () => {
     expect(GithubChangedFilesResultV1Schema.parse(producerResults[0])).toMatchObject({
       kind: 'changedFiles', rows: [{ path: 'src/dispatch.ts' }],
     });
-    await expect(detail.getByText('src/dispatch.ts')).resolves.toBeDefined();
+    // File titles retain both path halves in separate text runs for middle ellipsis.
+    expect(document.body.textContent).toContain('src/dispatch.ts');
     // A settled host update must retain the same page rather than re-read it.
     await act(async () => { await detail.updateSurface(createSurfaceContextFixture()); });
-    await expect(detail.getByText('src/dispatch.ts')).resolves.toBeDefined();
+    expect(document.body.textContent).toContain('src/dispatch.ts');
     expect(producerResults).toHaveLength(1);
   });
 

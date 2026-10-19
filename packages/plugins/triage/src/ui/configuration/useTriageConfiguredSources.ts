@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginTranslation } from '@happier-dev/plugin-ui';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
 
 import { readActiveConfiguredSourceRows } from '../../corpus/configuration/readConfiguredSourceRows.js';
 import { removeConfiguredSourceInstance } from '../../corpus/configuration/administerConfiguredSourceInstance.js';
 import { useTriageDurableAccount } from '../durable/accountDurableState.js';
-import type { TriageConfiguredSourceInstanceV1 } from '@happier-dev/triage-protocol/v1';
+import { TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1, type TriageConfiguredSourceInstanceV1 } from '@happier-dev/triage-protocol/v1';
 
 export type TriageMountedConfiguredSourceV1 = Readonly<{
   sourceInstanceId: string;
@@ -23,7 +24,7 @@ export type TriageMountedConfiguredSourcesV1 = Readonly<{
 }>;
 
 export type TriageConfiguredSourcesNoticeV1 = Readonly<{
-  kind: 'conflict' | 'missing';
+  kind: 'conflict' | 'missing' | 'refused';
   message: string;
 }>;
 
@@ -40,6 +41,7 @@ const UNAVAILABLE_REASON =
  * speculative change or replay intent.
  */
 export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
+  const host = usePluginHostApi();
   const durable = useTriageDurableAccount();
   const text = usePluginTranslation();
   const [sources, setSources] = useState<readonly TriageMountedConfiguredSourceV1[]>([]);
@@ -92,6 +94,8 @@ export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
     setBusySourceInstanceId(sourceInstanceId);
     setNotice(null);
     try {
+      if (!await host.admitAction(TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1,
+        { v: 1, kind: 'remove', sourceInstanceId }, { signal: controller.signal })) return false;
       const result = await removeConfiguredSourceInstance({
         collections: durable.collections,
         sourceInstanceId,
@@ -120,13 +124,17 @@ export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
         return false;
       }
       return await read(controller.signal);
-    } catch {
+    } catch (error) {
+      if (isPluginError(error) && error.code === 'denied') {
+        setNotice({ kind: 'refused', message: text('happier.plugin-ui.action.error.denied', 'This isn’t allowed here.') });
+        return false;
+      }
       setUnavailableReason(text('plugins.triage.surface.sources.unavailable', UNAVAILABLE_REASON));
       return false;
     } finally {
       setBusySourceInstanceId(null);
     }
-  }, [busySourceInstanceId, durable.collections, read, text, unavailableReason]);
+  }, [busySourceInstanceId, durable.collections, host, read, text, unavailableReason]);
 
   return useMemo(() => Object.freeze({
     sources,

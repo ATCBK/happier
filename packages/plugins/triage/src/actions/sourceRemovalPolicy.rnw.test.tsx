@@ -145,7 +145,7 @@ describe('source Remove through the shared Action admission and durable writer',
       page = await createPluginUiTestkit({
         identity: { instanceId: 'settings-1', mountNonce: 'mount-1' },
         authorPlugin: { id: SOURCE.pluginId, version: '0.0.0' }, surface,
-        surfaceContext: createSurfaceContextFixture(), adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+        surfaceContext: createSurfaceContextFixture(), adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
         handlers: {
           // Dialog presentation is the only UI boundary replaced. A stray local
           // question is observable alongside the actual policy-owned decision.
@@ -160,13 +160,18 @@ describe('source Remove through the shared Action admission and durable writer',
       });
     });
     mounted.push(page);
-    await act(async () => { await page.press(await page.getByRole('button', { name: 'Remove acme/api from PRs & Issues' })); });
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'More actions for acme/api' })); });
+    await act(async () => { await page.press(await page.getByRole('menuitem', { name: 'Remove acme/api from PRs & Issues' })); });
     expect(dialogs).toEqual(prompts === 0 ? [] : ['Action policy']);
     expect(admissions).toEqual([approved ? 'admitted' : 'unavailable']);
     expect(TriageReadConfiguredSourceInstancesResultV1Schema.parse(await read({ v: 1 }, context))).toMatchObject({ kind: 'read', instances: [
       { lifecycle, configured: { instance: { sourceInstanceId: INSTANCE_ID } } },
     ] });
-    expect(await page.getByRole('button', { name: lifecycle === 'retired'
-      ? 'Restore acme/api to PRs & Issues' : 'Remove acme/api from PRs & Issues' })).toBeDefined();
+    if (lifecycle === 'retired') {
+      expect(await page.getByRole('button', { name: 'Restore acme/api to PRs & Issues' })).toBeDefined();
+    } else {
+      await act(async () => { await page.press(await page.getByRole('button', { name: 'More actions for acme/api' })); });
+      expect(await page.getByRole('menuitem', { name: 'Remove acme/api from PRs & Issues' })).toBeDefined();
+    }
   });
 });

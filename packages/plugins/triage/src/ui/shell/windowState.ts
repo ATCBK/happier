@@ -126,6 +126,8 @@ export type TriageListShellStateV1 =
       refreshing: boolean;
       /** The rows are real but no longer known to be current. */
       stale: boolean;
+      /** Read-health presentation only; age by itself does not request an amber warning. */
+      showReadWarning: boolean;
       /** Retained beside the rows, never instead of them. */
       failure: TriageListShellFailureV1 | null;
     }>;
@@ -373,12 +375,19 @@ export function resolveTriageListShellState(
   const window = snapshot.window;
   if (window !== undefined) {
     if (snapshot.configuredSources.length === 0) return Object.freeze({ kind: 'configureSources' });
+    const stale = snapshot.freshness !== 'fresh';
+    const failure = readShellFailure(snapshot);
     return Object.freeze({
       kind: 'window',
       window,
       refreshing: snapshot.pending !== 'idle',
-      stale: snapshot.freshness !== 'fresh',
-      failure: readShellFailure(snapshot),
+      stale,
+      showReadWarning: stale && (
+        failure !== null
+        || snapshot.error !== undefined
+        || window.lanes.some((lane) => lane.health.kind === 'unavailable')
+      ),
+      failure,
     });
   }
   // Before the first completed cycle there are no configured sources to report

@@ -10,14 +10,14 @@ describe('direct fix-link transport', () => {
     const fixPullRequest = testkitEntryRef({ kindId: 'pull-request', entryId: '43' });
     let answer: ((approved: boolean) => void) | undefined;
     // The public UI host is outside this plugin process; its decision is the boundary.
-    const host = { confirm: async (_message: string, options?: Readonly<{ action?: unknown }>) => {
-      expect(options?.action).toBe('marks/set-fix-pull-request-v1');
+    const host = { admitAction: async (action: unknown) => {
+      expect(action).toBe('marks/set-fix-pull-request-v1');
       return await new Promise<boolean>(resolve => { answer = resolve; });
     } };
     const transport = createDirectTriageFixPullRequestsTransport(fixture.collections, {
       workflowSubjectOf: ref => ref.kindId === 'pull-request' ? 'pullRequest' : 'issue',
       presentationOf: () => 'active',
-    }, () => 10, host, () => 'Set fix pull request?');
+    }, () => 10, host);
     const write = transport.write({ v: 1, linked: true, entryRef, fixPullRequest,
       displayAtMark: { title: 'Issue', scopeLabel: 'test' },
       displayAtLink: { title: 'Fix', scopeLabel: 'test' },

@@ -54,6 +54,8 @@ export type TriageEntryActionRequestV1 = Readonly<{
  */
 export type TriageEntryActionRefusalV1 = Readonly<{ kind: 'missing' | 'unavailable' }>;
 
+export type TriageReviewPreparationV1 = 'ready' | 'pending' | 'unsupported';
+
 export type TriageEntryActionControlsPropsV1 = Readonly<{
   /** The one aggregate action target; it reads `selection`, never `focus`. */
   target: TriageActionTargetV1;
@@ -61,13 +63,13 @@ export type TriageEntryActionControlsPropsV1 = Readonly<{
   actions: readonly TriageActionV1[];
   workflowSubject: TriageSourceWorkflowSubjectV1;
   /**
-   * Whether the currently selected source contribution declares the admitted
-   * review-workspace preparation operation. An action that declares
-   * `pull_request` without one resolves the workspace refusal every time, so the
-   * control is disabled with a stated reason rather than left to fail after the
-   * press.
+   * Where review-workspace preparation stands for this entry. `unsupported`: the selected source contribution
+   * declares no admitted preparation operation, so an action that declares `pull_request` would resolve the
+   * workspace refusal every time; it is disabled with a stated reason rather than left to fail after the press.
+   * `pending`: the source can prepare, but this entry's own read has not produced the workspace yet (still reading,
+   * or it failed); the action stays disabled and keeps its place, because the verb belongs to the entry's kind.
    */
-  preparesReviewWorkspace: boolean;
+  reviewPreparation: TriageReviewPreparationV1;
   /** Whether the reader opened this entry (their own pull request asks for Fix, someone else's for Review). */
   viewerIsAuthor: boolean;
   /**
@@ -84,8 +86,8 @@ export type TriageEntryActionControlsPropsV1 = Readonly<{
 /**
  * The one primary control: the first action in catalog order a reader can
  * press. Every other action is secondary, so two filled buttons never sit side
- * by side (`DESIGN.md` "Hierarchy"). An action this entry cannot run is never
- * the primary one.
+ * by side (`DESIGN.md` "Hierarchy"). An action this source can never run is not
+ * the primary one; one that only waits on this entry's read keeps its place.
  */
 type TriageActionIntentV1 = 'review' | 'fix' | 'ask' | 'other';
 
@@ -104,10 +106,10 @@ function readTriageActionIntentV1(action: TriageActionV1): TriageActionIntentV1 
  */
 export function readTriagePrimaryActionIdV1(
   offered: readonly TriageActionV1[],
-  preparesReviewWorkspace: boolean,
+  reviewPreparation: TriageReviewPreparationV1,
   context: Readonly<{ workflowSubject: TriageSourceWorkflowSubjectV1; viewerIsAuthor: boolean }>,
 ): string | null {
-  const pressable = offered.filter((action) => !isTriageActionBlockedV1(action, preparesReviewWorkspace));
+  const pressable = offered.filter((action) => !(action.workspaceMode === 'pull_request' && reviewPreparation === 'unsupported'));
   const wanted: readonly TriageActionIntentV1[] = context.workflowSubject === 'pullRequest' && !context.viewerIsAuthor
     ? ['review', 'fix']
     : ['fix', 'review'];
@@ -118,8 +120,8 @@ export function readTriagePrimaryActionIdV1(
   return (pressable.find((action) => readTriageActionIntentV1(action) !== 'ask') ?? pressable[0])?.actionId ?? null;
 }
 
-function isTriageActionBlockedV1(action: TriageActionV1, preparesReviewWorkspace: boolean): boolean {
-  return action.workspaceMode === 'pull_request' && !preparesReviewWorkspace;
+function isTriageActionBlockedV1(action: TriageActionV1, reviewPreparation: TriageReviewPreparationV1): boolean {
+  return action.workspaceMode === 'pull_request' && reviewPreparation !== 'ready';
 }
 
 const NO_SELECTION_COPY = 'Select an entry to start a session from it.';
@@ -158,7 +160,7 @@ function TriageEntryActionButton(props: Readonly<{
 export function TriageEntryActionControls(
   props: TriageEntryActionControlsPropsV1,
 ): React.ReactElement {
-  const { target, actions, workflowSubject, preparesReviewWorkspace, viewerIsAuthor, onAction } = props;
+  const { target, actions, workflowSubject, reviewPreparation, viewerIsAuthor, onAction } = props;
   const text = usePluginTranslation();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const offered = React.useMemo(
@@ -192,7 +194,7 @@ export function TriageEntryActionControls(
   // Read from the action's own declared mode rather than from the subject: an
   // action needs a prepared workspace because it SAID so, and a subject that
   // happens to be a pull request is not by itself a claim about preparation.
-  const primaryActionId = readTriagePrimaryActionIdV1(offered, preparesReviewWorkspace, { workflowSubject, viewerIsAuthor });
+  const primaryActionId = readTriagePrimaryActionIdV1(offered, reviewPreparation, { workflowSubject, viewerIsAuthor });
   // With nothing pressable, the first offered action still leads, disabled, beside the reason it cannot start.
   const primary = offered.find((action) => action.actionId === primaryActionId) ?? offered[0] ?? null;
   // Beside the one filled action stays the one quiet question (Ask); every other action is one press behind More.
@@ -201,9 +203,11 @@ export function TriageEntryActionControls(
   const hasOverflow = overflowActions.length > 0 || (props.overflow !== undefined && props.overflow !== null);
   // The reason a control cannot start sits with that control: under the row when a blocked action is in sight,
   // inside More when the blocked ones are all behind it, so the row never says "cannot" beside an action that can.
-  const isBlocked = (action: TriageActionV1 | null) => action !== null && isTriageActionBlockedV1(action, preparesReviewWorkspace);
-  const blockedInRow = isBlocked(primary) || isBlocked(beside);
-  const blockedInOverflow = !blockedInRow && overflowActions.some(isBlocked);
+  const isBlocked = (action: TriageActionV1 | null) => action !== null && isTriageActionBlockedV1(action, reviewPreparation);
+  // Only a source that can never prepare a workspace owes the reader that sentence; a read still pending says nothing.
+  const sourceCannotPrepare = reviewPreparation === 'unsupported';
+  const blockedInRow = sourceCannotPrepare && (isBlocked(primary) || isBlocked(beside));
+  const blockedInOverflow = sourceCannotPrepare && !blockedInRow && overflowActions.some(isBlocked);
   const preparationReason = (
     <Status
       tone="muted"
@@ -219,7 +223,7 @@ export function TriageEntryActionControls(
       action={action}
       entryRef={entryRef}
       sourceInstanceId={sourceInstanceId}
-      blocked={isTriageActionBlockedV1(action, preparesReviewWorkspace)}
+      blocked={isTriageActionBlockedV1(action, reviewPreparation)}
       primary={action.actionId === primaryActionId}
       inOverflow={inOverflow}
       onPress={onPress}

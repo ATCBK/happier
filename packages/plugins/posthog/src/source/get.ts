@@ -11,7 +11,7 @@
  * An enrichment failure degrades the snapshot; it never downgrades a present entry.
  */
 
-import type { PosthogApiClient, PosthogRequestOptions } from '../api/client.js';
+import type { PosthogApiClient, PosthogRequestOptions, PosthogResult } from '../api/client.js';
 import type { PosthogFailure } from '../api/errors.js';
 import {
     errorTrackingIssueCrudPath,
@@ -45,6 +45,22 @@ export type PosthogGetOutcome =
     }>
     | Readonly<{ kind: 'unresolved'; resolution: PosthogUnresolvedIssue }>;
 
+/** The same authoritative CRUD reader serves detail and exact-write settlement. */
+export async function readPosthogIssueCrud(
+    client: PosthogApiClient,
+    input: Readonly<{ teamRouteId: number; issueId: string }>,
+    options: PosthogRequestOptions,
+): Promise<PosthogResult<PosthogIssueCrudRead>> {
+    const route = resolvePosthogTeamRouteId(input.teamRouteId);
+    if (!route.ok) return { ok: false, failure: { kind: 'requestInvalid', at: 'teamRouteId' } };
+    return client.requestJson({
+        method: 'GET', path: errorTrackingIssueCrudPath(route.teamRouteId, input.issueId),
+    }, (body) => {
+        const parsed = parsePosthogIssueCrudRead(body);
+        return parsed?.id === input.issueId ? parsed : null;
+    }, options);
+}
+
 export async function getPosthogIssue(
     client: PosthogApiClient,
     input: PosthogGetInput,
@@ -58,14 +74,7 @@ export async function getPosthogIssue(
         };
     }
 
-    const crud = await client.requestJson(
-        {
-            method: 'GET',
-            path: errorTrackingIssueCrudPath(route.teamRouteId, input.issueId),
-        },
-        parsePosthogIssueCrudRead,
-        options,
-    );
+    const crud = await readPosthogIssueCrud(client, input, options);
     if (!crud.ok) {
         return { kind: 'unresolved', resolution: resolvePosthogCrudFailure(crud.failure) };
     }

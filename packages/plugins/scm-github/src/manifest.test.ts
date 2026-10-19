@@ -189,6 +189,9 @@ describe('GitHub SCM manifest', () => {
       GITHUB_TRIAGE_ACTION_IDS_V1.get,
       GITHUB_TRIAGE_ACTION_IDS_V1.readPullRequestStatus,
       ...Object.values(GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1),
+      GITHUB_TRIAGE_ACTION_IDS_V1.create,
+      GITHUB_TRIAGE_ACTION_IDS_V1.edit,
+      GITHUB_TRIAGE_ACTION_IDS_V1.transition,
     ];
     for (const id of mountedOnly) {
       expect(actions.get(id)?.placementBindings, id).toEqual([]);
@@ -257,11 +260,16 @@ describe('GitHub SCM manifest', () => {
     });
   });
 
-  it('declares pull-request mutations with centrally approved automation surfaces', () => {
+  it('declares native and role-bound task mutations with centrally approved automation surfaces', () => {
     const actions = new Map(
       (PLUGIN_MANIFEST.contributes.actions ?? []).map((action) => [action.id, action]),
     );
-    const declared = Object.values(GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1);
+    const taskRoles = new Set<string>([
+      GITHUB_TRIAGE_ACTION_IDS_V1.create,
+      GITHUB_TRIAGE_ACTION_IDS_V1.edit,
+      GITHUB_TRIAGE_ACTION_IDS_V1.transition,
+    ]);
+    const declared = [...Object.values(GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1), ...taskRoles];
     expect(new Set(Object.values(GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1)).size)
       .toBe(Object.values(GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1).length);
 
@@ -270,10 +278,11 @@ describe('GitHub SCM manifest', () => {
       if (!action) throw new Error(`the mutation '${id}' must be declared`);
 
       // Every native write reaches the shared approval owner on agent/MCP/CLI ingress.
-      expect(action.surfaces).toEqual(['ui', 'agent', 'mcp', 'cli']);
+      expect(action.surfaces).toEqual(taskRoles.has(id)
+        ? ['plugin', 'ui', 'agent', 'mcp', 'cli'] : ['ui', 'agent', 'mcp', 'cli']);
       // The one placement is the details panel the write lives in; global
       // placement discovery is offered no other destination.
-      expect(action.placementBindings).toEqual(['detailsPanel']);
+      expect(action.placementBindings).toEqual(taskRoles.has(id) ? [] : ['detailsPanel']);
       expect(action.dangerLevel).not.toBe('safe');
       // Non-safe + a non-`plugin` surface is exactly the condition the manifest
       // grammar uses to require host confirmation presentation.
@@ -317,9 +326,13 @@ describe('GitHub SCM manifest', () => {
       GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.issueLabelRemove,
     ]) expect(actions.get(id)?.dangerLevel, id).toBe('writesRemote');
 
-    // They bind to no Triage operation role: the aggregate never invokes a write.
+    // Task roles reach exactly the same named Actions. Existing native writes
+    // remain source-owned detail operations outside those roles.
     const roleBound = JSON.stringify(PLUGIN_MANIFEST.contributes.targetedPluginContributions);
-    for (const id of declared) expect(roleBound).not.toContain(id);
+    for (const id of declared) {
+      if (taskRoles.has(id)) expect(roleBound).toContain(id);
+      else expect(roleBound).not.toContain(id);
+    }
 
     // And the details-panel list is exact: these eighteen and nothing else.
     expect(
@@ -328,7 +341,7 @@ describe('GitHub SCM manifest', () => {
           && action.placementBindings.includes('detailsPanel'))
         .map((action) => action.id)
         .sort(),
-    ).toEqual([...declared].sort());
+    ).toEqual(declared.filter((id) => !taskRoles.has(id)).sort());
   });
 
   it.each(['agent', 'mcp', 'cli'] as const)('admits discovery and detail reads but requires current intent for a %s issue write', async (surface) => {

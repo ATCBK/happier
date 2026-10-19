@@ -90,6 +90,12 @@ function failingChecksAnswer(): JsonValue {
     headRevision: HEAD_REVISION,
     state: 'resolved',
     rows: [{
+      key: 'github-check-run:9002',
+      resourceKind: 'check-run',
+      name: 'lint',
+      status: 'completed',
+      conclusion: 'success',
+    }, {
       key: 'github-check-run:9003',
       resourceKind: 'check-run',
       name: 'build',
@@ -99,7 +105,7 @@ function failingChecksAnswer(): JsonValue {
     }],
     failingCount: 1,
     runningCount: 0,
-    passingCount: 0,
+    passingCount: 1,
     omittedRowCount: 0,
     projectionTruncated: false,
   } as JsonValue;
@@ -165,6 +171,9 @@ describe('the mounted GitHub Checks plane Session-start boundary', () => {
     // Positive control: the plane really mounted the provider facts, so the
     // absence assertions below are about controls, not about an empty panel.
     await expect(detail.getByText('build')).resolves.toBeDefined();
+    // What needs the reader leads: the failing check is listed before the passing one GitHub reported first.
+    const listed = document.body.textContent ?? '';
+    expect(listed.indexOf('build')).toBeLessThan(listed.indexOf('lint'));
 
     // The boundary itself: the source detail body offers no way to start,
     // seed or open a Session. Every Session route for this entry belongs to

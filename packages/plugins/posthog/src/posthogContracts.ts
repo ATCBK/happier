@@ -71,6 +71,10 @@ export const POSTHOG_ACTION_IDS = {
     listInstances: 'posthog/list-instances',
     scan: 'posthog/scan',
     get: 'posthog/get',
+    resolve: 'posthog/resolve-issue',
+    suppress: 'posthog/suppress-issue',
+    unsuppress: 'posthog/unsuppress-issue',
+    assign: 'posthog/assign-issue',
     /** Native Overview facts and enrichment status from the canonical CRUD-first join. */
     nativeOverview: 'posthog/native-overview',
     /**

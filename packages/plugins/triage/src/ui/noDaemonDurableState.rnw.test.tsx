@@ -109,6 +109,7 @@ function createDurableHarness(options: Readonly<{
     /** Genuine Collection CAS boundary refusal for the configured-source writer. */
     sourceRemoveConflict?: boolean;
     admissionDenied?: boolean;
+    accountReadsFail?: () => boolean;
 }> = {}): DurableHarness {
     const corpus = createTestkitCorpusCollections();
     const accountKv = createTestkitAccountKv();
@@ -122,7 +123,13 @@ function createDurableHarness(options: Readonly<{
     const byId = new Map<string, unknown>([
         ['source-instances', sourceInstances],
         ['session-links', corpus.collections.sessionLinks],
-        ['user-marks', corpus.collections.userMarks],
+        ['user-marks', {
+            ...corpus.collections.userMarks,
+            query: async (...args: Parameters<typeof corpus.collections.userMarks.query>) => {
+                if (options.accountReadsFail?.()) throw new PluginError({ code: 'plugin_account_storage_unavailable' });
+                return await corpus.collections.userMarks.query(...args);
+            },
+        }],
     ]);
 
     const client = {
@@ -134,7 +141,13 @@ function createDurableHarness(options: Readonly<{
         async openCollectionQuery() {
             throw new Error('These surfaces open no declared UI query.');
         },
-        accountKv: accountKv.kv,
+        accountKv: {
+            ...accountKv.kv,
+            get: async (...args: Parameters<typeof accountKv.kv.get>) => {
+                if (options.accountReadsFail?.()) throw new PluginError({ code: 'plugin_account_storage_unavailable' });
+                return await accountKv.kv.get(...args);
+            },
+        },
     } as unknown as PluginUiDataClient;
 
     return {
@@ -288,7 +301,7 @@ function createDurableAdapter(
 
 const mounted: PluginUiTestkit[] = [];
 
-async function mountProbe(harness: DurableHarness): Promise<PluginUiTestkit> {
+async function mountProbe(harness: DurableHarness, surfaceContext = createSurfaceContextFixture({})): Promise<PluginUiTestkit> {
     let fixture!: PluginUiTestkit;
     const calls = harness.actionCalls as string[];
     await act(async () => {
@@ -296,7 +309,7 @@ async function mountProbe(harness: DurableHarness): Promise<PluginUiTestkit> {
             identity: { instanceId: 'fixture-instance-183', mountNonce: 'fixture-mount-183' },
             authorPlugin: { id: PLUGIN_ID, version: '0.0.0' },
             surface: durableProbeSurface,
-            surfaceContext: createSurfaceContextFixture({}),
+            surfaceContext,
             adapter: createDurableAdapter(harness.client),
             handlers: {
                 admitAction: async () => {
@@ -368,6 +381,24 @@ function seedConfiguredSource(harness: DurableHarness, seed = 2): void {
 }
 
 describe('durable Account state with no daemon reachable', () => {
+    it('recovers pins and saved views after cold Account reads fail and the host becomes ready, without Retry', async () => {
+        let failing = true;
+        const harness = createDurableHarness({ accountReadsFail: () => failing });
+        await seedPin(harness, 'Replace the duplicated normalizer');
+        const context = createSurfaceContextFixture({ machineConnectionPending: true, machineExecutionReady: false });
+        const fixture = await mountProbe(harness, context);
+        await expect(fixture.getByText('pins:unavailable')).resolves.toBeDefined();
+        await expect(fixture.getByText('views:unavailable')).resolves.toBeDefined();
+        failing = false;
+        await act(async () => {
+            await fixture.updateSurface({ ...context, machineConnectionPending: false, machineExecutionReady: true });
+        });
+        await expect(fixture.getByText('pins:[Replace the duplicated normalizer]')).resolves.toBeDefined();
+        await expect(fixture.getByText('views:absent:[]')).resolves.toBeDefined();
+        expect(harness.actionCalls).toEqual([]);
+        expect(harness.accountKv.setCallCount()).toBe(0);
+    });
+
     it('reads pins, saved views and configured actions from the Account while every daemon Action fails', async () => {
         const harness = createDurableHarness();
         await seedPin(harness, 'Replace the duplicated normalizer');

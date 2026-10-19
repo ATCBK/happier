@@ -258,8 +258,8 @@ function LinkedRowPeek(props: Readonly<{
 
     const unlink = React.useCallback(() => {
         if (entryRef === null) return;
-        void unlinkRelationship({ sessionId, entryRef });
-    }, [entryRef, sessionId, unlinkRelationship]);
+        void unlinkRelationship({ sessionId, entryRef, ...(row.sourceOwned ? { sourceOwned: true } : {}) });
+    }, [entryRef, sessionId, unlinkRelationship, row.sourceOwned]);
 
     if (entryRef === null || presentation.kind !== 'linked') return null;
     const facts = entry === null

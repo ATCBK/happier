@@ -34,7 +34,11 @@ const renderHeader = defineUiSurface(function LinkedSessionHeader(_context: Rend
 
 const mounted: PluginUiTestkit[] = [];
 
-async function mountHeader() {
+async function mountHeader(titles = ['Route repair', 'Parser cleanup'], options: Readonly<{
+  surface?: typeof renderHeader;
+  onRead?: (sessionId: string) => void;
+  onWatch?: (sessionId: string, signal: AbortSignal) => void;
+}> = {}) {
   calls.length = 0;
   openFails = false;
   releaseOpen = null;
@@ -43,10 +47,21 @@ async function mountHeader() {
   const fixture = await createPluginUiTestkit({
     identity: { instanceId: 'fixture-instance-175', mountNonce: 'fixture-mount-175' },
     authorPlugin: { id: 'happier.triage', version: '0.0.0' },
-    surface: renderHeader,
+    surface: options.surface ?? renderHeader,
     surfaceContext: createSurfaceContextFixture(),
     adapter: createPluginUiRnwSemanticSurfaceAdapter(),
     handlers: {
+      readSession: ({ sessionId }) => {
+        options.onRead?.(sessionId);
+        return {
+          sessionId, title: titles[sessionId === 'session-linked' ? 0 : sessionId === 'session-other' ? 1 : 2],
+          lifecycle: 'active', runtime: 'waiting', operational: 'ready',
+          workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' }, pendingPermissions: [],
+        };
+      },
+      ...(options.onWatch === undefined ? {} : {
+        watchSession: ({ sessionId, signal }) => { options.onWatch?.(sessionId, signal); },
+      }),
       executeAction: async ({ action, input }) => {
         calls.push({ action: String(action), input });
         if (blockOpen) {
@@ -66,6 +81,51 @@ afterEach(async () => {
 });
 
 describe('common-header linked Sessions', () => {
+  it('retains each existing Session read and watch while a page appends, follows title invalidation, and retires removed rows', async () => {
+    const reads: string[] = [];
+    const watches = new Map<string, AbortSignal>();
+    const titles = ['Route repair', 'Parser cleanup', 'Another investigation'];
+    let append!: () => void;
+    let removeFirst!: () => void;
+    const onSelect = (sessionId: string) => { selectedSessionId = sessionId; };
+    const surface = defineUiSurface(function PagingHeader() {
+      const [sessions, setSessions] = React.useState([{ sessionId: 'session-linked' }, { sessionId: 'session-other' }]);
+      append = () => setSessions((previous) => [...previous, { sessionId: 'session-third' }]);
+      removeFirst = () => setSessions((previous) => previous.filter((session) => session.sessionId !== 'session-linked'));
+      return <TriageLinkedSessions sessions={sessions} hasMore onSelect={onSelect} />;
+    });
+    const header = await mountHeader(titles, { surface, onRead: (id) => reads.push(id),
+      onWatch: (id, signal) => { watches.set(id, signal); } });
+    const firstWatch = watches.get('session-linked');
+    const otherWatch = watches.get('session-other');
+    expect(reads).toEqual(['session-linked', 'session-other']);
+    await act(async () => { append(); });
+    await expect(header.getByRole('button', { name: 'Another investigation' })).resolves.toBeDefined();
+    expect(reads).toEqual(['session-linked', 'session-other', 'session-third']);
+    expect(watches.get('session-linked')).toBe(firstWatch);
+    expect(watches.get('session-other')).toBe(otherWatch);
+    expect(firstWatch?.aborted).toBe(false);
+
+    titles[0] = 'Current investigation';
+    await act(async () => { header.invalidateSession('session-linked', `sha256:${'2'.repeat(64)}`); });
+    await expect(header.getByRole('button', { name: 'Current investigation' })).resolves.toBeDefined();
+    expect(reads).toEqual(['session-linked', 'session-other', 'session-third', 'session-linked']);
+    await act(async () => { removeFirst(); });
+    await expect(header.queryByRole('button', { name: 'Current investigation' })).resolves.toBeUndefined();
+    // The semantic host's establishment signal ends with admission, so prove
+    // withdrawal through the real watch event boundary rather than that signal.
+    await act(async () => { header.invalidateSession('session-linked', `sha256:${'3'.repeat(64)}`); });
+    expect(reads).toEqual(['session-linked', 'session-other', 'session-third', 'session-linked']);
+    expect(watches.get('session-other')).toBe(otherWatch);
+    await expect(header.getByRole('button', { name: 'Parser cleanup' })).resolves.toBeDefined();
+  });
+  it('names linked Session controls from the current public host snapshot', async () => {
+    const header = await mountHeader(['Current investigation', 'Current parser cleanup']);
+    await expect(header.getByRole('button', { name: 'Current investigation' })).resolves.toBeDefined();
+    await expect(header.queryByRole('button', { name: 'Route repair' })).resolves.toBeUndefined();
+    await act(async () => { await header.press(await header.getByRole('button', { name: 'Open session Current investigation' })); });
+    expect(calls).toEqual([{ action: 'session.open', input: { sessionId: 'session-linked' } }]);
+  });
   it('selects the inline Session independently from the explicit Open operation and its retryable failure', async () => {
     const header = await mountHeader();
     openFails = true;

@@ -120,8 +120,9 @@ export function planTriageListContinuationV1(input: Readonly<{
  * The window-honesty line under the list (COLLECTION.md §2, DESIGN-SPEC §2.4): how many rows are loaded, and
  * whether that is everything — "12 loaded · complete", or which connections may have more — then anything the
  * reader's pins have to say. The line reads the window's own coverage claim and its lanes; it never computes
- * "N of M". A failed or unresumable read says so in the words its continuation copy already owns. Nothing is said
- * about entries before a window exists: the page's own state (sources unreachable, first read) speaks then.
+ * "N of M". A failed or unresumable read says so in the words its continuation copy already owns. Before a window
+ * exists it says nothing about entries, except that the first read is still under way: a cold first read can take
+ * a minute, and skeleton rows alone never say why nothing is there yet.
  */
 export function readTriageWindowStatementV1(input: Readonly<{
   loadedCount: number;
@@ -130,12 +131,17 @@ export function readTriageWindowStatementV1(input: Readonly<{
   entries: TriageListContinuationCopyV1;
   /** The pins' own continuation copy, while there are more pins or reading them failed; otherwise `null`. */
   pins?: TriageListContinuationCopyV1 | null;
+  /** The first read has not answered yet (the page holds its skeleton rows). */
+  firstRead?: boolean;
   text: (key: string, fallback?: string, values?: Readonly<Record<string, string | number>>) => string;
 }>): readonly string[] | undefined {
   const { window, text } = input;
   const parts: string[] = [];
   // With nothing loaded the body's own state (a failure, an empty or quiet list) is the whole answer, so the
   // line adds nothing about entries beneath it.
+  if (window === null && input.firstRead === true) {
+    parts.push(text('plugins.triage.surface.window.reading', 'Reading your sources…'));
+  }
   if (window !== null && input.loadedCount > 0) {
     parts.push(text('plugins.triage.surface.window.loaded', '{count} loaded', { count: input.loadedCount }));
     if (input.entries.tone === 'warning') {

@@ -16,6 +16,7 @@ import {
     foldTriageListWindow,
     foldTriagePostMutationObservation,
     triageEntryRowKey,
+    triageFacetScopeKeyV1,
     type SurfaceFilterSelectionV1,
     type TriageListLaneV1,
     type TriageListLensV1,
@@ -140,6 +141,38 @@ describe('the content winner of one folded entry', () => {
         expect(after?.lane).toBe('2-done');
     });
 
+    it('keeps the reason a scan gave an entry when a selection read replaces its answer', () => {
+        const before = fold({
+            observations: [present({
+                sourceInstanceId: INSTANCE[0] ?? '',
+                title: 'Asked of you',
+                involvement: ['reviewRequested'],
+            })],
+        }).rows[0];
+        if (before === undefined) throw new Error('fixture row missing');
+        expect(before.attention?.reasonLabel).toBe('Review requested');
+
+        // The exact read states the entry's revision and no viewer facts: only a scan learns those.
+        const read = present({ sourceInstanceId: INSTANCE[0] ?? '', observedAtMs: 2_000, title: 'Asked of you' });
+        const kept = foldTriagePostMutationObservation({
+            row: before,
+            observation: read,
+            lanes: [lane(INSTANCE[0] ?? '')],
+            assembledAtMs: 2_000,
+            keepViewerFacts: true,
+        });
+        expect(kept?.attention?.reasonLabel).toBe('Review requested');
+
+        // After a press the same read is the new truth: the request may be gone.
+        const pressed = foldTriagePostMutationObservation({
+            row: before,
+            observation: read,
+            lanes: [lane(INSTANCE[0] ?? '')],
+            assembledAtMs: 2_000,
+        });
+        expect(pressed?.attention).toBeNull();
+    });
+
     it('keeps every active observing connection eligible when post-mutation attention changes', () => {
         const before = fold({
             observations: [
@@ -174,6 +207,98 @@ describe('the content winner of one folded entry', () => {
             sourceInstanceId: INSTANCE[0],
             reason: 'deterministicTieBreak',
         });
+    });
+
+    it('retains last-good attention across unresolved exact reads and replaces it on recovery', () => {
+        const sourceInstanceId = INSTANCE[0] ?? '';
+        const prior = present({
+            sourceInstanceId,
+            title: 'Review still needed',
+            involvement: ['reviewRequested', 'subscribed'],
+        });
+        const before = fold({ observations: [prior] }).rows[0];
+        if (before === undefined) throw new Error('fixture row missing');
+        const failure = { class: 'rateLimit', code: 'too-many-requests', retryNotBeforeMs: 32_000 } as const;
+        const failedRead: CorpusQualifiedObservationV1 = {
+            entryRef: before.entryRef,
+            sourceInstanceId,
+            observedAtMs: 2_000,
+            outcome: { kind: 'unresolved', failure },
+        };
+        const after = foldTriagePostMutationObservation({
+            row: before,
+            observation: failedRead,
+            lanes: [lane(sourceInstanceId)],
+            assembledAtMs: 2_000,
+        });
+
+        expect(after?.content).toBe(before.content);
+        expect(after?.attention).toEqual(before.attention);
+        expect(after?.attention?.level).toBe('required');
+        expect(after?.presence).toEqual({ kind: 'unresolved', observedAtMs: 2_000 });
+        expect(after?.observations).toEqual([{
+            sourceInstanceId,
+            observedAtMs: 2_000,
+            outcome: { kind: 'unresolved', failure },
+        }]);
+        expect(after?.selected).toEqual({ kind: 'none', reason: 'noPresentObservation' });
+        if (after === null) throw new Error('last-good row missing');
+
+        const stillUnresolved = foldTriagePostMutationObservation({
+            row: after,
+            observation: { ...failedRead, observedAtMs: 3_000 },
+            lanes: [lane(sourceInstanceId)],
+            assembledAtMs: 3_000,
+        });
+        expect(stillUnresolved?.content).toBe(before.content);
+        expect(stillUnresolved?.attention).toEqual(before.attention);
+
+        const recovered = foldTriagePostMutationObservation({
+            row: after,
+            observation: present({ sourceInstanceId, observedAtMs: 33_000, title: 'Review completed' }),
+            lanes: [lane(sourceInstanceId)],
+            assembledAtMs: 33_000,
+        });
+        expect(recovered?.content?.outcome.snapshot.title).toBe('Review completed');
+        expect(recovered?.attention).toBeNull();
+        expect(recovered?.presence).toEqual({ kind: 'present', observedAtMs: 33_000 });
+    });
+
+    it('uses another connection current answer when an exact reread is unresolved', () => {
+        const failedInstance = INSTANCE[0] ?? '';
+        const survivingInstance = INSTANCE[1] ?? '';
+        const current = present({
+            sourceInstanceId: survivingInstance,
+            title: 'Current from another connection',
+            observedAtMs: 1_500,
+            involvement: ['subscribed'],
+        });
+        const before = fold({ observations: [
+            present({ sourceInstanceId: failedInstance, title: 'Previous winner', involvement: ['reviewRequested'] }),
+            current,
+        ] }).rows[0];
+        if (before === undefined) throw new Error('fixture row missing');
+        const failedRead: CorpusQualifiedObservationV1 = {
+            entryRef: before.entryRef,
+            sourceInstanceId: failedInstance,
+            observedAtMs: 2_000,
+            outcome: { kind: 'unresolved', failure: { class: 'transient', code: 'server-error' } },
+        };
+        const after = foldTriagePostMutationObservation({
+            row: before,
+            observation: failedRead,
+            lanes: [lane(failedInstance), lane(survivingInstance)],
+            assembledAtMs: 2_000,
+        });
+
+        const canonical = fold({ observations: [failedRead, current] }).rows[0];
+        expect(after?.content).toEqual(canonical?.content);
+        expect(after?.attention).toEqual(canonical?.attention);
+        expect(after?.selected).toEqual(canonical?.selected);
+        expect(after?.presence).toEqual(canonical?.presence);
+        expect(after?.observations).toEqual(expect.arrayContaining([
+            expect.objectContaining({ sourceInstanceId: failedInstance, outcome: failedRead.outcome }),
+        ]));
     });
 
     /**
@@ -316,7 +441,13 @@ describe('the five-facet filter conjunction', () => {
         });
 
         expect(window.rows.map((row) => row.entryRef.entryId)).toEqual(['match']);
-        expect(window.facetCensus).toEqual({
+        // Every observed Scope is named for the rail the way its rows name it, not by its identity.
+        for (const scope of window.facetCensus.scopes) {
+            const name = window.facetCensus.scopeNames[triageFacetScopeKeyV1(scope.source, scope.collisionScope)];
+            expect(name, scope.collisionScope).toEqual(expect.any(String));
+            expect(name?.length).toBeGreaterThan(0);
+        }
+        expect(window.facetCensus).toMatchObject({
             types: [
                 { source: TRIAGE_TESTKIT_SOURCE, kindId: 'issue' },
                 { source: TRIAGE_TESTKIT_SOURCE, kindId: 'pull-request' },

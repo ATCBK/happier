@@ -33,7 +33,7 @@ export type CorpusQualificationRejectionV1 =
     /** The invoked source descriptor does not declare this kind. */
     | 'undeclaredKind'
     /**
-     * An authoritative get returned a different entry than the one requested.
+     * An authoritative get or addressed write returned a different entry than requested.
      * Treating that as a redirect would let a source result change the
      * aggregate's canonical identity after qualification.
      */
@@ -105,7 +105,7 @@ export function qualifySourceObservation(input: Readonly<{
     /** Our clock, stamped once for the whole observation. */
     observedAtMs: number;
     observation: TriageSourceObservationV1;
-    /** Set only for an authoritative get: the exact ref that was requested. */
+    /** For an authoritative get or addressed write: the exact requested ref. */
     requestedEntryRef?: TriageEntryRefV1;
 }>): CorpusQualificationResultV1 {
     const declaredKindIds = new Set(input.declaredKindIds);

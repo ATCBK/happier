@@ -23,8 +23,11 @@ import {
 import { renderSurface as renderShellSurface } from '../surface.js';
 import { TRIAGE_SHELL_FILL_TEST_ID_V1 } from '../shell/root.js';
 import { refreshTriageListWindow } from '../window/mountedWindow.js';
-import { filterFacetOption, toolbarMenuItem } from '../shell/toolbarMenus.test-support.js';
+import { filterFacetOption, openToolbarMenu, toolbarMenuItem } from '../shell/toolbarMenus.test-support.js';
 import { createTriageEphemeralSharedScopeFixture } from '../window/ephemeralSharedScope.test-support.js';
+import { CORPUS_DEFAULT_SMART_POLICY_V1 } from '../../corpus/query/smartPolicy.js';
+import { readTriageFilterSheetV1 } from './rail.js';
+import type { TriageListShellStateV1 } from '../shell/windowState.js';
 
 /**
  * `core/SURFACE.md` §6's two lens compositions, decided by the SAME measurement
@@ -34,7 +37,8 @@ import { createTriageEphemeralSharedScopeFixture } from '../window/ephemeralShar
  * those five into one labelled **Filters** trigger presented by the public
  * `Popover` — so focus, dismissal, focus return, Escape and Android Back stay
  * with the host — and keeps every selected constraint visible and removable as
- * a chip outside it. **Views** and **Order** stay separately labelled in both.
+ * a chip outside it. **Views** stays in the toolbar in both; on a phone **Order**
+ * joins the facets in that Filters form (the shared Collection toolbar).
  *
  * The measurement is supplied the way `shell/splitComposition.rnw.test.tsx`
  * supplies it: jsdom ships no `ResizeObserver`, so React Native Web's shared
@@ -100,7 +104,7 @@ function listResult(): TriageListEntriesResultV1 {
                     level: 'required',
                     fromSourceInstanceId: INSTANCE,
                     reasonId: 'involvement/review-requested',
-                    reasonLabel: 'Your review was requested',
+                    reasonLabel: 'Review requested',
                 },
                 selected: { kind: 'selected', sourceInstanceId: INSTANCE, reason: 'onlyPresent' },
                 observation,
@@ -119,9 +123,9 @@ function listResult(): TriageListEntriesResultV1 {
     });
 }
 
-async function executeAction(action: string): Promise<JsonValue> {
+async function executeAction(action: string, result: TriageListEntriesResultV1 = listResult()): Promise<JsonValue> {
     if (action === TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1) {
-        return listResult() as unknown as JsonValue;
+        return result as unknown as JsonValue;
     }
     if (action === TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1) {
         return { v: 1, pins: [] };
@@ -137,7 +141,7 @@ async function executeAction(action: string): Promise<JsonValue> {
 
 const mounted: PluginUiTestkit[] = [];
 
-async function mountShell(): Promise<PluginUiTestkit> {
+async function mountShell(result: TriageListEntriesResultV1 = listResult()): Promise<PluginUiTestkit> {
     const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
     let fixture!: PluginUiTestkit;
     await act(async () => {
@@ -155,7 +159,7 @@ async function mountShell(): Promise<PluginUiTestkit> {
             adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope, overlays: true }),
             handlers: {
                 publishCurrentUiContext: () => undefined,
-                executeAction: async ({ action }) => await executeAction(action),
+                executeAction: async ({ action }) => await executeAction(action, result),
                 replacePageLocation: ({ subPath }) => subPath,
             },
         });
@@ -190,6 +194,38 @@ afterEach(async () => {
 });
 
 describe('the PRs & Issues lens under the shell’s own measurement', () => {
+    it.each([
+        [{ kind: 'initial' }, 'Show results · Not yet synchronized'],
+        [{ kind: 'sourcesUnreachable', message: 'Offline', retryable: true }, 'Show results · Unavailable'],
+        [{ kind: 'unavailable', message: 'Offline', retryable: true }, 'Show results · Unavailable'],
+    ] satisfies readonly (readonly [TriageListShellStateV1, string])[])('carries %j into the completion label without a zero-result claim', (windowState, expected) => {
+        const input = {
+            facets: [], order: 'newest' as const, smartPolicy: CORPUS_DEFAULT_SMART_POLICY_V1, filtered: false,
+            text: (_key: string, fallback = '') => fallback, resultCount: 0,
+            windowState,
+            onToggleFilterValue() {}, onClearFilters() {}, onChangeOrder() {}, onChangeSmartPolicy() {},
+        };
+        const sheet = readTriageFilterSheetV1(input);
+        expect(sheet?.showResultsLabel).toBe(expected);
+    });
+
+    it.each([0, 1])('keeps partial coverage in the phone completion control with %s matches', async (count) => {
+        const result = listResult();
+        const shell = await mountShell(TriageListEntriesResultV1Schema.parse({
+            ...result,
+            window: {
+                ...result.window,
+                rows: result.window.rows.slice(0, count),
+                coverage: 'partial',
+                lanes: result.window.lanes.map((lane) => ({ ...lane, exhausted: false })),
+            },
+        }));
+        await measureFillRegion(COMPACT_WIDTH);
+        await openToolbarMenu(shell, 'Filters');
+        await expect(shell.getByRole('button', { name: count === 0 ? 'Show 0 results so far' : 'Show 1 result so far' })).resolves.toBeDefined();
+        await expect(shell.getByRole('menuitemradio', { name: 'Newest', state: { checked: true } })).resolves.toBeDefined();
+    });
+
     it('orders through the table title header and retains the toolbar order for list and board', async () => {
         const shell = await mountShell();
         await measureFillRegion(WIDE_WIDTH);
@@ -198,7 +234,9 @@ describe('the PRs & Issues lens under the shell’s own measurement', () => {
         await act(async () => { await shell.press(oldest); });
         await expect(toolbarMenuItem(shell, 'Entry', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
         await measureFillRegion(COMPACT_WIDTH);
-        await expect(toolbarMenuItem(shell, 'Order', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
+        // A phone keeps the order inside the one Filters sheet (the shared Collection toolbar folds it there).
+        await openToolbarMenu(shell, 'Filters');
+        await expect(shell.getByRole('menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
         await act(async () => { await shell.press(await shell.getByRole('radio', { name: 'Board' })); });
         await measureFillRegion(WIDE_WIDTH);
         await expect(toolbarMenuItem(shell, 'Order', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
@@ -228,15 +266,23 @@ describe('the PRs & Issues lens under the shell’s own measurement', () => {
         await expect(shell.queryByRole('checkbox', { name: 'Example account' })).resolves.toBeUndefined();
     });
 
-    it('keeps Views and Order separately labelled rather than folding them into the trigger', async () => {
+    it('on a phone keeps Views in the toolbar and folds Order into the Filters form', async () => {
         const shell = await mountShell();
         await measureFillRegion(COMPACT_WIDTH);
 
-        // §6: exactly the five facets go behind the trigger. Views names which
-        // saved lens this is and Order names the ladder; a reader who has to
-        // open a Filters overlay to reorder the list has lost both.
-        await expect(toolbarMenuItem(shell, 'Order', 'menuitemradio', { name: 'Newest' })).resolves.toBeDefined();
+        // Views names which saved lens this is and stays a toolbar control at every width. Order joins the facets
+        // in the round Filters button's form (lab `merged-list-phone`), so the phone toolbar is one search row and
+        // one lens row; no separate Order picker is left in the row.
         await expect(toolbarMenuItem(shell, 'Views', 'menuitemradio', { name: 'No saved view' })).resolves.toBeDefined();
+        const triggers = await shell.getAllByRole('button');
+        expect(triggers.some((trigger) => trigger.name?.startsWith('Order') === true)).toBe(false);
+        await openToolbarMenu(shell, 'Filters');
+        // The sheet holds the wide menu's grouped facet rows, Order as one radio group, and one way back to the
+        // list that says what it shows.
+        await expect(shell.getByRole('menuitemcheckbox', { name: 'Open' })).resolves.toBeDefined();
+        await expect(shell.getByRole('menuitemradio', { name: 'Newest', state: { checked: true } })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Show 1 result' })).resolves.toBeDefined();
+        await expect(shell.queryByRole('radio', { name: 'Newest' })).resolves.toBeUndefined();
     });
 
     it('keeps every selected constraint visible and removable as a token in the search field, in both arms', async () => {

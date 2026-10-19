@@ -4,7 +4,7 @@ import { act } from 'react';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
-import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
+import type { RenderContext, SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 import { Button, defineUiSurface, EmptyState, Text, useTabPanelActivity } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import {
@@ -13,6 +13,7 @@ import {
   TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
   TRIAGE_SOURCE_DETAIL_SURFACE_ROLE_V1,
   TriageDetailSurfaceInputV1JsonSchema,
+  admitTriageSourceDescriptorV1,
   type TriageDetailSurfaceInputV1,
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
@@ -61,7 +62,7 @@ const SURFACE = Object.freeze({
 });
 
 /** The published detail input schema, narrowed to require `panel: 'files'`. */
-function filesOnlyInputSchema() {
+function panelInputSchema(panel = 'files') {
   const base = TriageDetailSurfaceInputV1JsonSchema as Readonly<Record<string, unknown>> & {
     properties: Record<string, unknown>;
     required: readonly string[];
@@ -69,7 +70,7 @@ function filesOnlyInputSchema() {
   return {
     ...base,
     // A bare `const` is the canonical projection of a protocol literal.
-    properties: { ...base.properties, panel: { const: 'files' } },
+    properties: { ...base.properties, panel: { const: panel } },
     required: [...base.required, 'panel'],
   };
 }
@@ -81,7 +82,7 @@ const MOUNT = Object.freeze({
   contributor: CONTRIBUTOR,
   role: SURFACE.role,
   presentation: 'content',
-  inputSchema: filesOnlyInputSchema(),
+  inputSchema: panelInputSchema(),
   rendererChain: [{ pluginId: SOURCE_PLUGIN, localId: RENDERER }],
   selectedRenderer: {
     identity: { pluginId: SOURCE_PLUGIN, localId: RENDERER },
@@ -120,6 +121,11 @@ const MANIFEST = definePlugin({
 }).manifest;
 
 const INPUT = createTriageSourceV1Fixture().detailInput as TriageDetailSurfaceInputV1;
+const LIVE_SESSION = {
+  sessionId: 'session-a', title: 'Fix rounding', lifecycle: 'active', runtime: 'idle',
+  operational: 'ready', workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+  pendingPermissions: [],
+} satisfies SessionStateV1;
 
 let tabs: readonly TriageDetailTabV1[] = [];
 let session: React.ReactNode;
@@ -132,9 +138,9 @@ const renderBody = defineUiSurface(function Body(_context: RenderContext): React
       session={session}
       overviewTail={(
         <TriageAgentStep
-          sessions={[{ sessionId: 'session-a', displayTitle: 'Fix rounding' }]}
+          sessions={[{ sessionId: 'session-a', displayTitle: 'Old relationship label' }]}
           hasMore={false}
-          live={{ status: 'unsupported', state: null }}
+          live={{ status: 'ready', state: LIVE_SESSION }}
           reviewEntry={{ kind: 'pullRequest' }}
         />
       )}
@@ -148,7 +154,7 @@ afterEach(async () => {
   for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
 
-async function mountBody(nextTabs: readonly TriageDetailTabV1[], probe?: React.ReactNode, nextSession?: React.ReactNode) {
+async function mountBody(nextTabs: readonly TriageDetailTabV1[], probe?: React.ReactNode, nextSession?: React.ReactNode, requiredPanel?: string) {
   tabs = nextTabs;
   session = nextSession;
   const fixture = await createPluginUiTestkit({
@@ -158,12 +164,14 @@ async function mountBody(nextTabs: readonly TriageDetailTabV1[], probe?: React.R
     surfaceContext: context,
     adapter: createPluginUiRnwSemanticSurfaceAdapter({
       targetedSurfaces: {
-        readCurrentMounts: () => [probe === undefined ? MOUNT : { ...MOUNT, inputSchema: TriageDetailSurfaceInputV1JsonSchema }],
+        readCurrentMounts: () => [requiredPanel !== undefined
+          ? { ...MOUNT, inputSchema: panelInputSchema(requiredPanel) }
+          : probe === undefined ? MOUNT : { ...MOUNT, inputSchema: TriageDetailSurfaceInputV1JsonSchema }],
         readContributorManifest: () => MANIFEST,
         ...(probe === undefined ? {} : { renderAdmittedContent: () => probe }),
       },
     }),
-    handlers: { executeAction: async () => ({}) },
+    handlers: { executeAction: async () => ({}), readSession: () => LIVE_SESSION },
   });
   mounted.push(fixture);
   return fixture;
@@ -181,6 +189,45 @@ const PR_TABS = planTriageDetailTabsV1({
 });
 
 describe('the tabbed detail body (r0.42)', () => {
+  it.each([false, true])('mounts an admitted source session panel independently of a linked Session (%s)', async (linked) => {
+    const source = createTriageSourceV1Fixture().descriptor;
+    const admitted = admitTriageSourceDescriptorV1({ ...source, kinds: [{ ...source.kinds[0], detailTabs: [
+      { kind: 'shared', id: 'overview' },
+      { kind: 'source', id: 'session', title: 'Session history' },
+    ] }] });
+    if (!admitted.ok) throw new Error(`Public descriptor refused: ${admitted.reason}`);
+    const kind = admitted.descriptor.kinds[0]!;
+    const plan = planTriageDetailTabsV1({ workflowSubject: kind.workflowSubject ?? null, entryTabs: kind.detailTabs, fixPullRequest: null });
+    const body = await mountBody(plan.kind === 'tabs' ? plan.tabs : [], undefined,
+      linked ? <Text value="The linked Happier Session" /> : undefined, 'session');
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session history' })); });
+    // Cold admission accepts the original author panel only, never the frame's tab identity.
+    await expect(body.getByText(PANEL_BODY)).resolves.toBeDefined();
+    if (linked) {
+      await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+      await expect(body.getByText('The linked Happier Session')).resolves.toBeDefined();
+      await expect(body.queryByText(PANEL_BODY)).resolves.toBeUndefined();
+      await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session history' })); });
+      await expect(body.getByText(PANEL_BODY)).resolves.toBeDefined();
+    }
+  });
+
+  it('maps source panel openers to their frame tabs without exposing the host Session as a source panel', async () => {
+    function SourceOpener() {
+      const open = useTriageDetailPanelOpener('session');
+      return open === undefined ? <Text value="No source session panel" /> : <Button title="Open session history" onPress={open} />;
+    }
+    const plan = planTriageDetailTabsV1({ workflowSubject: 'pullRequest', entryTabs: [
+      { kind: 'shared', id: 'overview' }, { kind: 'source', id: 'session', title: 'Session history' },
+    ], fixPullRequest: null });
+    const body = await mountBody(plan.kind === 'tabs' ? plan.tabs : [], <SourceOpener />, <Text value="Linked Session" />);
+    await act(async () => { await body.press(await body.getByRole('button', { name: 'Open session history' })); });
+    await expect(body.getByRole('tab', { name: 'Session history', state: { selected: true } })).resolves.toBeDefined();
+    await body.dispose();
+    const shared = await mountBody(PR_TABS.kind === 'tabs' ? PR_TABS.tabs : [], <SourceOpener />, <Text value="Linked Session" />);
+    await expect(shared.getByText('No source session panel')).resolves.toBeDefined();
+  });
+
   it('keeps one admitted source selection and settled pages across panels, then cancels on retirement', async () => {
     const intervals: AbortSignal[] = [];
     const secondUuid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';

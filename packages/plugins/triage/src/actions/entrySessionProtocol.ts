@@ -200,7 +200,8 @@ const TriageStartEntrySessionReviewWorkspaceRequestV1Schema = defineProtocolObje
  *
  * `input` deliberately remains the host's raw selection shape: an account-bound
  * operation removes its selected account from that object and carries it beside
- * the selection. The action handler checks that the reconstructed source input
+ * the selection. Native operations keep their input intact and omit the account
+ * reference. The action handler checks that the reconstructed source input
  * is exactly the semantic request below, then relays this raw value through the
  * single-use carrier. Storing an operation handle or rebuilding a provider
  * request here would create a second source-action authority.
@@ -208,7 +209,7 @@ const TriageStartEntrySessionReviewWorkspaceRequestV1Schema = defineProtocolObje
 const TriageStartEntrySessionPrepareReviewWorkspaceSelectionV1Schema = defineProtocolObject({
     selection: PluginTargetedContributionSelectionV1Schema,
     input: defineProtocolJsonValue(),
-    credentialRef: QualifiedConnectedAccountRefSchema,
+    credentialRef: QualifiedConnectedAccountRefSchema.optional(),
 }, { policy: 'closed' });
 
 const TriageStartEntrySessionMaterializationV1Schema = defineProtocolUnion([
@@ -340,6 +341,8 @@ const triageSettledDeliveryOutcomeMembers = [
     defineProtocolLiteral('rejected'),
     defineProtocolLiteral('failed'),
     defineProtocolLiteral('cancelled'),
+    defineProtocolLiteral('held'),
+    defineProtocolLiteral('replied'),
 ] as const;
 
 const triageSettledDeliveryOutcome = defineProtocolUnion(triageSettledDeliveryOutcomeMembers);
@@ -415,6 +418,7 @@ export const TriageStartEntrySessionInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1),
     workspaceMode: TriageStartEntrySessionWorkspaceModeV1Schema,
     entryRef: TriageEntryRefV1Schema,
+    sourceInstanceId: TriageSourceInstanceIdV1Schema.optional(),
     display: TriageEntrySessionLinkDisplayV1Schema,
     destination: TriageStartEntrySessionDestinationV1Schema,
     delivery: TriageStartEntrySessionDeliveryV1Schema.optional(),
@@ -638,6 +642,7 @@ export const TriageUnlinkEntryFromSessionActionInputV1Schema = defineProtocolObj
     v: defineProtocolLiteral(1),
     sessionId: triageSessionId,
     entryRef: TriageEntryRefV1Schema,
+    sourceInstanceId: TriageSourceInstanceIdV1Schema.optional(),
 }, { policy: 'closed' });
 export type TriageUnlinkEntryFromSessionActionInputV1 =
     ReturnType<typeof TriageUnlinkEntryFromSessionActionInputV1Schema.parse>;

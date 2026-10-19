@@ -5,7 +5,7 @@ import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestki
 import { defineUiSurface, Text } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { PluginUiCollectionQuerySnapshot, PluginUiDataClient } from '@happier-dev/plugin-ui/data';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CORPUS_SESSION_LINKS_FIELD } from '../../corpus/collections/ids.js';
 import { toCorpusStoredValue } from '../../corpus/collections/rowCodec.js';
@@ -36,6 +36,39 @@ afterEach(async () => {
 });
 
 describe('the mounted Session link candidate reader', () => {
+    it.each([false, true])('distinguishes a first acquisition failure from an admitted empty window (failure=%s)', async (failed) => {
+        const scope = createTriageEphemeralSharedScopeFixture();
+        const corpus = createTestkitCorpusCollections();
+        const empty: PluginUiCollectionQuerySnapshot = { status: 'ready', rows: [], hasMore: false };
+        const client: PluginUiDataClient = {
+            collection: () => corpus.collections.sessionLinks as ReturnType<PluginUiDataClient['collection']>,
+            accountKv: createTestkitAccountKv().kv,
+            openCollectionQuery: async () => ({
+                getSnapshot: () => empty,
+                subscribe: () => () => {}, refresh: async () => {}, loadMore: async () => {}, dispose: () => {},
+            }),
+        };
+        const base = createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope: scope });
+        let fixture!: PluginUiTestkit;
+        await act(async () => {
+            fixture = await createPluginUiTestkit({
+                identity: { instanceId: 'first-demand', mountNonce: 'first-demand-mount' },
+                authorPlugin: { id: 'happier.triage', version: '0.0.0' }, surface: probe,
+                surfaceContext: createSurfaceContextFixture(),
+                adapter: { mount: async (input) => base.mount({ ...input,
+                    surface: (context) => cloneElement(input.surface(context) as ReactElement<{ dataClient?: PluginUiDataClient }>, { dataClient: client }),
+                }) },
+                handlers: { executeAction: async () => {
+                    if (failed) throw Object.assign(new Error('Aggregate unavailable'), { code: 'unavailable' });
+                    return { v: 1, configuredSources: [], configuredSourcesStatus: 'complete',
+                        window: { v: 1, rows: [], lanes: [], coverage: 'complete', assembledAtMs: Date.now() } };
+                } },
+            });
+        });
+        mounted.push(fixture);
+        await vi.waitFor(() => fixture.getByText(failed ? 'unavailable:' : 'ready:'));
+    });
+
     it('searches the retained acquisition outside the page lens and finishes Session paging before saying not linked', async () => {
         const scope = createTriageEphemeralSharedScopeFixture();
         const lane = { sourceInstanceId: TESTKIT_SOURCE_INSTANCE_ID, source: ENTRY.source,

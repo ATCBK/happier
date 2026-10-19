@@ -1,10 +1,10 @@
 /**
  * The sole PostHog plugin manifest.
  *
- * It declares exactly one Triage source contribution, the three read Actions that carry
+ * It declares exactly one Triage source contribution, native issue writes, the three read Actions that carry
  * its roles, the source-native detail reads behind its own body, the Connected
  * Account this source may materialize, the one direct-disclosure Tier-B Composer
- * reference, and the two host grants those reads need. It declares no Composer
+ * reference, and the two host grants those operations need. It declares no Composer
  * attachment, control, chip, picker, region, or whole-entry reference provider:
  * `happier.triage` owns the one whole-entry attachment, and a second owner here would
  * make the aggregate ambiguous about what a row is.
@@ -21,6 +21,7 @@ import {
     TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
     TriageSourcesContributionProtocolV1,
     TriageSourceConnectedAccountInputsV1,
+    TriageTaskWriteResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import { posthogConnectedAccountRuntime } from './connect/account.js';
@@ -71,7 +72,12 @@ import {
     readPosthogCodeVariablesForIssue,
     readPosthogSampledEvents,
     scanPosthogSource,
+    resolvePosthogIssue,
+    suppressPosthogIssue,
+    unsuppressPosthogIssue,
+    assignPosthogIssue,
 } from './source/operations.js';
+import { PosthogIssueAssignInputV1Schema, PosthogIssueWriteInputV1Schema } from './source/writeContracts.js';
 import {
     resolvePosthogEvidenceReference,
     searchPosthogEvidenceReferences,
@@ -122,7 +128,7 @@ const PERSONAL_API_KEY_FIELD = {
     description: {
         key: 'plugins.posthog.auth.personalApiKey.description',
         fallback: 'A personal API key scoped to error_tracking:read, organization:read,'
-            + ' project:read and activity_log:read.',
+            + ' project:read and activity_log:read. Issue writes additionally need error_tracking:write.',
     },
     schema: { type: 'string' as const, minLength: 1 },
     secret: true as const,
@@ -216,7 +222,7 @@ export const POSTHOG_PLUGIN = definePlugin({
         }, {
             id: POSTHOG_NETWORK_HOST_ACCESS_ID,
             capability: 'network',
-            reason: 'Read PostHog organizations, environments and Error Tracking issues for the selected Connected Account.',
+            reason: 'Read PostHog organizations, environments and Error Tracking issues, and update individual issues for the selected Connected Account.',
             scope: {
                 targets: [{
                     kind: 'connectedAccountOrigin',
@@ -224,8 +230,8 @@ export const POSTHOG_PLUGIN = definePlugin({
                 }],
                 // Error Tracking splits its planes across verbs: issue metadata is a
                 // `GET` on the CRUD plane while every issue and event query is a `POST`.
-                // V1 is read-only and requests no write scope.
-                methods: ['GET', 'POST'],
+                // Exact issue status/assignment writes use PATCH.
+                methods: ['GET', 'POST', 'PATCH'],
                 // The explicit self-hosted personal-API-key pilot is in V1 scope, and a
                 // self-hosted deployment may live on a private network. Removing that
                 // pilot must remove this in the same change.
@@ -318,6 +324,58 @@ export const POSTHOG_PLUGIN = definePlugin({
         }]),
     },
     actions: {
+        [POSTHOG_ACTION_IDS.resolve]: {
+            title: 'Resolve PostHog issue',
+            description: 'Resolves one exact PostHog issue and confirms its live CRUD state.',
+            surfaces: ['ui', 'agent', 'mcp', 'cli'],
+            placementBindings: ['detailsPanel'],
+            dangerLevel: 'writesRemote',
+            confirmation: { title: 'Resolve this PostHog issue?', body: 'Changes this issue to Resolved in PostHog. Requires error_tracking:write.', confirmLabel: 'Resolve' },
+            inputSchema: PosthogIssueWriteInputV1Schema.jsonSchema,
+            resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+            hostAccess: READ_HOST_ACCESS,
+            connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+            run: resolvePosthogIssue,
+        },
+        [POSTHOG_ACTION_IDS.suppress]: {
+            title: 'Suppress PostHog issue',
+            description: 'Suppresses one exact PostHog issue. PostHog will drop future events for this issue.',
+            surfaces: ['ui', 'agent', 'mcp', 'cli'],
+            placementBindings: ['detailsPanel'],
+            dangerLevel: 'writesRemote',
+            confirmation: { title: 'Suppress this PostHog issue?', body: 'PostHog will drop future events for this issue. Unsuppress allows future events again but does not recover dropped events. Requires error_tracking:write.', confirmLabel: 'Suppress issue' },
+            inputSchema: PosthogIssueWriteInputV1Schema.jsonSchema,
+            resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+            hostAccess: READ_HOST_ACCESS,
+            connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+            run: suppressPosthogIssue,
+        },
+        [POSTHOG_ACTION_IDS.unsuppress]: {
+            title: 'Unsuppress PostHog issue',
+            description: 'Returns one exact PostHog issue to Active so PostHog can accept future events again.',
+            surfaces: ['ui', 'agent', 'mcp', 'cli'],
+            placementBindings: ['detailsPanel'],
+            dangerLevel: 'writesRemote',
+            confirmation: { title: 'Unsuppress this PostHog issue?', body: 'Returns this issue to Active in PostHog and allows future events again. Previously dropped events are not recovered. Requires error_tracking:write.', confirmLabel: 'Unsuppress issue' },
+            inputSchema: PosthogIssueWriteInputV1Schema.jsonSchema,
+            resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+            hostAccess: READ_HOST_ACCESS,
+            connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+            run: unsuppressPosthogIssue,
+        },
+        [POSTHOG_ACTION_IDS.assign]: {
+            title: 'Assign PostHog issue',
+            description: 'Assigns one exact PostHog issue to the selected native user or role id.',
+            surfaces: ['ui', 'agent', 'mcp', 'cli'],
+            placementBindings: ['detailsPanel'],
+            dangerLevel: 'writesRemote',
+            confirmation: { title: 'Assign this PostHog issue?', body: 'Changes the assignee in PostHog and may notify that user or role. Requires error_tracking:write.', confirmLabel: 'Assign' },
+            inputSchema: PosthogIssueAssignInputV1Schema.jsonSchema,
+            resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+            hostAccess: READ_HOST_ACCESS,
+            connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+            run: assignPosthogIssue,
+        },
         [POSTHOG_ACTION_IDS.configuration]: {
             title: 'Configure PostHog error issues',
             description: 'Reads one user-requested page of PostHog organizations or environments.',

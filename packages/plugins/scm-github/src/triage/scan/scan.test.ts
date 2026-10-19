@@ -10,9 +10,12 @@ import {
   GITHUB_OTHER_REPOSITORY_RESPONSE,
   GITHUB_SEARCH_ITEM_WITHOUT_REPOSITORY,
   GITHUB_SEARCH_PULL_REQUEST_ITEM,
+  GITHUB_PULL_REQUEST_RESPONSE,
   GITHUB_SEARCH_UNDECODABLE_ITEM,
   githubSearchLinkHeader,
   githubSearchResponse,
+  githubCheckRunsResponse,
+  githubCombinedStatusResponse,
 } from '../__fixtures__/githubResponses.js';
 import {
   createStubGithubTransport,
@@ -119,6 +122,44 @@ async function runWalk(input: Readonly<{
 }
 
 describe('GitHub triage scan', () => {
+  it('does not start detached check reads for a row whose repository identity is unavailable', async () => {
+    const { result, transport } = await runScan({ respond: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/search/issues') return { status: 200, body: githubSearchResponse({
+        items: laneOf(request) === 'authored' ? [GITHUB_SEARCH_ITEM_WITHOUT_REPOSITORY] : [],
+      }) };
+      if (url.pathname === `/repos/${REPOSITORY_KEY}`) return { status: 403, body: { message: 'Forbidden' } };
+      return undefined;
+    } });
+    expect(result).toMatchObject({ kind: 'complete', observations: [], evidence: { kind: 'partial', reason: 'undecodable-items' } });
+    expect(transport.requests.some((request) => new URL(request.url).pathname.includes('/pulls/'))).toBe(false);
+  });
+
+  it.each(['identity', 'checks'] as const)('does not settle the last lane as complete when cancellation arrives during its %s read', async (phase) => {
+    const cancellation = new AbortController();
+    const transport = createStubGithubTransport({ signal: cancellation.signal, respond: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/search/issues') return { status: 200, body: githubSearchResponse({
+        items: laneOf(request) === 'authored'
+          ? [phase === 'identity' ? GITHUB_SEARCH_ITEM_WITHOUT_REPOSITORY : GITHUB_SEARCH_PULL_REQUEST_ITEM] : [],
+      }) };
+      if (url.pathname === `/repos/${REPOSITORY_KEY}` && phase === 'identity') {
+        cancellation.abort();
+        return { status: 200, body: GITHUB_REPOSITORY_RESPONSE };
+      }
+      if (url.pathname.endsWith('/pulls/1284')) {
+        cancellation.abort();
+        return { status: 200, body: GITHUB_PULL_REQUEST_RESPONSE };
+      }
+      return undefined;
+    } });
+    const client = await createTestGithubApiClient(transport);
+    const result = await runGithubTriageScan({ page: { kind: 'initial', limit: CONTRACT_LIMIT }, repositoryKey: REPOSITORY_KEY }, {
+      client, now: fixedClock(1_000), signal: cancellation.signal,
+    });
+    expect(result).toMatchObject({ kind: 'failed', failure: { class: 'transient', code: 'github_request_cancelled' } });
+  });
+
   it('preserves merged lifecycle from the search item pull_request envelope', async () => {
     // /search/issues shape from githubResponses.ts provenance: merged_at is nested.
     const { result } = await runScan({ respond: (request) => laneOf(request) === 'authored'
@@ -163,7 +204,7 @@ describe('GitHub triage scan', () => {
       }),
     });
 
-    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests.filter((request) => laneOf(request) !== null)).toHaveLength(1);
     expect(laneOf(transport.requests[0]!)).toBe('review-requested');
     expect(result.kind).toBe('page');
     if (result.kind !== 'page') return;
@@ -227,7 +268,7 @@ describe('GitHub triage scan', () => {
 
     // Without the continuation the first lane consumed the whole budget on every
     // refresh and the remaining four were never queried at all.
-    expect(transport.requests.map(laneOf)).toEqual([
+    expect(transport.requests.map(laneOf).filter((lane) => lane !== null)).toEqual([
       'review-requested',
       'assigned',
       'mentioned',
@@ -519,6 +560,7 @@ describe('GitHub triage scan', () => {
       limit: CONTRACT_LIMIT,
       respond: (request) => {
         const url = new URL(request.url);
+        if (url.pathname !== '/search/issues') return undefined;
         perPageSeen.add(url.searchParams.get('per_page') ?? '');
         return {
           status: 200,
@@ -538,7 +580,7 @@ describe('GitHub triage scan', () => {
     });
 
     expect(perPageSeen).toEqual(new Set([String(CONTRACT_LIMIT)]));
-    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests.filter((request) => laneOf(request) !== null)).toHaveLength(1);
     expect(result.kind).toBe('page');
     if (result.kind !== 'page') return;
     expect(result.observations).toHaveLength(CONTRACT_LIMIT);
@@ -599,12 +641,18 @@ describe('GitHub triage scan', () => {
 
   it('never returns an absent observation from a scan, whatever its health evidence', async () => {
     const { observations, settled } = await runWalk({
-      respond: () => ({
-        status: 200,
-        body: githubSearchResponse({
-          items: [GITHUB_SEARCH_ISSUE_ITEM, GITHUB_SEARCH_PULL_REQUEST_ITEM],
-        }),
-      }),
+      respond: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith('/pulls/1284')) return { status: 200, body: GITHUB_PULL_REQUEST_RESPONSE };
+        if (url.pathname.endsWith('/check-runs')) return { status: 200, body: githubCheckRunsResponse({ runs: [] }) };
+        if (url.pathname.endsWith('/status')) return { status: 200, body: githubCombinedStatusResponse({ state: 'success', statuses: [] }) };
+        return {
+          status: 200,
+          body: githubSearchResponse({
+            items: [GITHUB_SEARCH_ISSUE_ITEM, GITHUB_SEARCH_PULL_REQUEST_ITEM],
+          }),
+        };
+      },
     });
 
     expect(settled.kind).toBe('complete');
@@ -716,7 +764,7 @@ describe('GitHub triage scan', () => {
     const repositoryReads: string[] = [];
     const { result } = await runScan({
       respond: (request) => {
-        if (request.url.includes('/repos/')) {
+        if (new URL(request.url).pathname === `/repos/${REPOSITORY_KEY}`) {
           repositoryReads.push(request.url);
           return { status: 200, body: GITHUB_REPOSITORY_RESPONSE };
         }

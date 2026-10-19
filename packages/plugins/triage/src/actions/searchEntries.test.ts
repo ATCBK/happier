@@ -1,10 +1,14 @@
 import type { PluginClientActionContext } from '@happier-dev/plugin-sdk/actions';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import { PluginSearchResultV1Schema } from '@happier-dev/protocol';
+import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
 import {
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
+    TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1,
+    TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
     TriageConfiguredSourceInstanceV1Schema,
     type TriageScanResultV1,
 } from '@happier-dev/triage-protocol/v1';
@@ -26,6 +30,10 @@ import {
 } from '../ui/window/mountedWindow.js';
 import { createTriageListEntriesActionHandler } from './listEntries.js';
 import { createTriageSearchEntriesActionHandler } from './searchEntries.js';
+import * as searchActionArtifact from './searchEntries.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { createPluginRegistrationScope } from '@happier-dev/plugin-sdk/host/registration';
+import { derivePluginClientContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import type { TriageAdmittedSourceV1 } from './listEntries.js';
 
 /**
@@ -41,14 +49,25 @@ import type { TriageAdmittedSourceV1 } from './listEntries.js';
 
 const SOURCE = Object.freeze({ pluginId: 'happier.example.source', localId: 'example-forge' });
 const INSTANCE_ID = '11111111-1111-4111-8111-111111111111';
+const SOURCE_DESCRIPTOR = {
+    v: 1, purpose: 'triage-source', displayName: 'Example forge',
+    kinds: [
+        { id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' },
+        { id: 'issue', workflowSubject: 'issue', displayName: 'Issue' },
+    ],
+};
 
-function createDaemonContext(snapshots: readonly Readonly<{
+type SearchEntryFixture = Readonly<{
     entryId: string;
     title: string;
     collisionScope?: string;
     scopeLabel?: string;
     present?: boolean;
-}>[]): PluginInvocationContext {
+    kindId?: string;
+    designation?: string;
+}>;
+
+function createDaemonContext(snapshots: readonly SearchEntryFixture[]): PluginInvocationContext {
     const { collections, control } = createTestkitCorpusCollections();
     control.sourceInstances.seed(toCorpusStoredValue({
         instanceTag: `a${'0'.repeat(42)}`,
@@ -77,12 +96,7 @@ function createDaemonContext(snapshots: readonly Readonly<{
             id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
             version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
         },
-        descriptor: {
-            v: 1,
-            purpose: 'triage-source',
-            displayName: 'Example forge',
-            kinds: [{ id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' }],
-        },
+        descriptor: SOURCE_DESCRIPTOR,
         operations: { listInstances: {}, scan: { role: 'scan' }, get: {} },
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1];
@@ -121,7 +135,7 @@ function createDaemonContext(snapshots: readonly Readonly<{
                         kind: 'complete',
                         observations: page.map((entry) => {
                             const localRef = {
-                                kindId: 'pull-request',
+                                kindId: entry.kindId ?? 'pull-request',
                                 collisionScope: entry.collisionScope ?? 'example/repository',
                                 entryId: entry.entryId,
                             };
@@ -133,6 +147,7 @@ function createDaemonContext(snapshots: readonly Readonly<{
                                     locator: testkitLocator(),
                                     snapshot: testkitSnapshot({
                                         title: entry.title,
+                                        ...(entry.designation === undefined ? {} : { designation: entry.designation }),
                                         ...(entry.scopeLabel === undefined ? {} : { scopeLabel: entry.scopeLabel }),
                                     }),
                                     viewer: testkitViewer(),
@@ -151,13 +166,7 @@ function createDaemonContext(snapshots: readonly Readonly<{
     } as unknown as PluginInvocationContext;
 }
 
-function createContext(snapshots: readonly Readonly<{
-    entryId: string;
-    title: string;
-    collisionScope?: string;
-    scopeLabel?: string;
-    present?: boolean;
-}>[]): PluginClientActionContext {
+function createContext(snapshots: readonly SearchEntryFixture[]): PluginClientActionContext {
     const daemonContext = createDaemonContext(snapshots);
     const listEntries = createTriageListEntriesActionHandler();
     const executeAction = (async (
@@ -179,12 +188,71 @@ function createContext(snapshots: readonly Readonly<{
         },
         invocationSurface: 'ui',
         signal: new AbortController().signal,
-        ui: Object.freeze({ executeAction, openSurface: async () => {} }),
+        ui: Object.freeze({ executeAction, openSurface: async () => {}, context: async () => ({
+            targetedContributions: PluginUiTargetedContributionsV1Schema.parse({
+                target: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, occurrenceId: 'triage-1',
+                    sourceCustody: { kind: 'development', registeredRootId: 'triage-root' } },
+                points: [{ pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocols: [{
+                    protocol: { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 },
+                    contributions: [{ contributor: { pluginId: SOURCE.pluginId, contributionId: SOURCE.localId,
+                        occurrenceId: 'source-1', sourceCustody: { kind: 'development', registeredRootId: 'source-root' } },
+                        protocol: { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 },
+                        descriptor: SOURCE_DESCRIPTOR, operations: [], surfaces: [] }],
+                }] }],
+            }),
+        }) }),
         ephemeralSharedScope: createTriageEphemeralSharedScopeFixture(),
     };
 }
 
 describe('the Triage universal-search query Action', () => {
+    it('keeps retained entries searchable when the host has no admitted contribution snapshot', async () => {
+        const base = createContext([{ entryId: '17', title: 'Fix the transcript crash' }]);
+        const context: PluginClientActionContext = {
+            ...base,
+            ui: {
+                ...base.ui,
+                context: async (request) => ({
+                    ...await base.ui.context(request),
+                    targetedContributions: null,
+                }),
+            },
+        };
+
+        const result = PluginSearchResultV1Schema.parse(await createTriageSearchEntriesActionHandler()({
+            query: 'crash', limit: 8,
+        }, context));
+
+        expect(result.items).toEqual([
+            expect.objectContaining({ title: 'Fix the transcript crash', icon: 'info' }),
+        ]);
+        expect(result.items[0]?.command.kind).toBe('openSurface');
+    });
+
+    it('uses the source-declared kind glyph and designation through the strict search consumer', async () => {
+        const result = PluginSearchResultV1Schema.parse(await createTriageSearchEntriesActionHandler()({ query: 'cedar', limit: 8 },
+            createContext([
+                { entryId: '554', title: 'Cedar issue', kindId: 'issue', designation: '#554', scopeLabel: 'happier-dev/happier' },
+                { entryId: '555', title: 'Cedar change', designation: '#555', scopeLabel: 'happier-dev/happier' },
+            ])));
+        expect(result.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ title: 'Cedar issue', icon: 'issue', subtitle: 'happier-dev/happier · #554' }),
+            expect.objectContaining({ title: 'Cedar change', icon: 'change-open', subtitle: 'happier-dev/happier · #555' }),
+        ]));
+    });
+    it.each(['root_not_found', 'ROOT_NOT_FOUND', 'unavailable', 'auth_required'])(
+        'preserves a typed %s acquisition failure through the shared window and search result', async (code) => {
+            const base = createContext([]);
+            const context = { ...base, ui: { ...base.ui,
+                executeAction: async () => { throw new PluginError({ code }); },
+            } };
+            const result = await createTriageSearchEntriesActionHandler()({ query: 'needle', limit: 8 }, context);
+            expect(result).toEqual({ items: [], truncated: false,
+                failure: { code: code === 'ROOT_NOT_FOUND' ? 'root_not_found' : code } });
+            expect(PluginSearchResultV1Schema.safeParse(result).success).toBe(true);
+        },
+    );
+
     it('reuses the shared mounted window without rescanning or changing the shell lens', async () => {
         const daemonContext = createDaemonContext([
             { entryId: '17', title: 'Fix the transcript crash' },
@@ -201,6 +269,7 @@ describe('the Triage universal-search query Action', () => {
         const ui = Object.freeze({
             executeAction,
             openSurface: vi.fn(async () => {}),
+            context: createContext([]).ui.context,
         }) as PluginClientActionContext['ui'];
         const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
         const shellLease = acquireTriageListWindow(ui, ephemeralSharedScope);
@@ -237,16 +306,31 @@ describe('the Triage universal-search query Action', () => {
         }
     });
 
-    it('answers the canonical search contract from the one canonical matcher', async () => {
+    it('activates its declared client search handler before any plugin page opens', async () => {
         const context = createContext([
             { entryId: '17', title: 'Fix the transcript crash' },
             { entryId: '18', title: 'Document the release flow' },
         ]);
 
-        const result = await createTriageSearchEntriesActionHandler()({
+        const action = PLUGIN_MANIFEST.contributes.actions.find(entry => entry.id === 'entries/search-v1');
+        if (action?.execution.target !== 'client') throw new Error('Missing declared client search Action');
+        const target = { ...action.execution.client, platform: 'web' as const };
+        const scope = createPluginRegistrationScope({
+            pluginId: PLUGIN_MANIFEST.id,
+            target: { realm: 'client', ...target },
+            rights: derivePluginClientContributionRegistrationRights(PLUGIN_MANIFEST.contributes, target),
+        });
+        const exported: unknown = Reflect.get(searchActionArtifact, target.exportName);
+        if (typeof exported !== 'function') throw new Error('Missing declared client activation export');
+        await Reflect.apply(exported, undefined, [scope.api]);
+        const registration = scope.commit().find(entry => entry.family === 'actions' && entry.localId === action.id);
+        if (registration?.family !== 'actions') throw new Error('Client search handler was not registered');
+        // The exact client target and Action right above prove this opaque SDK capture's realm.
+        const handler = registration.value as unknown as ReturnType<typeof createTriageSearchEntriesActionHandler>;
+        const result = PluginSearchResultV1Schema.parse(await handler({
             query: 'crash',
             limit: 8,
-        }, context);
+        }, context));
 
         // The universal boundary parses this exact value, so the handler's own
         // answer has to satisfy it here.

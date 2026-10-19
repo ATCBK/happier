@@ -5,6 +5,9 @@ import {
   TriageScanResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
+import { activate } from '../activate.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { TriageTaskWriteResultV1Schema } from '@happier-dev/triage-protocol/v1';
 
 import issueDetail from '../fixtures/issueDetail.json' with { type: 'json' };
 import issuesListPage1 from '../fixtures/issuesListPage1.json' with { type: 'json' };
@@ -119,6 +122,94 @@ function configuredInstance(origin: string) {
 }
 
 describe('Sentry Triage source operations', () => {
+  async function write(action: string, harness: ReturnType<typeof host>, extra: object = {}) {
+    const register = vi.fn();
+    await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+    const handler = register.mock.calls.find(([id]) => id === action)?.[1];
+    expect(handler, `registered ${action}`).toBeTypeOf('function');
+    const result: unknown = await handler({
+      v: 1, instance: configuredInstance('https://de.sentry.io'),
+      localRef: { kindId: 'error-issue', collisionScope: `https://de.sentry.io${SENTRY_SCOPE_SEPARATOR}${ORGANIZATION_ID}`, entryId: issueDetail.body.id },
+      ...extra,
+    }, harness.context);
+    return TriageTaskWriteResultV1Schema.parse(result);
+  }
+
+  it.each([
+    ['sentry/resolve-issue', {}, { status: 'resolved' }, { status: 'resolved' }],
+    ['sentry/archive-issue', {}, { status: 'ignored', substatus: 'archived_forever' }, { status: 'ignored', substatus: 'archived_forever' }],
+    ['sentry/assign-issue', { assignee: { type: 'team', id: '42' } }, { assignedTo: 'team:42' }, { assignedTo: { type: 'team', id: '42', name: 'QA team' } }],
+  ])('dispatches %s once and confirms the exact issue with a fresh GET', async (action, extra, body, changed) => {
+    const harness = host({ responses: [issueDetail, { status: 200, headers: {}, body }, { ...issueDetail, body: { ...issueDetail.body, ...changed } }] });
+    const result = await write(action, harness, extra);
+    expect(result).toMatchObject({ kind: 'applied', observation: { localRef: { entryId: issueDetail.body.id } } });
+    expect(harness.request.mock.calls.map(([request]) => request)).toMatchObject([
+      { method: 'GET' }, { method: 'PUT', body: new TextEncoder().encode(JSON.stringify(body)), redirect: 'error' }, { method: 'GET' },
+    ]);
+    expect(harness.request.mock.calls.every(([request]) => new URL(request.url).pathname === `/api/0/organizations/${ORGANIZATION_ID}/issues/${issueDetail.body.id}/`)).toBe(true);
+    const declaration = PLUGIN_MANIFEST.contributes.actions.find(({ id }) => id === action);
+    expect(declaration).toMatchObject({ dangerLevel: 'writesRemote', confirmation: expect.any(Object), surfaces: expect.arrayContaining(['agent', 'mcp', 'cli', 'ui']) });
+  });
+
+  it('refuses a merged Sentry id before PUT', async () => {
+    const harness = host({ responses: [{ ...issueDetail, body: { ...issueDetail.body, id: '99999' } }] });
+    expect(await write('sentry/resolve-issue', harness)).toEqual({ kind: 'refused', reason: 'sentry-issue-merged' });
+    expect(harness.request.mock.calls).toHaveLength(1);
+  });
+
+  it.each([true, false])('settles answer loss by reread without replay (changed=%s)', async (changed) => {
+    const harness = host();
+    harness.request.mockImplementationOnce(async (input) => ({ status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(issueDetail.body)) }));
+    harness.request.mockRejectedValueOnce(new Error('connection lost'));
+    harness.request.mockImplementationOnce(async (input) => ({ status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...issueDetail.body, status: changed ? 'resolved' : 'unresolved' })) }));
+    expect(await write('sentry/resolve-issue', harness)).toMatchObject({ kind: changed ? 'applied' : 'uncertain' });
+    expect(harness.request.mock.calls).toHaveLength(3);
+  });
+
+  it('does not mistake a PUT echo for settlement when confirmation fails', async () => {
+    const harness = host({ responses: [issueDetail, { status: 200, headers: {}, body: { status: 'resolved' } }, { status: 503, headers: {}, body: {} }] });
+    expect(await write('sentry/resolve-issue', harness)).toMatchObject({ kind: 'uncertain', failure: { class: 'transient' } });
+  });
+
+  it('returns a permission failure without confirming a rejected Sentry write', async () => {
+    const harness = host({ responses: [issueDetail, { status: 403, headers: {}, body: {} }] });
+    expect(await write('sentry/resolve-issue', harness)).toMatchObject({ kind: 'failed', failure: { class: 'permission' } });
+    expect(harness.request.mock.calls).toHaveLength(2);
+  });
+
+  it('refuses an out-of-scope Sentry write without releasing credentials', async () => {
+    const harness = host();
+    expect(await write('sentry/resolve-issue', harness, { localRef: { kindId: 'error-issue', collisionScope: `https://de.sentry.io${SENTRY_SCOPE_SEPARATOR}999`, entryId: issueDetail.body.id } })).toMatchObject({ kind: 'failed', failure: { class: 'unsupportedContract' } });
+    expect(harness.materializeListedAccount).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+  });
+
+  it('requires exact Sentry assignee identity on confirmation, not its display name', async () => {
+    const harness = host({ responses: [issueDetail, { status: 200, headers: {}, body: {} }, { ...issueDetail, body: { ...issueDetail.body, assignedTo: { type: 'user', id: '999', name: 'QA team' } } }] });
+    expect(await write('sentry/assign-issue', harness, { assignee: { type: 'team', id: '42' } })).toMatchObject({ kind: 'uncertain' });
+  });
+
+  it('does not confirm Archived forever from a temporary Sentry archive', async () => {
+    const harness = host({ responses: [issueDetail, { status: 200, headers: {}, body: {} }, { ...issueDetail, body: { ...issueDetail.body, status: 'ignored', substatus: 'archived_until_escalating' } }] });
+    expect(await write('sentry/archive-issue', harness)).toMatchObject({ kind: 'uncertain' });
+  });
+
+  it('rejects unsupported Sentry fields before provider access', async () => {
+    const harness = host();
+    await expect(write('sentry/resolve-issue', harness, { discard: true })).rejects.toThrow();
+    expect(harness.request).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cancelled Sentry dispatch uncertain and does not replay', async () => {
+    const controller = new AbortController();
+    const harness = host();
+    harness.context = { ...harness.context, signal: controller.signal };
+    harness.request.mockImplementationOnce(async (input) => ({ status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(issueDetail.body)) }));
+    harness.request.mockImplementationOnce(async () => { controller.abort(); throw new Error('cancelled after send'); });
+    expect(await write('sentry/resolve-issue', harness)).toMatchObject({ kind: 'uncertain', failure: { code: SENTRY_FAILURE_CODES.cancelled } });
+    expect(harness.request.mock.calls).toHaveLength(2);
+  });
+
   it('refuses a native credential binding before account or provider access', async () => {
     const seam = host();
     const result = await scanSentrySource({

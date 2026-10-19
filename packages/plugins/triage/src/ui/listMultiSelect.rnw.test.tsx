@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cloneElement, type ReactElement } from 'react';
+import { act, cloneElement, createElement, Profiler, type ProfilerOnRenderCallback, type ReactElement } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
@@ -22,8 +22,9 @@ import {
     type TriageEntryRepositoryRefV1,
     type TriageScanResultV1,
 } from '@happier-dev/triage-protocol/v1';
-import type { JsonValue } from '@happier-dev/plugin-sdk';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PluginError, type JsonValue, type PluginDiagnosticData } from '@happier-dev/plugin-sdk';
+import { mergeAbortSignals } from '@happier-dev/plugin-sdk/async';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
     listTriageEntries,
@@ -37,11 +38,17 @@ import {
     TriageReadActionsInputV1Schema,
 } from '../actions/actionsCatalogProtocol.js';
 import { listTriagePinnedEntries } from '../actions/userMarks.js';
+import { reobserveTriageEntry } from '../actions/reobserveEntry.js';
+import { readTriageEntryDetail } from '../actions/readEntryDetail.js';
+import { TriageReobserveEntryInputV1Schema } from '../actions/reobserveEntryProtocol.js';
+import { TriageReadEntryDetailInputV1Schema } from '../actions/entryDetailProtocol.js';
+import { toTriageWireObservation } from '../projection/listWindowWire.js';
 import {
     TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1,
     TriageListPinnedEntriesInputV1Schema,
 } from '../actions/userMarksProtocol.js';
 import { CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
+import { findConfiguredSourceInstanceRow } from '../corpus/configuration/administerConfiguredSourceInstance.js';
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import type { CorpusSourceInstanceRowV1 } from '../corpus/collections/rows.js';
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
@@ -73,6 +80,20 @@ import { TriageMountedUiInputV1Schema, type TriageMountedUiOperationV1, type Tri
  */
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The composed host runs daemon owners in jsdom, whose AbortSignal lacks Node's
+// `any`. Preserve the daemon cancellation contract through the SDK's composer.
+const abortSignalAnyDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, 'any');
+beforeAll(() => {
+    if (abortSignalAnyDescriptor !== undefined) return;
+    Object.defineProperty(AbortSignal, 'any', {
+        configurable: true,
+        value: (signals: AbortSignal[]): AbortSignal => mergeAbortSignals(signals).signal ?? new AbortController().signal,
+    });
+});
+afterAll(() => {
+    if (abortSignalAnyDescriptor === undefined) Reflect.deleteProperty(AbortSignal, 'any');
+});
 
 const SOURCE = Object.freeze({ pluginId: 'happier.example.source', localId: 'example-forge' });
 const INSTANCE = '11111111-1111-4111-8111-111111111111';
@@ -161,6 +182,8 @@ function instanceRow(): CorpusSourceInstanceRowV1 {
 
 function createHarness(options: Readonly<{
     scanFails?: boolean;
+    /** Search/list observations may omit exact PR revisions; get supplies them. */
+    omitScanReviewRevision?: boolean;
     kindId?: string;
     /** A stored `triage.actions` catalog replacing the shipped seed. */
     actions?: JsonValue;
@@ -177,6 +200,7 @@ function createHarness(options: Readonly<{
     sessionStates?: Record<string, SessionStateV1 | null>;
     /** A Collection transport outage after an earlier successful mounted read. */
     sessionLinkReadFails?: () => boolean;
+    sessionLinkReadError?: () => Error | undefined;
 }> = {}) {
     const kindId = options.kindId ?? 'pull-request';
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
@@ -190,6 +214,9 @@ function createHarness(options: Readonly<{
     const composerTransactions: unknown[] = [];
     const spawnInputs: unknown[] = [];
     const sentInputs: unknown[] = [];
+    const diagnostics: PluginDiagnosticData[] = [];
+    const sessionLinkQueries: Parameters<typeof collections.sessionLinks.query>[0][] = [];
+    const sessionLinkPageSizes: number[] = [];
     let nextSessionNumber = 1;
     let spawnAttempt = 0;
     let retired = false;
@@ -201,8 +228,13 @@ function createHarness(options: Readonly<{
         ['session-links', {
             ...collections.sessionLinks,
             query: async (...args: Parameters<typeof collections.sessionLinks.query>) => {
+                sessionLinkQueries.push(args[0]);
+                const error = options.sessionLinkReadError?.();
+                if (error) throw error;
                 if (options.sessionLinkReadFails?.()) throw new Error('Session links unavailable');
-                return await collections.sessionLinks.query(...args);
+                const page = await collections.sessionLinks.query(...args);
+                sessionLinkPageSizes.push(page.rows.length);
+                return page;
             },
         }],
         ['user-marks', collections.userMarks],
@@ -317,7 +349,9 @@ function createHarness(options: Readonly<{
                 locator: testkitLocator(),
                 snapshot: {
                     ...testkitSnapshot({ title: 'Replace the duplicated normalizer' }),
-                    reviewRevision: { baseSha: 'base', headSha: 'head-17', nativeRevision: 'rev-17' },
+                    ...(options.omitScanReviewRevision ? {} : {
+                        reviewRevision: { baseSha: 'base', headSha: 'head-17', nativeRevision: 'rev-17' },
+                    }),
                 },
                 viewer: testkitViewer(),
                 sourceUpdatedAtMs: 3_000,
@@ -358,6 +392,38 @@ function createHarness(options: Readonly<{
     }>) {
         const action = String(request.action);
         if (retired) throw new Error('triage:test:surfaceRetired');
+        if (action === 'entries/reobserve-v1') {
+            const input = TriageReobserveEntryInputV1Schema.parse(request.input);
+            const result = await reobserveTriageEntry(input, {
+                readConfiguredInstance: async (sourceInstanceId, options) => {
+                    const row = await findConfiguredSourceInstanceRow(collections.sourceInstances, sourceInstanceId, options);
+                    return row?.value.lifecycle === CORPUS_SOURCE_INSTANCE_LIFECYCLE.active ? row.value.configured : null;
+                },
+                readAdmittedSources: async () => admitted,
+                executeGet: async () => ({
+                    kind: 'present',
+                    localRef: { kindId, collisionScope: input.entryRef.collisionScope, entryId: input.entryRef.entryId },
+                    locator: testkitLocator(),
+                    snapshot: { ...testkitSnapshot(), reviewRevision: {
+                        baseSha: 'base', headSha: `head-${input.entryRef.entryId}`, nativeRevision: `rev-${input.entryRef.entryId}`,
+                    } },
+                    viewer: testkitViewer(),
+                }),
+                nowMs: () => 4_000,
+                signal: request.signal,
+            });
+            if (result.kind !== 'observed') return { kind: 'unavailable' };
+            const { entryRef, ...observation } = result.observation;
+            return { kind: 'observed', entryRef, observation: toTriageWireObservation(observation) };
+        }
+        if (action === 'entries/read-detail-v1') {
+            return await readTriageEntryDetail(TriageReadEntryDetailInputV1Schema.parse(request.input), {
+                sourceInstances: collections.sourceInstances,
+                sessionLinks: collections.sessionLinks,
+                readSessionSummary: async () => null,
+                signal: request.signal,
+            });
+        }
         if (action === TRIAGE_READ_ACTIONS_ACTION_LOCAL_ID_V1) {
             return await readTriageActionsForSurface(
                 TriageReadActionsInputV1Schema.parse(request.input),
@@ -385,14 +451,12 @@ function createHarness(options: Readonly<{
             );
         }
         if (action === 'sessions/link-entry-v1') {
-            const [{ linkTriageEntryToSession }, { TriageLinkEntryToSessionInputV1Schema }] = await Promise.all([
-                import('../actions/sessionLinks.js'),
-                import('../actions/sessionLinksProtocol.js'),
-            ]);
-            return await linkTriageEntryToSession(
-                TriageLinkEntryToSessionInputV1Schema.parse(request.input),
-                { collections: { sessionLinks }, nowMs: () => 2_000 },
-            );
+            const { TriageLinkEntryToSessionInputV1Schema } = await import('../actions/sessionLinksProtocol.js');
+            const linked = await linkEntryToSession({
+                ...TriageLinkEntryToSessionInputV1Schema.parse(request.input),
+                collections: { sessionLinks }, nowMs: 2_000,
+            });
+            return { v: 1, status: linked.status };
         }
         if (action === 'session.spawn_new' || action === 'session.message.send' || action === 'session.open') {
             return await executeSessionAction(action, request.input as never);
@@ -440,6 +504,7 @@ function createHarness(options: Readonly<{
         composerTransactions,
         spawnInputs,
         sentInputs,
+        diagnostics,
         newSessionSeedResult: options.newSessionSeedResult,
         replaceActions: (actions: JsonValue) => {
             accountKv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, actions);
@@ -447,6 +512,8 @@ function createHarness(options: Readonly<{
         deleteAction: (actionId: string) => mutateTriageAction({ catalog: accountKv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'unused' }, {
             kind: 'delete', actionId, expectedRevision: accountKv.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
         }),
+        sessionLinkQueries,
+        sessionLinkPageSizes,
         get wasRetired() {
             return retired;
         },
@@ -465,7 +532,7 @@ const mounted: PluginUiTestkit[] = [];
 
 async function mountShell(
     harness: Harness,
-    options: Readonly<{ sourceContributions?: 'admitted' | 'absent' }> = {},
+    options: Readonly<{ sourceContributions?: 'admitted' | 'absent'; onRender?: ProfilerOnRenderCallback; overlays?: boolean }> = {},
 ): Promise<Readonly<{
     shell: PluginUiTestkit;
     locations: readonly string[];
@@ -474,12 +541,19 @@ async function mountShell(
     const locations: string[] = [];
     let published: PluginUiContextEnrichmentV1 | null = null;
     const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
-    const surfaceWithDataClient: RenderSurface = (context) => cloneElement(
+    const surfaceWithDataClient: RenderSurface = (context) => {
+        const surface = cloneElement(
         // This visible semantic mount supplies the same host activity fact as
         // the real surface; the generic testkit RenderContext omits it.
-        renderShellSurface({ ...context, activity: { active: true } }) as ReactElement<{ dataClient?: PluginUiDataClient }>,
-        { dataClient: harness.dataClient },
-    );
+        renderShellSurface({ ...context, activity: { active: true } }) as ReactElement<{
+            dataClient?: PluginUiDataClient; ephemeralSharedScope?: typeof ephemeralSharedScope;
+        }>,
+        // The Profiler wraps the entry, so supply the same canonical host scope
+        // explicitly rather than hiding the surface entry from adapter injection.
+        { dataClient: harness.dataClient, ephemeralSharedScope },
+        );
+        return options.onRender === undefined ? surface : createElement(Profiler, { id: 'triage-list', onRender: options.onRender }, surface);
+    };
     let fixture!: PluginUiTestkit;
     await act(async () => {
         fixture = await createPluginUiTestkit({
@@ -491,8 +565,9 @@ async function mountShell(
                     ? {}
                     : { targetedContributions: SOURCE_TARGETED_CONTRIBUTIONS },
             ),
-            adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope }),
+            adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope, ...(options.overlays === undefined ? {} : { overlays: options.overlays }) }),
             handlers: {
+                diagnostic: ({ data }) => { harness.diagnostics.push(data); },
                 publishCurrentUiContext: ({ enrichment }) => { published = enrichment; },
                 readSession: ({ sessionId }) => harness.sessionStates[sessionId] ?? null,
                 watchSession: () => undefined,
@@ -668,6 +743,159 @@ async function chooseBulkAction(shell: PluginUiTestkit, label: string): Promise<
 }
 
 describe('selecting several PRs & Issues rows', () => {
+    it('reads only visible entry relations despite many unrelated Account link pages', async () => {
+        const working: SessionStateV1 = {
+            sessionId: 'visible-session', lifecycle: 'active', runtime: 'working', operational: 'working',
+            pendingPermissions: [], workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+        };
+        const harness = createHarness({ sessionStates: { 'visible-session': working } });
+        const entryRef = { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' };
+        for (let index = 0; index < 1002; index += 1) {
+            const result = await linkEntryToSession({
+                collections: harness.collections,
+                entryRef: index === 0 ? entryRef : { ...entryRef, entryId: `unrelated-${index}` },
+                sessionId: index === 0 ? 'visible-session' : `unrelated-session-${index}`,
+                display: { locator: testkitLocator(), scopeLabel: 'example/repository' }, nowMs: index + 1,
+            });
+            expect(result.status).toBe('linked');
+        }
+        await mountShell(harness);
+        await vi.waitFor(async () => {
+            await settle();
+            expect(document.body.textContent).toContain('With an agent');
+        });
+        // The fixture has three visible entries. Each exact relation is one page,
+        // irrespective of the six Account-wide pages the old join traversed.
+        expect({
+            exactRelations: harness.sessionLinkQueries.every(query => query.prefix?.length === 1),
+            continued: harness.sessionLinkQueries.some(query => query.cursor !== undefined),
+            queries: harness.sessionLinkQueries.length,
+            rowsRead: harness.sessionLinkPageSizes.reduce((sum, size) => sum + size, 0),
+        }).toEqual({
+            exactRelations: true, continued: false,
+            queries: gridRows().filter(row => row.closest('[data-testid^="triage-entry-drag:"]')).length,
+            rowsRead: 1,
+        });
+    });
+
+    it('follows the visible relation cursor before publishing the linked work group', async () => {
+        const sessionId = 'visible-200';
+        const harness = createHarness({ sessionStates: { [sessionId]: {
+            sessionId, lifecycle: 'active', runtime: 'working', operational: 'working',
+            pendingPermissions: [], workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+        } } });
+        for (let index = 0; index < 201; index += 1) {
+            expect((await linkEntryToSession({
+                collections: harness.collections,
+                entryRef: { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                sessionId: `visible-${index}`,
+                display: { locator: testkitLocator(), scopeLabel: 'example/repository' }, nowMs: index + 1,
+            })).status).toBe('linked');
+        }
+        await mountShell(harness);
+        await vi.waitFor(async () => {
+            await settle();
+            expect(document.body.textContent).toContain('With an agent');
+        });
+        const continuationReads = harness.sessionLinkQueries.filter(query => query.cursor !== undefined);
+        expect(continuationReads).toHaveLength(1);
+        expect(continuationReads[0]!.prefix).toHaveLength(1);
+        expect(harness.sessionLinkQueries.some(query => query.cursor === undefined
+            && JSON.stringify(query.prefix) === JSON.stringify(continuationReads[0]!.prefix))).toBe(true);
+        expect(harness.sessionLinkPageSizes.reduce((sum, size) => sum + size, 0)).toBe(201);
+    });
+
+    it('keeps one sequential row stop with named Peek and Move access in the composed Triage Collection', async () => {
+        await mountShell(createHarness(), { overlays: true });
+        await settle();
+        const rows = gridRows().filter(row => row.closest('[data-testid^="triage-entry-drag:"]'));
+        expect(rows.length).toBeGreaterThan(1);
+        const primary = (row: HTMLElement) => row.querySelector<HTMLElement>('[role="gridcell"] [role="button"]')!;
+        const secondary = (row: HTMLElement) => [
+            row.closest<HTMLElement>('[data-testid^="triage-entry-drag:"]')!,
+            ...row.querySelectorAll<HTMLElement>('[data-testid$=":peek"]'),
+        ];
+        const focused = rows[1]!;
+        await act(async () => { primary(focused).focus(); });
+        expect(secondary(focused).length).toBeGreaterThanOrEqual(1);
+        expect(primary(focused).tabIndex).toBe(0);
+        expect(secondary(focused).every(control => control.tabIndex === -1)).toBe(true);
+        for (const row of rows.filter(row => row !== focused)) {
+            expect(primary(row).tabIndex).toBe(-1);
+            expect(secondary(row).every(control => control.tabIndex === -1)).toBe(true);
+        }
+        expect(secondary(focused).every(control => Boolean(control.getAttribute('aria-label')))).toBe(true);
+        const sequential = rows.flatMap(row => Array.from(row.closest<HTMLElement>('[data-testid^="triage-entry-drag:"]')!
+            .querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]')))
+            .filter(control => control.tabIndex >= 0 && !control.matches(':disabled'));
+        expect(sequential).toEqual([primary(focused)]);
+        const peek = focused.querySelector<HTMLElement>('[data-testid$=":peek"]');
+        if (peek !== null) {
+            const wasExpanded = peek.getAttribute('aria-expanded');
+            await act(async () => { peek.click(); });
+            expect(peek.getAttribute('aria-expanded')).not.toBe(wasExpanded);
+        }
+        await act(async () => { primary(focused).dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'F10', shiftKey: true, bubbles: true, cancelable: true,
+        })); });
+        const menuLabels = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(item => item.textContent ?? '');
+        expect(menuLabels.some(label => label.includes('Peek'))).toBe(peek !== null);
+        expect(menuLabels.some(label => label.includes('Move item'))).toBe(true);
+        expect(selectedLabels()).toEqual([]);
+    });
+
+    it('does not claim unreadable linked activity after an empty link read fails persistently', async () => {
+        let unreachable = false;
+        const harness = createHarness({ sessionLinkReadFails: () => unreachable });
+        const { shell } = await mountShell(harness);
+        await settle();
+        unreachable = true;
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Refresh' })); });
+        await settle();
+        expect(document.body.textContent).not.toContain('Some linked Session activity could not be read.');
+        expect(rowNamed('Replace the duplicated normalizer')).toBeDefined();
+        expect(harness.diagnostics).toContainEqual(expect.objectContaining({
+            code: 'triage_session_links_read_unavailable', message: 'Session links unavailable',
+        }));
+    });
+
+    it('retries a retryable Account link read once before showing a persistent failure', async () => {
+        let failuresRemaining = 0;
+        const harness = createHarness({ sessionStates: { 'linked-session': {
+            sessionId: 'linked-session', lifecycle: 'active', runtime: 'idle',
+            operational: 'ready', pendingPermissions: [],
+            workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+        } }, sessionLinkReadError: () => {
+            if (failuresRemaining === 0) return undefined;
+            failuresRemaining -= 1;
+            return new PluginError({ code: 'plugin_account_storage_unavailable', retryable: true });
+        } });
+        await linkEntryToSession({
+            collections: harness.collections,
+            entryRef: { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+            sessionId: 'linked-session',
+            display: { locator: testkitLocator(), scopeLabel: 'example/repository' }, nowMs: 1,
+        });
+        const { shell } = await mountShell(harness);
+        await settle();
+        failuresRemaining = 1;
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Refresh' })); });
+        await settle();
+        expect(document.body.textContent).not.toContain('Some linked Session activity could not be read.');
+
+        failuresRemaining = 2;
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Refresh' })); });
+        await vi.waitFor(async () => {
+            await settle();
+            expect(document.body.textContent).toContain('Some linked Session activity could not be read.');
+        });
+        expect(failuresRemaining).toBe(0);
+        expect(harness.diagnostics).toContainEqual(expect.objectContaining({
+            code: 'triage_session_links_read_unavailable',
+            details: { code: 'plugin_account_storage_unavailable', retryable: true },
+        }));
+    });
+
     it('groups linked working Sessions live without opening a detail', async () => {
         const working: SessionStateV1 = {
             sessionId: 'working-session', lifecycle: 'active', runtime: 'working',
@@ -682,13 +910,21 @@ describe('selecting several PRs & Issues rows', () => {
             display: { locator: testkitLocator(), scopeLabel: 'example/repository' },
             nowMs: 1,
         });
-        const { shell, locations } = await mountShell(harness);
+        let commits = 0;
+        const { shell, locations } = await mountShell(harness, { onRender: () => { commits += 1; } });
         await vi.waitFor(async () => {
             await act(async () => { await Promise.resolve(); });
             expect(document.body.textContent).toContain('With an agent');
         });
         expect(rowNamed('Replace the duplicated normalizer')).toBeDefined();
         expect(locations).toEqual([]);
+
+        await settle();
+        const commitsBeforeTitle = commits;
+        harness.sessionStates['working-session'] = { ...working, title: 'A different Session title' };
+        await act(async () => { shell.invalidateSession('working-session', `sha256:${'1'.repeat(64)}`); });
+        await settle();
+        expect(commits - commitsBeforeTitle).toBe(0);
 
         harness.sessionStates['working-session'] = {
             ...working, runtime: 'idle', operational: 'ready',
@@ -1106,22 +1342,21 @@ describe('selecting several PRs & Issues rows', () => {
 
         await chooseRow('Replace the duplicated normalizer');
         await chooseRow('Extract the selection reducer');
-        await act(async () => {
-            await shell.press(await shell.getByRole('button', { name: 'Attach to New Session' }));
-        });
         await settle();
 
+        expect(await shell.queryByRole('button', { name: 'Attach to New Session' })).toBeUndefined();
         expect(harness.newSessionSeeds).toEqual([]);
         expect(harness.preparedNewSessionSelections).toEqual([]);
         expect(harness.lifecycle).toEqual([]);
         expect(harness.wasRetired).toBe(false);
         expect(locations).toEqual([]);
-        expect(document.body.textContent).toContain('0 attached to New Session');
-        expect(document.body.textContent).toContain('2 could not be used');
+        expect(document.body.textContent).toContain('Each pull request needs its own review workspace.');
+        expect(document.body.textContent).not.toContain('could not be used');
     });
 
     it('carries one bulk-selected PR through the exact prepared-workspace operation', async () => {
         const harness = createHarness({
+            omitScanReviewRevision: true,
             actions: {
                 v: 1,
                 actions: [{
@@ -1145,7 +1380,9 @@ describe('selecting several PRs & Issues rows', () => {
         await act(async () => {
             await shell.press(await shell.getByRole('button', { name: 'Attach to New Session' }));
         });
-        await settle();
+        await act(async () => { await vi.waitFor(() => {
+            expect(harness.newSessionSeeds, document.body.textContent ?? '').toHaveLength(1);
+        }); });
 
         expect(harness.newSessionSeeds).toEqual([
             expect.objectContaining({

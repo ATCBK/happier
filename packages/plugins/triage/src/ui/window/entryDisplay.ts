@@ -3,7 +3,9 @@ import {
   type TriageSourceEntrySnapshotV1,
   type TriageSourceDescriptorV1,
   type TriageEntryRefV1,
+  type TriageSourceWorkflowSubjectV1,
 } from '@happier-dev/triage-protocol/v1';
+import type { PluginUiIconTokenV1 } from '@happier-dev/plugin-sdk/ui';
 
 import { triageEntryRowKey, type TriageListRowV1 } from '../../projection/listWindow.js';
 import { readTriageAttentionReasonIconV1 } from '../../corpus/attention/deriveAttention.js';
@@ -39,6 +41,22 @@ import { readTriageAttentionReasonIconV1 } from '../../corpus/attention/deriveAt
 export type TriageEntryDisplayTextV1 = (key: string, fallback?: string) => string;
 
 const ENGLISH_TEXT: TriageEntryDisplayTextV1 = (_key, fallback = '') => fallback;
+
+/** One semantic glyph for list, detail, linked entries and Universal Search. */
+export function readTriageEntryGlyphV1(
+  lifecycle: TriageEntryDisplayV1['lifecyclePresentation'],
+  workflowSubject: TriageSourceWorkflowSubjectV1 | null,
+): PluginUiIconTokenV1 {
+  if (lifecycle === 'closed' || lifecycle === 'suppressed') return 'close';
+  if (lifecycle === 'resolved') {
+    return workflowSubject === 'pullRequest' ? 'change-complete' : 'check';
+  }
+  if (lifecycle !== 'active') return 'info';
+  if (workflowSubject === 'issue') return 'issue';
+  if (workflowSubject === 'errorIssue') return 'bug';
+  if (workflowSubject === 'other') return 'info';
+  return workflowSubject === 'pullRequest' ? 'change-open' : 'info';
+}
 
 /**
  * The closed presentation vocabulary in the reader's own words.

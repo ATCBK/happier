@@ -1,13 +1,27 @@
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import {
+    EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
+    isExternalActionResultWithinResponseEnvelopeLimitV1,
+    measureExternalActionResultResponseEnvelopeUtf8BytesV1,
+} from '@happier-dev/plugin-sdk/actions';
+import type { SessionId } from '@happier-dev/plugin-sdk/sessions';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
-import { TriageReadFixPullRequestsResultV1Schema } from '@happier-dev/triage-protocol/v1';
+import {
+    MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
+    MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
+    MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1,
+    MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
+    TriageFixPullRequestV1Schema,
+    TriageReadFixPullRequestsResultV1Schema,
+} from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
 
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import { CORPUS_SESSION_LINKS_COLLECTION_ID, CORPUS_SOURCE_INSTANCES_COLLECTION_ID, CORPUS_SOURCE_INSTANCE_LIFECYCLE, CORPUS_USER_MARKS_INDEX_ID } from '../corpus/collections/ids.js';
-import { createTriageReadFixPullRequestsActionHandler, createTriageSetFixPullRequestActionHandler, setTriageFixPullRequest } from './fixPullRequests.js';
+import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
+import { createTriageReadFixPullRequestsActionHandler, createTriageSetFixPullRequestActionHandler, readTriageFixPullRequests, setTriageFixPullRequest } from './fixPullRequests.js';
 
 const fixture = createTriageSourceV1Fixture();
 const pr = fixture.detailInput.observation.entryRef;
@@ -15,6 +29,75 @@ const error = { ...pr, source: { pluginId: 'happier.example.errors', localId: 'e
 const display = { title: 'Fix error', scopeLabel: 'example/repo' };
 
 describe('fix-PR public Action read', () => {
+    it('fits whole derived candidates at the real Action envelope while preserving explicit links and the full local read', async () => {
+        const { collections } = createTestkitCorpusCollections();
+        await setTriageFixPullRequest({ v: 1, linked: true, entryRef: error, displayAtMark: display,
+            fixPullRequest: pr, displayAtLink: display }, { collections, nowMs: () => 1_000 });
+        const displayPath = '"'.repeat(MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
+        const candidate = TriageFixPullRequestV1Schema.parse({
+            entryRef: { ...pr, collisionScope: '\\'.repeat(MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1),
+                entryId: '000000' + '"'.repeat(MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1 - 6) },
+            origins: ['session'], status: 'unknown',
+            display: { displayPath },
+        });
+        const candidateBytes = measureExternalActionResultResponseEnvelopeUtf8BytesV1([candidate])
+            - measureExternalActionResultResponseEnvelopeUtf8BytesV1([]);
+        const count = Math.ceil(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES / candidateBytes) + 1;
+        const siblingsPerSession = MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 - 1;
+        const sessionCount = Math.ceil(count / siblingsPerSession);
+        expect(sessionCount).toBeLessThanOrEqual(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1);
+        for (let index = 0; index < count; index += 1) {
+            const sessionId = `fixture-session-${Math.floor(index / siblingsPerSession)}` as SessionId;
+            if (index % siblingsPerSession === 0) {
+                expect((await linkEntryToSession({ collections, entryRef: error, sessionId, nowMs: 1,
+                    display: { locator: fixture.detailInput.observation.locator, scopeLabel: display.scopeLabel } })).status).toBe('linked');
+            }
+            expect((await linkEntryToSession({ collections,
+                entryRef: { ...candidate.entryRef, entryId: String(index).padStart(6, '0') + '"'.repeat(MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1 - 6) },
+                sessionId, nowMs: 2_000 + index,
+                display: { locator: { v: 1, displayPath }, scopeLabel: display.scopeLabel },
+            })).status).toBe('linked');
+        }
+        const local = TriageReadFixPullRequestsResultV1Schema.parse(await readTriageFixPullRequests({ v: 1, entryRef: error }, {
+            collections, nowMs: () => 3_000,
+            projection: {
+                workflowSubjectOf: (ref) => fixture.descriptor.kinds.find((kind) => kind.id === ref.kindId)?.workflowSubject ?? null,
+                presentationOf: () => null,
+            },
+        }));
+        expect(local.candidates).toHaveLength(count + 1);
+        expect(local.incomplete).toBe(false);
+        expect(isExternalActionResultWithinResponseEnvelopeLimitV1(local)).toBe(false);
+        // Only Account storage and the admitted descriptor transport are replaced.
+        // No configured provider connection is needed to retain unknown PRs.
+        const context = {
+            surface: 'agent',
+            services: {
+                storage: { account: { collection: (definition: PluginAccountCollectionDefinition) => (
+                    definition.id === CORPUS_SOURCE_INSTANCES_COLLECTION_ID ? collections.sourceInstances
+                        : definition.id === CORPUS_SESSION_LINKS_COLLECTION_ID ? collections.sessionLinks : collections.userMarks
+                ) } },
+                targetedContributions: { observeForSelf: () => ({
+                    readCurrent: async () => ({ contributions: [{
+                        contributor: { pluginId: pr.source.pluginId, contributionId: pr.source.localId },
+                        descriptor: fixture.descriptor, operations: {},
+                    }] }), dispose: () => {},
+                }) },
+            },
+        } as unknown as PluginInvocationContext;
+        const result = TriageReadFixPullRequestsResultV1Schema.parse(await createTriageReadFixPullRequestsActionHandler()({ v: 1, entryRef: error }, context));
+        expect(isExternalActionResultWithinResponseEnvelopeLimitV1(result)).toBe(true);
+        expect(result.incomplete).toBe(true);
+        expect(result.candidates[0]?.entryRef).toEqual(pr);
+        expect(result.primary?.entryRef).toEqual(pr);
+        expect(result.candidates).toEqual(local.candidates.slice(0, result.candidates.length));
+        expect(isExternalActionResultWithinResponseEnvelopeLimitV1({
+            ...result, candidates: local.candidates.slice(0, result.candidates.length + 1),
+        })).toBe(false);
+        // Real Collection links plus repeated complete 24 MB envelope measures
+        // took 30s in this harness; use the maximal-envelope lane's 60s budget.
+    }, 60_000);
+
     it('resolves lifecycle through the current configured source and admitted get, without exposing mark storage', async () => {
         const { collections, control } = createTestkitCorpusCollections();
         control.sourceInstances.seed(toCorpusStoredValue({

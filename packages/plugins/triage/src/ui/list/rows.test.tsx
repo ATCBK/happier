@@ -10,6 +10,8 @@ import {
   TRIAGE_ROW_SELECT_ACTION_ID_V1,
   readTriageAgentBadgeV1,
   readTriageRowPlaceV1,
+  readTriageRowBylinePlaceV1,
+  readTriageRowBylinePartsV1,
   readTriageAgentCellMarkV1,
   readTriageAttentionBadgeToneV1,
   readTriageRowMarkV1,
@@ -246,7 +248,7 @@ describe('a PRs & Issues entry row', () => {
       ANNOUNCED,
     );
     const suggestion = triageListRowItemProps(
-      displayRow({ detail: 'You were mentioned', detailKind: 'suggestion' }),
+      displayRow({ detail: 'Mentioned', detailKind: 'suggestion' }),
       false,
       ANNOUNCED,
     );
@@ -270,6 +272,25 @@ describe('a PRs & Issues entry row', () => {
       .toBe('tidewater/payments-api');
     expect(readTriageRowPlaceV1({ designation: null, identifierLabel: 'CHECKOUT-WEB', scopeLabel: 'checkout-web' }))
       .toBe('CHECKOUT-WEB');
+  });
+
+  it('keeps the designation in the list byline by naming the place as the table does, not by its full path', () => {
+    // A phone's byline is one truncating line: "happier-dev/happi…" loses the "#535" that tells two rows apart.
+    expect(readTriageRowBylinePlaceV1({ designation: '#2481', identifierLabel: 'tidewater/payments-api#2481', scopeLabel: 'tidewater/payments-api', scopeDisplayName: 'payments-api' }))
+      .toBe('payments-api #2481');
+    expect(readTriageRowBylinePlaceV1({ designation: '!88', identifierLabel: 'infra/modules!88', scopeLabel: 'infra/modules' }))
+      .toBe('infra/modules !88');
+    expect(readTriageRowBylinePlaceV1({ designation: null, identifierLabel: 'CHECKOUT-WEB', scopeLabel: 'checkout-web' }))
+      .toBe('CHECKOUT-WEB');
+  });
+
+  it('hands the byline its truncating place and its never-truncating designation apart', () => {
+    // One text run truncates from its end, so a narrow phone row (a wide reason chip beside it) cut
+    // "happier #535" to "happier #5…". The designation is what tells two entries apart: it is its own part.
+    expect(readTriageRowBylinePartsV1({ designation: '#535', identifierLabel: 'happier-dev/happier#535', scopeLabel: 'happier-dev/happier', scopeDisplayName: 'happier' }))
+      .toEqual({ place: 'happier', designation: '#535' });
+    expect(readTriageRowBylinePartsV1({ designation: null, identifierLabel: 'CHECKOUT-WEB', scopeLabel: 'checkout-web' }))
+      .toEqual({ place: 'CHECKOUT-WEB', designation: null });
   });
 
   it('badges the row glyph with what the linked agent is doing: a hand while it waits on the reader, a live dot while it works', () => {
@@ -414,6 +435,18 @@ describe('the window-honesty line', () => {
     expect(readTriageWindowStatementV1({
       loadedCount: 0, window: { coverage: 'partial', lanes: [lanes[0]!] }, configuredSources: sources, entries, text,
     })).toBeUndefined();
+  });
+
+  it('says the list is still being read while the first read has not answered, instead of a wordless skeleton', () => {
+    // A cold first read can take a minute; the line under the skeleton is where the window speaks, so it says the
+    // read is under way rather than leaving the reader with placeholder rows and no words.
+    expect(readTriageWindowStatementV1({
+      loadedCount: 0, window: null, configuredSources: sources, entries, firstRead: true, text,
+    })).toEqual(['Reading your sources…']);
+    // Once a window exists the loaded count speaks, never both.
+    expect(readTriageWindowStatementV1({
+      loadedCount: 12, window: { coverage: 'complete', lanes: [] }, configuredSources: sources, entries, firstRead: false, text,
+    })).toEqual(['12 loaded', 'complete']);
   });
 
   it('says what the pins have left, beside the window, while there are more of them', () => {

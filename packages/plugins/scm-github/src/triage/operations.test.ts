@@ -27,6 +27,9 @@ import {
   GITHUB_SEARCH_PULL_REQUEST_ITEM,
   githubSearchResponse,
   githubChangedFile,
+  githubCheckRun,
+  githubCheckRunsResponse,
+  githubCombinedStatusResponse,
 } from './__fixtures__/githubResponses.js';
 import { listGithubChangedFiles } from './detailOperations.js';
 import { encodeGithubTriageConfiguration } from './configuration.js';
@@ -46,6 +49,51 @@ import {
 const REPOSITORY_KEY = `${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}`.toLowerCase();
 
 describe('registered GitHub REST → Triage source contract', () => {
+  it.each([
+    { name: 'readable failing', checkStatus: 200, empty: false, headStatus: 200, failureCode: null },
+    { name: 'readable empty', checkStatus: 200, empty: true, headStatus: 200, failureCode: null },
+    { name: 'checks denied', checkStatus: 403, empty: false, headStatus: 200, failureCode: 'github_forbidden' },
+    { name: 'head denied', checkStatus: 200, empty: false, headStatus: 403, failureCode: 'github_forbidden' },
+    { name: 'checks throttled', checkStatus: 429, empty: false, headStatus: 200, failureCode: 'github_rate_limited' },
+  ])('preserves the PR and distinguishes $name Checks through the registered strict consumer', async ({ checkStatus, empty, headStatus, failureCode }) => {
+    const transport = createStubGithubTransport({ respond: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === '/search/issues') return { status: 200, body: githubSearchResponse({
+        items: /review-requested:|mentions:/u.test(url.searchParams.get('q') ?? '') ? [GITHUB_SEARCH_PULL_REQUEST_ITEM] : [],
+      }) };
+      if (url.pathname.endsWith('/pulls/1284')) return { status: headStatus, body: GITHUB_PULL_REQUEST_RESPONSE };
+      if (url.pathname.endsWith('/check-runs')) return { status: checkStatus,
+        ...(checkStatus === 429 ? { headers: { 'retry-after': '60' } } : {}), body: githubCheckRunsResponse({
+        runs: empty ? [] : [githubCheckRun({ id: 1, name: 'unit', status: 'completed', conclusion: 'failure' })],
+      }) };
+      if (url.pathname.endsWith('/status')) return { status: 200, body: githubCombinedStatusResponse({ state: 'success', statuses: [] }) };
+      return undefined;
+    } });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: transport.context.services.http, connectedAccounts: transport.context.services.connectedAccounts,
+    } });
+    try {
+      const result = TriageScanResultV1Schema.parse(await plugin.invokeAction(GITHUB_TRIAGE_ACTION_IDS_V1.scan, {
+        v: 1, instance: configuredInstance({ scope: 'repository' }), page: { kind: 'initial', limit: 200 },
+      }, { surface: 'agent', sessionId: 'triage-audit-session' }));
+      if (result.kind === 'failed') throw new Error('The search row must survive an optional checks failure');
+      expect(result.observations).toHaveLength(2);
+      const row = result.observations[0];
+      if (row?.kind !== 'present') throw new Error('Expected the real search row');
+      expect(row.viewer.involvement).toEqual(['reviewRequested']);
+      expect(result.observations[1]).toMatchObject({ kind: 'present', viewer: { involvement: ['mentioned'] } });
+      expect(row.snapshot.facts.find((fact) => fact.id === 'github/checks')?.value).toEqual(
+        failureCode !== null ? { kind: 'status', value: 'Checks unavailable', tone: 'warning' }
+          : empty ? undefined : { kind: 'status', value: '1 failing', tone: 'danger' },
+      );
+      expect(result.evidence).toEqual(failureCode === null
+        ? { kind: 'walkFinished' } : { kind: 'partial', reason: failureCode });
+      expect(transport.requests.filter((request) => new URL(request.url).pathname.endsWith('/pulls/1284'))).toHaveLength(1);
+    } finally {
+      await plugin.dispose();
+    }
+  });
+
   it('projects provider responses through the real registered get Action into the strict target schema', async () => {
     let response: Readonly<Record<string, unknown>> = { ...GITHUB_PULL_REQUEST_RESPONSE, title: 'Fix café 🧪'.repeat(500) };
     const transport = createStubGithubTransport({ respond: (request) => (
@@ -308,7 +356,7 @@ describe('GitHub Triage source operations', () => {
     // `projection-budget` describes this PAGE's shape — it is not a claim that the
     // walk stopped early, because the continuation carries it forward.
     expect(result.evidence).toEqual({ kind: 'partial', reason: 'projection-budget' });
-    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests.filter((request) => new URL(request.url).pathname === '/search/issues')).toHaveLength(1);
   });
 
   it('materializes only the exact configured account and never a caller-supplied one', async () => {
@@ -743,7 +791,7 @@ describe('GitHub Triage source operations', () => {
         { now: fixedClock(1_700_000_000_000) },
       );
       expect(() => TriageScanResultV1Schema.parse(result)).not.toThrow();
-      lanes.push(new URL(stub.requests.at(-1)?.url ?? '').searchParams.get('q') ?? '');
+      lanes.push(new URL(stub.requests.filter((request) => new URL(request.url).pathname === '/search/issues').at(-1)?.url ?? '').searchParams.get('q') ?? '');
       if (result.kind === 'complete') break;
       if (result.kind !== 'page') throw new Error('expected a page arm');
       request = { v: 1, instance, page: { kind: 'continuation', continuation: result.continuation } };

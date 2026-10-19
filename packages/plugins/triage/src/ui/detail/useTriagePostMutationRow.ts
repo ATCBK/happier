@@ -30,7 +30,10 @@ export function useTriagePostMutationRow(
   }
   const reobservation = React.useRef<AbortController | null>(null);
   const row = state.ownerKey === ownerKey ? state.row ?? windowRow : windowRow;
-  const reobserveRow = React.useCallback(async (candidate: TriageListRowV1 | null): Promise<void> => {
+  const reobserveRow = React.useCallback(async (
+    candidate: TriageListRowV1 | null,
+    keepViewerFacts = false,
+  ): Promise<void> => {
     const selected = candidate === null ? null : readTriageSelectedObservationV1(candidate);
     if (candidate === null || selected === null) return;
     const lifecycleGeneration = state.generation;
@@ -39,6 +42,7 @@ export function useTriagePostMutationRow(
     reobservation.current = controller;
     const next = await reobserveTriagePostMutationRow(hostApi, candidate, lanes, selected.sourceInstanceId, {
       signal: controller.signal,
+      keepViewerFacts,
     });
     if (!controller.signal.aborted && reobservation.current === controller && next !== null) {
       setState((current) => current.ownerKey === ownerKey && current.generation === lifecycleGeneration
@@ -48,7 +52,7 @@ export function useTriagePostMutationRow(
     if (reobservation.current === controller) reobservation.current = null;
   }, [hostApi, lanes, ownerKey, state.generation]);
   const completePostMutation = React.useCallback(() => reobserveRow(row), [reobserveRow, row]);
-  const reobserveSelection = React.useEffectEvent(() => reobserveRow(windowRow));
+  const reobserveSelection = React.useEffectEvent(() => reobserveRow(windowRow, true));
   React.useEffect(() => {
     setState((current) => current.ownerKey === ownerKey ? { ...current, row: null } : current);
     // Scans need not carry exact revision facts. The selected detail and its

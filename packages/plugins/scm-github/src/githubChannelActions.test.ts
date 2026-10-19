@@ -366,6 +366,7 @@ describe('GitHub Channel Actions', () => {
     const setup = ConversationProviderSetupOutcomeV1Schema.parse(await setupGithubChannels(
       setupInput, coreContext({ connectedAccounts, http }),
     ));
+    if ('kind' in setup) throw new Error('Expected a completed GitHub channel setup');
     expect(setup).toEqual({
       v: 1,
       credentialRef: GITHUB_ACCOUNT,

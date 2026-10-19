@@ -79,14 +79,14 @@ const HEALTHY_LANE: TriageListLaneV1 = {
 describe('projectTriageDetailHeaderV1', () => {
     it('gives the attention chip the same mark as its row chip', () => {
         const projected = projectTriageDetailHeaderV1({
-            row: { ...row(), attention: { level: 'required', fromSourceInstanceId: INSTANCE, reasonId: 'involvement/review-requested', reasonLabel: 'Your review was requested' } },
+            row: { ...row(), attention: { level: 'required', fromSourceInstanceId: INSTANCE, reasonId: 'involvement/review-requested', reasonLabel: 'Review requested' } },
             lanes: [HEALTHY_LANE],
             connectionLabel: null,
             sourceDescriptor: DESCRIPTOR,
             linkedSessions: [],
             linkedSessionsHasMore: false,
         });
-        expect(projected.attention).toEqual({ level: 'required', reasonLabel: 'Your review was requested', icon: 'review' });
+        expect(projected.attention).toEqual({ level: 'required', reasonLabel: 'Review requested', icon: 'review' });
     });
 
     it('says nothing about a connection no pass asked', () => {

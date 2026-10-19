@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import * as React from 'react';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { act } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -27,6 +28,7 @@ import {
 import { testkitLocator } from '../../corpus/testkit/observations.test-support.js';
 import { describeTriageEntrySessionPhaseV1 } from './sessionStartOutcome.js';
 import { useTriageEntrySessionStart, type TriageEntrySessionStartRequestV1 } from './useEntrySessionStart.js';
+import type { TriageActionProfilePreferencesV1 } from '../../sessions/actionLaunch.js';
 
 /**
  * The controller is exercised through its actual mounted Host API boundary:
@@ -213,12 +215,14 @@ async function mountProbe(input: Readonly<{
     strictMode?: boolean;
     request?: TriageEntrySessionStartRequestV1;
     seedResult?: unknown;
+    seedError?: Error;
     /** What this plugin's own start Action answers, press by press. */
     startResults?: readonly ('lost' | TriageStartEntrySessionResultV1)[];
     /** How the host answers the source selection, in order. Default: submitted. */
     selectionResults?: readonly ScriptedSelection[];
     linkedSession?: Readonly<{ sessionId: string; serverId?: string; machineId: string; path: string }>;
     projects?: readonly unknown[];
+    profilePlacement?: TriageActionProfilePreferencesV1['placement'];
 }> = {}): Promise<Readonly<{
     fixture: PluginUiTestkit;
     actionCalls: readonly string[];
@@ -255,7 +259,7 @@ async function mountProbe(input: Readonly<{
                         items: [{
                             id: 'profile-worktree',
                             name: 'Worktree repair',
-                            placement: 'automatic',
+                            placement: input.profilePlacement ?? 'automatic',
                             checkout: 'create_worktree',
                         }],
                     };
@@ -277,6 +281,7 @@ async function mountProbe(input: Readonly<{
             openNewSession: async ({ request, preparedReviewWorkspace }) => {
                 seeds.push(request);
                 if (preparedReviewWorkspace !== undefined) openedPreparations.push(preparedReviewWorkspace);
+                if (input.seedError) throw input.seedError;
                 if (input.seedResult !== undefined) throw new Error('New Session unavailable');
             },
             selectActionInput: async ({ request }) => {
@@ -439,6 +444,38 @@ describe('read-only PR Walk placement', () => {
 });
 
 describe('single-entry compose checkout handoff', () => {
+    it.each([
+        new PluginError({ code: 'plugin_action_current_intent_rejected' }),
+        new PluginError({ code: 'denied', diagnostics: [{ code: 'plugin_action_current_intent_rejected', severity: 'error' }] }),
+    ])(
+        'leaves preparation idle after the host returns $code ($diagnostics)', async (seedError) => {
+            const { fixture, actionCalls } = await mountProbe({
+                request: PREPARED_REVIEW_START_REQUEST,
+                seedError,
+            });
+            await act(async () => {
+                await fixture.press(await fixture.getByRole('button', { name: 'Compose in worktree' }));
+            });
+            await settle();
+            expect(openedPreparations).toHaveLength(1);
+            expect(notice).toBeNull();
+            expect(startInputs).toEqual([]);
+            expect(actionCalls).toEqual(['sessions.spawn.profiles.list', 'projects.list']);
+        },
+    );
+
+    it('keeps a real seed failure visible instead of treating generic unavailability as Decline', async () => {
+        const { fixture } = await mountProbe({
+            request: PREPARED_REVIEW_START_REQUEST,
+            seedError: new PluginError({ code: 'unavailable', diagnostics: [{ code: 'prepared_review_workspace_unavailable', severity: 'error' }] }),
+        });
+        await act(async () => {
+            await fixture.press(await fixture.getByRole('button', { name: 'Compose in worktree' }));
+        });
+        await settle();
+        expect(notice).toBe('plugins.triage.surface.session.newSessionUnavailable');
+    });
+
     it('carries the resolved profile worktree answer and exact entry attachment into the host seed', async () => {
         const { fixture } = await mountProbe();
 
@@ -496,6 +533,42 @@ describe('single-entry compose checkout handoff', () => {
  * delivery key — a second Session and a second Message for one intent.
  */
 describe('a start whose own response never arrived', () => {
+    it.each(['automatic', 'ask', { fixed: { serverId: 'server-a', machineId: 'machine-a' }, directory: '/workspaces/example' }] as const)(
+        'retains saved workspace evidence for prepared start with placement %j', async (profilePlacement) => {
+            const { fixture } = await mountProbe({ request: PREPARED_REVIEW_SEND_REQUEST, profilePlacement,
+                projects: [{ projectKey: { id: 'workspace-a' }, serverId: 'server-a', machineId: 'machine-a',
+                    rootPath: '/workspaces/example', forge: START_REQUEST.repository, worktrees: [], reachable: true }],
+                startResults: [REJOINED_RESULT] });
+            await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Compose in worktree' })); });
+            await settle();
+            expect(startInputs).toHaveLength(1);
+            expect(startInputs[0]?.destination).toMatchObject({ materialization: { kind: 'reviewWorkspace', request: {
+                workspace: { serverId: 'server-a', machineId: 'machine-a', rootPath: '/workspaces/example' },
+            } } });
+        },
+    );
+    it('carries a native-service selection with no Connected Account through prepared Session start', async () => {
+        const instance = testkitConfiguredInstance();
+        if (!('account' in instance.binding)) throw new Error('Expected account fixture');
+        const { fixture } = await mountProbe({
+            request: { ...PREPARED_REVIEW_SEND_REQUEST, reviewWorkspace: {
+                ...PREPARED_REVIEW_SEND_REQUEST.reviewWorkspace,
+                preparation: { ...PREPARED_REVIEW_SEND_REQUEST.reviewWorkspace.preparation,
+                    instance: { ...instance, binding: { purpose: instance.binding.purpose,
+                        source: 'native', service: instance.binding.account.service } } },
+            } },
+            selectionResults: ['refused'], // Host's admitted connectedAccount:none arm.
+            startResults: [REJOINED_RESULT],
+        });
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Compose in worktree' })); });
+        await settle();
+        expect(startInputs).toHaveLength(1);
+        expect(startInputs[0]?.prepareReviewWorkspaceSelection).toMatchObject({ input: {
+            instance: { binding: { source: 'native', service: instance.binding.account.service } },
+        } });
+        expect(startInputs[0]?.prepareReviewWorkspaceSelection?.credentialRef).toBeUndefined();
+        expect(startCarriers[0]).toEqual({ operation: PREPARED_OPERATION, result: preparedSelections[0] });
+    });
     it('retries the identical creation and delivery identity rather than starting a second session', async () => {
         const { fixture } = await mountProbe({
             request: SEND_START_REQUEST,

@@ -4,6 +4,7 @@ import {
     validatePluginCollectionUiQueryParametersV1,
 } from '@happier-dev/protocol';
 import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { projectPluginAccountCollectionDeclaration } from '@happier-dev/plugin-sdk/host/registration';
 import { describe, expect, it } from 'vitest';
 
 import { CORPUS_SESSION_LINKS_COLLECTION } from '../../corpus/collections/definitions.js';
@@ -29,7 +30,9 @@ import {
 
 const CONTRACT = normalizePluginAccountCollectionContractV1({
     pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
-    contribution: PluginAccountCollectionContributionV1Schema.parse(CORPUS_SESSION_LINKS_COLLECTION),
+    contribution: PluginAccountCollectionContributionV1Schema.parse(projectPluginAccountCollectionDeclaration(
+        CORPUS_SESSION_LINKS_COLLECTION.id, CORPUS_SESSION_LINKS_COLLECTION,
+    )),
 });
 
 describe('the Session cockpit linked-entries query', () => {

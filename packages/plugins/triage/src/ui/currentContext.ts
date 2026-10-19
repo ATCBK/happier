@@ -8,7 +8,7 @@ import {
 } from '@happier-dev/plugin-sdk/ui';
 
 import { triageEntryRowKey, type TriageListRowV1 } from '../projection/listWindow.js';
-import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1 } from '../composer/openEntryDetails.js';
+import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1, TRIAGE_TASK_DETAIL_DESTINATION_V1 } from '../composer/openEntryDetails.js';
 import {
   preflightTriageRouteLensV1,
   readTriageRouteLensV1,
@@ -121,7 +121,7 @@ export function projectTriageCurrentUiContextV1(input: Readonly<{
       title: input.formatOpenEntryTitle(display.title),
       command: Object.freeze({
         kind: 'openSurface',
-        destination: TRIAGE_ENTRY_DETAIL_DESTINATION_V1,
+        destination: input.surface.filters.tasks === undefined ? TRIAGE_ENTRY_DETAIL_DESTINATION_V1 : TRIAGE_TASK_DETAIL_DESTINATION_V1,
         subPath: location.subPath,
       }),
     }));

@@ -81,7 +81,7 @@ describe('Sentry plugin manifest', () => {
     expect(contribution?.operations).not.toHaveProperty('prepareReviewWorkspace');
   });
 
-  it('admits both Cloud deployments and the account origin for read-only requests', () => {
+  it('admits reads and exact issue PUTs on both Cloud deployments and the account origin', () => {
     expect(PLUGIN_MANIFEST.hostAccess.required).toEqual(expect.arrayContaining([{
       id: SENTRY_CLOUD_NETWORK_HOST_ACCESS_ID,
       capability: 'network',
@@ -91,7 +91,7 @@ describe('Sentry plugin manifest', () => {
           { kind: 'fixedOrigin', origin: SENTRY_CLOUD_REGION_ORIGINS.us },
           { kind: 'fixedOrigin', origin: SENTRY_CLOUD_REGION_ORIGINS.de },
         ],
-        methods: ['GET'],
+        methods: ['GET', 'PUT'],
       },
     }, {
       id: SENTRY_ACCOUNT_NETWORK_HOST_ACCESS_ID,
@@ -99,7 +99,7 @@ describe('Sentry plugin manifest', () => {
       reason: expect.any(String),
       scope: {
         targets: [{ kind: 'connectedAccountOrigin', service: SENTRY_CONNECTED_ACCOUNT_ID }],
-        methods: ['GET'],
+        methods: ['GET', 'PUT'],
         privateNetwork: true,
       },
     }, {
@@ -139,9 +139,7 @@ describe('Sentry plugin manifest', () => {
       expect(request.scope.targets.filter((target) => target.kind === 'fixedOrigin')).toEqual([]);
     }
 
-    // Neither split widened anything else: both remain read-only, and the two
-    // documented Cloud deployments stay exactly as reachable as before.
-    expect(network.flatMap((request) => request.scope.methods ?? [])).toEqual(['GET', 'GET']);
+    expect(network.flatMap((request) => request.scope.methods ?? [])).toEqual(['GET', 'PUT', 'GET', 'PUT']);
     expect(network.flatMap((request) => request.scope.targets)).toEqual([
       { kind: 'fixedOrigin', origin: SENTRY_CLOUD_REGION_ORIGINS.us },
       { kind: 'fixedOrigin', origin: SENTRY_CLOUD_REGION_ORIGINS.de },
@@ -149,7 +147,7 @@ describe('Sentry plugin manifest', () => {
     ]);
   });
 
-  it('binds every read Action to the exact account and both grants', () => {
+  it('binds every Action to the exact account and grants, with approval defaults on writes', () => {
     const actions = new Map(PLUGIN_MANIFEST.contributes.actions.map((action) => [
       action.id,
       action,
@@ -165,7 +163,8 @@ describe('Sentry plugin manifest', () => {
         SENTRY_CLOUD_NETWORK_HOST_ACCESS_ID,
         SENTRY_ACCOUNT_NETWORK_HOST_ACCESS_ID,
       ]);
-      expect(action.dangerLevel).toBe('safe');
+      const writes = [SENTRY_ACTION_IDS.resolve, SENTRY_ACTION_IDS.archive, SENTRY_ACTION_IDS.assign];
+      expect(action.dangerLevel).toBe(writes.some((id) => id === action.id) ? 'writesRemote' : 'safe');
     }
     // Every Action that receives an account declares where that account is,
     // including `scan`: the canonical Action parser now walks a union-shaped

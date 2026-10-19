@@ -202,6 +202,11 @@ export type TriageEntrySessionStartResultV1 =
 
 export type TriageEntrySessionDepsV1 = Readonly<{
     collections: Pick<CorpusCollectionsV1, 'sessionLinks'>;
+    /** Source-neutral relationship owner; absent only for direct external-owner callers. */
+    linkSession?: (input: Readonly<{
+        entryRef: TriageEntryRefV1; display: TriageEntrySessionLinkDisplayV1;
+        sessionId: string; sourceInstanceId?: string;
+    }>) => Promise<Readonly<{ status: 'linked' | 'failed' }>>;
     execute: TriageSessionActionInvokerV1;
     /**
      * The selected source contribution's admitted preparation operation and the
@@ -255,7 +260,13 @@ async function linkDeliverThenOpen(
         requiredLinks.push(candidate);
     }
     for (const requiredLink of requiredLinks) {
-        const link = await linkEntryToSession({
+        const linkInput = {
+            ...requiredLink,
+            sessionId: input.sessionId,
+            sourceInstanceId: input.delivery?.attachments.find((attachment) =>
+                sameTriageEntryReference(attachment.entryRef, requiredLink.entryRef))?.sourceInstanceId,
+        };
+        const link = deps.linkSession ? await deps.linkSession(linkInput) : await linkEntryToSession({
             collections: deps.collections,
             entryRef: requiredLink.entryRef,
             display: requiredLink.display,

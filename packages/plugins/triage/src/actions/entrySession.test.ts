@@ -3,7 +3,7 @@ import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginTargetedContributionSelectionV1 } from '@happier-dev/plugin-sdk/contributions';
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import type { SessionMessageSendResultV1 } from '@happier-dev/protocol';
-import { TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, projectTriagePrepareReviewWorkspaceInputV1 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
 
 import { activate } from '../activate.js';
@@ -32,6 +32,7 @@ import {
     TESTKIT_SELECTED_WORKSPACE,
     createTestkitPrepareReviewWorkspace,
     testkitConfiguredInstance,
+    testkitReadOnlySourceSnapshot,
     createTestkitActionInvoker,
     spawnSuccess,
     createTriageSelectedPrStartApprovalInput,
@@ -100,6 +101,9 @@ function createContext(
     return {
         signal: new AbortController().signal,
         services: {
+            targetedContributions: { observeForSelf: () => ({
+                readCurrent: async () => testkitReadOnlySourceSnapshot(), dispose: () => {},
+            }) },
             actions: {
                 execute: async (actionId: unknown, input: unknown) => {
                     if (executeOverride !== undefined) {
@@ -297,7 +301,7 @@ function createFormalReviewContext(input: Readonly<{
                             kind: 'scm_pull_request_review_scope.v1',
                             ...('account' in review.instance.binding
                                 ? { account: review.instance.binding.account }
-                                : { nativeService: review.instance.binding.service }),
+                                : 'service' in review.instance.binding ? { nativeService: review.instance.binding.service } : {}),
                             pullRequest: { number: 17 },
                             observed: TESTKIT_OBSERVED_REVISION,
                         },
@@ -686,6 +690,19 @@ describe('the Session-start Action a mounted header can actually press', () => {
 });
 
 describe('the registered formal Review transition', () => {
+    it('refuses Account-data bindings before source verification or SCM review execution', async () => {
+        const input = formalReviewInput();
+        const review = { ...input.review, instance: { ...input.review.instance, binding: {
+            purpose: input.review.instance.binding.purpose, source: 'accountData' as const,
+        } } };
+        const events: string[] = [];
+        const handler = registeredHandler(TRIAGE_START_PULL_REQUEST_REVIEW_ACTION_LOCAL_ID_V1);
+        await expect(handler({ ...input, review }, createFormalReviewContext({
+            expectedReview: review, verifyResult: { kind: 'verified', pullRequest: { number: 17 } }, events,
+        }))).resolves.toEqual({ v: 1, status: 'refused', reason: 'scopeRefused' });
+        expect(events).toEqual([]);
+    });
+
     it('starts a native-bound selected PR review with service metadata and no account substitute', async () => {
         const input = formalReviewInput();
         const review = { ...input.review, instance: { ...input.review.instance, binding: {
@@ -1043,6 +1060,8 @@ describe('the Session-start wire', () => {
         'outcomeUnknown',
         'failed',
         'cancelled',
+        'held',
+        'replied',
     ] as const satisfies readonly SessionMessageSendResultV1['status'][];
     type MissingCanonicalSendStatusV1 = Exclude<
         SessionMessageSendResultV1['status'],
@@ -1139,6 +1158,52 @@ describe('the Session-start wire', () => {
             parsed.success,
             parsed.success ? undefined : JSON.stringify(parsed.error, null, 2),
         ).toBe(true);
+    });
+
+    it.each([false, true])('prepares native input through the registered Action with exact carrier comparison (mismatch: %s)', async (mismatch) => {
+        const { collections } = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker({ spawn: [spawnSuccess()] });
+        const base = createTriageSelectedPrStartApprovalInput();
+        if (base.destination.kind !== 'new' || base.destination.materialization.kind !== 'reviewWorkspace'
+            || base.prepareReviewWorkspaceSelection === undefined) throw new Error('Expected prepared fixture');
+        const instance = testkitConfiguredInstance();
+        if (!('account' in instance.binding)) throw new Error('Expected account fixture');
+        const request = { ...base.destination.materialization.request, instance: { ...instance, binding: {
+            purpose: instance.binding.purpose, source: 'native' as const, service: instance.binding.account.service,
+        } } };
+        const selected = base.prepareReviewWorkspaceSelection.selection;
+        const operation = { role: 'prepareReviewWorkspace' };
+        let prepared = false;
+        const context = createContext(collections, invoker);
+        const handler = registeredHandler(TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1);
+        const result = await handler(TriageStartEntrySessionInputV1Schema.parse({ ...base,
+            destination: { ...base.destination, materialization: { kind: 'reviewWorkspace', request } },
+            prepareReviewWorkspaceSelection: { selection: selected, input: {
+                ...projectTriagePrepareReviewWorkspaceInputV1(request),
+                ...(mismatch ? { entryRef: { ...request.entryRef, entryId: 'other' } } : {}),
+            } },
+        }), { ...context, services: { ...context.services,
+            targetedContributions: { observeForSelf: () => ({
+                readCurrent: async () => ({ occurrenceId: 'target-1', sourceCustody: selected.target.sourceCustody,
+                    contributions: [{ contributor: { ...selected.contributor, occurrenceId: 'source-1' },
+                        descriptor: testkitReadOnlySourceSnapshot().contributions[0]!.descriptor,
+                        protocol: selected.point.protocol, operations: { prepareReviewWorkspace: operation } }] }),
+                dispose: () => {},
+            }) },
+            actions: { ...context.services.actions,
+                executeAdmittedTargetedOperation: async (selectedOperation: unknown, value: unknown, options: unknown) => {
+                    prepared = true;
+                    expect(selectedOperation).toBe(operation);
+                    expect(value).toEqual(projectTriagePrepareReviewWorkspaceInputV1(request));
+                    expect(options).not.toHaveProperty('expectedSelectedConnectedAccountRef');
+                    return { kind: 'prepared', repositoryPath: '/workspaces/example-review', branch: 'pr-17', created: false,
+                        pullRequest: { number: 17 }, currentness: { kind: 'currentAtObservedHead' } };
+                },
+            },
+        } } as unknown as PluginInvocationContext); // Host admission, Action RPC and Collection boundaries.
+        expect(prepared).toBe(!mismatch);
+        expect(result).toMatchObject(mismatch ? { type: 'workspacePreparationFailed' } : { type: 'opened', sessionId: 'session-a' });
+        expect(invoker.callsFor('session.spawn_new')).toHaveLength(mismatch ? 0 : 1);
     });
 
     it('carries an exact selected-PR workspace request only to the supplied admitted operation', async () => {

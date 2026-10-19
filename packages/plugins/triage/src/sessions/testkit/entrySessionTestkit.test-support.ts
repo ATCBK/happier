@@ -23,6 +23,17 @@ import type {
 } from '../entrySessionWorkspace.js';
 import { TriageStartEntrySessionInputV1Schema } from '../../actions/entrySessionProtocol.js';
 
+/** The host-admitted read-only fixture source; opaque operation handles stay at the RPC boundary. */
+export function testkitReadOnlySourceSnapshot() {
+    return { contributions: [{
+        contributor: { pluginId: TRIAGE_TESTKIT_SOURCE.pluginId, contributionId: TRIAGE_TESTKIT_SOURCE.localId },
+        descriptor: { v: 1, purpose: 'triage-source', displayName: 'Example source', kinds: [
+            { id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' },
+            { id: 'issue', workflowSubject: 'issue', displayName: 'Issue' },
+        ] }, operations: {},
+    }] };
+}
+
 /**
  * Fixtures for the Session start vertical.
  *

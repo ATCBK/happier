@@ -46,8 +46,8 @@ export async function toolbarMenuItem(
 }
 
 /**
- * The lens facets (Source, Type, Scope, State, Attention) live in the one **Filters** form, at every width: open
- * it the way a reader does, then find the option as the checkbox the form draws. `facet` names the group a test
+ * The lens facets (Source, Type, Scope, State, Attention) live in the one **Filters** menu of labelled checkbox groups: open
+ * it the way a reader does, then find the option as the checkbox row the menu draws. `facet` names the group a test
  * means; option names are unique across the facets these fixtures plan.
  */
 export async function filterFacetOption(
@@ -56,7 +56,7 @@ export async function filterFacetOption(
   options: Parameters<PluginUiTestkit['getByRole']>[1],
 ): Promise<Awaited<ReturnType<PluginUiTestkit['getByRole']>>> {
   await openToolbarMenu(shell, 'Filters');
-  return await shell.getByRole('checkbox', options);
+  return await shell.getByRole('menuitemcheckbox', options);
 }
 
 /** Open the Filters form and press one facet option. */

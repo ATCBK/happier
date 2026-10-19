@@ -1,5 +1,10 @@
 import type { SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 
+/** Only the host facts used by row status and grouping; detail labels remain full Session consumers. */
+export type TriageAgentStateV1 = Readonly<Pick<SessionStateV1, 'lifecycle' | 'operational' | 'agent'> & {
+  workStatus: Pick<SessionStateV1['workStatus'], 'bucket' | 'tone'>;
+}>;
+
 /**
  * The one sentence the story rail's agent step says about a linked Session's
  * live state (r0.42), read from the host's canonical Session awareness
@@ -31,7 +36,7 @@ const COPY = {
 
 export type TriageAgentStatusKindV1 = keyof typeof COPY;
 
-function status(id: TriageAgentStatusKindV1, state: SessionStateV1): TriageAgentStatusV1 {
+function status(id: TriageAgentStatusKindV1, state: TriageAgentStateV1): TriageAgentStatusV1 {
   const namedAttention = state.agent !== undefined && state.workStatus.bucket === 'needs_you'
     && (id === 'permission' || id === 'action' || id === 'input');
   return {
@@ -50,7 +55,7 @@ export function readTriageSessionWhereV1(state: SessionStateV1 | null): string |
   return state?.workspace?.worktreeName ?? state?.workspace?.projectName;
 }
 
-export function describeTriageAgentStatusV1(state: SessionStateV1): TriageAgentStatusV1 | null {
+export function describeTriageAgentStatusV1(state: TriageAgentStateV1): TriageAgentStatusV1 | null {
   switch (state.workStatus.bucket) {
     case 'working': return status('working', state);
     case 'offline': return status('offline', state);
@@ -81,7 +86,7 @@ const ROW_AGENT_PRIORITY: readonly SessionStateV1['workStatus']['bucket'][] = ['
  * The one agent state a PRs & Issues row shows for all of its linked Sessions (the table's Agent column).
  * It reuses the story rail's sentence owner, so a row and its detail never word the same Session differently.
  */
-export function readTriageEntryAgentStatusV1(states: readonly SessionStateV1[]): TriageAgentStatusV1 | null {
+export function readTriageEntryAgentStatusV1(states: readonly TriageAgentStateV1[]): TriageAgentStatusV1 | null {
   for (const bucket of ROW_AGENT_PRIORITY) {
     const match = states.find((state) => state.workStatus.bucket === bucket);
     const described = match === undefined ? null : describeTriageAgentStatusV1(match);

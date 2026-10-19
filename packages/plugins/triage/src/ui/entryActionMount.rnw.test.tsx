@@ -235,6 +235,8 @@ function createHarness(options: Readonly<{
     includeSecondEntry?: boolean;
     issue?: boolean;
     involvement?: readonly ('author' | 'assignee' | 'reviewRequested')[];
+    /** The durable detail read answers `unavailable`, so the detail never becomes ready. */
+    detailUnavailable?: boolean;
 }> = {}): Harness {
     const descriptor = options.issue === true
         ? { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map((kind) => ({ ...kind, workflowSubject: 'issue' })) }
@@ -335,6 +337,7 @@ function createHarness(options: Readonly<{
             );
         }
         if (action === TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1) {
+            if (options.detailUnavailable === true) return { kind: 'unavailable' };
             // The descriptor is what the offered controls are chosen from; the
             // instance is the one the window selected for this row.
             return TriageReadEntryDetailResultV1Schema.parse({
@@ -563,6 +566,17 @@ describe('the entry action controls on the mounted detail header', () => {
         expect(review.state?.disabled).not.toBe(true);
         await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
     });
+    it('keeps Review leading, disabled, for someone else\'s pull request whose detail could not be read', async () => {
+        // The source can prepare a review workspace; only this entry's read is missing. The verb belongs to the
+        // entry's kind, so a failed read never swaps Review for the issue verb, nor says the source cannot prepare.
+        const harness = createHarness({ formalReviewReady: true, detailUnavailable: true });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        const review = await shell.getByRole('button', { name: 'Review' });
+        expect(review.state?.disabled).toBe(true);
+        await expect(shell.queryByRole('button', { name: 'Fix' })).resolves.toBeUndefined();
+        await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
+    }, 60_000);
     it('gives a newly selected entry its own action controller while the prior entry is still starting', async () => {
         const harness = createHarness({ includeSecondEntry: true });
         harness.setActions([{
@@ -1017,6 +1031,7 @@ describe('the entry action controls on the mounted detail header', () => {
 
         // The blocked arm is the one whose DECLARED mode is `pull_request`,
         // independent of its label or target arm.
+        await pressAction(shell, 'More actions');
         const blocked = await shell.findByRole('button', { name: 'Repair pull request' });
 
         // This fixture admits no preparation operation, so this action would

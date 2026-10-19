@@ -34,8 +34,9 @@ export async function reobserveTriagePostMutationRow(
   row: TriageListRowV1,
   lanes: readonly TriageListLaneV1[],
   sourceInstanceId: string,
-  options: PluginCancellationOptions,
+  options: PluginCancellationOptions & Readonly<{ keepViewerFacts?: boolean }>,
 ): Promise<TriageListRowV1 | null> {
+  const { keepViewerFacts, ...cancellation } = options;
   const prior = row.observations.find(
     (observation) => observation.sourceInstanceId === sourceInstanceId,
   );
@@ -52,7 +53,7 @@ export async function reobserveTriagePostMutationRow(
         sourceInstanceId,
         ...(lastKnownLocator === undefined ? {} : { lastKnownLocator }),
       },
-      options,
+      cancellation,
     ));
   } catch {
     return null;
@@ -67,5 +68,6 @@ export async function reobserveTriagePostMutationRow(
     observation,
     lanes,
     assembledAtMs: result.observation.observedAtMs,
+    ...(keepViewerFacts === true ? { keepViewerFacts } : {}),
   });
 }

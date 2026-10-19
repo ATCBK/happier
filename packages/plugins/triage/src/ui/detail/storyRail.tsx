@@ -25,6 +25,7 @@ import type { TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protoc
 
 import { describeTriageAgentStatusV1, readTriageSessionWhereV1 } from './agentState.js';
 import { TriageLinkedSessions } from './linkedSessions.js';
+import { readTriageSessionTitle } from './sessionTitle.js';
 import { useLinkedSessionOpen } from './useLinkedSessionOpen.js';
 
 type TriageFindingV1 = ReturnType<typeof useReviewCommentProposalsForEntry>['proposals'][number];
@@ -95,9 +96,8 @@ export function TriageAgentStep(props: Readonly<{
   // field; in that case use the story's current linked Session destination.
   const omittedFinding = findings.proposals[SHOWN_FINDINGS];
   const findingsSessionId = omittedFinding?.sessionId ?? props.sessions[0]?.sessionId;
-  // ③ is named after the Session doing the work (its own title), and only falls back to the generic words when
-  // the Session has none to give.
-  const title = props.sessions[0]?.displayTitle ?? text('plugins.triage.surface.detail.story.agent', 'Agent work');
+  // ③ uses the same public Session title and untitled fallback as the linked controls.
+  const title = readTriageSessionTitle(props.live.state, text);
   const content = (
     <>
       {status === null ? null : (

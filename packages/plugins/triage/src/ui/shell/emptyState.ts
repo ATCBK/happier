@@ -47,51 +47,80 @@ export type TriageListEmptyStateV1 = Readonly<{
         | 'noMatchYet'
         | 'noSearchMatch'
         | 'noSearchMatchYet'
+        | 'noTasks'
+        | 'noTasksYet'
         | 'healthy';
     title: string;
     description: string;
+    /**
+     * The ways out of a state the reader's own lens narrowed, in the order they are
+     * offered (the first is primary). The shell draws one control per step, so the
+     * sentence and its controls come from this one decision: `loadMore` while the
+     * walk has more to read, then what undoes the narrowing.
+     */
+    next: readonly TriageListEmptyNextStepV1[];
 }>;
+
+/** One control an empty narrowed list offers; each calls the owner the page already has for it. */
+export type TriageListEmptyNextStepV1 = 'loadMore' | 'clearSearch' | 'clearFilters';
+
+const NO_NEXT_STEPS: readonly TriageListEmptyNextStepV1[] = Object.freeze([]);
 
 const HEALTHY: TriageListEmptyStateV1 = Object.freeze({
     kind: 'healthy',
     title: 'Nothing needs you',
     description: 'Every configured source answered, and none of them has an entry for you right now.',
+    next: NO_NEXT_STEPS,
 });
 
 const READING: TriageListEmptyStateV1 = Object.freeze({
     kind: 'reading',
     title: 'Still reading your sources',
     description: 'Nothing has come back yet. This list fills in as each source answers.',
+    next: NO_NEXT_STEPS,
 });
 
 const BOUNDED: TriageListEmptyStateV1 = Object.freeze({
     kind: 'boundedWindow',
     title: 'This list is not complete yet',
     description: 'Some sources had not finished their walk, so entries may still be missing. Refresh to keep reading.',
+    next: NO_NEXT_STEPS,
 });
 
 const NO_MATCH: TriageListEmptyStateV1 = Object.freeze({
     kind: 'noMatch',
     title: 'Nothing matches these filters',
-    description: 'Every configured source answered, and nothing in this list matches what you selected. Adjust or clear a filter to widen it.',
+    description: 'Every configured source answered, and nothing in this list matches what you selected.',
+    next: Object.freeze(['clearFilters'] as const),
 });
 
 const NO_MATCH_YET: TriageListEmptyStateV1 = Object.freeze({
     kind: 'noMatchYet',
     title: 'No match yet',
-    description: 'Nothing matches these filters in the part of your sources read so far. Keep reading, or clear a filter to widen it.',
+    description: 'Nothing read so far matches these filters, and your sources have more to read.',
+    next: Object.freeze(['loadMore', 'clearFilters'] as const),
 });
 
 const NO_SEARCH_MATCH: TriageListEmptyStateV1 = Object.freeze({
     kind: 'noSearchMatch',
     title: 'Nothing matches your search',
-    description: 'Every configured source answered, and nothing in this list matches what you typed. Clear the search to widen it.',
+    description: 'Every configured source answered, and nothing in this list matches what you typed.',
+    next: Object.freeze(['clearSearch'] as const),
 });
 
 const NO_SEARCH_MATCH_YET: TriageListEmptyStateV1 = Object.freeze({
     kind: 'noSearchMatchYet',
     title: 'No search match yet',
-    description: 'Nothing matches what you typed in the part of your sources read so far. Keep reading, or clear the search to widen it.',
+    description: 'Nothing read so far matches what you typed, and your sources have more to read.',
+    next: Object.freeze(['loadMore', 'clearSearch'] as const),
+});
+
+const NO_TASKS: TriageListEmptyStateV1 = Object.freeze({
+    kind: 'noTasks', title: 'No tasks here', description: 'Try another task lens or create a task.', next: NO_NEXT_STEPS,
+});
+const NO_TASKS_YET: TriageListEmptyStateV1 = Object.freeze({
+    kind: 'noTasksYet', title: 'No tasks here', description: 'No tasks read so far are in this lens. More sources may still answer.',
+    next: Object.freeze(['loadMore'] as const),
 });
 
 /**
@@ -102,6 +131,7 @@ const EMPTY_SCENES_V1: Readonly<Partial<Record<TriageListEmptyStateV1['kind'], H
     healthy: 'inboxZero',
     noMatch: 'noMatch',
     noSearchMatch: 'noMatch',
+    noTasks: 'noMatch',
 });
 
 export function readTriageListEmptyScene(kind: TriageListEmptyStateV1['kind']): HappierSceneId | undefined {
@@ -141,6 +171,8 @@ const EMPTY_TRANSLATION_KEYS_V1: Readonly<Record<TriageListEmptyStateV1['kind'],
         title: 'plugins.triage.surface.empty.noSearchMatchYet.title',
         description: 'plugins.triage.surface.empty.noSearchMatchYet.description',
     }),
+    noTasks: Object.freeze({ title: 'plugins.triage.tasks.empty.title', description: 'plugins.triage.tasks.empty.description' }),
+    noTasksYet: Object.freeze({ title: 'plugins.triage.tasks.empty.title', description: 'plugins.triage.tasks.empty.pending' }),
 });
 
 /**
@@ -206,6 +238,7 @@ export function resolveTriageListEmptyState(input: Readonly<{
         return Object.freeze({
             kind: 'sourceFailure',
             ...readTriageListFailureNotice(input.failure, text),
+            next: NO_NEXT_STEPS,
         });
     }
     if (input.narrowing.facets) {
@@ -222,6 +255,7 @@ export function resolveTriageListEmptyState(input: Readonly<{
         // sentence names the search box the query is actually in.
         return input.coverage === 'partial' ? NO_SEARCH_MATCH_YET : NO_SEARCH_MATCH;
     }
+    if (input.narrowing.tasks) return input.coverage === 'partial' ? NO_TASKS_YET : NO_TASKS;
     if (input.coverage === 'partial') return input.refreshing ? READING : BOUNDED;
     // A complete window with a refresh in flight is a real, current, empty
     // answer; the pass now running may change it, but nothing said so far is

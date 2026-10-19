@@ -16,7 +16,6 @@ import { readTriageActionsForSurface } from '../actions/actionsCatalog.js';
 import { readTriageSavedViewsForSurface } from '../actions/savedViews.js';
 import { TriageReadActionsInputV1Schema } from '../actions/actionsCatalogProtocol.js';
 import { TriageReadSavedViewsInputV1Schema } from '../actions/savedViewsProtocol.js';
-import { TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1 } from '../actions/userMarksProtocol.js';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { useTriagePostMutationCompletion } from '@happier-dev/triage-sources/ui';
 import { PLUGIN_UI_SUB_PATH_MAX_UTF8_BYTES_V1 } from '@happier-dev/plugin-sdk/ui';
@@ -31,13 +30,14 @@ import {
     TriageConfiguredSourceInstanceV1Schema,
     TriageDetailSurfaceInputV1JsonSchema,
     TriageEntryRefV1Schema,
+    admitTriageSourceDescriptorV1,
     type TriageConfiguredSourceInstanceV1,
     type TriageScanResultV1,
 } from '@happier-dev/triage-protocol/v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PluginUiContextEnrichmentV1 } from '@happier-dev/plugin-sdk/ui';
 import { TriageMountedUiInputV1Schema } from '../actions/mountedUiProtocol.js';
-import { unlinkTriageEntryFromSession } from '../actions/entrySession.js';
+import { unlinkEntryFromSession } from '../sessions/entrySessionLinks.js';
 import { TriageUnlinkEntryFromSessionActionInputV1Schema, TriageUnlinkEntryFromSessionActionResultV1Schema } from '../actions/entrySessionProtocol.js';
 import { invokeTriageMountedUiAction } from './mountedActions.js';
 
@@ -331,7 +331,7 @@ const OTHER_ADMITTED_MOUNT = Object.freeze({
     },
 });
 
-function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedDetail?: boolean;
+function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedDetail?: boolean; sourceSessionTab?: boolean;
     fixPullRequestState?: 'unprojected' | 'unreachable'; }> = {}) {
     const contributesDetail = options.contributesDetail !== false;
     return createSurfaceContextFixture({
@@ -364,7 +364,14 @@ function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedD
                     }, {
                         contributor: CONTRIBUTOR,
                         protocol: PROTOCOL,
-                        descriptor: options.fixPullRequestState !== undefined ? {
+                        descriptor: options.sourceSessionTab ? (() => {
+                            const admitted = admitTriageSourceDescriptorV1({ ...DESCRIPTOR, kinds: [{ ...DESCRIPTOR.kinds[0], detailTabs: [
+                                { kind: 'shared', id: 'overview' }, { kind: 'shared', id: 'files' },
+                                { kind: 'source', id: 'session', title: 'Session history' },
+                            ] }] });
+                            if (!admitted.ok) throw new Error(`Public descriptor refused: ${admitted.reason}`);
+                            return admitted.descriptor;
+                        })() : options.fixPullRequestState !== undefined ? {
                             ...DESCRIPTOR, kinds: [{ ...DESCRIPTOR.kinds[0], workflowSubject: 'issue', detailTabs: [
                                 { kind: 'shared', id: 'overview' }, { kind: 'shared', id: 'activity' },
                             ] }, { id: 'fix-pr', workflowSubject: 'pullRequest', displayName: 'Pull request',
@@ -547,9 +554,10 @@ function createHarness(options: Readonly<{
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>) {
         const action = String(request.action);
         if (action === 'sessions/unlink-entry-v1') {
-            return TriageUnlinkEntryFromSessionActionResultV1Schema.parse(await unlinkTriageEntryFromSession(
-                TriageUnlinkEntryFromSessionActionInputV1Schema.parse(request.input), { collections },
-            ));
+            const unlinked = await unlinkEntryFromSession({
+                ...TriageUnlinkEntryFromSessionActionInputV1Schema.parse(request.input), collections,
+            });
+            return TriageUnlinkEntryFromSessionActionResultV1Schema.parse({ v: 1, status: unlinked.status });
         }
         if (action === TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1) {
             return await listTriagePinnedEntries(
@@ -752,6 +760,7 @@ async function mountShell(
         sessionTitle?: string;
         hostedDetail?: boolean;
         tabbedDetail?: boolean;
+        sourceSessionTab?: boolean;
         activeSurface?: boolean;
         hostTarget?: { ready: boolean; pending?: boolean; executionReady?: boolean };
         automaticDemandOnly?: boolean;
@@ -1225,6 +1234,45 @@ describe('opening a row into the source detail', () => {
         await expect(shell.queryByRole('button', { name: 'Open' })).resolves.toBeUndefined();
         await act(async () => { expect(await invoke('peekRow')).toEqual({ status: 'applied' }); });
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Open' })); });
+        await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
+    });
+
+    it.each([0, 1])('keeps source session and host Session destinations distinct through mounted Actions (%s linked)', async (linkedSessionCount) => {
+        let published: PluginUiContextEnrichmentV1 | null = null;
+        const shell = await mountShell({ activeSurface: true, sourceSessionTab: true, linkedSessionCount,
+            publishCurrentUiContext: (context) => { published = context; } });
+        await openTheRow(shell);
+        const sourceCommand = (published as PluginUiContextEnrichmentV1 | null)?.commands?.find(
+            (entry) => entry.title === 'Select Session history tab');
+        if (sourceCommand?.command.kind !== 'executeAction') throw new Error('Missing source panel selection command');
+        const address = TriageMountedUiInputV1Schema.parse(sourceCommand.command.input);
+        const { createTriageMountedUiActionHandler } = await import('../actions/mountedUi.js');
+        const invoke = async (operation: typeof address.operation) => await createTriageMountedUiActionHandler()(
+            { mountId: address.mountId, operation }, {
+                plugin: { id: 'happier.triage', version: '0.0.0' },
+                contribution: { id: 'ui/mounted-v1', qualifiedId: 'happier.triage/actions/ui/mounted-v1' },
+                invocationSurface: 'agent', signal: new AbortController().signal,
+                ui: shell.context.hostApi, ephemeralSharedScope: currentHarness!.ephemeralSharedScope,
+            });
+        await act(async () => { expect(await invoke(address.operation)).toEqual({ status: 'applied' }); });
+        await expect(shell.getByRole('tab', { name: 'Session history', state: { selected: true } })).resolves.toBeDefined();
+        await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
+        await act(async () => { await shell.press(await shell.getByRole('tab', { name: 'Files' })); });
+        await expect(shell.getByRole('tab', { name: 'Files', state: { selected: true } })).resolves.toBeDefined();
+        if (linkedSessionCount > 0) {
+            await act(async () => { expect(await invoke({ kind: 'selectDetailTab', tab: 'session' })).toEqual({ status: 'applied' }); });
+            await expect(shell.getByRole('group', { name: 'Session session-linked-001' })).resolves.toBeDefined();
+            await expect(shell.queryByText(DETAIL_BODY_TEXT)).resolves.toBeUndefined();
+        } else {
+            expect(await invoke({ kind: 'selectDetailTab', tab: 'session' })).toEqual({ status: 'unavailable' });
+        }
+        await act(async () => { expect(await invoke({ kind: 'closeDetail' })).toEqual({ status: 'applied' }); });
+        if (address.operation.kind !== 'selectDetailTab') throw new Error('Expected a source tab selection');
+        const tab = address.operation.tab;
+        await act(async () => { expect(await invoke({ kind: 'openDetail', entryRef: {
+            source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17',
+        }, tab })).toEqual({ status: 'applied' }); });
+        await expect(shell.getByRole('tab', { name: 'Session history', state: { selected: true } })).resolves.toBeDefined();
         await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined();
     });
 

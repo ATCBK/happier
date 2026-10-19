@@ -6,6 +6,7 @@ import {
     isTriageBulkSessionOutcomeRetryableV1,
     mergeTriageBulkRetryResultsV1,
     resolveTriageBulkSeedPlacementV1,
+    readTriageBulkDestinationUnavailableReasonV1,
 } from './useBulkEntrySessions.js';
 
 const REPOSITORY = Object.freeze({
@@ -32,6 +33,36 @@ function candidate(input: Readonly<{
 }
 
 describe('bulk New Session placement seeding', () => {
+    it('keeps the fixed machine and saved-project evidence while the reader chooses its directory', () => {
+        expect(resolveTriageBulkSeedPlacementV1({ workspaceMode: 'pull_request',
+            preferences: { placement: { fixed: { serverId: 'server-a', machineId: 'machine-a' } } },
+            entries: [{ repository: REPOSITORY }], registryComplete: true,
+            projects: [candidate({ projectId: 'workspace-api', machineId: 'machine-a', rootPath: '/checkouts/api' })],
+        })).toMatchObject({ kind: 'exact', placement: { executionTarget: { serverId: 'server-a', machineId: 'machine-a' } },
+            candidates: [expect.objectContaining({ projectKey: { id: 'workspace-api' } })] });
+    });
+    it.each(['ask', { fixed: { serverId: 'server-a', machineId: 'machine-a' }, directory: '/checkouts/api' }] as const)(
+        'retains saved project evidence under the placement preference %j', (placement) => {
+            const result = resolveTriageBulkSeedPlacementV1({ workspaceMode: 'pull_request', preferences: { placement },
+                entries: [{ repository: REPOSITORY }], registryComplete: true,
+                projects: [candidate({ projectId: 'workspace-api', machineId: 'machine-a', rootPath: '/checkouts/api' })] });
+            expect(result).toMatchObject(placement === 'ask'
+                ? { kind: 'candidates', candidates: [expect.objectContaining({ projectKey: { id: 'workspace-api' } })] }
+                : { kind: 'exact', candidates: [expect.objectContaining({ projectKey: { id: 'workspace-api' } })] });
+        },
+    );
+    it('counts only applicable entries when checking a shared PR checkout', () => {
+        const action = {
+            actionId: 'review', label: 'Review', enabled: true, appliesTo: ['pullRequest' as const],
+            profileId: null, workspaceMode: 'pull_request' as const,
+            target: { kind: 'agent' as const, promptInvocationId: null, delivery: 'compose' as const },
+        };
+        const entries = [{ workflowSubject: 'pullRequest' as const }, { workflowSubject: 'issue' as const }];
+        expect(readTriageBulkDestinationUnavailableReasonV1({ action, entries, destination: 'attachAllToNewSession' })).toBeNull();
+        expect(readTriageBulkDestinationUnavailableReasonV1({ action, entries: [entries[0]!, entries[0]!], destination: 'attachAllToNewSession' }))
+            .toBe('sharedPlacementIncompatible');
+    });
+
     it('allows error entries without forge identity to share a user-selected project', () => {
         expect(isTriageBulkSharedPlacementCompatibleV1({
             workspaceMode: 'repository', entries: [{}, {}],
@@ -156,7 +187,7 @@ describe('bulk New Session placement seeding', () => {
         });
 
         expect(result).toMatchObject({ kind: 'exact' });
-        expect(result.kind === 'exact' ? result.candidate?.projectKey : undefined)
+        expect(result.kind === 'exact' ? result.candidates[0]?.projectKey : undefined)
             .toEqual(matches ? left : undefined);
     });
 });

@@ -1,5 +1,6 @@
 import { TriageConfiguredSourceInstanceV1Schema, type TriageScanResultV1 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import {
     testkitLocator,
@@ -131,6 +132,65 @@ function completedPage(entryId: string): TriageScanResultV1 {
 }
 
 describe('one materialization pass', () => {
+    it('walks past non-selected kinds before spending the result row budget', async () => {
+        const mixed = positionalLane({
+            sourceInstanceId: INSTANCE_ID,
+            declaredKindIds: ['pull-request', 'issue'],
+            pageFor: (token) => token === null ? {
+                kind: 'page', evidence: { kind: 'partial', reason: 'pageLimit' },
+                observations: [presentObservation('pull-request', 'pr')],
+                continuation: { v: 1, token: 'tasks-page' },
+            } : {
+                kind: 'complete', evidence: WALK_FINISHED,
+                observations: [presentObservation('issue', 'task')],
+            },
+        });
+        const pass = await runTriageScanPass({
+            lanes: [{ ...mixed, selectedKindIds: ['issue'] }],
+            pageLimit: 1, observationBudget: 1, nowMs: () => 1000,
+        });
+        expect(pass.observations.map((item) => item.entryRef.entryId)).toEqual(['task']);
+        expect(pass.lanes[0]?.exhausted).toBe(true);
+        expect(pass.stopped).toEqual([]);
+    });
+
+    it('still rejects an undeclared kind even when it would be filtered from the result', async () => {
+        const source = positionalLane({
+            sourceInstanceId: INSTANCE_ID, declaredKindIds: ['issue'],
+            pageFor: () => ({ kind: 'complete', evidence: WALK_FINISHED,
+                observations: [presentObservation('undeclared', 'bad')] }),
+        });
+        const pass = await runTriageScanPass({
+            lanes: [{ ...source, selectedKindIds: ['issue'] }],
+            pageLimit: 1, observationBudget: 1, nowMs: () => 1000,
+        });
+        expect(pass.observations).toEqual([]);
+        expect(pass.lanes[0]?.health.kind).toBe('failed');
+    });
+
+    it.each([
+        { error: new PluginError({ code: 'source_read_refused', retryable: true, message: 'private exception' }),
+            expected: { code: 'source_read_refused', retryable: true } },
+        // Ordinary separately bundled SDK errors share the public contract, not a constructor.
+        { error: Object.assign(new Error('private exception'), {
+            name: 'PluginError', code: 'external_source_refused', retryable: false,
+            data: { name: 'PluginError', code: 'external_source_refused', retryable: false, message: 'private exception' },
+        }), expected: { code: 'external_source_refused', retryable: false } },
+        { error: new Error('private exception'), expected: { code: 'triage/scanInvocationRejected' } },
+    ])('keeps only safe rejection diagnostics for an unavailable source', async ({ error, expected }) => {
+        const warn = vi.fn();
+        const pass = await runTriageScanPass({
+            lanes: [answeringLane({ sourceInstanceId: INSTANCE_ID, declaredKindIds: ['pull-request'],
+                scan: () => { throw error; },
+            })],
+            pageLimit: 1, observationBudget: 1, nowMs: () => 1000,
+            logger: { warn },
+        });
+        expect(pass.lanes[0]?.health).toEqual({ kind: 'unavailable', error: expected });
+        expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining(expected));
+        expect(JSON.stringify([pass, warn.mock.calls])).not.toContain('private exception');
+    });
+
     it('rejects a whole page whose source broke the contract, and adopts none of its siblings', async () => {
         const pass = await runTriageScanPass({
             lanes: [lane({
@@ -356,6 +416,115 @@ describe('one materialization pass', () => {
         expect(pass.lanes.map((entry) => entry.exhausted)).toEqual([false, true]);
     });
 
+    it('advances healthy lanes serially while an earlier lane is still unanswered', async () => {
+        vi.useFakeTimers();
+        const calls: string[] = [];
+        let releaseSlow!: (page: TriageScanResultV1) => void;
+        let releaseHealthy!: (page: TriageScanResultV1) => void;
+        const slow = new Promise<TriageScanResultV1>((resolve) => { releaseSlow = resolve; });
+        const healthy = new Promise<TriageScanResultV1>((resolve) => { releaseHealthy = resolve; });
+        const pending = runTriageScanPass({
+            lanes: [
+                answeringLane({ sourceInstanceId: INSTANCE_ID, declaredKindIds: ['pull-request'],
+                    scan: () => { calls.push('slow'); return slow; } }),
+                answeringLane({ sourceInstanceId: OTHER_INSTANCE_ID, declaredKindIds: ['pull-request'],
+                    scan: async (input) => {
+                        calls.push(input.page.kind === 'initial' ? 'healthy-first' : input.page.continuation.token);
+                        return input.page.kind === 'initial' ? await healthy : completedPage('healthy-last');
+                    } }),
+            ],
+            pageLimit: 1, observationBudget: 3, nowMs: () => 1_000,
+        });
+        try {
+            expect(calls).toEqual(['slow', 'healthy-first']);
+            // Neither pending page can cause another read of its own lane.
+            await vi.runAllTimersAsync();
+            expect(calls).toEqual(['slow', 'healthy-first']);
+            releaseHealthy({ kind: 'page', evidence: { kind: 'partial', reason: 'pageLimit' },
+                observations: [presentObservation('pull-request', 'healthy-first')],
+                continuation: { v: 1, token: 'healthy-next' } });
+            await vi.runAllTimersAsync();
+            expect(calls).toEqual(['slow', 'healthy-first', 'healthy-next']);
+        } finally {
+            releaseHealthy(completedPage('healthy-first'));
+            releaseSlow(completedPage('slow'));
+            await vi.runAllTimersAsync();
+            await pending;
+            vi.useRealTimers();
+        }
+        const pass = await pending;
+        expect(pass.observations.map((observation) => observation.entryRef.entryId).sort())
+            .toEqual(['healthy-first', 'healthy-last', 'slow']);
+        expect(pass.lanes.every((entry) => entry.exhausted)).toBe(true);
+    });
+
+    it('reserves whole pending pages and gives waiting lanes the next available budget', async () => {
+        vi.useFakeTimers();
+        const calls: string[] = [];
+        const thirdId = '33333333-3333-4333-8333-333333333333';
+        let releaseSlow!: (page: TriageScanResultV1) => void;
+        const slow = new Promise<TriageScanResultV1>((resolve) => { releaseSlow = resolve; });
+        const pending = runTriageScanPass({
+            lanes: [
+                answeringLane({ sourceInstanceId: INSTANCE_ID, declaredKindIds: ['pull-request'],
+                    scan: () => { calls.push(INSTANCE_ID); return slow; } }),
+                lane({ sourceInstanceId: OTHER_INSTANCE_ID, declaredKindIds: ['pull-request'],
+                    pages: endlessPages('pull-request', 3), calls }),
+                lane({ sourceInstanceId: thirdId, declaredKindIds: ['pull-request'],
+                    pages: [completedPage('third')], calls }),
+            ],
+            pageLimit: 1, observationBudget: 2, nowMs: () => 1_000,
+        });
+        try {
+            await vi.runAllTimersAsync();
+            expect(calls).toEqual([INSTANCE_ID, OTHER_INSTANCE_ID]);
+            // The first pending page still owns one row of capacity. Once it
+            // answers empty, the untouched third lane precedes a second slice.
+            releaseSlow({ kind: 'complete', evidence: WALK_FINISHED, observations: [] });
+            await vi.runAllTimersAsync();
+            const pass = await pending;
+            expect(calls).toEqual([INSTANCE_ID, OTHER_INSTANCE_ID, thirdId]);
+            expect(pass.observations.map((observation) => observation.entryRef.entryId))
+                .toEqual(['deep-0', 'third']);
+            expect(pass.stopped.map((entry) => entry.sourceInstanceId)).toEqual([OTHER_INSTANCE_ID]);
+        } finally {
+            releaseSlow({ kind: 'complete', evidence: WALK_FINISHED, observations: [] });
+            await vi.runAllTimersAsync();
+            await pending;
+            vi.useRealTimers();
+        }
+    });
+
+    it('shares caller cancellation across in-flight lanes without starting continuations', async () => {
+        const controller = new AbortController();
+        const signals: AbortSignal[] = [];
+        const pending = runTriageScanPass({
+            lanes: [INSTANCE_ID, OTHER_INSTANCE_ID].map((sourceInstanceId) => answeringLane({
+                sourceInstanceId, declaredKindIds: ['pull-request'],
+                scan: (_input, options) => new Promise<TriageScanResultV1>((_resolve, reject) => {
+                    if (options?.signal) {
+                        signals.push(options.signal);
+                        options.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+                    }
+                }),
+            })),
+            signal: controller.signal,
+            pageLimit: 1, observationBudget: 4, nowMs: () => 1_000,
+        });
+        try {
+            expect(signals).toHaveLength(2);
+        } finally {
+            controller.abort();
+            await pending;
+        }
+        const pass = await pending;
+        expect(signals.every((signal) => signal.aborted)).toBe(true);
+        expect(signals).toHaveLength(2);
+        expect(pass.observations).toEqual([]);
+        expect(pass.lanes.every((entry) => !entry.exhausted)).toBe(true);
+        expect(pass.stopped).toEqual([]);
+    });
+
     it('ends the rotation rather than the lane when the observation budget runs out', async () => {
         const pass = await runTriageScanPass({
             lanes: [lane({
@@ -525,13 +694,15 @@ describe('one materialization pass', () => {
 
     it('applies nothing a timed-out page returns while the pass is still running', async () => {
         let settleLate: ((result: TriageScanResultV1) => void) | undefined;
+        let slowSignal: AbortSignal | undefined;
         const pass = await runTriageScanPass({
             lanes: [
                 answeringLane({
                     sourceInstanceId: INSTANCE_ID,
                     declaredKindIds: ['pull-request'],
                     // Never answers before the deadline.
-                    scan: async () => await new Promise<TriageScanResultV1>((resolve) => {
+                    scan: async (_input, options) => await new Promise<TriageScanResultV1>((resolve) => {
+                        slowSignal = options?.signal;
                         settleLate = resolve;
                     }),
                 }),
@@ -539,12 +710,15 @@ describe('one materialization pass', () => {
                     sourceInstanceId: OTHER_INSTANCE_ID,
                     declaredKindIds: ['pull-request'],
                     scan: async () => {
+                        // Lanes now start independently. Release the abandoned
+                        // answer only after its real deadline signal fires.
+                        await new Promise<void>((resolve) => {
+                            if (slowSignal?.aborted) resolve();
+                            else slowSignal?.addEventListener('abort', () => resolve(), { once: true });
+                        });
                         // The abandoned lane answers now, while the pass is
                         // still walking this one.
                         settleLate?.(completedPage('late'));
-                        await new Promise<void>((resolve) => {
-                            setTimeout(resolve, 0);
-                        });
                         return completedPage('21');
                     },
                 }),

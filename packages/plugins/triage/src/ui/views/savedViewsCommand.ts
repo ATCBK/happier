@@ -1,4 +1,5 @@
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
+import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 
 import {
   administerTriageSavedView,
@@ -76,7 +77,7 @@ export type TriageSavedViewsTransportV1 = Readonly<{
   administer(
     input: TriageAdministerSavedViewInputV1,
     options?: PluginCancellationOptions,
-  ): Promise<TriageAdministerSavedViewResultV1>;
+  ): Promise<TriageAdministerSavedViewResultV1 | null>;
 }>;
 
 /**
@@ -86,6 +87,7 @@ export type TriageSavedViewsTransportV1 = Readonly<{
  */
 export function createDirectTriageSavedViewsTransport(
   catalog: TriageCatalogStoreV1,
+  host: Pick<PluginUiHostApi, 'admitAction'>,
 ): TriageSavedViewsTransportV1 {
   return Object.freeze({
     read: async (options) => await readTriageSavedViewsForSurface({ v: 1 }, {
@@ -93,12 +95,15 @@ export function createDirectTriageSavedViewsTransport(
       mintViewId: mintTriageOpaqueIdV1,
       ...(options?.signal ? { signal: options.signal } : {}),
     }),
-    administer: async (input, options) => await administerTriageSavedView(input, {
-      catalog,
-      // Minted at the writer, which for this transport is this mount.
-      mintViewId: mintTriageOpaqueIdV1,
-      ...(options?.signal ? { signal: options.signal } : {}),
-    }),
+    administer: async (input, options) => {
+      if (!await host.admitAction(TRIAGE_ADMINISTER_SAVED_VIEW_ACTION_LOCAL_ID_V1, input as unknown as JsonValue, options)) return null;
+      return await administerTriageSavedView(input, {
+        catalog,
+        // Minted at the writer, which for this transport is this mount.
+        mintViewId: mintTriageOpaqueIdV1,
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
+    },
   });
 }
 

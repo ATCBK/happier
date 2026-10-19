@@ -11,6 +11,12 @@ import { hasSelectedTriageFacetV1, readTriageLensNarrowingV1 } from './narrowing
 const SOURCE = { pluginId: 'happier.example.source', localId: 'example-forge' } as const;
 
 describe('the one lens-narrowing predicate', () => {
+  it('counts the Tasks lens without claiming Clear filters can remove it', () => {
+    for (const tasks of ['mine', 'agents', 'everyone'] as const) {
+      expect(readTriageLensNarrowingV1({ filters: { ...TRIAGE_LIST_NO_FILTERS_V1, tasks }, query: '' }))
+        .toEqual({ facets: false, search: false, tasks: true, narrowed: true });
+    }
+  });
   it('counts a selected value in any of the five facets', () => {
     expect(hasSelectedTriageFacetV1(TRIAGE_LIST_NO_FILTERS_V1)).toBe(false);
     expect(hasSelectedTriageFacetV1({ ...TRIAGE_LIST_NO_FILTERS_V1, sources: [{ source: SOURCE }] }))

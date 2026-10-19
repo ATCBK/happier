@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { TriageListWindowV1 } from '../../projection/listWindow.js';
 import type { TriageLensNarrowingV1 } from '../state/narrowing.js';
+import { readTriageLensNarrowingV1 } from '../state/narrowing.js';
+import { TRIAGE_LIST_NO_FILTERS_V1 } from '../../projection/listWindow.js';
 import {
     readTriageListEmptyState,
     readTriageListEmptyStateKeys,
@@ -45,6 +47,13 @@ function windowState(input: Readonly<{
 }
 
 describe('the empty PRs & Issues list', () => {
+    it('keeps an empty Tasks lens distinct from all-clear and offers only real continuations', () => {
+        const narrowing = readTriageLensNarrowingV1({ filters: { ...TRIAGE_LIST_NO_FILTERS_V1, tasks: 'mine' }, query: '' });
+        expect(resolveTriageListEmptyState({ coverage: 'complete', failure: null, refreshing: false, narrowing }))
+            .toMatchObject({ kind: 'noTasks', next: [] });
+        expect(resolveTriageListEmptyState({ coverage: 'partial', failure: null, refreshing: false, narrowing }))
+            .toMatchObject({ kind: 'noTasksYet', next: ['loadMore'] });
+    });
     it('claims every source answered only when a complete window really is empty', () => {
         expect(resolveTriageListEmptyState({
             coverage: 'complete',
@@ -127,6 +136,25 @@ describe('the empty PRs & Issues list', () => {
             refreshing: false,
             narrowing: { facets: true, search: true, narrowed: true },
         }).kind).toBe('noMatch');
+    });
+
+    it('offers each narrowed empty list the way out that matches what narrowed it', () => {
+        // A narrowed empty list never leaves the reader at a sentence: a search that
+        // matched nothing is cleared from the search box, a facet from the rail, and
+        // a window that has not finished reading can also be read further. The steps
+        // are decided here, beside the sentence they belong to, so the copy and the
+        // control cannot name different ways out.
+        const next = (coverage: 'complete' | 'partial', narrowing: TriageLensNarrowingV1) =>
+            resolveTriageListEmptyState({ coverage, failure: null, refreshing: false, narrowing }).next;
+
+        expect(next('complete', SEARCH_NARROWED)).toEqual(['clearSearch']);
+        expect(next('partial', SEARCH_NARROWED)).toEqual(['loadMore', 'clearSearch']);
+        expect(next('complete', FACET_NARROWED)).toEqual(['clearFilters']);
+        expect(next('partial', FACET_NARROWED)).toEqual(['loadMore', 'clearFilters']);
+        // Nothing the reader narrowed, nothing to undo: the healthy, reading and bounded
+        // states have their own header controls.
+        expect(next('complete', NOT_NARROWED)).toEqual([]);
+        expect(next('partial', NOT_NARROWED)).toEqual([]);
     });
 
     it('gives every empty kind its own catalog keys', () => {

@@ -1,4 +1,6 @@
 import {
+    defineProtocolArray,
+    defineProtocolNumber,
     defineProtocolLiteral,
     defineProtocolObject,
     defineProtocolString,
@@ -10,6 +12,7 @@ import {
     TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
     TriageEntryLocatorV1Schema,
     TriageEntryRefV1Schema,
+    TriageSourceInstanceIdV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 /**
@@ -59,6 +62,7 @@ export const TriageLinkEntryToSessionInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1),
     sessionId: triageSessionId,
     entryRef: TriageEntryRefV1Schema,
+    sourceInstanceId: TriageSourceInstanceIdV1Schema.optional(),
     display: TriageEntrySessionLinkDisplayV1Schema,
 }, { policy: 'closed' });
 export type TriageLinkEntryToSessionInputV1 =
@@ -82,3 +86,18 @@ export type TriageLinkEntryToSessionActionResultV1 =
 
 /** The durable link write. One Action, one canonical writer beneath it. */
 export const TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1 = 'sessions/link-entry-v1';
+
+/** Source-owned relationships supplement the existing external Collection pager. */
+export const TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1 = 'sessions/read-source-links-v1';
+export const TriageReadSourceSessionLinksInputV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1), sessionId: triageSessionId,
+}, { policy: 'closed' });
+export const TriageReadSourceSessionLinksResultV1Schema = defineProtocolObject({
+    kind: defineProtocolUnion([defineProtocolLiteral('complete'), defineProtocolLiteral('failed')]),
+    links: defineProtocolArray(defineProtocolObject({
+        entryRef: TriageEntryRefV1Schema, sessionId: triageSessionId,
+        linkedAtMs: defineProtocolNumber({ integer: true }), displayPath: triageText,
+    }, { policy: 'closed' })),
+}, { policy: 'closed' });
+export type TriageReadSourceSessionLinksInputV1 = ReturnType<typeof TriageReadSourceSessionLinksInputV1Schema.parse>;
+export type TriageReadSourceSessionLinksResultV1 = ReturnType<typeof TriageReadSourceSessionLinksResultV1Schema.parse>;

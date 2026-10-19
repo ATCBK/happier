@@ -23,6 +23,7 @@ import {
     admitForgeRequestUrl,
     deriveTriageConfiguredSourceInstanceDigestV1,
     readTriageSourceAccountListingV1,
+    settleAtMostOnceProviderWrite,
 } from '@happier-dev/triage-sources/runtime';
 import {
     MAX_TRIAGE_ROW_FACTS_V1,
@@ -40,6 +41,9 @@ import {
     type TriageSourceInstanceDraftV1,
     type TriageSourceScanEvidenceV1,
     type TriageSourceScanObservationV1,
+    TriageTaskWriteResultV1Schema,
+    type TriageTaskWriteResultV1,
+    type TriageSourceEntryLocalRefV1,
     decodeTriagePagingTokenV1,
     encodeTriagePagingTokenV1,
 } from '@happier-dev/triage-protocol/v1';
@@ -57,7 +61,8 @@ import {
     type PosthogConfigurationDirectoryResultV1,
 } from '../connect/configurationContract.js';
 import type { PosthogFailure } from '../api/errors.js';
-import { organizationProjectsPath, organizationsListPath } from '../api/paths.js';
+import { errorTrackingIssueAssignPath, errorTrackingIssueCrudPath, resolvePosthogTeamRouteId, organizationProjectsPath, organizationsListPath } from '../api/paths.js';
+import type { PosthogResult } from '../api/client.js';
 import {
     parsePosthogDirectoryPage,
     parsePosthogEnvironmentRow,
@@ -95,7 +100,8 @@ import {
     type PosthogIssueActivityResultV1,
 } from './detail/issueActivityContract.js';
 import { readPosthogSampledIssueEvents } from './detail/issueEvents.js';
-import { getPosthogIssue } from './get.js';
+import { getPosthogIssue, readPosthogIssueCrud, type PosthogGetOutcome } from './get.js';
+import { PosthogIssueAssignInputV1Schema, PosthogIssueWriteInputV1Schema } from './writeContracts.js';
 import {
     buildPosthogLocalInstanceKey,
     parsePosthogCollisionScope,
@@ -1093,6 +1099,26 @@ async function readPosthogSourceEntry(
         return unresolved(toTriageSourceFailure(outcome.resolution.failure));
     }
 
+    const { snapshot, row } = projectPosthogReadSnapshot(outcome, parsed.localRef, environment);
+    return {
+        observation: buildPosthogPresentObservation({
+            snapshot,
+            ...(row.lastSeenMs === undefined ? {} : { sourceUpdatedAtMs: row.lastSeenMs }),
+        }),
+        ...(snapshot.severity === undefined ? {} : { severity: snapshot.severity }),
+        ...(outcome.enrichmentFailure === undefined ? {} : {
+            enrichmentFailure: toTriageSourceFailure(outcome.enrichmentFailure),
+        }),
+        ...posthogSparklineTrend(outcome.queryDetail?.sparkline ?? null, detailWindow),
+    };
+}
+
+/** The canonical get projection also shapes CRUD-only confirming observations. */
+function projectPosthogReadSnapshot(
+    outcome: Extract<PosthogGetOutcome, { kind: 'present' }>,
+    localRef: TriageSourceEntryLocalRefV1,
+    environment: PosthogConfiguredEnvironment,
+) {
     // The query plane supplies the richer row when it answered; a failed enrichment
     // degrades the snapshot rather than downgrading a present entry.
     const row: PosthogIssueRow = outcome.queryDetail === undefined ? {
@@ -1109,6 +1135,10 @@ async function readPosthogSourceEntry(
         aggregations: null,
     } : {
         ...outcome.queryDetail,
+        // Query enrichment can lag the CRUD writer; it never overrides the
+        // authoritative metadata used by exact-write confirmation.
+        nativeStatus: outcome.crud.nativeStatus,
+        assignee: outcome.crud.assignee,
         // `impact` is the detail route's named impact aggregate. Prefer it when the
         // provider supplies it instead of paying for that plane and discarding it.
         aggregations: outcome.queryDetail.impact ?? outcome.queryDetail.aggregations,
@@ -1116,8 +1146,8 @@ async function readPosthogSourceEntry(
 
     const snapshot = buildPosthogEntrySnapshot({
         locator: {
-            collisionScope: parsed.localRef.collisionScope,
-            entryId: parsed.localRef.entryId,
+            collisionScope: localRef.collisionScope,
+            entryId: localRef.entryId,
         },
         row,
         scope: {
@@ -1129,17 +1159,7 @@ async function readPosthogSourceEntry(
         untitledLabel: UNTITLED_ISSUE_LABEL,
         bounds: PROJECTION_BOUNDS,
     });
-    return {
-        observation: buildPosthogPresentObservation({
-            snapshot,
-            ...(row.lastSeenMs === undefined ? {} : { sourceUpdatedAtMs: row.lastSeenMs }),
-        }),
-        ...(snapshot.severity === undefined ? {} : { severity: snapshot.severity }),
-        ...(outcome.enrichmentFailure === undefined ? {} : {
-            enrichmentFailure: toTriageSourceFailure(outcome.enrichmentFailure),
-        }),
-        ...posthogSparklineTrend(outcome.queryDetail?.sparkline ?? null, detailWindow),
-    };
+    return { snapshot, row };
 }
 
 /**
@@ -1533,3 +1553,81 @@ export function createPosthogIssueActivityReader(
 /** The bound reader the manifest declares. */
 export const readPosthogActivity: PosthogIssueActivityReader
     = createPosthogIssueActivityReader();
+
+type PosthogWriteTarget = ReturnType<typeof PosthogIssueWriteInputV1Schema.parse>;
+type PosthogWriteAssignee = ReturnType<typeof PosthogIssueAssignInputV1Schema.parse>['assignee'];
+
+/** Source-native issue writes reuse exact scope, HTTP, projection, and settlement owners. */
+async function writePosthogIssue(
+    target: PosthogWriteTarget,
+    change: Readonly<{ status: 'resolved' | 'suppressed' | 'active' }> | Readonly<{ assignee: PosthogWriteAssignee }>,
+    context: PluginInvocationContext,
+): Promise<TriageTaskWriteResultV1> {
+    const scope = resolvePosthogIssueScope(target.instance, target.localRef);
+    if (!scope.ok) return { kind: 'failed', failure: scope.failure };
+    const route = resolvePosthogTeamRouteId(scope.environment.teamPathId);
+    if (!route.ok) return { kind: 'failed', failure: toTriageSourceFailure({ kind: 'requestInvalid', at: 'teamRouteId' }) };
+    const client = createPosthogInvocationClient(context, target.instance.binding.account, scope.origin);
+    const options = { signal: context.signal };
+    const read = () => readPosthogIssueCrud(client, {
+        teamRouteId: scope.environment.teamPathId, issueId: target.localRef.entryId,
+    }, options);
+    const before = await read();
+    if (!before.ok) return { kind: 'failed', failure: toTriageSourceFailure(before.failure) };
+    if (context.signal.aborted) return { kind: 'failed', failure: toTriageSourceFailure({ kind: 'cancelled' }) };
+
+    const settlement = await settleAtMostOnceProviderWrite<
+        PosthogResult<true>,
+        Extract<TriageGetResultV1, { kind: 'present' }>,
+        TriageSourceFailureV1
+    >({
+        dispatch: () => client.requestJson({
+            method: 'PATCH',
+            path: 'status' in change
+                ? errorTrackingIssueCrudPath(route.teamRouteId, target.localRef.entryId)
+                : errorTrackingIssueAssignPath(route.teamRouteId, target.localRef.entryId),
+            body: change,
+        }, () => true as const, options),
+        // Success bodies are acknowledgements only. Lost/malformed replies and
+        // server/redirect failures may follow an applied effect; never replay.
+        mayHaveChanged: (result) => result.ok || [
+            'transport', 'timeout', 'cancelled', 'server', 'malformedResponse', 'redirected',
+        ].includes(result.failure.kind),
+        confirm: async () => {
+            const current = await read();
+            if (!current.ok) return { kind: 'uncertain', failure: toTriageSourceFailure(current.failure) };
+            const matches = 'status' in change
+                ? current.value.nativeStatus === change.status
+                : current.value.assignee?.type === change.assignee.type
+                    && current.value.assignee.id === change.assignee.id;
+            const { snapshot } = projectPosthogReadSnapshot(
+                { kind: 'present', crud: current.value }, target.localRef, scope.environment,
+            );
+            return {
+                kind: matches ? 'applied' : 'uncertain',
+                observation: buildPosthogPresentObservation({ snapshot }),
+            };
+        },
+    });
+    if (settlement.kind !== 'settled') return TriageTaskWriteResultV1Schema.parse(settlement);
+    const result = settlement.result;
+    if (!result.ok) return { kind: 'failed', failure: toTriageSourceFailure(result.failure) };
+    return { kind: 'uncertain' };
+}
+
+export async function resolvePosthogIssue(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+    return writePosthogIssue(PosthogIssueWriteInputV1Schema.parse(input), { status: 'resolved' }, context);
+}
+
+export async function suppressPosthogIssue(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+    return writePosthogIssue(PosthogIssueWriteInputV1Schema.parse(input), { status: 'suppressed' }, context);
+}
+
+export async function unsuppressPosthogIssue(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+    return writePosthogIssue(PosthogIssueWriteInputV1Schema.parse(input), { status: 'active' }, context);
+}
+
+export async function assignPosthogIssue(input: unknown, context: PluginInvocationContext): Promise<TriageTaskWriteResultV1> {
+    const { assignee, ...target } = PosthogIssueAssignInputV1Schema.parse(input);
+    return writePosthogIssue(target, { assignee }, context);
+}

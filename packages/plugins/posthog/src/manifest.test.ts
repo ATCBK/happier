@@ -130,7 +130,7 @@ describe('PostHog plugin manifest', () => {
         expect(contributes.composerRegions).toBeUndefined();
     });
 
-    it('authorizes exact account materialization and GET+POST to its origin, including the PAT pilot', () => {
+    it('authorizes exact account materialization and GET/POST/PATCH to its origin, including the PAT pilot', () => {
         expect(PLUGIN_MANIFEST.hostAccess.required).toEqual(expect.arrayContaining([{
             id: POSTHOG_CONNECTED_ACCOUNT_PURPOSE,
             capability: 'connectedAccounts',
@@ -146,7 +146,7 @@ describe('PostHog plugin manifest', () => {
             reason: expect.any(String),
             scope: {
                 targets: [{ kind: 'connectedAccountOrigin', service: POSTHOG_CONNECTED_ACCOUNT_PURPOSE }],
-                methods: ['GET', 'POST'],
+                methods: ['GET', 'POST', 'PATCH'],
                 privateNetwork: true,
             },
         }]));
@@ -286,9 +286,10 @@ describe('PostHog plugin manifest', () => {
         });
     });
 
-    it('routes sensitive reveals through the shared default, waiver and Ask-first policy on every exposed surface', () => {
-        const reveal = PLUGIN_MANIFEST.contributes.actions.find(action => action.id === POSTHOG_ACTION_IDS.codeVariables)!;
-        const actionId = 'happier.posthog/posthog/code-variables';
+    it.each(['posthog/code-variables', 'posthog/suppress-issue', 'posthog/unsuppress-issue'])('routes %s through the shared default, waiver and Ask-first policy on every exposed surface', (localId) => {
+        const reveal = PLUGIN_MANIFEST.contributes.actions.find(action => action.id === localId)!;
+        expect(reveal).toBeDefined();
+        const actionId = `happier.posthog/${localId}`;
         const defaultRequired = pluginActionRequiresPresentUserIntent(reveal, 'agent');
         for (const surface of ['ui', 'agent', 'mcp', 'cli'] as const) {
             const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });

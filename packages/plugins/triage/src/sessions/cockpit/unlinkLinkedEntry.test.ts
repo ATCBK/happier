@@ -30,6 +30,17 @@ function recordingHost(result: unknown) {
 }
 
 describe('the cockpit Unlink transport', () => {
+    it('routes a source-owned unlink through the source-neutral Action even with direct Account storage', async () => {
+        const fixture = createTestkitCorpusCollections();
+        const { calls, host } = recordingHost({ v: 1, status: 'unlinked' });
+        const transport = createDirectTriageUnlinkTransport(fixture.collections,
+            { ...host, admitAction: async () => true }, () => true);
+        expect(await transport.unlink({ sessionId: 'session-a', entryRef: testkitEntryRef() }))
+            .toEqual({ v: 1, status: 'unlinked' });
+        expect(calls).toEqual([{ action: TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1,
+            input: { v: 1, sessionId: 'session-a', entryRef: testkitEntryRef() } }]);
+    });
+
     it('waits for shared Action policy before a direct Account unlink and leaves a declined link intact', async () => {
         const fixture = createTestkitCorpusCollections();
         const entryRef = testkitEntryRef();

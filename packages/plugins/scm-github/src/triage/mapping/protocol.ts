@@ -183,6 +183,8 @@ export function toTriageSnapshot(
     ...(isEmittableInstant(snapshot.createdAtMs) ? { createdAtMs: snapshot.createdAtMs } : {}),
     state: Object.freeze({
       presentation: snapshot.state.presentation,
+      ...(snapshot.state.stage === undefined ? {} : { stage: snapshot.state.stage }),
+      ...(snapshot.state.completionReason === undefined ? {} : { completionReason: snapshot.state.completionReason }),
       // GitHub's `state` is a bare provider string and an unrecognized value reaches
       // here verbatim, so the provider's own word is projected into one bounded line
       // like every other display string. Nothing surviving omits the label rather than
@@ -190,6 +192,7 @@ export function toTriageSnapshot(
       ...(nativeLabel.value.length === 0 ? {} : { nativeLabel: nativeLabel.value }),
     }),
     facts: facts.facts,
+    ...(snapshot.relations === undefined ? {} : { relations: snapshot.relations }),
     ...(snapshot.reviewRevision === undefined
       ? {}
       : { reviewRevision: snapshot.reviewRevision }),
@@ -207,6 +210,7 @@ export function toTriageFailure(failure: GithubTriageFailureV1): TriageSourceFai
   return Object.freeze({
     class: failure.class,
     code: failure.code,
+    ...(failure.detail === undefined ? {} : { detail: failure.detail }),
     ...(failure.retryNotBeforeMs === undefined
       ? {}
       : { retryNotBeforeMs: failure.retryNotBeforeMs }),
@@ -241,6 +245,10 @@ function toTriagePresentObservation(
   });
 }
 
+export function toTriageObservation(
+  observation: Extract<GithubTriageObservationV1, { kind: 'present' }>,
+): Extract<TriageSourceObservationV1, { kind: 'present' }>;
+export function toTriageObservation(observation: GithubTriageObservationV1): TriageSourceObservationV1;
 export function toTriageObservation(
   observation: GithubTriageObservationV1,
 ): TriageSourceObservationV1 {

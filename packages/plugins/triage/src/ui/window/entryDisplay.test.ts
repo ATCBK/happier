@@ -162,7 +162,7 @@ describe('projectTriageEntryDisplay', () => {
         level: 'required',
         fromSourceInstanceId: INSTANCE_A,
         reasonId: 'involvement/review-requested',
-        reasonLabel: 'Your review was requested',
+        reasonLabel: 'Review requested',
       },
     }));
 
@@ -180,11 +180,11 @@ describe('projectTriageEntryDisplay', () => {
         level: 'required',
         fromSourceInstanceId: INSTANCE_A,
         reasonId: 'involvement/review-requested',
-        reasonLabel: 'Your review was requested',
+        reasonLabel: 'Review requested',
       },
     }));
 
-    expect(display.detail).toBe('Your review was requested');
+    expect(display.detail).toBe('Review requested');
     expect(display.summary).toBeNull();
     expect(display.tone).toBe('neutral');
   });
@@ -194,7 +194,7 @@ describe('projectTriageEntryDisplay', () => {
       level: 'required' as const,
       fromSourceInstanceId: INSTANCE_A,
       reasonId: 'involvement/review-requested',
-      reasonLabel: 'Your review was requested',
+      reasonLabel: 'Review requested',
     };
     const byMara: ProjectedObservationV1 = {
       sourceInstanceId: INSTANCE_A,
@@ -287,7 +287,7 @@ describe('what a reader who cannot see a row is told about it', () => {
         level: 'required',
         fromSourceInstanceId: INSTANCE_A,
         reasonId: 'involvement/review-requested',
-        reasonLabel: 'Your review was requested',
+        reasonLabel: 'Review requested',
       },
     }));
 
@@ -297,7 +297,7 @@ describe('what a reader who cannot see a row is told about it', () => {
     }, { nowMs: NOW_MS, locale: 'en' });
 
     expect(announcement).toBe(
-      'pull-request, example/repository, Open, Your review was requested',
+      'pull-request, example/repository, Open, Review requested',
     );
     expect(announcement).not.toContain(display.title);
   });

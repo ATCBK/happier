@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
 
 import type { TriageAdministerSavedViewInputV1 } from '../../actions/savedViewsProtocol.js';
 import type { CorpusSavedViewsReadV1 } from '../../settings/savedViews.js';
@@ -69,13 +70,14 @@ const UNAVAILABLE_REASON = 'Happier cannot reach your account right now, so save
 export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
+  const readiness = usePluginHostReadiness(durable.savedViews === null);
   const text = usePluginTranslation();
   // One owner, two transports. Direct Account KV when this mount can
   // reach the Account — which is what keeps saved views readable and writable
   // while no daemon is — and the published Actions otherwise.
   const transport = useMemo<TriageSavedViewsTransportV1>(
     () => durable.savedViews
-      ? createDirectTriageSavedViewsTransport(durable.savedViews)
+      ? createDirectTriageSavedViewsTransport(durable.savedViews, hostApi)
       : createActionTriageSavedViewsTransport(hostApi),
     [durable.savedViews, hostApi],
   );
@@ -105,10 +107,11 @@ export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
   }, [text, transport]);
 
   useEffect(() => {
+    if (readiness.pending) return;
     const controller = new AbortController();
     void read(controller.signal);
     return () => { controller.abort(); };
-  }, [read]);
+  }, [read, readiness.pending, readiness.revision]);
 
   const retry = useCallback(() => {
     const controller = new AbortController();
@@ -131,6 +134,7 @@ export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
     setNotice(null);
     try {
       const result = await transport.administer(input, { signal: controller.signal });
+      if (result === null) return null;
       if (result.status === 'applied') {
         const projection = readTriageSavedViewsProjectionV1({
           availability: 'parsed',
@@ -159,7 +163,11 @@ export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
         await read(controller.signal);
       }
       return null;
-    } catch {
+    } catch (error) {
+      if (isPluginError(error) && error.code === 'denied') {
+        setNotice({ tone: 'warning', message: text('happier.plugin-ui.action.error.denied', 'This isn’t allowed here.') });
+        return null;
+      }
       setUnavailableReason(text('plugins.triage.surface.views.unavailable', UNAVAILABLE_REASON));
       return null;
     } finally {
@@ -172,10 +180,10 @@ export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
     revision,
     busy,
     notice,
-    unavailableReason,
+    unavailableReason: readiness.pending ? null : unavailableReason,
     retry,
     administer,
-  }), [administer, busy, notice, retry, revision, saved, unavailableReason]);
+  }), [administer, busy, notice, retry, revision, saved, unavailableReason, readiness.pending]);
 }
 
 /**

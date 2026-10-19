@@ -3,7 +3,7 @@ import { readTriageSourceAccountListingV1 } from '@happier-dev/triage-sources/ru
 import {
   type TriageListInstancesResultV1,
   type TriageSourceInstanceDraftV1,
-  type TriageSourceAccountBindingV1,
+  type TriageSourceCredentialBindingV1,
 } from '@happier-dev/triage-protocol/v1';
 
 import {
@@ -78,7 +78,7 @@ function readAccountIdentity(body: unknown): GithubAccountIdentity | null {
  * metadata, and no candidate exists without a current authorized provider response.
  */
 async function readCandidate(
-  binding: TriageSourceAccountBindingV1,
+  binding: TriageSourceCredentialBindingV1,
   context: PluginInvocationContext,
   now: () => number,
   nativeClient?: GithubApiClientV1,
@@ -183,7 +183,7 @@ export async function listGithubTriageInstances(
     failure: ReturnType<typeof toTriageFailure>;
   }>> = [];
   if (listing.kind === 'unbound' && (nativeClient !== undefined || nativeFailure !== undefined)) {
-    const binding: TriageSourceAccountBindingV1 = Object.freeze({
+    const binding: TriageSourceCredentialBindingV1 = Object.freeze({
       purpose: GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1.purpose,
       source: 'native' as const,
       service: GITHUB_CONNECTED_ACCOUNT_SERVICE,

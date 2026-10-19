@@ -157,6 +157,7 @@ async function mountPanel(panel: string | (() => string), options: Readonly<{
   feedback?: (connection: string) => JsonValue;
   timeline?: (continuation: string | undefined) => JsonValue;
   checks?: JsonValue;
+  overview?: JsonValue;
 }> = {}): Promise<PluginUiTestkit> {
   let detail!: PluginUiTestkit;
   await act(async () => {
@@ -191,7 +192,7 @@ async function mountPanel(panel: string | (() => string), options: Readonly<{
           if (localId === GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readChecks) return options.checks ?? failingChecksAnswer();
           if (localId === GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readOverview) {
             overviewReads.push(localId);
-            return overviewAnswer();
+            return options.overview ?? overviewAnswer();
           }
           if (localId === GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listTimeline) return {
             kind: 'timeline',
@@ -219,6 +220,31 @@ async function mountPanel(panel: string | (() => string), options: Readonly<{
 }
 
 describe('the GitHub detail as Triage panels', () => {
+  it.each([true, false])('reports an empty description only after a successful exact read (success=%s)', async (success) => {
+    const detail = await mountPanel('overview', { overview: success
+      ? { ...(overviewAnswer() as Record<string, JsonValue>), body: '' }
+      : { kind: 'unavailable', failure: { class: 'transient', code: 'overview-read-refused' } },
+    });
+    if (success) await expect(detail.getByText('No description.')).resolves.toBeDefined();
+    else {
+      expect(document.body.textContent).toContain('overview-read-refused');
+      await expect(detail.queryByText('No description.')).resolves.toBeUndefined();
+    }
+  });
+
+  it('does not claim empty comments when only the other feedback connections answered', async () => {
+    const detail = await mountPanel('activity', {
+      feedback: (connection): JsonValue => connection === 'comments'
+        ? { kind: 'unavailable', failure: { class: 'transient', code: 'comments-read-refused' } }
+        : { kind: connection, rows: [], omittedRowCount: 0, projectionTruncated: false },
+      timeline: () => ({ kind: 'unavailable', failure: { class: 'transient', code: 'timeline-read-refused' } }),
+    });
+    expect(document.body.textContent).toContain('comments-read-refused');
+    await expect(detail.queryByText('0 comment(s) read.')).resolves.toBeUndefined();
+    await expect(detail.queryByText('0 event(s) read.')).resolves.toBeUndefined();
+    await expect(detail.queryByRole('heading', { name: 'Nothing has been said yet' })).resolves.toBeUndefined();
+  });
+
   it('keeps a root capabilities read across source panels but pauses it while the source is hidden', async () => {
     let visible = true;
     let panel = 'overview';

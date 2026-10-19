@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { usePluginHostReadiness, type PluginUiHostReadiness } from '@happier-dev/plugin-ui';
 
 import type { TriageRefreshTriggerV1 } from '../../refresh/refreshEligibility.js';
 
@@ -17,27 +18,34 @@ type RefreshTriageListWindowV1 = (trigger: TriageRefreshTriggerV1) => Promise<vo
 export function useTriageListWindowViewDemand(
   active: boolean,
   refresh: RefreshTriageListWindowV1,
+  readClientReadiness?: PluginUiHostReadiness,
 ): void {
+  const ownReadiness = usePluginHostReadiness();
+  const readiness = readClientReadiness ?? ownReadiness;
   const previous = useRef<Readonly<{
     active: boolean;
     refresh: RefreshTriageListWindowV1;
+    readiness: PluginUiHostReadiness;
   }> | null>(null);
 
   useEffect(() => {
     const preceding = previous.current;
-    previous.current = Object.freeze({ active, refresh });
+    previous.current = Object.freeze({ active, refresh, readiness });
 
     // A new refresh callback is a new host-scoped mounted window. It receives
     // its own initial demand even when the preceding surface was active. For a
-    // retained window, only an inactive -> active edge is a new named demand;
-    // remaining inactive is intentionally silent.
+    // retained window, an inactive -> active edge is a new view demand;
+    // the shared read owner can also require re-acquisition after admission.
     const mountOrScopeChanged = preceding === null || preceding.refresh !== refresh;
     const regainedActivity = preceding !== null && !preceding.active && active;
+    const reacquire = preceding !== null && preceding.readiness !== readiness;
     // A retained inactive surface must stay demand-silent. The host's active
-    // fact is the sole gate; the first active mount and each inactive -> active
-    // edge are the only named demand producers.
-    if (!active || (!mountOrScopeChanged && !regainedActivity)) return;
+    // fact gates both view demand and the shared owner's re-acquisition.
+    // Readiness is supplied by the host, independently from public activity.
+    // Defer Machine demand while it loads, then hand the named readiness edge
+    // to the same window/coalescing owner. No error interpretation or retry loop.
+    if (!active || readiness.pending || (!mountOrScopeChanged && !regainedActivity && !reacquire)) return;
 
-    void refresh('view');
-  }, [active, refresh]);
+    void refresh(reacquire ? 'manual' : 'view');
+  }, [active, refresh, readiness]);
 }

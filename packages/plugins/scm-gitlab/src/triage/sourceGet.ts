@@ -152,8 +152,11 @@ async function executeGitlabTriageEntry(
     signal: input.signal,
     nowMs: input.nowMs,
   });
+  if (viewer.kind === 'failed') {
+    return unresolved(localRef, projectGitlabSourceFailure(viewer.failure));
+  }
   const involvement = deriveGitlabItemInvolvement({
-    viewerUsername: viewer.kind === 'identified' ? viewer.viewer.username : null,
+    viewerUsername: viewer.viewer.username,
     author: entry.snapshot.author?.username ?? null,
     assignees: entry.snapshot.assignees.map((actor) => actor.username),
     reviewers: entry.snapshot.reviewers.map((actor) => actor.username),

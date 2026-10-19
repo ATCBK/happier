@@ -47,7 +47,9 @@ export type TriageLensNarrowingV1 = Readonly<{
   facets: boolean;
   /** The query carries at least one term the window actually matched on. */
   search: boolean;
-  /** Either of the two: rows are being withheld by the reader's own lens. */
+  /** A task-kind/audience lens also hides rows, but Clear filters does not remove the page identity. */
+  tasks?: true;
+  /** Rows are being withheld by the reader's own lens. */
   narrowed: boolean;
 }>;
 
@@ -70,7 +72,7 @@ export function hasSelectedTriageFacetV1(filters: SurfaceFilterSelectionV1): boo
 /**
  * Read one lens's narrowing, split by cause.
  *
- * The two causes stay separate all the way to the reader because the honest
+ * The causes stay separate all the way to the reader because the honest
  * next action differs: a query that matches nothing is cleared from the search
  * box, and a facet that matches nothing is cleared from the rail. Collapsing
  * them into one boolean is what makes an empty list tell somebody to adjust a
@@ -82,5 +84,6 @@ export function readTriageLensNarrowingV1(lens: Readonly<{
 }>): TriageLensNarrowingV1 {
   const facets = hasSelectedTriageFacetV1(lens.filters);
   const search = parseTriageSearchQuery(lens.query).length > 0;
-  return Object.freeze({ facets, search, narrowed: facets || search });
+  const tasks = lens.filters.tasks !== undefined;
+  return Object.freeze({ facets, search, ...(tasks ? { tasks: true as const } : {}), narrowed: facets || search || tasks });
 }

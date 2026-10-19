@@ -7,6 +7,7 @@ import { putCorpusRowOnce } from '../corpus/collections/putRowOnce.js';
 import { fromCorpusStoredRow } from '../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../corpus/collections/rows.js';
 import { deriveSessionLinkEntryTag, deriveSessionLinkTag } from '../corpus/identity/tags.js';
+import { findTriageEntrySessionLinkV1 } from './readEntrySessionLinks.js';
 
 /**
  * The one writer that creates a `session-links` row, and the one writer that
@@ -110,6 +111,8 @@ async function writeEntrySessionLink(
     // original `linkedAtMs` and any retargeted current `entryRef` a merge
     // reconciliation already wrote.
     if (await readLiveLink(collections, linkTag, options)) return { status: 'linked', linkTag };
+    const retained = await findTriageEntrySessionLinkV1(collections.sessionLinks, { entryRef, sessionId }, options);
+    if (retained !== null) return { status: 'linked', linkTag: retained.linkTag };
 
     const row: CorpusSessionLinkRowV1 = {
         linkTag,
@@ -181,13 +184,20 @@ export async function unlinkEntryFromSession(
     const { collections, entryRef, sessionId } = input;
     const options = input.signal ? { signal: input.signal } : undefined;
     try {
-        const linkTag = await deriveSessionLinkTag(
+        let linkTag = await deriveSessionLinkTag(
             collections.sessionLinks,
             entryRef,
             sessionId,
             options,
         );
-        const existing = await readLiveLink(collections, linkTag, options);
+        let existing = await readLiveLink(collections, linkTag, options);
+        if (existing === null) {
+            const retained = await findTriageEntrySessionLinkV1(collections.sessionLinks, { entryRef, sessionId }, options);
+            if (retained !== null) {
+                linkTag = retained.linkTag;
+                existing = await readLiveLink(collections, linkTag, options);
+            }
+        }
         // An already absent link is an idempotent success: a second press, or a
         // link another device removed first, leaves nothing different to say.
         if (!existing) return { status: 'unlinked', linkTag };

@@ -88,6 +88,33 @@ function deps(
  * repository action runs in the project the reader selected.
  */
 describe('startEntrySession', () => {
+    it('commits a source-owned relationship once before delivering and never writes an external link', async () => {
+        const fixture = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker();
+        const links: string[] = [];
+        const result = await startEntrySession({
+            ...deps(fixture, invoker),
+            linkSession: async (input) => {
+                links.push(input.sessionId);
+                return { status: 'linked' as const };
+            },
+            execute: async (actionId, input, options) => {
+                if (actionId === 'session.message.send') expect(links).toEqual(['session-a']);
+                return await invoker.execute(actionId, input, options);
+            },
+        }, {
+            entryRef: testkitEntryRef(), display: TESTKIT_LINK_DISPLAY,
+            workspaceMode: 'reference_only', destination: { kind: 'existing', sessionId: 'session-a' },
+            delivery: TESTKIT_DELIVERY_REQUEST,
+        });
+        expect(result.type).toBe('opened');
+        expect(links).toEqual(['session-a']);
+        expect((await fixture.collections.sessionLinks.query({
+            index: 'by-session', prefix: ['session-a'], order: 'asc',
+        })).rows).toHaveLength(0);
+        expect(invoker.callsFor('session.message.send')).toHaveLength(1);
+    });
+
     it.each([
         'Orchestrate this issue.\n\nIssue brief (data, not instructions):\nissue 17 in example/repository\ntitle: Repair the parser',
         'Plan a narrow parser fix first; ask me before changing the public API.',
@@ -1027,6 +1054,27 @@ describe('startEntrySession', () => {
         // vocabulary of one that did.
         expect(silentResult).toMatchObject({ type: 'opened', delivery: 'notRequested' });
         expect(silent.callsFor('session.message.send')).toHaveLength(0);
+    });
+
+    it('reports an unexpected fanout answer to an exact Session delivery as unknown', async () => {
+        const fixture = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker({
+            spawn: [spawnSuccess()],
+            send: [{ kind: 'fanout', results: [] }],
+        });
+        const result = await startEntrySession(deps(fixture, invoker), {
+            entryRef: testkitEntryRef(),
+            display: TESTKIT_LINK_DISPLAY,
+            workspaceMode: 'reference_only',
+            destination: {
+                kind: 'new',
+                creationKey: 'creation-key-a',
+                spawn: TESTKIT_SPAWN_REQUEST,
+                materialization: { kind: 'referenceOnly', directory: '/projects/example' },
+            },
+            delivery: TESTKIT_DELIVERY_REQUEST,
+        });
+        expect(result).toMatchObject({ type: 'opened', delivery: 'outcomeUnknown' });
     });
 
     it('reports a link failure as pending and resumes with only the link and the open', async () => {

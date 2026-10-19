@@ -1,7 +1,8 @@
 import * as React from 'react';
-import type { RenderContext, RenderSurface } from '@happier-dev/plugin-sdk/ui';
+import type { RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import {
   Button,
+  Banner,
   EmptyState,
   ErrorState,
   Icon,
@@ -13,10 +14,15 @@ import {
   usePluginTranslation,
   usePluginUiEphemeralSharedScope,
   useSurfaceContext,
+  usePluginSurfaceActivity,
 } from '@happier-dev/plugin-ui';
 
-import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
-import { TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
+import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, type TriageMountedUiOperationV1, type TriageMountedUiResultV1 } from '../../actions/mountedUiProtocol.js';
+import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
+import { bindTriageMountedUiActions } from '../mountedActions.js';
+import { useTriageCurrentUiContextPublication } from '../currentContextPublication.js';
+import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1, TRIAGE_TASK_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
+import { TRIAGE_LIST_DEFAULT_LENS_V1, triageEntryRowKey } from '../../projection/listWindow.js';
 import { readTriageSourceDescriptorV1 } from '../detail/sourceSurface.js';
 import { readTriageRowDetailToneV1, readTriageRowMarkV1 } from '../list/rows.js';
 import { openTriageLinkedEntry } from '../navigation/openLinkedEntry.js';
@@ -24,6 +30,8 @@ import { projectTriageEntryDisplay } from '../window/entryDisplay.js';
 import { projectTriageListWindow } from '../window/mountedWindow.js';
 import { useTriageListWindow } from '../window/useTriageListWindow.js';
 import { useTriageListWindowViewDemand } from '../window/useTriageListWindowViewDemand.js';
+import { planTriageListItemsV1 } from '../list/sections.js';
+import { TRIAGE_ROUTE_DEFAULT_LENS_V1 } from '../navigation/location.js';
 
 /**
  * How many of the newest entries the Home widget shows. Home is a glance, not the list: the page
@@ -42,22 +50,52 @@ const LATEST_LENS = Object.freeze({ ...TRIAGE_LIST_DEFAULT_LENS_V1, limit: TRIAG
  * fresh — with no timer anywhere. Mounting is the only demand it makes; Home builds it only while
  * it is focused and on screen.
  */
-function TriageLatestWidget(_context: RenderContext): React.ReactElement {
+export function TriageLatestWidget({ tasksOnly = false }: Readonly<{ tasksOnly?: boolean }>): React.ReactElement {
   const text = usePluginTranslation();
   const hostApi = usePluginHostApi();
   const surfaceContext = useSurfaceContext();
   const sharedScope = usePluginUiEphemeralSharedScope();
   const window = useTriageListWindow();
-  useTriageListWindowViewDemand(true, window.refresh);
+  const activity = usePluginSurfaceActivity();
+  const mountId = React.useId();
+  useTriageListWindowViewDemand(true, window.refresh, window.readiness);
   const snapshot = window.snapshot;
+  const refresh = React.useCallback(() => window.refresh('manual'), [window.refresh]);
+  const runMountedOperation = React.useCallback(async (operation: TriageMountedUiOperationV1, signal: AbortSignal): Promise<TriageMountedUiResultV1> => {
+    if (signal.aborted || operation.kind !== 'refresh') return { status: 'unavailable' };
+    await refresh();
+    return { status: 'applied' };
+  }, [refresh]);
+  React.useLayoutEffect(() => sharedScope === null || !activity.active ? undefined : bindTriageMountedUiActions(
+    sharedScope, mountId, runMountedOperation,
+  ), [activity.active, mountId, runMountedOperation, sharedScope]);
+  const currentUiContext = React.useMemo(() => ({ detail: {
+    view: tasksOnly ? 'tasks-widget' : 'latest-widget',
+    mountedAction: { action: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1 }, mountId },
+  } }), [mountId, tasksOnly]);
+  useTriageCurrentUiContextPublication(hostApi, currentUiContext);
 
   const rows = React.useMemo(
-    () => (snapshot.window === undefined ? undefined : projectTriageListWindow(LATEST_LENS, hostApi, sharedScope)?.rows),
-    [hostApi, sharedScope, snapshot.window],
+    () => {
+      if (snapshot.window === undefined) return undefined;
+      const projected = projectTriageListWindow(tasksOnly ? TRIAGE_LIST_DEFAULT_LENS_V1 : LATEST_LENS, hostApi, sharedScope)?.rows;
+      if (!tasksOnly || projected === undefined) return projected;
+      const mine = planTriageListItemsV1({ rows: projected, pins: [], workflowSubjectOf: () => null,
+        tasks: { audience: 'mine', hasSessions: () => false, isTask: (ref) => readTriageSourceDescriptorV1(surfaceContext, ref.source)
+          ?.kinds.some((kind) => kind.id === ref.kindId && kind.task === true) === true } });
+      const wanted = new Set(mine.slice(0, TRIAGE_LATEST_WIDGET_ROWS_V1).map((item) => item.key));
+      return projected.filter((row) => wanted.has(triageEntryRowKey(row.entryRef)));
+    },
+    [hostApi, sharedScope, snapshot.window, surfaceContext.targetedContributions, tasksOnly],
   );
   const openPage = React.useCallback(() => {
-    void hostApi.openSurface(TRIAGE_ENTRY_DETAIL_DESTINATION_V1, undefined, { subPath: '' }).catch(() => undefined);
-  }, [hostApi]);
+    void hostApi.openSurface(tasksOnly ? TRIAGE_TASK_DETAIL_DESTINATION_V1 : TRIAGE_ENTRY_DETAIL_DESTINATION_V1,
+      undefined, { subPath: tasksOnly ? 'tasks,mine' : '' }).catch(() => undefined);
+  }, [hostApi, tasksOnly]);
+  const taskCoverageNotice = !tasksOnly ? null : snapshot.freshness === 'stale'
+    ? <Banner tone="warning" title={text('plugins.triage.surface.lastKnown', 'Showing the last known list')} />
+    : snapshot.window?.coverage === 'partial'
+      ? <Banner tone="info" title={text('plugins.triage.surface.empty.incomplete.title', 'This list is not complete yet')} /> : null;
 
   if (rows === undefined) {
     if (snapshot.error !== undefined) {
@@ -73,7 +111,7 @@ function TriageLatestWidget(_context: RenderContext): React.ReactElement {
                 variant="secondary"
                 titleKey="plugins.triage.widget.retry"
                 title="Try again"
-                onPress={() => { void window.refresh('manual'); }}
+                onPress={() => { void refresh(); }}
               />
             ),
           })}
@@ -91,6 +129,9 @@ function TriageLatestWidget(_context: RenderContext): React.ReactElement {
   }
 
   if (rows.length === 0) {
+    if (tasksOnly) return <>{taskCoverageNotice}<EmptyState layout="line" title={text('plugins.triage.tasks.myTasks', 'My tasks')}
+      description={text('plugins.triage.tasks.description', 'Your work, and the agents working with you.')}
+      action={<Button title={text('plugins.triage.tasks.title', 'Tasks')} variant="plain" onPress={openPage} />} /></>;
     return snapshot.configuredSources.length === 0 ? (
       <EmptyState
         testID="triage-latest-widget.noSources"
@@ -110,6 +151,8 @@ function TriageLatestWidget(_context: RenderContext): React.ReactElement {
   }
 
   return (
+    <>
+    {taskCoverageNotice}
     <ItemGroup testID="triage-latest-widget.rows">
       {rows.map((row) => {
         const display = projectTriageEntryDisplay(row, text);
@@ -131,12 +174,14 @@ function TriageLatestWidget(_context: RenderContext): React.ReactElement {
             {...(display.detail === null ? {} : { detail: display.detail, detailNumberOfLines: 1 })}
             {...(detailTone === undefined ? {} : { detailTone })}
             density="compact"
-            onPress={() => { void openTriageLinkedEntry(hostApi, row.entryRef); }}
+            onPress={() => { void openTriageLinkedEntry(hostApi, row.entryRef, undefined,
+              tasksOnly ? { ...TRIAGE_ROUTE_DEFAULT_LENS_V1, filters: { ...TRIAGE_ROUTE_DEFAULT_LENS_V1.filters, tasks: 'mine' } } : undefined); }}
           />
         );
       })}
     </ItemGroup>
+    </>
   );
 }
 
-export const renderSurface: RenderSurface = defineUiSurface(TriageLatestWidget);
+export const renderSurface: RenderSurface = defineUiSurface(() => <TriageLatestWidget />);

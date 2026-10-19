@@ -8,10 +8,55 @@ import {
   Stack,
   Status,
   usePluginTranslation,
+  useSessionState,
 } from '@happier-dev/plugin-ui';
 import type { TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protocol/v1';
 
 import { useLinkedSessionOpen } from './useLinkedSessionOpen.js';
+import { readTriageSessionTitle } from './sessionTitle.js';
+
+const LinkedSessionRow = React.memo(function LinkedSessionRow(props: Readonly<{
+  sessionId: TriageLinkedSessionProjectionV1['sessionId'];
+  busy: boolean;
+  unavailable: boolean;
+  failed: boolean;
+  onSelect?: (sessionId: TriageLinkedSessionProjectionV1['sessionId']) => void;
+  open: (sessionId: TriageLinkedSessionProjectionV1['sessionId']) => Promise<void>;
+}>) {
+  const text = usePluginTranslation();
+  const state = useSessionState(props.sessionId);
+  const title = readTriageSessionTitle(state.state, text);
+  const description = props.failed
+    ? text('plugins.triage.surface.detail.sessionOpenFailed', 'This Session could not be opened.')
+    : props.unavailable
+      ? text('plugins.triage.surface.detail.sessionUnavailable', 'Another Session is opening.')
+      : undefined;
+  return (
+    <Item
+      title={title}
+      detail={description}
+      accessibilityLabel={title}
+      accessibilityHint={description}
+      tone={props.failed ? 'danger' : undefined}
+      busy={props.busy}
+      disabled={props.unavailable}
+      onPress={() => {
+        if (props.onSelect !== undefined) props.onSelect(props.sessionId);
+        else void props.open(props.sessionId);
+      }}
+      accessoryOutsidePressable
+      accessory={<Button
+        titleKey="plugins.triage.surface.detail.session.open"
+        title="Open session"
+        accessibilityLabel={`${text('plugins.triage.surface.detail.session.open', 'Open session')} ${title}`}
+        variant="secondary"
+        busy={props.busy}
+        disabled={props.unavailable}
+        onPress={() => { void props.open(props.sessionId); }}
+      />}
+    />
+  );
+});
 
 /** Common-header rendering for the bounded read-only linked Session projection. */
 export function TriageLinkedSessions(props: Readonly<{
@@ -32,42 +77,17 @@ export function TriageLinkedSessions(props: Readonly<{
         <Label value={text('plugins.triage.surface.detail.sessions', 'Sessions')} />
       )}
       <ItemGroup accessibilityLabel={text('plugins.triage.surface.detail.sessions', 'Sessions')}>
-        {props.sessions.map((session) => {
-          const title = session.displayTitle ?? text('plugins.triage.surface.detail.session', 'Session');
-          const unavailable = busySessionId !== null && busySessionId !== session.sessionId;
-          const failed = failedSessionId === session.sessionId;
-          const description = failed
-            ? text('plugins.triage.surface.detail.sessionOpenFailed', 'This Session could not be opened.')
-            : unavailable
-              ? text('plugins.triage.surface.detail.sessionUnavailable', 'Another Session is opening.')
-              : undefined;
-          return (
-            <Item
-              key={session.sessionId}
-              title={title}
-              detail={description}
-              accessibilityLabel={title}
-              accessibilityHint={description}
-              tone={failed ? 'danger' : undefined}
-              busy={busySessionId === session.sessionId}
-              disabled={unavailable}
-              onPress={() => {
-                if (props.onSelect !== undefined) props.onSelect(session.sessionId);
-                else void openSession(session.sessionId);
-              }}
-              accessoryOutsidePressable
-              accessory={<Button
-                titleKey="plugins.triage.surface.detail.session.open"
-                title="Open session"
-                accessibilityLabel={`${text('plugins.triage.surface.detail.session.open', 'Open session')} ${title}`}
-                variant="secondary"
-                busy={busySessionId === session.sessionId}
-                disabled={unavailable}
-                onPress={() => { void openSession(session.sessionId); }}
-              />}
-            />
-          );
-        })}
+        {props.sessions.map((session) => (
+          <LinkedSessionRow
+            key={session.sessionId}
+            sessionId={session.sessionId}
+            busy={busySessionId === session.sessionId}
+            unavailable={busySessionId !== null && busySessionId !== session.sessionId}
+            failed={failedSessionId === session.sessionId}
+            onSelect={props.onSelect}
+            open={openSession}
+          />
+        ))}
       </ItemGroup>
       {props.hasMore ? (
         <Button

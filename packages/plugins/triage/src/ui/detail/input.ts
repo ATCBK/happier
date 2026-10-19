@@ -1,8 +1,11 @@
 import {
+  MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1,
+  TriageLinkedSessionProjectionV1Schema,
   TriageDetailSurfaceInputV1Schema,
   type TriageConfiguredSourceInstanceV1,
   type TriageDetailSurfaceInputV1,
 } from '@happier-dev/triage-protocol/v1';
+import { PluginUiLaunchInputV1Schema } from '@happier-dev/plugin-sdk/ui';
 
 import { sameTriageSourceIdentity } from '../../corpus/identity/components.js';
 import { sameTriageEntryRefV1, type TriageSurfaceSelectionV1 } from '../state/surface.js';
@@ -44,7 +47,58 @@ export type TriageDetailSurfaceInputBuildInputV1 = Readonly<{
   linkedSessions: TriageDetailSurfaceInputV1['linkedSessions'];
   /** Whether the Collection has another page beyond this bounded projection. */
   linkedSessionsHasMore: boolean;
+  /** Include the actual panel before fitting the physical mount's launch input. */
+  panel?: string;
 }>;
+
+/** Full native relationships/workflows remain source-owned live detail reads. */
+function fitLaunchProjection(input: TriageDetailSurfaceInputV1): TriageDetailSurfaceInputV1 | null {
+  if (PluginUiLaunchInputV1Schema.safeParse(input).success) return input;
+
+  const snapshot = input.observation.snapshot;
+  const relations = snapshot.relations;
+  const taskCapabilities = snapshot.taskCapabilities;
+  const hasRelationEntries = Boolean(relations?.children?.entries?.length || relations?.blockedBy?.length);
+  const hasTransitions = Boolean(taskCapabilities?.transitions?.length);
+  const projectedSnapshot = hasRelationEntries || hasTransitions ? {
+    ...snapshot,
+    ...(hasRelationEntries && relations ? {
+      relations: {
+        ...(relations.parent === undefined ? {} : { parent: relations.parent }),
+        ...(relations.children === undefined ? {} : { children: {
+          total: relations.children.total,
+          ...(relations.children.completed === undefined ? {} : { completed: relations.children.completed }),
+        } }),
+      },
+    } : {}),
+    ...(hasTransitions && taskCapabilities ? { taskCapabilities: {
+      ...(taskCapabilities.createFields === undefined ? {} : { createFields: taskCapabilities.createFields }),
+      ...(taskCapabilities.editFields === undefined ? {} : { editFields: taskCapabilities.editFields }),
+    } } : {}),
+    projectionTruncated: true as const,
+  } : snapshot;
+  const projection = { ...input, observation: { ...input.observation, snapshot: projectedSnapshot } };
+  if (PluginUiLaunchInputV1Schema.safeParse(projection).success) {
+    return TriageDetailSurfaceInputV1Schema.parse(projection);
+  }
+
+  // Keep the largest prefix admitted by the real host, rather than choosing a
+  // second Session-count limit. The common header retains the full read page.
+  const prefix = (count: number) => ({
+    ...projection,
+    linkedSessions: input.linkedSessions.slice(0, count),
+    linkedSessionsHasMore: input.linkedSessionsHasMore === true || count < input.linkedSessions.length,
+  });
+  if (!PluginUiLaunchInputV1Schema.safeParse(prefix(0)).success) return null;
+  let low = 0;
+  let high = input.linkedSessions.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (PluginUiLaunchInputV1Schema.safeParse(prefix(mid)).success) low = mid;
+    else high = mid - 1;
+  }
+  return TriageDetailSurfaceInputV1Schema.parse(prefix(low));
+}
 
 export function buildTriageDetailSurfaceInputV1(
   input: TriageDetailSurfaceInputBuildInputV1,
@@ -59,20 +113,26 @@ export function buildTriageDetailSurfaceInputV1(
   if (!instanceAgrees) return REFUSED_INSTANCE_MISMATCH;
 
   try {
+    // Reject malformed trusted values before projecting presentation, so fitting
+    // cannot hide a bad identity, unknown authority field or invalid source data.
+    const sessions = input.linkedSessions.map((session) => TriageLinkedSessionProjectionV1Schema.parse(session));
+    const parsed = TriageDetailSurfaceInputV1Schema.parse({
+      v: 1,
+      instance: input.instance,
+      observation: input.observation,
+      linkedSessions: sessions.slice(0, MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1),
+      linkedSessionsHasMore: input.linkedSessionsHasMore || sessions.length > MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1,
+      ...(input.panel === undefined ? {} : { panel: input.panel }),
+    });
+    const fitted = fitLaunchProjection(parsed);
+    if (fitted === null) return REFUSED_INVALID_CONTRACT_VALUE;
     return Object.freeze({
       kind: 'admitted',
-      input: TriageDetailSurfaceInputV1Schema.parse({
-        v: 1,
-        instance: input.instance,
-        observation: input.observation,
-        linkedSessions: input.linkedSessions,
-        linkedSessionsHasMore: input.linkedSessionsHasMore,
-      }),
+      input: fitted,
     });
   } catch {
-    // A value the published contract cannot carry — an over-bound Session
-    // projection, for instance — is refused whole. Truncating it here would
-    // silently tell the source that a link does not exist.
+    // Invalid trusted values are still refused whole. Valid presentation may
+    // be shortened only with the contract's explicit incompleteness markers.
     return REFUSED_INVALID_CONTRACT_VALUE;
   }
 }

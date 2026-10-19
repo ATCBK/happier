@@ -36,6 +36,7 @@ export async function linkTriageSessionEntry(
     try {
         const input = TriageLinkEntryToSessionInputV1Schema.parse({
             v: 1, sessionId, entryRef: entry.entryRef,
+            ...(entry.sourceInstanceId === null ? {} : { sourceInstanceId: entry.sourceInstanceId }),
             display: { locator: entry.locator, scopeLabel: entry.scopeLabel },
         });
         return TriageLinkEntryToSessionActionResultV1Schema.parse(await host.executeAction(

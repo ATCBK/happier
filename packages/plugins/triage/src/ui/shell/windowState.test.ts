@@ -39,6 +39,16 @@ function snapshot(overrides: Partial<TriageListWindowSnapshotV1> = {}): TriageLi
 }
 
 describe('resolveTriageListShellState', () => {
+  it('keeps age-only staleness truthful without a list read warning', () => {
+    const aged = snapshot({
+      window: window({ lanes: [{ sourceInstanceId: INSTANCE, source: SOURCE, health: { kind: 'walkFinished' }, exhausted: true }] }),
+      freshness: 'stale',
+    });
+    expect(resolveTriageListShellState(aged)).toMatchObject({
+      kind: 'window', stale: true, showReadWarning: false, failure: null,
+    });
+  });
+
   it('withholds "configure a source" until a pass has actually looked', () => {
     // Before the first completed cycle nothing has enumerated the configured
     // instances, so accusing the reader of not configuring one would be a guess.
@@ -169,6 +179,7 @@ describe('resolveTriageListShellState', () => {
       window: rows,
       refreshing: false,
       stale: true,
+      showReadWarning: true,
       failure: null,
     });
   });
@@ -212,6 +223,7 @@ describe('resolveTriageListShellState', () => {
       window: failed,
       refreshing: false,
       stale: true,
+      showReadWarning: true,
       failure: {
         kind: 'sources',
         sources: [{
@@ -311,6 +323,8 @@ describe('resolveTriageListShellState', () => {
 
     expect(state).toMatchObject({
       kind: 'window',
+      stale: true,
+      showReadWarning: true,
       failure: {
         kind: 'sources',
         sources: [{
@@ -410,7 +424,7 @@ describe('resolveTriageListShellState', () => {
       freshness: 'stale',
     }));
 
-    expect(state).toMatchObject({ kind: 'window', failure: null });
+    expect(state).toMatchObject({ kind: 'window', stale: true, showReadWarning: true, failure: null });
   });
 
   it('separates a refresh in flight from staleness', () => {
@@ -420,6 +434,7 @@ describe('resolveTriageListShellState', () => {
       window: window(),
       refreshing: true,
       stale: false,
+      showReadWarning: false,
       failure: null,
     });
   });
@@ -446,6 +461,7 @@ describe('resolveTriageListShellState', () => {
     }));
 
     expect(state.kind).toBe('window');
+    expect(state).toMatchObject({ showReadWarning: true });
     const failure = state.kind === 'window' ? state.failure : null;
     expect(failure?.kind).toBe('sources');
     expect(failure?.kind === 'sources' ? failure.sources.map((s) => s.sourceInstanceId) : [])

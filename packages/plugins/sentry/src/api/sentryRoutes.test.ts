@@ -8,6 +8,7 @@ import {
   buildSentryIssueEventsUrl,
   buildSentryIssueUrl,
   buildSentryTagValuesUrl,
+  isSentryRoutableTagKey,
 } from './sentryRoutes.js';
 
 const INSTANCE: SentryInvokedInstanceV1 = Object.freeze({
@@ -77,18 +78,20 @@ describe('Sentry detail routes', () => {
     expect(url.searchParams.get('cursor')).toBe('0:100:0');
   });
 
-  it('escapes a tag key into exactly one path segment', () => {
+  it.each(['sentry:user', 'browser.name', 'server_name', 'release..version'])('escapes %s into exactly one path segment', (tagKey) => {
+    expect(isSentryRoutableTagKey(tagKey)).toBe(true);
     const url = new URL(buildSentryTagValuesUrl({
       instance: INSTANCE,
       entryId: '1234',
-      tagKey: 'sentry:user',
+      tagKey,
       perPage: 100,
     }));
-    expect(url.pathname).toBe('/api/0/organizations/42/issues/1234/tags/sentry%3Auser/values/');
+    expect(url.pathname).toBe(`/api/0/organizations/42/issues/1234/tags/${encodeURIComponent(tagKey)}/values/`);
   });
 
   it('refuses a tag key that could leave its own path segment', () => {
-    for (const tagKey of ['../../projects', 'a/b', '', 'x'.repeat(201), 'tag key']) {
+    for (const tagKey of ['.', '..', '../../projects', 'a/b', '', 'x'.repeat(201), 'tag key']) {
+      expect(isSentryRoutableTagKey(tagKey)).toBe(false);
       expect(() => buildSentryTagValuesUrl({
         instance: INSTANCE,
         entryId: '1234',

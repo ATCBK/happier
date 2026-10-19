@@ -4,6 +4,7 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { defineUiSurface } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 
@@ -15,7 +16,7 @@ import {
     TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
 } from '@happier-dev/triage-protocol/v1';
 import { TESTKIT_OBSERVED_REVISION, testkitConfiguredInstance } from '../../sessions/testkit/entrySessionTestkit.test-support.js';
-import { testkitLocator } from '../../corpus/testkit/observations.test-support.js';
+import { testkitLocator, testkitSnapshot, testkitViewer } from '../../corpus/testkit/observations.test-support.js';
 import type { TriageStartEntrySessionInputV1 } from '../../actions/entrySessionProtocol.js';
 import { readTriageActionsForSurface } from '../../actions/actionsCatalog.js';
 import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../../settings/actions.js';
@@ -28,6 +29,7 @@ type BoundaryHost = Readonly<{
         selectedActionInput?: unknown;
     }>) => Promise<unknown>;
     selectActionInput?: (request: unknown) => Promise<unknown>;
+    openNewSession?: () => Promise<void>;
 }>;
 
 import {
@@ -161,14 +163,14 @@ function MountedController(): React.ReactElement | null {
     return null;
 }
 
-async function mount(host: BoundaryHost): Promise<void> {
+async function mount(host: BoundaryHost, targetedContributions?: ReturnType<typeof createSurfaceContextFixture>['targetedContributions']): Promise<void> {
     const catalog = createTestkitAccountKv({ [TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1]: { v: 1, actions: [action(null)] } });
     await act(async () => {
         fixture = await createPluginUiTestkit({
             identity: { instanceId: 'bulk-controller-fixture', mountNonce: 'bulk-controller-mount' },
             authorPlugin: { id: 'happier.triage', version: '0.0.0' },
             surface: defineUiSurface(MountedController),
-            surfaceContext: createSurfaceContextFixture({ targetedContributions: {
+            surfaceContext: createSurfaceContextFixture({ targetedContributions: targetedContributions ?? {
                 target: { pluginId: 'happier.triage', occurrenceId: 'triage-generation',
                     sourceCustody: { kind: 'development', registeredRootId: 'triage-root' } },
                 points: [],
@@ -183,6 +185,7 @@ async function mount(host: BoundaryHost): Promise<void> {
                         await host.selectActionInput!(request) as SelectActionInputResult
                     ),
                 }),
+                ...(host.openNewSession === undefined ? {} : { openNewSession: host.openNewSession }),
             },
         });
     });
@@ -205,6 +208,75 @@ afterEach(async () => {
 });
 
 describe('bulk cancellation ownership', () => {
+    it('acquires source get facts before authoring a single PR whose list projection has no review revision', async () => {
+        const reads: string[] = [];
+        const selections: unknown[] = [];
+        let opened = false;
+        const instance = testkitConfiguredInstance();
+        const operation = {
+            point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol: {
+                id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
+            } },
+            contributor: { pluginId: ENTRY.entryRef.source.pluginId, contributionId: ENTRY.entryRef.source.localId,
+                occurrenceId: 'source-generation', sourceCustody: { kind: 'development' as const, registeredRootId: 'source-root' } },
+            role: 'prepareReviewWorkspace', action: { pluginId: ENTRY.entryRef.source.pluginId, localId: 'prepare-review-workspace' },
+        };
+        await mount({
+            executeAction: async (id) => {
+                reads.push(id);
+                if (id === 'projects.list') return { items: [], truncated: false };
+                if (id === 'entries/reobserve-v1') return { kind: 'observed', entryRef: ENTRY.entryRef, observation: {
+                    sourceInstanceId: ENTRY.sourceInstance.sourceInstanceId, observedAtMs: 4_000,
+                    outcome: { kind: 'present', locator: testkitLocator(), snapshot: testkitSnapshot({
+                        reviewRevision: { baseSha: 'base', headSha: 'head', nativeRevision: 'rev' },
+                    }), viewer: testkitViewer() },
+                } };
+                if (id === 'entries/read-detail-v1') return { kind: 'read', instance, linkedSessions: [] };
+                throw new Error(`Unexpected effect: ${id}`);
+            },
+            selectActionInput: async (request) => {
+                selections.push(request);
+                return { kind: 'cancelled' };
+            },
+            openNewSession: async () => { opened = true; },
+        }, {
+            target: { pluginId: 'happier.triage', occurrenceId: 'triage-generation', sourceCustody: { kind: 'development', registeredRootId: 'triage-root' } },
+            points: [{ pointId: operation.point.pointId, protocols: [{ protocol: operation.point.protocol, contributions: [{
+                contributor: operation.contributor, protocol: operation.point.protocol,
+                descriptor: { v: 1, purpose: 'triage-source', displayName: 'External forge', kinds: [{ id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' }] },
+                operations: [operation], surfaces: [],
+            }] }] }],
+        });
+        await act(async () => { controller?.run({
+            action: { ...action(null), workspaceMode: 'pull_request' },
+            destination: 'attachAllToNewSession', entries: [ENTRY],
+        }); });
+        await flush();
+        expect(reads).toContain('entries/reobserve-v1');
+        expect(selections).toEqual([expect.objectContaining({ operation, draft: expect.objectContaining({
+            observed: { baseSha: 'base', headSha: 'head', nativeRevision: 'rev', observedAtMs: 4_000 },
+        }) })]);
+        expect(controller?.phase).toEqual({ kind: 'idle' });
+        expect(opened).toBe(false);
+    });
+
+    it('leaves bulk authoring idle when the host declines its New Session seed', async () => {
+        await mount({
+            executeAction: async (actionId) => {
+                if (actionId === 'projects.list') return { items: [], truncated: false };
+                throw new Error(`Unexpected effect after declined seed: ${actionId}`);
+            },
+            openNewSession: async () => {
+                throw new PluginError({ code: 'denied', diagnostics: [{ code: 'plugin_action_current_intent_rejected', severity: 'error' }] });
+            },
+        });
+        await act(async () => {
+            controller?.run({ action: action(null), destination: 'attachAllToNewSession', entries: [ENTRY] });
+        });
+        await flush();
+        expect(controller?.phase).toEqual({ kind: 'idle' });
+    });
+
     for (const deferredAction of [
         'sessions.spawn.profiles.list',
         'projects.list',

@@ -60,7 +60,7 @@ describe('deriveDisplayedAttention', () => {
             level: 'required',
             fromSourceInstanceId: INSTANCE_B,
             reasonId: 'involvement/review-requested',
-            reasonLabel: 'Your review was requested',
+            reasonLabel: 'Review requested',
         });
     });
 

@@ -5,6 +5,7 @@ import type {
 
 import type { TriageListLaneV1 } from './listWindow.js';
 import type { TriageListWindowSnapshotV1 } from './listWindowStore.js';
+import type { TriageListInvocationErrorV1 } from '../actions/listEntriesProtocol.js';
 
 /**
  * Which configured connections could not be read, named.
@@ -80,7 +81,7 @@ export type TriageSourceUnreadableV1 = Readonly<{
     displayName: string;
     /** What the store could say about the invocation that did not settle. */
     reason: string;
-}>;
+}> & Partial<TriageListInvocationErrorV1>;
 
 /**
  * Every connection the store asked and could not read, in window order.
@@ -95,16 +96,18 @@ export function projectTriageUnreadableSourceHealth(
 ): readonly TriageSourceUnreadableV1[] {
     const unreadable = snapshot.unreadableSources ?? [];
     if (unreadable.length === 0) return Object.freeze([]);
-    const messages = new Map(unreadable.map((entry) => [entry.sourceInstanceId, entry.message]));
+    const messages = new Map(unreadable.map((entry) => [entry.sourceInstanceId, entry]));
     const health: TriageSourceUnreadableV1[] = [];
     for (const lane of snapshot.window?.lanes ?? []) {
-        const message = messages.get(lane.sourceInstanceId);
-        if (message === undefined) continue;
+        const unread = messages.get(lane.sourceInstanceId);
+        if (unread === undefined) continue;
         const sourceInstance = { source: lane.source, sourceInstanceId: lane.sourceInstanceId };
         health.push(Object.freeze({
             sourceInstance,
             displayName: readTriageSourceDisplayName(snapshot, sourceInstance),
-            reason: message,
+            reason: unread.message,
+            ...(unread.code === undefined ? {} : { code: unread.code }),
+            ...(unread.retryable === undefined ? {} : { retryable: unread.retryable }),
         }));
     }
     return Object.freeze(health);

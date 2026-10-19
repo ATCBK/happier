@@ -335,10 +335,28 @@ export function TriageEntryPicker(context: RenderContext): React.ReactElement {
     }, [composerView]);
 
     const runMountedOperation = async (operation: TriageMountedUiOperationV1, signal: AbortSignal): Promise<TriageMountedUiResultV1> => {
-        if (signal.aborted || handle === null) return { status: 'unavailable' };
-        if (operation.kind !== 'attachEntry' && operation.kind !== 'removeEntry') return { status: 'unavailable' };
+        if (signal.aborted) return { status: 'unavailable' };
+        if (operation.kind === 'setPickerQuery') {
+            setQuery(operation.query);
+            return { status: 'applied' };
+        }
+        if (operation.kind === 'refresh') {
+            if (requestTriagePickerRefresh(view).status !== 'invoke') return { status: 'unavailable' };
+            await refresh();
+            return { status: 'applied' };
+        }
+        if (operation.kind !== 'attachEntry' && operation.kind !== 'removeEntry' && operation.kind !== 'openDetail') return { status: 'unavailable' };
         const key = deriveTriageComposerEntryAttachmentKey(operation.entryRef);
-        if (!view.rows.some((row) => row.id === key)) return { status: 'unavailable' };
+        const row = view.rows.find((row) => row.id === key);
+        if (row === undefined) return { status: 'unavailable' };
+        if (operation.kind === 'openDetail') {
+            if (row.viewDetails.kind !== 'open') return { status: 'unavailable' };
+            const outcome = await openTriageEntryDetails({ hostApi: context.hostApi,
+                entryRef: row.entryRef, sourceInstance: row.viewDetails.sourceInstance,
+                originComposer: mount.status === 'bound' ? mount.composer : undefined, signal });
+            return { status: outcome.kind === 'opened' ? 'applied' : 'unavailable' };
+        }
+        if (handle === null) return { status: 'unavailable' };
         // The same picker model supplies attach data even when the current
         // snapshot already holds the entry. The mutation owner re-reads and
         // plans against the actual draft, rather than trusting stale row state.
@@ -359,10 +377,17 @@ export function TriageEntryPicker(context: RenderContext): React.ReactElement {
     React.useLayoutEffect(() => sharedScope === null || !surfaceActivity.active ? undefined : bindTriageMountedUiActions(
         sharedScope, mountId, (operation, signal) => mountedOperationRef.current(operation, signal),
     ), [mountId, sharedScope, surfaceActivity.active]);
-    const currentUiContext = React.useMemo(() => ({ detail: {
-        view: 'attachment-picker',
-        mountedAction: { action: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1 }, mountId },
-    } }), [mountId]);
+    const currentUiContext = React.useMemo(() => ({
+        detail: {
+            view: 'attachment-picker',
+            mountedAction: { action: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1 }, mountId },
+        },
+        commands: view.rows.filter((row) => row.viewDetails.kind === 'open').map((row) => ({
+            title: text('plugins.triage.picker.viewDetailsEntryLabel', 'View details {title}', { title: row.title }),
+            command: { kind: 'executeAction' as const, action: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1,
+                input: { mountId, operation: { kind: 'openDetail', entryRef: row.entryRef } } },
+        })),
+    }), [mountId, text, view.rows]);
     useTriageCurrentUiContextPublication(context.hostApi, currentUiContext);
 
     const originComposer = mount.status === 'bound' ? mount.composer : undefined;

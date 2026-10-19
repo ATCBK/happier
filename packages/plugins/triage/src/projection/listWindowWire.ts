@@ -6,7 +6,8 @@ import type { CorpusQualifiedObservationV1 } from '../corpus/fold/qualify.js';
 import type { TriageListRowV1, TriageListWindowV1 } from './listWindow.js';
 
 /**
- * The one projection between the assembled window and the list Action's wire.
+ * The observation projection shared by list and exact-reread Action results,
+ * plus the assembled window's list wire projection.
  *
  * Both directions live here because they are one contract. The wire carries
  * one complete folded answer for every connection that observed a row: the
@@ -28,7 +29,7 @@ function byInstanceIdAscending(left: string, right: string): number {
 }
 
 /** Strip process-local fold evidence before publishing one observation. */
-function toWireObservation(observation: ProjectedObservationV1): WireObservation {
+export function toTriageWireObservation(observation: ProjectedObservationV1): WireObservation {
     if (observation.outcome.kind !== 'present') return observation;
     const { nativeRevision: _nativeRevision, ...outcome } = observation.outcome;
     return { ...observation, outcome };
@@ -97,7 +98,7 @@ function otherObservations(
         ? undefined
         : byConnection.get(attentionInstanceId);
     const ordered = attention === undefined ? rest : [attention, ...rest];
-    return ordered.map(toWireObservation);
+    return ordered.map(toTriageWireObservation);
 }
 
 /** Project one assembled window's rows onto the list Action's wire. */
@@ -120,7 +121,7 @@ export function toTriageListWireRows(window: TriageListWindowV1): WireRows {
             },
             ...(row.attention === null ? {} : { attention: row.attention }),
             selected: row.selected,
-            observation: toWireObservation(observation),
+            observation: toTriageWireObservation(observation),
             otherObservations: otherObservations(row, byConnection, observation.sourceInstanceId),
             observedByCount: byConnection.size,
         });

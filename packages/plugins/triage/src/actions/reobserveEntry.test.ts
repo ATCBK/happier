@@ -1,12 +1,67 @@
+import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import type { TriageGetInputV1, TriageGetResultV1 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
-import { reobserveTriageEntry } from './reobserveEntry.js';
+import { CORPUS_SOURCE_INSTANCES_COLLECTION_ID, CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
+import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
+import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
+import { createTriageReobserveEntryActionHandler, reobserveTriageEntry } from './reobserveEntry.js';
+import { TriageReobserveEntryResultV1Schema } from './reobserveEntryProtocol.js';
 
 const fixture = createTriageSourceV1Fixture();
 
 describe('reobserveTriageEntry', () => {
+  it('publishes an authoritative source reread through the strict Action result contract', async () => {
+    const { collections, control } = createTestkitCorpusCollections();
+    const source = fixture.detailInput.observation.entryRef.source;
+    control.sourceInstances.seed(toCorpusStoredValue({
+      instanceTag: `a${'0'.repeat(42)}`,
+      sourceQualifiedId: `${source.pluginId}/${source.localId}`,
+      lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active,
+      configuredAtMs: 1,
+      configured: fixture.configuredInstance,
+    }));
+    const getHandle = {};
+    // The host's Collection transport, admitted handle and external-source dispatch
+    // are the boundaries; qualification and Action result production stay real.
+    const context = {
+      surface: 'cli',
+      signal: new AbortController().signal,
+      services: {
+        storage: { account: { collection: (definition: { id: string }) => (
+          definition.id === CORPUS_SOURCE_INSTANCES_COLLECTION_ID
+            ? collections.sourceInstances : collections.userMarks
+        ) } },
+        targetedContributions: { observeForSelf: () => ({
+          readCurrent: async () => ({ contributions: [{
+            contributor: { pluginId: source.pluginId, contributionId: source.localId },
+            descriptor: fixture.descriptor,
+            operations: { get: getHandle },
+          }] }),
+          dispose: () => {},
+        }) },
+        actions: { executeAdmittedTargetedOperation: async (operation: unknown, input: TriageGetInputV1) => {
+          expect(operation).toBe(getHandle);
+          expect(input).toEqual(fixture.getInput);
+          return fixture.getResult;
+        } },
+      },
+    } as unknown as PluginInvocationContext;
+    const result = await createTriageReobserveEntryActionHandler()({
+      v: 1,
+      entryRef: fixture.detailInput.observation.entryRef,
+      sourceInstanceId: fixture.configuredInstance.instance.sourceInstanceId,
+      lastKnownLocator: fixture.detailInput.observation.locator,
+    }, context);
+
+    expect(fixture.getResult).toHaveProperty('nativeRevision');
+    expect(result).toMatchObject({ kind: 'observed', observation: { outcome: { kind: 'present' } } });
+    expect(result).toHaveProperty('observation.outcome.snapshot', fixture.detailInput.observation.snapshot);
+    expect(result).not.toHaveProperty('observation.outcome.nativeRevision');
+    expect(TriageReobserveEntryResultV1Schema.safeParse(result)).toMatchObject({ success: true });
+  });
+
   it('uses the exact configured instance and locator, then qualifies the authoritative get once', async () => {
     const executeGet = vi.fn(async (_operation: unknown, _input: TriageGetInputV1) => fixture.getResult);
 
@@ -39,7 +94,7 @@ describe('reobserveTriageEntry', () => {
         entryRef: fixture.detailInput.observation.entryRef,
         sourceInstanceId: fixture.configuredInstance.instance.sourceInstanceId,
         observedAtMs: 1_760_000_800_000,
-        outcome: { kind: 'present' },
+        outcome: { kind: 'present', nativeRevision: 'b3f1c0a9d2e4' },
       },
     });
   });

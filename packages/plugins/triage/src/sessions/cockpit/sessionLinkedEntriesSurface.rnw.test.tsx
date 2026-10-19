@@ -33,6 +33,7 @@ import { createTriageEphemeralSharedScopeFixture } from '../../ui/window/ephemer
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
 import { toTriageListWireRows } from '../../projection/listWindowWire.js';
 import { TriageListEntriesResultV1Schema } from '../../actions/listEntriesProtocol.js';
+import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 
 /**
  * The mounted Session cockpit, driven through the real host boundary.
@@ -192,7 +193,7 @@ function createDataHarness(input: Readonly<{
 /** Mirrors the host's post-render private Data binding without widening author context. */
 function createCockpitAdapter(
     dataClient: PluginUiDataClient | null,
-    sharedScope?: PluginUiEphemeralSharedScope,
+    sharedScope?: PluginUiEphemeralSharedScope | (() => PluginUiEphemeralSharedScope),
 ): PluginUiSemanticSurfaceAdapter<typeof renderSessionLinkedEntriesSurface> {
     // Overlays mounted, so the link picker a press opens is observable like the host's.
     const rnwAdapter = createPluginUiRnwSemanticSurfaceAdapter({ overlays: true });
@@ -204,7 +205,7 @@ function createCockpitAdapter(
                     ? mountInput.surface(context) as ReactElement
                     : cloneElement(
                         mountInput.surface(context) as ReactElement<{ dataClient?: PluginUiDataClient; ephemeralSharedScope?: PluginUiEphemeralSharedScope }>,
-                        { dataClient, ...(sharedScope === undefined ? {} : { ephemeralSharedScope: sharedScope }) },
+                        { dataClient, ...(sharedScope === undefined ? {} : { ephemeralSharedScope: typeof sharedScope === 'function' ? sharedScope() : sharedScope }) },
                     ),
             });
         },
@@ -233,6 +234,8 @@ async function mountCockpit(
     statusFixture?: Readonly<{ scope: PluginUiEphemeralSharedScope; readStatus: () => Promise<TriagePullRequestStatusV1> }>,
     sourceOccurrencePresent = true,
     listEntries?: () => Promise<unknown>,
+    sourceLinks?: () => Promise<unknown>,
+    sourceScope?: () => PluginUiEphemeralSharedScope,
 ): Promise<PluginUiTestkit> {
     let fixture!: PluginUiTestkit;
     const surfaceContext = createSurfaceContextFixture({
@@ -253,25 +256,35 @@ async function mountCockpit(
                         kinds: [{ id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' },
                             { id: 'merge-request', workflowSubject: 'pullRequest', displayName: 'Merge request' },
                             { id: 'issue', workflowSubject: 'issue', displayName: 'Issue' }] },
-                    operations: [], surfaces: [],
+                    operations: sourceLinks === undefined ? [] : ['readSessionLinks', 'linkSession'].map((role) => ({
+                        point: { pointId: 'sources', protocol: { id: 'happier.triage/sources', version: 1 } },
+                        contributor: { pluginId: 'happier.example.source', contributionId: 'example-forge',
+                            occurrenceId: 'example-forge-1', sourceCustody: { kind: 'development', registeredRootId: 'example-root' } },
+                        role, action: { pluginId: 'happier.example.source', localId: role === 'linkSession' ? 'link-session' : 'read-session-links' },
+                    })), surfaces: [],
                 }],
             }] }],
         },
     });
     if (!sourceOccurrencePresent) delete surfaceContext.targetedContributions;
+    const admittedContext = PluginUiHostApiSurfaceContextV1Schema.safeParse(surfaceContext);
+    if (!admittedContext.success) throw new Error(JSON.stringify(admittedContext.error));
     await act(async () => {
         fixture = await createPluginUiTestkit({
             identity: { instanceId: 'fixture-instance-165', mountNonce: 'fixture-mount-165' },
             authorPlugin: { id: PLUGIN_ID, version: '0.0.0' },
             surface: renderSessionLinkedEntriesSurface,
             surfaceContext,
-            adapter: createCockpitAdapter(accountReachable ? harness.client : null, statusFixture?.scope),
+            adapter: createCockpitAdapter(accountReachable ? harness.client : null, sourceScope ?? statusFixture?.scope),
             handlers: {
                 confirm: async () => true,
                 // Direct Account writes use the host's Action admission boundary.
                 admitAction: async () => true,
                 executeAction: async ({ action, input }) => {
                     actionCalls.push({ action: String(action), input });
+                    if (sourceLinks !== undefined && String(action) === 'sessions/read-source-links-v1') {
+                        return await sourceLinks() as never;
+                    }
                     if (listEntries !== undefined && String(action) === 'entries/list-v1') {
                         return await listEntries() as never;
                     }
@@ -479,6 +492,44 @@ describe('the Session tab, round 2', () => {
 });
 
 describe('the mounted Session cockpit', () => {
+    it('never carries source-only links into another Account scope with the same Session id', async () => {
+        const harness = createDataHarness({ snapshot: { status: 'ready', rows: [], hasMore: false } });
+        let scope = createTriageEphemeralSharedScopeFixture();
+        const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID },
+            null, true, null, undefined, true, undefined, async () => ({ kind: 'complete', links: [{
+                entryRef: linkRow().entryRef, sessionId: SESSION_ID, linkedAtMs: 10, displayPath: 'First Account private task',
+            }] }), () => scope);
+        await expect(fixture.getByText('First Account private task')).resolves.toBeDefined();
+        scope = createTriageEphemeralSharedScopeFixture();
+        const nextContext = createSurfaceContextFixture({ target: { kind: 'session', sessionId: SESSION_ID } });
+        delete nextContext.targetedContributions;
+        await act(async () => { await fixture.updateSurface(nextContext); });
+        await expect(fixture.queryByText('First Account private task')).resolves.toBeUndefined();
+        expect(harness.gets).toHaveLength(0);
+    });
+
+    it('joins source-owned work without a v2 row and retains it after a failed source refresh', async () => {
+        const harness = createDataHarness({ snapshot: { status: 'ready', rows: [], hasMore: false } });
+        let failSource = false;
+        const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID },
+            { v: 1, status: 'unlinked' }, true, null, undefined, true, undefined, async () => {
+                if (failSource) throw new Error('The source is offline');
+                return { kind: 'complete', links: [{ entryRef: linkRow().entryRef, sessionId: SESSION_ID,
+                    linkedAtMs: 10, displayPath: 'Personal task without external storage' }] };
+            });
+        await expect(fixture.getByText('Personal task without external storage')).resolves.toBeDefined();
+        expect(harness.gets).toHaveLength(0);
+        failSource = true;
+        await act(async () => { harness.control.publish({ status: 'error', rows: [], hasMore: false }); });
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Refresh' })); });
+        await act(async () => { await Promise.resolve(); });
+        await expect(fixture.getByText('Personal task without external storage')).resolves.toBeDefined();
+        await openRow(fixture, 'Personal task without external storage');
+        await act(async () => { await fixture.press(await fixture.findByRole('button', { name: 'Unlink Personal task without external storage' })); });
+        expect(actionCalls.filter((call) => call.action === 'sessions/unlink-entry-v1')).toHaveLength(1);
+        expect(harness.deletes).toHaveLength(0);
+    });
+
     it('loads and retains every linked-entry page so link 51 can be inspected and unlinked', async () => {
         const firstPage = Array.from({ length: 50 }, (_, index) => (
             queryRow(`link-${index + 1}`, 100 - index)

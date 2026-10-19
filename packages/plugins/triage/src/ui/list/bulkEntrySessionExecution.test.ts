@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createTestkitCorpusCollections } from '../../corpus/testkit/corpusCollections.test-support.js';
 
 import { startTriageEntrySession } from '../../actions/entrySession.js';
 import {
@@ -91,18 +92,16 @@ function executionHarness(input: Readonly<{
     const sends = [...(input.sendResults ?? [])];
     let linkAttempt = 0;
     let retired = false;
+    const { sessionLinks: storedLinks } = createTestkitCorpusCollections().collections;
     const sessionLinks = {
-        identityTag: async (request: Readonly<{ field: string; components: readonly string[] }>) => (
-            `${request.field}:${request.components.join(':')}`
-        ),
-        get: async () => null,
-        batch: async () => {
+        ...storedLinks,
+        batch: async (...args: Parameters<typeof storedLinks.batch>) => {
             linkAttempt += 1;
             lifecycle.push('link');
             if (linkAttempt === input.failLinkAttempt) {
                 throw new Error('triage:test:linkUnavailable');
             }
-            return { status: 'updated' as const, results: [], changeCursor: 1 };
+            return await storedLinks.batch(...args);
         },
     };
     const execute = (async (actionId: string, actionInput: Readonly<{ initialInput?: unknown }>) => {
@@ -141,7 +140,7 @@ function executionHarness(input: Readonly<{
                 return await startTriageEntrySession(
                     TriageStartEntrySessionInputV1Schema.parse(actionInput),
                     {
-                        collections: { sessionLinks: sessionLinks as never },
+                        collections: { sessionLinks },
                         execute,
                         nowMs: () => 1_760_000_900_000,
                     },

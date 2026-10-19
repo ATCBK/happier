@@ -33,6 +33,8 @@ import {
 import { TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS } from '../refresh/refreshEligibility.js';
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1, TRIAGE_LIST_DEFAULT_LENS_V1 } from './listWindow.js';
 import { createTriageListWindowStore } from './listWindowStore.js';
+import { resolveTriageListShellState } from '../ui/shell/windowState.js';
+import { projectTriagePickerCorpusFacts } from '../composer/pickerFacts.js';
 
 /**
  * The composed PRs & Issues vertical, driven end to end.
@@ -987,15 +989,22 @@ describe('the mounted PRs & Issues window store', () => {
         }
     });
 
-    it('goes stale on its own clock and adopts the next pass on refresh', async () => {
+    it('projects fresh, aged and failed shared windows into the provider-silent picker', async () => {
         const harness = createHarness();
         const store = createTriageListWindowStore({
             readEntries: harness.readEntries,
             nowMs: () => harness.clock.nowMs,
         });
 
+        const pickerFacts = () => {
+            const calls = harness.scanCalls.count;
+            const facts = projectTriagePickerCorpusFacts({ snapshot: store.getSnapshot(), nowMs: harness.clock.nowMs });
+            expect(harness.scanCalls.count).toBe(calls);
+            return facts;
+        };
+        expect(pickerFacts().freshness).toEqual({ kind: 'neverSynchronized' });
         await store.refresh('view');
-        expect(store.getSnapshot().freshness).toBe('fresh');
+        expect(pickerFacts().freshness).toEqual({ kind: 'current' });
 
         // Inside the shared minimum interval, view demand joins rather than
         // multiplying into a second provider read.
@@ -1004,8 +1013,11 @@ describe('the mounted PRs & Issues window store', () => {
         expect(harness.scanCalls.count).toBe(callsAfterFirstPass);
         expect(store.getSnapshot().freshness).toBe('fresh');
 
-        harness.clock.nowMs += TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS + 1;
-        expect(store.getSnapshot().freshness).toBe('stale');
+        harness.clock.nowMs += TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS - 1;
+        expect(pickerFacts().freshness).toEqual({ kind: 'current' });
+        harness.clock.nowMs += 1;
+        expect(pickerFacts().freshness).toEqual({ kind: 'stale', lastMaterializedAtMs: store.getSnapshot().window!.assembledAtMs });
+        expect(resolveTriageListShellState(store.getSnapshot())).toMatchObject({ stale: true, showReadWarning: false });
 
         harness.state.titleOfFirstEntry = 'Consolidate the two normalizers';
         await store.refresh('view');
@@ -1017,6 +1029,19 @@ describe('the mounted PRs & Issues window store', () => {
         const outcome = first?.observations[0]?.outcome;
         expect(outcome?.kind === 'present' ? outcome.snapshot.title : null)
             .toBe('Consolidate the two normalizers');
+        expect(pickerFacts().freshness).toEqual({ kind: 'current' });
+
+        // A failed explicit revalidation is stale even inside the age interval,
+        // retains the usable rows, and recovers only after a successful read.
+        const retainedRows = pickerFacts().rows;
+        harness.clock.nowMs += 1;
+        harness.state.sourceBFails = true;
+        await store.refresh('manual');
+        expect(pickerFacts().freshness.kind).toBe('stale');
+        expect(pickerFacts().rows).toEqual(retainedRows);
+        harness.state.sourceBFails = false;
+        await store.refresh('manual');
+        expect(pickerFacts().freshness).toEqual({ kind: 'current' });
         store.dispose();
     });
 
@@ -1088,13 +1113,15 @@ describe('the mounted PRs & Issues window store', () => {
                 expect(store.getSnapshot().freshness).toBe('fresh');
                 observedFreshness.length = 0;
 
-                // Freshness is a derived read fact. Mount/focus/visibility/manual
-                // demand own wakeups; the store must not manufacture a hidden
-                // timer just to age its cached snapshot.
+                // Freshness ages on read; only explicit demand owns wakeups.
                 expect(freshnessWake).toBeNull();
+                const settled = store.getSnapshot();
                 harness.clock.nowMs += TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS;
                 expect(observedFreshness).toEqual([]);
+                expect(store.getSnapshot()).not.toBe(settled);
                 expect(store.getSnapshot().freshness).toBe('stale');
+                const stale = store.getSnapshot();
+                expect(store.getSnapshot()).toBe(stale);
             } finally {
                 unsubscribe();
                 store.dispose();
@@ -1139,6 +1166,7 @@ describe('the mounted PRs & Issues window store', () => {
         store.dispose();
     });
 
+
     it('still reports a failed aggregate read when no window was ever assembled', async () => {
         // The one honest use of the store-wide slot: there is no list, so "the
         // list could not be read" is exactly what happened.
@@ -1155,6 +1183,57 @@ describe('the mounted PRs & Issues window store', () => {
         expect(snapshot.window).toBeUndefined();
         expect(snapshot.error?.code).toBe('plugin_action_failed');
         store.dispose();
+    });
+
+    it('withholds the previous cold-read failure while a retry is pending and restores a genuine failed retry', async () => {
+        const harness = createHarness();
+        harness.state.enumerationRejected = true;
+        let holdRead: Promise<void> | null = null;
+        const store = createTriageListWindowStore({
+            readEntries: async (input) => {
+                if (holdRead !== null) await holdRead;
+                return await harness.readEntries(input);
+            },
+            nowMs: () => harness.clock.nowMs,
+        });
+
+        try {
+            await store.refresh('view');
+            const initialFailure = store.getSnapshot().error;
+            expect(initialFailure?.code).toBe('plugin_action_failed');
+
+            for (const failsAgain of [true, false]) {
+                let release = () => {};
+                holdRead = new Promise<void>((resolve) => { release = resolve; });
+                harness.state.enumerationRejected = failsAgain;
+                const retry = store.refresh('manual');
+                try {
+                    await vi.waitFor(() => {
+                        expect(store.getSnapshot().pending).toBe('initial');
+                    });
+                    // No completed first read has answered this attempt yet.
+                    // Both shell and picker must see loading, not a verdict
+                    // retained from the attempt that just failed.
+                    expect(store.getSnapshot().window).toBeUndefined();
+                    expect(store.getSnapshot().error).toBeUndefined();
+                } finally {
+                    release();
+                    await retry;
+                    holdRead = null;
+                }
+                expect(store.getSnapshot().pending).toBe('idle');
+                if (failsAgain) {
+                    expect(store.getSnapshot().error).toEqual(initialFailure);
+                    expect(store.getSnapshot().window).toBeUndefined();
+                } else {
+                    expect(store.getSnapshot().error).toBeUndefined();
+                    expect(store.getSnapshot().window?.rows).toHaveLength(3);
+                    expect(store.getSnapshot().freshness).toBe('fresh');
+                }
+            }
+        } finally {
+            store.dispose();
+        }
     });
 
     it('keeps whether retrying can help, and the host diagnostic, beside the aggregate failure', async () => {
@@ -1174,7 +1253,7 @@ describe('the mounted PRs & Issues window store', () => {
         });
         await permanentStore.refresh('view');
         expect(permanentStore.getSnapshot().error).toEqual({
-            code: 'plugin_action_failed',
+            code: 'unsupported_method',
             message: 'unsupported_method',
             retryable: false,
             detail: 'unsupported_method · host_api_method_not_installed:executeAction',
@@ -1604,7 +1683,7 @@ describe('the mounted PRs & Issues window store', () => {
         }
     });
 
-    it('does not age a window from a cycle that read nothing', async () => {
+    it('does not extend freshness from a cycle that read nothing', async () => {
         const harness = createHarness();
         const store = createTriageListWindowStore({
             readEntries: harness.readEntries,
@@ -1615,9 +1694,7 @@ describe('the mounted PRs & Issues window store', () => {
         await store.refresh('view');
         expect(store.getSnapshot().freshness).toBe('fresh');
 
-        // A view trigger inside the minimum interval reads no provider. Stamping
-        // the cycle anyway would extend the fresh window without a read, so the
-        // list would keep saying "up to date" about entries nobody re-read.
+        // A paced-away view trigger must not extend the last successful read.
         harness.clock.nowMs = readAtMs + 10_000;
         const before = harness.scanCalls.count;
         await store.refresh('view');
@@ -1625,6 +1702,9 @@ describe('the mounted PRs & Issues window store', () => {
 
         harness.clock.nowMs = readAtMs + TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS + 1;
         expect(store.getSnapshot().freshness).toBe('stale');
+        await store.refresh('view');
+        expect(harness.scanCalls.count).toBeGreaterThan(before);
+        expect(store.getSnapshot().freshness).toBe('fresh');
         store.dispose();
     });
 
@@ -2307,7 +2387,7 @@ describe('appending another bounded window to one mount', () => {
         expect(scanInputsAfterLoadMore[1]?.resume?.map((entry) => entry.sourceInstanceId))
             .toEqual([INSTANCE_A, INSTANCE_B]);
         const resumedPages = scanInputsAfterLoadMore[1]?.resume?.map(
-            (entry) => Number(entry.continuation.token),
+            (entry) => Number(entry.continuation?.token),
         ) ?? [];
         expect(resumedPages).toHaveLength(2);
         expect(resumedPages.every((page) => page > 1)).toBe(true);
@@ -2318,7 +2398,7 @@ describe('appending another bounded window to one mount', () => {
         );
         expect(afterSecondAppend).toHaveLength(3);
         const secondResumedPages = afterSecondAppend[2]?.resume?.map(
-            (entry) => Number(entry.continuation.token),
+            (entry) => Number(entry.continuation?.token),
         ) ?? [];
         expect(secondResumedPages).toHaveLength(2);
         expect(secondResumedPages.every((page, index) => page > (resumedPages[index] ?? 0))).toBe(true);
@@ -2360,7 +2440,7 @@ describe('appending another bounded window to one mount', () => {
         ).at(-1);
         expect(resumed?.resume?.map((entry) => entry.sourceInstanceId))
             .toEqual([INSTANCE_A, INSTANCE_B]);
-        const resumedPages = resumed?.resume?.map((entry) => Number(entry.continuation.token)) ?? [];
+        const resumedPages = resumed?.resume?.map((entry) => Number(entry.continuation?.token)) ?? [];
         expect(resumedPages).toHaveLength(2);
         expect(resumedPages.every((page) => page > 1)).toBe(true);
 
@@ -2405,8 +2485,8 @@ describe('appending another bounded window to one mount', () => {
             sourceInstanceIds: [INSTANCE_A],
         });
         expect(transportPages.at(-1)?.resume).toHaveLength(1);
-        expect(Number(transportPages.at(-1)?.resume?.[0]?.continuation.token))
-            .toBeGreaterThan(Number(initialFrontiers?.[0]?.continuation.token ?? 0));
+        expect(Number(transportPages.at(-1)?.resume?.[0]?.continuation?.token))
+            .toBeGreaterThan(Number(initialFrontiers?.[0]?.continuation?.token ?? 0));
         expect(store.getSnapshot().window?.rows.map((row) => row.entryRef.entryId))
             .toEqual(expect.arrayContaining(['a-3', 'b-1']));
 

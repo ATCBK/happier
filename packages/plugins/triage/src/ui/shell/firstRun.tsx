@@ -75,6 +75,15 @@ export function TriageFirstRun(props: Readonly<{
             </Card>
           ))}
         </Columns>
+        {/* Where the reader's work is read, said before they connect anything (lab Desk first run). */}
+        <Text
+          variant="micro"
+          tone="secondary"
+          value={text(
+            'plugins.triage.surface.firstRun.trust',
+            'Sources are read live on the machine you choose. Their pull requests, issues and errors are never copied into your account.',
+          )}
+        />
       </Stack>
       <Stack gap="medium">
         <Heading level={2} value={text('plugins.triage.surface.firstRun.next.title', 'What happens next')} />

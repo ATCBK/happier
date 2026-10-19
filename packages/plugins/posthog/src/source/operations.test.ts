@@ -12,6 +12,9 @@ import {
 } from '@happier-dev/triage-protocol/v1';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { describe, expect, it, vi } from 'vitest';
+import { activate } from '../activate.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { TriageTaskWriteResultV1Schema } from '@happier-dev/triage-protocol/v1';
 
 import organizationsPage from '../api/__fixtures__/organizationsPage.json' with { type: 'json' };
 import projectsPage from '../api/__fixtures__/organizationProjectsPage.json' with { type: 'json' };
@@ -170,6 +173,102 @@ function configuredInstance() {
 }
 
 describe('PostHog Triage source operations', () => {
+    async function write(action: string, host: ReturnType<typeof context>, extra: object = {}) {
+        const register = vi.fn();
+        await activate({ actions: { register }, connectedAccounts: { register: vi.fn() }, composerReferences: { register: vi.fn() } } as never);
+        const handler = register.mock.calls.find(([id]) => id === action)?.[1];
+        expect(handler, `registered ${action}`).toBeTypeOf('function');
+        const result: unknown = await handler({
+            v: 1, instance: configuredInstance(),
+            localRef: { kindId: 'error-issue', collisionScope: 'posthog:https://eu.posthog.com:00000000-0000-4000-8000-0000000000d1', entryId: crudIssueRead.id },
+            ...extra,
+        }, host.value);
+        return TriageTaskWriteResultV1Schema.parse(result);
+    }
+
+    it.each([
+        ['posthog/resolve-issue', {}, { status: 'resolved' }, '', { status: 'resolved' }],
+        ['posthog/suppress-issue', {}, { status: 'suppressed' }, '', { status: 'suppressed' }],
+        ['posthog/unsuppress-issue', {}, { status: 'active' }, '', { status: 'active' }],
+        ['posthog/assign-issue', { assignee: { type: 'user', id: 42 } }, { assignee: { type: 'user', id: 42 } }, 'assign/', { assignee: { type: 'user', id: 42 } }],
+    ])('dispatches %s once on the configured Team and confirms CRUD truth', async (action, extra, body, suffix, changed) => {
+        const before = action === 'posthog/unsuppress-issue' ? { ...crudIssueRead, status: 'suppressed' } : crudIssueRead;
+        const host = context([before, { success: true }, { ...crudIssueRead, ...changed }]);
+        const result = await write(action, host, extra);
+        expect(result).toMatchObject({ kind: 'applied', observation: { localRef: { entryId: crudIssueRead.id } } });
+        const requests = host.request.mock.calls.map(([request]) => request);
+        expect(requests).toMatchObject([
+            { method: 'GET' },
+            { method: 'PATCH', url: `https://eu.posthog.com/api/projects/4821/error_tracking/issues/${crudIssueRead.id}/${suffix}`, body: new TextEncoder().encode(JSON.stringify(body)), redirect: 'manual' },
+            { method: 'GET' },
+        ]);
+        expect(requests).toHaveLength(3);
+        const declaration = PLUGIN_MANIFEST.contributes.actions.find(({ id }) => id === action);
+        expect(declaration).toMatchObject({ dangerLevel: 'writesRemote', confirmation: expect.any(Object), surfaces: expect.arrayContaining(['agent', 'mcp', 'cli', 'ui']) });
+    });
+
+    it.each([
+        ['posthog/resolve-issue', 'active', 'resolved'],
+        ['posthog/suppress-issue', 'active', 'suppressed'],
+        ['posthog/unsuppress-issue', 'suppressed', 'active'],
+    ])('confirms lost %s replies without replay', async (action, previousStatus, nextStatus) => {
+        for (const changed of [true, false]) {
+            const host = context([]);
+            host.request.mockImplementationOnce(async (input) => ({ status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...crudIssueRead, status: previousStatus })) }));
+            host.request.mockRejectedValueOnce(new Error('answer lost'));
+            host.request.mockImplementationOnce(async (input) => ({ status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify({ ...crudIssueRead, status: changed ? nextStatus : previousStatus })) }));
+            expect(await write(action, host)).toMatchObject({ kind: changed ? 'applied' : 'uncertain' });
+            expect(host.request.mock.calls).toHaveLength(3);
+        }
+    });
+
+    it('refuses a different PostHog CRUD identity before dispatch', async () => {
+        const host = context([{ ...crudIssueRead, id: '00000000-0000-4000-8000-000000000099' }]);
+        expect(await write('posthog/resolve-issue', host)).toMatchObject({ kind: 'failed', failure: { class: 'unsupportedContract' } });
+        expect(host.request.mock.calls).toHaveLength(1);
+    });
+
+    it('returns uncertainty when PostHog confirmation is unreadable', async () => {
+        const host = context([crudIssueRead, { success: true }, {}]);
+        expect(await write('posthog/resolve-issue', host)).toMatchObject({ kind: 'uncertain', failure: { class: 'unsupportedContract' } });
+    });
+
+    it('refuses an unconfigured PostHog Team before credential materialization', async () => {
+        const host = context([]);
+        expect(await write('posthog/resolve-issue', host, { localRef: { kindId: 'error-issue', collisionScope: 'posthog:https://eu.posthog.com:00000000-0000-4000-8000-0000000000ff', entryId: crudIssueRead.id } })).toMatchObject({ kind: 'failed', failure: { class: 'unsupportedContract' } });
+        expect(host.materializeListedAccount).not.toHaveBeenCalled();
+        expect(host.request).not.toHaveBeenCalled();
+    });
+
+    it.each(['posthog/resolve-issue', 'posthog/suppress-issue', 'posthog/unsuppress-issue'])('does not confirm a permission-rejected %s write', async (action) => {
+        const host = context([crudIssueRead, {}], [200, 403]);
+        expect(await write(action, host)).toMatchObject({ kind: 'failed', failure: { class: 'permission' } });
+        expect(host.request.mock.calls).toHaveLength(2);
+    });
+
+    it('requires exact PostHog assignee type and id on confirmation', async () => {
+        const host = context([crudIssueRead, { success: true }, { ...crudIssueRead, assignee: { type: 'role', id: 42 } }]);
+        expect(await write('posthog/assign-issue', host, { assignee: { type: 'user', id: 42 } })).toMatchObject({ kind: 'uncertain' });
+    });
+
+    it('keeps authoritative PostHog CRUD status when query enrichment still has the old state', async () => {
+        const host = context([{ ...crudIssueRead, status: 'resolved' }, { ...queryIssueDetail, status: 'active' }]);
+        const result = await getPosthogSourceEntry({
+            v: 1, instance: configuredInstance(),
+            localRef: { kindId: 'error-issue', collisionScope: 'posthog:https://eu.posthog.com:00000000-0000-4000-8000-0000000000d1', entryId: crudIssueRead.id },
+        }, host.value);
+        expect(result).toMatchObject({ kind: 'present', snapshot: { state: { presentation: 'resolved' } } });
+    });
+
+    it('keeps a cancelled PostHog dispatch uncertain and does not replay', async () => {
+        const controller = new AbortController();
+        const host = context([], [], { signal: controller.signal });
+        host.request.mockImplementationOnce(async (input) => ({ status: 200, finalUrl: input.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(crudIssueRead)) }));
+        host.request.mockImplementationOnce(async () => { controller.abort(); throw new Error('cancelled after send'); });
+        expect(await write('posthog/resolve-issue', host)).toMatchObject({ kind: 'uncertain', failure: { code: POSTHOG_FAILURE_CODES.cancelled } });
+        expect(host.request.mock.calls).toHaveLength(2);
+    });
+
     it('refuses a native credential binding before account or provider access', async () => {
         const host = context([]);
         const result = await scanPosthogSource({

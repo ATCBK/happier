@@ -17,7 +17,7 @@ import type {
     TriageListOrderV1,
 } from '../projection/listWindow.js';
 import {
-    TriageListFilterSelectionV1Schema,
+    TriageSurfaceFilterSelectionV1Schema,
     TriageListSettledQueryV1Schema,
 } from '../actions/listEntriesProtocol.js';
 
@@ -224,7 +224,7 @@ type FiltersOutcome =
     | Readonly<{ ok: false; reason: CorpusSavedViewsRejectionV1 }>;
 
 function readFilters(raw: unknown): FiltersOutcome {
-    const parsed = TriageListFilterSelectionV1Schema.safeParse(raw);
+    const parsed = TriageSurfaceFilterSelectionV1Schema.safeParse(raw);
     if (!parsed.success) return { ok: false, reason: 'filterValue' };
     const filters = parsed.data;
     if (hasDuplicateFacetValue(filters.sources)
@@ -349,6 +349,7 @@ function toStoredValue(value: CorpusSavedViewsCatalogV1): JsonValue {
             label: view.label,
             query: view.query,
             filters: {
+                ...(view.filters.tasks === undefined ? {} : { tasks: view.filters.tasks }),
                 sources: view.filters.sources.map((entry) => ({ source: { ...entry.source } })),
                 types: view.filters.types.map((entry) => ({
                     source: { ...entry.source },

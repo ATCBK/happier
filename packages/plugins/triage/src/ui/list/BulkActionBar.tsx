@@ -367,7 +367,7 @@ const UNAVAILABLE_COPY: Readonly<Record<
   },
   sharedPlacementIncompatible: {
     key: 'plugins.triage.surface.bulk.sharedPlacementIncompatible',
-    fallback: 'These entries do not share one compatible repository placement. Use A session each or Attach to New Session.',
+    fallback: 'Each pull request needs its own review workspace.',
   },
   preparedWorkspaceUnsupported: {
     key: 'plugins.triage.surface.bulk.preparedWorkspaceUnsupported',

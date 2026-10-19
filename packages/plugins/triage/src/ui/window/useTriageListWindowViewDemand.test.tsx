@@ -44,6 +44,7 @@ function render(initial: Props): Readonly<{
 }
 
 describe('the mounted Triage list view-demand producer', () => {
+
   it('does not demand while first mounted or retained inactive, including callback replacement', async () => {
     const first = vi.fn(async () => {});
     const second = vi.fn(async () => {});

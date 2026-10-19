@@ -2,6 +2,7 @@ import type {
     OpenNewSessionRequest,
     OpenNewSessionOptions,
 } from '@happier-dev/plugin-sdk/ui';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 
 /**
  * The one path to "put this on the host's New Session screen and open it".
@@ -36,6 +37,8 @@ export type TriageNewSessionSeedResultV1 =
     | Readonly<{ status: 'seeded' }>
     /** This mount installs no New Session navigation capability. */
     | Readonly<{ status: 'unsupported' }>
+    /** The person declined or dismissed the host's preparation confirmation. */
+    | Readonly<{ status: 'cancelled' }>
     /** The screen could not be opened, or the host refused the seed. */
     | Readonly<{ status: 'unavailable' }>;
 
@@ -54,7 +57,14 @@ export async function requestTriageNewSessionSeed(
 
     try {
         await host.openNewSession(seed, options);
-    } catch {
+    } catch (error) {
+        // The canonical present-user Action gate uses this diagnostic for both
+        // Decline and dismissal. Arbitrary denial/unavailability is not cancellation.
+        const declined = 'plugin_action_current_intent_rejected';
+        if (isPluginError(error) && (error.code === declined
+            || error.diagnostics?.some((diagnostic) => diagnostic.code === declined))) {
+            return { status: 'cancelled' };
+        }
         return { status: 'unavailable' };
     }
     return { status: 'seeded' };

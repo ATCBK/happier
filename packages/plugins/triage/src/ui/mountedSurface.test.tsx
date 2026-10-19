@@ -415,6 +415,23 @@ const SOURCE_REACHING_ACTIONS: ReadonlySet<string> = new Set([
 ]);
 
 describe('the mounted PRs & Issues surface', () => {
+    it('opens task creation from the Tasks lens without a second list mount or a provider write', async () => {
+        const harness = createHarness();
+        const shell = await mountSurface(renderShellSurface, harness, 'tasks-create-entry', {}, { subPath: 'tasks,everyone' });
+        await settleWindow('view', shell);
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Create task' })); });
+        await expect(shell.getByText('Where?')).resolves.toEqual({ content: 'Where?' });
+        expect(harness.actionCalls.filter((id) => id === 'tasks/create-v1')).toEqual([]);
+    });
+    it('does not mistake an unreadable Session-link index for an empty Agents lens', async () => {
+        const harness = createHarness();
+        const shell = await mountSurface(renderShellSurface, harness, 'tasks-agents-unavailable', {}, { subPath: 'tasks,agents' });
+        await settleWindow('view', shell);
+        // This host fixture has no Account Collection transport: no link read can establish absence.
+        await expect(shell.getByText('Some linked Session activity could not be read.'))
+            .resolves.toEqual({ content: 'Some linked Session activity could not be read.' });
+        await expect(shell.getByText('Nothing needs you')).rejects.toBeDefined();
+    });
     it('applies Smart precedence through the addressed mounted Action and retains it when omitted', async () => {
         const harness = createHarness();
         const shell = await mountSurface(renderShellSurface, harness, 'triage-smart-parity');

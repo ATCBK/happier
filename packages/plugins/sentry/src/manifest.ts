@@ -6,6 +6,7 @@ import {
   TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
   TriageSourcesContributionProtocolV1,
   TriageSourceConnectedAccountInputsV1,
+  TriageTaskWriteResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import {
@@ -59,6 +60,8 @@ import {
   resolveSentryEvidenceReference,
   searchSentryEvidenceReferences,
 } from './composer/reference.js';
+import { SentryIssueAssignInputV1Schema, SentryIssueWriteInputV1Schema } from './source/writeContracts.js';
+import { archiveSentryIssue, assignSentryIssue, resolveSentryIssue } from './source/writeOperations.js';
 
 /** The detail surface's declared renderer and the UI artifact it mounts. */
 export const SENTRY_DETAIL_RENDERER_ID = 'sentry-detail';
@@ -135,7 +138,7 @@ const TOKEN_FIELD = {
   title: { key: 'plugins.sentry.auth.token.title', fallback: 'Sentry auth token' },
   description: {
     key: 'plugins.sentry.auth.token.description',
-    fallback: 'An internal-integration or personal token with org:read and event:read.',
+    fallback: 'An internal-integration or personal token with org:read and event:read. Issue writes additionally need event:write.',
   },
   schema: { type: 'string' as const, minLength: 1 },
   secret: true as const,
@@ -227,15 +230,14 @@ export const SENTRY_PLUGIN = definePlugin({
     required: [{
       id: SENTRY_CLOUD_NETWORK_HOST_ACCESS_ID,
       capability: 'network',
-      reason: 'Read Sentry organizations, issues, events and tags on the two Sentry Cloud regions.',
+      reason: 'Read Sentry organizations, issues, events and tags, and update individual issues on the two Sentry Cloud regions.',
       scope: {
         targets: [
           { kind: 'fixedOrigin', origin: SENTRY_CLOUD_REGION_ORIGINS.us },
           { kind: 'fixedOrigin', origin: SENTRY_CLOUD_REGION_ORIGINS.de },
         ],
-        // V1 is read-only. `event:admin` is never requested and no mutation
-        // route exists, so no other method is admitted.
-        methods: ['GET'],
+        // Exact issue writes need event:write, never event:admin or DELETE.
+        methods: ['GET', 'PUT'],
         // No `privateNetwork` here, deliberately: the Cloud origins are public
         // by definition and must not widen when a self-hosted user grants their
         // own deployment private reach. The flag is scope-level, so a separate
@@ -248,12 +250,12 @@ export const SENTRY_PLUGIN = definePlugin({
     }, {
       id: SENTRY_ACCOUNT_NETWORK_HOST_ACCESS_ID,
       capability: 'network',
-      reason: 'Read Sentry organizations, issues, events and tags on the exact deployment the'
+      reason: 'Read Sentry organizations, issues, events and tags, and update individual issues on the exact deployment the'
         + ' selected Connected Account is configured for, which for a self-hosted Sentry may be'
         + ' on a private network.',
       scope: {
         targets: [{ kind: 'connectedAccountOrigin', service: SENTRY_CONNECTED_ACCOUNT_ID }],
-        methods: ['GET'],
+        methods: ['GET', 'PUT'],
         // The self-hosted auth mode is in V1 scope, and a self-hosted Sentry
         // may live on a private network. Removing that mode must remove this in
         // the same change.
@@ -333,6 +335,45 @@ export const SENTRY_PLUGIN = definePlugin({
     ]),
   },
   actions: {
+    [SENTRY_ACTION_IDS.resolve]: {
+      title: 'Resolve Sentry issue',
+      description: 'Resolves one exact Sentry issue and confirms its live state.',
+      surfaces: ['ui', 'agent', 'mcp', 'cli'],
+      placementBindings: ['detailsPanel'],
+      dangerLevel: 'writesRemote',
+      confirmation: { title: 'Resolve this Sentry issue?', body: 'Changes this issue to Resolved in Sentry. Requires event:write.', confirmLabel: 'Resolve' },
+      inputSchema: SentryIssueWriteInputV1Schema.jsonSchema,
+      resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+      hostAccess: READ_HOST_ACCESS,
+      connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+      run: resolveSentryIssue,
+    },
+    [SENTRY_ACTION_IDS.archive]: {
+      title: 'Archive Sentry issue',
+      description: 'Archives one exact Sentry issue forever and confirms its live state.',
+      surfaces: ['ui', 'agent', 'mcp', 'cli'],
+      placementBindings: ['detailsPanel'],
+      dangerLevel: 'writesRemote',
+      confirmation: { title: 'Archive this Sentry issue forever?', body: 'Sets this issue to Archived forever in Sentry. This does not discard incoming events. Requires event:write.', confirmLabel: 'Archive' },
+      inputSchema: SentryIssueWriteInputV1Schema.jsonSchema,
+      resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+      hostAccess: READ_HOST_ACCESS,
+      connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+      run: archiveSentryIssue,
+    },
+    [SENTRY_ACTION_IDS.assign]: {
+      title: 'Assign Sentry issue',
+      description: 'Assigns one exact Sentry issue to the selected native user or team id.',
+      surfaces: ['ui', 'agent', 'mcp', 'cli'],
+      placementBindings: ['detailsPanel'],
+      dangerLevel: 'writesRemote',
+      confirmation: { title: 'Assign this Sentry issue?', body: 'Changes the assignee in Sentry and may notify that user or team. Requires event:write.', confirmLabel: 'Assign' },
+      inputSchema: SentryIssueAssignInputV1Schema.jsonSchema,
+      resultSchema: TriageTaskWriteResultV1Schema.jsonSchema,
+      hostAccess: READ_HOST_ACCESS,
+      connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
+      run: assignSentryIssue,
+    },
     [SENTRY_ACTION_IDS.listInstances]: {
       title: 'Discover Sentry organizations',
       description: 'Lists the Sentry organizations each connected Sentry account can reach.',

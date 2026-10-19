@@ -207,6 +207,18 @@ function byReachableThenRootPath(
     return left.rootPath < right.rootPath ? -1 : 1;
 }
 
+/** All saved-project evidence for a repository, independent of the placement preference. */
+export function resolveTriageLaunchCandidatesV1(input: Readonly<{
+    forge?: TriageForgeIdentityV1;
+    projects: readonly TriageProjectCandidateV1[];
+}>): readonly TriageLaunchCandidateV1[] {
+    if (input.forge === undefined) return [];
+    return input.projects
+        .filter((project) => sameScmHostingRepositoryIdentity(project.forge, input.forge))
+        .map(candidateFor)
+        .sort(byReachableThenRootPath);
+}
+
 function prefill(
     reason: TriageLaunchPlacementPrefillReasonV1,
     candidates: readonly TriageLaunchCandidateV1[],
@@ -242,10 +254,7 @@ export function resolveTriageLaunchPlacementV1(input: Readonly<{
     // holds, so a partial read cannot change this answer.
     if (forge === undefined) return prefill('noForgeIdentity', []);
 
-    const matched = input.projects
-        .filter((project) => sameScmHostingRepositoryIdentity(project.forge, forge))
-        .map(candidateFor)
-        .sort(byReachableThenRootPath);
+    const matched = resolveTriageLaunchCandidatesV1(input);
 
     const reachable = matched.filter((candidate) => candidate.reachable);
     // Two reachable checkouts are two choices no matter how many rows went

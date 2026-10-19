@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
-import { usePluginHostApi } from '@happier-dev/plugin-ui';
+import { usePluginHostApi, usePluginHostReadiness, useSurfaceContext } from '@happier-dev/plugin-ui';
 import type {
   TriageDetailSurfaceInputV1,
   TriageLinkedSessionProjectionV1,
@@ -18,6 +18,7 @@ import type { TriageSurfaceSelectionV1 } from '../state/surface.js';
 import { sameTriageEntryRefV1 } from '../state/surface.js';
 import { useTriageDurableAccount } from '../durable/accountDurableState.js';
 import { buildTriageDetailSurfaceInputV1 } from './input.js';
+import { resolveTriageSourceSessionRelationsV1 } from './sourceSurface.js';
 
 /**
  * The selected entry's mounted detail input.
@@ -66,12 +67,16 @@ export type TriageEntryDetailStateV1 =
 
 /** The mounted form adds the reader's one recovery action to Account failure. */
 export type TriageMountedEntryDetailStateV1 =
-  | Exclude<TriageEntryDetailStateV1, Readonly<{ kind: 'unreachable' }>>
+  | Exclude<TriageEntryDetailStateV1, Readonly<{ kind: 'unreachable' | 'ready' }>>
+  | (Extract<TriageEntryDetailStateV1, Readonly<{ kind: 'ready' }>> & Readonly<{
+    /** An explicit relationship change starts a fresh authoritative linked-Session walk. */
+    refreshLinkedSessions(): void;
+  }>)
   | Readonly<{ kind: 'unreachable'; retry(): void }>;
 
-const READING: TriageEntryDetailStateV1 = Object.freeze({ kind: 'reading' });
-const UNAVAILABLE: TriageEntryDetailStateV1 = Object.freeze({ kind: 'unavailable' });
-const UNREACHABLE: TriageEntryDetailStateV1 = Object.freeze({ kind: 'unreachable' });
+const READING = Object.freeze({ kind: 'reading' } satisfies TriageEntryDetailStateV1);
+const UNAVAILABLE = Object.freeze({ kind: 'unavailable' } satisfies TriageEntryDetailStateV1);
+const UNREACHABLE = Object.freeze({ kind: 'unreachable' } satisfies TriageEntryDetailStateV1);
 
 /** Settle any cursor this mounted walk already spent, including A→B→A. */
 /**
@@ -232,11 +237,21 @@ export function useTriageEntryDetail(
 ): TriageMountedEntryDetailStateV1 | null {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
+  const { targetedContributions } = useSurfaceContext();
+  const sourceReadSelection = useRef<Readonly<{ identity: string | null; sourceOwned: boolean }>>({ identity: null, sourceOwned: false });
+  const identity = source === null ? null : `${source.selection.entryRef.source.pluginId}/${source.selection.entryRef.source.localId}/${source.selection.sourceInstanceId}`;
+  const admittedSourceRead = source !== null && resolveTriageSourceSessionRelationsV1(targetedContributions, source.selection.entryRef.source, 'readSessionLinks');
+  // Losing admission cannot reinterpret the same mounted source relationship
+  // as an external Collection relation. A different selection starts fresh.
+  sourceReadSelection.current = { identity, sourceOwned: admittedSourceRead
+    || (sourceReadSelection.current.identity === identity && sourceReadSelection.current.sourceOwned) };
+  const sourceOwned = sourceReadSelection.current.sourceOwned;
+  const readiness = usePluginHostReadiness(durable.collections === null);
   const transport = useMemo<TriageEntryDetailTransportV1>(
-    () => durable.collections === null
+    () => durable.collections === null || sourceOwned
       ? createActionTriageEntryDetailTransport(hostApi)
       : createDirectTriageEntryDetailTransport(durable.collections),
-    [durable.collections, hostApi],
+    [durable.collections, hostApi, sourceOwned],
   );
   const [state, setState] = useState<TriageEntryDetailStateV1 | null>(null);
   const stateRef = useRef<TriageEntryDetailStateV1 | null>(null);
@@ -247,6 +262,7 @@ export function useTriageEntryDetail(
   /** Cursors already spent by this selection's mount-local linked-session walk. */
   const spentLinkedSessionCursors = useRef(new Set<string>());
   const [retryGeneration, setRetryGeneration] = useState(0);
+  const lastSettledRetryGeneration = useRef(0);
 
   const entryRef = source?.selection.entryRef;
   const sourceInstanceId = source?.selection.sourceInstanceId;
@@ -375,6 +391,7 @@ export function useTriageEntryDetail(
         ? retained
         : READING
     );
+    if (readiness.pending) return () => controller.abort();
     void (async () => {
       const next = await readTriageEntryDetailStateThrough(
         transport,
@@ -382,19 +399,29 @@ export function useTriageEntryDetail(
         { signal: controller.signal },
       );
       if (controller.signal.aborted || current !== generation.current) return;
-      publish(keepLoadedLinkedSessionPagesV1(stateRef.current, next));
+      // Ordinary source refresh retains already-loaded pages. An explicit relationship reread
+      // must replace them: appending old rows would resurrect the link the user just removed.
+      if (next.kind === 'unreachable' && stateRef.current?.kind === 'ready') {
+        publish(Object.freeze({ ...stateRef.current, linkedSessionsPageState: 'failed' }));
+        return;
+      }
+      publish(lastSettledRetryGeneration.current === retryGeneration
+        ? keepLoadedLinkedSessionPagesV1(stateRef.current, next)
+        : next);
+      if (next.kind === 'ready') lastSettledRetryGeneration.current = retryGeneration;
     })();
     return () => {
       controller.abort();
       linkedSessionsController.current?.abort();
     };
-  }, [entryRef, observation, publish, retryGeneration, sourceInstanceId, transport]);
+  }, [entryRef, observation, publish, retryGeneration, sourceInstanceId, transport, readiness.pending, readiness.revision]);
 
   return useMemo(() => (
-    state?.kind === 'ready'
-      ? Object.freeze({ ...state, loadMoreLinkedSessions })
+    readiness.pending && state?.kind !== 'ready' ? READING
+      : state?.kind === 'ready'
+      ? Object.freeze({ ...state, loadMoreLinkedSessions, refreshLinkedSessions: retry })
       : state?.kind === 'unreachable'
         ? Object.freeze({ ...state, retry })
         : state
-  ), [loadMoreLinkedSessions, retry, state]);
+  ), [loadMoreLinkedSessions, retry, state, readiness.pending]);
 }

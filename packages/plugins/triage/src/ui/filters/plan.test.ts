@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { TRIAGE_LIST_NO_FILTERS_V1 } from '../../projection/listWindow.js';
+import { TRIAGE_LIST_NO_FILTERS_V1, triageFacetScopeKeyV1 } from '../../projection/listWindow.js';
 import type { TriageListWindowSnapshotV1 } from '../../projection/listWindowStore.js';
 import { planTriageFilterFacetsV1 } from './plan.js';
 
@@ -138,6 +138,7 @@ describe('the filter rail facet plan', () => {
           { source: GITHUB, collisionScope: 'acme/api' },
           { source: GITHUB, collisionScope: 'acme/widgets' },
         ],
+        scopeNames: {},
         coverage: 'partial',
       },
       filters: {
@@ -151,6 +152,34 @@ describe('the filter rail facet plan', () => {
       .toEqual([['issue', false], ['pull-request', true]]);
     expect(facetOf(plan, 'scopes').options.map((option) => [option.label, option.selected]))
       .toEqual([['acme/api', false], ['acme/widgets', true]]);
+  });
+
+  it('names Type and Scope the way the rows do, never by their ids', () => {
+    const census = {
+      types: [{ source: GITHUB, kindId: 'pull-request' }],
+      scopes: [{ source: GITHUB, collisionScope: 'github:1117388084' }],
+      scopeNames: { [triageFacetScopeKeyV1(GITHUB, 'github:1117388084')]: 'happier' },
+      coverage: 'complete',
+    } as const;
+    const named = planTriageFilterFacetsV1({
+      configuredSources: [configured(GITHUB, 'instance-1', 'acme/widgets')],
+      facetCensus: census,
+      filters: TRIAGE_LIST_NO_FILTERS_V1,
+      readKindName: (_source, kindId) => (kindId === 'pull-request' ? 'Pull request' : undefined),
+    });
+    expect(facetOf(named, 'types').options.map((option) => option.label)).toEqual(['Pull request']);
+    expect(facetOf(named, 'scopes').options.map((option) => option.label)).toEqual(['happier']);
+
+    // The label is presentation only: the value a press toggles, and the key it is looked up
+    // by, stay the protocol identity, so a saved view or a route carrying it still matches.
+    expect(facetOf(named, 'types').options[0]?.selection)
+      .toEqual({ facet: 'types', value: { source: GITHUB, kindId: 'pull-request' } });
+    const ids = planTriageFilterFacetsV1({
+      configuredSources: [configured(GITHUB, 'instance-1', 'acme/widgets')],
+      facetCensus: census,
+      filters: TRIAGE_LIST_NO_FILTERS_V1,
+    });
+    expect(facetOf(ids, 'types').options[0]?.key).toBe(facetOf(named, 'types').options[0]?.key);
   });
 
   it('names the source of an active Type when two sources constrain the same kind', () => {

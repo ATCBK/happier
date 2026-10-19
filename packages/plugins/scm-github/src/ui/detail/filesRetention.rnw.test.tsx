@@ -17,6 +17,14 @@ import { renderSurface } from '../renderSurface.js';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true;
 
+/**
+ * The paths the panel lists, as a reader sees them. A path row gives up its middle on a narrow pane, so its words
+ * are drawn as two runs (`titleEllipsizeMode="middle"`); a whole-text query would miss a path that is plainly there.
+ */
+function listedText(): string {
+  return document.body.textContent ?? '';
+}
+
 const SOURCE_CONTRIBUTION = Object.freeze({
   pluginId: GITHUB_PLUGIN_ID,
   localId: 'github-forge',
@@ -251,9 +259,20 @@ describe('the mounted GitHub Files panel across a tab leave', () => {
     // same reading order, and GitHub was asked for nothing.
     await expect(detail.getByText('3 changed file(s) read.'))
       .resolves.toEqual({ content: '3 changed file(s) read.' });
-    await expect(detail.getByText('src/alpha.ts')).resolves.toEqual({ content: 'src/alpha.ts' });
-    await expect(detail.getByText('src/gamma.ts')).resolves.toEqual({ content: 'src/gamma.ts' });
+    expect(listedText()).toContain('src/alpha.ts');
+    expect(listedText()).toContain('src/gamma.ts');
     expect(readCount(GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles)).toBe(2);
+  });
+
+  it('offers a row\'s copy and open from its quiet overflow, not as two buttons on every row', async () => {
+    // Live 2026-10-16: every changed file carried plain "Copy" and "Open" buttons.
+    const detail = await mountDetail();
+    await openTab(detail, 'Files');
+    expect(listedText()).toContain('src/alpha.ts');
+
+    await expect(detail.queryAllByRole('button', { name: 'Copy src/alpha.ts' })).resolves.toEqual([]);
+    const overflow = await detail.queryAllByRole('button', { name: 'More actions' });
+    expect(overflow.length).toBeGreaterThan(0);
   });
 
   it('re-asks the page that was in flight at the leave, instead of staying pending forever', async () => {
@@ -282,7 +301,7 @@ describe('the mounted GitHub Files panel across a tab leave', () => {
     expect(readCount(GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles)).toBe(3);
     await expect(detail.getByText('3 changed file(s) read.'))
       .resolves.toEqual({ content: '3 changed file(s) read.' });
-    await expect(detail.getByText('src/gamma.ts')).resolves.toEqual({ content: 'src/gamma.ts' });
+    expect(listedText()).toContain('src/gamma.ts');
 
     // Usable again, not merely unstuck: the panel's own explicit re-read is
     // offered and lands, which it cannot do while a page is still in flight.
@@ -323,8 +342,8 @@ describe('the mounted GitHub Files panel across a tab leave', () => {
     ]);
     await expect(detail.getByText('2 changed file(s) read.'))
       .resolves.toEqual({ content: '2 changed file(s) read.' });
-    await expect(detail.getByText('src/alpha.ts')).resolves.toEqual({ content: 'src/alpha.ts' });
-    expect(await detail.queryByText('src/gamma.ts')).toBeUndefined();
+    expect(listedText()).toContain('src/alpha.ts');
+    expect(listedText()).not.toContain('src/gamma.ts');
   });
 
   it('asks GitHub again for the page it refused, from the control the reader is looking at', async () => {
@@ -351,7 +370,7 @@ describe('the mounted GitHub Files panel across a tab leave', () => {
       'github-files-page-2',
       'github-files-page-2',
     ]);
-    await expect(detail.getByText('src/gamma.ts')).resolves.toEqual({ content: 'src/gamma.ts' });
+    expect(listedText()).toContain('src/gamma.ts');
     await expect(detail.getByText('3 changed file(s) read.'))
       .resolves.toEqual({ content: '3 changed file(s) read.' });
   });
