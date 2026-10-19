@@ -22,6 +22,10 @@ for (const stage of ['root', 'ui']) {
     const patchCli = join(root, 'node_modules/patch-package/dist/index.js');
     await mkdir(join(root, 'node_modules/patch-package/dist'), { recursive: true });
     const require = createRequire(import.meta.url);
+    // Real postinstall prepares this third-party package before applying all patches.
+    // Copy its installed bytes so fixture preparation cannot mutate shared dependencies.
+    await cp(join(require.resolve('react-native-enriched-markdown/package.json'), '..'),
+      join(ui, 'node_modules/react-native-enriched-markdown'), { recursive: true });
     await symlink(join(require.resolve('esbuild/package.json'), '..'), join(root, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
     // Genuine third-party process boundary: patch-package reports errors but
     // defaults to success outside CI unless --error-on-fail is requested.
@@ -33,7 +37,7 @@ if (process.cwd() === ${JSON.stringify(stage === 'root' ? root : ui)}) {
 if (process.cwd() === ${JSON.stringify(ui)}) writeFileSync(${JSON.stringify(join(root, 'next-stage'))}, 'started');
 `);
     const result = spawnSync(process.execPath, [join(ui, 'tools/postinstall.mjs')], {
-      cwd: ui, encoding: 'utf8', env: { ...process.env, CI: '', HAPPIER_UI_VENDOR_WEB_ASSETS: '0' },
+      cwd: ui, encoding: 'utf8', env: { ...process.env, CI: '', HAPPIER_UI_VENDOR_WEB_ASSETS: '0', HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' },
     });
     assert.equal(result.status, 23, result.stderr);
     assert.match(result.stderr, /Failed to apply patch/);

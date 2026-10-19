@@ -1,0 +1,493 @@
+diff --git a/node_modules/react-native-unistyles/src/core/useProxifiedUnistyles/useProxifiedUnistyles.ts b/node_modules/react-native-unistyles/src/core/useProxifiedUnistyles/useProxifiedUnistyles.ts
+--- a/node_modules/react-native-unistyles/src/core/useProxifiedUnistyles/useProxifiedUnistyles.ts
++++ b/node_modules/react-native-unistyles/src/core/useProxifiedUnistyles/useProxifiedUnistyles.ts
+@@ -60,6 +60,11 @@
+                 runtimeChanged()
+             },
+         })
++
++        // A newly read dependency may have missed changes before subscription.
++        if (dependencies.has(UnistyleDependency.Theme)) {
++            setTheme(UnistylesRuntime.getTheme(scopedTheme))
++        }
+ 
+         // <Activity> cleans up effects, a theme change made while hidden was missed (#1297)
+         if (wasDisposedRef.current) {
+diff --git a/node_modules/react-native-unistyles/lib/module/core/useProxifiedUnistyles/useProxifiedUnistyles.js b/node_modules/react-native-unistyles/lib/module/core/useProxifiedUnistyles/useProxifiedUnistyles.js
+--- a/node_modules/react-native-unistyles/lib/module/core/useProxifiedUnistyles/useProxifiedUnistyles.js
++++ b/node_modules/react-native-unistyles/lib/module/core/useProxifiedUnistyles/useProxifiedUnistyles.js
+@@ -53,6 +53,11 @@
+         runtimeChanged();
+       }
+     });
++
++    // A newly read dependency may have missed changes before subscription.
++    if (dependencies.has(UnistyleDependency.Theme)) {
++        setTheme(UnistylesRuntime.getTheme(scopedTheme));
++    }
+ 
+     // <Activity> cleans up effects, a theme change made while hidden was missed (#1297)
+     if (wasDisposedRef.current) {
+diff --git a/node_modules/react-native-unistyles/lib/commonjs/core/useProxifiedUnistyles/useProxifiedUnistyles.js b/node_modules/react-native-unistyles/lib/commonjs/core/useProxifiedUnistyles/useProxifiedUnistyles.js
+--- a/node_modules/react-native-unistyles/lib/commonjs/core/useProxifiedUnistyles/useProxifiedUnistyles.js
++++ b/node_modules/react-native-unistyles/lib/commonjs/core/useProxifiedUnistyles/useProxifiedUnistyles.js
+@@ -58,6 +58,11 @@
+         runtimeChanged();
+       }
+     });
++
++    // A newly read dependency may have missed changes before subscription.
++    if (dependencies.has(_NativePlatform.UnistyleDependency.Theme)) {
++        setTheme(_specs.UnistylesRuntime.getTheme(scopedTheme));
++    }
+ 
+     // <Activity> cleans up effects, a theme change made while hidden was missed (#1297)
+     if (wasDisposedRef.current) {
+diff --git a/node_modules/react-native-unistyles/src/web/css/state.ts b/node_modules/react-native-unistyles/src/web/css/state.ts
+--- a/node_modules/react-native-unistyles/src/web/css/state.ts
++++ b/node_modules/react-native-unistyles/src/web/css/state.ts
+@@ -14,6 +14,7 @@
+     value: any
+ }
+ type HydrateState = Array<[string, Array<[string, Array<[string, any]>]>]>
++type LiveGroup = { rule: CSSMediaRule; styles: Map<string, CSSStyleRule> }
+ 
+ const safeGetMap = (map: Map<string, Map<string, any>>, key: string) => {
+     const nextLevelMap = map.get(key)
+@@ -34,6 +35,9 @@
+     mqMap: MapType = new Map()
+     private styleTag: HTMLStyleElement | null = null
+     private themesCSS = new Map<string, string>()
++    private liveGroups = new Map<MapType, Map<string, LiveGroup>>()
++    private themesDirty = false
++    private liveReady = false
+ 
+     constructor(private services: UnistylesServices) {
+         if (isServer()) {
+@@ -59,17 +63,83 @@
+         const thirdLevelMap = safeGetMap(secondLevelMap, className)
+ 
+         thirdLevelMap.set(propertyKey, value)
++        if (this.liveReady && !this.themesDirty) {
++            this.updateRule(firstLevelMap, mediaQuery, className, thirdLevelMap)
++        }
+     }
+ 
+     add = (hash: string, values: UnistylesValues) => {
+         convertToCSS(hash, convertUnistyles(values, this.services.runtime), this)
+-        this.recreate()
++        if (!this.liveReady || this.themesDirty) {
++            this.recreate()
++        }
++    }
++
++    private getGroup = (map: MapType, mediaQuery: string) => {
++        const sheet = this.styleTag?.sheet
++        if (!sheet) {
++            return
++        }
++
++        let groups = this.liveGroups.get(map)
++        if (!groups) {
++            groups = new Map()
++            this.liveGroups.set(map, groups)
++        }
++        let group = groups.get(mediaQuery)
++        if (!group) {
++            const index = map === this.mainMap
++                ? this.themesCSS.size + groups.size
++                : sheet.cssRules.length
++            sheet.insertRule(`${mediaQuery || '@media all'}{}`, index)
++            group = { rule: sheet.cssRules[index] as CSSMediaRule, styles: new Map() }
++            groups.set(mediaQuery, group)
++        }
++
++        return group
++    }
++
++    private updateRule = (map: MapType, mediaQuery: string, className: string, properties: Map<string, unknown>) => {
++        const group = this.getGroup(map, mediaQuery)
++        if (!group) {
++            return
++        }
++        let rule = group.styles.get(className)
++        if (!rule) {
++            const index = group.rule.cssRules.length
++            const selector = className[0] === ':' ? className : `.${className}`
++            group.rule.insertRule(`${selector}{}`, index)
++            rule = group.rule.cssRules[index] as CSSStyleRule
++            group.styles.set(className, rule)
++        }
++        rule.style.cssText = Array.from(properties)
++            .filter(([, value]) => value !== undefined)
++            .map(([property, value]) => `${hyphenate(property)}:${value};`)
++            .join('')
+     }
+ 
+     recreate = () => {
+-        if (this.styleTag) {
+-            this.styleTag.innerText = this.getStyles()
+-        }
++        const sheet = this.styleTag?.sheet
++        if (!sheet) {
++            return
++        }
++        while (sheet.cssRules.length) {
++            sheet.deleteRule(sheet.cssRules.length - 1)
++        }
++        this.liveGroups.clear()
++        for (const themeCSS of this.themesCSS.values()) {
++            sheet.insertRule(themeCSS, sheet.cssRules.length)
++        }
++        for (const map of [this.mainMap, this.mqMap]) {
++            for (const [mediaQuery, styles] of map) {
++                this.getGroup(map, mediaQuery)
++                for (const [className, properties] of styles) {
++                    this.updateRule(map, mediaQuery, className, properties)
++                }
++            }
++        }
++        this.themesDirty = false
++        this.liveReady = true
+     }
+ 
+     addTheme = (theme: string, values: Record<string, any>) => {
+@@ -102,21 +172,27 @@
+             theme,
+             `:root.${theme},:root.${theme} [data-unistyles-reset],[data-unistyles-theme="${theme}"]{${themeVars}}`,
+         )
++        this.themesDirty = true
+     }
+ 
+     remove = (hash: string) => {
+         const childrenClassName = getChildrenClassName(hash)
+-
+-        this.mainMap.forEach((styles) => {
+-            styles.delete(hash)
+-            styles.delete(childrenClassName)
+-        })
+-        this.mqMap.forEach((styles) => {
+-            styles.delete(hash)
+-            styles.delete(childrenClassName)
+-        })
+-        this.recreate()
+-    }
++        for (const map of [this.mainMap, this.mqMap]) {
++            map.forEach((styles, mediaQuery) => {
++                for (const className of [hash, childrenClassName]) {
++                    styles.delete(className)
++                    const group = this.liveGroups.get(map)?.get(mediaQuery)
++                    const rule = group?.styles.get(className)
++                    if (group && rule) {
++                        const index = Array.from(group.rule.cssRules).indexOf(rule)
++                        group.rule.deleteRule(index)
++                        group.styles.delete(className)
++                    }
++                }
++            })
++        }
++    }
++
+ 
+     getStyles = () => {
+         let styles = Array.from(this.themesCSS.entries()).reduce((acc, [, themeCss]) => {
+@@ -201,10 +277,12 @@
+ 
+         hydrateState(mainState)
+         hydrateState(mqState, true)
++        this.recreate()
+     }
+ 
+     reset = () => {
+         this.mqMap.clear()
+         this.mainMap.clear()
++        this.recreate()
+     }
+ }
+diff --git a/node_modules/react-native-unistyles/lib/module/web/css/state.js b/node_modules/react-native-unistyles/lib/module/web/css/state.js
+--- a/node_modules/react-native-unistyles/lib/module/web/css/state.js
++++ b/node_modules/react-native-unistyles/lib/module/web/css/state.js
+@@ -17,6 +17,9 @@
+   mqMap = new Map();
+   styleTag = null;
+   themesCSS = new Map();
++  liveGroups = new Map();
++  themesDirty = false;
++  liveReady = false;
+   constructor(services) {
+     this.services = services;
+     if (isServer()) {
+@@ -42,15 +45,75 @@
+     const secondLevelMap = safeGetMap(firstLevelMap, mediaQuery);
+     const thirdLevelMap = safeGetMap(secondLevelMap, className);
+     thirdLevelMap.set(propertyKey, value);
++    if (this.liveReady && !this.themesDirty) {
++      this.updateRule(firstLevelMap, mediaQuery, className, thirdLevelMap);
++    }
+   };
+   add = (hash, values) => {
+     convertToCSS(hash, convertUnistyles(values, this.services.runtime), this);
+-    this.recreate();
++    if (!this.liveReady || this.themesDirty) {
++      this.recreate();
++    }
++  };
++  getGroup = (map, mediaQuery) => {
++    const sheet = this.styleTag?.sheet;
++    if (!sheet) {
++      return;
++    }
++    let groups = this.liveGroups.get(map);
++    if (!groups) {
++      groups = new Map();
++      this.liveGroups.set(map, groups);
++    }
++    let group = groups.get(mediaQuery);
++    if (!group) {
++      const index = map === this.mainMap ? this.themesCSS.size + groups.size : sheet.cssRules.length;
++      sheet.insertRule(`${mediaQuery || '@media all'}{}`, index);
++      group = {
++        rule: sheet.cssRules[index],
++        styles: new Map()
++      };
++      groups.set(mediaQuery, group);
++    }
++    return group;
++  };
++  updateRule = (map, mediaQuery, className, properties) => {
++    const group = this.getGroup(map, mediaQuery);
++    if (!group) {
++      return;
++    }
++    let rule = group.styles.get(className);
++    if (!rule) {
++      const index = group.rule.cssRules.length;
++      const selector = className[0] === ':' ? className : `.${className}`;
++      group.rule.insertRule(`${selector}{}`, index);
++      rule = group.rule.cssRules[index];
++      group.styles.set(className, rule);
++    }
++    rule.style.cssText = Array.from(properties).filter(([, value]) => value !== undefined).map(([property, value]) => `${hyphenate(property)}:${value};`).join('');
+   };
+   recreate = () => {
+-    if (this.styleTag) {
+-      this.styleTag.innerText = this.getStyles();
+-    }
++    const sheet = this.styleTag?.sheet;
++    if (!sheet) {
++      return;
++    }
++    while (sheet.cssRules.length) {
++      sheet.deleteRule(sheet.cssRules.length - 1);
++    }
++    this.liveGroups.clear();
++    for (const themeCSS of this.themesCSS.values()) {
++      sheet.insertRule(themeCSS, sheet.cssRules.length);
++    }
++    for (const map of [this.mainMap, this.mqMap]) {
++      for (const [mediaQuery, styles] of map) {
++        this.getGroup(map, mediaQuery);
++        for (const [className, properties] of styles) {
++          this.updateRule(map, mediaQuery, className, properties);
++        }
++      }
++    }
++    this.themesDirty = false;
++    this.liveReady = true;
+   };
+   addTheme = (theme, values) => {
+     let themeVars = '';
+@@ -70,19 +133,26 @@
+       this.themesCSS.set(`media ${theme}`, `@media (prefers-color-scheme: ${theme}){:root,[data-unistyles-reset]{${themeVars}}}`);
+     }
+     this.themesCSS.set(theme, `:root.${theme},:root.${theme} [data-unistyles-reset],[data-unistyles-theme="${theme}"]{${themeVars}}`);
++    this.themesDirty = true;
+   };
+   remove = hash => {
+     const childrenClassName = getChildrenClassName(hash);
+-    this.mainMap.forEach(styles => {
+-      styles.delete(hash);
+-      styles.delete(childrenClassName);
+-    });
+-    this.mqMap.forEach(styles => {
+-      styles.delete(hash);
+-      styles.delete(childrenClassName);
+-    });
+-    this.recreate();
+-  };
++    for (const map of [this.mainMap, this.mqMap]) {
++      map.forEach((styles, mediaQuery) => {
++        for (const className of [hash, childrenClassName]) {
++          styles.delete(className);
++          const group = this.liveGroups.get(map)?.get(mediaQuery);
++          const rule = group?.styles.get(className);
++          if (group && rule) {
++            const index = Array.from(group.rule.cssRules).indexOf(rule);
++            group.rule.deleteRule(index);
++            group.styles.delete(className);
++          }
++        }
++      });
++    }
++  };
++
+   getStyles = () => {
+     let styles = Array.from(this.themesCSS.entries()).reduce((acc, [, themeCss]) => {
+       return acc + themeCss;
+@@ -153,10 +223,12 @@
+     };
+     hydrateState(mainState);
+     hydrateState(mqState, true);
++    this.recreate();
+   };
+   reset = () => {
+     this.mqMap.clear();
+     this.mainMap.clear();
++    this.recreate();
+   };
+ }
+ //# sourceMappingURL=state.js.map
+\ No newline at end of file
+diff --git a/node_modules/react-native-unistyles/lib/commonjs/web/css/state.js b/node_modules/react-native-unistyles/lib/commonjs/web/css/state.js
+--- a/node_modules/react-native-unistyles/lib/commonjs/web/css/state.js
++++ b/node_modules/react-native-unistyles/lib/commonjs/web/css/state.js
+@@ -21,6 +21,9 @@
+   mqMap = new Map();
+   styleTag = null;
+   themesCSS = new Map();
++  liveGroups = new Map();
++  themesDirty = false;
++  liveReady = false;
+   constructor(services) {
+     this.services = services;
+     if ((0, _utils.isServer)()) {
+@@ -46,15 +49,75 @@
+     const secondLevelMap = safeGetMap(firstLevelMap, mediaQuery);
+     const thirdLevelMap = safeGetMap(secondLevelMap, className);
+     thirdLevelMap.set(propertyKey, value);
++    if (this.liveReady && !this.themesDirty) {
++      this.updateRule(firstLevelMap, mediaQuery, className, thirdLevelMap);
++    }
+   };
+   add = (hash, values) => {
+     (0, _core.convertToCSS)(hash, (0, _convert.convertUnistyles)(values, this.services.runtime), this);
+-    this.recreate();
++    if (!this.liveReady || this.themesDirty) {
++      this.recreate();
++    }
++  };
++  getGroup = (map, mediaQuery) => {
++    const sheet = this.styleTag?.sheet;
++    if (!sheet) {
++      return;
++    }
++    let groups = this.liveGroups.get(map);
++    if (!groups) {
++      groups = new Map();
++      this.liveGroups.set(map, groups);
++    }
++    let group = groups.get(mediaQuery);
++    if (!group) {
++      const index = map === this.mainMap ? this.themesCSS.size + groups.size : sheet.cssRules.length;
++      sheet.insertRule(`${mediaQuery || '@media all'}{}`, index);
++      group = {
++        rule: sheet.cssRules[index],
++        styles: new Map()
++      };
++      groups.set(mediaQuery, group);
++    }
++    return group;
++  };
++  updateRule = (map, mediaQuery, className, properties) => {
++    const group = this.getGroup(map, mediaQuery);
++    if (!group) {
++      return;
++    }
++    let rule = group.styles.get(className);
++    if (!rule) {
++      const index = group.rule.cssRules.length;
++      const selector = className[0] === ':' ? className : `.${className}`;
++      group.rule.insertRule(`${selector}{}`, index);
++      rule = group.rule.cssRules[index];
++      group.styles.set(className, rule);
++    }
++    rule.style.cssText = Array.from(properties).filter(([, value]) => value !== undefined).map(([property, value]) => `${(0, _utils.hyphenate)(property)}:${value};`).join('');
+   };
+   recreate = () => {
+-    if (this.styleTag) {
+-      this.styleTag.innerText = this.getStyles();
+-    }
++    const sheet = this.styleTag?.sheet;
++    if (!sheet) {
++      return;
++    }
++    while (sheet.cssRules.length) {
++      sheet.deleteRule(sheet.cssRules.length - 1);
++    }
++    this.liveGroups.clear();
++    for (const themeCSS of this.themesCSS.values()) {
++      sheet.insertRule(themeCSS, sheet.cssRules.length);
++    }
++    for (const map of [this.mainMap, this.mqMap]) {
++      for (const [mediaQuery, styles] of map) {
++        this.getGroup(map, mediaQuery);
++        for (const [className, properties] of styles) {
++          this.updateRule(map, mediaQuery, className, properties);
++        }
++      }
++    }
++    this.themesDirty = false;
++    this.liveReady = true;
+   };
+   addTheme = (theme, values) => {
+     let themeVars = '';
+@@ -74,19 +137,26 @@
+       this.themesCSS.set(`media ${theme}`, `@media (prefers-color-scheme: ${theme}){:root,[data-unistyles-reset]{${themeVars}}}`);
+     }
+     this.themesCSS.set(theme, `:root.${theme},:root.${theme} [data-unistyles-reset],[data-unistyles-theme="${theme}"]{${themeVars}}`);
++    this.themesDirty = true;
+   };
+   remove = hash => {
+     const childrenClassName = (0, _core.getChildrenClassName)(hash);
+-    this.mainMap.forEach(styles => {
+-      styles.delete(hash);
+-      styles.delete(childrenClassName);
+-    });
+-    this.mqMap.forEach(styles => {
+-      styles.delete(hash);
+-      styles.delete(childrenClassName);
+-    });
+-    this.recreate();
+-  };
++    for (const map of [this.mainMap, this.mqMap]) {
++      map.forEach((styles, mediaQuery) => {
++        for (const className of [hash, childrenClassName]) {
++          styles.delete(className);
++          const group = this.liveGroups.get(map)?.get(mediaQuery);
++          const rule = group?.styles.get(className);
++          if (group && rule) {
++            const index = Array.from(group.rule.cssRules).indexOf(rule);
++            group.rule.deleteRule(index);
++            group.styles.delete(className);
++          }
++        }
++      });
++    }
++  };
++
+   getStyles = () => {
+     let styles = Array.from(this.themesCSS.entries()).reduce((acc, [, themeCss]) => {
+       return acc + themeCss;
+@@ -157,10 +227,12 @@
+     };
+     hydrateState(mainState);
+     hydrateState(mqState, true);
++    this.recreate();
+   };
+   reset = () => {
+     this.mqMap.clear();
+     this.mainMap.clear();
++    this.recreate();
+   };
+ }
+ exports.CSSState = CSSState;
