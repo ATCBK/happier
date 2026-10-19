@@ -24,6 +24,7 @@ description: Contribution families that a plugin can declare for projection and 
 | `settings` | Typed settings descriptors | `context.services.settings` in invoked handlers |
 | `workflows` | Reusable, read-only Workflow definitions shown under From plugins | `workflows.<id>`: `title`, optional `description`, and `definition` |
 | `registrySources` | Data-only catalogs shown alongside built-in and personal sources | `registrySources.<id>`: `title`, `format`, `kinds`, `url`, optional `path` and `ref` |
+| `skills` | Packaged, read-only skills in the Skills library | `skills.<id>`: `directory` |
 | `openableContentViewers` | Declarative matching for host-opened content and its plugin-owned viewer | direct same-plugin `contributes.ui.views` destination |
 | MCP servers | Hosted or managed MCP server descriptors | `mcp.servers.<id>.runtime` when dynamic |
 | MCP discovery | Runtime MCP discovery | `mcp.discoverySources.<id>.discover` |
@@ -232,6 +233,61 @@ reads use the canonical registry Actions and fetch-placement owner; declaring
 a URL neither grants credential access nor installs the catalog's contents.
 See [Registry sources](/extending/registries) and
 [Marketplace integration](/plugins/packaging/marketplace) for consumption.
+
+### Library skills in development
+
+In **0.3 development / Developer Preview authoring**, a plugin can package a
+skill and declare its directory in the existing `definePlugin(...)` module:
+
+```ts
+import { definePlugin } from '@happier-dev/plugin-sdk';
+
+export const { manifest, activate } = definePlugin({
+  id: 'com.example.my-plugin',
+  version: '0.1.0',
+  displayName: 'My plugin',
+  entrypoints: { daemon: './dist/index.js' },
+  skills: {
+    'check-project': { directory: './resources/skills/check-project' },
+  },
+});
+```
+
+The directory must stay inside the plugin package and contain `SKILL.md` with
+a valid skill name in its frontmatter, for example:
+
+```markdown
+---
+name: check-project
+description: Check the project's local conventions before changing code.
+---
+
+Read the project instructions and run its documented checks.
+```
+
+Include it and its supporting files in the package's deliberate `files`
+inventory; see [Package anatomy](/plugins/manifest/package-anatomy). Happier
+reads the skill's name, description, `user-invocable` and
+`disable-model-invocation` flags from `SKILL.md` frontmatter. Declare only the
+directory here, so the manifest and skill cannot disagree about that metadata.
+The cold projection carries the local `id` and `directory`; this family needs
+no activation callback or skill registration API.
+
+The library projection marks the skill as plugin-owned and uses the normal
+reach rules and Session delivery. Its initial reach is seeded once;
+later plugin updates or re-enablement preserve the person's rules. The packaged
+content is read-only and follows the plugin's version. The existing
+`skills.duplicate` Action creates an editable skill owned by the person.
+Disable or uninstall the plugin to
+retire its supplied skills; retained rules have no effect while the declaration
+is absent. An independent copy remains in the person's library.
+
+These declarations are separate from skills found in an Agent's native plugin
+folders. See [Skills](/extending/skills) for the library and Found workflows.
+Check the generated [availability matrix](/plugins/manifest/availability) and
+[SDK surface](/plugins/api/surface) for your exact SDK artifact; this
+development-source contract is not a published-package availability claim or
+verification of the Skills UI integration.
 
 ### Workflow definitions
 

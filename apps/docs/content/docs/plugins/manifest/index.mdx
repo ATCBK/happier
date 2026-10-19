@@ -106,6 +106,11 @@ an optional source preference; neither field grants execution authority.
 - Use `<pluginId>/<localId>` only at global CLI, wire, and display boundaries.
 - Do not dot-concatenate the two ids or repeat the plugin id inside a local id.
 
+Contribution-local ids share one namespace across a plugin's contribution
+families. For example, a Resource named `notes` and an Action named `notes`
+collide; use distinct ids such as `notes` and `save-note`. Nested ids, such as
+Settings field ids, follow their owning family's rules.
+
 `entrypoints.daemon` names the compiled, self-contained installed module.
 `entrypoints.development` names the TypeScript source module selected by
 `hdev plugins dev`. Static discovery, review, and catalog projection do not

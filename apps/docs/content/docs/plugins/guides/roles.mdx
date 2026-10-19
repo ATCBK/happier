@@ -47,6 +47,12 @@ execution preferences; they do not create an Agent or grant permissions. The
 workspace-write setting is a ceiling, not a replacement for the Session's
 permission mode.
 
+Set the optional `canDelegateToOtherRoles: true` trait to include the available
+roles and their start Actions in this role's coding instructions and Settings
+preview. Omission leaves that list off. Users can override the trait through
+the ordinary role override Actions. It supplies guidance, not start authority,
+and leaves your role's `runsAs` choice intact.
+
 ## Read and use the role
 
 The SDK's `PluginManifest` contribution descriptor is the public declaration
@@ -63,6 +69,12 @@ read-only plugin source. `session.role.set` selects a role for a Session;
 Session overrides and workflow choices remain host-owned. The generated
 [host Action reference](/plugins/api/host-actions) supplies exact input,
 output and availability contracts rather than a second list here.
+
+On 0.3 development hosts, that same Action can change a Session's
+worker-question preference independently of its role selection. Omitted
+choices and the Session's notes, inherited roles and overrides remain intact.
+Use the installed SDK's generated input shape and the host's normal approval
+and target-access checks.
 
 Starts use `session.spawn_new` or `execution.run.start` with the qualified
 `roleId` and matching runs-as choice. The host resolves engine, profile and

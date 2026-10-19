@@ -57,11 +57,15 @@ hdev plugins dev build .
 hdev plugins test .
 hdev plugins pack . --out ../session-agent.tgz
 hdev plugins install ../session-agent.tgz --kind archive --json
-hdev plugins change approve <pendingChangeId> --json
+hdev actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"approve"}' --json
 ```
 
-The archive install is an explicit lifecycle canary and requires present-user
-trust approval. Review the prepared change before substituting its pending id.
+The archive install is an explicit lifecycle canary. When it creates an ordinary
+`plugins.install` approval Artifact, review it in the Happier Inbox before
+substituting that Artifact's ID in the decision command. Decision authority
+follows the user's approval policy. A daemon pending change ID is for status
+inspection, not approval. See
+[Review a pending change](/plugins/packaging/authoring-cli#review-a-pending-change).
 The example README continues through
 source install, reload, Session-runner restart, archive update, disable/enable,
 hard revocation, reinstall, uninstall, and the shared UI selectors.

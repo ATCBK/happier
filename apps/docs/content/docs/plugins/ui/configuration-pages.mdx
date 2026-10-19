@@ -392,3 +392,41 @@ one recovery (`action`, for example Retry). Pass `busy` while a reconnect or
 refresh is in flight and `tone="warning"` when a refresh failed. It is the same
 line Happier's own panes draw. Never show it over an empty body: a surface with
 nothing retained shows `LoadingState` or `ErrorState` instead.
+
+In **unreleased 0.3 development source**, the public shared renderer
+`HappierFreshnessLine` also offers `presentation="chip"` for a compact status
+at the end of a header or tab bar. It sizes to its words without a filled strip;
+an optional `lead` puts a quiet clause before the glyph. The default
+`presentation="line"` keeps the full-width line under a surface's header.
+`onSheet` removes that line's fill and borders when the surrounding sheet
+already provides them. `lead` is used only by the chip.
+
+Keep `FreshnessLine` for the usual retained-content case: it formats `asOf`
+and supplies the glyph and recovery from domain facts. Its props do not expose
+the chip presentation. Use `HappierFreshnessLine` from the public components
+entry point when you need compact composition, supplying the status text, glyph
+and recovery yourself. For example, inside a `defineUiSurface` component:
+
+```tsx
+import { Button, Icon, Text, usePluginTheme } from '@happier-dev/plugin-ui';
+import { HappierFreshnessLine } from '@happier-dev/plugin-ui/components';
+
+function RetainedStatus({ label, refresh }: { label: string; refresh(): void }) {
+  const theme = usePluginTheme();
+  return (
+    <HappierFreshnessLine
+      presentation="chip"
+      colors={{ background: theme.colors.surface, border: theme.colors.border }}
+      icon={<Icon name="refresh" />}
+      lead={<Text value="Last known" />}
+      action={<Button title="Retry" size="small" onPress={refresh} />}
+    >
+      <Text value={label} />
+    </HappierFreshnessLine>
+  );
+}
+```
+
+Here `label` is the status your data owner already knows, such as “As of 10:42”.
+Neither presentation decides when data becomes stale or starts a refresh on its
+own. Check your installed API inventory before using these development exports.
