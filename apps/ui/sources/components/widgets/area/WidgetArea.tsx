@@ -203,6 +203,12 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
         || state.reasonCode === 'server_target_mismatch');
     const ready = state.status === 'ready' ? state : null;
     const canAdd = ready?.canEdit === true;
+    // An open Add surface outlives a re-read that finds the area unavailable: it keeps the layout it was opened on, so a
+    // failed Add still says why in its own footer instead of vanishing with the area. Closing releases it.
+    const addBasis = React.useRef(ready);
+    if (!addOpen) addBasis.current = null;
+    else if (ready) addBasis.current = ready;
+    const addReady = addOpen ? addBasis.current : null;
     // Organize is where a group shows its bar (grip, name, width, ⋯): the options route of an untitled
     // group and the handle of every group, on every pointer, including a group with one remaining
     // child. Other widgets keep the existing touch DnD route.
@@ -348,13 +354,13 @@ function WidgetAreaWithLayout(props: WidgetAreaProps & Readonly<{ port: WidgetAr
             ) : null}
             {ready ? <SessionSurfaceEntityFeedback kind="widget-area-instance" scope={ready.surface} address={null} widgetSurface={ready.surface} testID={`${props.testID}.move`} /> : null}
             <SessionSurfaceEntityTargetFeedback drag={drop} testID={props.testID} />
-            {ready && addOpen ? (
+            {addReady ? (
                 <WidgetAreaAddPopover
                     anchorRef={addAnchorRef}
-                    surface={ready.surface}
+                    surface={addReady.surface}
                     area={props.area}
-                    placements={ready.placements}
-                    context={ready.context}
+                    placements={addReady.placements}
+                    context={addReady.context}
                     {...(props.area ? { area: props.area } : {})}
                     surfaceName={props.surfaceName}
                     {...(props.dashboard?.addTitle ? { title: props.dashboard.addTitle } : {})}

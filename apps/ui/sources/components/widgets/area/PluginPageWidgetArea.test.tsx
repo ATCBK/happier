@@ -591,6 +591,44 @@ describe('a plugin page widget area', () => {
         expect(screen.getTextContent()).not.toContain('widgetAdd.justAdded');
         expect(widgetPlacements(await area.store.read())).toEqual([]);
     });
+    it('never closes a failed Add silently: it stays open with the reason the host gave, even while the area re-reads as unavailable', async () => {
+        const area = createArea();
+        const inputlessProjection = widgetProjectionOf([{ ...checks, target: 'app', title: 'Checks' }],
+            { 'acme.ci': widgetInstalledPackage('acme.ci', 'CI') });
+        let outage = false;
+        const hostApi: PluginUiHostApi = { ...area.hostApi, widgetArea: async (raw, options) => {
+            const request = PluginUiWidgetAreaRequestV1Schema.parse(raw);
+            if (request.operation.actionId === 'widgets.item.add') {
+                outage = true;
+                return PluginUiWidgetAreaResultV1Schema.parse({ ok: false, errorCode: 'upstream_failed', error: 'The Home answered with an error' });
+            }
+            if (outage) return PluginUiWidgetAreaResultV1Schema.parse({ ok: false, errorCode: 'upstream_failed', error: 'The Home answered with an error' });
+            return area.hostApi.widgetArea(raw, options);
+        } };
+        const screen = await renderScreen(
+            <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: inputlessProjection, pluginBrowserProjection: null, phase: 'current',
+                interactionEnabled: true, machineId: 'machine-1', serverId: scope.serverId, platform: 'web',
+                accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
+                <PluginHostApiProvider hostApi={hostApi}>
+                    <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
+                        <WidgetSurface area="pinned" context={{ repository: 'happier' }} testID="prs.pinned" />
+                    </PluginUiHostPresentationScope>
+                </PluginHostApiProvider>
+            </AppShellPluginUiProjectionValueProvider>,
+        );
+        await flushHookEffects({ cycles: 4 });
+        await act(async () => { screen.pressByTestId('prs.pinned.add'); });
+        await flushHookEffects({ cycles: 3 });
+        await act(async () => { screen.pressByTestId('prs.pinned.addPopover.entry.plugin-acme.ci/checks'); });
+        await flushHookEffects({ cycles: 4 });
+        await submitAreaAdd(screen);
+        // The re-read after the write failed too, so the area itself is unavailable; the Add surface is still there with the reason.
+        expect(screen.findByTestId('prs.pinned.unavailable')).not.toBeNull();
+        const step = screen.root.findByType(WidgetSetupStep);
+        expect(screen.findByTestId(`${step.props.testID}.why`)).not.toBeNull();
+        expect(screen.getTextContent()).toContain('The Home answered with an error');
+        expect(screen.getTextContent()).not.toContain('widgetAdd.addFailed');
+    });
     it.each(['approvalPending', 'refused'] as const)('keeps the real area %s acknowledgement truthful through add and input editing', async kind => {
         const area = createArea();
         await area.store.apply({ kind: 'add', instance: pin });

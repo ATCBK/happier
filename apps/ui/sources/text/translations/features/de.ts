@@ -12854,6 +12854,7 @@ const widgetDefinitionTranslations = { de: {
         madeInYourAccount: "In deinem Konto erstellt",
         edited: ({ time }) => `bearbeitet ${time}`,
         readsOnly: "Nur lesend",
+            writeUnconfirmed: "Dein Home hat es nicht bestätigt. Prüfe den Bereich und versuche es dann erneut.",
         runsOn: ({ machine }) => `läuft auf ${machine}`,
         withYourConnection: "mit deiner eigenen Verbindung",
         readsResource: ({ read, plugin }) => `${read} aus ${plugin}`,

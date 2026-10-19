@@ -13384,6 +13384,7 @@ const widgetDefinitionTranslations = { ca: {
         edited: ({ time }) => `editat ${time}`,
         readsOnly: "Només lectura",
         runsOn: ({ machine }) => `s’executa a ${machine}`,
+            writeUnconfirmed: "El teu Home no ho ha confirmat. Revisa l’àrea i torna-ho a provar.",
         withYourConnection: "amb la teva pròpia connexió",
         readsResource: ({ read, plugin }) => `${read} de ${plugin}`,
         cannotRunAnythingElse: "El giny no pot executar res més.",

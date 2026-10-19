@@ -13408,6 +13408,7 @@ const widgetDefinitionTranslations = { fr: {
         edited: ({ time }) => `modifié ${time}`,
         readsOnly: "Lecture seule",
         runsOn: ({ machine }) => `s’exécute sur ${machine}`,
+            writeUnconfirmed: "Ton Home ne l’a pas confirmé. Vérifie la zone, puis réessaie.",
         withYourConnection: "avec ta propre connexion",
         readsResource: ({ read, plugin }) => `${read} depuis ${plugin}`,
         cannotRunAnythingElse: "Le widget ne peut rien exécuter d’autre.",

@@ -14,7 +14,10 @@ function readWidgetRefusalMessage(code: unknown): string | null {
         case 'widget_type_unavailable': return t('widgetAdd.refusals.typeUnavailable');
         case 'widget_size_unsupported': return t('widgetAdd.refusals.sizeUnsupported');
         case 'widget_edit_denied': return t('widgetAdd.refusals.editDenied');
-        default: return null;
+        default:
+            // A write whose acknowledgement never came back (`widget_add_unknown`, `widget_write_ack_unknown`, …) may or may
+            // not have landed: say the Home did not confirm it, never that it simply failed.
+            return typeof code === 'string' && /^widget_[a-z_]+_unknown$/.test(code) ? t('widgetAdd.refusals.writeUnconfirmed') : null;
     }
 }
 

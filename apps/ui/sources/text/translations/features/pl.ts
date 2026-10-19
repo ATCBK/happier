@@ -13375,6 +13375,7 @@ const widgetDefinitionTranslations = { pl: {
         edited: ({ time }) => `edytowano ${time}`,
         readsOnly: "Tylko odczyt",
         runsOn: ({ machine }) => `działa na ${machine}`,
+            writeUnconfirmed: "Twój Home tego nie potwierdził. Sprawdź obszar i spróbuj ponownie.",
         withYourConnection: "z twoim własnym połączeniem",
         readsResource: ({ read, plugin }) => `${read} z ${plugin}`,
         cannotRunAnythingElse: "Widżet nie może uruchomić niczego innego.",

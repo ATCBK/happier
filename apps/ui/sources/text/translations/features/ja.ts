@@ -13349,6 +13349,7 @@ const widgetDefinitionTranslations = { ja: {
         edited: ({ time }) => `${time} に編集`,
         readsOnly: "読み取りのみ",
         runsOn: ({ machine }) => `${machine} で実行`,
+            writeUnconfirmed: "Home から確認が返りませんでした。エリアを確認して、もう一度お試しください。",
         withYourConnection: "あなた自身の接続を使用",
         readsResource: ({ read, plugin }) => `${plugin} の ${read}`,
         cannotRunAnythingElse: "このウィジェットはこれ以外を実行できません。",

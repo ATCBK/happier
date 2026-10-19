@@ -13387,6 +13387,7 @@ const widgetDefinitionTranslations = { ru: {
         edited: ({ time }) => `изменено ${time}`,
         readsOnly: "Только чтение",
         runsOn: ({ machine }) => `работает на ${machine}`,
+            writeUnconfirmed: "Ваш Home не подтвердил это. Проверьте область и повторите попытку.",
         withYourConnection: "с вашим собственным подключением",
         readsResource: ({ read, plugin }) => `${read} из ${plugin}`,
         cannotRunAnythingElse: "Виджет не может запускать ничего другого.",

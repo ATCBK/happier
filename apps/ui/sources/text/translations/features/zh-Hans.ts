@@ -13345,6 +13345,7 @@ const widgetDefinitionTranslations = { 'zh-Hans': {
         edited: ({ time }) => `${time} 编辑`,
         readsOnly: "只读",
         runsOn: ({ machine }) => `在 ${machine} 上运行`,
+            writeUnconfirmed: "你的 Home 没有确认这项操作。请检查此区域，然后重试。",
         withYourConnection: "使用你自己的连接",
         readsResource: ({ read, plugin }) => `来自 ${plugin} 的 ${read}`,
         cannotRunAnythingElse: "此小组件不能运行其他任何内容。",

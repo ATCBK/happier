@@ -127,7 +127,7 @@ export type WidgetAddTranslation = Readonly<{
     areaWriteFailed: string;
     areaApprovalPending: string;
     /** Why an Add or save was refused, and the next step. */
-    refusals: Readonly<Record<'areaUnavailable' | 'inputsInvalid' | 'typeUnavailable' | 'sizeUnsupported' | 'editDenied', string>>;
+    refusals: Readonly<Record<'areaUnavailable' | 'inputsInvalid' | 'typeUnavailable' | 'sizeUnsupported' | 'editDenied' | 'writeUnconfirmed', string>>;
     valueNotFound: (params: Readonly<{ value: string }>) => string;
     chooseAnother: (params: Readonly<{ field: string }>) => string;
     chooseField: (params: Readonly<{ field: string }>) => string;
@@ -271,6 +271,7 @@ export const widgetAddTranslationsEnglish = { en: {
             typeUnavailable: 'This widget isn’t available anymore. Choose another.',
             sizeUnsupported: 'That size isn’t available for this widget. Pick another size.',
             editDenied: 'You can’t change widgets here.',
+            writeUnconfirmed: 'Your Home didn’t confirm it. Check the area, then try again.',
         },
         valueNotFound: ({ value }) => `${value} can’t be found`,
         chooseAnother: ({ field }) => `Choose another ${inSentence(field)}`,

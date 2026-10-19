@@ -28,7 +28,8 @@ export type WidgetAreaPort = Readonly<{
 export type WidgetAreaWriteOutcome =
     | Readonly<{ kind: 'applied' }>
     | Readonly<{ kind: 'approvalPending' }>
-    | Readonly<{ kind: 'refused'; errorCode: string }>;
+    /** `error` is the host's own sentence when it gave one beyond the code, so a refusal can say why. */
+    | Readonly<{ kind: 'refused'; errorCode: string; error?: string }>;
 
 export type WidgetAreaLayoutState<C> =
     | Readonly<{ status: 'loading' }>
@@ -188,7 +189,8 @@ export function useWidgetAreaLayout<C extends WidgetSurfaceContext>(port: Widget
         try {
             const result = await port.execute(operation, undefined, { surface: admitted.surface, context: admitted.context });
             const refused = failureCode(result);
-            outcome = refused !== null ? { kind: 'refused', errorCode: refused }
+            const reason = refused !== null ? failureReason(result, refused) : undefined;
+            outcome = refused !== null ? { kind: 'refused', errorCode: refused, ...(reason ? { error: reason } : {}) }
                 : result.ok && 'kind' in result.result && result.result.kind === 'approval_request_created' ? { kind: 'approvalPending' }
                 : { kind: 'applied' };
         } catch {

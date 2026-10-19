@@ -13345,6 +13345,7 @@ const widgetDefinitionTranslations = { 'zh-Hant': {
         edited: ({ time }) => `${time} 編輯`,
         readsOnly: "唯讀",
         runsOn: ({ machine }) => `在 ${machine} 上執行`,
+            writeUnconfirmed: "你的 Home 沒有確認這項操作。請檢查此區域，然後再試一次。",
         withYourConnection: "使用你自己的連線",
         readsResource: ({ read, plugin }) => `來自 ${plugin} 的 ${read}`,
         cannotRunAnythingElse: "此小工具無法執行其他任何內容。",
