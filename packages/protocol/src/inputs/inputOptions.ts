@@ -21,9 +21,11 @@ import type { InputOption, InputFieldHint } from './inputFields.js';
 import type { InputOptionsConsumerV1 } from './inputOptionsConsumer.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { parseSessionAwarenessListResultV1 } from '../sessions/awareness/action.js';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '../sessions/listing/query.js';
 import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/availability.js';
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
+import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
 import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
 import { normalizeUsageQuery, readUsageGroupByOptions, readUsagePeriodOptions } from './usageQuery.js';
 import { executeUsageAction } from '../actions/executor/usageActions.js';
@@ -281,6 +283,37 @@ export async function resolveInputOptions(params: Readonly<{
       .map(([value, label]) => ({ value, label })) };
   }
 
+  if (optionsSourceId === 'host-input:workspace') {
+    const selectedServerId = readNonEmptyString(ctx.serverId);
+    if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
+    if (!deps.projectWorkspaceRefs) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:projects.list' };
+    const result = await deps.projectWorkspaceRefs({ serverId: selectedServerId }, ctx);
+    const failure = params.readFailure(result);
+    if (failure) return failure;
+    ctx.signal?.throwIfAborted();
+    // Machine names only tell apart the same checkout on two machines; an unreadable list leaves the path to do that.
+    const machineList = await deps.machinesList({ serverId: selectedServerId, purpose: 'input' });
+    const machineLabels = new Map<string, string>();
+    if (!params.readFailure(machineList)) {
+      for (const machine of readRecordListProperty(machineList, 'items')) {
+        const id = readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id);
+        const label = readNonEmptyString(machine.label);
+        if (id && label) machineLabels.set(id, label);
+      }
+    }
+    const options: InputOption[] = [];
+    for (const row of readRecordListProperty(result, 'workspaceRefs')) {
+      const ref = WorkspaceRefV1Schema.safeParse(row);
+      if (!ref.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      // Recency changes whenever the checkout is opened; a saved pin must keep matching its option.
+      const { lastOpenedAtMs: _recency, ...stable } = ref.data;
+      const machineLabel = machineLabels.get(ref.data.machineId);
+      options.push({ value: stable, label: ref.data.label ?? ref.data.rootPath.split(/[\\/]+/).filter(Boolean).at(-1) ?? ref.data.rootPath,
+        description: machineLabel ? `${machineLabel} · ${ref.data.rootPath}` : ref.data.rootPath });
+    }
+    return { ok: true, result: options };
+  }
+
   if (optionsSourceId === 'host-input:machine') {
     const selectedServerId = readNonEmptyString(ctx.serverId);
     if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
@@ -361,6 +394,8 @@ export async function resolveInputOptions(params: Readonly<{
         const result = await executor.execute('session.list', { view: 'awareness', ...(projectFilter ? { project: projectFilter } : {}), query: {
           v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
           audiences: [], tagIds: [], includeAttention: false,
+          // The picker reads the whole inventory, one round trip per page: ask for the largest page the Home's list allows.
+          limit: SESSION_LIST_PAGE_MAX_LIMIT,
           ...(cursor ? { cursor } : {}),
         } }, ctx);
         if (!result.ok) return result;

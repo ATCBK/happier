@@ -4,7 +4,7 @@ import { readInputPath } from '../inputs/inputPredicates.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
 import type { WidgetActionInputResolverV1 } from './actionsV1.js';
 import { isWidgetTargetHostableV1, resolveConfiguredWidgetInputs, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
-import { WidgetInstanceV1Schema, type WidgetBindingResolutionInputV1, type WidgetInputIssueV1, type WidgetInputBindingsV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
+import { WidgetInstanceV1Schema, type WidgetBindingResolutionInputV1, type WidgetInputIssueV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from './widgetInstanceV1.js';
 import { readInputFieldOptionsConstraint, validateInputFieldSchema, validateInputFieldValue, type ResolvedInputTypeV1 } from '../inputs/inputTypeRuntime.js';
 import { hasValidPluginConnectedAccountPurposeBindingsV2 } from '../plugins/actions/v2.js';
 import type { PluginJsonSchemaV2 } from '../plugins/contributions/publicTypes.js';
@@ -18,14 +18,20 @@ import type { PluginProjectedResourceV2 } from '../daemon/contributionRegistryPr
 type Request = Parameters<WidgetActionInputResolverV1['resolve']>[0];
 type Validation = ReturnType<WidgetBindingResolutionInputV1['validateValue']>;
 
-/** Group slots override the surface's slots, but convey values rather than access. */
+/** Destination identity fills its intrinsic slots; group pins override values, never access. */
 export function composeWidgetGroupContextV1(input: Readonly<{
     providedContext: WidgetBindingResolutionInputV1['context'];
+    surfaceOwner?: WidgetSurfaceRefV1['owner'];
     groupBindings?: WidgetInputBindingsV1;
 }>): WidgetBindingResolutionInputV1['context'] {
-    if (!input.groupBindings || !Object.keys(input.groupBindings).length) return input.providedContext;
-    return { ...input.providedContext, ...Object.fromEntries(Object.entries(input.groupBindings).map(([slot, binding]) => [slot,
-        binding.kind === 'value' ? [binding.value] : binding.kind === 'context' ? input.providedContext[binding.slot] ?? [] : [],
+    // Project identity fills an absent slot without a mount, Source, or checkout.
+    // Preserve an exact mounted area's supplied value (including unavailable),
+    // since an attached layout's storage owner can differ from its viewing Project.
+    const providedContext = input.surfaceOwner?.kind === 'project' && input.providedContext.projects === undefined
+        ? { ...input.providedContext, projects: [[input.surfaceOwner.projectId]] } : input.providedContext;
+    if (!input.groupBindings || !Object.keys(input.groupBindings).length) return providedContext;
+    return { ...providedContext, ...Object.fromEntries(Object.entries(input.groupBindings).map(([slot, binding]) => [slot,
+        binding.kind === 'value' ? [binding.value] : binding.kind === 'context' ? providedContext[binding.slot] ?? [] : [],
     ])) };
 }
 
@@ -117,7 +123,7 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
         request.instance = inheritWidgetGroupViewerBindingsV1(request.instance, groupBindings, descriptor.inputs?.fields ?? []);
         const savedInstance = WidgetInstanceV1Schema.parse(request.instance);
         const [surfaceContext, currentViewer] = await Promise.all([ports.readContext(request), ports.readViewerValues(request)]);
-        const providedContext = composeWidgetGroupContextV1({ providedContext: surfaceContext, groupBindings });
+        const providedContext = composeWidgetGroupContextV1({ providedContext: surfaceContext, surfaceOwner: request.ref.surface.owner, groupBindings });
         request.signal?.throwIfAborted();
         const viewerPaths = request.admission === 'configuration'
             ? Object.entries(savedInstance.bindings).filter(([, binding]) => binding.kind === 'viewer').map(([path]) => path) : [];

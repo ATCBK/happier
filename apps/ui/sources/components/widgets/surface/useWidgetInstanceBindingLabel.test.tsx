@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { InputHints } from '@happier-dev/protocol/inputs';
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
@@ -7,6 +7,8 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { isWidgetFollowingSurfaceSlot, useWidgetInstanceBindingLabel } from './useWidgetInstanceBindingLabel';
 import { useWidgetBindingValueLabels } from './useWidgetBindingValueLabels';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupSurfaceContext } from '../group/widgetGroupInputs';
+
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 
 afterEach(() => standardCleanup());
 

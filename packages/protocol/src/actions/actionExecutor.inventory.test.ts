@@ -364,6 +364,24 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-1' }, label: 'Machine 1', description: 'Online' });
     expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Offline' });
   });
+  it('offers the Account checkouts as stable complete refs, named with their machine, through the typed Checkout input', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const ref = (id: string, machineId: string, rootPath: string, extra: Record<string, unknown> = {}) =>
+      ({ id, serverId: 'home', machineId, rootPath, label: null, createdAtMs: 1, lastOpenedAtMs: 99, ...extra });
+    const executor = createActionExecutor({ ...createDeps(),
+      projectWorkspaceRefs: async () => ({ workspaceRefs: [ref('ws-1', 'm1', '/work/happier'), ref('ws-2', 'm2', '/srv/happier', { label: 'Happier (server)' })] }),
+      machinesList: async () => ({ items: [{ serverId: 'home', machineId: 'm1', label: 'Laptop', active: true }, { serverId: 'home', machineId: 'm2', label: 'Dev box', active: true }] }),
+      widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+    const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+      definition: { kind: 'builtin', id: 'project_checkouts' } }, fieldPath: 'checkout' }, { serverId: 'home' });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { optionsSourceId: 'host-input:workspace' } });
+    if (!result.ok) return;
+    // The saved pin must still match its option after the checkout is opened again, so recency is not part of the value.
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options).toEqual([
+      { value: { id: 'ws-1', serverId: 'home', machineId: 'm1', rootPath: '/work/happier', label: null, createdAtMs: 1 }, label: 'happier', description: 'Laptop · /work/happier' },
+      { value: { id: 'ws-2', serverId: 'home', machineId: 'm2', rootPath: '/srv/happier', label: 'Happier (server)', createdAtMs: 1 }, label: 'Happier (server)', description: 'Dev box · /srv/happier' },
+    ]);
+  });
   it('requires a qualified machine before discovering its volume choices from the vitals owner', async () => {
     const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
     const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),

@@ -334,6 +334,7 @@ import {
   getSessionTranscriptForVoiceTool,
 } from '@/voice/tools/actionImpl/sessionRecentMessages';
 import { listRecentPathsForVoiceTool } from '@/voice/tools/actionImpl/pathsListRecent';
+import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
 import { listProjectsForActions } from './listProjects';
 import { createProjectSourceActionDeps } from '@/sync/api/projects/projectSourceActions';
 import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
@@ -2543,6 +2544,18 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
       }
       const rows = await createUiProjectAccountRowsClient(accountContext).read(context?.signal);
       return listProjectsForActions(args, rows);
+    },
+    projectWorkspaceRefs: async (args, context) => {
+      if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      if (!canUsePrivateProjectAccountAction(accountContext, context)) return { ok: false, errorCode: 'project_account_access_denied', error: 'project_account_access_denied' };
+      if (args.serverId !== undefined && !areServerProfileIdentifiersEquivalent(args.serverId, accountContext.serverId)) {
+        return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+      }
+      const rows = await createUiProjectAccountRowsClient(accountContext).read(context?.signal);
+      if (rows.status !== 'ready') return { ok: false, errorCode: 'project_account_rows_unavailable', error: 'project_account_rows_unavailable' };
+      // The same visible, ordered checkouts the Projects list shows.
+      return { workspaceRefs: projectProjectListV1({ serverId: accountContext.serverId, workspaceRefs: rows.workspaceRefs,
+        organizations: rows.organizations, normalizeServerId: resolveServerProfileScopeIdForIdentifier }).items.map(item => item.ref) };
     },
     projectsVisibilitySet: async (input, context) => {
       if (!accountContext || !canUsePrivateProjectAccountAction(accountContext, context)) return { ok: false, errorCode: 'project_visibility_access_denied' };
