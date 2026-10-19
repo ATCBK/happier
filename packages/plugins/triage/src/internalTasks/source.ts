@@ -96,7 +96,12 @@ export async function getInternalTask(input: TriageGetInputV1, context: PluginIn
   const list = await readTasks(context);
   if (list === null) return { kind: 'unresolved', localRef: input.localRef, failure: UNAVAILABLE };
   const task = list.todos.find(candidate => candidate.id === input.localRef.entryId);
-  return task ? observation(task, list) : { kind: 'absent', localRef: input.localRef };
+  if (!task) return { kind: 'absent', localRef: input.localRef };
+  return { ...observation(task, list), taskFields: {
+    title: task.title, body: task.notes ?? '', assigneeIds: task.owner === undefined ? [] : [task.owner],
+    labelIds: [...(task.labels ?? [])], dueDate: task.dueAt === undefined ? null : new Date(task.dueAt).toISOString(),
+    parent: task.parentId === undefined ? null : taskRef(task.parentId), blockedBy: (task.blockedBy ?? []).map(taskRef),
+  } };
 }
 
 function localRelation(ref: TriageEntryRefV1): boolean {

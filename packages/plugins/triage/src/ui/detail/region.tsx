@@ -254,7 +254,7 @@ export type TriageDetailPinActionV1 = Readonly<{
 function TriageEntryScopedActionRegion(props: Readonly<{
   target: TriageActionTargetV1;
   actions: TriageMountedActionsV1;
-  workflowSubject: TriageSourceWorkflowSubjectV1;
+  workflowSubject: TriageSourceWorkflowSubjectV1 | null;
   snapshot?: TriageSourceEntrySnapshotV1;
   display: TriageEntrySessionStartRequestV1['display'];
   presentation: TriageEntrySessionStartRequestV1['presentation'];
@@ -333,9 +333,11 @@ function TriageEntryScopedActionRegion(props: Readonly<{
     // the last place a press could have re-decided any of them, and it does
     // not — it only adds the facts this screen holds and the record cannot.
     return (async () => {
+      const workflowSubject = props.workflowSubject;
+      if (workflowSubject === null) return { kind: 'unavailable' as const };
       const executable = await props.actions.resolveForExecution(
         request.action.actionId,
-        [props.workflowSubject],
+        [workflowSubject],
       );
       // Said beside the control that was pressed, never swallowed.
       if (executable.status !== 'resolved') return { kind: executable.status };
@@ -407,7 +409,7 @@ function TriageEntryScopedActionRegion(props: Readonly<{
 
   return (
     <Stack gap="small">
-      {orchestrationPrompt === null ? <TriageEntryActionControls
+      {props.workflowSubject === null ? null : orchestrationPrompt === null ? <TriageEntryActionControls
         target={props.target}
         actions={props.actions.actions}
         workflowSubject={props.workflowSubject}
@@ -647,8 +649,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
    * supplies the selection-derived target, and only this component has read the
    * source's declared descriptor and its admitted operation roles.
    *
-   * The section is deliberately absent until the entry's workflow subject and a
-   * present observation are both known. Offering actions before the descriptor
+   * The controls are absent until the entry's workflow subject and a present
+   * observation are both known. Offering actions before the descriptor
    * answers would flash a control set chosen for the wrong subject, and a start
    * needs the display facts the link freezes from that observation.
    */
@@ -780,17 +782,20 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       />
     </TriagePostMutationCompletionProvider>
   ) : undefined;
-  const actionRegionShown = workflowSubject !== null && display !== null && actionPresentation !== null && selected !== null;
+  // Source re-admission can withdraw its descriptor while a comparison read is pending.
+  // Keep the selected entry's controller in place; only its controls wait for the descriptor.
+  const actionRegionAvailable = display !== null && actionPresentation !== null && selected !== null;
+  const actionRegionShown = workflowSubject !== null && actionRegionAvailable;
   const viewerIsAuthor = row.content?.outcome.viewer.involvement.includes('author') === true;
   // Pushed (the detail is the page), the actions pin to the foot; why the entry is here is a fact, so it stays with
   // the title and facts above the story rather than riding in the thumb bar.
-  const pinned = props.pushed === true && actionRegionShown;
+  const pinned = props.pushed === true && actionRegionAvailable;
   const attention = header.attention === null || pinned ? undefined : (
     <TriageAttentionBadge attention={header.attention} />
   );
   // The entry's actions: in the header beside the list, and pinned at the foot of the page when the detail is the
   // page. One keyed region either way, so its action state is the same one; only where it is placed differs.
-  const actionRegion = !actionRegionShown || workflowSubject === null || display === null || actionPresentation === null
+  const actionRegion = display === null || actionPresentation === null
     || selected === null ? null : (
       <TriageEntryScopedActionRegion
         key={deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}
@@ -839,7 +844,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       {/* Keyed per entry instance like the action region beside it, under its own name: one key for two siblings
           made React drop or duplicate one of them on update. */}
       <TriageEditTaskFields key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
-        row={row} disabled={props.sourceWritesDisabled === true || detail?.kind !== 'ready'} onApplied={completePostMutation} />
+        row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
+        disabled={props.sourceWritesDisabled === true || detail?.kind !== 'ready'} onApplied={completePostMutation} />
       {actionRegionShown ? null : sourceActions}
       </Stack>
       </ScrollArea>

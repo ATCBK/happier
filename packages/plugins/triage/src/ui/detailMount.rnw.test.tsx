@@ -37,6 +37,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PluginUiContextEnrichmentV1 } from '@happier-dev/plugin-sdk/ui';
 import { TriageMountedUiInputV1Schema } from '../actions/mountedUiProtocol.js';
+import { TriageEditTaskActionInputV1Schema } from '../actions/tasksProtocol.js';
 import { unlinkEntryFromSession } from '../sessions/entrySessionLinks.js';
 import { TriageUnlinkEntryFromSessionActionInputV1Schema, TriageUnlinkEntryFromSessionActionResultV1Schema } from '../actions/entrySessionProtocol.js';
 import { invokeTriageMountedUiAction } from './mountedActions.js';
@@ -79,6 +80,7 @@ import {
 import { TRIAGE_SHELL_FILL_TEST_ID_V1, TRIAGE_SHELL_DETAIL_REGION_TEST_ID_V1 } from './shell/root.js';
 import { refreshTriageListWindow } from './window/mountedWindow.js';
 import { renderSurface as renderShellSurface } from './surface.js';
+import { renderSurface as renderTasksSurface } from './tasksSurface.js';
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../projection/listWindow.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 
@@ -151,6 +153,8 @@ const DESCRIPTOR = Object.freeze({
         pluralDisplayName: 'Pull requests',
     }],
 });
+const TASK_DESCRIPTOR = { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map(kind => ({ ...kind, task: true,
+    taskCapabilities: { editFields: ['title', 'body'] } })) };
 
 /** The contributor's real public manifest, as the host reads it at admission. */
 const CONTRIBUTOR_MANIFEST = definePlugin({
@@ -333,12 +337,12 @@ const OTHER_ADMITTED_MOUNT = Object.freeze({
 });
 
 function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedDetail?: boolean; sourceSessionTab?: boolean;
-    fixPullRequestState?: 'unprojected' | 'unreachable'; }> = {}) {
+    fixPullRequestState?: 'unprojected' | 'unreachable'; taskEdit?: boolean }> = {}) {
     const contributesDetail = options.contributesDetail !== false;
     return createSurfaceContextFixture({
         mount: {
             kind: 'destination',
-            destination: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: 'triage' },
+            destination: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: options.taskEdit ? 'tasks' : 'triage' },
             container: 'appPage',
         },
         targetedContributions: {
@@ -365,7 +369,7 @@ function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedD
                     }, {
                         contributor: CONTRIBUTOR,
                         protocol: PROTOCOL,
-                        descriptor: options.sourceSessionTab ? (() => {
+                        descriptor: options.taskEdit ? TASK_DESCRIPTOR : options.sourceSessionTab ? (() => {
                             const admitted = admitTriageSourceDescriptorV1({ ...DESCRIPTOR, kinds: [{ ...DESCRIPTOR.kinds[0], detailTabs: [
                                 { kind: 'shared', id: 'overview' }, { kind: 'shared', id: 'files' },
                                 { kind: 'source', id: 'session', title: 'Session history' },
@@ -385,7 +389,10 @@ function surfaceContext(options: Readonly<{ contributesDetail?: boolean; tabbedD
                                 { kind: 'shared', id: 'files' }, { kind: 'shared', id: 'checks' },
                             ] })),
                         } : DESCRIPTOR,
-                        operations: [],
+                        operations: options.taskEdit ? ['get', 'edit'].map(role => ({
+                            point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol: PROTOCOL },
+                            contributor: CONTRIBUTOR, role, action: { pluginId: SOURCE.pluginId, localId: role },
+                        })) : [],
                         surfaces: contributesDetail ? [DETAIL_SURFACE] : [],
                     }],
                 }],
@@ -472,6 +479,7 @@ function createHarness(options: Readonly<{
     secondInstanceObservesEntry?: boolean;
     otherSourceEntry?: boolean;
     deferLinkedEntry?: boolean;
+    taskEdit?: boolean;
 }> = {}) {
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
@@ -506,7 +514,7 @@ function createHarness(options: Readonly<{
     const admitted = [{
         contributor: CONTRIBUTOR,
         protocol: PROTOCOL,
-        descriptor: DESCRIPTOR,
+        descriptor: options.taskEdit ? TASK_DESCRIPTOR : DESCRIPTOR,
         operations: { listInstances: {}, scan: { role: 'scan' }, get: {} },
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1, ...(options.otherSourceEntry === true ? [{
@@ -546,7 +554,7 @@ function createHarness(options: Readonly<{
                     ? 'Another source matching entry'
                     : 'Replace the duplicated normalizer',
             }),
-            viewer: testkitViewer(),
+            viewer: testkitViewer({ involvement: options.taskEdit ? ['assignee'] : [] }),
             sourceUpdatedAtMs: observationRevision.current,
         }, {
             kind: 'present',
@@ -646,6 +654,7 @@ function createHarness(options: Readonly<{
                         kind: 'present',
                         locator: testkitLocator(),
                         snapshot: testkitSnapshot({
+                            ...(options.taskEdit ? { projectionTruncated: true } : {}),
                             title: isLongEntry
                                 ? LONG_REF_ROW_TITLE
                                 : isOtherSource
@@ -654,7 +663,7 @@ function createHarness(options: Readonly<{
                                         ? 'Replace the duplicated normalizer after mutation'
                                         : 'Replace the duplicated normalizer',
                         }),
-                        viewer: testkitViewer(),
+                        viewer: testkitViewer({ involvement: options.taskEdit ? ['assignee'] : [] }),
                         sourceUpdatedAtMs: observationRevision.current,
                     },
                 },
@@ -790,6 +799,8 @@ async function mountShell(
         onNotification?: (notification: Readonly<{ message: string; severity?: string }>) => void;
         onDiagnostic?: (data: Readonly<{ code: string }>) => void;
         fixPullRequestState?: 'unprojected' | 'unreachable';
+        taskEdit?: boolean;
+        onTaskEdit?: (input: unknown) => void;
         publishCurrentUiContext?: (context: PluginUiContextEnrichmentV1 | null) => void;
         replacePageLocation?: (request: Readonly<{
             subPath: string;
@@ -805,6 +816,7 @@ async function mountShell(
             : { secondInstanceObservesEntry: options.secondInstanceObservesEntry }),
         ...(options.otherSourceEntry === undefined ? {} : { otherSourceEntry: options.otherSourceEntry }),
         ...(options.deferLinkedEntry === undefined ? {} : { deferLinkedEntry: options.deferLinkedEntry }),
+        ...(options.taskEdit === undefined ? {} : { taskEdit: options.taskEdit }),
     });
     currentHarness = harness;
     if (options.linkedSessionCount !== undefined) {
@@ -823,7 +835,8 @@ async function mountShell(
             ...(options.launchInput === undefined ? {} : { launchInput: options.launchInput }),
             // The semantic host's RenderContext omits its activity snapshot;
             // supply this genuine host boundary fact for mounted-action cases.
-            surface: (context) => renderShellSurface({ ...context, activity: { active: options.activeSurface === true } }),
+            surface: (context) => (options.taskEdit ? renderTasksSurface : renderShellSurface)(
+                { ...context, activity: { active: options.activeSurface === true } }),
             surfaceContext: options.hostTarget?.ready === false
                 ? { ...accountSurface, machineConnectionPending: options.hostTarget.pending ?? true,
                     ...(options.hostTarget.executionReady === undefined ? {} : { machineExecutionReady: options.hostTarget.executionReady }) } : admittedSurface,
@@ -854,6 +867,18 @@ async function mountShell(
                 diagnostic: ({ data }) => { options.onDiagnostic?.(data); },
                 publishCurrentUiContext: ({ enrichment }) => options.publishCurrentUiContext?.(enrichment),
                 executeAction: async ({ action, input }) => {
+                    if (options.taskEdit && typeof action !== 'string' && action.localId === 'get') {
+                        return { kind: 'present', localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                            locator: testkitLocator(), snapshot: testkitSnapshot({ projectionTruncated: true }), viewer: testkitViewer(),
+                            taskFields: { title: 'Replace the duplicated normalizer', body: 'Complete source notes\n\nPreserve Markdown.  \n' } };
+                    }
+                    if (options.taskEdit && action === 'tasks/edit-v1') {
+                        options.onTaskEdit?.(input);
+                        return { kind: 'applied', observation: {
+                            kind: 'present', localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                            locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+                        } };
+                    }
                     if (typeof action === 'string' && options.refusedHostReads?.has(action)) throw new PluginError({
                         code: 'unavailable', retryable: true,
                         diagnostics: [{ code: 'plugin_surface_connection_pending', severity: 'error' }],
@@ -908,6 +933,23 @@ async function openTheRow(shell: PluginUiTestkit): Promise<void> {
     await act(async () => { await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
 }
+
+it('opens the shared Tasks detail, reads full fields and commits a body-only edit despite truncated row facts', async () => {
+    const edits: ReturnType<typeof TriageEditTaskActionInputV1Schema.parse>[] = [];
+    const shell = await mountShell({ taskEdit: true, onTaskEdit: input => edits.push(TriageEditTaskActionInputV1Schema.parse(input)) });
+    await openTheRow(shell);
+    await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Edit task' })); });
+    const notes = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]');
+    expect(notes?.value).toBe('Complete source notes\n\nPreserve Markdown.  \n');
+    await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(notes, 'Updated source notes\n');
+        notes!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Save changes' })); });
+    expect(edits).toMatchObject([{ entryRef: { source: SOURCE, entryId: '17' }, sourceInstanceId: INSTANCE,
+        fields: { body: 'Updated source notes\n' } }]);
+    expect(edits[0]?.fields).not.toHaveProperty('title');
+});
 
 type LayoutHandler = (event: Readonly<{
     nativeEvent: Readonly<{ layout: Readonly<{ x: number; y: number; width: number; height: number }> }>;

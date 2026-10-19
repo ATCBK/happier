@@ -1,4 +1,4 @@
-import type { TriageEntryStateV1, TriageSourceEntrySnapshotV1 } from '@happier-dev/triage-protocol/v1';
+import type { TriageEntryStateV1, TriageSourceEntrySnapshotV1, TriageTaskFieldsV1 } from '@happier-dev/triage-protocol/v1';
 
 /**
  * GitHub-local Triage shapes.
@@ -136,6 +136,8 @@ export type GithubTriagePresentObservationV1 = Readonly<{
   locator: GithubTriageEntryLocatorV1;
   snapshot: GithubTriageEntrySnapshotV1;
   viewer: GithubTriageViewerFactsV1;
+  /** Exact-read-only values; the scan/observation mapper never copies these. */
+  taskFields?: TriageTaskFieldsV1;
 }>;
 
 export type GithubTriageObservationV1 =

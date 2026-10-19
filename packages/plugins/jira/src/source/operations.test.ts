@@ -66,6 +66,22 @@ export function host(respond: (url: URL, body: unknown) => { status?: number; bo
 }
 
 describe('Jira source through provider HTTP', () => {
+    it('loads complete editable values and never invents a value for an omitted provider field', async () => {
+        const h = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
+            : url.pathname.endsWith('/editmeta') ? { fields: {} }
+                : url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' } : issue }));
+        const result = TriageGetResultV1Schema.parse(await getJiraEntry({ v: 1, instance, localRef: ref }, h.context));
+        expect(result).toMatchObject({ kind: 'present', taskFields: { title: issue.fields.summary, body: 'Keep queued work.\n',
+            labelIds: ['reliability'], assigneeIds: ['person-1'], priority: '2', parent: { entryId: '10002' } } });
+        expect(result).not.toHaveProperty('taskFields.dueDate');
+        const unavailableBody = host((url) => ({ body: url.pathname.endsWith('/transitions') ? { transitions: [] }
+            : url.pathname.endsWith('/editmeta') ? { fields: {} }
+                : url.pathname === '/rest/api/3/myself' ? { accountId: 'person-1' }
+                    : { ...issue, fields: { ...issue.fields, description: { inaccessible: true } } } }));
+        const unavailable = await getJiraEntry({ v: 1, instance, localRef: ref }, unavailableBody.context);
+        expect(unavailable).toMatchObject({ kind: 'present', taskFields: { title: issue.fields.summary } });
+        expect(unavailable).not.toHaveProperty('taskFields.body');
+    });
     it('discovers every project on the exact configured site without persisting source instances', async () => {
         const h = host((url) => ({ body: url.pathname === '/rest/api/3/project/search'
             ? { isLast: Number(url.searchParams.get('startAt')) > 0, startAt: Number(url.searchParams.get('startAt')), maxResults: 1, total: 2,

@@ -32,6 +32,7 @@ import {
     TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1,
     TriageStartEntrySessionInputV1Schema,
     type TriageStartEntrySessionInputV1,
+    type TriageStartEntrySessionResultV1,
 } from '../actions/entrySessionProtocol.js';
 import {
     listTriageEntries,
@@ -127,6 +128,17 @@ const PREPARE_REVIEW_WORKSPACE_OPERATION = Object.freeze({
     role: 'prepareReviewWorkspace',
     action: { pluginId: SOURCE.pluginId, localId: 'prepare-review-workspace' },
 }) satisfies PluginUiTargetedContributionOperationV1;
+
+const GET_OPERATION = Object.freeze({
+    ...PREPARE_REVIEW_WORKSPACE_OPERATION,
+    role: 'get',
+    action: { pluginId: SOURCE.pluginId, localId: 'get' },
+}) satisfies PluginUiTargetedContributionOperationV1;
+
+const PR_COMPARISON = { kind: 'pullRequest', locator: {
+    providerId: 'forge', repository: 'example/repository', number: 17,
+    baseOid: 'a'.repeat(40), headOid: 'b'.repeat(40),
+} } as const;
 
 /**
  * The source's own declared descriptor, as this mount's targeted snapshot
@@ -227,6 +239,7 @@ type Harness = Readonly<{
     formalReviewReady: boolean;
     /** Every chooser engine-list request reached through this physical mount. */
     reviewEngineListRequests: readonly unknown[];
+    comparisonOpens: readonly unknown[];
 }>;
 
 function createHarness(options: Readonly<{
@@ -237,6 +250,7 @@ function createHarness(options: Readonly<{
     involvement?: readonly ('author' | 'assignee' | 'reviewRequested')[];
     /** The durable detail read answers `unavailable`, so the detail never becomes ready. */
     detailUnavailable?: boolean;
+    comparisonRead?: () => Promise<unknown>;
 }> = {}): Harness {
     const descriptor = options.issue === true
         ? { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map((kind) => ({ ...kind, workflowSubject: 'issue' })) }
@@ -245,6 +259,7 @@ function createHarness(options: Readonly<{
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
     const startRequests: TriageStartEntrySessionInputV1[] = [];
     const reviewEngineListRequests: unknown[] = [];
+    const comparisonOpens: unknown[] = [];
     const formalReviewReady = options.formalReviewReady === true;
     let draftSettles = true;
     let registry: Readonly<{ items: readonly unknown[]; truncated: boolean }> = {
@@ -309,6 +324,10 @@ function createHarness(options: Readonly<{
     } satisfies TriageScanResultV1);
 
     async function executeAction(request: Readonly<{ action: unknown; input: unknown }>): Promise<unknown> {
+        if (typeof request.action === 'object' && request.action !== null
+            && 'localId' in request.action && request.action.localId === 'get') {
+            return options.comparisonRead?.();
+        }
         const action = String(request.action);
         if (action === TRIAGE_REOBSERVE_ENTRY_ACTION_LOCAL_ID_V1) {
             const result = await reobserveTriageEntry(TriageReobserveEntryInputV1Schema.parse(request.input), {
@@ -347,6 +366,7 @@ function createHarness(options: Readonly<{
             });
         }
         if (action === 'projects.list') return registry;
+        if (action === 'session.open') { comparisonOpens.push(request.input); return null; }
         if (action === 'sessions.spawn.profiles.list') return { items: profiles };
         if (action === 'agents.backends.list') return { items: backends };
         if (action === 'prompts.invocation.resolve') {
@@ -417,10 +437,12 @@ function createHarness(options: Readonly<{
         get reviewEngineListRequests() {
             return reviewEngineListRequests;
         },
+        comparisonOpens,
     };
 }
 
 const mounted: PluginUiTestkit[] = [];
+const refreshMountedShell = new WeakMap<PluginUiTestkit, () => Promise<unknown>>();
 
 /** How many times this mount opened the host's New Session surface. */
 let draftsOpened = 0;
@@ -429,7 +451,7 @@ let draftSeeds: unknown[] = [];
 /** Seeds handed to the host-owned New Session authoring surface. */
 let newSessionSeeds: unknown[] = [];
 
-async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
+async function mountShell(harness: Harness, hostedDetail = false): Promise<PluginUiTestkit> {
     const ephemeralSharedScope = createTriageEphemeralSharedScopeFixture();
     let fixture!: PluginUiTestkit;
     await act(async () => {
@@ -454,9 +476,9 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                                     version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
                                 },
                                 descriptor: harness.descriptor,
-                                operations: harness.formalReviewReady
+                                operations: [GET_OPERATION, ...(harness.formalReviewReady
                                     ? [PREPARE_REVIEW_WORKSPACE_OPERATION]
-                                    : [],
+                                    : [])],
                                 surfaces: [],
                             }],
                         }],
@@ -465,6 +487,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
             }),
             adapter: createPluginUiRnwSemanticSurfaceAdapter({
                 ephemeralSharedScope, overlays: true,
+                ...(hostedDetail ? { detailsPane: { available: true } } : {}),
                 // The native/web focus adapter is a genuine host boundary, as in the review chooser harness.
                 physicalFocus(target) { target.focus(); return true; },
             }),
@@ -519,6 +542,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
         });
     });
     mounted.push(fixture);
+    refreshMountedShell.set(fixture, () => refreshTriageListWindow('view', fixture.context.hostApi, ephemeralSharedScope));
     await act(async () => {
         await refreshTriageListWindow('view', fixture.context.hostApi, ephemeralSharedScope);
     });
@@ -557,6 +581,81 @@ afterEach(async () => {
 const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 describe('the entry action controls on the mounted detail header', () => {
+    it.each([false, true])('hands off Walk through after the detail refreshes during its comparison read (hosted=%s)', async (hosted) => {
+        let finishRead!: (result: unknown) => void;
+        let reads = 0;
+        const harness = createHarness({ comparisonRead: async () => {
+            reads += 1;
+            return await new Promise((resolve) => { finishRead = resolve; });
+        } });
+        harness.setStartResults([{ v: 1, type: 'linked', sessionId: 'session-a',
+            disposition: 'created', delivery: 'none', finalOpen: 'deferred' } satisfies TriageStartEntrySessionResultV1]);
+        const shell = await mountShell(harness, hosted);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        expect(reads).toBe(1);
+        // Re-admission temporarily withdraws the source descriptor while the same selected entry reloads.
+        const { targetedContributions: _targeted, ...readingSurface } = shell.context.surface;
+        await act(async () => { await shell.updateSurface({ ...readingSurface, machineConnectionPending: true }); });
+        await act(async () => { await refreshMountedShell.get(shell)!(); });
+        await act(async () => { await shell.updateSurface(shell.context.surface); });
+        await settle();
+        await act(async () => { finishRead({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }); });
+        await settle();
+        expect(draftsOpened).toBe(1);
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.startRequests[0]?.finalOpen).toBe('deferred');
+        expect(harness.comparisonOpens).toEqual([{ sessionId: 'session-a', serverId: 'server-a',
+            destination: { kind: 'scmReview', comparison: PR_COMPARISON, view: 'walkthrough' } }]);
+        expect(reads).toBe(1);
+    }, 60_000);
+
+    it('keeps a comparison failure visible after source re-admission', async () => {
+        let failRead!: (reason: Error) => void;
+        const shell = await mountShell(createHarness({ comparisonRead: async () =>
+            await new Promise((_resolve, reject) => { failRead = reject; }) }));
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        const { targetedContributions: _targeted, ...readingSurface } = shell.context.surface;
+        await act(async () => { await shell.updateSurface({ ...readingSurface, machineConnectionPending: true }); });
+        await act(async () => { failRead(new Error('Source unavailable')); });
+        await act(async () => { await shell.updateSurface(shell.context.surface); });
+        await settle();
+        await expect(shell.getByText('This source cannot open a comparison for this pull request.')).resolves.toBeDefined();
+        expect(draftsOpened).toBe(0);
+    }, 60_000);
+
+    it('retires a pending Walk through when the reader selects another entry', async () => {
+        let finishRead!: (result: unknown) => void;
+        const harness = createHarness({ includeSecondEntry: true, comparisonRead: async () =>
+            await new Promise((resolve) => { finishRead = resolve; }) });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Walk through');
+        await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
+            ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
+        })); });
+        await settle();
+        await act(async () => { finishRead({
+            kind: 'present',
+            localRef: { kindId: ENTRY_REF.kindId, collisionScope: ENTRY_REF.collisionScope, entryId: ENTRY_REF.entryId },
+            locator: testkitLocator(), snapshot: testkitSnapshot({ title: ENTRY_TITLE }), viewer: testkitViewer(),
+            comparisonSource: PR_COMPARISON,
+        }); });
+        await settle();
+        expect(draftsOpened).toBe(0);
+        expect(harness.comparisonOpens).toEqual([]);
+        expect(harness.startRequests).toEqual([]);
+        await expect(shell.getByText(SECOND_ENTRY_TITLE)).resolves.toBeDefined();
+    }, 60_000);
     it('makes formal review available after reading the selected source, even when its scan omitted revision facts', async () => {
         const harness = createHarness({ formalReviewReady: true, reviewRevisionOnlyOnGet: true });
         const shell = await mountShell(harness);

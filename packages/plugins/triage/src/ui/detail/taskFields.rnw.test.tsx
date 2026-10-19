@@ -8,7 +8,8 @@ import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/plugin-sdk/ui';
 import { createTriageSourceV1Fixture } from '@happier-dev/triage-protocol/testing/v1';
 import { TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
-  TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1, TriageSourceDescriptorV1Schema, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
+  TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1, TriageSourceDescriptorV1Schema,
+  type TriageTaskFieldV1, type TriageTaskFieldsV1, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 import { testkitEntryRef, testkitObservation } from '../../corpus/testkit/observations.test-support.js';
 import { foldTriageListWindow, TRIAGE_LIST_DEFAULT_LENS_V1 } from '../../projection/listWindow.js';
 import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema } from '../../actions/tasksProtocol.js';
@@ -19,7 +20,8 @@ import { TriageCreateTaskFields, TriageEditTaskFields, useTriageTaskCommit } fro
 const mounted: PluginUiTestkit[] = [];
 afterEach(async () => { for (const fixture of mounted.splice(0)) await fixture.dispose(); });
 
-function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, role: 'create' | 'edit', readOnly = false): PluginUiTargetedContributionsV1 {
+function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, role: 'create' | 'edit', readOnly = false,
+  fields: readonly TriageTaskFieldV1[] = ['title', 'body']): PluginUiTargetedContributionsV1 {
   const protocol = { id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1, version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1 };
   const contributor = { pluginId: source.pluginId, contributionId: source.localId,
     occurrenceId: 'source-one', sourceCustody: { kind: 'development' as const, registeredRootId: 'task-source' } };
@@ -30,9 +32,9 @@ function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, 
       contributor, protocol,
       descriptor: TriageSourceDescriptorV1Schema.parse({ ...createTriageSourceV1Fixture().descriptor,
         kinds: [{ id: kindId, task: true, workflowSubject: 'issue', displayName: 'Issue',
-          taskCapabilities: { [role === 'create' ? 'createFields' : 'editFields']: ['title'] } }] }),
-      operations: readOnly ? [] : [{ point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
-        contributor, role, action: { pluginId: source.pluginId, localId: role } }], surfaces: [],
+          taskCapabilities: { [role === 'create' ? 'createFields' : 'editFields']: fields } }] }),
+      operations: readOnly ? [] : [role, 'get'].map(operationRole => ({ point: { pointId: TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1, protocol },
+        contributor, role: operationRole, action: { pluginId: source.pluginId, localId: operationRole } })), surfaces: [],
     }] }] }],
   };
 }
@@ -93,32 +95,43 @@ it('keeps task creation unavailable until sources are read and distinguishes set
   expect(saved[0]?.sourceInstanceId).toBe(source.configuredInstance.instance.sourceInstanceId);
 });
 
-async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean }> = {}) {
+async function mountEditor(options: Readonly<{ readOnly?: boolean; uncertain?: boolean; truncated?: boolean; readFailed?: boolean;
+  fields?: readonly TriageTaskFieldV1[]; values?: TriageTaskFieldsV1 }> = {}) {
   const source = createTriageSourceV1Fixture();
   const entryRef = testkitEntryRef();
-  const observation = testkitObservation();
+  const base = testkitObservation();
+  if (base.outcome.kind !== 'present') throw new Error('Expected a present fixture');
+  const observation = { ...base, outcome: { ...base.outcome, snapshot: { ...base.outcome.snapshot,
+    ...(options.truncated ? { projectionTruncated: true as const } : {}) } } };
   const row = foldTriageListWindow({ observations: [{ ...observation, entryRef }], lanes: [],
     configuredSourcesStatus: 'complete', activeSourceInstanceIds: [observation.sourceInstanceId],
     lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: 1_000 }).rows[0]!;
-  const targeted = targetedTaskSource(entryRef.source, entryRef.kindId, 'edit', options.readOnly);
+  const targeted = targetedTaskSource(entryRef.source, entryRef.kindId, 'edit', options.readOnly, options.fields);
   const saved: ReturnType<typeof TriageEditTaskActionInputV1Schema.parse>[] = [];
   let rereads = 0;
   let fixture!: PluginUiTestkit;
   await act(async () => {
     fixture = await createPluginUiTestkit({ identity: { instanceId: 'task-edit', mountNonce: `edit-${mounted.length}` },
       authorPlugin: { id: 'happier.triage', version: '0.0.0' },
-      surface: defineUiSurface(() => <TriageEditTaskFields row={row} disabled={false} onApplied={async () => { rereads++; }} />),
+      surface: defineUiSurface(() => <TriageEditTaskFields row={row} instance={source.configuredInstance} disabled={false} onApplied={async () => { rereads++; }} />),
       surfaceContext: createSurfaceContextFixture({ targetedContributions: targeted }),
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       // Host Action transport is the genuine boundary; field drafts and capability decisions stay real.
       handlers: { executeAction: ({ action, input }) => {
-        expect(action).toBe('tasks/edit-v1');
-        saved.push(TriageEditTaskActionInputV1Schema.parse(input));
-        return options.uncertain ? { kind: 'uncertain' } : { kind: 'applied', observation: {
-          ...source.getResult, kind: 'present', localRef: { kindId: entryRef.kindId, collisionScope: entryRef.collisionScope, entryId: entryRef.entryId },
-          locator: row.content!.outcome.locator, snapshot: { ...row.content!.outcome.snapshot, title: saved.at(-1)!.fields.title },
-          viewer: { involvement: [] },
-        } };
+        if (typeof action === 'string') {
+          expect(action).toBe('tasks/edit-v1');
+          saved.push(TriageEditTaskActionInputV1Schema.parse(input));
+          return options.uncertain ? { kind: 'uncertain' } : { kind: 'applied', observation: {
+            ...source.getResult, kind: 'present', localRef: { kindId: entryRef.kindId, collisionScope: entryRef.collisionScope, entryId: entryRef.entryId },
+            locator: row.content!.outcome.locator, snapshot: row.content!.outcome.snapshot,
+            viewer: { involvement: [] },
+          } };
+        }
+        expect(action.localId).toBe('get');
+        if (options.readFailed) throw new Error('Source unavailable');
+        return { kind: 'present', localRef: { kindId: entryRef.kindId, collisionScope: entryRef.collisionScope, entryId: entryRef.entryId },
+          locator: row.content!.outcome.locator, snapshot: row.content!.outcome.snapshot, viewer: { involvement: [] },
+          taskFields: options.values ?? { title: row.content!.outcome.snapshot.title, body: 'Full body\n\nOriginal Markdown.  \n' } };
       } },
     });
   });
@@ -152,6 +165,57 @@ it('offers no Edit task when the admitted source has no edit role', async () => 
   expect(saved).toEqual([]);
 });
 
+it('edits the full body independently of truncated display facts and sends only the changed field', async () => {
+  const { fixture, saved } = await mountEditor({ truncated: true });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  const input = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]');
+  expect(input?.value).toBe('Full body\n\nOriginal Markdown.  \n');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'Updated body\n\nKeep whitespace.  \n');
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(saved).toEqual([]);
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Save changes' })); });
+  expect(saved[0]?.fields).toEqual({ body: 'Updated body\n\nKeep whitespace.  \n' });
+});
+
+it('does not open an edit form with fabricated values when the full read fails', async () => {
+  const { fixture, saved } = await mountEditor({ readFailed: true });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  expect(document.querySelector('[role="form"]')).toBeNull();
+  expect(saved).toEqual([]);
+});
+
+it('supports body-only sources and does not offer a field whose current value is unavailable', async () => {
+  const { fixture, saved } = await mountEditor({ fields: ['body', 'labelIds'], values: { body: 'Current notes' } });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  expect(document.querySelector('input[aria-label="Title"]')).toBeNull();
+  expect(document.querySelector('textarea[aria-label="Labels"]')).toBeNull();
+  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]')?.value).toBe('Current notes');
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Save changes' })); });
+  expect(saved).toEqual([]);
+});
+
+it('offers every declared complete field without rewriting untouched structured values', async () => {
+  const parent = testkitEntryRef();
+  const values: TriageTaskFieldsV1 = { title: 'Exact title', body: 'Exact notes\n', labelIds: [' keep whitespace '], assigneeIds: [],
+    scopeId: 'scope', projectId: null, priority: 'priority-1', dueDate: null, estimate: null, parent, blockedBy: [parent] };
+  const fields = Object.keys(values) as TriageTaskFieldV1[];
+  const { fixture, saved } = await mountEditor({ fields, values });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
+  for (const title of ['Title', 'Notes', 'Labels', 'Assignees', 'Repository or project', 'Project', 'Priority', 'Due date', 'Estimate', 'Parent task', 'Blocked by']) {
+    expect(document.querySelector(`[aria-label="${title}"]`), title).not.toBeNull();
+  }
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Title"]');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Updated title');
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Save changes' })); });
+  expect(saved[0]?.fields).toEqual({ title: 'Updated title' });
+  expect(document.querySelector('[role="form"]')).toBeNull();
+});
+
 it('does not report an unsettled commit when its authoritative reread fails', async () => {
   let write: ReturnType<typeof useTriageTaskCommit> | undefined;
   let calls = 0;
@@ -167,7 +231,7 @@ it('does not report an unsettled commit when its authoritative reread fails', as
   });
   await act(async () => {
     const commit = write!.commit;
-    await expect(commit('tasks/edit-v1', {})).resolves.toBeUndefined();
+    await expect(commit('tasks/edit-v1', {})).resolves.toMatchObject({ kind: 'uncertain' });
     // A second activation can still hold the preceding render's callback.
     await commit('tasks/edit-v1', {});
   });

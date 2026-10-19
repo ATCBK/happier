@@ -10,7 +10,7 @@ import {
 import { readTriageSourceAccountListingV1 } from '@happier-dev/triage-sources/runtime';
 import { JIRA_ACCOUNT_PURPOSE } from '../contracts.js';
 import { createJiraClient, invalidJira, jiraCloudOrigin, jiraFailure, numericId, object, string, type JiraClient } from '../api.js';
-import { readJiraConfiguration, readJiraIssue, projectJiraIssue, type JiraConfiguration, type JiraIssue } from './model.js';
+import { readJiraConfiguration, readJiraIssue, projectJiraIssue, jiraTaskFields, type JiraConfiguration, type JiraIssue } from './model.js';
 import { readJiraTaskCapabilities } from './metadata.js';
 
 function sameAccount(a: ConnectedAccountRef, b: ConnectedAccountRef): boolean {
@@ -136,6 +136,7 @@ export async function getJiraEntry(raw: unknown, context: PluginInvocationContex
         const { client, configuration } = await openJiraInstance(input.instance, context, input.localRef);
         const issue = await readExactJiraIssue(client, configuration, input.localRef.entryId);
         const observation = projectJiraIssue(issue, client.origin, await jiraViewer(client));
-        return { ...observation, snapshot: { ...observation.snapshot, taskCapabilities: await readJiraTaskCapabilities(client, issue) } };
+        return { ...observation, taskFields: jiraTaskFields(issue, client.origin),
+            snapshot: { ...observation.snapshot, taskCapabilities: await readJiraTaskCapabilities(client, issue) } };
     } catch (error) { return { kind: 'unresolved', localRef: input.localRef, failure: jiraFailure(error) }; }
 }

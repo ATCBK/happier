@@ -1,16 +1,19 @@
 import * as React from 'react';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import {
   Banner, Button, EmptyState, ErrorState, Form, Item, ItemGroup, LoadingState, Select, Stack,
   usePluginHostApi, usePluginTranslation, useSurfaceContext,
+  type ActionFormFieldHint,
 } from '@happier-dev/plugin-ui';
-import { TriageTaskWriteResultV1Schema, type TriageTaskWriteResultV1 } from '@happier-dev/triage-protocol/v1';
+import { TriageGetResultV1Schema, TriageTaskFieldsV1Schema, TriageTaskWriteResultV1Schema,
+  type TriageConfiguredSourceInstanceV1, type TriageTaskFieldV1, type TriageTaskWriteResultV1 } from '@happier-dev/triage-protocol/v1';
 import { TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1, TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1,
   TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1 } from '../../actions/tasksProtocol.js';
 import type { TriageListRowV1 } from '../../projection/listWindow.js';
 import type { TriageMountedConfiguredSourceV1 } from '../configuration/useTriageConfiguredSources.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
-import { resolveTriageSourceDescriptorV1, resolveTriageSourceTaskOperationV1 } from './sourceSurface.js';
+import { readTriageSourceGetOperationV1, resolveTriageSourceDescriptorV1, resolveTriageSourceTaskOperationV1 } from './sourceSurface.js';
 
 /** A single explicit form commit; provider authorization and settlement stay in tasks/* and the source. */
 export function useTriageTaskCommit(onApplied: () => Promise<void>) {
@@ -45,6 +48,7 @@ export function useTriageTaskCommit(onApplied: () => Promise<void>) {
         message: 'The task write settled, but its authoritative reread was unavailable.' });
     }
     finally { pending.current = false; setBusy(false); }
+    return next;
   };
   return { result, busy, commit };
 }
@@ -123,39 +127,106 @@ export function TriageCreateTaskFields(props: Readonly<{
   </ItemGroup>;
 }
 
-/** Lives inside the existing detail frame. Full provider-native body/comments remain source-owned. */
+const TASK_EDIT_HINTS = {
+  title: { title: 'Title', widget: 'text', required: true },
+  body: { title: 'Notes', widget: 'textarea' },
+  assigneeIds: { title: 'Assignees', widget: 'text_list' },
+  labelIds: { title: 'Labels', widget: 'json' },
+  scopeId: { title: 'Repository or project', widget: 'text' },
+  projectId: { title: 'Project', widget: 'json' },
+  priority: { title: 'Priority', widget: 'json' },
+  dueDate: { title: 'Due date', widget: 'json' },
+  estimate: { title: 'Estimate', widget: 'json' },
+  parent: { title: 'Parent task', widget: 'json' },
+  blockedBy: { title: 'Blocked by', widget: 'json' },
+} as const satisfies Record<TriageTaskFieldV1, Omit<ActionFormFieldHint, 'path'>>;
+
+/** Exact editable values belong to the source read, never to the bounded display projection. */
 export function TriageEditTaskFields(props: Readonly<{
-  row: TriageListRowV1; disabled: boolean; onApplied(): Promise<void>;
+  row: TriageListRowV1; instance?: TriageConfiguredSourceInstanceV1; disabled: boolean; onApplied(): Promise<void>;
 }>): React.ReactElement | null {
   const context = useSurfaceContext();
+  const host = usePluginHostApi();
   const text = usePluginTranslation();
   const selected = readTriageSelectedObservationV1(props.row);
   const kind = resolveTriageSourceDescriptorV1(context.targetedContributions, props.row.entryRef.source)
     ?.kinds.find((kind) => kind.id === props.row.entryRef.kindId);
   const snapshot = selected?.observation.snapshot;
   const [editing, setEditing] = React.useState(false);
-  const [draft, setDraft] = React.useState<Record<string, unknown>>({ title: snapshot?.title ?? '' });
+  const [draft, setDraft] = React.useState<Record<string, unknown>>({});
+  const [opening, setOpening] = React.useState<Record<string, unknown>>({});
+  const [editable, setEditable] = React.useState<readonly TriageTaskFieldV1[]>([]);
+  const [issues, setIssues] = React.useState<Record<string, string>>({});
+  const [readFailed, setReadFailed] = React.useState(false);
+  const [reading, setReading] = React.useState(false);
+  const read = React.useRef<AbortController | null>(null);
+  React.useEffect(() => () => read.current?.abort(), []);
   const write = useTriageTaskCommit(props.onApplied);
   if (kind?.task !== true || selected === null || snapshot === undefined) return null;
   const capabilities = snapshot.taskCapabilities ?? kind.taskCapabilities;
-  const canEdit = snapshot.projectionTruncated !== true && capabilities?.editFields?.includes('title') === true
+  const get = readTriageSourceGetOperationV1(context, props.row.entryRef.source);
+  const canEdit = (capabilities?.editFields?.length ?? 0) > 0 && get !== undefined
     && resolveTriageSourceTaskOperationV1(context.targetedContributions, props.row.entryRef.source, 'edit') !== undefined;
   const transitions = resolveTriageSourceTaskOperationV1(context.targetedContributions, props.row.entryRef.source, 'transition') === undefined
     ? [] : capabilities?.transitions ?? [];
   const address = { v: 1, entryRef: props.row.entryRef, sourceInstanceId: selected.sourceInstanceId, lastKnownLocator: selected.observation.locator };
-  const disabled = props.disabled || write.busy || write.result?.kind === 'uncertain';
+  const disabled = props.disabled || props.instance === undefined || reading || write.busy || write.result?.kind === 'uncertain';
+  const openEditor = async () => {
+    if (disabled || !canEdit || !get || !props.instance || read.current) return;
+    const controller = new AbortController();
+    read.current = controller;
+    setReading(true);
+    setReadFailed(false);
+    const entry = props.row.entryRef;
+    const localRef = { kindId: entry.kindId, collisionScope: entry.collisionScope, entryId: entry.entryId };
+    try {
+      const result = TriageGetResultV1Schema.parse(await host.executeAction(get.action, {
+        v: 1, instance: props.instance, localRef, lastKnownLocator: selected.observation.locator,
+      }, { signal: controller.signal }));
+      if (controller.signal.aborted) return;
+      if (result.kind !== 'present' || !pluginJsonValuesEqual(result.localRef, localRef) || result.taskFields === undefined) {
+        setReadFailed(true);
+        return;
+      }
+      const fields = result.snapshot.taskCapabilities?.editFields ?? capabilities?.editFields ?? [];
+      const taskFields = result.taskFields;
+      // A missing value means unavailable, never empty. Sources publish only complete
+      // values here; unrelated snapshot/relationship truncation has no edit authority.
+      const complete = fields.filter(field => Object.hasOwn(taskFields, field));
+      const values = Object.fromEntries(complete.map(field => [field, taskFields[field]]));
+      setEditable(complete);
+      setIssues({});
+      setOpening(values);
+      setDraft(values);
+      setReadFailed(complete.length !== fields.length || complete.length === 0);
+      setEditing(complete.length > 0);
+    } catch { if (!controller.signal.aborted) setReadFailed(true); }
+    finally { read.current = null; if (!controller.signal.aborted) setReading(false); }
+  };
   return <Stack gap="small">
     {/* A source without the edit role never gets a greyed "Edit task": a control that cannot succeed is not drawn. */}
     {!canEdit && !editing ? null : !editing ? <Button title={text('plugins.triage.tasks.edit', 'Edit task')} variant="plain" disabled={disabled}
-      onPress={() => { setDraft({ title: snapshot.title }); setEditing(true); }} /> : <Form
-      value={draft} onChange={setDraft} disabled={disabled || !canEdit} busy={write.busy}
-      hints={{ submitLabel: text('plugins.triage.tasks.save', 'Save changes'), fields: [
-        { path: 'title', title: text('plugins.triage.tasks.taskTitle', 'Title'), widget: 'text', required: true },
-      ] }} onCancel={() => setEditing(false)} onSubmit={async (value) => {
-        const title = typeof value.title === 'string' ? value.title.trim() : '';
-        if (!canEdit || disabled || !title || title === snapshot.title) return;
-        await write.commit(TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1, { ...address, fields: { title } });
+      busy={reading} onPress={openEditor} /> : <Form
+      value={draft} onChange={value => { setDraft(value); setIssues({}); }} issues={issues}
+      disabled={disabled || !canEdit} busy={write.busy}
+      hints={{ submitLabel: text('plugins.triage.tasks.save', 'Save changes'), fields: editable.map(field => ({
+        ...TASK_EDIT_HINTS[field], path: field, title: text(`plugins.triage.tasks.fields.${field}`, TASK_EDIT_HINTS[field].title),
+      })) }} onCancel={() => setEditing(false)} onSubmit={async (value) => {
+        if (!canEdit || disabled) return;
+        const changed = Object.fromEntries(editable.filter(field => !pluginJsonValuesEqual(value[field], opening[field]))
+          .map(field => [field, value[field]]));
+        const fields = TriageTaskFieldsV1Schema.safeParse(changed);
+        if (!fields.success) {
+          setIssues(Object.fromEntries(fields.error.issues.map(issue => [String(issue.path[0]),
+            text('plugins.triage.tasks.invalidField', 'Check this value before saving.')])));
+          return;
+        }
+        if (Object.keys(fields.data).length === 0) return;
+        const result = await write.commit(TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1, { ...address, fields: fields.data });
+        if (result?.kind === 'applied') setEditing(false);
       }} />}
+    {readFailed ? <Banner tone="warning" title={text('plugins.triage.tasks.editValuesUnavailable',
+      'Some current task values could not be loaded. Only fully loaded fields can be edited.')} /> : null}
     {transitions.length === 0 ? null : <Select label={text('plugins.triage.tasks.transition', 'Change status')} presentation="field"
       disabled={disabled} value={null} options={transitions.map((transition) => ({ value: transition.id, label: transition.label }))}
       onChange={(value) => { if (!disabled && typeof value === 'string' && transitions.some((transition) => transition.id === value))

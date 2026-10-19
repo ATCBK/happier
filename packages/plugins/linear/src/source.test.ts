@@ -5,6 +5,18 @@ import { getLinearEntry, listLinearInstances, scanLinearSource, readLinearDetail
 import { account, instance, localRef, issue, page, host } from './fixtures.test-support.js';
 
 describe('Linear source through provider HTTP', () => {
+  it('loads complete editable values without putting bodies into scans', async () => {
+    const body = 'Full Markdown\n\nPreserve whitespace.  \n';
+    const h = host(({ operationName, query }) => {
+      if (operationName === 'LinearViewer') return { viewer: { id: 'viewer-1' } };
+      if (operationName === 'LinearIssue') return { issue: { ...issue, title: '界'.repeat(1000), description: body } };
+      if (query.includes('labels(')) return { issue: { ...issue, labels: page([{ id: 'label-1', name: 'Fix' }]) } };
+      throw new Error('Optional relation unavailable');
+    });
+    expect(await getLinearEntry({ v: 1, instance, localRef }, h.context)).toMatchObject({ kind: 'present',
+      snapshot: { projectionTruncated: true }, taskFields: { title: '界'.repeat(1000), body, assigneeIds: ['viewer-1'],
+        labelIds: ['label-1'], projectId: 'project-1', priority: 2, dueDate: '2026-10-25', estimate: 3, parent: { entryId: 'parent-1' } } });
+  });
   it('discovers teams through the exact listed account and preserves pagination', async () => {
     const h = host(({ variables }) => ({ teams: variables.after ? page([{ id: 'team-2', key: 'OPS', name: 'Operations' }]) : page([issue.team], true, 'teams-next') }));
     const result = TriageListInstancesResultV1Schema.parse(await listLinearInstances({ v: 1 }, h.context));

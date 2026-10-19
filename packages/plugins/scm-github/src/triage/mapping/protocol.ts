@@ -175,7 +175,8 @@ export function toTriageSnapshot(
     title,
     // No `summary`. It is one line of row subtitle, never a body excerpt, and GitHub
     // publishes no such line: the body, its comments and its activity are live detail
-    // materializations and never ride a list result.
+    // materializations and never ride a list result. Complete task edit values
+    // are carried separately by exact get, never by this display snapshot.
     scopeLabel,
     ...(snapshot.scopeDisplayName === undefined ? {} : { scopeDisplayName: snapshot.scopeDisplayName }),
     ...(snapshot.authorLabel === undefined ? {} : { authorLabel: snapshot.authorLabel }),
@@ -285,7 +286,9 @@ export function toTriageGetResult(
   instance: TriageConfiguredSourceInstanceV1,
 ): TriageGetResultV1 {
   const projected = toTriageObservation(observation);
-  if (observation.kind !== 'present' || projected.kind !== 'present' || observation.localRef.kindId !== 'pull-request') return projected;
+  if (observation.kind !== 'present' || projected.kind !== 'present') return projected;
+  if (observation.localRef.kindId !== 'pull-request') return { ...projected,
+    ...(observation.taskFields === undefined ? {} : { taskFields: observation.taskFields }) };
   const revision = observation.snapshot.reviewRevision;
   const route = parseGithubRoutingToken(observation.locator.routingToken);
   const repository = route === null ? null : buildGithubRepositoryKey(route);

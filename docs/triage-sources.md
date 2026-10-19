@@ -102,6 +102,17 @@ when their provider contract requires at-most-once confirmation. Task body
 inputs preserve multiline document text; row-display strings retain their
 existing single-line projection rules.
 
+For task editing, the existing exact `get` result can return optional
+`taskFields`, using the same closed field vocabulary as edit inputs. Each
+included value is complete; an omitted value means unavailable. These values
+stay local to the edit read and never enter scan results, snapshots or the
+retained list projection. The generic detail form loads them before editing,
+offers only fields declared in `taskCapabilities.editFields` whose current
+values were returned, and submits only changes through `tasks/edit-v1`.
+Snapshot `projectionTruncated` describes display completeness and does not
+disable an unrelated complete field. Sources without full values remain
+readable and show the edit-read failure rather than seeding an empty field.
+
 Task category is derived by the single public `triageTaskStatusCategoryV1`
 mapper from the existing entry state, including its optional active stage and
 terminal completion reason. Unknown or unclassified suppressed states remain

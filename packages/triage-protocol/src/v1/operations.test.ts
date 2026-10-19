@@ -20,6 +20,13 @@ const fixture = createTriageSourceV1Fixture();
 const instance = fixture.configuredInstance;
 const present = fixture.getResult;
 
+it('keeps complete editable values on the exact read, separate from bounded scan snapshots', () => {
+    const fields = { title: '界'.repeat(1000), body: 'Full Markdown\n\nwith trailing whitespace  \n', labelIds: [] };
+    expect(TriageGetResultV1Schema.safeParse({ ...present, taskFields: fields }).success).toBe(true);
+    expect(TriageGetResultV1Schema.safeParse({ ...present, taskFields: { unknown: 'value' } }).success).toBe(false);
+    expect(TriageScanResultV1Schema.safeParse({ kind: 'complete', observations: [{ ...present, taskFields: fields }], evidence: { kind: 'walkFinished' } }).success).toBe(false);
+});
+
 describe('Triage connected-Account source inputs', () => {
     it('admits a credentialless current Account-data instance without accepting invented credentials', () => {
         const binding = { purpose: 'example.api', source: 'accountData' };
