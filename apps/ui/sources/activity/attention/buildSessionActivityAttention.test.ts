@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { t } from '@/text';
 
 import { buildSessionActivityAttention } from './buildSessionActivityAttention';
 
@@ -46,6 +47,12 @@ describe('buildSessionActivityAttention', () => {
 
         expect(attention.title).not.toContain('Private retained title');
         expect(attention.subtitle).not.toContain('/private/retained/path');
+    });
+
+    it('names a Session whose content this device cannot read the way every other Session surface does', () => {
+        const session = createSessionFixture({ encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable', metadata: null });
+
+        expect(buildSessionActivityAttention({ session, nowMs: 1_000 }).title).toBe(t('session.access.lockedTitleFallback'));
     });
 
     it('names a Session this device opened even when its Home cannot vouch for notification content', () => {

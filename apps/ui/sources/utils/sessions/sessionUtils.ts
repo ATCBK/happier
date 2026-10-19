@@ -577,7 +577,16 @@ export function useSessionStatus(session: SessionStatusSource | null, options: U
 export function resolveLockedSessionTitle(title: string): string {
     return title.trim().length > 0 && !isUntitledSessionName(title)
         ? title
-        : t('session.access.lockedTitleFallback');
+        : readLockedSessionName();
+}
+
+/**
+ * What a Session whose content this device cannot read is called when no safe name is held: the
+ * Session list, its header, the Inbox and the activity surfaces all say it the same way. (The Board's
+ * "Encrypted details unavailable" is a widget sentence, not a Session name.)
+ */
+export function readLockedSessionName(): string {
+    return t('session.access.lockedTitleFallback');
 }
 
 /**
