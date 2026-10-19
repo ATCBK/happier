@@ -7535,20 +7535,28 @@ class Sync {
         const normalizedSessionId = String(sessionId ?? '').trim();
         if (!normalizedSessionId) return { status: 'not_ready' };
 
-        const session = storage.getState().sessions[normalizedSessionId] ?? null;
-        if (!session && this.hasFetchedSessionsSnapshotForActiveServer && !this.isSessionKnownOnResolvedOwnerServer(normalizedSessionId)) {
-            return { status: 'not_ready' };
+        const currentness = captureActiveServerAccountScopeCurrentness();
+        const encryption = this.encryption;
+        let session = storage.getState().sessions[normalizedSessionId] ?? null;
+        if (!session || (session.encryptionMode !== 'plain' && !encryption?.getSessionEncryption(normalizedSessionId))) {
+            // Sent-before also walks list-only Sessions. Reuse by-ID hydration to
+            // acquire their mode/key without opening or populating the transcript.
+            const hydration = await this.ensureSessionVisibleForMessageRoute(normalizedSessionId, { hydrateMessages: false });
+            if (!currentness.isCurrent() || hydration.kind !== 'available') return { status: 'not_ready' };
+            session = storage.getState().sessions[normalizedSessionId] ?? null;
         }
+        if (!session || !currentness.isCurrent()) return { status: 'not_ready' };
 
-        return fetchUserMessageHistoryPage({
+        const result = await fetchUserMessageHistoryPage({
             sessionId: normalizedSessionId,
             beforeSeq: opts.beforeSeq,
             limit: opts.limit,
             ...(opts.turnProjection === true ? { turnProjection: true } : {}),
             sessionEncryptionMode: session?.encryptionMode === 'plain' ? 'plain' : 'e2ee',
             request: this.createSessionMessagesRequest(normalizedSessionId),
-            getSessionEncryption: (id) => this.encryption?.getSessionEncryption(id) ?? null,
+            getSessionEncryption: (id) => encryption?.getSessionEncryption(id) ?? null,
         });
+        return currentness.isCurrent() ? result : { status: 'not_ready' };
     }
 
     /**
@@ -9093,6 +9101,11 @@ class Sync {
         void task.catch(() => { if (this.projectAccountRowsRuntime === task) this.projectAccountRowsRuntime = null; });
         return task;
     }
+
+    /** Reads the Account's project rows back after a write made elsewhere (a controller daemon's lifecycle Action). */
+    public refreshProjectAccountRows = async () => {
+        await (await this.ensureProjectAccountRowsRuntime()).refresh();
+    };
 
     public mutateProjectWorkspaceRef = async (mutation: WorkspaceRefAccountMutation, expectedScope: AccountSettingsScope) => {
         if (!areAccountSettingsScopesEqual(this.pendingSettingsScope, expectedScope)) throw new Error('Project Account/Home changed');

@@ -431,7 +431,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             // A coarse-kind read is one filtered request while every row is classified; the shared selector
             // restarts from the full inventory when the server reports unclassified rows.
             list: (options) => options.coarseKind === undefined ? listArtifacts(options)
-                : listArtifactHeadersV1({ options, readPage: listArtifacts, encodeCursor: encodeArtifactListCursor }),
+                : listArtifactHeadersV1({ options, readPage: pageOptions => listArtifacts(pageOptions ?? {}), encodeCursor: encodeArtifactListCursor }),
             create: async (input) => (await createArtifactDocument(input)).artifactId,
             update: updateArtifactDocument,
             delete: async (artifactId, options) => {
