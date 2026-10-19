@@ -1,7 +1,18 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import 'fake-indexeddb/auto';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+import { HAPPIER_REPLAY_MIN_SEED_CHARS } from '@happier-dev/protocol/sessions/replay-seed-budget';
+import { renderScreen as renderBaseScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import {
     installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
@@ -18,8 +29,25 @@ installSessionSettingsEntryModuleMocks({
             useWindowDimensions: () => ({ width: 1440, height: 900, scale: 1, fontScale: 1 }),
         });
     },
-    featureEnabled: () => executionRunsEnabledState.enabled,
 });
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { Item } = await import('@/components/ui/lists/Item');
+const { LlmTaskRunnerConfigV1BackendModelPicker } = await import('@/components/settings/llmTasks/LlmTaskRunnerConfigV1BackendModelPicker');
+await import('@/app/(app)/settings/session/resume');
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+
+async function renderScreen(element: React.ReactElement) {
+    account = await createSecretSettingsTestHarness({ settings: settingsParse({
+        ...sessionSettingsEntryState.settingsState,
+        experiments: true,
+        featureToggles: { 'execution.runs': executionRunsEnabledState.enabled },
+    }), sharedEnabled: false });
+    const credentials = account.credentials;
+    const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>{children}</InjectedAuthProvider>;
+    return renderBaseScreen(element, { wrapper });
+}
 
 const executionRunsEnabledState = { enabled: true };
 
@@ -37,7 +65,6 @@ vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModel
 beforeEach(() => {
     resetSessionSettingsEntryState();
     executionRunsEnabledState.enabled = true;
-    sessionSettingsEntryState.options.featureEnabled = () => executionRunsEnabledState.enabled;
     sessionSettingsEntryState.settingsState.sessionReplayEnabled = true;
     sessionSettingsEntryState.settingsState.sessionReplayStrategy = 'summary_plus_recent';
     sessionSettingsEntryState.settingsState.sessionReplayRecentMessagesCount = 100;
@@ -45,20 +72,21 @@ beforeEach(() => {
     sessionSettingsEntryState.settingsState.sessionReplaySummaryRunnerV1 = null;
 });
 
-afterEach(() => {
+afterEach(async () => {
+    await standardCleanup();
+    await account?.dispose();
+    account = undefined;
     executionRunsEnabledState.enabled = true;
     resetSessionSettingsEntryState();
 });
 
 const MAX_SEED_CHARS_FIELD_TEST_ID = 'settings-session-replay-maxSeedChars-input';
 
-type ScreenLike = Readonly<{ findAll: (predicate: (node: any) => boolean) => any[] }>;
+type ScreenLike = Pick<Awaited<ReturnType<typeof renderBaseScreen>>, 'findAllByType'>;
 
-/** The budget row (a `FieldValueItem`); `Item` is a host element here, so its field is its `rightElement`. */
+/** Read the real budget row's public field after its owner resolves the draft. */
 function maxSeedCharsRows(screen: ScreenLike) {
-    return screen.findAll((node) => (
-        node.type === 'Item' && node.props?.rightElement?.props?.testID === MAX_SEED_CHARS_FIELD_TEST_ID
-    ));
+    return screen.findAllByType(Item).filter(node => node.props?.rightElement?.props?.testID === MAX_SEED_CHARS_FIELD_TEST_ID);
 }
 
 function maxSeedCharsField(screen: ScreenLike) {
@@ -89,7 +117,7 @@ describe('Session resume settings (Replay summary runner controls)', () => {
         const SessionResumeSettingsScreen = mod.default;
 
         const screen = await renderScreen(React.createElement(SessionResumeSettingsScreen));
-        const summaryRunnerPickers = screen.findAllByType('LlmTaskRunnerConfigV1BackendModelPicker' as any);
+        const summaryRunnerPickers = screen.findAllByType(LlmTaskRunnerConfigV1BackendModelPicker);
 
         expect(summaryRunnerPickers).toHaveLength(1);
         expect(summaryRunnerPickers[0]?.props?.backendTestID).toBe('settings-session-replay-summaryRunner-backend');
@@ -105,16 +133,16 @@ describe('Session resume settings (Replay summary runner controls)', () => {
         const SessionResumeSettingsScreen = mod.default;
 
         const screen = await renderScreen(React.createElement(SessionResumeSettingsScreen));
-        const summaryRunnerPickers = screen.findAllByType('LlmTaskRunnerConfigV1BackendModelPicker' as any);
+        const summaryRunnerPickers = screen.findAllByType(LlmTaskRunnerConfigV1BackendModelPicker);
 
         expect(summaryRunnerPickers).toHaveLength(0);
     });
 
     it.each([
-        { typed: '1', stored: 1 },
-        { typed: '500', stored: 500 },
+        { typed: String(HAPPIER_REPLAY_MIN_SEED_CHARS), stored: HAPPIER_REPLAY_MIN_SEED_CHARS },
+        { typed: String(HAPPIER_REPLAY_MIN_SEED_CHARS + 500), stored: HAPPIER_REPLAY_MIN_SEED_CHARS + 500 },
         { typed: '524288', stored: 524288 },
-    ])('retains the selected positive integer budget $typed', async ({ typed, stored }) => {
+    ])('retains the selected structurally complete seed budget $typed', async ({ typed, stored }) => {
         sessionSettingsEntryState.settingsState.sessionReplayEnabled = true;
 
         const mod = await import('@/app/(app)/settings/session/resume');
@@ -127,18 +155,20 @@ describe('Session resume settings (Replay summary runner controls)', () => {
             maxSeedCharsField(screen).onBlur();
         });
 
-        expect(sessionSettingsEntryState.settingsState.sessionReplayMaxSeedChars).toBe(stored);
+        await vi.waitFor(() => expect(storage.getState().settings.sessionReplayMaxSeedChars).toBe(stored));
+        await vi.waitFor(() => expect(account?.persistedSettings.sessionReplayMaxSeedChars).toBe(stored));
     });
 
     // Integer draft filtering and the mobile numeric keyboard remain the
     // shared field owner's contract; empty/non-number drafts return to saved.
-    it.each(['0', 'NaN', 'Infinity', 'invalid'])(
+    it.each([String(HAPPIER_REPLAY_MIN_SEED_CHARS - 1), '0', 'NaN', 'Infinity', 'invalid'])(
         'leaves the saved budget unchanged for invalid draft %s', async (typed) => {
             const mod = await import('@/app/(app)/settings/session/resume');
             const screen = await renderScreen(React.createElement(mod.default));
             await act(async () => { maxSeedCharsField(screen).onChangeText(typed); });
             await act(async () => { maxSeedCharsField(screen).onBlur(); });
-            expect(sessionSettingsEntryState.settingsState.sessionReplayMaxSeedChars).toBe(50_000);
+            expect(storage.getState().settings.sessionReplayMaxSeedChars).toBe(50_000);
+            expect(account?.persistedSettings.sessionReplayMaxSeedChars).toBe(50_000);
             expect(maxSeedCharsField(screen).value).toBe('50000');
         },
     );
@@ -176,7 +206,8 @@ describe('Session resume settings (Replay summary runner controls)', () => {
         const mod = await import('@/app/(app)/settings/session/resume');
         await renderScreen(React.createElement(mod.default));
 
-        expect(sessionSettingsEntryState.settingsState.sessionReplayRecentMessagesCount).toBe(100);
+        expect(storage.getState().settings.sessionReplayRecentMessagesCount).toBe(100);
+        expect(account?.persistedSettings.sessionReplayRecentMessagesCount).toBe(100);
     });
 });
 
@@ -204,7 +235,9 @@ describe('Session resume settings (summary strategy discloses its requirement)',
         executionRunsEnabledState.enabled = true;
         sessionSettingsEntryState.settingsState.sessionReplayEnabled = true;
         sessionSettingsEntryState.settingsState.sessionReplayStrategy = 'summary_plus_recent';
-        sessionSettingsEntryState.settingsState.sessionReplaySummaryRunnerV1 = { v: 1, backendTargetKey: 'agent:claude' };
+        sessionSettingsEntryState.settingsState.sessionReplaySummaryRunnerV1 = { v: 1, modelSelection: {
+            agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'default',
+        } };
 
         const screen = await renderResume();
 

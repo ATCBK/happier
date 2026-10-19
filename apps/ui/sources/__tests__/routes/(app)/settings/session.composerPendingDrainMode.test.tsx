@@ -1,8 +1,18 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { Item } from '@/components/ui/lists/Item';
 import {
     installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
@@ -12,6 +22,11 @@ import {
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installSessionSettingsEntryModuleMocks();
+installDisconnectedServerSocketBoundary();
+// Cold route transformation is fixture preparation, not the mounted choice deadline.
+await import('@/app/(app)/settings/session/composer');
+const initialStorage = storage.getState();
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
 beforeEach(() => {
     sessionSettingsEntryState.settingsState = {
@@ -25,16 +40,19 @@ beforeEach(() => {
     };
 });
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    await account?.dispose();
+    account = undefined;
+    storage.setState(initialStorage, true);
     resetSessionSettingsEntryState();
 });
 
 type SettingsScreen = Awaited<ReturnType<typeof renderSettingsView>>;
 
-/** A segmented-choice row: `Item` is a host element here, its segmented control is the row's `rightElement`. */
+/** Inspect the real row and its segmented-choice accessory. */
 function segmentedRow(screen: SettingsScreen, testID: string) {
-    const row = screen.findAll((node) => (node.type as unknown) === 'Item' && node.props?.testID === testID)[0];
+    const row = screen.findAllByType(Item).find(node => node.props.testID === testID);
     if (!row) throw new Error(`Missing segmented row ${testID}`);
     return row;
 }
@@ -44,8 +62,11 @@ function segmentIds(screen: SettingsScreen, testID: string): string[] {
 }
 
 async function renderComposerSettings(): Promise<SettingsScreen> {
+    account = await createSecretSettingsTestHarness({ settings: settingsParse(sessionSettingsEntryState.settingsState), sharedEnabled: false });
     const mod = await import('@/app/(app)/settings/session/composer');
-    return renderSettingsView(React.createElement(mod.default));
+    const credentials = account.credentials;
+    const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>{children}</InjectedAuthProvider>;
+    return renderSettingsView(React.createElement(mod.default), { wrapper });
 }
 
 describe('Session composer settings pending queue drain mode', () => {
@@ -75,8 +96,9 @@ describe('Session composer settings pending queue drain mode', () => {
             segmentedRow(screen, 'settings-composer-pending-timing').props.rightElement.props.onSelectTab('after_runtime_idle');
         });
 
-        expect(sessionSettingsEntryState.settingsState.sessionPendingQueueDeliveryTiming).toBe('after_runtime_idle');
-        expect(sessionSettingsEntryState.settingsState.sessionPendingQueueDrainMode).toBe('one_at_a_time');
+        await vi.waitFor(() => expect(account?.persistedSettings.sessionPendingQueueDeliveryTiming).toBe('after_runtime_idle'));
+        expect(storage.getState().settings.sessionPendingQueueDeliveryTiming).toBe('after_runtime_idle');
+        expect(storage.getState().settings.sessionPendingQueueDrainMode).toBe('one_at_a_time');
     });
 
     // The rows stay (so search never lands on a missing row) but offer no choice, and the section says why.

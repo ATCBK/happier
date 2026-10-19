@@ -1,4 +1,7 @@
 import * as React from 'react';
+import { Item } from '@/components/ui/lists/Item';
+import { storage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
@@ -40,19 +43,22 @@ sessionSettingsEntryState.settingsState = {
     sessionsRightPaneDefaultOpen: false,
     uiMultiPanePanelsEnabled: true,
 };
+const initialStorage = storage.getState();
 
 afterEach(() => {
     standardCleanup();
+    storage.setState(initialStorage, true);
     resetSessionSettingsEntryState();
 });
 
 describe('Session settings (native enter-to-send)', () => {
     it('binds Enter-to-send to the native setting on native platforms', async () => {
+        storage.setState({ settings: settingsParse(sessionSettingsEntryState.settingsState) });
         const mod = await import('@/app/(app)/settings/session/composer');
         const SessionComposerSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionComposerSettingsScreen));
 
-        const items = screen.findAllByType('Item' as any);
+        const items = screen.findAllByType(Item);
         // The row is the declared Composer › Typing setting (`SettingRow`), titled from its declaration.
         const enterToSendItem = items.find((item) => item.props?.testID === 'settings-composer-enter-to-send');
         expect(enterToSendItem?.props?.title).toBe('settingsSessionPages.composer.enterToSendTitle');

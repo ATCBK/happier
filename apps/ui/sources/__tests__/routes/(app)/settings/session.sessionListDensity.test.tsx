@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderSettingsView as renderBaseSettingsView, standardCleanup } from '@/dev/testkit';
 import 'fake-indexeddb/auto';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
@@ -9,8 +12,10 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { storage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults, settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { ACCOUNT_SETTINGS_QUIET_FLUSH_DELAY_MS } from '@/sync/engine/pending/pendingSettings';
 import {
-    installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
     sessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
@@ -19,6 +24,8 @@ import {
 
 
 installDisconnectedServerSocketBoundary();
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { Item } = await import('@/components/ui/lists/Item');
 const initialStorage = storage.getState();
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
@@ -27,7 +34,13 @@ async function renderSettingsView(element: React.ReactElement, options?: Paramet
         const fixture = Object.fromEntries(Object.entries(settingsDefaults).map(([key, value]) => [
             key, readSessionSettingFixture(key) ?? value,
         ]));
-        account = await createSecretSettingsTestHarness({ settings: settingsParse(fixture), sharedEnabled: false });
+        const features = createRootLayoutFeaturesResponse();
+        for (const featureId of ['sessions', 'sessions.folders'] as const) {
+            if (!tryWriteServerEnabledBitInPlace(features, featureId, true)) throw new Error(`Missing fixture feature ${featureId}`);
+        }
+        account = await createSecretSettingsTestHarness({ features, settings: settingsParse({ ...fixture,
+            featureToggles: { 'sessions.folders': true }, experiments: true,
+        }), sharedEnabled: false });
         storage.setState({ localSettings: localSettingsParse({ sessionsRightPaneDefaultOpen: false, uiMultiPanePanelsEnabled: true }) });
     }
     const credentials = account.credentials;
@@ -37,27 +50,42 @@ async function renderSettingsView(element: React.ReactElement, options?: Paramet
 
 async function expectPersistedSettings(delta: Partial<Settings>) {
     await vi.waitFor(() => expect(storage.getState().settings).toMatchObject(delta));
-    await vi.waitFor(() => expect(account?.persistedSettings).toMatchObject(delta));
+    await vi.waitFor(() => expect(account?.persistedSettings, JSON.stringify(account?.settingsWrites.map(write => {
+        const record = write as { expectedVersion?: number; content?: { t?: string; v?: Record<string, unknown> } };
+        return { expectedVersion: record.expectedVersion, ordering: record.content?.v?.sessionListOrderingModeV1,
+            folderSort: record.content?.v?.sessionListFolderSortModeV1 };
+    }))).toMatchObject(delta));
+}
+
+/** Advance the real quiet-flush clock, not the assertion deadline or the Settings owner. */
+async function selectDebouncedChoice(onSelect: (id: string) => void, id: string) {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+        await act(async () => {
+            onSelect(id);
+            await vi.advanceTimersByTimeAsync(ACCOUNT_SETTINGS_QUIET_FLUSH_DELAY_MS);
+        });
+    } finally {
+        vi.useRealTimers();
+    }
 }
 
 let translationPrefix = 'en';
 let sessionListOrderingModeSetting: 'custom' | 'created' | 'updated' = 'custom';
 let sessionListFolderSortModeSetting: 'foldersFirst' | 'mixed' = 'foldersFirst';
 
-// Folder display and folder sort are offered only while the server enables session folders.
-const foldersEnabled = (featureId: string) => featureId === 'sessions.folders';
-
-installSessionSettingsEntryModuleMocks({
-    featureEnabled: foldersEnabled,
-    textModule: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string) => `${translationPrefix}:${key}`,
-            translateLoose: (key: string) => `${translationPrefix}:${key}`,
-            getPreferredLanguage: () => translationPrefix,
-        });
-    },
-    storageModule: (importOriginal) => importOriginal<typeof import('@/sync/domains/state/storage')>(),
+await vi.hoisted(async () => {
+    const { installSessionSettingsEntryModuleMocks } = await import('./sessionSettingsEntryTestHelpers');
+    installSessionSettingsEntryModuleMocks({
+        textModule: async () => {
+            const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+            return createTextModuleMock({
+                translate: (key: string) => `${translationPrefix}:${key}`,
+                translateLoose: (key: string) => `${translationPrefix}:${key}`,
+                getPreferredLanguage: () => translationPrefix,
+            });
+        },
+    });
 });
 
 /** The Account settings this screen reads, with the setter each test observes; `undefined` when not fixed here. */
@@ -103,10 +131,6 @@ function readSessionSettingFixture(key: string): unknown {
 }
 
 
-beforeEach(() => {
-    sessionSettingsEntryState.options.featureEnabled = foldersEnabled;
-});
-
 afterEach(async () => {
     standardCleanup();
     await account?.dispose();
@@ -124,7 +148,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const densityTiles = screen.findByProps({ testID: 'settings-session-sessionListDensity' }).props.rightElement;
         const headerIdentityDropdown = dropdowns.find((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings-session-sessionHeaderIdentityDisplay-trigger');
         const orderingDropdown = dropdowns.find((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings-session-sessionListOrderingMode-trigger');
@@ -156,23 +180,20 @@ describe('Session settings session list density', () => {
         });
         await expectPersistedSettings({ sessionHeaderIdentityDisplay: 'agentLogo' });
 
-        await act(async () => {
-            orderingDropdown!.props.onSelect('ordering:updated');
-        });
-
-        await expectPersistedSettings({ sessionListOrderingModeV1: 'updated' });
-
-        await act(async () => {
-            folderDisplayDropdown!.props.onSelect('folderDisplay:off');
-        });
-
-        await expectPersistedSettings({ sessionFolderViewModeV1: 'off' });
-
-        await act(async () => {
-            folderSortDropdown!.props.onSelect('folderSort:mixed');
-        });
+        await selectDebouncedChoice(
+            screen.findAllByType(DropdownMenu).find(node =>
+                node.props.itemTrigger?.itemProps?.testID === 'settings-session-sessionListFolderSortMode-trigger')!
+                .props.onSelect, 'folderSort:mixed');
 
         await expectPersistedSettings({ sessionListFolderSortModeV1: 'mixed' });
+
+        // Mixed folders are an available choice only under custom ordering.
+        await selectDebouncedChoice(orderingDropdown!.props.onSelect, 'ordering:updated');
+        await expectPersistedSettings({ sessionListOrderingModeV1: 'updated' });
+
+        // Folder sorting is unavailable once folder display is off.
+        await selectDebouncedChoice(folderDisplayDropdown!.props.onSelect, 'folderDisplay:off');
+        await expectPersistedSettings({ sessionFolderViewModeV1: 'off' });
     });
 
     it('refreshes the density, ordering, and grouping dropdown labels when the language changes and the screen rerenders', async () => {
@@ -182,7 +203,7 @@ describe('Session settings session list density', () => {
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
         const readDropdowns = () => {
-            const dropdowns = screen.findAllByType('DropdownMenu' as any);
+            const dropdowns = screen.findAllByType(DropdownMenu);
             return {
                 density: screen.findByProps({ testID: 'settings-session-sessionListDensity' }).props.rightElement,
                 ordering: dropdowns.find((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings-session-sessionListOrderingMode-trigger'),
@@ -213,9 +234,11 @@ describe('Session settings session list density', () => {
         expect(preview.getTextContent()).toContain('en:settingsSessionPages.preview.userMessage');
 
         translationPrefix = 'fr';
+        const { sync } = await import('@/sync/sync');
         await act(async () => {
-            await screen.update(React.createElement(SessionSettingsScreen));
+            sync.applySettings({ preferredLanguage: 'fr' }, { expectedSettingsScope: account!.scope });
         });
+        await expectPersistedSettings({ preferredLanguage: 'fr' });
         await act(async () => {
             await preview.update(readDropdowns().density);
         });
@@ -250,7 +273,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const folderSortDropdown = dropdowns.find((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings-session-sessionListFolderSortMode-trigger');
         expect(folderSortDropdown?.props?.selectedId).toBe('folderSort:foldersFirst');
 
@@ -269,7 +292,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const workspaceNameDropdown = dropdowns.find((node: any) =>
             node.props?.itemTrigger?.itemProps?.testID === 'settings-session-workspacePathDisplay-trigger');
         expect(workspaceNameDropdown).toBeTruthy();
@@ -281,7 +304,7 @@ describe('Session settings session list density', () => {
         });
         await expectPersistedSettings({ workspacePathDisplayModeV1: 'path' });
 
-        const faviconItem = screen.findAllByType('Item' as any).find((node: any) =>
+        const faviconItem = screen.findAllByType(Item).find((node: any) =>
             node.props?.title === 'en:settingsSession.sessionList.workspaceFaviconsTitle');
         expect(faviconItem).toBeTruthy();
         await act(async () => {
@@ -289,7 +312,7 @@ describe('Session settings session list density', () => {
         });
         await expectPersistedSettings({ workspaceFaviconsEnabled: false });
 
-        const machineSubtitleItem = screen.findAllByType('Item' as any).find((node: any) =>
+        const machineSubtitleItem = screen.findAllByType(Item).find((node: any) =>
             node.props?.title === 'en:settingsSession.sessionList.workspaceMachineSubtitlesTitle');
         expect(machineSubtitleItem).toBeTruthy();
         await act(async () => {
@@ -314,7 +337,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const identityDropdown = dropdowns.find((node: any) =>
             node.props?.itemTrigger?.itemProps?.testID === 'settings-session-sessionListIdentityDisplay-trigger');
         expect(identityDropdown).toBeTruthy();
@@ -335,7 +358,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const activeColorDropdown = dropdowns.find((node: any) =>
             node.props?.itemTrigger?.itemProps?.testID === 'settings-session-sessionListActiveColorMode-trigger');
         expect(activeColorDropdown).toBeTruthy();
@@ -355,7 +378,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const attentionPromotionDropdown = dropdowns.find((node: any) =>
             node.props?.itemTrigger?.itemProps?.testID === 'settings-session-attentionPromotionMode-trigger');
         expect(attentionPromotionDropdown).toBeTruthy();
@@ -375,7 +398,7 @@ describe('Session settings session list density', () => {
         const SessionSettingsScreen = mod.default;
 
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const workingPlacementDropdown = dropdowns.find((node: any) =>
             node.props?.itemTrigger?.itemProps?.testID === 'settings-session-workingPlacementMode-trigger');
         expect(workingPlacementDropdown).toBeTruthy();
@@ -397,9 +420,7 @@ describe('Session settings session list density', () => {
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
         const layoutRow = screen.findByTestId('settings-session-sessionListLayout');
         expect(layoutRow).not.toBeNull();
-        // The route harness keeps Item opaque. Mount its real picker to exercise
-        // the visible radio controls, not a callback on a mocked menu.
-        const picker = await renderSettingsView(layoutRow!.props.rightElement);
+        const picker = screen;
         const projects = picker.findByTestId('settings-session-sessionListLayout:layout:projects');
         const recent = picker.findByTestId('settings-session-sessionListLayout:layout:recent_activity');
         const activeInactive = picker.findByTestId('settings-session-sessionListLayout:layout:active_inactive');

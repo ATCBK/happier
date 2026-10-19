@@ -156,18 +156,12 @@ export const WorkspaceRouteBody = React.memo(function SessionSettingsScreen() {
     }, sessionListLayoutChoice);
     const applySessionListViewOption = React.useCallback((itemId: string) => {
         const delta = resolveSessionListViewOptionSelectionDelta(itemId, {
-            sessionListSectionModeV1,
-            sessionListActiveGroupingV1,
-            sessionListInactiveGroupingV1,
             sessionListOrderingModeV1,
         });
         if (delta) applySettings(delta);
     }, [
         applySettings,
-        sessionListActiveGroupingV1,
-        sessionListInactiveGroupingV1,
         sessionListOrderingModeV1,
-        sessionListSectionModeV1,
     ]);
     const sessionListDensityItems = React.useMemo(() => [
         {

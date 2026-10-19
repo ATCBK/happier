@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Item } from '@/components/ui/lists/Item';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderSettingsView, standardCleanup } from '@/dev/testkit';
@@ -22,7 +23,7 @@ describe('Session settings (Actions entry)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const titles = screen.findAllByType('Item' as any).map((item) => item.props.title);
+        const titles = screen.findAllByType(Item).map((item) => item.props.title);
 
         expect(titles).not.toContain('common.actions');
     });

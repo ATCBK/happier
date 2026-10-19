@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import 'fake-indexeddb/auto';
 
 import {
@@ -8,7 +11,6 @@ import {
     standardCleanup,
 } from '@/dev/testkit';
 import {
-    installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
@@ -20,18 +22,24 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 installDisconnectedServerSocketBoundary();
+const { Item } = await import('@/components/ui/lists/Item');
 const initialStorage = storage.getState();
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
-installSessionSettingsEntryModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            TextInput: 'TextInput',
-        });
-    },
-    storageModule: (importOriginal) => importOriginal<typeof import('@/sync/domains/state/storage')>(),
+await vi.hoisted(async () => {
+    const { installSessionSettingsEntryModuleMocks } = await import('./sessionSettingsEntryTestHelpers');
+    installSessionSettingsEntryModuleMocks({
+        reactNative: async () => {
+            const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+            return createReactNativeWebMock({
+                TextInput: 'TextInput',
+            });
+        },
+    });
 });
+
+// Cold route transformation is fixture preparation, not the mounted write deadline.
+await import('@/app/(app)/settings/session/transcript');
 
 afterEach(async () => {
     standardCleanup();
@@ -51,8 +59,7 @@ describe('Transcript settings (thinking display mode)', () => {
         const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>{children}</InjectedAuthProvider>;
         const screen = await renderSettingsView(React.createElement(mod.default), { wrapper });
 
-        // A visual picker row: `Item` is a host element here, the tiles are its `rightElement`.
-        const row = screen.findAll((node) => (node.type as unknown) === 'Item' && node.props?.testID === 'settings-session-thinking-display')[0];
+        const row = screen.findAllByType(Item).find(node => node.props.testID === 'settings-session-thinking-display');
         expect(row?.props.title).toBe('settingsSession.thinking.displayModeTitle');
         const tiles = row!.props.rightElement.props;
         expect(tiles.value).toBe('inline_summary');

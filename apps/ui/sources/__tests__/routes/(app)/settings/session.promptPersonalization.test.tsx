@@ -1,8 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { renderSettingsView as renderBaseSettingsView, standardCleanup } from '@/dev/testkit';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { storage } from '@/sync/domains/state/storageStore';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import {
     installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
@@ -11,22 +19,36 @@ import {
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installSessionSettingsEntryModuleMocks({
-    featureEnabled: (featureId) => featureId === 'sessions.usageLimitRecovery',
-});
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 
-afterEach(() => {
-    standardCleanup();
+installSessionSettingsEntryModuleMocks();
+installDisconnectedServerSocketBoundary();
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+
+async function renderSettingsView(element: React.ReactElement) {
+    const features = createRootLayoutFeaturesResponse({ features: {
+        sessions: { enabled: true, usageLimitRecovery: { enabled: true } },
+    } });
+    account = await createSecretSettingsTestHarness({
+        settings: settingsParse(sessionSettingsEntryState.settingsState), features, sharedEnabled: false,
+    });
+    return renderBaseSettingsView(element);
+}
+
+afterEach(async () => {
+    await standardCleanup();
+    await account?.dispose();
+    account = undefined;
     resetSessionSettingsEntryState();
 });
 
 type SettingsScreen = Awaited<ReturnType<typeof renderSettingsView>>;
 
-/** The resume-prompt segmented row: `Item` is a host element here, its segmented control is the `rightElement`. */
+/** The real resume-prompt row exposes its segmented control as the right element. */
 function resumePromptChoice(screen: SettingsScreen) {
-    const row = screen.findAll((node) => (
-        (node.type as unknown) === 'Item' && node.props?.testID === 'settings-session-usage-limit-recovery-resume-prompt'
-    ))[0];
+    const row = screen.findAllByType(Item).find(node => node.props?.testID === 'settings-session-usage-limit-recovery-resume-prompt');
     if (!row) throw new Error('Missing the resume prompt choice');
     return row;
 }
@@ -47,29 +69,27 @@ describe('Session settings (prompt personalization)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const groupTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
+        const groupTitles = screen.findAllByType(ItemGroup).map((group) => group.props.title);
         expect(groupTitles).toContain('settingsSession.rootGroups.agentPersonalization.title');
         expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToRenameSessionsTitle')).toBeTruthy();
         expect(screen.findRowByTitle('settingsSession.promptPersonalization.askAgentToSuggestReplyOptionsTitle')).toBeTruthy();
 
-        const dropdowns = screen.findAllByType('DropdownMenu' as any);
+        const dropdowns = screen.findAllByType(DropdownMenu);
         const titleDropdown = dropdowns.find((node: any) =>
             node.props?.itemTrigger?.title === 'settingsSession.promptPersonalization.askAgentToRenameSessionsTitle');
         expect(titleDropdown).toBeTruthy();
         expect(titleDropdown?.props?.selectedId).toBe('ongoing');
         expect(titleDropdown?.props?.items?.map((item: any) => item.id)).toEqual(['disabled', 'initial', 'ongoing']);
 
-        titleDropdown!.props.onSelect('initial');
-        expect(sessionSettingsEntryState.settingsState.codingPromptBehaviorV1).toEqual({
+        await act(async () => { await titleDropdown!.props.onSelect('initial'); });
+        await vi.waitFor(() => expect(storage.getState().settings.codingPromptBehaviorV1).toEqual({
             v: 1,
             sessionTitleUpdates: 'initial',
             responseOptions: 'agent',
-        });
+        }));
     });
 
     it('updates the usage limit recovery resume prompt mode', async () => {
-        sessionSettingsEntryState.options.featureEnabled = (featureId) =>
-            featureId === 'sessions.usageLimitRecovery';
         sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1 = {
             v: 1,
             mode: 'auto_wait',
@@ -90,17 +110,15 @@ describe('Session settings (prompt personalization)', () => {
             resumePrompt.props.rightElement.props.onSelectTab('off');
         });
 
-        expect(sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1).toEqual({
+        await vi.waitFor(() => expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
             v: 1,
             mode: 'auto_wait',
             promptMode: 'standard',
             resumePromptMode: 'off',
-        });
+        }));
     });
 
     it('selects the custom resume prompt mode while preserving the saved custom text', async () => {
-        sessionSettingsEntryState.options.featureEnabled = (featureId) =>
-            featureId === 'sessions.usageLimitRecovery';
         sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1 = {
             v: 1,
             mode: 'auto_wait',
@@ -117,18 +135,16 @@ describe('Session settings (prompt personalization)', () => {
             resumePromptChoice(screen).props.rightElement.props.onSelectTab('custom');
         });
 
-        expect(sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1).toEqual({
+        await vi.waitFor(() => expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
             v: 1,
             mode: 'auto_wait',
             promptMode: 'standard',
             resumePromptMode: 'custom',
             customResumePrompt: 'Pick the task back up.',
-        });
+        }));
     });
 
     it('shows the inline custom prompt input when custom mode is selected and commits trimmed text', async () => {
-        sessionSettingsEntryState.options.featureEnabled = (featureId) =>
-            featureId === 'sessions.usageLimitRecovery';
         sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1 = {
             v: 1,
             mode: 'auto_wait',
@@ -142,7 +158,7 @@ describe('Session settings (prompt personalization)', () => {
 
         const inputRow = screen.findRowByTitle('settingsSession.usageLimitRecovery.customResumePromptTitle');
         expect(inputRow).toBeTruthy();
-        // `Item` is a host element here, so the inline field is the row's `rightElement`.
+        // The inline field belongs to the real row's right element.
         const input = (inputRow as any)?.props?.rightElement;
         expect(input?.props?.placeholder).toBe('settingsSession.usageLimitRecovery.customResumePromptPlaceholder');
         expect(input?.props?.maxLength).toBeUndefined();
@@ -156,18 +172,16 @@ describe('Session settings (prompt personalization)', () => {
             updatedInput.props.onBlur();
         });
 
-        expect(sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1).toEqual({
+        await vi.waitFor(() => expect(storage.getState().settings.usageLimitRecoverySettingsV1).toEqual({
             v: 1,
             mode: 'auto_wait',
             promptMode: 'standard',
             resumePromptMode: 'custom',
             customResumePrompt: 'Resume exactly where you stopped.',
-        });
+        }));
     });
 
     it('hides the inline custom prompt input when custom mode is not selected', async () => {
-        sessionSettingsEntryState.options.featureEnabled = (featureId) =>
-            featureId === 'sessions.usageLimitRecovery';
         sessionSettingsEntryState.settingsState.usageLimitRecoverySettingsV1 = {
             v: 1,
             mode: 'auto_wait',
