@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readSkillOutsideReferencesV1 } from './skillReferencesV1.js';
+import { readSiblingSkillPathsV1, readSkillOutsideReferencesV1 } from './skillReferencesV1.js';
 
 const skill = (body: string) =>
   `---\nname: review\ndescription: Reviews.\n---\n${body}`;
@@ -61,5 +61,28 @@ describe('skill outside references', () => {
       '../c.md',
       '../shared/a.md',
     ]);
+  });
+});
+
+describe('sibling skill folders a skill refers to', () => {
+  it('names the sibling folder whether the reference points at its SKILL.md, the folder, or a file inside it', () => {
+    expect(
+      readSiblingSkillPathsV1('prisma-cli', [
+        '../prisma-orm-setup/SKILL.md',
+        '../prisma-orm-setup/',
+        '../prisma-orm-setup/references/a.md',
+        '../prisma-mongodb-upgrade',
+      ]),
+    ).toEqual(['prisma-orm-setup', 'prisma-mongodb-upgrade']);
+  });
+
+  it('resolves against the skill folder inside a nested source tree', () => {
+    expect(readSiblingSkillPathsV1('skills/a', ['../b/SKILL.md', '../../shared/c/SKILL.md'])).toEqual(['skills/b', 'shared/c']);
+  });
+
+  it('names no sibling for a single file, a file inside the skill, or a path above the source tree', () => {
+    expect(readSiblingSkillPathsV1('skills/a', ['../README.md', 'missing.md', 'references/missing.md'])).toEqual([]);
+    expect(readSiblingSkillPathsV1('', ['../b/SKILL.md'])).toEqual([]);
+    expect(readSiblingSkillPathsV1('a', ['../../b/SKILL.md'])).toEqual([]);
   });
 });
