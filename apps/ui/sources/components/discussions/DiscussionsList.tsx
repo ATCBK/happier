@@ -13,7 +13,7 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { useHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { COLLECTION_LIST_SEARCH_THRESHOLD, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { PaneSectionHeader } from '@/components/ui/lists/PaneSectionHeader';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { ITEM_SUBTITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
@@ -28,6 +28,7 @@ import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/dom
 import type { DiscussionRepositoryStatus } from '@/sync/ops/discussions/discussionRepository';
 import { getDiscussionRepository } from '@/sync/ops/discussions/discussionRepositoryRegistry';
 import { useDiscussionRepositorySnapshot } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
+import { useDiscussionListSearch } from '@/sync/ops/discussions/useDiscussionListSearch';
 import { t } from '@/text';
 import {
     buildDiscussionActivityItems,
@@ -88,7 +89,7 @@ const styles = StyleSheet.create((theme) => ({
 type DiscussionListItem = DiscussionActivityItem
     | Readonly<{ kind: 'archived_disclosure' }>
     | Readonly<{ kind: 'archived_discussion'; discussion: DiscussionOpenedSummaryV1 }>
-    | Readonly<{ kind: 'archived_loading' | 'archived_empty' | 'archived_error' | 'archived_load_more' | 'filter_empty' }>;
+    | Readonly<{ kind: 'archived_loading' | 'archived_empty' | 'archived_error' | 'archived_load_more' | 'filter_empty' | 'search_empty' | 'search_more' }>;
 
 /** What the Discussions column shows (lab T2-A filter): everything, or only what needs you, unread or archived. */
 type DiscussionColumnFilter = 'all' | 'needs_you' | 'unread' | 'archived';
@@ -110,7 +111,9 @@ function discussionListItemKey(item: DiscussionListItem): string {
         case 'archived_empty':
         case 'archived_error':
         case 'archived_load_more':
-        case 'filter_empty': return item.kind;
+        case 'filter_empty':
+        case 'search_empty':
+        case 'search_more': return item.kind;
         default: return discussionActivityItemKey(item);
     }
 }
@@ -237,6 +240,12 @@ function DiscussionsListReady(props: Readonly<{
     const [archivedExpanded, setArchivedExpanded] = React.useState(false);
     const [filter, setFilter] = React.useState<DiscussionColumnFilter>('all');
     const [filterOpen, setFilterOpen] = React.useState(false);
+    // The column's search (R6): what this device already opened for each Discussion (its title, the people
+    // in it, its source), across the whole list; the list pages to its end while a query is typed.
+    const [query, setQuery] = React.useState('');
+    const searching = column && query.trim().length > 0;
+    const searched = useDiscussionListSearch({ repository, scope: props.scope, accountLifetime: props.accountLifetime,
+        query: column ? query : '', state: filter === 'archived' ? 'archived' : 'active', ...(anchorSessionId ? { anchorSessionId } : {}) });
     const active = React.useMemo(() => ({ ...collection.lists.active, items: selectDiscussionSummariesForAnchor(collection.lists.active.items, props.anchor) }), [props.anchor, collection.lists.active]);
     const archived = React.useMemo(() => ({ ...collection.lists.archived, items: selectDiscussionSummariesForAnchor(collection.lists.archived.items, props.anchor) }), [props.anchor, collection.lists.archived]);
     const viewerAccountId = props.scope.accountId;
@@ -264,6 +273,22 @@ function DiscussionsListReady(props: Readonly<{
 
     const items = React.useMemo<readonly DiscussionListItem[]>(() => {
         const humanListPending = active.status === 'idle' || (active.status === 'loading' && active.items.length === 0);
+        if (searching) {
+            // Matches keep the column's grouping and the chosen filter; a whole-list answer still on its way
+            // says so under the matches rather than claiming there are no more.
+            const kept = searched.items.filter((discussion) => filter === 'unread'
+                ? discussion.unreadCount > 0
+                : filter === 'needs_you'
+                    ? attention.get(discussion.id) != null || (discussion.unreadCount > 0 && discussion.unreadMentionCount > 0)
+                    : true);
+            const rows: DiscussionListItem[] = kept.length === 0 ? []
+                : filter === 'archived'
+                    ? kept.map((discussion) => ({ kind: 'archived_discussion' as const, discussion }))
+                    : [...buildDiscussionColumnItems({ discussions: kept, humanListPending: false, now: new Date(), attention })];
+            if (searched.incomplete && !isUnreadable(searched.status)) rows.push({ kind: 'search_more' });
+            else if (kept.length === 0) rows.push({ kind: 'search_empty' });
+            return rows;
+        }
         if (column && filter === 'archived') {
             if (archived.status === 'loading' && archived.items.length === 0) return [{ kind: 'archived_loading' }];
             if (isUnreadable(archived.status) && archived.items.length === 0) return [{ kind: 'archived_error' }];
@@ -300,7 +325,7 @@ function DiscussionsListReady(props: Readonly<{
             if (archived.nextCursor) archivedItems.push({ kind: 'archived_load_more' });
         }
         return [...primary, ...archivedItems];
-    }, [active.items, active.status, archived.items, archived.nextCursor, archived.status, archivedExpanded, attention, collection.archivedExistence, column, filter]);
+    }, [active.items, active.status, archived.items, archived.nextCursor, archived.status, archivedExpanded, attention, collection.archivedExistence, column, filter, searched, searching]);
 
     const activeCount = active.nextCursor === null && active.items.length > 0 ? active.items.length : undefined;
     const renderItem = React.useCallback(({ item }: Readonly<{ item: DiscussionListItem }>) => {
@@ -418,12 +443,13 @@ function DiscussionsListReady(props: Readonly<{
                 return <DiscussionRow discussion={item.discussion} viewerAccountId={viewerAccountId} geometry={column ? 'column' : 'pane'} attentionReason={attention.get(item.discussion.id) ?? null} selected={activeDiscussionKey === item.discussion.id} onPress={() => openDiscussion(item.discussion.id, item.discussion.title)} />;
             case 'archived_loading':
                 return <View style={styles.center}><ActivitySpinner size="small" /></View>;
+            case 'search_more':
+                return <View style={styles.center}><ActivitySpinner size="small" accessibilityLabel={t('session.collaboration.discussion.loading')} /></View>;
+            // A narrowed column says so on the column's own quiet line, at the rows' text edge.
+            case 'search_empty':
+                return <EmptyState testID="discussions-column-search-empty" layout="line" title={t('common.noMatches')} />;
             case 'filter_empty':
-                return (
-                    <View style={styles.stateLine}>
-                        <SurfaceStateCard size="line" kind="empty" title={t('session.collaboration.discussion.home.filterEmpty')} />
-                    </View>
-                );
+                return <EmptyState testID="discussions-column-filter-empty" layout="line" title={t('session.collaboration.discussion.home.filterEmpty')} />;
             case 'archived_empty':
                 return (
                     <View style={styles.stateLine}>
@@ -476,6 +502,11 @@ function DiscussionsListReady(props: Readonly<{
         );
     }
     if (column) {
+        const searchable = query.length > 0 || active.nextCursor !== null || active.items.length > COLLECTION_LIST_SEARCH_THRESHOLD;
+        const narrowedRows = items.filter((item) => item.kind === 'human_discussion' || item.kind === 'archived_discussion').length;
+        const narrowedComplete = searching ? !searched.incomplete
+            : filter === 'archived' ? archived.nextCursor === null && archived.status === 'ready' : active.nextCursor === null && active.status === 'ready';
+        const narrowedCount = narrowedComplete && narrowedRows > 0 ? narrowedRows : null;
         const whole = active.items.length === 0 && active.status === 'locked'
             ? <SurfaceStateCard testID="session-conversations-locked" size="line" kind="error" iconName="lock" title={t('session.collaboration.pane.lockedTitle')} action={{ label: t('session.collaboration.discussion.retry'), onPress: retryActive }} />
             : active.status === 'revoked'
@@ -487,7 +518,14 @@ function DiscussionsListReady(props: Readonly<{
                 testID="discussions-column"
                 surface={props.surface}
                 title={t('session.collaboration.discussion.title')}
-                count={activeCount ?? null}
+                // A narrowed column counts what it shows, once that answer is whole.
+                count={searching || filter !== 'all' ? narrowedCount : activeCount ?? null}
+                search={searchable ? {
+                    testID: 'discussions-column-search',
+                    value: query,
+                    onChangeText: setQuery,
+                    placeholder: t('session.collaboration.discussion.home.search'),
+                } : null}
                 // Whose Discussions these are, and who reads them (lab T2-A).
                 subtitle={{
                     testID: 'discussions-column-home',
