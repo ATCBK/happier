@@ -254,7 +254,7 @@ describe('pinned Pi 0.82.1 transcript grammar', () => {
     ]);
   });
 
-  it('still refuses a thinking block whose payload is not a string', async () => {
+  it('represents a thinking block whose payload is not a string as unsupported', async () => {
     const result = await page([
       {
         type: 'message',
@@ -268,10 +268,14 @@ describe('pinned Pi 0.82.1 transcript grammar', () => {
         },
       },
     ]);
-    expect(result).toMatchObject({ ok: false, code: 'agent_error' });
+    expect(result).toMatchObject({ ok: true, value: {
+      items: [{ messageRole: 'agent', raw: { role: 'agent', content: { type: 'acp', agentId: 'pi',
+        data: { type: 'message', message: 'Agent emitted an unsupported content block.' } } } }],
+      diagnostics: [{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign' }],
+    } });
   });
 
-  it('still refuses a genuinely unknown Pi entry', async () => {
+  it('represents an unknown Pi entry as unsupported', async () => {
     const result = await page([
       {
         type: 'not_a_real_pi_entry',
@@ -280,6 +284,9 @@ describe('pinned Pi 0.82.1 transcript grammar', () => {
         timestamp: '2026-01-01T00:00:01.000Z',
       },
     ]);
-    expect(result).toMatchObject({ ok: false, code: 'agent_error' });
+    expect(result).toMatchObject({ ok: true, value: {
+      items: [{ messageRole: 'agent' }],
+      diagnostics: [{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign' }],
+    } });
   });
 });

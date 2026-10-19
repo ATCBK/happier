@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { open, stat, type FileHandle } from 'node:fs/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { AgentExternalSessionTranscriptItem, AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import {
   readJsonlFileBackwardPage,
+  readJsonlFileForward,
   readJsonlFileForwardLines,
   createExternalSessionContentSearchControl,
   searchExternalSessionContent,
@@ -14,7 +15,7 @@ import {
 
 import { createCodexRolloutSemanticTracker, type CodexRolloutSemanticState } from '../../../rollout/semanticTracker.js';
 import { projectCodexRolloutRecord } from '../../../rollout/projection/actions.js';
-import { mapCodexRolloutLineToExternalMessages } from '../../../rollout/projection/transcript.js';
+import { mapCodexRolloutLineToExternalMessages, readCodexRolloutLineTimestampMs } from '../../../rollout/projection/transcript.js';
 import {
   describeCodexRolloutFileSetResourceIdentity,
   inventoryCodexRootSessionRolloutFiles,
@@ -70,17 +71,18 @@ type CodexProjectedTranscriptRecord = Readonly<{
 
 type CodexProjectionRow<T> = Readonly<{ startOffsetBytes: number; records: readonly T[]; hasUser: boolean; rollbackCount: number | null | undefined }>;
 
-const ContentRowLocationSchema = z.object({ startOffsetBytes: z.number().int().nonnegative(), endOffsetBytes: z.number().int().nonnegative() }).strict();
-const CodexContentSearchProgressSchema = z.object({
-  remoteSessionId: z.string(), partial: z.boolean(), phase: z.enum(['selection', 'matching', 'ordinal', 'done']), messageIndex: z.number().int().nonnegative(),
-  hit: z.object({ streamIndex: z.number().int().nonnegative(), row: ContentRowLocationSchema, id: z.string(), createdAtMs: z.number() }).strict().optional(),
-  streams: z.array(z.object({
-    fileRelPath: z.string(), sourceIdentity: z.string(), sizeBytes: z.number().int().nonnegative(), offsetBytes: z.number().int().nonnegative(),
-    selectionEndOffsetBytes: z.number().int().nonnegative(), pendingTurns: z.number().int().nonnegative(), previousExcluded: z.boolean(), excluded: z.array(ContentRowLocationSchema),
-    semantic: z.object({ assistant: ContentRowLocationSchema.nullable(), pending: z.array(z.object({ callId: z.string(), row: ContentRowLocationSchema }).strict()),
-      startedThreadIds: z.array(z.string()), completedThreadIds: z.array(z.string()) }).strict(),
-  }).strict()),
-}).strict();
+const ContentRowLocationSchema = z.strictObject({ startOffsetBytes: z.number().check(z.int(), z.nonnegative()), endOffsetBytes: z.number().check(z.int(), z.nonnegative()) });
+const CodexContentSearchProgressSchema = z.strictObject({
+  remoteSessionId: z.string(), partial: z.boolean(), phase: z.enum(['selection', 'matching', 'ordinal', 'done']), messageIndex: z.number().check(z.int(), z.nonnegative()),
+  hit: z.optional(z.strictObject({ streamIndex: z.number().check(z.int(), z.nonnegative()), row: ContentRowLocationSchema, id: z.string(), createdAtMs: z.number() })),
+  streams: z.array(z.strictObject({
+    fileRelPath: z.string(), sourceIdentity: z.string(), contentFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/u)), sizeBytes: z.number().check(z.int(), z.nonnegative()), offsetBytes: z.number().check(z.int(), z.nonnegative()),
+    selectionEndOffsetBytes: z.number().check(z.int(), z.nonnegative()), pendingTurns: z.number().check(z.int(), z.nonnegative()), previousExcluded: z.boolean(), excluded: z.array(ContentRowLocationSchema),
+    precedingTimestampMs: z.number().check(z.nonnegative()),
+    semantic: z.strictObject({ assistant: z.nullable(ContentRowLocationSchema), pending: z.array(z.strictObject({ callId: z.string(), row: ContentRowLocationSchema })),
+      startedThreadIds: z.array(z.string()), completedThreadIds: z.array(z.string()) }),
+  })),
+});
 export type CodexContentSearchProgress = z.infer<typeof CodexContentSearchProgressSchema>;
 export function parseCodexContentSearchProgress(value: unknown): CodexContentSearchProgress | null {
   const parsed = CodexContentSearchProgressSchema.safeParse(value);
@@ -101,12 +103,12 @@ function selectCodexExternalTranscriptRows<T>(rows: readonly CodexProjectionRow<
   let partial = false;
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
-    if (row.rollbackCount !== undefined) {
-      if (row.rollbackCount === null) partial = true;
-      else pendingTurns += row.rollbackCount;
+    if (typeof row.rollbackCount === 'number') {
+      pendingTurns += row.rollbackCount;
     } else if (pendingTurns > 0) {
       if (row.hasUser) pendingTurns -= 1;
     } else records.push(...row.records);
+    if (row.rollbackCount === null) partial = true;
     rollbackTurnsByOffset.set(row.startOffsetBytes, pendingTurns);
   }
   return { records, pendingTurns, rollbackTurnsByOffset, partial };
@@ -118,15 +120,6 @@ type BestCodexHomeWithFiles = Readonly<{
   files: readonly CodexRolloutFile[];
 }>;
 
-export class CodexExternalSessionUnsupportedRolloutRecordError extends Error {
-  readonly code = 'codex_unsupported_rollout_record';
-
-  constructor() {
-    super('Codex external session contains an unsupported rollout record.');
-    this.name = 'CodexExternalSessionUnsupportedRolloutRecordError';
-  }
-}
-
 async function readCodexExternalTranscriptProjection(params: Readonly<{
   streams: readonly CodexExternalTranscriptRolloutStream[];
   maxBytes?: number;
@@ -137,21 +130,27 @@ async function readCodexExternalTranscriptProjection(params: Readonly<{
   for (const stream of params.streams) {
     const rows: CodexProjectionRow<Readonly<{ id: string; createdAtMs: number }>>[] = [];
     let offsetBytes = 0;
-    const maxBytes = params.maxBytes ?? Math.max(1, await statFileSize(stream.filePath, params) ?? 1);
+    const sourceSizeBytes = await statFileSize(stream.filePath, params) ?? 0;
+    const maxBytes = params.maxBytes ?? Math.max(1, sourceSizeBytes);
     let semanticTracker = createCodexRolloutSemanticTracker();
+    let precedingTimestampMs = 0;
     while (true) {
       throwIfCodexExternalSessionInvocationStopped(params);
       const page = await readJsonlFileForwardLines({ filePath: stream.filePath, offsetBytes, maxBytes, maxItems: maxBytes, fileSystem,
         onLine(line) {
           throwIfCodexExternalSessionInvocationStopped(params);
+          if (line.value === null && line.rawLine !== 'null' && line.endOffsetBytes === sourceSizeBytes) {
+            partial = true;
+            return;
+          }
+          precedingTimestampMs = readCodexRolloutLineTimestampMs(line.value) ?? precedingTimestampMs;
           const count = readCodexExternalRollbackCount(line.value);
-          if (count !== undefined) {
-            if (count === null) { partial = true; return; }
+          if (typeof count === 'number') {
             rows.push({ startOffsetBytes: line.startOffsetBytes, records: [], hasUser: false, rollbackCount: count });
             if (count > 0) semanticTracker = createCodexRolloutSemanticTracker();
             return;
           }
-          const projected = projectLine({ stream, lineStartOffsetBytes: line.startOffsetBytes, lineEndOffsetBytes: line.endOffsetBytes, lineValue: line.value, semanticTracker });
+          const projected = projectLine({ stream, lineStartOffsetBytes: line.startOffsetBytes, lineEndOffsetBytes: line.endOffsetBytes, lineValue: line.value, semanticTracker, precedingTimestampMs });
           partial ||= projected.unsupportedRecord;
           rows.push({ startOffsetBytes: line.startOffsetBytes, hasUser: projected.records.some((record) => record.item.raw.role === 'user'),
             records: projected.records.map(({ item }) => ({ id: item.id, createdAtMs: item.createdAtMs })), rollbackCount: undefined });
@@ -197,6 +196,7 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
         const initialEnd = state.selectionEndOffsetBytes;
         const page = await readJsonlFileBackwardPage({ filePath: stream.filePath, endOffsetBytes: initialEnd,
           maxBytes: Math.max(1, state.sizeBytes), maxItems: Math.max(1, state.sizeBytes), fileSystem,
+          includeMalformedRecords: true,
           onDiagnostic: () => { progress.partial = true; },
           onLine(line, tailOffsetBytes) {
             throwIfCodexExternalSessionInvocationStopped(nativeBounds);
@@ -206,7 +206,7 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
             const count = readCodexExternalRollbackCount(line.value);
             const selected = selectCodexExternalTranscriptRows([{ startOffsetBytes: line.startOffsetBytes, records: [line],
               hasUser: projected.records.some((record) => record.item.raw.role === 'user'), rollbackCount: count }], state.pendingTurns);
-            const excluded = count === undefined && selected.records.length === 0;
+            const excluded = typeof count !== 'number' && selected.records.length === 0;
             if (excluded) {
               const previous = state.excluded.at(-1);
               if (previous && state.previousExcluded) previous.startOffsetBytes = line.startOffsetBytes;
@@ -254,16 +254,20 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
         onDiagnostic: () => { progress.partial = true; },
         onLine(line) {
           throwIfCodexExternalSessionInvocationStopped(nativeBounds);
+          if (line.value === null && line.rawLine !== 'null' && line.endOffsetBytes === state.sizeBytes) {
+            progress.partial = true;
+            return;
+          }
+          state.precedingTimestampMs = readCodexRolloutLineTimestampMs(line.value) ?? state.precedingTimestampMs;
           const location = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes };
           const count = readCodexExternalRollbackCount(line.value);
-          if (count !== undefined) {
-            progress.partial ||= count === null;
-            if (count !== null && count > 0) {
+          if (typeof count === 'number') {
+            if (count > 0) {
               semanticTracker = createCodexRolloutSemanticTracker();
               state.semantic = emptySemantic();
             }
           } else if (!state.excluded.some((range) => line.startOffsetBytes >= range.startOffsetBytes && line.startOffsetBytes < range.endOffsetBytes)) {
-            const projected = projectLine({ stream, lineStartOffsetBytes: line.startOffsetBytes, lineEndOffsetBytes: line.endOffsetBytes, lineValue: line.value, semanticTracker,
+            const projected = projectLine({ stream, lineStartOffsetBytes: line.startOffsetBytes, lineEndOffsetBytes: line.endOffsetBytes, lineValue: line.value, semanticTracker, precedingTimestampMs: state.precedingTimestampMs,
               onSemanticAction(action, emitted) {
                 if (action.type === 'assistant-text') { if (emitted) state.semantic.assistant = location; }
                 if (action.type === 'collaboration-tool-call' && action.name === 'spawn_agent') {
@@ -302,7 +306,7 @@ async function readCodexExternalContentSearchProjection(params: Readonly<{
   }
   if (!isCodexContentScanComplete(progress)) {
     if (progress.phase === 'ordinal' || !progress.hit) progress.phase = 'done';
-    else { progress.phase = 'ordinal'; for (const entry of progress.streams) { entry.offsetBytes = 0; entry.semantic = emptySemantic(); } }
+    else { progress.phase = 'ordinal'; for (const entry of progress.streams) { entry.offsetBytes = 0; entry.precedingTimestampMs = 0; entry.semantic = emptySemantic(); } }
   }
   }
   const match = progress.hit;
@@ -349,19 +353,35 @@ export async function searchCodexExternalTranscript(params: Readonly<{
   const streams = collectTranscriptStreams({ rootSessionId: params.remoteSessionId, rootFamilyFiles: files });
   if (streams.length === 0) return { partial: true, unsearchable: true };
   const nativeBounds = { signal: params.signal, deadlineAtMs: params.deadlineAtMs };
-  const sources = await Promise.all(streams.map(async (stream) => {
+  const readSources = (capturedSizes?: readonly number[]) => Promise.all(streams.map(async (stream, index) => {
     throwIfCodexExternalSessionInvocationStopped(nativeBounds);
     const file = await stat(stream.filePath, { bigint: true });
+    const contentFingerprint = await captureContentAnchor(stream.filePath, capturedSizes?.[index] ?? Number(file.size), nativeBounds);
     throwIfCodexExternalSessionInvocationStopped(nativeBounds);
-    return { fileRelPath: stream.fileRelPath, sourceIdentity: `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`, sizeBytes: Number(file.size) };
+    return { fileRelPath: stream.fileRelPath, sourceIdentity: `${file.dev}:${file.ino}:${file.birthtimeNs}:${file.mtimeNs}:${file.ctimeNs}`, sizeBytes: Number(file.size), contentFingerprint };
   }));
+  const sources = await readSources(params.progress?.streams.map(stream => stream.sizeBytes));
+  // Reuse older-page content anchors and keep the captured end across native
+  // appends. New tail bytes make coverage partial; replacement and edits to the
+  // captured boundary still invalidate the scan.
+  const preservesCapturedSource = (source: typeof sources[number], captured: Readonly<{
+    fileRelPath: string; sourceIdentity: string; sizeBytes: number; contentFingerprint: string;
+  }>) => source.fileRelPath === captured.fileRelPath
+    && source.sizeBytes >= captured.sizeBytes
+    && source.contentFingerprint === captured.contentFingerprint
+    && source.sourceIdentity.split(':').slice(0, 3).join(':') === captured.sourceIdentity.split(':').slice(0, 3).join(':')
+    && (source.sizeBytes > captured.sizeBytes || source.sourceIdentity === captured.sourceIdentity);
   if (params.progress && (params.progress.remoteSessionId !== params.remoteSessionId || params.progress.streams.length !== sources.length
-    || sources.some((source, index) => source.fileRelPath !== params.progress!.streams[index]!.fileRelPath || source.sourceIdentity !== params.progress!.streams[index]!.sourceIdentity || source.sizeBytes !== params.progress!.streams[index]!.sizeBytes))) {
+    || sources.some((source, index) => !preservesCapturedSource(source, params.progress!.streams[index]!)))) {
     throw new CodexExternalSessionCandidateSourceChangedError();
   }
   const progress: CodexContentSearchProgress = params.progress ?? { remoteSessionId: params.remoteSessionId, partial: false, phase: 'selection', messageIndex: 0,
-    streams: sources.map((source) => ({ ...source, offsetBytes: 0, selectionEndOffsetBytes: source.sizeBytes, pendingTurns: 0, previousExcluded: false, excluded: [],
-      semantic: { assistant: null, pending: [], startedThreadIds: [], completedThreadIds: [] } })) };
+    streams: sources.map((source) => {
+      if (!source.contentFingerprint) throw new CodexExternalSessionCandidateSourceChangedError();
+      return { ...source, contentFingerprint: source.contentFingerprint, offsetBytes: 0, precedingTimestampMs: 0, selectionEndOffsetBytes: source.sizeBytes, pendingTurns: 0, previousExcluded: false, excluded: [],
+        semantic: { assistant: null, pending: [], startedThreadIds: [], completedThreadIds: [] } };
+    }) };
+  progress.partial ||= sources.some((source, index) => source.sizeBytes > progress.streams[index]!.sizeBytes);
   const control = params.contentSearchControl ?? createExternalSessionContentSearchControl(params);
   // A multi-stream transcript has one semantic order; decode all its streams
   // once any stream matches so source ordinals and normalization stay correct.
@@ -369,15 +389,19 @@ export async function searchCodexExternalTranscript(params: Readonly<{
     const result = await searchExternalSessionContent({
       query: params.query, ...(params.progress ? {} : { paths: streams.map((stream) => stream.filePath) }), ripgrep: params.ripgrep,
       control, isScanComplete: () => progress.phase === 'done',
-      decode: (matchText) => readCodexExternalContentSearchProjection({ ...params, contentSearchControl: control, streams, progress, matchText }),
+      decode: async (matchText) => {
+        let projection!: Awaited<ReturnType<typeof readCodexExternalContentSearchProjection>>;
+        await control.prepare(async () => {
+          projection = await readCodexExternalContentSearchProjection({ ...params, contentSearchControl: control, streams, progress, matchText });
+          return true;
+        });
+        return projection;
+      },
     });
-    const current = await Promise.all(streams.map(async (stream) => {
-      const file = await stat(stream.filePath, { bigint: true });
-      return `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;
-    }));
+    const current = await readSources(progress.streams.map(stream => stream.sizeBytes));
     throwIfCodexExternalSessionInvocationStopped(nativeBounds);
-    if (current.some((identity, index) => identity !== sources[index]!.sourceIdentity)) throw new CodexExternalSessionCandidateSourceChangedError();
-    return { ...result, unsearchable: false };
+    if (current.some((source, index) => !preservesCapturedSource(source, progress.streams[index]!))) throw new CodexExternalSessionCandidateSourceChangedError();
+    return { ...result, partial: result.partial || current.some((source, index) => source.sizeBytes > progress.streams[index]!.sizeBytes), unsearchable: false };
   } catch (error) {
     if (error instanceof ExternalSessionContentSearchYield) throw new CodexContentSearchYield(progress);
     throw error;
@@ -886,6 +910,7 @@ function projectLine(params: Readonly<{
   lineEndOffsetBytes: number;
   lineValue: unknown;
   semanticTracker: ReturnType<typeof createCodexRolloutSemanticTracker>;
+  precedingTimestampMs?: number;
   onSemanticAction?: (action: ReturnType<typeof projectCodexRolloutRecord>['actions'][number], emitted: boolean) => void;
 }>): Readonly<{
   records: readonly CodexProjectedTranscriptRecord[];
@@ -893,8 +918,10 @@ function projectLine(params: Readonly<{
   unsupportedRecord: boolean;
 }> {
   const rollbackCount = readCodexExternalRollbackCount(params.lineValue);
-  if (rollbackCount !== undefined) return { records: [], knownNonTranscriptRecord: rollbackCount !== null, unsupportedRecord: rollbackCount === null };
+  if (typeof rollbackCount === 'number') return { records: [], knownNonTranscriptRecord: true, unsupportedRecord: false };
   const rolloutRecord = projectCodexRolloutRecord(params.lineValue, { debug: true });
+  const unsupportedRecord = rollbackCount === null || rolloutRecord.disposition === 'unsupported';
+  if (unsupportedRecord) params.semanticTracker.breakAssistantEcho();
   const normalizedActions = rolloutRecord.actions.flatMap((action) => {
     const emitted = params.semanticTracker.consume(action);
     params.onSemanticAction?.(action, emitted.length > 0);
@@ -905,6 +932,8 @@ function projectLine(params: Readonly<{
     lineStartOffsetBytes: params.lineStartOffsetBytes,
     lineValue: params.lineValue,
     actions: normalizedActions,
+    unsupportedRecord,
+    precedingTimestampMs: params.precedingTimestampMs,
     sidechainId: params.stream.sidechainId,
   });
   const safeItems = mappedItems.flatMap((item) => (
@@ -928,8 +957,8 @@ function projectLine(params: Readonly<{
       subIndex,
       lineRecordCount: safeItems.length,
     })),
-    knownNonTranscriptRecord: rolloutRecord.disposition === 'known',
-    unsupportedRecord: rolloutRecord.disposition === 'unsupported',
+    knownNonTranscriptRecord: !unsupportedRecord && rolloutRecord.disposition === 'known',
+    unsupportedRecord,
   };
 }
 
@@ -939,6 +968,27 @@ function readCodexExternalRollbackCount(value: unknown): number | null | undefin
   if (envelope?.type !== 'event_msg' || payload?.type !== 'thread_rolled_back') return undefined;
   const count = payload.num_turns;
   return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
+async function readPrecedingCodexRolloutTimestamp(params: Readonly<{
+  stream: CodexExternalTranscriptRolloutStream;
+  beforeOffsetBytes: number;
+  maxBytes: number;
+}> & CodexExternalSessionInvocationBounds): Promise<number> {
+  let endOffsetBytes = params.beforeOffsetBytes;
+  while (endOffsetBytes > 0) {
+    throwIfCodexExternalSessionInvocationStopped(params);
+    const page = await readJsonlFileBackwardPage({ filePath: params.stream.filePath, endOffsetBytes,
+      maxBytes: params.maxBytes, maxItems: params.maxBytes, fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params) });
+    if (page.diagnostics?.length) throw new Error('Codex transcript source contains malformed UTF-8.');
+    for (let index = page.items.length - 1; index >= 0; index -= 1) {
+      const timestampMs = readCodexRolloutLineTimestampMs(page.items[index]!.value);
+      if (timestampMs !== null) return timestampMs;
+    }
+    if (page.reachedStart || page.nextEndOffsetBytes >= endOffsetBytes) return 0;
+    endOffsetBytes = page.nextEndOffsetBytes;
+  }
+  return 0;
 }
 
 function collectTranscriptStreams(params: Readonly<{
@@ -975,6 +1025,7 @@ async function resolveBestHomesWithFiles(params: Readonly<{
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   throwIfCodexExternalSessionInvocationStopped(params);
   const bestLatestMtimeById = new Map<string, number>();
@@ -986,6 +1037,7 @@ async function resolveBestHomesWithFiles(params: Readonly<{
       signal: params.signal ?? new AbortController().signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
     throwIfCodexExternalSessionInvocationStopped(params);
     for (const { remoteSessionId, files } of inventory.requested) {
@@ -1038,6 +1090,7 @@ async function resolveCodexExternalSessionAppServerMetadata(params: Readonly<{
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
     onProgress: params.onProgress,
+    preparation: params.preparation,
   });
   throwIfCodexExternalSessionInvocationStopped(params);
   let best: CodexExternalSessionAppServerMetadata | null = null;
@@ -1081,6 +1134,7 @@ async function resolveTranscriptStreams(params: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     }),
   };
 }
@@ -1169,6 +1223,7 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
   const rollbackStates = new Map<string, Readonly<{ initial: number; final: number; byOffset: ReadonlyMap<number, number> }>>();
   const originalEnds = new Map<string, number>();
   const scannedToStreamStart = new Set<string>();
+  const unsupportedItemIds = new Set<string>();
 
   for (const stream of streams) {
     throwIfCodexExternalSessionInvocationStopped(params);
@@ -1183,28 +1238,37 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
       endOffsetBytes,
       maxBytes,
       maxItems: maxItems * 2,
+      includeMalformedRecords: true,
       fileSystem,
     });
     throwIfCodexExternalSessionInvocationStopped(params);
     if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
       throw new Error('Codex transcript source contains malformed UTF-8.');
     }
+    if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
+      return { items: [], nextCursor: null, tailCursor, hasMore: false, truncated: true };
+    }
     nextEnds.push({ fileRelPath: stream.fileRelPath, endOffsetBytes: page.nextEndOffsetBytes });
     if (page.reachedStart) scannedToStreamStart.add(stream.fileRelPath);
 
     const semanticTracker = createCodexRolloutSemanticTracker();
     const rows: CodexProjectionRow<CodexProjectedTranscriptRecord>[] = [];
+    let precedingTimestampMs = page.items[0] && readCodexRolloutLineTimestampMs(page.items[0].value) === null && !page.reachedStart
+      ? await readPrecedingCodexRolloutTimestamp({ ...params, stream, beforeOffsetBytes: page.items[0].startOffsetBytes, maxBytes })
+      : 0;
     for (const line of page.items) {
       throwIfCodexExternalSessionInvocationStopped(params);
+      precedingTimestampMs = readCodexRolloutLineTimestampMs(line.value) ?? precedingTimestampMs;
       const projected = projectLine({
         stream,
         lineStartOffsetBytes: line.startOffsetBytes,
         lineEndOffsetBytes: line.endOffsetBytes,
         lineValue: line.value,
         semanticTracker,
+        precedingTimestampMs,
       });
       if (projected.unsupportedRecord) {
-        throw new CodexExternalSessionUnsupportedRolloutRecordError();
+        for (const record of projected.records) unsupportedItemIds.add(record.item.id);
       }
       rows.push({ startOffsetBytes: line.startOffsetBytes, records: projected.records, hasUser: projected.records.some((record) => record.item.raw.role === 'user'), rollbackCount: readCodexExternalRollbackCount(line.value) });
     }
@@ -1279,6 +1343,8 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
       truncated: true,
     };
   }
+  const unsupportedPositions = selected.filter((record) => unsupportedItemIds.has(record.item.id))
+    .map((record) => record.lineStartOffsetBytes);
   return {
     items: selected.map((record) => record.item),
     nextCursor,
@@ -1288,6 +1354,7 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
     // pagination, not a source truncation. The earlier missing-continuation
     // branch remains the fail-closed `truncated: true` outcome.
     truncated: false,
+    ...(unsupportedPositions.length > 0 ? { diagnostics: [{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign' as const, count: unsupportedPositions.length, positions: unsupportedPositions.slice(0, 200) }] } : {}),
   };
 }
 
@@ -1451,8 +1518,9 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
   const candidateRecords: CodexProjectedTranscriptRecord[] = [];
   const emptyScanAdvances = new Map<string, number>();
   const retainedProjection = await readCodexExternalTranscriptProjection({ ...params, streams });
-  const retainedIds = new Set(retainedProjection.records.map((record) => record.id));
+  const retainedTimestamps = new Map(retainedProjection.records.map((record) => [record.id, record.createdAtMs]));
   const knownNonTranscriptPositionsByStream = new Map<string, number[]>();
+  const unsupportedPositionsByStream = new Map<string, number[]>();
   const malformedSourceDiagnostics: Array<Readonly<{
     code: 'malformed_source_utf8';
     severity: 'required';
@@ -1470,11 +1538,12 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
       fingerprintOffsetBytes: 0,
     };
     const offsetBytes = progress.nextOffsetBytes;
-    const page = await readJsonlFileForwardLines({
+    const page = await readJsonlFileForward({
       filePath: stream.filePath,
       offsetBytes,
       maxBytes,
       maxItems: maxItems * 2,
+      includeMalformedRecords: true,
       fileSystem,
     });
     throwIfCodexExternalSessionInvocationStopped(params);
@@ -1485,13 +1554,11 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
     if (!page.reachedEnd || page.truncated) truncated = true;
     let projectedCount = 0;
     const streamKnownNonTranscriptPositions: number[] = [];
+    const streamUnsupportedPositions: number[] = [];
     const semanticTracker = createCodexRolloutSemanticTracker();
     let cursorContinuationValidated = progress.subIndex === 0;
     for (const line of page.items) {
       throwIfCodexExternalSessionInvocationStopped(params);
-      if (line.value === null) {
-        throw new CodexExternalSessionUnsupportedRolloutRecordError();
-      }
       const projected = projectLine({
         stream,
         lineStartOffsetBytes: line.startOffsetBytes,
@@ -1499,9 +1566,7 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
         lineValue: line.value,
         semanticTracker,
       });
-      if (projected.unsupportedRecord) {
-        throw new CodexExternalSessionUnsupportedRolloutRecordError();
-      }
+      if (projected.unsupportedRecord) streamUnsupportedPositions.push(line.startOffsetBytes);
       if (!cursorContinuationValidated) {
         if (
           line.startOffsetBytes !== offsetBytes
@@ -1521,7 +1586,9 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
       const records = line.startOffsetBytes === offsetBytes && progress.subIndex > 0
         ? projected.records.filter((record) => record.subIndex >= progress.subIndex)
         : projected.records;
-      const retainedRecords = records.filter((record) => retainedIds.has(record.item.id));
+      const retainedRecords = records.filter((record) => retainedTimestamps.has(record.item.id)).map((record) => ({
+        ...record, item: { ...record.item, createdAtMs: retainedTimestamps.get(record.item.id)! },
+      }));
       projectedCount += retainedRecords.length;
       candidateRecords.push(...retainedRecords);
     }
@@ -1535,6 +1602,7 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
       stream.fileRelPath,
       streamKnownNonTranscriptPositions,
     );
+    unsupportedPositionsByStream.set(stream.fileRelPath, streamUnsupportedPositions);
   }
 
   if (cursorContinuationInvalid) {
@@ -1605,6 +1673,7 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
   const knownNonTranscriptPositions = selectedSkippedPositions(
     knownNonTranscriptPositionsByStream,
   );
+  const unsupportedPositions = selectedSkippedPositions(unsupportedPositionsByStream);
   const nextCursor = await buildStreamVectorCursorFromEntries(
     nextEntries,
     resourceIdentity,
@@ -1635,9 +1704,11 @@ export async function readAfterCodexExternalSessionTranscript(params: Readonly<{
     ...(
       malformedSourceDiagnostics.length > 0
       || knownNonTranscriptPositions.length > 0
+      || unsupportedPositions.length > 0
         ? {
           diagnostics: [
             ...malformedSourceDiagnostics,
+            ...(unsupportedPositions.length > 0 ? [{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign' as const, count: unsupportedPositions.length, positions: unsupportedPositions.slice(0, 200) }] : []),
             ...(knownNonTranscriptPositions.length > 0 ? [{
               code: 'non_transcript_record_skipped',
               severity: 'benign' as const,

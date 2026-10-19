@@ -1,5 +1,6 @@
 /** @moduleRealm daemon */
 import { open, stat as nodeStat } from 'node:fs/promises';
+import { readSessionInputPromptUserTextV1 } from '../promptDisplay.js';
 
 import { parseDefaultSessionHeader } from './records.js';
 import {
@@ -236,7 +237,10 @@ function findLastTimestampMs(records: readonly unknown[]): number | null {
 function findFirstUserMessage(lines: readonly string[], limit: number): string | null {
   for (const line of lines.slice(0, limit)) {
     const text = extractUserMessageText(parseJsonLine(line));
-    if (text) return text;
+    if (text) {
+      const userText = readSessionInputPromptUserTextV1(text);
+      if (userText.trim()) return userText;
+    }
   }
   return null;
 }
@@ -413,6 +417,8 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   chunkBytes?: number;
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
+  /** Retain complete nonblank malformed records as null for a visible transcript fallback. */
+  includeMalformedRecords?: boolean;
   /** Consume parsed lines newest first, preserving progress before a read yields. */
   onLine?: (line: JsonlParsedLineV1, tailOffsetBytes: number | null) => void;
   onDiagnostic?: (diagnostic: JsonlSourceDiagnosticV1) => void;
@@ -499,6 +505,7 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
       carryChunks = [];
       carryLength = 0;
       segmentEndIndex = index;
+      oldestConsumedOffsetBytes = startOffsetAbs;
       const decoded = decodeSourceLine(segment);
       const parsed = decoded.ok ? parseJsonLine(decoded.value) : null;
       if (tailOffsetBytes === null) {
@@ -514,7 +521,8 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
         }
         continue;
       }
-      if (parsed === null) continue;
+      if (parsed === null && (!params.includeMalformedRecords || decoded.value.trim().length === 0
+        || (endOffsetAbs === initialEnd && decoded.value.trim() !== 'null'))) continue;
       acceptLine({ value: parsed, startOffsetBytes: startOffsetAbs, endOffsetBytes: endOffsetAbs });
     }
 
@@ -529,6 +537,7 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
         ? carryChunks[0]!
         : Buffer.concat(carryChunks.reverse(), carryLength);
       const decoded = decodeSourceLine(carry);
+      oldestConsumedOffsetBytes = 0;
       if (!decoded.ok) {
         malformedCount += 1;
         params.onDiagnostic?.({ code: 'malformed_source_utf8', count: 1, positions: [decoded.malformedOffsetBytes] });
@@ -540,7 +549,8 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
         if (tailOffsetBytes === null) {
           tailOffsetBytes = parsed !== null || decoded.value.trim() === 'null' ? initialEnd : 0;
         }
-        if (parsed !== null) {
+        if (parsed !== null || (params.includeMalformedRecords && decoded.value.trim().length > 0
+          && (carry.length < initialEnd || decoded.value.trim() === 'null'))) {
           acceptLine({ value: parsed, startOffsetBytes: 0, endOffsetBytes: carry.length });
         }
       }
@@ -548,9 +558,11 @@ export async function readJsonlFileBackwardPage(params: Readonly<{
   }
 
   const items = collectedNewestFirst.reverse();
-  // A malformed-only page must still consume the bytes that were inspected.
-  // Returning initialEnd here would hand the caller the same cursor forever.
-  const nextEndOffsetBytes = oldestConsumedOffsetBytes ?? end;
+  // Only complete lines establish a continuation. The read limit may leave
+  // `end` inside a native row (even inside a UTF-8 scalar); publishing that
+  // offset would turn a valid source into a malformed one on the next page.
+  // No progress tells the caller that this row exceeds the scanner budget.
+  const nextEndOffsetBytes = oldestConsumedOffsetBytes ?? initialEnd;
   const diagnostics = buildMalformedSourceDiagnostics(malformedCount, malformedPositions);
   return {
     items,
@@ -713,6 +725,8 @@ export async function readJsonlFileForward(params: Readonly<{
   chunkBytes?: number;
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
+  /** Retain complete malformed records as null; an incomplete tail remains retryable. */
+  includeMalformedRecords?: boolean;
 }>): Promise<Readonly<{
   items: readonly JsonlParsedLineV1[];
   diagnostics?: readonly JsonlSourceDiagnosticV1[];
@@ -730,7 +744,7 @@ export async function readJsonlFileForward(params: Readonly<{
     && lastLine.endOffsetBytes === page.nextOffsetBytes;
   return {
     items: page.items.flatMap((line) =>
-      line.value === null
+      line.value === null && (!params.includeMalformedRecords || (incompleteTail && line === lastLine))
         ? []
         : [{
           value: line.value,

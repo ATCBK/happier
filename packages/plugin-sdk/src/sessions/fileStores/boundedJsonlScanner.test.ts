@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 type ByteCursor = Readonly<{ v: 1; kind: 'byteOffset'; offset: number }>;
 
@@ -104,6 +105,34 @@ afterEach(async () => {
 });
 
 describe('bounded JSONL session scanner', () => {
+  it('retains complete malformed records for tolerant transcript projection without consuming a partial tail', async () => {
+    const scanner = await import('./index.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-malformed-records-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const first = jsonlLine({ text: 'before' });
+    const malformed = '{broken native record}\n';
+    const body = first + malformed + jsonlLine({ text: 'after' });
+    await writeFile(filePath, body);
+    const backward = await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null,
+      maxBytes: 4096, maxItems: 10, includeMalformedRecords: true });
+    expect(backward.items.map(item => item.value)).toEqual([{ text: 'before' }, null, { text: 'after' }]);
+    expect(backward.items[1]?.startOffsetBytes).toBe(Buffer.byteLength(first));
+    const forward = await scanner.readJsonlFileForward({ filePath, offsetBytes: 0,
+      maxBytes: 4096, maxItems: 2, includeMalformedRecords: true });
+    expect(forward.items.map(item => item.value)).toEqual([{ text: 'before' }, null]);
+    expect(forward.nextOffsetBytes).toBe(Buffer.byteLength(first + malformed));
+    const remaining = await scanner.readJsonlFileForward({ filePath, offsetBytes: forward.nextOffsetBytes,
+      maxBytes: 4096, maxItems: 10, includeMalformedRecords: true });
+    expect(remaining.items.map(item => item.value)).toEqual([{ text: 'after' }]);
+    await appendFile(filePath, '{"unfinished":');
+    const tail = await scanner.readJsonlFileForward({ filePath, offsetBytes: Buffer.byteLength(body),
+      maxBytes: 4096, maxItems: 10, includeMalformedRecords: true });
+    expect(tail.items).toEqual([]);
+    expect(tail.nextOffsetBytes).toBe(Buffer.byteLength(body));
+    expect(tail.reachedEnd).toBe(false);
+  });
+
   it('retains forward source diagnostics before a consumed native line yields', async () => {
     const scanner = await import('./index.js');
     const root = await mkdtemp(join(tmpdir(), 'happier-forward-progress-'));
@@ -249,9 +278,21 @@ describe('bounded JSONL session scanner', () => {
     expect(page).toMatchObject({
       items: [],
       tailOffsetBytes: null,
-      nextEndOffsetBytes: Buffer.byteLength(content) - oversizeLineBytes,
+      nextEndOffsetBytes: Buffer.byteLength(content),
       reachedStart: false,
     });
+  });
+
+  it('never publishes a backward continuation inside a valid oversized UTF-8 row', async () => {
+    const scanner = await import('./index.js');
+    const root = await mkdtemp(join(tmpdir(), 'happier-file-store-oversize-utf8-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'transcript.jsonl');
+    const content = jsonlLine({ id: 1, pad: '🙂'.repeat(2_100_000) });
+    await writeFile(filePath, content);
+    const page = await scanner.readJsonlFileBackwardPage({ filePath, endOffsetBytes: null, maxBytes: 8192, maxItems: 1 });
+    expect(page.diagnostics).toBeUndefined();
+    expect(page).toMatchObject({ items: [], nextEndOffsetBytes: Buffer.byteLength(content), reachedStart: false });
   });
 
   it.each([false, true])('paginates complete oversize records across read chunks with trailing newline=%s', async (trailingNewline) => {
@@ -363,6 +404,19 @@ describe('bounded JSONL session scanner', () => {
       cwd: '/repo',
       createdAtMs: Date.parse('2026-07-21T10:00:00.000Z'),
     }));
+  });
+
+  it('skips injected-only user records when deriving the first real user text', async () => {
+    const scanner = await loadScanner();
+    const root = await mkdtemp(join(tmpdir(), 'happier-file-store-real-user-'));
+    tempDirs.add(root);
+    const filePath = join(root, 'session.jsonl');
+    await writeFile(filePath, [
+      { type: 'session', id: 'session', timestamp: '2026-07-21T10:00:00.000Z', cwd: '/repo' },
+      { type: 'message', message: { role: 'user', content: buildHappierBaseSystemPromptV1() } },
+      { type: 'message', message: { role: 'user', content: 'Review the release branch' } },
+    ].map(jsonlLine).join(''));
+    expect((await scanner.scanJsonlSessionFile(filePath))?.firstUserMessage).toBe('Review the release branch');
   });
 
   it('derives discovery fields without whole-file reads', async () => {

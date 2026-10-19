@@ -1,4 +1,26 @@
 import type { SessionFileStoreHeaderDescriptorV1 } from './productDescriptor.js';
+import type { AgentExternalSessionTranscriptItem } from '../../externalSessions.js';
+
+/**
+ * A native record this reader cannot interpret is still a readable transcript
+ * item. Keep its source identity for paging, but never disclose its native body
+ * or mistake a codec mismatch for source discontinuity.
+ */
+export function createExternalSessionUnsupportedTranscriptItem(params: Readonly<{
+  agentId: string;
+  id: string;
+  localId?: string | null;
+  createdAtMs: number;
+}>): AgentExternalSessionTranscriptItem {
+  return {
+    id: params.id,
+    localId: params.localId ?? null,
+    createdAtMs: params.createdAtMs,
+    messageRole: 'agent',
+    raw: { role: 'agent', content: { type: 'acp', agentId: params.agentId,
+      data: { type: 'message', message: 'Agent emitted an unsupported content block.' } } },
+  };
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

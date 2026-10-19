@@ -427,13 +427,11 @@ function toOffsetRecords(
     endOffsetBytes: number;
   }>>,
 ): readonly AntigravityTranscriptRecordWithOffsets[] {
-  return values.flatMap((entry) => isRecord(entry.value)
-    ? [{
-        record: entry.value,
-        startOffsetBytes: entry.startOffsetBytes,
-        endOffsetBytes: entry.endOffsetBytes,
-      }]
-    : []);
+  return values.map((entry) => ({
+    record: isRecord(entry.value) ? entry.value : {},
+    startOffsetBytes: entry.startOffsetBytes,
+    endOffsetBytes: entry.endOffsetBytes,
+  }));
 }
 
 async function readCorrelationLookback(params: Readonly<{
@@ -505,9 +503,13 @@ export async function pageAntigravityTranscriptLines(params: Readonly<{
       endOffsetBytes,
       maxBytes: params.maxBytes,
       maxItems: params.maxItems,
+      includeMalformedRecords: true,
     });
     if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
       return { kind: 'read_failed', error: 'Malformed Antigravity transcript UTF-8.' };
+    }
+    if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
+      return { kind: 'read_failed', error: 'Antigravity transcript backward read made no progress.' };
     }
     const firstPageRecord = page.items[0];
     const correlationLookbackRecords = await readCorrelationLookback({
@@ -615,7 +617,7 @@ export async function readAntigravityTranscriptLinesAfter(params: Readonly<{
         heldPartialTail = true;
         continue;
       }
-      return { kind: 'read_failed', error: 'Malformed Antigravity transcript JSONL.' };
+      records.push({ record: {}, startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes });
     }
     const after = await snapshotAntigravityTranscriptSource(params.path);
     if (!after) return { kind: 'source_unavailable' };

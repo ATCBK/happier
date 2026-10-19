@@ -585,7 +585,6 @@ async function listFullCandidateSearch(params: Readonly<{
         };
         contentProgress = progress;
         let scanFinished = progress.offsetBytes === sizeBytes;
-        const checkScanWork = () => scanFinished || progress.offsetBytes === sizeBytes ? control.assertNotYielded() : control.checkWork();
         const searched = await searchExternalSessionContent({
           query: params.searchTerm,
           ...(resumed ? {} : { paths: [nativeCandidate.transcriptPath] }),
@@ -593,8 +592,8 @@ async function listFullCandidateSearch(params: Readonly<{
           control,
           isScanComplete: () => scanFinished || progress.offsetBytes === sizeBytes,
           async decode(matchText) {
-            while (progress.offsetBytes < sizeBytes) {
-              checkScanWork();
+            await control.prepare(async () => {
+              if (progress.offsetBytes >= sizeBytes) return true;
               const offsetBytes = progress.offsetBytes;
               const lines = await readJsonlFileForwardLines({ filePath: nativeCandidate.transcriptPath, offsetBytes,
                 maxItems: params.maxItems, maxBytes: params.invocation.maxSerializedBytes, fileSystem: nativeFileSystem,
@@ -605,35 +604,42 @@ async function listFullCandidateSearch(params: Readonly<{
                   const projected = projectAntigravityTranscriptRecordGroupsWithCorrelation({
                     conversationId: nativeCandidate.conversationId,
                     pendingToolCallIds: progress.pendingToolCallIds,
-                    records: valid ? [{ record: line.value as Record<string, unknown>,
+                    records: valid || line.endOffsetBytes < sizeBytes ? [{ record: valid ? line.value as Record<string, unknown> : {},
                       startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes }] : [],
                   });
                   const group = projected.groups[0];
+                  const unsupported = Boolean(group?.unsupported);
+                  const count = progress.count;
                   let match = progress.match;
                   for (const [itemIndex, item] of (group?.items ?? []).entries()) {
                     const text = readContentSearchText(item.raw.content);
                     if (!match && text !== null && matchText(text) !== null) {
                       match = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes,
-                        itemIndex, messageIndex: progress.count + itemIndex };
+                        itemIndex, messageIndex: count + itemIndex };
                     }
                   }
-                  // A native row is indivisible. Retain byte, ordinal and tool
-                  // correlation facts before checking cooperative work time.
-                  progress = { ...progress, offsetBytes: Math.min(sizeBytes, line.endOffsetBytes + 1),
-                    count: progress.count + (group?.items.length ?? 0),
+                  // Commit native byte, ordinal and correlation facts before
+                  // the shared scheduler checks the cooperative deadline.
+                  progress = { conversationId: progress.conversationId, sourceIdentity: progress.sourceIdentity,
+                    offsetBytes: Math.min(sizeBytes, line.endOffsetBytes + 1),
+                    count: count + (group?.items.length ?? 0),
                     pendingToolCallIds: projected.pendingToolCallIds,
-                    partial: progress.partial || !valid || Boolean(group?.unsupported), ...(match ? { match } : {}) };
+                    partial: progress.partial || !valid || unsupported, ...(match ? { match } : {}) };
                   contentProgress = progress;
-                  checkScanWork();
                 },
               });
               control.assertNotYielded();
               progress = { ...progress, offsetBytes: lines.nextOffsetBytes,
                 partial: progress.partial || lines.truncated || Boolean(lines.diagnostics?.length) };
               contentProgress = progress;
-              if (lines.reachedEnd) { scanFinished = true; break; }
-              if (lines.nextOffsetBytes <= offsetBytes) { progress = { ...progress, partial: true }; scanFinished = true; break; }
-            }
+              if (lines.reachedEnd) scanFinished = true;
+              if (lines.nextOffsetBytes <= offsetBytes) {
+                progress = { ...progress, partial: true };
+                contentProgress = progress;
+                scanFinished = true;
+              }
+              return scanFinished || progress.offsetBytes === sizeBytes;
+            });
             // Opaque cursor data holds locations, never authoritative text.
             // Finalization re-decodes the native row under hard cancellation.
             const row = progress.match;
@@ -663,7 +669,7 @@ async function listFullCandidateSearch(params: Readonly<{
         partial ||= searched.partial;
         processedOffset = nativeCandidate.directoryEntryOffset;
         if (!searched.match) continue;
-        candidate = { ...candidate, match: searched.match };
+        candidate = { ...candidate, match: searched.match, ...(!searched.partial ? { messageCount: progress.count } : {}) };
       } catch (error) {
         if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
         yielded = true;
@@ -843,16 +849,13 @@ export async function readAntigravityExternalTranscriptAfter(params: Readonly<{
   const itemEnd = Math.min(windowItems.length, itemStart + Math.trunc(params.maxItems));
   const items = windowItems.slice(itemStart, itemEnd);
   const windowDrained = itemEnd >= windowItems.length;
-  const emptyGroups = groups.filter((group) => group.items.length === 0);
-  // The host counts every skip code except `non_transcript_record_skipped` as a
-  // REQUIRED item failure, so a checkpoint this build deliberately omits must
-  // not be reported as history it could not read. Reported once, when this
-  // window is retired, so replaying it cannot inflate the counts.
+  // Report fallback and deliberate-omission facts once the native window is
+  // retired, so replaying a projected item page cannot inflate the counts.
   const skippedPositions = windowDrained
-    ? emptyGroups.filter((group) => group.unsupported).map((group) => group.startOffsetBytes)
+    ? groups.filter((group) => group.unsupported).map((group) => group.startOffsetBytes)
     : [];
   const nonTranscriptPositions = windowDrained
-    ? emptyGroups.filter((group) => !group.unsupported).map((group) => group.startOffsetBytes)
+    ? groups.filter((group) => group.items.length === 0 && !group.unsupported).map((group) => group.startOffsetBytes)
     : [];
   return {
     kind: 'advanced',
@@ -919,8 +922,8 @@ function mapReadAfterOutcome(
                   : []),
                 ...(outcome.skippedPositions
                   ? [{
-                      code: 'unsupported_record_skipped',
-                      severity: 'required' as const,
+                      code: 'external_sessions_transcript_unsupported_record',
+                      severity: 'benign' as const,
                       count: outcome.skippedPositions.length,
                       positions: outcome.skippedPositions.slice(0, 200),
                     }]
@@ -1186,20 +1189,7 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
         pendingToolCallIds: incomingPendingToolCallIds,
       });
       const groups = projected.groups;
-      // A transcript page carries no diagnostics channel, so a record this build
-      // cannot read can only be reported by declaring the page INCOMPLETE.
-      // Records arrive oldest-first inside a backward page, so everything older
-      // than the newest unreadable record is unreachable: publishing it as an
-      // ordinary success would finalize a history with a silent hole and hand
-      // back a cursor that walks straight past it.
-      const lastUnsupportedIndex = groups.reduce(
-        (found, group, index) => (group.unsupported ? index : found),
-        -1,
-      );
-      const readableGroups = lastUnsupportedIndex < 0
-        ? groups
-        : groups.slice(lastUnsupportedIndex + 1);
-      const windowItems = readableGroups.flatMap((group) => group.items);
+      const windowItems = groups.flatMap((group) => group.items);
       // The cursor replays this window; a smaller projection than it recorded
       // means the source moved under it, and slicing it anyway would silently
       // emit different history at the same position.
@@ -1219,10 +1209,6 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
         conversationId: request.remoteSessionId,
         records: outcome.tailCorrelationLookbackRecords,
       }).pendingToolCallIds;
-      // Older items of this window are unreachable past an unreadable record,
-      // but the readable ones newer than it are still owed to the caller, so the
-      // page only becomes incomplete once this window is drained.
-      const truncated = lastUnsupportedIndex >= 0 && windowDrained;
       const nextCursor = !windowDrained
         ? encodeAntigravityExternalPageCursor({
           v: 1,
@@ -1232,7 +1218,7 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
           nativeMaxBytes,
           itemEnd: itemStart,
         })
-        : truncated || outcome.nextCursor === null
+        : outcome.nextCursor === null
           ? null
           : encodeAntigravityExternalPageCursor({
             v: 1,
@@ -1251,7 +1237,12 @@ export function createAntigravityExternalSessionsContribution(params: Readonly<{
           pendingToolCallIds: tailPendingToolCallIds,
         }),
         hasMore: nextCursor !== null,
-        ...(truncated ? { truncated: true } : {}),
+        ...(windowDrained && groups.some((group) => group.unsupported) ? { diagnostics: [{
+          code: 'external_sessions_transcript_unsupported_record',
+          severity: 'benign' as const,
+          count: groups.filter((group) => group.unsupported).length,
+          positions: groups.filter((group) => group.unsupported).map((group) => group.startOffsetBytes).slice(0, 200),
+        }] } : {}),
       }));
     },
 

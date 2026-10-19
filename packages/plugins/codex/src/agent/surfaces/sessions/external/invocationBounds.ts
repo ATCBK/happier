@@ -1,4 +1,5 @@
 import type { ExternalSessionContentSearchControl } from '@happier-dev/plugin-sdk/sessions/file-stores';
+import type { CodexRolloutPreparation } from '../../../rollout/discovery/preparation.js';
 
 export type CodexExternalSessionInvocationBounds = Readonly<{
   signal?: AbortSignal;
@@ -6,12 +7,14 @@ export type CodexExternalSessionInvocationBounds = Readonly<{
   /** Content discovery may yield before another observed work unit cannot fit. */
   onProgress?: (resetEstimate?: boolean) => void;
   contentSearchControl?: ExternalSessionContentSearchControl;
+  preparation?: CodexRolloutPreparation;
 }>;
 
 export function throwIfCodexExternalSessionInvocationStopped(
   bounds: CodexExternalSessionInvocationBounds,
 ): void {
   bounds.signal?.throwIfAborted();
+  bounds.preparation?.assertNotYielded();
   bounds.onProgress?.();
   if (
     bounds.deadlineAtMs !== undefined

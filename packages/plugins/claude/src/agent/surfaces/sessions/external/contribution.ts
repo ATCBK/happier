@@ -100,14 +100,14 @@ function validateSource(params: Readonly<{
 }>> {
     const legacySource = projectClaudeExternalSessionSource(params.source);
     if (!legacySource) {
-        return failed('source_invalid', 'provider/source mismatch');
+        return failed('source_invalid', 'external_sessions_source_kind_mismatch');
     }
     const validation = validateClaudeExternalSessionSource({
         source: legacySource,
         env: params.env,
     });
     if (!validation.ok) {
-        return failed('source_invalid', validation.error);
+        return failed('source_invalid', 'external_sessions_source_validation');
     }
     return ok({
         legacySource: validation.source,
@@ -170,11 +170,12 @@ function mapTranscriptPage(
         tailCursor?: string | null;
         hasMore?: boolean;
         truncated?: boolean;
+        diagnostics?: AgentExternalSessionsTranscriptPage['diagnostics'];
     }>,
 ): AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage> {
     const items = page.items.map(mapTranscriptItem);
     if (items.some((item) => item === null)) {
-        return failed('agent_error', 'Claude produced a transcript item outside the public JSON contract.');
+        return failed('agent_error', 'external_sessions_transcript_item_json');
     }
     return ok({
         items: items.filter((item): item is AgentExternalSessionTranscriptItem | AgentExternalSessionTerminalObservation => item !== null),
@@ -182,6 +183,7 @@ function mapTranscriptPage(
         ...(page.tailCursor !== undefined ? { tailCursor: page.tailCursor } : {}),
         ...(page.hasMore !== undefined ? { hasMore: page.hasMore } : {}),
         ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+        ...(page.diagnostics !== undefined ? { diagnostics: page.diagnostics } : {}),
     });
 }
 
@@ -226,6 +228,8 @@ function mapReadAfterPage(
 function mapCandidate(candidate: Readonly<{
     remoteSessionId: string;
     title?: string | null;
+    cwd?: string;
+    messageCount?: number;
     updatedAtMs: number;
     createdAtMs?: number;
     archived?: boolean;
@@ -238,6 +242,8 @@ function mapCandidate(candidate: Readonly<{
     return {
         remoteSessionId: candidate.remoteSessionId,
         ...(candidate.title ? { title: candidate.title } : {}),
+        ...(candidate.cwd ? { cwd: candidate.cwd } : {}),
+        ...(candidate.messageCount !== undefined ? { messageCount: candidate.messageCount } : {}),
         updatedAtMs: candidate.updatedAtMs,
         ...(candidate.createdAtMs !== undefined ? { createdAtMs: candidate.createdAtMs } : {}),
         ...(candidate.archived !== undefined ? { archived: candidate.archived } : {}),
@@ -376,7 +382,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
                 projectId: requestedProjectId,
             });
             const legacySource = projectClaudeExternalSessionSource(source);
-            if (!legacySource) return failed('source_invalid', 'provider/source mismatch');
+            if (!legacySource) return failed('source_invalid', 'external_sessions_source_kind_mismatch');
             try {
                 const resolved = await resolveClaudeJsonlSessionFile({
                     source: legacySource,
@@ -463,20 +469,20 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
                 return serializedByteLength(mapped) <= request.maxSerializedBytes
                     ? mapped
                     : createAgentExternalSessionsProducerOverflowFailure(
-                        'Claude transcript result byte budget cannot fit the page envelope.',
+                        'external_sessions_transcript_page_byte_budget',
                     );
             } catch (error) {
                 const after = invocationFailure(request);
                 if (after) return after;
                 if (error instanceof ClaudeTranscriptInvalidCursorError) {
-                    return failed('invalid_request', error.message);
+                    return failed('invalid_request', 'external_sessions_transcript_cursor_invalid');
                 }
                 if (error instanceof ClaudeTranscriptResultBudgetTooSmallError) {
                     return createAgentExternalSessionsProducerOverflowFailure(error.message);
                 }
                 return failed(
                     'agent_error',
-                    error instanceof Error ? error.message : 'Claude external-session transcript operation failed.',
+                    'external_sessions_transcript_read_failed',
                     true,
                 );
             }

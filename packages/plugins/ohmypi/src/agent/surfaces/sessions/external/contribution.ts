@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises';
+
 import {
   createExternalSessionContentSearchControl,
   searchExternalSessionContent,
@@ -32,7 +34,6 @@ import { resolveOhMyPiSessionFile } from './files.js';
 import {
   OhMyPiExternalSessionIncompleteBranchError,
   OhMyPiExternalSessionInvalidCursorError,
-  OhMyPiExternalSessionUnsupportedRecordError,
   OhMyPiExternalSessionSourceChangedError,
   OhMyPiExternalSessionSourceUnavailableError,
   pageOhMyPiSessionTranscript,
@@ -114,6 +115,57 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
+type OhMyPiContentSearchProgress = {
+  filePath: string;
+  sourceIdentity: string;
+  maxItems: number;
+  maxSerializedBytes: number;
+  page: NonNullable<Parameters<typeof searchExternalSessionContent>[0]['pageProgress']>;
+};
+
+function readContentSearchProgress(value: unknown): OhMyPiContentSearchProgress | null {
+  if (!isPlainObject(value) || typeof value.filePath !== 'string' || !value.filePath
+    || typeof value.sourceIdentity !== 'string' || !value.sourceIdentity
+    || typeof value.maxItems !== 'number' || !Number.isSafeInteger(value.maxItems) || value.maxItems < 1
+    || typeof value.maxSerializedBytes !== 'number' || !Number.isSafeInteger(value.maxSerializedBytes) || value.maxSerializedBytes < 1
+    || !isPlainObject(value.page)) return null;
+  const page = value.page;
+  if (typeof page.complete !== 'boolean' || typeof page.itemCount !== 'number'
+    || !Number.isSafeInteger(page.itemCount) || page.itemCount < 0
+    || (page.cursor !== undefined && (typeof page.cursor !== 'string' || !page.cursor))) return null;
+  const match = page.match;
+  let parsedMatch: OhMyPiContentSearchProgress['page']['match'] = null;
+  if (match !== null) {
+    if (!isPlainObject(match) || typeof match.id !== 'string' || !match.id
+      || (match.cursor !== undefined && (typeof match.cursor !== 'string' || !match.cursor))
+      || typeof match.distanceFromEnd !== 'number' || !Number.isSafeInteger(match.distanceFromEnd)
+      || match.distanceFromEnd < 1 || match.distanceFromEnd > page.itemCount) return null;
+    parsedMatch = {
+      ...(typeof match.cursor === 'string' ? { cursor: match.cursor } : {}),
+      id: match.id,
+      distanceFromEnd: match.distanceFromEnd,
+    };
+  }
+  return {
+    filePath: value.filePath,
+    sourceIdentity: value.sourceIdentity,
+    maxItems: value.maxItems,
+    maxSerializedBytes: value.maxSerializedBytes,
+    page: {
+      ...(typeof page.cursor === 'string' ? { cursor: page.cursor } : {}),
+      complete: page.complete,
+      itemCount: page.itemCount,
+      match: parsedMatch,
+    },
+  };
+}
+
+async function readContentSourceIdentity(filePath: string): Promise<string> {
+  const metadata = await stat(filePath, { bigint: true }).catch(() => null);
+  if (!metadata?.isFile()) throw new OhMyPiCandidateSourceChangedError('Oh My Pi transcript is unavailable during content search.');
+  return [metadata.dev, metadata.ino, metadata.birthtimeNs, metadata.size, metadata.mtimeNs, metadata.ctimeNs].join(':');
+}
+
 function isLinkDataValue(
   value: unknown,
   ancestors: ReadonlySet<object>,
@@ -155,6 +207,7 @@ function mapTranscriptItem(
     createdAtMs: item.createdAtMs,
     ...(item.localId !== undefined ? { localId: item.localId } : {}),
     raw: parsedRaw.data,
+    ...(item.messageRole !== undefined ? { messageRole: item.messageRole } : {}),
   };
 }
 
@@ -165,6 +218,7 @@ function mapTranscriptPage(
     tailCursor?: string | null;
     hasMore?: boolean;
     truncated?: boolean;
+    diagnostics?: AgentExternalSessionsTranscriptPage['diagnostics'];
   }>,
 ): AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage> {
   const items = page.items.map(mapTranscriptItem);
@@ -177,6 +231,7 @@ function mapTranscriptPage(
     ...(page.tailCursor !== undefined ? { tailCursor: page.tailCursor } : {}),
     ...(page.hasMore !== undefined ? { hasMore: page.hasMore } : {}),
     ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    ...(page.diagnostics?.length ? { diagnostics: page.diagnostics } : {}),
   });
 }
 
@@ -263,9 +318,6 @@ function transcriptFailure(error: unknown): AgentExternalSessionsResult<never> {
   if (error instanceof OhMyPiExternalSessionIncompleteBranchError) {
     return failed('agent_error', error.message, false);
   }
-  if (error instanceof OhMyPiExternalSessionUnsupportedRecordError) {
-    return failed('agent_error', error.message, false);
-  }
   // A readable-source fault the leaf did not classify (for example an
   // unreadable file) is an Agent fault, never evidence that the Agent is missing.
   return failed(
@@ -278,6 +330,7 @@ function transcriptFailure(error: unknown): AgentExternalSessionsResult<never> {
 function mapCandidate(candidate: Readonly<{
   remoteSessionId: string;
   title?: string | null;
+  messageCount?: number;
   updatedAtMs: number;
   createdAtMs?: number;
   archived?: boolean;
@@ -291,6 +344,8 @@ function mapCandidate(candidate: Readonly<{
   return {
     remoteSessionId: candidate.remoteSessionId,
     ...(candidate.title ? { title: candidate.title } : {}),
+    ...(typeof details?.workingDirectory === 'string' && details.workingDirectory.trim() ? { cwd: details.workingDirectory } : {}),
+    ...(candidate.messageCount !== undefined ? { messageCount: candidate.messageCount } : {}),
     updatedAtMs: candidate.updatedAtMs,
     ...(candidate.createdAtMs !== undefined ? { createdAtMs: candidate.createdAtMs } : {}),
     ...(candidate.archived !== undefined ? { archived: candidate.archived } : {}),
@@ -424,8 +479,10 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
       const contentSearch = request.searchTarget === 'content';
       const query = request.searchTerm ?? '';
       const sourceKey = JSON.stringify(validation.value.publicSource);
+      let contentProgress: OhMyPiContentSearchProgress | null = null;
       const wrapCursor = (cursor: string | null) => contentSearch && cursor
-        ? Buffer.from(JSON.stringify({ v: 1, kind: 'ohMyPiContentSearch', query, sourceKey, cursor }), 'utf8').toString('base64url')
+        ? Buffer.from(JSON.stringify({ v: 1, kind: 'ohMyPiContentSearch', query, sourceKey, cursor,
+          ...(contentProgress ? { progress: contentProgress } : {}) }), 'utf8').toString('base64url')
         : cursor;
       let cursor = request.cursor;
       if (contentSearch && cursor) {
@@ -434,6 +491,10 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
         if (!isPlainObject(parsed) || parsed.v !== 1 || parsed.kind !== 'ohMyPiContentSearch'
           || parsed.query !== query || parsed.sourceKey !== sourceKey || typeof parsed.cursor !== 'string') {
           return failed('invalid_request', 'Oh My Pi content cursor does not match this query and source.');
+        }
+        if (parsed.progress !== undefined) {
+          contentProgress = readContentSearchProgress(parsed.progress);
+          if (!contentProgress) return failed('invalid_request', 'Oh My Pi content cursor progress is invalid.');
         }
         cursor = parsed.cursor;
       }
@@ -451,46 +512,59 @@ export function createOhMyPiExternalSessionsContribution(params: Readonly<{
           searchTerm: request.searchTerm,
           signal: request.signal,
           ...(control ? {
-            checkWork: control.checkWork,
             async searchCandidate(candidate: OhMyPiExternalSessionCandidate) {
+              const filePath = candidate.details.sessionFilePath;
+              const resuming = contentProgress !== null;
+              const sourceIdentity = await readContentSourceIdentity(filePath);
+              if (contentProgress && (contentProgress.filePath !== filePath || contentProgress.sourceIdentity !== sourceIdentity)) {
+                throw new OhMyPiCandidateSourceChangedError('Oh My Pi transcript changed during content search.');
+              }
+              const progress: OhMyPiContentSearchProgress = contentProgress ?? {
+                filePath, sourceIdentity, maxItems: request.maxItems, maxSerializedBytes: request.maxSerializedBytes,
+                page: { complete: false, itemCount: 0, match: null },
+              };
+              contentProgress = progress;
+              // Commit native branch/byte pages before cooperative yield;
+              // every read still observes actual cancellation.
+              const nativeControl = createExternalSessionContentSearchControl({ signal: request.signal });
               const searched = await searchExternalSessionContent({
                 query,
-                paths: [candidate.details.sessionFilePath],
+                ...(resuming ? {} : { paths: [filePath] }),
                 ripgrep: request.ripgrep,
                 control,
-                async decode(matchText) {
-                  const pages: Readonly<{ id: string; snippet?: string }>[][] = [];
-                  let transcriptCursor: string | undefined;
-                  do {
-                    control.checkWork();
-                    const page = await pageOhMyPiSessionTranscript({
-                      source: validation.value.legacySource,
-                      env,
-                      providerSessionId: candidate.remoteSessionId,
-                      sessionFilePath: candidate.details.sessionFilePath,
-                      direction: 'older',
-                      cursor: transcriptCursor,
-                      maxBytes: request.maxSerializedBytes,
-                      maxItems: request.maxItems,
-                      scannerFileSystem: control.fileSystem,
-                    });
-                    control.checkWork();
-                    if (page.truncated) return { records: [], partial: true };
-                    pages.push(page.items.map((item) => {
-                      const content = isPlainObject(item.raw.content) ? item.raw.content : null;
-                      const data = isPlainObject(content?.data) ? content.data : null;
-                      const text = content?.type === 'text' ? content.text
-                        : content?.type === 'acp' && data?.type === 'message' ? data.message : null;
-                      const snippet = typeof text === 'string' ? matchText(text) : null;
-                      return { id: item.id, ...(snippet === null ? {} : { snippet }) };
-                    }));
-                    transcriptCursor = page.nextCursor ?? undefined;
-                  } while (transcriptCursor);
-                  return { records: pages.reverse().flat(), partial: false };
+                pageProgress: progress.page,
+                async decode(matchText, transcriptCursor) {
+                  if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
+                    throw new OhMyPiCandidateSourceChangedError('Oh My Pi transcript changed during content search.');
+                  }
+                  const page = await pageOhMyPiSessionTranscript({
+                    source: validation.value.legacySource,
+                    env,
+                    providerSessionId: candidate.remoteSessionId,
+                    sessionFilePath: filePath,
+                    direction: 'older',
+                    cursor: transcriptCursor,
+                    maxBytes: progress.maxSerializedBytes,
+                    maxItems: progress.maxItems,
+                    scannerFileSystem: nativeControl.fileSystem,
+                  });
+                  if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
+                    throw new OhMyPiCandidateSourceChangedError('Oh My Pi transcript changed during content search.');
+                  }
+                  return { records: page.items.map((item) => {
+                    const content = isPlainObject(item.raw.content) ? item.raw.content : null;
+                    const data = isPlainObject(content?.data) ? content.data : null;
+                    const text = content?.type === 'text' ? content.text
+                      : content?.type === 'acp' && data?.type === 'message' ? data.message : null;
+                    const snippet = typeof text === 'string' ? matchText(text) : null;
+                    return { id: item.id, ...(snippet === null ? {} : { snippet }) };
+                  }), nextCursor: page.nextCursor, partial: page.truncated === true };
                 },
               });
+              contentProgress = null;
               partial ||= searched.partial;
-              return searched.match ? { ...candidate, match: searched.match } : null;
+              return searched.match ? { ...candidate, match: searched.match,
+                ...(!searched.partial ? { messageCount: progress.page.itemCount } : {}) } : null;
             },
           } : {}),
           resultBudget: {

@@ -11,7 +11,7 @@ import { createAntigravityExternalSessionsContribution } from './externalSession
 // Preserve real filesystem data/handles; only charge native reads to the clock.
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, open: vi.fn(actual.open) };
+  return { ...actual, open: vi.fn(actual.open), stat: vi.fn(actual.stat) };
 });
 
 const roots: string[] = [];
@@ -19,6 +19,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   vi.mocked(fileSystem.open).mockReset().mockImplementation(actual.open);
+  vi.mocked(fileSystem.stat).mockReset().mockImplementation(actual.stat);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -33,7 +34,8 @@ async function corpus() {
   // source fixture. One oversized planner row must commit before yielding.
   records[1] = { ...records[1], text: 'ordinary '.repeat(70_000) };
   records.push(...Array.from({ length: 12 }, (_, index) => ({
-    step_index: 20 + index, type: 'PLANNER_RESPONSE', text: `ordinary row ${index}`,
+    step_index: 20 + index, type: 'PLANNER_RESPONSE',
+    text: index === 8 ? 'Body-only café needle earliest' : `ordinary row ${index}`,
   })), { step_index: 40, type: 'PLANNER_RESPONSE', text: 'Body-only café needle' });
   const paths: string[] = [];
   for (const [id, rows] of [['conversation-first', records], ['conversation-later', [{ id: 'later', type: 'PLANNER_RESPONSE', text: 'Body-only café needle later' }]]] as const) {
@@ -56,7 +58,7 @@ async function corpus() {
 
 describe('Antigravity native content continuation', () => {
   it('commits indivisible native rows across identical budgets, rematches native text and advances beyond the file', async () => {
-    const { ExternalSessionCandidateV1Schema, ExternalSessionCandidateMatchV1Schema } = await import('@happier-dev/protocol/sessions/external/daemonRpcV1');
+    const { ExternalSessionCandidateV1Schema, ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListResponseSchema } = await import('@happier-dev/protocol/sessions/external/daemonRpcV1');
     const { contribution, request, paths } = await corpus();
     const transcript = await contribution.pageTranscript({ ...request, maxItems: 100, remoteSessionId: 'conversation-first', direction: 'older' });
     if (!transcript.ok) throw new Error(JSON.stringify(transcript));
@@ -65,13 +67,27 @@ describe('Antigravity native content continuation', () => {
       if (!content || typeof content !== 'object' || Array.isArray(content) || content.type !== 'acp') return false;
       const data = content.data;
       return data !== null && typeof data === 'object' && !Array.isArray(data)
-        && data.type === 'message' && data.message === request.searchTerm;
+        && data.type === 'message' && data.message === `${request.searchTerm} earliest`;
     });
     expect(expectedIndex).toBeGreaterThan(10);
     const expectedId = transcript.value.items[expectedIndex]!.id;
+    const toolCallIds = transcript.value.items.flatMap((item) => {
+      const content = item.raw.content;
+      if (!content || typeof content !== 'object' || Array.isArray(content) || content.type !== 'acp') return [];
+      const data = content.data;
+      return data !== null && typeof data === 'object' && !Array.isArray(data)
+        && data.type === 'tool-call' && typeof data.callId === 'string' ? [data.callId] : [];
+    });
+    expect(toolCallIds).toHaveLength(2);
     let nowMs = Date.now();
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(fileSystem.stat).mockImplementation(async (...args) => {
+      const metadata = await actual.stat(...args);
+      // Source validation itself can exhaust the cooperative scan deadline.
+      nowMs += 15_000;
+      return metadata;
+    });
     vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
       const handle = await actual.open(...args);
       nowMs += 3000;
@@ -85,6 +101,7 @@ describe('Antigravity native content continuation', () => {
       const result = await contribution.listCandidates({ ...request, scanDeadlineAtMs: nowMs + 15_000,
         ...(cursor ? { cursor } : {}) });
       if (!result.ok) throw new Error(JSON.stringify(result));
+      ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, ...result.value });
       for (const candidate of result.value.candidates) {
         hits.push(ExternalSessionCandidateV1Schema.parse(candidate));
         ExternalSessionCandidateMatchV1Schema.parse(candidate.match);
@@ -94,13 +111,16 @@ describe('Antigravity native content continuation', () => {
       if (cursor) expect(result.value.nextCursor).not.toBe(cursor);
       firstCursor ??= result.value.nextCursor;
       const continuation = JSON.parse(Buffer.from(result.value.nextCursor, 'base64url').toString('utf8')) as { contentProgress?: { pendingToolCallIds: string[] } };
-      pendingCallsSeen ||= (continuation.contentProgress?.pendingToolCallIds.length ?? 0) === 2;
+      if (continuation.contentProgress?.pendingToolCallIds.length === 2) {
+        expect(continuation.contentProgress.pendingToolCallIds).toEqual(toolCallIds);
+        pendingCallsSeen = true;
+      }
       cursor = result.value.nextCursor;
     }
     expect(cursor).toBeNull();
     expect(hits.map((hit) => hit.remoteSessionId).sort()).toEqual(['conversation-first', 'conversation-later']);
     expect(hits.find((hit) => hit.remoteSessionId === 'conversation-first')?.match).toEqual({
-      sourceItemId: expectedId, messageIndex: expectedIndex, snippet: request.searchTerm,
+      sourceItemId: expectedId, messageIndex: expectedIndex, snippet: `${request.searchTerm} earliest`,
     });
     expect(firstCursor).toBeDefined();
     expect(pendingCallsSeen).toBe(true);
@@ -128,5 +148,55 @@ describe('Antigravity native content continuation', () => {
       return handle;
     });
     await expect(contribution.listCandidates({ ...request, signal: controller.signal })).resolves.toMatchObject({ ok: false, code: 'cancelled' });
+    let clock = Date.now();
+    const deadlineAtMs = clock + 1000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    opens = 0;
+    vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      if (++opens > 1) clock = deadlineAtMs;
+      return handle;
+    });
+    await expect(contribution.listCandidates({ ...request, deadlineAtMs }))
+      .resolves.toMatchObject({ ok: false, code: 'timeout' });
+    expect(opens).toBeGreaterThan(1);
+  });
+
+  it('reports an interrupted native JSONL tail as partial even when directory traversal finishes', async () => {
+    const { contribution, request, paths } = await corpus();
+    await appendFile(paths[0]!, '{"type":"PLANNER_RESPONSE"');
+    await expect(contribution.listCandidates({ ...request, maxItems: 100 }))
+      .resolves.toMatchObject({ ok: true, value: { nextCursor: null, contentCoverage: 'partial' } });
+  });
+
+  it('preserves full transcript ordinals and earlier matches around unsupported records', async () => {
+    const { contribution, request, paths } = await corpus();
+    const rows = (await readFile(paths[0]!, 'utf8')).trimEnd().split('\n');
+    // The real sanitized native fixture includes this future observation.
+    const fixture = await readFile(new URL('./transcript/__fixtures__/transcript_full.semantic.sanitized.jsonl', import.meta.url), 'utf8');
+    const unsupported = fixture.trim().split('\n').find((line) => line.includes('FUTURE_OBSERVATION'));
+    if (!unsupported) throw new Error('Native fixture is missing its unsupported observation.');
+    rows.splice(3, 0, unsupported);
+    await writeFile(paths[0]!, rows.join('\n') + '\n');
+    const transcript = await contribution.pageTranscript({ ...request, maxItems: 100,
+      remoteSessionId: 'conversation-first', direction: 'older' });
+    if (!transcript.ok) throw new Error(JSON.stringify(transcript));
+    expect(transcript.value.truncated).not.toBe(true);
+    const messageIndex = transcript.value.items.findIndex((item) => {
+      const content = item.raw.content;
+      if (!content || typeof content !== 'object' || Array.isArray(content) || content.type !== 'acp') return false;
+      const data = content.data;
+      return data !== null && typeof data === 'object' && !Array.isArray(data)
+        && data.type === 'message' && data.message === `${request.searchTerm} earliest`;
+    });
+    expect(messageIndex).toBeGreaterThanOrEqual(0);
+    const result = await contribution.listCandidates({ ...request, maxItems: 100 });
+    if (!result.ok) throw new Error(JSON.stringify(result));
+    expect(result.value.contentCoverage).toBe('partial');
+    expect(result.value.candidates.find((candidate) => candidate.remoteSessionId === 'conversation-first')?.match)
+      .toEqual({ sourceItemId: transcript.value.items[messageIndex]!.id,
+        messageIndex, snippet: `${request.searchTerm} earliest` });
+    await expect(contribution.listCandidates({ ...request, maxItems: 100, searchTerm: 'Inspect the demo workspace.' }))
+      .resolves.toMatchObject({ ok: true, value: { candidates: [expect.objectContaining({ remoteSessionId: 'conversation-first' })], contentCoverage: 'partial' } });
   });
 });

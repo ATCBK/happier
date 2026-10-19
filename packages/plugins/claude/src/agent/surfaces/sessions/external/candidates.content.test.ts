@@ -17,7 +17,7 @@ import { RawJSONLinesSchema } from '../../../transcripts/rawJsonLines.js';
 // Filesystem is a genuine system boundary; retain its actual reads and handles.
 vi.mock('node:fs/promises', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
-    return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir) };
+    return { ...actual, open: vi.fn(actual.open), readdir: vi.fn(actual.readdir) };
 });
 
 const roots: string[] = [];
@@ -25,7 +25,7 @@ afterEach(async () => {
     vi.restoreAllMocks();
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
     vi.mocked(fileSystem.open).mockReset().mockImplementation(actual.open);
-    vi.mocked(fileSystem.opendir).mockReset().mockImplementation(actual.opendir);
+    vi.mocked(fileSystem.readdir).mockReset().mockImplementation(actual.readdir);
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -60,6 +60,232 @@ async function corpus() {
 }
 
 describe('Claude candidate conversation search', () => {
+    it('finds readable assistant text after a NUL record in a directory-prefiltered native transcript', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        await appendFile(path, '\0\n' + JSON.stringify({ type: 'assistant', uuid: 'nul-follow-up', parentUuid: 'tool',
+            message: { role: 'assistant', content: [{ type: 'text', text: 'test-r101 traced all 23' }] } }) + '\n');
+        // Exercise the machine-wide layout, not an explicit file operand.
+        const page = await listClaudeExternalSessionCandidates({ ...params,
+            source: { kind: 'claudeConfig', configDir: params.source.configDir }, searchTerm: 'test-r101 traced all 23' });
+        expect(page.candidates).toMatchObject([{ remoteSessionId: 'session',
+            match: { snippet: 'test-r101 traced all 23', sourceItemId: expect.any(String) } }]);
+        expect(page.contentCoverage).toBe('partial');
+        expect(page.nextCursor).toBeNull();
+    });
+    it('excludes unrelated Unicode-escaped bodies before decoding while retaining mixed-escape hits', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        const miss = join(directory, 'unicode-miss.jsonl');
+        const missLine = JSON.stringify({ type: 'user', uuid: 'miss', parentUuid: null,
+            message: { role: 'user', content: 'unrelated \u001b native tool output'.repeat(1000) } }) + '\n';
+        await writeFile(miss, missLine);
+        const hit = join(directory, 'encoded-hit.jsonl');
+        await writeFile(hit, JSON.stringify({ type: 'user', uuid: 'encoded', parentUuid: null,
+            message: { role: 'user', content: 'VIOLET harbor lantern' } }).replace('VIOLET', '\\u0056I\\u004fLET') + '\n');
+        const sidechain = join(directory, 'subagents', 'nested.jsonl');
+        await mkdir(join(directory, 'subagents'));
+        await writeFile(sidechain, '{"text":"violet harbor lantern"}\n');
+        // Native candidates are top-level JSONL files, independent of Git ignore rules.
+        await writeFile(join(directory, '.gitignore'), 'encoded-hit.jsonl\n');
+        let missBytes = 0;
+        const open = vi.mocked(fileSystem.open).getMockImplementation()!;
+        vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+            const handle = await open(...args);
+            if (args[0] === miss) {
+                const read = handle.read.bind(handle);
+                handle.read = (async (...readArgs: Parameters<typeof read>) => {
+                    const result = await read(...readArgs);
+                    missBytes += result.bytesRead;
+                    return result;
+                }) as typeof handle.read;
+            }
+            return handle;
+        });
+        const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'violet harbor lantern' });
+        expect(page.candidates).toMatchObject([{ remoteSessionId: 'encoded-hit',
+            match: { snippet: 'VIOLET harbor lantern', sourceItemId: expect.any(String), messageIndex: 0 } }]);
+        expect(page.nextCursor).toBeNull();
+        // One source-scoped OS prefilter covers the page's native files.
+        expect(params.ripgrep.run).toHaveBeenCalledTimes(1);
+        expect((await params.ripgrep.run.mock.results[0]!.value).stdout).not.toContain(sidechain);
+        // Two existing 16-KiB source-anchor reads are legitimate; reading the
+        // entire miss proves it crossed the prefilter into native decoding.
+        expect(missBytes).toBeLessThan(missLine.length);
+    });
+    it('keeps fresh and between-file pages readable when the scanned native file appends', async () => {
+        const params = await corpus();
+        const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
+        const olderPath = join(params.source.configDir, 'projects', 'project', 'older.jsonl');
+        await writeFile(olderPath, JSON.stringify({ type: 'user', uuid: 'older', parentUuid: null,
+            message: { role: 'user', content: 'Body-only older' } }) + '\n');
+        await utimes(olderPath, new Date('2025-01-01'), new Date('2025-01-01'));
+        const run = params.ripgrep.run.getMockImplementation()!;
+        params.ripgrep.run.mockImplementation(async request => {
+            const result = await run(request);
+            await appendFile(path, JSON.stringify({ type: 'cost-state', totalCostUSD: 0 }) + '\n');
+            return result;
+        });
+        const request = { ...params, searchTerm: 'Body-only', limit: 1 };
+        const first = await listClaudeExternalSessionCandidates(request);
+        expect(first.candidates.map(hit => hit.remoteSessionId)).toEqual(['session']);
+        expect(first.nextCursor).toBeTruthy();
+        await appendFile(path, JSON.stringify({ type: 'atis-latch', enabled: true }) + '\n');
+        const next = await listClaudeExternalSessionCandidates({ ...request, cursor: first.nextCursor! });
+        expect(next.candidates.map(hit => hit.remoteSessionId)).toEqual(['older']);
+    });
+    it('retires intermediate development content cursors through the existing fresh-search failure', async () => {
+        const params = await corpus();
+        const result = await createClaudeExternalSessionsContribution({ env: {} }).listCandidates({
+            source: params.source, maxItems: 1, searchTarget: 'content', searchTerm: 'Body-only',
+            cursor: Buffer.from(JSON.stringify([6, null, 'body-only', 'l', 'content', {}])).toString('base64url'),
+            signal: new AbortController().signal, maxSerializedBytes: 1024 * 1024,
+            ripgrep: params.ripgrep, exec: {} as ExecService,
+        });
+        expect(result).toMatchObject({ ok: false, code: 'source_invalid', retryable: true });
+        const fresh = await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'Body-only' });
+        expect(fresh.candidates).toMatchObject([{ remoteSessionId: 'session', match: { messageIndex: 1 } }]);
+    });
+    it('keeps its content frontier independent of corpus size', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        const nowMs = Date.now() + 1000;
+        vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+        const row = JSON.stringify({ type: 'user', uuid: 'hit', parentUuid: null,
+            message: { role: 'user', content: 'compact frontier needle' } }) + '\n';
+        await writeFile(join(directory, 'a.jsonl'), row);
+        await utimes(join(directory, 'a.jsonl'), new Date(nowMs - 100), new Date(nowMs - 100));
+        const request = { ...params, searchTerm: 'compact frontier needle', limit: 1 };
+        const small = await listClaudeExternalSessionCandidates(request);
+        expect(small.candidates.map(hit => hit.remoteSessionId)).toEqual(['a']);
+        expect(small.nextCursor).toBeTruthy();
+        await Promise.all(Array.from({ length: 661 }, async (_, index) => {
+            const path = join(directory, `older-${index}.jsonl`);
+            await writeFile(path, row);
+            await utimes(path, new Date(nowMs - 200), new Date(nowMs - 200));
+        }));
+        const large = await listClaudeExternalSessionCandidates(request);
+        expect(large.nextCursor).toBe(small.nextCursor);
+        expect(large.nextCursor!.length).toBeLessThanOrEqual(2000);
+    });
+    it('resumes tied native identities even after the fully visited frontier file disappears', async () => {
+        const params = await corpus();
+        const projects = join(params.source.configDir, 'projects');
+        for (const project of ['alpha', 'beta', 'gamma']) {
+            await mkdir(join(projects, project));
+            const path = join(projects, project, 'same-id.jsonl');
+            await writeFile(path, JSON.stringify({ type: 'user', uuid: 'match', parentUuid: null,
+                message: { role: 'user', content: 'tied frontier needle' } }) + '\n');
+            await utimes(path, new Date('2026-01-01'), new Date('2026-01-01'));
+        }
+        const request = { ...params, source: { kind: 'claudeConfig' as const, configDir: params.source.configDir },
+            searchTerm: 'tied frontier needle', limit: 1 };
+        const first = await listClaudeExternalSessionCandidates(request);
+        const found = first.candidates.map(row => row.details.projectId);
+        await rm(join(projects, found[0]!, 'same-id.jsonl'));
+        let cursor = first.nextCursor;
+        for (let page = 0; cursor && page < 4; page += 1) {
+            const next = await listClaudeExternalSessionCandidates({ ...request, cursor });
+            found.push(...next.candidates.map(row => row.details.projectId));
+            if (next.nextCursor) expect(next.nextCursor).not.toBe(cursor);
+            cursor = next.nextCursor;
+        }
+        expect(cursor).toBeNull();
+        expect(found.sort()).toEqual(['alpha', 'beta', 'gamma']);
+    });
+    it('finishes the main frontier before a single bounded changed-file pass despite visited and unrelated appends', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        let nowMs = Date.now() + 1000;
+        const t0 = nowMs;
+        vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+        for (const [id, age] of [['a', 10], ['b', 20], ['c', 30], ['unrelated', 40]] as const) {
+            const path = join(directory, `${id}.jsonl`);
+            await writeFile(path, JSON.stringify({ type: 'user', uuid: id, parentUuid: null,
+                message: { role: 'user', content: id === 'unrelated' ? 'ordinary' : 'changed frontier needle' } }) + '\n');
+            await utimes(path, new Date(t0 - age), new Date(t0 - age));
+        }
+        const request = { ...params, searchTerm: 'changed frontier needle', limit: 1 };
+        const first = await listClaudeExternalSessionCandidates(request);
+        expect(first.candidates.map(row => row.remoteSessionId)).toEqual(['a']);
+        nowMs += 1000;
+        for (const id of ['a', 'b', 'unrelated']) {
+            await appendFile(join(directory, `${id}.jsonl`), JSON.stringify({ type: 'user', uuid: `${id}-next`, parentUuid: id,
+                message: { role: 'user', content: 'ordinary append' } }) + '\n');
+            await utimes(join(directory, `${id}.jsonl`), new Date(nowMs), new Date(nowMs));
+        }
+        const hits = [...first.candidates];
+        let cursor = first.nextCursor;
+        let changedPassStarted = false;
+        for (let page = 0; cursor && page < 10; page += 1) {
+            const next = await listClaudeExternalSessionCandidates({ ...request, cursor });
+            hits.push(...next.candidates);
+            if (next.candidates.some(row => row.remoteSessionId === 'b')) {
+                changedPassStarted = true;
+                // Writing an already visited file again after T1 must not loop.
+                nowMs += 1000;
+                await utimes(join(directory, 'b.jsonl'), new Date(nowMs), new Date(nowMs));
+            }
+            if (next.nextCursor) expect(next.nextCursor).not.toBe(cursor);
+            cursor = next.nextCursor;
+        }
+        expect(changedPassStarted).toBe(true);
+        expect(cursor).toBeNull();
+        expect(hits.map(row => row.remoteSessionId)).toEqual(['a', 'c', 'a', 'b']);
+    });
+    it.each([false, true])('continues native rows with one unfinished transcript while an unvisited file changes (changed suffix=%s)', async (changeSuffix) => {
+        const params = await corpus();
+        await writeFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'),
+            Array.from({ length: 30 }, (_, index) => JSON.stringify({ type: 'user', uuid: `row-${index}`,
+                parentUuid: index ? `row-${index - 1}` : null,
+                message: { role: 'user', content: (index === 0 ? 'Prepared native needle ' : '') + 'ordinary '.repeat(2500) },
+            })).join('\n') + '\n');
+        const olderPath = join(params.source.configDir, 'projects', 'project', 'older.jsonl');
+        if (changeSuffix) {
+            await writeFile(olderPath, JSON.stringify({ type: 'user', uuid: 'older', parentUuid: null,
+                message: { role: 'user', content: 'Prepared native needle' } }) + '\n');
+            await utimes(olderPath, new Date('2025-01-01'), new Date('2025-01-01'));
+        }
+        let nowMs = Date.now();
+        vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+        vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+            const file = await actual.open(...args); nowMs += 3_000; return file;
+        });
+        const contribution = createClaudeExternalSessionsContribution({ env: {} });
+        const request = { source: params.source, maxItems: 1, searchTarget: 'content' as const,
+            searchTerm: 'Prepared native needle', signal: new AbortController().signal,
+            maxSerializedBytes: 1024 * 1024, ripgrep: params.ripgrep, exec: {} as ExecService };
+        let cursor: string | null = null;
+        let previousEnd: number | null = null;
+        const found: string[] = [];
+        let suffixChanged = false;
+        for (let page = 0; page < 30; page += 1) {
+            const result = await contribution.listCandidates({ ...request, scanDeadlineAtMs: nowMs + 10_000,
+                ...(cursor ? { cursor } : {}) });
+            if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+            if (result.value.candidates.length > 0) {
+                expect(result.value.candidates).toMatchObject([{ match: { messageIndex: 0 } }]);
+                found.push(...result.value.candidates.map(row => row.remoteSessionId));
+            }
+            if (!result.value.nextCursor) {
+                break;
+            }
+            const outer = JSON.parse(Buffer.from(result.value.nextCursor, 'base64url').toString('utf8')) as unknown[];
+            const progress = outer[7] as { endOffsetBytes?: number } | undefined;
+            if (typeof progress?.endOffsetBytes === 'number') {
+                if (previousEnd !== null) expect(progress.endOffsetBytes).toBeLessThan(previousEnd);
+                previousEnd = progress.endOffsetBytes;
+                if (changeSuffix && !suffixChanged) {
+                    nowMs += 1000;
+                    await utimes(olderPath, new Date(nowMs), new Date(nowMs));
+                    suffixChanged = true;
+                }
+            }
+            cursor = result.value.nextCursor;
+        }
+        expect(found).toEqual(changeSuffix ? ['session', 'older'] : ['session']);
+    });
     it('commits a large native row before cooperative yield across equally slow pages', async () => {
         const params = await corpus();
         const directory = join(params.source.configDir, 'projects', 'project');
@@ -128,18 +354,7 @@ describe('Claude candidate conversation search', () => {
         expect(first.candidates.map(row => row.remoteSessionId)).toEqual(['a-hit']);
         // Enumeration order is an OS boundary, not a continuation identity.
         const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-        vi.mocked(fileSystem.opendir).mockImplementation(async (...args) => {
-            const directory = await actual.opendir(...args);
-            return new Proxy(directory, { get(target, property) {
-                if (property === Symbol.asyncIterator) return async function* () {
-                    const entries = [];
-                    for await (const entry of target) entries.push(entry);
-                    yield* entries.reverse();
-                };
-                const value = Reflect.get(target, property, target);
-                return typeof value === 'function' ? value.bind(target) : value;
-            } });
-        });
+        vi.mocked(fileSystem.readdir).mockImplementation(async (...args) => (await actual.readdir(...args)).reverse());
         const second = await listClaudeExternalSessionCandidates({ ...request, cursor: first.nextCursor! });
         expect(second.candidates.map(row => row.remoteSessionId)).toEqual(['b-hit']);
         // A newer unrelated conversation must not shift a recency continuation.
@@ -149,9 +364,55 @@ describe('Claude candidate conversation search', () => {
         await utimes(join(projects, 'z-recent', 'b-hit.jsonl'), newer, newer);
         const third = await listClaudeExternalSessionCandidates({ ...request, cursor: second.nextCursor! });
         expect(third.candidates.map(row => row.remoteSessionId)).toEqual(['old']);
-        const final = third.nextCursor ? await listClaudeExternalSessionCandidates({ ...request, cursor: third.nextCursor }) : third;
+        let final = third;
+        for (let page = 0; final.nextCursor && page < 3; page += 1) {
+            const next = await listClaudeExternalSessionCandidates({ ...request, cursor: final.nextCursor });
+            if (next.nextCursor) expect(next.nextCursor).not.toBe(final.nextCursor);
+            final = next;
+        }
         expect(final.nextCursor).toBeNull();
         expect(final.contentCoverage).toBe('complete');
+    });
+    it('accepts its continuation when a newer conversation is created in the same native project', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        for (const [id, day] of [['a', 3], ['b', 2], ['c', 1]] as const) {
+            const path = join(directory, `${id}.jsonl`);
+            await writeFile(path, JSON.stringify({ type: 'user', uuid: id, parentUuid: null,
+                message: { role: 'user', content: 'stable native continuation needle' } }) + '\n');
+            const stamp = new Date(Date.UTC(2026, 0, day));
+            await utimes(path, stamp, stamp);
+        }
+        const contribution = createClaudeExternalSessionsContribution({ env: {} });
+        const request = { source: params.source, maxItems: 1, searchTarget: 'content' as const,
+            searchTerm: 'stable native continuation needle', signal: new AbortController().signal,
+            maxSerializedBytes: 1024 * 1024, ripgrep: params.ripgrep, exec: {} as ExecService };
+        const first = await contribution.listCandidates(request);
+        if (!first.ok) throw new Error(`${first.code}: ${first.message}`);
+        expect(first.value.candidates.map(row => row.remoteSessionId)).toEqual(['a']);
+        expect(first.value.nextCursor).toEqual(expect.any(String));
+        await writeFile(join(directory, 'newer.jsonl'), JSON.stringify({ type: 'user', uuid: 'newer', parentUuid: null,
+            message: { role: 'user', content: 'unrelated new conversation' } }) + '\n');
+        const second = await contribution.listCandidates({ ...request, cursor: first.value.nextCursor! });
+        expect(second).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: 'b' }] } });
+    });
+    it('returns the real first page while another conversation appears during native enumeration', async () => {
+        const params = await corpus();
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+        let inserted = false;
+        vi.mocked(fileSystem.readdir).mockImplementation(async (...args) => {
+            const entries = await actual.readdir(...args);
+            if (!inserted && args[0] === join(params.source.configDir, 'projects', 'project')) {
+                inserted = true;
+                await writeFile(join(params.source.configDir, 'projects', 'project', 'new.jsonl'), '{}\n');
+            }
+            return entries;
+        });
+        const contribution = createClaudeExternalSessionsContribution({ env: {} });
+        const result = await contribution.listCandidates({ source: params.source, maxItems: 1,
+            searchTarget: 'content', searchTerm: 'Body-only', signal: new AbortController().signal,
+            maxSerializedBytes: 1024 * 1024, ripgrep: params.ripgrep, exec: {} as ExecService });
+        expect(result).toMatchObject({ ok: true, value: { candidates: [{ remoteSessionId: 'session' }] } });
     });
     it('budgets returned content hits rather than unrelated source files', async () => {
         const params = await corpus();
@@ -210,10 +471,13 @@ describe('Claude candidate conversation search', () => {
         if (!first.ok) throw new Error(`${first.code}: ${first.message}`);
         expect(nowMs).toBeLessThan(deadlineAtMs);
         expect(first.value).toMatchObject({ candidates: [], contentCoverage: 'partial', nextCursor: expect.any(String) });
+        await appendFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'),
+            JSON.stringify({ type: 'cost-state', totalCostUSD: 0 }) + '\n');
+        await utimes(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), sourceMtime, sourceMtime);
         // A client may edit an opaque cursor. Returned content still comes
         // from a native row and must pass the canonical matcher on finalization.
         const editedCursor = JSON.parse(Buffer.from(first.value.nextCursor!, 'base64url').toString('utf8')) as unknown[];
-        const progress = editedCursor[8] as Record<string, unknown>;
+        const progress = editedCursor[7] as Record<string, unknown>;
         const titleHeader = JSON.stringify({ type: 'custom-title', sessionId: 'session', customTitle: 'Obsolete native title' }) + '\n';
         const firstNativeRow = JSON.stringify({ type: 'user', uuid: 'row-0', parentUuid: null,
             message: { role: 'user', content: 'ordinary '.repeat(40) } });
@@ -240,35 +504,12 @@ describe('Claude candidate conversation search', () => {
         expect(hits.map(hit => hit.remoteSessionId)).toEqual(['session', 'older']);
         expect(hits[0]?.match).toMatchObject({ snippet: 'First file deadline needle earliest', messageIndex: 100 });
         expect(hits[0]?.title).toBe('Latest native title');
-        await appendFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), JSON.stringify({
-            type: 'user', uuid: 'append', parentUuid: 'row-1499', message: { role: 'user', content: 'New native row' },
-        }) + '\n');
-        // Keep ordering unchanged: the full transcript identity, rather than
-        // recency evidence, must reject even an edited EOF continuation.
+        await writeFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), text.replace('Obsolete', 'Replaced'));
+        // Keep ordering unchanged: the captured prefix anchor must reject a
+        // rewrite, including an edited EOF continuation.
         await utimes(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), sourceMtime, sourceMtime);
         await expect(listClaudeExternalSessionCandidates({ ...params, searchTerm: request.searchTerm,
             cursor: Buffer.from(JSON.stringify(editedCursor), 'utf8').toString('base64url'), deadlineAtMs: nowMs + 15_000 })).rejects.toMatchObject({ name: 'ClaudeCandidateSourceChangedError' });
-    });
-    it('resets rather than silently omitting an unvisited file updated above the consumed recency anchor', async () => {
-        const params = await corpus();
-        const directory = join(params.source.configDir, 'projects', 'project');
-        for (const [id, age] of [['a', 3], ['b', 2], ['c', 1]] as const) {
-            const path = join(directory, `${id}.jsonl`);
-            await writeFile(path, JSON.stringify({ type: 'user', uuid: id, parentUuid: null,
-                message: { role: 'user', content: 'recency crossing needle' } }) + '\n');
-            const time = new Date(Date.UTC(2026, 0, age));
-            await utimes(path, time, time);
-        }
-        const request = { ...params, searchTerm: 'recency crossing needle', limit: 1 };
-        const first = await listClaudeExternalSessionCandidates(request);
-        expect(first.candidates.map(row => row.remoteSessionId)).toEqual(['a']);
-        const newer = new Date('2026-02-01');
-        await utimes(join(directory, 'b.jsonl'), newer, newer);
-        await expect(listClaudeExternalSessionCandidates({ ...request, cursor: first.nextCursor! }))
-            .rejects.toMatchObject({ name: 'ClaudeCandidateSourceChangedError' });
-        const fresh = await listClaudeExternalSessionCandidates({ ...request, limit: 10 });
-        expect(fresh.candidates.map(row => row.remoteSessionId)).toEqual(['b', 'a', 'c']);
-        expect(fresh.contentCoverage).toBe('complete');
     });
     it('scans a long single-file conversation within the host budget without rereading a chunk for every row', async () => {
         const params = await corpus();
@@ -314,13 +555,17 @@ describe('Claude candidate conversation search', () => {
         await Promise.all(Array.from({ length: corpusSize - 1 }, (_, index) => writeFile(join(directory, `session-${index}.jsonl`), text)));
         let nowMs = Date.now();
         vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
-        const run = params.ripgrep.run.getMockImplementation()!;
-        params.ripgrep.run.mockImplementation(async (request) => {
-            const result = await run(request);
-            // Clock is a genuine boundary: charge completed real-rg file work
-            // against the existing host budget, without wall-clock sleeps.
-            nowMs += request.paths.length * 8_000;
-            return result;
+        const open = vi.mocked(fileSystem.open).getMockImplementation()!;
+        const charged = new Set<string>();
+        vi.mocked(fileSystem.open).mockImplementation(async (...args) => {
+            const handle = await open(...args);
+            // Charge real source I/O once per file, independently of how the
+            // page batches its rg process. No wall-clock sleeps are needed.
+            if (typeof args[0] === 'string' && args[0].startsWith(directory) && !charged.has(args[0])) {
+                charged.add(args[0]);
+                nowMs += 8_000;
+            }
+            return handle;
         });
         const contribution = createClaudeExternalSessionsContribution({ env: {} });
         const ids = new Set<string>();
@@ -356,13 +601,14 @@ describe('Claude candidate conversation search', () => {
         expect(page.candidates[0]?.match).toMatchObject({ snippet: 'İstanbul', messageIndex: 0 });
         expect(page.contentCoverage).toBe('complete');
     });
-    it('accepts the ASCII prefilter miss at a Unicode lowercase expansion', async () => {
+    it('keeps the canonical decoded match at a Unicode lowercase expansion', async () => {
         const params = await corpus();
         await writeFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), JSON.stringify({
             type: 'user', uuid: 'unicode-ascii', parentUuid: null, message: { role: 'user', content: 'prefix skİ suffix' },
         }) + '\n');
         const page = await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'ski' });
-        expect(page.candidates).toEqual([]);
+        expect(page.candidates).toMatchObject([{ remoteSessionId: 'session',
+            match: { snippet: 'prefix skİ suffix', messageIndex: 0 } }]);
         expect(page.contentCoverage).toBe('complete');
     });
     it('matches decoded NUL text without passing NUL through process arguments', async () => {
@@ -436,7 +682,7 @@ describe('Claude candidate conversation search', () => {
         expect(page.candidates[0]?.match).toEqual({ snippet: 'Body-only café\nwith "quotes"', sourceItemId: expect.stringMatching(/^claude:/), messageIndex: 1 });
         expect(page.contentCoverage).toBe('complete');
         await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'Body-only' });
-        expect(params.ripgrep.run.mock.calls.at(-1)?.[0].paths).toEqual([await realpath(join(params.source.configDir, 'projects', 'project', 'session.jsonl'))]);
+        expect(params.ripgrep.run.mock.calls.at(-1)?.[0].paths).toEqual([await realpath(join(params.source.configDir, 'projects', 'project'))]);
     });
     it('excludes tool metadata and abandoned branches', async () => {
         const params = await corpus();

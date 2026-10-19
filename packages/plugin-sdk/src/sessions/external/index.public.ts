@@ -118,4 +118,6 @@ export { validateAgentExternalSessionTakeoverResolveLaunchResult } from '../exte
 export {
     createExternalSessionContentMatchSnippet,
     findExternalSessionContentMatchRange,
+    readSessionInputPromptUserTextV1,
+    runWithSessionInputPromptUserTextReader,
 } from '../external.js';

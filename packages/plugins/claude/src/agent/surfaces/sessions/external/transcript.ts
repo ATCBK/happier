@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { open, stat } from 'node:fs/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { defineProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import type {
     AgentExternalSessionTerminalObservation,
     AgentExternalSessionTranscriptItem,
     AgentExternalSessionsInvocation,
+    AgentExternalSessionsReadAfterDiagnostic,
 } from '@happier-dev/plugin-sdk/sessions/external';
 
 import {
@@ -158,6 +159,9 @@ export type ClaudeTranscriptResultBudget = Readonly<{
 
 export class ClaudeTranscriptResultBudgetTooSmallError extends Error {
     readonly name = 'ClaudeTranscriptResultBudgetTooSmallError';
+    constructor(reason: 'transcript_item_count_budget' | 'transcript_item_byte_budget' | 'transcript_page_byte_budget') {
+        super(`external_sessions_${reason}`);
+    }
 }
 
 /**
@@ -200,7 +204,7 @@ export async function readClaudeExternalTranscriptBranch(params: Readonly<{
         // The source byte bound also bounds the number of nonempty JSONL rows.
         // Consume each read once instead of reopening an overlapping chunk for
         // every row in a long conversation.
-        const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes, maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: params.fileSystem });
+        const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes, maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: params.fileSystem, includeMalformedRecords: true });
         throwIfAborted(params.signal);
         partial ||= Boolean(page.diagnostics?.length);
         for (let index = page.items.length - 1; index >= 0; index -= 1) {
@@ -217,22 +221,23 @@ export async function readClaudeExternalTranscriptBranch(params: Readonly<{
     return { offsets: parentUuid === undefined ? null : offsets, partial: partial || typeof parentUuid === 'string' };
 }
 
-const ClaudeContentSearchRowSchema = z.object({
-    startOffsetBytes: z.number().int().nonnegative(),
-    endOffsetBytes: z.number().int().nonnegative(),
-}).strict();
+const ClaudeContentSearchRowSchema = z.strictObject({
+    startOffsetBytes: z.number().check(z.int(), z.nonnegative()),
+    endOffsetBytes: z.number().check(z.int(), z.nonnegative()),
+});
 
-const ClaudeContentSearchProgressSchema = z.object({
+const ClaudeContentSearchProgressSchema = z.strictObject({
     fileRelPath: z.string(),
     sourceIdentity: z.string(),
-    endOffsetBytes: z.number().int().nonnegative(),
+    sourceSize: z.number().check(z.int(), z.nonnegative()),
+    endOffsetBytes: z.number().check(z.int(), z.nonnegative()),
     branchParentUuid: z.union([z.string(), z.null(), z.literal(false)]),
-    count: z.number().int().nonnegative(),
+    count: z.number().check(z.int(), z.nonnegative()),
     partial: z.boolean(),
-    title: z.object({ customTitle: ClaudeContentSearchRowSchema.nullable(), aiTitle: ClaudeContentSearchRowSchema.nullable(), fallbackTitle: ClaudeContentSearchRowSchema.nullable(),
-        customTitleSeen: z.boolean().optional(), aiTitleSeen: z.boolean().optional() }).strict(),
-    match: ClaudeContentSearchRowSchema.extend({ itemIndex: z.number().int().nonnegative(), newerItems: z.number().int().nonnegative() }).strict().optional(),
-}).strict();
+    title: z.strictObject({ customTitle: z.nullable(ClaudeContentSearchRowSchema), aiTitle: z.nullable(ClaudeContentSearchRowSchema), fallbackTitle: z.nullable(ClaudeContentSearchRowSchema),
+        customTitleSeen: z.optional(z.boolean()), aiTitleSeen: z.optional(z.boolean()) }),
+    match: z.optional((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ClaudeContentSearchRowSchema, { itemIndex: z.number().check(z.int(), z.nonnegative()), newerItems: z.number().check(z.int(), z.nonnegative()) }))),
+});
 
 export type ClaudeContentSearchProgress = z.infer<typeof ClaudeContentSearchProgressSchema>;
 
@@ -245,11 +250,6 @@ export class ClaudeContentSearchYield extends ExternalSessionContentSearchYield 
     constructor(readonly progress: ClaudeContentSearchProgress) { super(); }
 }
 
-async function readClaudeContentSearchSourceIdentity(filePath: string) {
-    const file = await stat(filePath, { bigint: true });
-    return { size: Number(file.size), identity: `${file.dev}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}` };
-}
-
 export async function searchClaudeExternalTranscript(params: Readonly<{
     filePath: string;
     fileRelPath: string;
@@ -259,43 +259,44 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
     ripgrep: AgentExternalSessionsInvocation['ripgrep'];
     control: ExternalSessionContentSearchControl;
     progress?: ClaudeContentSearchProgress;
-}>): Promise<Readonly<{ match?: { snippet: string; sourceItemId: string; messageIndex: number }; partial: boolean; title?: string }>> {
-    const file = await readClaudeContentSearchSourceIdentity(params.filePath);
-    const sourceIdentity = file.identity;
-    if (params.progress && (params.progress.fileRelPath !== params.fileRelPath || params.progress.sourceIdentity !== sourceIdentity)) {
-        throw new ClaudeCandidateSourceChangedError('Claude content-search transcript changed during pagination.');
+    /** The candidate page already ran the shared prefilter over this source. */
+    prefiltered?: boolean;
+}>): Promise<Readonly<{ match?: { snippet: string; sourceItemId: string; messageIndex: number }; partial: boolean; title?: string; cwd?: string; messageCount?: number }>> {
+    const sourceSize = params.progress?.sourceSize ?? await readClaudeJsonlFileSize(params.filePath, params.signal);
+    const evidence = await readSourceAnchorEvidence(params.filePath, sourceSize, params.signal);
+    if (!evidence) throw new ClaudeCandidateSourceChangedError('external_sessions_source_identity_unavailable');
+    const sourceIdentity = `${evidence.sourceGeneration}:${evidence.sourceAnchorSha256}`;
+    if (params.progress && params.progress.fileRelPath !== params.fileRelPath) {
+        throw new ClaudeCandidateSourceChangedError('external_sessions_path_authority');
+    }
+    if (params.progress && params.progress.sourceIdentity !== sourceIdentity) {
+        throw new ClaudeCandidateSourceChangedError('external_sessions_source_identity_changed');
     }
     let progress: ClaudeContentSearchProgress = params.progress ?? {
-        fileRelPath: params.fileRelPath, sourceIdentity, endOffsetBytes: file.size,
+        fileRelPath: params.fileRelPath, sourceIdentity, sourceSize, endOffsetBytes: sourceSize,
         branchParentUuid: false, count: 0, partial: false,
         title: { customTitle: null, aiTitle: null, fallbackTitle: null },
     };
     const remoteSessionId = params.fileRelPath.split('/').at(-1)!.slice(0, -'.jsonl'.length);
+    let cwd: string | undefined;
     // JSONL rows are indivisible continuation units. Cancellation reaches every
     // native read; cooperative time is checked after a decoded row is retained.
     const nativeFileSystem = createExternalSessionContentSearchControl({ signal: params.signal }).fileSystem;
-    // EOF closes cooperative scanning. Native-row verification and response
-    // assembly finish under the containing operation's cancellation lifetime.
-    const scanControl: ExternalSessionContentSearchControl = {
-        ...params.control,
-        checkWork(resetEstimate) {
-            if (progress.endOffsetBytes === 0) params.control.assertNotYielded();
-            else params.control.checkWork(resetEstimate);
-        },
-    };
     try {
         const result = await searchExternalSessionContent({
-            query: params.query, ...(params.progress ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: scanControl,
+            query: params.query, ...(params.progress || params.prefiltered ? {} : { paths: [params.filePath] }), ripgrep: params.ripgrep, control: params.control,
+            isScanComplete: () => progress.endOffsetBytes === 0,
             decode: async (matchText) => {
-                while (progress.endOffsetBytes > 0) {
+                await params.control.prepare(async () => {
+                    if (progress.endOffsetBytes === 0) return true;
                     throwIfAborted(params.signal);
-                    scanControl.checkWork();
                     const initialEndOffsetBytes = progress.endOffsetBytes;
                     const page = await readJsonlFileBackwardPage({ filePath: params.filePath, endOffsetBytes: progress.endOffsetBytes,
-                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: nativeFileSystem,
+                        maxBytes: params.maxBytes, maxItems: Math.max(1, params.maxBytes), fileSystem: nativeFileSystem, includeMalformedRecords: true,
                         onDiagnostic: () => { progress = { ...progress, partial: true }; },
                         onLine: (line, tailOffsetBytes) => {
                             throwIfAborted(params.signal);
+                            if (isTranscriptObject(line.value) && typeof line.value.cwd === 'string' && line.value.cwd.trim()) cwd = line.value.cwd;
                             const selected = selectClaudeExternalBranchLine(line.value, progress.branchParentUuid === false ? undefined : progress.branchParentUuid);
                             let count = progress.count;
                             let match = progress.match;
@@ -331,20 +332,21 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                                 branchParentUuid: selected.parentUuid === undefined ? false : selected.parentUuid,
                                 count, partial, title,
                                 ...(match ? { match } : {}) };
-                            scanControl.checkWork();
+                            if (progress.endOffsetBytes === 0) params.control.assertNotYielded();
+                            else params.control.checkWork();
                         },
                     });
                     throwIfAborted(params.signal);
                     params.control.assertNotYielded();
                     if (!page.reachedStart && page.nextEndOffsetBytes >= initialEndOffsetBytes) {
                         progress = { ...progress, partial: true };
-                        break;
+                        return true;
                     }
                     progress = { ...progress, endOffsetBytes: page.nextEndOffsetBytes,
                         partial: progress.partial || Boolean(page.diagnostics?.length)
                             || (page.tailOffsetBytes !== null && page.tailOffsetBytes < initialEndOffsetBytes) };
-                    if (page.reachedStart) break;
-                }
+                    return page.reachedStart;
+                });
                 // A caller's opaque continuation carries positions, never
                 // authoritative text. Re-read and re-match the native row.
                 const line = progress.match ? await readSearchRow(progress.match) : null;
@@ -364,11 +366,16 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
         const titleRow = progress.title.customTitle ?? progress.title.aiTitle ?? progress.title.fallbackTitle;
         const titleLine = result.match && titleRow ? await readSearchRow(titleRow) : null;
         const title = titleLine ? resolveClaudeTitle(applyClaudeTitleRecord({ customTitle: null, aiTitle: null, fallbackTitle: null }, titleLine.value, remoteSessionId)) : null;
-        if ((await readClaudeContentSearchSourceIdentity(params.filePath)).identity !== sourceIdentity) {
-            throw new ClaudeCandidateSourceChangedError('Claude content-search transcript changed while scanning.');
+        // The page reads the captured prefix. Native writers may append after
+        // it; the existing transcript anchor rejects replacement and anchor changes
+        // without making an unrelated new tail invalidate a search page.
+        const after = await readSourceAnchorEvidence(params.filePath, sourceSize, params.signal);
+        if (!after || `${after.sourceGeneration}:${after.sourceAnchorSha256}` !== sourceIdentity) {
+            throw new ClaudeCandidateSourceChangedError('external_sessions_source_identity_changed');
         }
         throwIfAborted(params.signal);
-        return { ...result, ...(title ? { title } : {}) };
+        return { ...result, ...(title ? { title } : {}), ...(cwd ? { cwd } : {}),
+            ...(!result.partial ? { messageCount: progress.count } : {}) };
     } catch (error) {
         if (error instanceof ExternalSessionContentSearchYield) throw new ClaudeContentSearchYield(progress);
         throw error;
@@ -618,8 +625,6 @@ async function readSourceAnchorEvidence(
             !afterPath?.isFile()
             || before.dev !== afterHandle.dev
             || before.ino !== afterHandle.ino
-            || before.mtimeNs !== afterHandle.mtimeNs
-            || before.ctimeNs !== afterHandle.ctimeNs
             || afterHandle.dev !== afterPath.dev
             || afterHandle.ino !== afterPath.ino
             || afterHandle.size < BigInt(offsetBytes)
@@ -768,10 +773,10 @@ function projectLines(params: Readonly<{
     projection?: 'terminal';
 }>): Readonly<{
     items: ClaudeSourceItem[];
-    consumedUnsupportedRecord: boolean;
+    unsupportedRecordCount: number;
 }> {
     const items: ClaudeSourceItem[] = [];
-    let consumedUnsupportedRecord = false;
+    let unsupportedRecordCount = 0;
     for (const line of params.lines) {
         if (items.length >= params.maxItems) break;
         const projected = projectForwardLine({
@@ -780,13 +785,23 @@ function projectLines(params: Readonly<{
             lineValue: line.value,
             maxItems: params.maxItems - items.length,
         }, params.projection, undefined, true);
-        if (projected.disposition === 'unsupported') consumedUnsupportedRecord = true;
+        if (projected.disposition === 'unsupported') unsupportedRecordCount += 1;
         for (const item of projected.items) {
             if (items.length >= params.maxItems) break;
             items.push(item);
         }
     }
-    return { items, consumedUnsupportedRecord };
+    return { items, unsupportedRecordCount };
+}
+
+function unsupportedRecordDiagnostics(count: number) {
+    return count > 0 ? { diagnostics: [{ code: 'external_sessions_transcript_unsupported_record',
+        severity: 'benign', count, positions: [] }] satisfies AgentExternalSessionsReadAfterDiagnostic[] } : {};
+}
+
+function transcriptDiscontinuity(reason: 'source_identity_changed' | 'source_identity_unavailable' | 'path_authority' | 'frontier_anchor' | 'transcript_record_limit') {
+    return { truncated: true as const, diagnostics: [{ code: `external_sessions_${reason}`,
+        severity: 'required', count: 1, positions: [] }] satisfies AgentExternalSessionsReadAfterDiagnostic[] };
 }
 
 export async function pageClaudeExternalSessionTranscript(params: Readonly<{
@@ -806,6 +821,7 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
     tailCursor: string | null;
     hasMore: boolean;
     truncated?: boolean;
+    diagnostics?: readonly AgentExternalSessionsReadAfterDiagnostic[];
 }>> {
     throwIfAborted(params.signal);
     const resolved = await resolveClaudeJsonlSessionFile({
@@ -874,7 +890,12 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
             nextCursor: hasMore ? forward.nextCursor : null,
             tailCursor,
             hasMore,
-            ...(truncated ? { truncated: true } : {}),
+            ...(truncated ? transcriptDiscontinuity(forward.readAfterOutcome === 'source_replaced'
+                ? 'source_identity_changed' : forward.readAfterOutcome === 'gap_or_cursor_expired'
+                    ? 'frontier_anchor' : forward.readAfterOutcome === 'source_unavailable'
+                        ? 'source_identity_unavailable' : 'transcript_record_limit') : unsupportedRecordDiagnostics(
+                            forward.diagnostics?.filter(diagnostic => diagnostic.code === 'unsupported_record_skipped')
+                                .reduce((count, diagnostic) => count + diagnostic.count, 0) ?? 0)),
         };
     }
     const decoded = decodeBackwardCursor(params.cursor);
@@ -906,18 +927,21 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
             || currentEvidence.sourceAnchorSha256 !== decoded.sourceAnchorSha256
             || currentEvidence.sourceGeneration !== decoded.sourceGeneration
         ) {
-            return { items: [], nextCursor: null, tailCursor: await readTailCursor(tailParams), hasMore: false, truncated: true };
+            return { items: [], nextCursor: null, tailCursor: await readTailCursor(tailParams), hasMore: false,
+                ...transcriptDiscontinuity('source_identity_changed') };
         }
     }
     const endOffsetBytes = cursorMismatch || !decoded
         ? fileSize
         : Math.min(fileSize, Math.max(0, decoded.endOffsetBytes));
     if (endOffsetBytes <= 0) {
-        return { items: [], nextCursor: null, tailCursor: await readTailCursor(tailParams), hasMore: false, ...(cursorMismatch ? { truncated: true } : {}) };
+        return { items: [], nextCursor: null, tailCursor: await readTailCursor(tailParams), hasMore: false,
+            ...(cursorMismatch ? transcriptDiscontinuity('path_authority') : {}) };
     }
     const sourceGeneration = await readSourceGeneration(resolved.filePath, params.signal);
     if (!sourceGeneration) {
-        return { items: [], nextCursor: null, tailCursor: await readTailCursor(tailParams), hasMore: false, truncated: true };
+        return { items: [], nextCursor: null, tailCursor: await readTailCursor(tailParams), hasMore: false,
+            ...transcriptDiscontinuity('source_identity_unavailable') };
     }
 
     // Carry one pending native parent, never a body cache or retained-row set.
@@ -927,6 +951,7 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
         endOffsetBytes,
         maxBytes: params.maxBytes,
         maxItems: params.maxItems,
+        includeMalformedRecords: true,
     });
     throwIfAborted(params.signal);
     if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
@@ -940,6 +965,12 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
             signal: params.signal,
         })
         : await readTailCursor(tailParams);
+    if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
+        // A native row exceeded the scanner's existing byte boundary. Refuse
+        // this history explicitly rather than minting a cursor inside it or
+        // repeatedly reading the same row as if a continuation were possible.
+        return { items: [], nextCursor: null, tailCursor, hasMore: false, ...transcriptDiscontinuity('transcript_record_limit') };
+    }
     const maxItems = Math.max(1, Math.trunc(params.maxItems));
     if (params.resultBudget || params.projection === 'terminal') {
         const items: ClaudeSourceItem[] = [];
@@ -947,10 +978,9 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
             ? page.nextEndOffsetBytes
             : endOffsetBytes;
         let stoppedBeforeOlderLine = false;
-        // Only a row the page actually advances past can be lost. A row the
-        // budget refuses stays behind `nextCursor`, so it is a continuation
-        // rather than a discarded record.
-        let consumedUnsupportedRecord = false;
+        // Represent unsupported rows within the same budget as ordinary rows.
+        // A refused row stays behind nextCursor rather than becoming a loss.
+        let unsupportedRecordCount = 0;
 
         for (let index = page.items.length - 1; index >= 0; index -= 1) {
             throwIfAborted(params.signal);
@@ -965,7 +995,7 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
             }, params.projection, selection.selected);
             const mapped = projected.items;
             if (items.length + mapped.length > maxItems) {
-                if (items.length === 0) throw new ClaudeTranscriptResultBudgetTooSmallError('Claude transcript item budget cannot fit one native row.');
+                if (items.length === 0) throw new ClaudeTranscriptResultBudgetTooSmallError('transcript_item_count_budget');
                 stoppedBeforeOlderLine = true;
                 break;
             }
@@ -985,16 +1015,13 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
                 nextCursor: proposedNextCursor,
                 tailCursor,
                 hasMore: proposedHasMore,
-                ...(cursorMismatch
-                    || consumedUnsupportedRecord
-                    || projected.disposition === 'unsupported'
-                    ? { truncated: true }
-                    : {}),
+                ...(cursorMismatch ? { truncated: true } : unsupportedRecordDiagnostics(
+                    unsupportedRecordCount + (projected.disposition === 'unsupported' ? 1 : 0))),
             };
             if (params.resultBudget && !params.resultBudget.fits(proposed)) {
                 if (items.length === 0) {
                     throw new ClaudeTranscriptResultBudgetTooSmallError(
-                        'Claude transcript result byte budget cannot fit one item.',
+                        'transcript_item_byte_budget',
                     );
                 }
                 stoppedBeforeOlderLine = true;
@@ -1003,7 +1030,7 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
             items.splice(0, items.length, ...proposedItems);
             nextEndOffsetBytes = proposedNextEndOffsetBytes;
             branchParentUuid = selection.parentUuid;
-            if (projected.disposition === 'unsupported') consumedUnsupportedRecord = true;
+            if (projected.disposition === 'unsupported') unsupportedRecordCount += 1;
         }
 
         const hasMore = stoppedBeforeOlderLine || !page.reachedStart;
@@ -1019,18 +1046,18 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
         // A page whose continuation cannot be bound to this generation is
         // reported as truncated rather than as a silent end of history.
         if (hasMore && !nextCursor) {
-            return { items, nextCursor: null, tailCursor, hasMore: false, truncated: true };
+            return { items, nextCursor: null, tailCursor, hasMore: false, ...transcriptDiscontinuity('source_identity_unavailable') };
         }
         const result = {
             items,
             nextCursor,
             tailCursor,
             hasMore,
-            ...(cursorMismatch || consumedUnsupportedRecord ? { truncated: true } : {}),
+            ...(cursorMismatch ? transcriptDiscontinuity('path_authority') : unsupportedRecordDiagnostics(unsupportedRecordCount)),
         };
         if (params.resultBudget && !params.resultBudget.fits(result)) {
             throw new ClaudeTranscriptResultBudgetTooSmallError(
-                'Claude transcript result byte budget cannot fit the page envelope.',
+                'transcript_page_byte_budget',
             );
         }
         return result;
@@ -1042,7 +1069,7 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
         branchParentUuid = selection.parentUuid;
         if (selection.selected) selectedOffsets.add(line.startOffsetBytes);
     }
-    const { items, consumedUnsupportedRecord } = projectLines({
+    const { items, unsupportedRecordCount } = projectLines({
         lines: page.items.filter((line) => selectedOffsets.has(line.startOffsetBytes)),
         fileRelPath: resolved.fileRelPath,
         maxItems,
@@ -1059,14 +1086,14 @@ export async function pageClaudeExternalSessionTranscript(params: Readonly<{
         })
         : null;
     if (hasMore && !nextCursor) {
-        return { items, nextCursor: null, tailCursor, hasMore: false, truncated: true };
+        return { items, nextCursor: null, tailCursor, hasMore: false, ...transcriptDiscontinuity('source_identity_unavailable') };
     }
     return {
         items,
         nextCursor,
         tailCursor,
         hasMore,
-        ...(cursorMismatch || consumedUnsupportedRecord ? { truncated: true } : {}),
+        ...(cursorMismatch ? transcriptDiscontinuity('path_authority') : unsupportedRecordDiagnostics(unsupportedRecordCount)),
     };
 }
 
@@ -1168,6 +1195,7 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
         offsetBytes: Math.max(0, decoded.offsetBytes),
         maxBytes: params.maxBytes,
         maxItems: params.maxItems,
+        includeMalformedRecords: true,
     });
     throwIfAborted(params.signal);
     if (read.truncated) {
@@ -1211,7 +1239,7 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
             if (items.length + mapped.length > maxItems) {
                 if (items.length === 0) {
                     throw new ClaudeTranscriptResultBudgetTooSmallError(
-                        'Claude transcript result item budget cannot fit one complete source row.',
+                        'transcript_item_count_budget',
                     );
                 }
                 break;
@@ -1232,7 +1260,7 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
             if (params.resultBudget && !params.resultBudget.fits(proposed)) {
                 if (items.length === 0) {
                     throw new ClaudeTranscriptResultBudgetTooSmallError(
-                        'Claude transcript result byte budget cannot fit one item.',
+                        'transcript_item_byte_budget',
                     );
                 }
                 break;
@@ -1276,7 +1304,7 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
             ...(unsupportedPositions.length > 0
                 ? [{
                     code: 'unsupported_record_skipped',
-                    severity: 'required' as const,
+                    severity: 'benign' as const,
                     count: unsupportedPositions.length,
                     positions: unsupportedPositions.slice(0, 200),
                 }]
@@ -1291,7 +1319,7 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
         };
         if (params.resultBudget && !params.resultBudget.fits(result)) {
             throw new ClaudeTranscriptResultBudgetTooSmallError(
-                'Claude transcript result byte budget cannot fit the page envelope.',
+                'transcript_page_byte_budget',
             );
         }
         return result;
@@ -1349,7 +1377,7 @@ export async function readAfterClaudeExternalSessionTranscript(params: Readonly<
         ...(unsupportedPositions.length > 0
             ? [{
                 code: 'unsupported_record_skipped',
-                severity: 'required' as const,
+                severity: 'benign' as const,
                 count: unsupportedPositions.length,
                 positions: unsupportedPositions.slice(0, 200),
             }]

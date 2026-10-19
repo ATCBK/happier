@@ -1,5 +1,5 @@
-export { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield, searchExternalSessionContent } from '../fileStores/contentSearch.js';
-export type { ExternalSessionContentSearchControl } from '../fileStores/contentSearch.js';
+export { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield, prefilterExternalSessionContentPaths, searchExternalSessionContent } from '../fileStores/contentSearch.js';
+export type { ExternalSessionContentSearchControl, ExternalSessionContentSearchPageProgress } from '../fileStores/contentSearch.js';
 export type { JsonlByteCursorV1 } from '../fileStores/boundedJsonlScanner.js';
 export type { AgentAccountingJsonlState, AgentAccountingJsonlProjection } from '../fileStores/accountingJsonl.js';
 export { readAgentAccountingJsonlSource, discoverAgentAccountingJsonlSource } from '../fileStores/accountingJsonl.js';
@@ -20,6 +20,7 @@ export { decodeJsonlByteCursor } from '../fileStores/boundedJsonlScanner.js';
 export { encodeIndexCursor } from '../fileStores/indexCursor.js';
 export { encodeJsonlByteCursor } from '../fileStores/boundedJsonlScanner.js';
 export { extractUserMessageText } from '../fileStores/records.js';
+export { createExternalSessionUnsupportedTranscriptItem } from '../fileStores/records.js';
 export { findNewestSessionFileInDir } from '../fileStores/files.js';
 export { isBareSessionFileId } from '../fileStores/sessionFileNameCodec.js';
 export { listSessionFileStoreRoots } from '../fileStores/sessionDirResolver.js';

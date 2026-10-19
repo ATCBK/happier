@@ -2,6 +2,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 /**
  * The only mocked boundary is the filesystem itself, and every call still runs
@@ -33,6 +34,7 @@ const { mkdtemp, writeFile } = await import('node:fs/promises');
 const {
   CODEX_ROLLOUT_TITLE_HEAD_BUDGET,
   readCodexSessionTitleFromRollout,
+  readCodexRolloutHead,
 } = await import('./rolloutTitle.js');
 
 function recordFileReads(): () => number {
@@ -79,6 +81,15 @@ async function writeRollout(name: string, records: readonly string[]): Promise<s
 }
 
 describe('Codex rollout title reader', () => {
+  it('retains cwd from the title head read and removes Happier prompt text before deriving its title', async () => {
+    const filePath = await writeRollout('native-prompt', [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'native-prompt', cwd: '/repo/happier' } }) + '\n',
+      messageRecord('user', `${buildHappierBaseSystemPromptV1()}\n\nStabilise CI on the release branch`),
+    ]);
+    expect(await readCodexRolloutHead(filePath, {}, CODEX_ROLLOUT_TITLE_HEAD_BUDGET)).toMatchObject({
+      title: 'Stabilise CI on the release branch', cwd: '/repo/happier',
+    });
+  });
   it('reads the first genuine message of a normal rollout head', async () => {
     const filePath = await writeRollout('normal', [
       messageRecord('user', 'Fix the Codex candidate title reader'),
@@ -122,7 +133,7 @@ describe('Codex rollout title reader', () => {
 
   it('stays identifier-only when the head carries nothing but harness boilerplate', async () => {
     const filePath = await writeRollout('boilerplate-only', [
-      messageRecord('user', '# Session title\n\nAt the start of the session, call the change_title tool.'),
+      messageRecord('user', buildHappierBaseSystemPromptV1()),
       messageRecord('user', '<environment_context>cwd=/tmp</environment_context>'),
     ]);
 

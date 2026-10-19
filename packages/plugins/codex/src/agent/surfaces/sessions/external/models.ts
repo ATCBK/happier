@@ -7,7 +7,7 @@ import type {
   AgentExternalSessionsTranscriptPage,
 } from '@happier-dev/plugin-sdk/sessions/external';
 import { resolveTranscriptBodySessionMessageRole } from '@happier-dev/plugin-sdk/sessions';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { CodexSessionThread } from '../../../rollout/discovery/sessionThread.js';
 
 export type CodexExternalSessionSource = Readonly<{
@@ -19,13 +19,13 @@ export type CodexExternalSessionSource = Readonly<{
   connectedServiceGroupId?: string;
 }>;
 
-const OptionalSourceStringSchema = z.string().min(1).optional();
+const OptionalSourceStringSchema = z.optional(z.string().check(z.minLength(1)));
 
 export type CodexExternalSessionHandoffSource = Readonly<
   Omit<CodexExternalSessionSource, 'homePath'>
 >;
 
-export const CodexExternalSessionHandoffSourceSchema: z.ZodType<CodexExternalSessionHandoffSource> = z.object({
+export const CodexExternalSessionHandoffSourceSchema: z.ZodMiniType<CodexExternalSessionHandoffSource> = z.object({
   kind: z.literal('codexHome'),
   home: z.enum(['user', 'connectedService']),
   connectedServiceId: OptionalSourceStringSchema,
@@ -171,6 +171,7 @@ export function projectCodexExternalSessionCandidateToAgent(
   return {
     remoteSessionId: candidate.remoteSessionId,
     ...(candidate.title ? { title: candidate.title } : {}),
+    ...(typeof details?.cwd === 'string' && details.cwd.trim() ? { cwd: details.cwd } : {}),
     updatedAtMs: candidate.updatedAtMs,
     ...(candidate.createdAtMs !== undefined ? { createdAtMs: candidate.createdAtMs } : {}),
     ...(candidate.archived !== undefined ? { archived: candidate.archived } : {}),
@@ -231,5 +232,6 @@ export function projectCodexExternalSessionTranscriptPageToAgent(
     ...(page.tailCursor !== undefined ? { tailCursor: page.tailCursor } : {}),
     ...(page.hasMore !== undefined ? { hasMore: page.hasMore } : {}),
     ...(page.truncated !== undefined ? { truncated: page.truncated } : {}),
+    ...(page.diagnostics?.length ? { diagnostics: page.diagnostics } : {}),
   };
 }

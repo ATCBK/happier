@@ -9,10 +9,7 @@ import {
 import type { AgentExternalSessionCandidate } from '@happier-dev/plugin-sdk/sessions/external';
 import {
   deriveExternalSessionActivity,
-  HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1,
+  readSessionInputPromptUserTextV1,
 } from '@happier-dev/plugin-sdk/sessions/external';
 
 import { resolveOhMyPiSessionsRoot } from './files.js';
@@ -21,6 +18,7 @@ import { resolveOhMyPiAgentDir, type OhMyPiExternalSessionSource } from './sourc
 export type OhMyPiExternalSessionCandidate = Readonly<{
   remoteSessionId: string;
   title?: string;
+  messageCount?: number;
   updatedAtMs: number;
   createdAtMs?: number;
   activity?: ReturnType<typeof deriveExternalSessionActivity>;
@@ -79,23 +77,6 @@ const EMPTY_AGGREGATE_XOR = Buffer.alloc(12).toString('base64url');
 
 const OH_MY_PI_CANDIDATE_TITLE_MAX_CHARS = 120;
 
-/**
- * Happier prepends its own base system prompt to the first Oh My Pi user turn and
- * Oh My Pi persists that whole block as the first user message, so a title derived
- * from it would render a wall of instructions. Which block opens the preamble
- * depends on the session's prompt settings, so every opening the canonical producer
- * can emit disqualifies the message. Anchoring on the producer's own block headings
- * — rather than a hand-copied phrase list — keeps this honest as the prompt evolves.
- */
-const HAPPIER_BASE_SYSTEM_PROMPT_HEADINGS = [
-  HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
-]
-  .map((block) => (block.split('\n', 1)[0] ?? '').trim().toLowerCase())
-  .filter((heading) => heading.length > 0);
-
 function normalizeOhMyPiCandidateTitle(value: string | null): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.replace(/\s+/g, ' ').trim();
@@ -112,13 +93,7 @@ function normalizeOhMyPiCandidateTitle(value: string | null): string | null {
  * evidence is the first user message the bounded session scan already returned.
  */
 export function formatOhMyPiCandidateTitle(value: string | null): string | null {
-  const normalized = normalizeOhMyPiCandidateTitle(value);
-  if (!normalized) return null;
-  const lowerNormalized = normalized.toLowerCase();
-  if (HAPPIER_BASE_SYSTEM_PROMPT_HEADINGS.some((heading) => lowerNormalized.startsWith(heading))) {
-    return null;
-  }
-  return normalized;
+  return normalizeOhMyPiCandidateTitle(typeof value === 'string' ? readSessionInputPromptUserTextV1(value) : null);
 }
 
 export class OhMyPiCandidateInvalidCursorError extends Error {
@@ -416,7 +391,6 @@ export async function listOhMyPiSessionCandidates(params: Readonly<{
   signal?: AbortSignal;
   resultBudget?: OhMyPiCandidateResultBudget;
   searchCandidate?: (candidate: OhMyPiExternalSessionCandidate) => Promise<OhMyPiExternalSessionCandidate | null>;
-  checkWork?: () => void;
 }>): Promise<Readonly<{
   candidates: OhMyPiExternalSessionCandidate[];
   nextCursor: string | null;
@@ -589,7 +563,6 @@ export async function listOhMyPiSessionCandidates(params: Readonly<{
           let candidate: OhMyPiExternalSessionCandidate | null = null;
           if (phase === 'scan') {
             try {
-              params.checkWork?.();
               const inspected = await inspectCandidateFile({
                 filePath,
                 sessionRoot: rootPath,

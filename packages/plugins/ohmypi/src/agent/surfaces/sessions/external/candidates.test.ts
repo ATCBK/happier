@@ -422,8 +422,8 @@ describe('listOhMyPiSessionCandidates', () => {
       (candidate) => [candidate.remoteSessionId, candidate.title ?? null],
     ))).toEqual({
       '153e1829e9d3e497': 'Investigate the failing external-session link',
-      '153e1829e9d3e498': null,
-      '153e1829e9d3e499': null,
+      '153e1829e9d3e498': 'real prompt',
+      '153e1829e9d3e499': 'real prompt',
       '153e1829e9d3e500': null,
     });
   });

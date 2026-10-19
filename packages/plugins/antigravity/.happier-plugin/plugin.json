@@ -120,7 +120,7 @@
                       "-Command",
                       "irm https://antigravity.google/cli/install.ps1 | iex"
                     ],
-                    "cmd": "powershell"
+                    "cmd": "powershell.exe"
                   }
                 ]
               }
@@ -414,6 +414,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -436,6 +437,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Antigravity",

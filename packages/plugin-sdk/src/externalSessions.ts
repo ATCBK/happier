@@ -156,8 +156,20 @@ export type AgentExternalSessionsInvocation =
  */
 export function getAgentExternalSessionsInvocationFailure(
     invocation: AgentExternalSessionsInvocationBounds,
-): AgentExternalSessionsResult<never> | null {
+): Extract<AgentExternalSessionsResult<never>, { ok: false }> | null {
     if (invocation.signal.aborted) {
+        // The receiving RPC owns this reason. A deadline-triggered abort must
+        // retain its timeout meaning; an explicit Stop remains cancellation.
+        const reason: unknown = invocation.signal.reason;
+        if (reason !== null && typeof reason === 'object'
+            && 'code' in reason && reason.code === 'RPC_REQUEST_TIMEOUT') {
+            return {
+                ok: false,
+                code: 'timeout',
+                message: 'External-session operation exceeded its deadline.',
+                retryable: true,
+            };
+        }
         return {
             ok: false,
             code: 'cancelled',
@@ -222,6 +234,10 @@ export type AgentExternalSessionCandidateThread = Readonly<{
 export type AgentExternalSessionCandidate = Readonly<{
     remoteSessionId: string;
     title?: string;
+    /** Display facts observed by the existing native read, never link identity. */
+    cwd?: string;
+    /** Complete decoded transcript count; omitted when coverage is partial. */
+    messageCount?: number;
     updatedAtMs: number;
     createdAtMs?: number;
     archived?: boolean;
@@ -453,6 +469,8 @@ export type AgentExternalSessionsTranscriptPage = Readonly<{
     tailCursor?: string | null;
     hasMore?: boolean;
     truncated?: boolean;
+    /** Source-owned loss evidence; the host logs only its closed safe codes. */
+    diagnostics?: readonly AgentExternalSessionsReadAfterDiagnostic[];
 }>;
 
 /**

@@ -1,4 +1,5 @@
 import { readdir, stat } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   parseCodexRolloutFilename,
@@ -165,9 +166,9 @@ async function collectRolloutMatchesFromFlatDir(params: Readonly<{
   examinedFilePaths?: Set<string>;
 }> & CodexExternalSessionInvocationBounds): Promise<Map<string, CodexRolloutFile[]>> {
   throwIfCodexExternalSessionInvocationStopped(params);
-  let entries: any[];
+  let entries: Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>[];
   try {
-    entries = await readdir(params.dir, { withFileTypes: true });
+    entries = params.preparation ? await params.preparation.readDirectory(params.dir) : await readdir(params.dir, { withFileTypes: true });
   } catch {
     throwIfCodexExternalSessionInvocationStopped(params);
     return new Map();
@@ -212,6 +213,7 @@ async function collectRolloutMatchesFromFlatDir(params: Readonly<{
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
     throwIfCodexExternalSessionInvocationStopped(params);
     if (!match) continue;
@@ -256,6 +258,7 @@ async function collectTargetedRolloutMatches(params: Readonly<{
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       })),
     )
   ).flatMap(
@@ -302,6 +305,7 @@ async function collectTargetedRootSessionRolloutMatches(params: Readonly<{
           signal: params.signal,
           deadlineAtMs: params.deadlineAtMs,
           onProgress: params.onProgress,
+          preparation: params.preparation,
         }),
     ),
   );
@@ -330,7 +334,7 @@ async function describeRolloutFile(params: Readonly<{
 }> & CodexExternalSessionInvocationBounds): Promise<CodexRolloutFile | null> {
   throwIfCodexExternalSessionInvocationStopped(params);
   try {
-    const s = await stat(params.filePath);
+    const s = params.preparation ? await params.preparation.readMetadata(params.filePath) : await stat(params.filePath);
     throwIfCodexExternalSessionInvocationStopped(params);
     const fromName = parseRolloutTimestampFromFilename(params.filePath);
     const fromBirth = Number.isFinite(s.birthtimeMs) && s.birthtimeMs > 0
@@ -420,9 +424,9 @@ async function collectCodexRolloutFilesByMembership(params: Readonly<{
   const walk = async (dir: string, depth: number): Promise<void> => {
     throwIfCodexExternalSessionInvocationStopped(params);
     if (depth > 10) return;
-    let entries: any[];
+    let entries: Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>[];
     try {
-      entries = await readdir(dir, { withFileTypes: true });
+      entries = params.preparation ? await params.preparation.readDirectory(dir) : await readdir(dir, { withFileTypes: true });
     } catch {
       throwIfCodexExternalSessionInvocationStopped(params);
       return;
@@ -447,6 +451,7 @@ async function collectCodexRolloutFilesByMembership(params: Readonly<{
         signal: params.signal,
         deadlineAtMs: params.deadlineAtMs,
         onProgress: params.onProgress,
+        preparation: params.preparation,
       });
       throwIfCodexExternalSessionInvocationStopped(params);
       if (match) {
@@ -500,6 +505,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
       examinedFilePaths: knownFilePaths,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
+      preparation: params.preparation,
     });
   for (const [remoteSessionId, targetedMatches] of targetedMatchesBySessionId) {
     if (targetedMatches.length > 0) {
@@ -524,9 +530,9 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
     if (depth > 10) return;
     if (visitedDirectories.has(dir)) return;
     visitedDirectories.add(dir);
-    let entries: any[];
+    let entries: Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>[];
     try {
-      entries = await readdir(dir, { withFileTypes: true });
+      entries = params.preparation ? await params.preparation.readDirectory(dir) : await readdir(dir, { withFileTypes: true });
     } catch (error) {
       throwIfCodexExternalSessionInvocationStopped(params);
       return;
@@ -551,7 +557,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
         continue;
       }
 
-      let metadata: Awaited<ReturnType<typeof stat>> | null = null;
+      let metadata: Readonly<{ birthtimeMs: number; mtimeMs: number }> | null = null;
       if (earliestRequestedStartMs !== null) {
         const fromName = parseRolloutTimestampFromFilename(full);
         if (
@@ -564,7 +570,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
         }
         if (fromName === null) {
           try {
-            metadata = await stat(full);
+            metadata = params.preparation ? await params.preparation.readMetadata(full) : await stat(full);
           } catch (error) {
             throwIfCodexExternalSessionInvocationStopped(params);
             continue;
@@ -599,7 +605,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
       if (!discoveredRootSessionId || !requestedIds.has(discoveredRootSessionId)) continue;
 
       try {
-        metadata ??= await stat(full);
+        metadata ??= params.preparation ? await params.preparation.readMetadata(full) : await stat(full);
         throwIfCodexExternalSessionInvocationStopped(params);
         const fromName = parseRolloutTimestampFromFilename(full);
         const fromBirth = (

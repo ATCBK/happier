@@ -45,6 +45,7 @@ export {
 } from './indexCursor.js';
 export type { IndexCursorV1 } from './indexCursor.js';
 export {
+  createExternalSessionUnsupportedTranscriptItem,
   extractUserMessageText,
   isRecord,
   parseDefaultSessionHeader,

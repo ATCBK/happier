@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 
 import type { JsonlScannerFileSystem } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import { isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
+import { readSessionInputPromptUserTextV1 } from '@happier-dev/plugin-sdk/sessions/external';
 
 import {
   readAntigravityTranscriptHeadRecord,
@@ -105,7 +106,7 @@ const CONVERSATION_TITLE_MAX_CHARS = 120;
  * to normalize whitespace and bound the length.
  */
 function formatAntigravityConversationTitle(text: string): string | null {
-  const normalized = text.replace(/\s+/g, ' ').trim();
+  const normalized = readSessionInputPromptUserTextV1(text).replace(/\s+/g, ' ').trim();
   if (!normalized) return null;
   return normalized.length <= CONVERSATION_TITLE_MAX_CHARS
     ? normalized
