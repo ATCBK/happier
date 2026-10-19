@@ -36,6 +36,8 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { useFoundSkillsCache } from '@/sync/domains/skills/useFoundSkills';
+import { useSkillComposerSource } from '@/sync/domains/skills/useSkillComposerSource';
+import type { SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
 import { skillHref } from '@/components/settings/skills/skillsCollectionModel';
 import { useReachRulesLookup } from '@/sync/store/useReachRulesCatalog';
 import { t } from '@/text';
@@ -47,6 +49,7 @@ import {
 import {
   SessionCapabilitiesContent,
   type SessionCapabilitiesChange,
+  type SessionCapabilitiesUndo,
 } from './SessionCapabilitiesContent';
 import {
   buildSessionCapabilitiesModel,
@@ -66,7 +69,7 @@ type Detail = Pick<
   SessionCapabilitiesModelInput,
   'rules' | 'mcpStatus' | 'skillStatus' | 'names' | 'context' | 'nativeSkills' | 'cost'
 >;
-type SheetTarget = Readonly<{ sessionId?: string; metadata?: unknown;
+export type SheetTarget = Readonly<{ sessionId?: string; metadata?: unknown;
   draft?: Pick<NewSessionCapabilitiesDraft, 'machineId' | 'directory' | 'agentId' | 'projectKey'> }>;
 const EMPTY_MESSAGES: Readonly<Record<string, Message>> = Object.freeze({});
 type ModelInput = Pick<
@@ -85,7 +88,7 @@ const NO_STATUSES: ReturnType<Detail['mcpStatus']> = [];
  * The detail owners mount only in the open sheet, which reports back the one summary fact the closed
  * chip shows (its attention dot).
  */
-const CLOSED_DETAIL: Detail = {
+export const CLOSED_DETAIL: Detail = {
   rules: () => NO_RULES,
   mcpStatus: () => NO_STATUSES,
   skillStatus: () => NO_STATUSES,
@@ -101,7 +104,7 @@ const CLOSED_DETAIL: Detail = {
  * The sheet's detail inputs, from their canonical owners: rules from the Account rows (P2), skill and MCP
  * statuses from P6/P7's status owners, names from the places owner.
  */
-function useSessionCapabilitiesDetail(
+export function useSessionCapabilitiesDetail(
   serverId: string | null,
   machineOnline: boolean,
   onFactsChanged: () => void,
@@ -175,7 +178,7 @@ function useSessionCapabilitiesDetail(
       }
     }
     for (const item of modelInput.view?.skills.plan.nativeDisables ?? []) if (!items.has(item.name)) items.set(item.name, { name: item.name, path: item.path });
-    const declaration = machine?.agentDeclarationsById?.[agentId]?.capabilities.skills;
+    const declaration = machine?.agentDeclarationsById?.[agentId]?.capabilities?.skills;
     const bundled = !machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.skills : null;
     return { items: [...items.values()], canDisable: (declaration ?? bundled)?.nativeDisable === 'supported',
       machineName, agentName: names.agentName(agentId), applyTiming: modelInput.applyState?.applyTiming?.mcp ?? modelInput.view?.applyTiming.mcp ?? { t: 'session_not_running' as const } };
@@ -218,7 +221,7 @@ function useSessionCapabilitiesDetail(
         const entry = servers.get(id);
         const snapshot = entry?.toolsSnapshot;
         if (!entry || !snapshot) return null;
-        const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities.tools
+        const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities?.tools
           ?? (!machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.tools : null) : null;
         const hidesOff = toolsDeclaration?.mcpToolControl?.off === 'hidden';
         const tools = snapshot.tools.filter(tool => !hidesOff || resolveMcpToolDecisionV1({ policy: entry.tools, toolName: tool.name,
@@ -286,6 +289,7 @@ function SessionCapabilitiesSheet(
     machineName: string;
     maxHeight: number;
     target: SheetTarget;
+    undo?: SessionCapabilitiesUndo | null;
   }>,
 ) {
   const router = useRouter();
@@ -324,6 +328,7 @@ function SessionCapabilitiesSheet(
     <SessionCapabilitiesContent
       model={model}
       onChange={props.onChange}
+      undo={props.undo}
       onRetry={props.onRetry}
       onOpen={onOpen}
       renderMark={renderMark}
@@ -347,6 +352,7 @@ function useCapabilitiesChip(
     demandPreview: () => void;
     openRequest?: Readonly<{ consume: () => void }> | null;
     target: SheetTarget;
+    undo?: SessionCapabilitiesUndo | null;
   }>,
 ): AgentInputExtraActionChip {
   const { height } = useWindowDimensions();
@@ -364,6 +370,7 @@ function useCapabilitiesChip(
     demandPreview,
     openRequest,
     target,
+    undo,
   } = params;
   // Unknown is never zero: until the first preview the chip names what it holds, not "0 skills".
   const label = modelInput.view ? model.chipLabel : `${t('capabilities.skills.title')} · MCP`;
@@ -390,6 +397,7 @@ function useCapabilitiesChip(
             machineName={machineName}
             maxHeight={maxHeight}
             target={target}
+            undo={undo}
           />
         ),
       }),
@@ -407,6 +415,7 @@ function useCapabilitiesChip(
       openRequest,
       height,
       target,
+      undo,
     ],
   );
 }
@@ -425,6 +434,8 @@ export function useNewSessionCapabilitiesChip(
 ): Readonly<{
   chip: AgentInputExtraActionChip;
   model: SessionCapabilitiesModel;
+  /** The composer `$` source: a library pick edits this same draft. */
+  skillSource: SkillComposerSource | null;
 }> {
   const machineOnline = params.machineOnline;
   const closedInput = React.useMemo(
@@ -462,7 +473,9 @@ export function useNewSessionCapabilitiesChip(
     demandPreview: popover.demandPreview,
     target,
   });
-  return { chip, model: popover.model };
+  const skillSource = useSkillComposerSource({ serverId: draft.targetServerId ?? null, agentId: draft.agentId,
+    machineId: draft.machineId ?? null, machineName: params.machineName, owner: setItem });
+  return { chip, model: popover.model, skillSource };
 }
 
 /**
@@ -484,6 +497,8 @@ export function useExistingSessionCapabilitiesChip(
   model: SessionCapabilitiesModel;
   applyBadge: AgentInputStatusBadge | null;
   undoLast: () => Promise<unknown>;
+  /** The composer `$` source: a library pick writes through this Session's own controller and apply line. */
+  skillSource: SkillComposerSource | null;
 }> {
   const { machineName, machineOnline, turnSettled } = params;
   const base = React.useMemo<Base>(
@@ -513,6 +528,28 @@ export function useExistingSessionCapabilitiesChip(
   const onRetry = React.useCallback(() => {
     void refresh();
   }, [refresh]);
+  const { undoReceipt, undoLast } = popover;
+  const undo = React.useMemo<SessionCapabilitiesUndo | null>(
+    () =>
+      undoReceipt
+        ? {
+            title: undoReceipt.title,
+            change: undoReceipt.change,
+            onUndo: () => {
+              void undoLast().then((result) => {
+                if (!result.ok && result.message !== 'read_only') {
+                  publishPresentationNotice({
+                    key: `session-capabilities:${sessionId}`,
+                    message: t('capabilities.control.changeFailed'),
+                    severity: 'error',
+                  });
+                }
+              });
+            },
+          }
+        : null,
+    [undoReceipt, undoLast, sessionId],
+  );
   const route = useSessionCapabilitiesOpenRequest();
   const { consume } = route;
   const openRequest = React.useMemo(
@@ -531,16 +568,26 @@ export function useExistingSessionCapabilitiesChip(
     demandPreview: popover.demandPreview,
     openRequest,
     target,
+    undo,
   });
   const { badge } = useSessionCapabilityRestart({
     notice: popover.model.applyNotice,
     stop: params.stop,
     resume: params.resume,
   });
+  const sessionMetadata = React.useMemo(() => {
+    const parsed = MetadataSchema.safeParse(popover.metadata);
+    return parsed.success ? parsed.data : null;
+  }, [popover.metadata]);
+  const skillSource = useSkillComposerSource({ serverId: params.target.serverId,
+    agentId: sessionMetadata ? resolveAgentIdFromSessionMetadata(sessionMetadata) : null,
+    machineId: sessionMetadata?.machineId ?? null, machineName, owner: setItem,
+    applyTiming: popover.applyTiming?.skills ?? null });
   return {
     chip,
     model: popover.model,
     applyBadge: badge,
     undoLast: popover.undoLast,
+    skillSource,
   };
 }

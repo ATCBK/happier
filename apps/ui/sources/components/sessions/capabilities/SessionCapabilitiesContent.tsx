@@ -32,9 +32,18 @@ export type SessionCapabilitiesChange = (
   }>,
 ) => Promise<unknown>;
 
+/** The person's last add or removal, held by the controller for an in-place Undo ("pdf added · Undo"). */
+export type SessionCapabilitiesUndo = Readonly<{
+  title: string;
+  change: 'added' | 'removed';
+  onUndo: () => void;
+}>;
+
 export type SessionCapabilitiesContentProps = Readonly<{
   model: SessionCapabilitiesModel;
   onChange: SessionCapabilitiesChange;
+  /** Present while the last change can still be taken back; drawn by the shared line state above the footer. */
+  undo?: SessionCapabilitiesUndo | null;
   testID: string;
   /** The popover's remaining height budget; the body scrolls under the fixed add field and footer. */
   maxHeight?: number;
@@ -278,6 +287,25 @@ export function SessionCapabilitiesContent(
       >
         {body}
       </ScrollView>
+      {props.undo ? (
+        <View style={styles.undoLine}>
+          <SurfaceStateCard
+            testID={`${props.testID}:undo`}
+            kind="success"
+            size="line"
+            accessibilitySemantics="status"
+            title={
+              props.undo.change === 'added'
+                ? t('capabilities.session.sheet.itemAdded', { item: props.undo.title })
+                : t('capabilities.session.sheet.itemRemoved', { item: props.undo.title })
+            }
+            action={{
+              label: t('capabilities.session.ask.undo'),
+              onPress: props.undo.onUndo,
+            }}
+          />
+        </View>
+      ) : null}
       {footer}
     </View>
   );
@@ -490,9 +518,12 @@ function SessionCapabilityAddField(
               key={`${item.kind}:${item.id}`}
               title={item.title}
               subtitle={
-                item.kind === 'skill'
-                  ? t('capabilities.skills.title')
-                  : t('capabilities.session.mcpServers')
+                // A pick that can't apply to this running session says why instead of its kind (PD12).
+                item.readOnlyReason === 'new_sessions_only'
+                  ? t('capabilities.session.apply.newSessionsOnly', { item: '', machine: '' })
+                  : item.kind === 'skill'
+                    ? t('capabilities.skills.title')
+                    : t('capabilities.session.mcpServers')
               }
               disabled={item.readOnlyReason !== null}
               showChevron={false}
@@ -541,6 +572,12 @@ const styles = StyleSheet.create((theme) => ({
       MENU_ROW_METRICS.paddingHorizontalPx -
       HAPPIER_STATE_LINE_METRICS.paddingHorizontalPx,
     paddingVertical: theme.space.s8,
+  },
+  undoLine: {
+    marginHorizontal:
+      MENU_ROW_METRICS.paddingHorizontalPx -
+      HAPPIER_STATE_LINE_METRICS.paddingHorizontalPx,
+    paddingVertical: theme.space.s4,
   },
   groupDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,

@@ -84,7 +84,12 @@ function view(entries: readonly Entry[]) {
 async function render(
   entries: readonly Entry[],
   state: 'ready' | 'error' | 'machine_unreachable' | 'resolving' = 'ready',
-  options: Readonly<{ preview?: boolean }> = {},
+  options: Readonly<{
+    preview?: boolean;
+    undo?: Parameters<
+      typeof import('./SessionCapabilitiesContent').SessionCapabilitiesContent
+    >[0]['undo'];
+  }> = {},
 ) {
   const { buildSessionCapabilitiesModel } =
     await import('./sessionCapabilitiesModel');
@@ -117,6 +122,7 @@ async function render(
         changes.push(change);
       }}
       onRetry={onRetry}
+      undo={options.undo}
       machineName="nl2"
       testID="caps"
     />,
@@ -172,6 +178,35 @@ describe('SessionCapabilitiesContent', () => {
     expect(changes).toEqual([
       { kind: 'mcp_server', id: 'postgres', state: 'on' },
     ]);
+  });
+
+  it('offers Undo in place for the last change and hands the press to its owner', async () => {
+    const onUndo = vi.fn();
+    const entries: readonly Entry[] = [
+      { kind: 'skill', id: 'code-review', ruleOn: true, override: null },
+    ];
+    const without = await render(entries);
+    expect(
+      without.screen.findAll((node) => node.props?.testID === 'caps:undo'),
+    ).toHaveLength(0);
+    const { screen } = await render(entries, 'ready', {
+      undo: { title: 'pdf', change: 'removed', onUndo },
+    });
+    expect(
+      screen.findAll((node) => node.props?.testID === 'caps:undo').length,
+    ).toBeGreaterThan(0);
+    const { t } = await import('@/text');
+    const { act } = await import('react');
+    const undo = screen.findAll(
+      (node) =>
+        node.props?.accessibilityLabel === t('capabilities.session.ask.undo') &&
+        typeof node.props?.onPress === 'function',
+    )[0];
+    if (!undo) throw new Error('no Undo control in the line');
+    await act(async () => {
+      await undo.props.onPress({});
+    });
+    expect(onUndo).toHaveBeenCalledTimes(1);
   });
 
   it('says a failed preview once with its retry, and keeps an empty group with its own line', async () => {

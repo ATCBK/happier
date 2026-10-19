@@ -1,9 +1,11 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import {
   createSessionFixture,
+  createMachineFixture,
   renderHook,
   renderScreen,
   standardCleanup,
@@ -16,6 +18,8 @@ import {
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
+import { PluginProjectionV2Schema, RPC_METHODS } from '@happier-dev/protocol';
 
 const homes = createHomeGovernanceHarness();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -34,6 +38,12 @@ await loadSyncSingletonForTests();
 const { useNewSessionCapabilitiesChip, useExistingSessionCapabilitiesChip } =
   await import('./useSessionCapabilitiesChip');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
+const { useReachMachines } = await import('@/sync/domains/capabilities/reach/useReachProjection');
+const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { loadDaemonMergedProjectionCacheEntry, clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const { useReachRulesLookup } = await import('@/sync/store/useReachRulesCatalog');
 const { applyPromptLibraryCatalogSnapshot } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { loadPromptLibraryCatalogV1 } = await import('@happier-dev/protocol/prompts/library/promptLibraryCatalogV1');
@@ -101,6 +111,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   standardCleanup();
+  clearDaemonMergedProjectionCacheForTests();
   await homes.reset();
 });
 
@@ -172,6 +183,35 @@ it('binds the draft chip to the preview on intent and edits only the draft', asy
 
 it('mounts one Session owner for the chip and the apply line, and adds nothing until intent', async () => {
   const sessionId = 'c123456789012345678901234';
+  const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1, homeServerIdentityId: 'srv_chip_capabilities',
+    canonicalServerUrl: 'https://chip-capabilities.test', revision: 1,
+    endpoints: [{ kind: 'https', url: 'https://chip-capabilities.test' }] } });
+  if (!home.serverIdentityId) throw new Error('Expected a qualified fixture Home');
+  const credentials = await TokenStorage.getCredentialsForServerUrl('https://chip-capabilities.test', { serverId });
+  if (!credentials) throw new Error('Expected the fixture Home credentials');
+  await restoreConnectionToActiveServer(credentials);
+  const scope = { serverId: home.serverIdentityId, accountId: 'owner' };
+  const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
+  getStorage().setState({ settingsScope: scope, profileScope: scope, machines: { machine },
+    machineListByServerId: { [scope.serverId]: [machine] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+  // A published Agent may omit optional capability declarations. The open sheet must still
+  // render its catalog and known costs, without inventing native-disable support.
+  const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, agentsById: {
+    claude: { id: 'claude', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+  } });
+  transport.mockImplementation(async (input: unknown) => input && typeof input === 'object'
+    && Reflect.get(input, 'method') === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+    ? { protocolVersion: 1, projection } : preview);
+  const binding = await renderHook(() => useServerCredentialAccountScopeBinding(scope.serverId));
+  await vi.waitFor(() => expect(binding.getCurrent().binding).not.toBeNull());
+  await act(async () => {
+    expect(await loadDaemonMergedProjectionCacheEntry({ machineId: 'machine', serverId: scope.serverId,
+      accountLifetime: binding.getCurrent().binding! })).toMatchObject({ kind: 'ready' });
+  });
+  const reach = await renderHook(() => useReachMachines());
+  expect(reach.getCurrent().machines[0]?.agentDeclarationsById?.claude).toMatchObject({ id: 'claude' });
+  expect(reach.getCurrent().machines[0]?.agentDeclarationsById?.claude?.capabilities).toBeUndefined();
+  transport.mockClear();
   const nativeCatalog = SessionSkillCatalogListResponseV1Schema.parse({ skills: [
       { origin: 'vendor', name: 'native-review', backendId: 'claude', path: '/native/native-review' },
       { origin: 'happier', name: 'injected-review', backendId: 'claude', path: '/session/skills/review' },
@@ -198,7 +238,7 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
         ownerMetadataView: MetadataSchema.parse({ ...metadata, sessionSkillCatalogV1: nativeCatalog }),
       }),
     },
-    sessionLocalStateScope: { serverId, accountId: 'owner' },
+    sessionLocalStateScope: scope,
   });
   const stop = vi.fn(async () => true);
   const resume = vi.fn(async () => true);
@@ -250,7 +290,6 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
   const content = hook.getCurrent().chip.collapsedContentPopover!.renderContent;
   if (typeof content !== 'function') throw new Error('Expected the production sheet binding');
   const sheet = await renderScreen(<>{content({ maxHeight: 500, requestClose: () => {} })}</>);
-  const scope = { serverId, accountId: 'owner' };
   const before = transport.mock.calls.length;
   const catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'linear', name: 'linear', transport: 'stdio',
     stdio: { command: 'linear', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
@@ -263,14 +302,15 @@ it('mounts one Session owner for the chip and the apply line, and adds nothing u
       expect.objectContaining({ id: 'linear', line2: { kind: 'cost', cost: { toolCount: 1, tokensPerTurn: 1400 } } }),
     ]) })]) });
   expect(sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[0].nativeRow.rows.map((row: { id: string }) => row.id)).toEqual(['native-review']);
-  const notice = normalizeRawMessage('capability-failure', null, 2, { role: 'agent', content: { type: 'event', data: {
+  const notice = normalizeRawMessage('capability-failure', null, 2, { role: 'agent', content: { type: 'event', id: 'capability-failure', data: {
     type: 'message', message: 'Optional server failed', capabilityNoticeV1: { v: 1,
       items: [{ kind: 'mcp_server', itemId: 'linear', name: 'linear', code: 'spawn_failed' }] },
   } } });
   if (!notice) throw new Error('Expected a normalized capability notice');
   await act(async () => { getStorage().getState().applyMessages(sessionId, [notice]); });
-  expect(sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[1].rows.find((row: { id: string }) => row.id === 'linear'))
-    .toMatchObject({ line2: { kind: 'status', status: { kind: 'error', detail: 'spawn_failed' } } });
+  const failedRow = sheet.findByType(SessionCapabilitiesContent)?.props.model.groups[1].rows.find((row: { id: string }) => row.id === 'linear');
+  expect(failedRow).toMatchObject({ line2: { kind: 'status', status: { kind: 'error' } } });
+  expect(failedRow.line2.status.detail).toBeUndefined();
   const callsAfterFacts = transport.mock.calls.length;
   await act(async () => { hook.getCurrent().chip.onIntent?.(); });
   await vi.waitFor(() => expect(transport.mock.calls.length).toBeGreaterThan(callsAfterFacts));

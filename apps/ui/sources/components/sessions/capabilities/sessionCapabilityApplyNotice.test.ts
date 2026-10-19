@@ -63,6 +63,15 @@ describe('the single session capability apply notice', () => {
             applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } },
             change: readSessionCapabilityApplyChange(metadata, () => 'Linear'), machineOnline: true, machineName: 'QA', turnSettled: false })?.key).toBe('pendingNextTurn');
     });
+    it('does not lend an aggregate MCP refusal to a library skill when both kinds are pending', () => {
+        const input = { pendingApply: { mcp: true, skills: true, reason: 'new_sessions_only' },
+            applyTiming: { mcp: { t: 'new_sessions_only' }, skills: { t: 'applied_now' } } as const,
+            change: { kind: 'skill', title: 'Review', state: 'on' } as const,
+            machineOnline: true, machineName: 'QA', turnSettled: true };
+        expect(sessionCapabilityApplyNotice(input)?.key).toBe('addedNow');
+        expect(sessionCapabilityApplyNotice({ ...input, change: { ...input.change, reason: 'next_turn' } })?.key).toBe('joinsNextTurn');
+        expect(sessionCapabilityApplyNotice({ ...input, change: null })?.key).toBe('newSessionsOnly');
+    });
     it.each(['skill', 'mcp_server', 'native_skill'] as const)('uses the runner reason for %s additions and removals, even without a preview', kind => {
         for (const state of ['on', 'off'] as const) {
             const input = { pendingApply: { mcp: kind === 'mcp_server', skills: kind !== 'mcp_server', reason: 'next_turn' },

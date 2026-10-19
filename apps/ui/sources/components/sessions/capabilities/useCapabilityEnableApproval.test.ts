@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderScreen, standardCleanup, createTestSessionTranscriptSource, wrapWithSessionTranscriptSource } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -18,6 +19,12 @@ import { resolveReachV1 } from '@happier-dev/protocol/reach/resolveReachV1';
 import { SessionCapabilitiesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { readPendingCapabilityApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema,
+    PromptLibraryRecordV1Schema, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { createReachRulesController } from '@/sync/domains/capabilities/reach/useReachRulesState';
+import { createCapabilityEnableApprovalController } from './capabilityEnableApproval';
+import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+import { SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -40,18 +47,86 @@ installApprovalCommonModuleMocks({ storage: original => original(), text: async 
 await loadSyncSingletonForTests();
 const { createDefaultActionExecutor, isApprovalExecutionOriginCurrentForAccountContext } = await import('@/sync/ops/actions/defaultActionExecutor');
 const { useCapabilityEnableApproval } = await import('./useCapabilityEnableApproval');
-const { getMcpServerCatalogSnapshot } = await import('@/sync/store/settings/mcpServerCatalogSnapshot');
+const { CapabilityEnableApprovalView, describeCapabilityEnableSettled } = await import('./CapabilityEnableApprovalView');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { createUiSessionCapabilityActionDeps } = await import('@/sync/ops/actions/sessionCapabilityActionDeps');
 const { readSessionCapabilityApplyChange, sessionCapabilityApplyNotice } = await import('./sessionCapabilityApplyNotice');
+const { McpAlwaysAllowDecision } = await import('@/components/tools/shell/permissions/McpAlwaysAllowDecision');
+const { PermissionPromptCard } = await import('@/components/tools/shell/permissions/PermissionPromptCard');
+const { ResolvedMcpToolIdentityV1Schema } = await import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1');
 
 beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests(); machineTransport.mockReset(); });
 afterEach(async () => { standardCleanup(); await homes.reset(); });
 
-it.each(['always', 'reject', 'cannot_resume'] as const)('uses the existing Agent approval with reason and a D33-qualified %s decision', async choice => {
+it('loads the MCP server default and saves Always allow after the answered tray card unmounts', async () => {
+    const accountId = 'mcp-tray-owner';
+    const serverId = await homes.addHome({ name: 'MCP Tray Home', serverUrl: 'https://mcp-tray.test', accountId });
+    let catalog = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'docs', name: 'docs', title: 'Docs', transport: 'http',
+        remote: { url: 'https://docs.test/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1,
+        tools: { default: 'allow_read_only', overrides: {} } }], bindings: [] });
+    let revision = 1;
+    homes.answer(serverId, 'GET /v1/account/entity-rows/mcp', { select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: catalog } } }) });
+    homes.answer(serverId, 'POST /v1/account/entity-rows/mcp', { select: input => {
+        const mutation = McpServerCatalogRowMutationV1Schema.parse(input);
+        if (mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision } };
+        if (mutation.content?.t !== 'plain') throw new Error('Expected Plain catalog');
+        catalog = mutation.content.v;
+        return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+    } });
+    const identity = ResolvedMcpToolIdentityV1Schema.parse({ server: 'docs', tool: 'write', item: { serverId: 'docs' }, serverTitle: 'Docs',
+        decision: { exposed: true, approval: 'ask', effectClass: 'write', source: 'server_default' } });
+    const answered = createDeferred<void>();
+    const acknowledge = createDeferred<void>();
+    const scope = { serverId, accountId };
+    let answers = 0;
+    const source = createTestSessionTranscriptSource({ sessionId: 'session-mcp', serverId, navigate: () => {},
+        interaction: { canSendMessages: true, canApprovePermissions: true }, actions: {
+        respondToPermission: async response => {
+            expect(response).toMatchObject({ id: 'mcp-tray', approved: true, decision: 'approved_for_session' });
+            answers++; answered.resolve(); await acknowledge.promise;
+        },
+        answerUserAction: async () => { throw new Error('Unexpected user action'); },
+        abort: async () => { throw new Error('Unexpected abort'); },
+        submitMessage: async () => { throw new Error('Unexpected message'); },
+    } });
+    let screen = await renderScreen(wrapWithSessionTranscriptSource(React.createElement(PermissionPromptCard, {
+        sessionId: 'session-mcp', request: { id: 'mcp-tray', kind: 'permission', createdAt: 1, tool: 'mcp__docs__write', arguments: {}, mcpTool: identity },
+        metadata: { path: '/repo', host: 'MacBook', homeDir: '/home/tester', flavor: 'codex', machineId: 'machine' }, location: null, canApprovePermissions: true,
+    }), source));
+    await vi.waitFor(() => expect(screen.findByTestId('permission-footer.always-allow')).toBeTruthy());
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('capabilities.mcp.tools.defaultReadOnly'));
+    expect(screen.findByTestId('permission-prompt-tool-settings')).toBeTruthy();
+    await act(async () => { screen.pressByTestId('permission-footer.always-allow'); await answered.promise; });
+    await act(async () => { screen.tree.unmount(); });
+    await act(async () => { acknowledge.resolve(); });
+    // A later Details/transcript view sees the request's result without answering it twice.
+    function Settled() {
+        return React.createElement(McpAlwaysAllowDecision, { requestId: 'mcp-tray', identity, scope, canWriteCatalog: true, pending: false,
+            answerForSession: async () => { throw new Error('Already answered'); }, renderDecision: () => null });
+    }
+    screen = await renderScreen(React.createElement(Settled));
+    await vi.waitFor(() => expect(catalog.servers[0]?.tools?.overrides.write).toBe('allow'));
+    expect(screen.findByTestId('permission-footer.always-allow-settled')).toBeTruthy();
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('capabilities.session.toolAsk.savedIn'));
+    expect(answers).toBe(1);
+});
+
+it.each(['always', 'reject', 'cannot_resume', 'tray', 'tray_failed', 'tray_account_changed', 'remount', 'skill_revision'] as const)('uses the existing Agent approval with reason and a D33-qualified %s decision', async choice => {
+    const skillRevision = choice === 'skill_revision';
+    const tray = choice === 'tray' || choice === 'tray_failed' || choice === 'tray_account_changed' || skillRevision;
     const accountId = 'capability-owner';
     const serverId = await homes.addHome({ name: 'Capability Home', serverUrl: 'https://capability-approval.test', accountId,
         serverIdentityId: 'srv_capability-home-identity' });
+    let itemId = 'linear-id';
+    if (skillRevision) {
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            const created = await account.createArtifactDocument({ header: { v: 1, kind: 'prompt_bundle.v2', title: 'Linear', bundleSchemaId: 'skills.skill_md_v1' },
+                body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+                    contentBase64: Buffer.from('---\nname: linear\n---\nInstructions').toString('base64') }] }) });
+            itemId = created.artifactId;
+        } finally { account.dispose(); }
+    }
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     homes.answer(serverId, '/v1/machines?includeRevoked=true', { body: [createPlainMachineRowFixture({ id: 'machine', accountId })] });
     const sessionId = 'c123456789012345678901234';
@@ -78,15 +153,39 @@ it.each(['always', 'reject', 'cannot_resume'] as const)('uses the existing Agent
         bindings: [{ id: 'general', serverId: 'linear-id', target: { t: 'project', projectKey: 'happier' }, enabled: true, createdAt: 1, updatedAt: 1 },
             { id: 'except-gemini', serverId: 'linear-id', target: { t: 'project', projectKey: 'happier' }, agentId: 'gemini', enabled: false, createdAt: 1, updatedAt: 1 }] });
     let revision = 1;
+    let skillRecord: PromptLibraryRecordV1 & { key: 'skill-rules' } = { key: 'skill-rules', value: { v: 1,
+        rules: catalog.bindings.map(({ serverId: _id, ...rule }) => ({ ...rule, skillId: itemId })) } };
+    const readRules = () => skillRevision ? skillRecord.value.rules.map(({ skillId: _id, ...rule }) => rule)
+        : catalog.bindings.map(({ serverId: _id, ...rule }) => rule);
+    const attempts: (number | 'absent')[] = [];
+    if (skillRevision) {
+        homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => ({ body: { status: 'listed', rows: [
+            { key: skillRecord.key, revision, content: { t: 'plain', v: skillRecord } },
+            ...PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== skillRecord.key).map(key => ({ key, revision: 1, content: null })),
+        ] } }) });
+        homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/skill-rules`, { select: input => {
+            const mutation = PromptLibraryRowMutationV1Schema.parse(input);
+            attempts.push(mutation.expectedRevision);
+            if (mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision } };
+            if (mutation.content?.t !== 'plain') throw new Error('Expected Plain skill rules');
+            const parsed = PromptLibraryRecordV1Schema.parse(mutation.content.v);
+            if (parsed.key !== 'skill-rules') throw new Error('Expected skill-rules record');
+            skillRecord = parsed;
+            return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+        } });
+    }
+    let refuseRules = choice === 'tray_failed';
     homes.answer(serverId, 'GET /v1/account/entity-rows/mcp', { select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: catalog } } }) });
     homes.answer(serverId, 'POST /v1/account/entity-rows/mcp', { select: input => {
         const mutation = McpServerCatalogRowMutationV1Schema.parse(input);
-        if (mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision } };
+        if (refuseRules || mutation.expectedRevision !== revision) return { body: { status: 'conflict', revision } };
         if (mutation.content?.t !== 'plain') throw new Error('Expected Plain Account catalog');
         catalog = mutation.content.v;
         return { body: { status: 'updated', revision: ++revision, cursor: revision } };
     } });
     homes.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
+    const replaySettled = createDeferred<void>();
+    const returnReplay = createDeferred<void>();
     machineTransport.mockImplementation(async request => {
         expect(request.method).toBe(RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED);
         const account = await captureLazyActionAccountContext(serverId);
@@ -118,58 +217,195 @@ it.each(['always', 'reject', 'cannot_resume'] as const)('uses the existing Agent
         } finally { account.dispose(); }
     });
     const executor = createDefaultActionExecutor();
-    const requested = { sessionId, kind: 'mcp_server', id: 'linear-id', state: 'on', reason: 'Read the project issues' };
+    const requested = { sessionId, kind: skillRevision ? 'skill' : 'mcp_server', id: itemId, state: 'on', reason: 'Read the project issues' };
     const proposal = await executor.execute('session.capabilities.set', requested, { serverId, surface: 'agent', authority: 'account_automation',
-        actionCaller: { kind: 'host' }, defaultSessionId: sessionId, actionRequestId: 'enable-linear',
+        actionCaller: { kind: 'host' }, defaultSessionId: sessionId, actionRequestId: `enable-linear-${choice}`,
         defaultSessionMachineId: 'machine', serverIdentityId: 'srv_capability-home-identity' });
     expect(proposal).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     expect(row.metadataVersion).toBe(1);
-    const artifact = homes.artifacts(serverId).list()[0];
+    const artifact = homes.artifacts(serverId).list().find(row => row.id !== itemId);
     if (!artifact) throw new Error('Existing approval machinery did not persist the request');
+    const artifactId = artifact.id;
     const approval = ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id)!));
     expect(approval.actionArgs).toEqual(requested);
+    if (tray) homes.answer(serverId, `POST /v1/artifacts/${artifact.id}`, { select: async input => {
+        const response = await homes.artifacts(serverId).handle(`/v1/artifacts/${artifact.id}`, { method: 'POST', body: JSON.stringify(input) });
+        if (!response) throw new Error('Missing Artifact persistence boundary');
+        const stored = ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id)!));
+        // The server has committed settlement. Hold its HTTP acknowledgement while the
+        // open-only tray observes that settlement and unmounts the actual card.
+        if (stored.status === 'executed') { replaySettled.resolve(); await returnReplay.promise; }
+        return { status: response.status, body: await response.json() };
+    } });
     const context = { machineId: 'machine', machinePlatform: 'posix', projectKey: 'happier', directory: '/repo', agentId: 'gemini' } as const;
-    const rules = catalog.bindings.map(({ serverId: _id, ...rule }) => rule);
+    const rules = readRules();
     const decision = resolveReachV1(rules, context);
     expect(decision).toMatchObject({ enabled: false, decidedBy: { ruleId: 'except-gemini', agentQualified: true } });
-    const hook = await renderHook((current: ApprovalRequest) => useCapabilityEnableApproval({ artifact: { id: artifact.id,
+    let pendingDecision: Promise<void> | undefined;
+    const mount = async (current: ApprovalRequest) => {
+        let latest!: ReturnType<typeof useCapabilityEnableApproval>;
+        function Card() {
+            latest = useCapabilityEnableApproval({ artifact: { id: artifactId,
         header: { kind: 'approval_request.v1', title: null, serverId } }, approval: current, sessionId, decidedBy: decision.decidedBy,
         projectKey: 'happier', machineId: 'machine', itemTitle: 'Linear', agentName: 'Gemini',
-        names: { agentName: () => 'Gemini', projectName: key => key, machineName: () => 'MacBook', folderLabel: () => '~/repo' } }), { initialProps: approval });
-    await vi.waitFor(() => expect(hook.getCurrent().alwaysWrite, JSON.stringify({ request: hook.getCurrent().request,
-        ready: hook.getCurrent().ready, home: hook.getCurrent().serverId, resolution: hook.getCurrent().resolution,
-        origin: approval.v === 2 ? approval.executionOriginV1 : null, catalog: getMcpServerCatalogSnapshot({ serverId, accountId }),
-        requests: homes.requests.map(({ path }) => path) })).not.toBeNull());
+        names: { agentName: () => 'Gemini', projectName: key => key, machineName: () => 'MacBook', folderLabel: () => '~/repo' } });
+            return React.createElement(CapabilityEnableApprovalView, { chrome: 'card', decisionsAvailable: latest.ready,
+                onChoose: choice => { pendingDecision = latest.choose?.(choice); }, model: { title: latest.title ?? '', reason: latest.reason, offLine: null, alwaysLine: null,
+                    cost: null, timing: null, connected: false, allowLabel: 'Allow for this session', alwaysLabel: latest.alwaysLabel,
+                    blocking: null, decisionError: null, deciding: latest.state?.status === 'deciding',
+                    settled: describeCapabilityEnableSettled({ approvalStatus: current.status, snapshot: latest.state, itemTitle: 'Linear',
+                        agentName: 'Gemini', placeName: 'happier', timing: null, undoAlways: () => latest.undoAlways?.(),
+                        undoSession: latest.undoSession, retryAlways: () => latest.retryAlways?.() }) } });
+        }
+        const screen = await renderScreen(React.createElement(Card));
+        return { getCurrent: () => latest, text: screen.getTextContent, unmount: async () => { await act(async () => screen.tree.unmount()); },
+            chooseAlways: () => screen.pressByTestId('capability-enable-always') };
+    };
+    let hook = await mount(approval);
+    await vi.waitFor(() => {
+        expect(hook.getCurrent().alwaysWrite).not.toBeNull();
+        expect(hook.getCurrent().rulesStatus).toBe('ready');
+        expect(hook.getCurrent().ready).toBe(true);
+    });
     expect(hook.getCurrent().alwaysLabel).toBe('Always for Gemini in happier');
     expect(hook.getCurrent().reason).toBe(requested.reason);
-    await act(async () => { await hook.getCurrent().choose?.(choice === 'reject' ? 'reject' : 'always'); });
+    expect(hook.getCurrent().state?.status).toBe('idle');
+    if (skillRevision) {
+        // Another device commits without a local wake, after the tray has retained its controller.
+        skillRecord = { key: 'skill-rules', value: { v: 1, rules: [...skillRecord.value.rules,
+            { id: 'other-machine', skillId: itemId, target: { t: 'machine', machineId: 'other' }, enabled: true, createdAt: 2, updatedAt: 2 }] } };
+        revision = 2;
+    }
+    if (tray) {
+        let pending: Promise<void> | undefined;
+        let ended = false;
+        await act(async () => {
+            hook.chooseAlways();
+            pending = pendingDecision;
+            expect(pending).toBeDefined();
+            await Promise.race([replaySettled.promise, pending?.then(() => { ended = true; })]);
+        });
+        expect({ ended, status: hook.getCurrent().state?.status, paths: homes.requests.map(({ path }) => path) })
+            .toMatchObject({ ended: false, status: 'deciding' });
+        await hook.unmount();
+        if (choice === 'tray_account_changed') await homes.switchAccount(serverId, 'other-account');
+        await act(async () => { returnReplay.resolve(); await pending; });
+    } else await act(async () => { await hook.getCurrent().choose?.(choice === 'reject' ? 'reject' : 'always'); });
     if (choice === 'reject' || choice === 'cannot_resume') {
         expect(hook.getCurrent().state?.status).toBe(choice === 'reject' ? 'rejected' : 'decision_failed');
         expect(revision).toBe(1); expect(row.metadataVersion).toBe(1);
     } else {
-        expect(hook.getCurrent().state, JSON.stringify({ calls: machineTransport.mock.calls,
-            settled: homes.artifacts(serverId).readPlainBody(artifact.id), requests: homes.requests.map(({ path }) => path) }))
-            .toMatchObject({ status: 'always_saved', approved: true });
         const settled = ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id)!));
+        if (choice === 'tray_account_changed') {
+            // The approval owner refuses the retired Account's result before a rules
+            // Action can start. A durable settlement must not authorize the new Account.
+            expect(revision).toBe(1);
+            await homes.switchAccount(serverId, accountId);
+            hook = await mount(settled);
+            await vi.waitFor(() => expect(hook.getCurrent().ready).toBe(true));
+            expect(hook.getCurrent().state).toMatchObject({ status: 'decision_failed', approved: false });
+            return;
+        }
+        if (choice === 'tray_failed') {
+            expect(revision).toBe(1);
+            hook = await mount(settled);
+            await vi.waitFor(() => expect(hook.getCurrent().ready).toBe(true));
+            expect(hook.getCurrent().state).toMatchObject({ status: 'always_failed', approved: true });
+            expect(hook.getCurrent().state?.errorCode).toBe('conflict');
+            expect(hook.text()).toContain('capabilities.session.ask.alwaysFailed');
+            refuseRules = false;
+            await act(async () => { await hook.getCurrent().retryAlways?.(); });
+            expect(row.metadataVersion).toBe(2);
+        } else if (tray) {
+            // The open-only attention card leaves as soon as the durable approval settles,
+            // before its replay returns and the controller can start the rules Action.
+            expect(resolveReachV1(readRules(), context).enabled).toBe(true);
+            if (skillRevision) {
+                expect(attempts).toEqual([2]);
+                expect(readRules().find(rule => rule.id === 'other-machine')?.enabled).toBe(true);
+                expect(readRules().find(rule => rule.id === 'except-gemini')).toMatchObject({ agentId: 'gemini', enabled: true });
+            }
+        } else expect(hook.getCurrent().state).toMatchObject({ status: 'always_saved', approved: true });
         const result = settled.execution?.ok ? SessionCapabilitiesSetOutputV1Schema.parse(settled.execution.result) : null;
         expect(result).toMatchObject({ ok: true, previous: 'inherit', applyTiming: { t: 'next_turn' } });
         if (!result?.ok) throw new Error('Expected successful capability execution');
         if (row.ownerMetadata?.t !== 'plain') throw new Error('Expected Plain Session owner metadata');
         const appliedMetadata = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v });
         expect(appliedMetadata)
-            .toMatchObject({ mcpSelectionV1: { forceIncludeServerIds: ['linear-id'] } });
+            .toMatchObject(skillRevision ? { skillSelectionV1: { forceIncludeSkillIds: [itemId] } }
+                : { mcpSelectionV1: { forceIncludeServerIds: [itemId] } });
         const change = readSessionCapabilityApplyChange(appliedMetadata, () => 'Linear');
         expect(sessionCapabilityApplyNotice({ change, pendingApply: readPendingCapabilityApplyV1(appliedMetadata),
             applyTiming: { mcp: result.applyTiming, skills: { t: 'next_turn' } },
             machineOnline: true, machineName: 'MacBook', turnSettled: true })?.key).toBe('joinsNextTurn');
-        expect(resolveReachV1(catalog.bindings.map(({ serverId: _id, ...rule }) => rule), context).enabled).toBe(true);
-        expect(catalog.bindings.find(rule => rule.id === 'general')?.enabled).toBe(true);
+        expect(resolveReachV1(readRules(), context).enabled).toBe(true);
+        expect(readRules().find(rule => rule.id === 'general')?.enabled).toBe(true);
+        if (choice === 'remount') await hook.unmount();
+        if (choice === 'remount' || choice === 'tray' || skillRevision) {
+            hook = await mount(settled);
+            await vi.waitFor(() => expect(hook.getCurrent().ready).toBe(true));
+            expect(hook.getCurrent().state).toMatchObject({ status: 'always_saved', approved: true });
+        }
         await act(async () => { expect(await hook.getCurrent().undoAlways?.()).toEqual({ ok: true }); });
-        expect(resolveReachV1(catalog.bindings.map(({ serverId: _id, ...rule }) => rule), context).enabled).toBe(false);
-        await hook.rerender(settled);
+        expect(resolveReachV1(readRules(), context).enabled).toBe(false);
+        if (!tray && choice !== 'remount') { await hook.unmount(); hook = await mount(settled); }
+        await vi.waitFor(() => expect(hook.getCurrent().ready).toBe(true));
         await act(async () => { expect(await hook.getCurrent().undoSession()).toMatchObject({ ok: true, result: { ok: true, state: 'inherit' } }); });
         if (row.ownerMetadata?.t !== 'plain') throw new Error('Expected Plain Session owner metadata after Undo');
         expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v }))
-            .toMatchObject({ mcpSelectionV1: { forceIncludeServerIds: [] } });
+            .toMatchObject(skillRevision ? { skillSelectionV1: { forceIncludeSkillIds: [] } }
+                : { mcpSelectionV1: { forceIncludeServerIds: [] } });
     }
+});
+
+it('restores the acknowledged previous skill rules, retaining Always on a refused or unacknowledged Undo', async () => {
+    const accountId = 'skill-undo-owner';
+    const serverId = await homes.addHome({ name: 'Skill Undo Home', serverUrl: 'https://skill-undo.test', accountId });
+    const account = await captureLazyActionAccountContext(serverId);
+    let skillId: string;
+    try {
+        const artifact = await account.createArtifactDocument({ header: { v: 1, kind: 'prompt_bundle.v2', title: 'QA skill', bundleSchemaId: 'skills.skill_md_v1' },
+            body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+                contentBase64: Buffer.from('---\nname: qa-skill\n---\nUse it.').toString('base64') }] }) });
+        skillId = artifact.artifactId;
+    } finally { account.dispose(); }
+    const previous = [{ id: 'everywhere-off', target: { t: 'allMachines' as const }, enabled: false, createdAt: 1, updatedAt: 1 }];
+    let record: PromptLibraryRecordV1 = { key: 'skill-rules', value: { v: 1, rules: previous.map(rule => ({ ...rule, skillId })) } };
+    let revision = 1;
+    let undoRefused = true;
+    const undoAck = createDeferred<void>();
+    homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => ({ body: { status: 'listed', rows: [
+        { key: record.key, revision, content: { t: 'plain', v: record } },
+        ...PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== record.key).map(key => ({ key, revision: 1, content: null })),
+    ] } }) });
+    homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/skill-rules`, { select: input => {
+        const mutation = PromptLibraryRowMutationV1Schema.parse(input);
+        if (mutation.expectedRevision !== revision || revision === 2 && undoRefused) return { body: { status: 'conflict', revision } };
+        if (mutation.content?.t !== 'plain') throw new Error('Expected Plain rules');
+        record = PromptLibraryRecordV1Schema.parse(mutation.content.v);
+        return { body: { status: 'updated', revision: ++revision, cursor: revision }, ...(revision === 3 ? { respondAfter: undoAck.promise } : {}) };
+    } });
+    const execute = createDefaultActionExecutor();
+    const rules = createReachRulesController({ key: 'skill-undo', kind: 'skill', itemId: skillId, rules: previous,
+        revision, status: 'ready', valueAvailable: true }, async (actionId, input) => {
+        const result = await execute.execute(actionId, input, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId, expectedAccountId: accountId });
+        if (result.ok) expect(SkillsRulesSetOutputV1Schema.safeParse(result.result).success).toBe(true);
+        return result;
+    });
+    const controller = createCapabilityEnableApprovalController({ alwaysWrite: { place: { t: 'machine', machineId: 'machine' }, state: 'on' },
+        decide: async () => true, changeRules: rules.change, undoRules: rules.undoLast });
+    await controller.choose('always');
+    expect(controller.getSnapshot()).toMatchObject({ status: 'always_saved', errorCode: null });
+    expect(await controller.undoAlways()).toEqual({ ok: false, message: 'conflict' });
+    expect(controller.getSnapshot().status).toBe('always_saved');
+    undoRefused = false;
+    const undo = controller.undoAlways();
+    await vi.waitFor(() => expect(revision).toBe(3));
+    expect(controller.getSnapshot().status).toBe('always_saved');
+    undoAck.resolve();
+    expect(await undo).toEqual({ ok: true });
+    expect(controller.getSnapshot().status).toBe('session_allowed');
+    if (record.key !== 'skill-rules') throw new Error('Expected skill rules');
+    expect(reachRulesToDraftsV1(record.value.rules)).toEqual(reachRulesToDraftsV1(previous));
 });

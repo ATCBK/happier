@@ -13,8 +13,10 @@ import { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1
 import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SkillListItemV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { buildSkillComposerGroups, pickSkillComposerRow } from '@/sync/domains/skills/skillComposerGroups';
-import { resolveSelectionRestartMarkersForStartupV1, writeCapabilitySelectionApplyV1, clearCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { readSessionCapabilitySelectionFromMetadataV1, resolveSelectionRestartMarkersForStartupV1, writeCapabilitySelectionApplyV1, clearCapabilitySelectionApplyV1, writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { setSessionCapabilitySelectionItemV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { MetadataSchema } from '@happier-dev/session-core/state';
+import { sessionCapabilityApplyNotice } from './sessionCapabilityApplyNotice';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -41,6 +43,17 @@ beforeEach(async () => {
     transport.mockReset(); transport.mockResolvedValue(preview);
 });
 afterEach(async () => { standardCleanup(); await homes.reset(); });
+
+it('keeps an aggregate pending notice on its selected kind when only the other kind has a runtime refusal', async () => {
+    const selection = setSessionCapabilitySelectionItemV1(setSessionCapabilitySelectionItemV1({}, 'mcp_server', 'linear', 'on'), 'skill', 'review', 'on');
+    const metadata = writeCapabilitySelectionApplyV1(writeSessionCapabilitySelectionToMetadataV1({}, selection, { sessionActive: true }),
+        { skills: { reason: 'missing_resume_snapshot' } });
+    const { useSessionCapabilities } = await import('@/sync/domains/capabilities/session/useSessionCapabilities');
+    const hook = await renderHook(() => useSessionCapabilities('c123456789012345678901234', metadata, { serverId }));
+    expect(sessionCapabilityApplyNotice({ pendingApply: hook.getCurrent().pendingApply,
+        applyTiming: { mcp: { t: 'next_turn' }, skills: { t: 'applied_now' } }, change: null,
+        machineOnline: true, machineName: 'QA', turnSettled: true })?.key).toBe('pendingNextTurn');
+});
 
 it('edits only the authoring draft and does not request a Machine preview before demand', async () => {
     const hook = await renderHook(() => {
@@ -86,9 +99,27 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
     getStorage().setState({ sessions: { [sessionId]: createSessionFixture({ id: sessionId, serverId, active: true, metadataLayoutVersion: 1,
         metadata: { path: '', host: '' }, ownerMetadataView: metadata() }) }, sessionLocalStateScope: { serverId, accountId: 'owner' } });
     let conflict = false;
+    let acknowledgeApply = false;
     for (const suffix of ['', '?accessProjectionVersion=1']) homes.answer(serverId, `GET /v2/sessions/${sessionId}${suffix}`, { select: () => {
         const response = { body: { session: row } };
-        if (conflict) { conflict = false; row = { ...row, metadataVersion: row.metadataVersion + 1 }; }
+        if (conflict) {
+            conflict = false;
+            const edited = createSessionOwnerMetadataV1({ metadata: writeSessionCapabilitySelectionToMetadataV1(metadata() ?? {},
+                setSessionCapabilitySelectionItemV1(readSessionCapabilitySelectionFromMetadataV1(metadata()), 'native_skill', 'native-review', 'on'), { sessionActive: true }) });
+            if (!edited.ok) throw new Error('Invalid concurrent selection');
+            row = { ...row, metadataVersion: row.metadataVersion + 1,
+                ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(edited.ownerMetadata) };
+        }
+        if (acknowledgeApply) {
+            acknowledgeApply = false;
+            const acknowledged = createSessionOwnerMetadataV1({ metadata: {
+                ...resolveSelectionRestartMarkersForStartupV1({ current: metadata() ?? {}, applied: readSessionCapabilitySelectionFromMetadataV1(metadata()) }),
+                hostPid: 42,
+            } });
+            if (!acknowledged.ok) throw new Error('Invalid runtime acknowledgment');
+            row = { ...row, metadataVersion: row.metadataVersion + 1,
+                ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(acknowledged.ownerMetadata) };
+        }
         return response;
     } });
     homes.answer(serverId, `PATCH /v2/sessions/${sessionId}`, { select: input => {
@@ -102,15 +133,27 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
     homes.answer(serverId, 'GET /v1/artifacts', { body: [] });
     const hook = await renderHook((readOnly: boolean) => useExistingSessionCapabilitiesPopover({ ...target, readOnly }, presentation), { initialProps: false });
     expect(transport).not.toHaveBeenCalled();
-    await act(async () => { expect(await hook.getCurrent().setItem('native_skill', 'native-review', 'on')).toEqual({ ok: true }); });
+    await act(async () => { expect(await hook.getCurrent().setItem('native_skill', 'native-review', 'on')).toMatchObject({ ok: true }); });
     expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual([]);
-    await act(async () => { expect(await hook.getCurrent().undoLast()).toEqual({ ok: true }); });
+    // The receipt for the in-place Undo line names the change in the person's words (turning a native skill on is an add).
+    expect(hook.getCurrent().undoReceipt).toEqual({ kind: 'native_skill', title: 'native-review', change: 'added' });
+    await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
     expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual(['native-review']);
+    // Undo resent the previous override and settled the line; it is not offered twice.
+    expect(hook.getCurrent().undoReceipt).toBeNull();
+    await act(async () => { await hook.getCurrent().setItem('native_skill', 'native-review', 'on'); });
+    expect(hook.getCurrent().undoReceipt).not.toBeNull();
+    // The newest change owns the offer, and it resends that change's own previous override.
+    await act(async () => { await hook.getCurrent().setItem('native_skill', 'native-review', 'off'); });
+    expect(hook.getCurrent().undoReceipt).toEqual({ kind: 'native_skill', title: 'native-review', change: 'removed' });
+    await act(async () => { await hook.getCurrent().undoLast(); });
+    expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual([]);
+    await act(async () => { await hook.getCurrent().setItem('native_skill', 'native-review', 'off'); });
     conflict = true;
     await act(async () => { expect(await hook.getCurrent().setItem('native_skill', 'native-review', 'on')).toEqual({ ok: false, message: 'conflict' }); });
+    // A refused write leaves no Undo behind.
+    expect(hook.getCurrent().undoReceipt).toBeNull();
     expect(hook.getCurrent().selection.skills?.excludeNativeSkillNames).toEqual(['native-review']);
-    await act(async () => { hook.getCurrent().demandPreview(); });
-    await vi.waitFor(() => expect(hook.getCurrent().model.state).toBe('ready'));
     const builtIn = SkillListItemV1Schema.parse({ skillId: 'happier:happier', name: 'happier', description: null, revision: '1:1', rules: [],
         trust: 'text_only', cost: { descriptionTokens: 0, bodyTokens: 1 }, provenance: { kind: 'first_party' }, modified: false,
         updatePolicy: 'manual', createdAt: 0, migratedFromContext: false, userInvocable: true, folderId: null });
@@ -121,6 +164,32 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
         expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) })).toMatchObject({ ok: true });
     });
     expect(hook.getCurrent().selection.skills?.forceIncludeSkillIds).toContain('happier:happier');
+    expect(hook.getCurrent().undoReceipt).toEqual({ kind: 'skill', title: 'happier', change: 'added' });
+    acknowledgeApply = true;
+    await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
+    expect(readSessionCapabilitySelectionFromMetadataV1(metadata()).skills.forceIncludeSkillIds).toEqual([]);
+    expect(metadata()?.hostPid).toBe(42);
+    await act(async () => { hook.getCurrent().demandPreview(); });
+    await vi.waitFor(() => expect(hook.getCurrent().model.state).toBe('ready'));
+    await act(async () => {
+        expect(await pickSkillComposerRow(pickRow, hook.getCurrent())).toMatchObject({ ok: true });
+    });
+    acknowledgeApply = true;
+    await act(async () => { expect(await hook.getCurrent().undoLast()).toMatchObject({ ok: true }); });
+    expect(readSessionCapabilitySelectionFromMetadataV1(metadata()).skills.forceIncludeSkillIds).toEqual([]);
+    await act(async () => { expect(await pickSkillComposerRow(pickRow, hook.getCurrent())).toMatchObject({ ok: true }); });
+    // A pending MCP refusal must not become the timing of the skill just added.
+    const bothPending = writeCapabilitySelectionApplyV1(writeSessionCapabilitySelectionToMetadataV1(metadata() ?? {},
+        setSessionCapabilitySelectionItemV1(hook.getCurrent().selection, 'mcp_server', 'linear', 'on'), { sessionActive: true }),
+        { mcp: { reason: 'new_sessions_only' }, skills: { reason: 'next_turn' } });
+    const pendingOwner = createSessionOwnerMetadataV1({ metadata: bothPending });
+    if (!pendingOwner.ok) throw new Error('Invalid pending metadata');
+    row = { ...row, ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(pendingOwner.ownerMetadata) };
+    await act(async () => {
+        const state = getStorage().getState();
+        getStorage().setState({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, ownerMetadataView: metadata() } } });
+    });
+    expect(hook.getCurrent().model.applyNotice?.key).toBe('joinsNextTurn');
     // Simulate the external runtime's acknowledged applied selection through its real metadata codec.
     const applied = resolveSelectionRestartMarkersForStartupV1({ current: metadata() ?? {}, applied: hook.getCurrent().selection });
     const acknowledged = createSessionOwnerMetadataV1({ metadata: applied });
@@ -134,7 +203,7 @@ it('reuses the Session Action owner for rollback, previous-override Undo and rea
     expect(hook.getCurrent().model.applyNotice).toMatchObject({ key: 'addedNow', text: hook.getCurrent().model.pendingNote });
     // The same sheet controller owns the live receipt, including a title absent from its preview.
     const dollarNotice = hook.getCurrent().model.pendingNote;
-    await act(async () => { expect(await hook.getCurrent().setItem('skill', 'happier:happier', 'on', 'happier')).toEqual({ ok: true }); });
+    await act(async () => { expect(await hook.getCurrent().setItem('skill', 'happier:happier', 'on', 'happier')).toMatchObject({ ok: true }); });
     expect(hook.getCurrent().model.pendingNote).toBe(dollarNotice);
     // A later rule change supersedes that old local receipt; its acknowledgment
     // must clear the single line instead of resurrecting the earlier edit.

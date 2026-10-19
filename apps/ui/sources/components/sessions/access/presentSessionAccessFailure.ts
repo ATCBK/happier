@@ -4,6 +4,7 @@ import { t } from '@/text';
 import { HappyError } from '@/utils/errors/errors';
 
 import type { SessionAccessUiError, SessionAccessUiReason } from './sessionAccessEditorTypes';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 function sessionAccessFailureMessage(code: string, status?: number): string {
     switch (code) {
@@ -68,7 +69,7 @@ export function presentSessionAccessReason(code: SessionAccessErrorCodeV1): Sess
  * was lost is the family's ordinary unknown outcome and must be reconciled.
  */
 export function presentSessionAccessApprovalSettlement(code: string): SessionAccessUiError | null {
-    if (code === 'approval_rejected' || code === 'approval_canceled') return null;
+    if (isActionApprovalDeclinedErrorCode(code)) return null;
     return presentSessionAccessFailure(new SessionAccessApiError(
         code === 'approval_execution_outcome_unknown' ? 'outcome_unknown' : code,
     ));

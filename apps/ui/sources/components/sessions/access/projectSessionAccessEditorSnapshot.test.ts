@@ -7,7 +7,7 @@ const capabilities = {readTranscript:true,submitAgentInput:true,editSessionRecor
 type CompleteSessionAccessSnapshot = Extract<SessionAccessGrantsListResponseV1, { visibility: 'complete' }>;
 
 function snapshot(): CompleteSessionAccessSnapshot {
-    return {visibility:'complete',owner:{kind:'account',accountId:'owner',firstName:'Owner',lastName:null,username:null,avatarUrl:null},primaryTeamId:null,effectiveAccess:{v:1,level:'owner',sources:[{kind:'owner'}],capabilities},grants:[{grant:{subject:{kind:'team',teamId:'team'},accessLevel:'view',canApprovePermissions:false,requiredByTeamPolicy:true},principal:{kind:'team',teamId:'team',name:'Acme'},allowedTransitions:{accessLevels:[],canChangePermissionDelegation:false,canRemove:false,reason:'session_access_team_policy_required'}}]};
+    return {visibility:'complete',owner:{kind:'account',accountId:'owner',name:'Owner',firstName:'Owner',lastName:null,username:null,avatarUrl:null},primaryTeamId:null,effectiveAccess:{v:1,level:'owner',sources:[{kind:'owner'}],capabilities},grants:[{grant:{subject:{kind:'team',teamId:'team'},accessLevel:'view',canApprovePermissions:false,requiredByTeamPolicy:true},principal:{kind:'team',teamId:'team',name:'Acme'},allowedTransitions:{accessLevels:[],canChangePermissionDelegation:false,canRemove:false,reason:'session_access_team_policy_required'}}]};
 }
 describe('access editor server projection',()=>{
     it('uses an acknowledged username as identity without adding an unnamed-account id hint', () => {
@@ -19,11 +19,11 @@ describe('access editor server projection',()=>{
         const named = projectSessionAccessEditorSnapshot({ snapshot: snapshot(), viewerAccountId: 'owner' });
         expect(named.owner?.principal).toMatchObject({ displayName: 'Owner', secondaryLabel: 'You' });
         const emptyLocalProfile = projectSessionAccessEditorSnapshot({ snapshot: snapshot(), viewerAccountId: 'owner',
-            viewerProfile: { firstName: null, lastName: null, username: null, avatarUrl: null } });
+            viewerProfile: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null } });
         expect(emptyLocalProfile.owner?.principal).toMatchObject({ displayName: 'Owner', secondaryLabel: 'You' });
         const original = snapshot();
         const unnamed = projectSessionAccessEditorSnapshot({ snapshot: { ...original,
-            owner: { kind: 'account', accountId: 'owner', firstName: null, lastName: null, username: null, avatarUrl: null },
+            owner: { kind: 'account', accountId: 'owner', name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
         }, viewerAccountId: 'owner' });
         expect(unnamed.owner?.principal.displayName).toBe('Your account');
         expect(unnamed.owner?.principal.secondaryLabel).toBe('You');
@@ -135,7 +135,7 @@ describe('access editor server projection',()=>{
             { ...row, grant: { ...row.grant, accessLevel: 'view', canApprovePermissions },
                 allowedTransitions: { accessLevels: ['view', 'edit', 'admin'], canChangePermissionDelegation: true, canRemove: true } },
             { ...row, grant: { subject: { kind: 'account', accountId: 'alice' }, accessLevel: 'edit', canApprovePermissions: true },
-                principal: { kind: 'account', accountId: 'alice', firstName: 'Alice', lastName: null, username: null, avatarUrl: null },
+                principal: { kind: 'account', accountId: 'alice', name: 'Alice', firstName: 'Alice', lastName: null, username: null, avatarUrl: null },
                 allowedTransitions: { accessLevels: ['view', 'edit', 'admin'], canChangePermissionDelegation: true, canRemove: true } },
         ] } });
 
@@ -148,7 +148,7 @@ describe('access editor server projection',()=>{
         const result=projectSessionAccessEditorSnapshot({snapshot:{...original,grants:[{
             ...row,
             grant:{subject:{kind:'account',accountId:'alice'},accessLevel:'view',canApprovePermissions:false},
-            principal:{kind:'account',accountId:'alice',firstName:'Alice',lastName:null,username:'alice',avatarUrl:'https://cdn.example/alice.png'},
+            principal:{kind:'account',accountId:'alice',name:'Alice',firstName:'Alice',lastName:null,username:'alice',avatarUrl:'https://cdn.example/alice.png'},
         }]}});
 
         expect(result.grants[0]?.principal.avatar).toEqual({id:'alice',imageUrl:'https://cdn.example/alice.png'});

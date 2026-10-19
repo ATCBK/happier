@@ -3,6 +3,20 @@ import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 import type { AgentState } from '@happier-dev/session-core/state';
 import type { Message } from '@happier-dev/session-core/messages';
 import { sortNormalizedMessagesOldestFirst } from '@/utils/sessions/sortNormalizedMessagesOldestFirst';
+import type { Metadata } from '@happier-dev/session-core/state';
+import { readSharedMetadataPresentationCompletedRequests } from '@happier-dev/session-core/pending';
+
+export function createPublicSharePresentationAgentState(
+    metadata: Metadata | null,
+    metadataLayoutVersion: unknown,
+): AgentState {
+    return {
+        completedRequests: readSharedMetadataPresentationCompletedRequests(
+            metadata,
+            metadataLayoutVersion,
+        ),
+    } as AgentState;
+}
 
 export function reducePublicShareTranscript(
     normalized: readonly NormalizedMessage[],

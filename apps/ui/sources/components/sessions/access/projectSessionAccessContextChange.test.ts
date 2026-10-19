@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { t } from '@/text';
+
 import { projectSessionAccessContextChange } from './projectSessionAccessContextChange';
 
 const restricted = (teamId: string) => ({
@@ -18,7 +20,7 @@ describe('projectSessionAccessContextChange', () => {
         });
 
         expect(consequences).toHaveLength(1);
-        expect(consequences[0]).toMatch(/external sharing/i);
+        expect(consequences[0]).toContain(t('teams.policy.externalSharingDisabled'));
     });
 
     it('names the context-required credential selections the outgoing Team keeps', () => {
