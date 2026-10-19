@@ -26,7 +26,7 @@ CREATE TABLE `ManagedMachine` (
     `wakeOnAcceptedMessage` BOOLEAN NOT NULL,
     `observation` JSON,
     `cleanup` JSON,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
     CONSTRAINT `ManagedMachine_custodianAccountId_fkey` FOREIGN KEY (`custodianAccountId`) REFERENCES `Account` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT `ManagedMachine_enrolledMachineId_fkey` FOREIGN KEY (`enrolledMachineId`) REFERENCES `Machine` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
@@ -45,7 +45,7 @@ CREATE TABLE `ManagedMachinePreset` (
     `wakeOnAcceptedMessage` BOOLEAN,
     `simultaneousMaximum` INTEGER,
     `archivedAt` DATETIME(3),
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
     CONSTRAINT `ManagedMachinePreset_custodianAccountId_fkey` FOREIGN KEY (`custodianAccountId`) REFERENCES `Account` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT `ManagedMachinePreset_teamId_fkey` FOREIGN KEY (`teamId`) REFERENCES `Team` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
