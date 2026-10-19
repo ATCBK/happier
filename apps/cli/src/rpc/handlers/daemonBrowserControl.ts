@@ -2,8 +2,24 @@ import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { DaemonBrowserControlDispatchRequestV1Schema, DaemonBrowserControlDispatchResponseV1Schema, DaemonBrowserViewListRequestV1Schema, DaemonBrowserViewListResponseV1Schema } from '@happier-dev/protocol/browser/control/v1';
 import type { DaemonBrowserControlDispatchResponseV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
+import { resolveManagedBrowserSidecarCandidate } from '@/daemon/browser/sidecar/source';
+
+async function unavailableBrowserControl(): Promise<never> {
+    // Explain the absent owner through the same source that startup/provisioning uses. Discovery
+    // remains read-only: only an admitted Browser open/automation Action may start the download.
+    const candidate = await resolveManagedBrowserSidecarCandidate();
+    if (candidate?.available === false) {
+        throw new RpcError(
+            'Managed Chromium is not installed on this machine. Open a Browser view to download it, then try again.',
+            'managed_package_missing',
+        );
+    }
+    // An installed or unsupported source does not establish why no route was registered.
+    throw new RpcError('Browser control runtime is unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+}
 
 // W2-A-1 / A3: expose the existing `createBrowserDaemonControlRoutes` broker as a UI-reachable
 // machine-scoped RPC. The human-owner control surface (streamed/sidecar view reload/stop/navigate)
@@ -22,7 +38,7 @@ export function registerDaemonBrowserControlHandler(
 ): void {
     rpc.registerHandler(RPC_METHODS.DAEMON_BROWSER_VIEW_LIST, async (raw: unknown) => {
         const request = DaemonBrowserViewListRequestV1Schema.parse(raw);
-        if (!options.browserControl) throw new Error('Browser control runtime is unavailable');
+        if (!options.browserControl) return unavailableBrowserControl();
         return DaemonBrowserViewListResponseV1Schema.parse({ protocolVersion: 1,
             views: options.browserControl.listViews(request.browserSessionId) });
     });
@@ -31,7 +47,7 @@ export function registerDaemonBrowserControlHandler(
         async (raw: unknown, context?: RpcHandlerContext): Promise<DaemonBrowserControlDispatchResponseV1> => {
             const request = DaemonBrowserControlDispatchRequestV1Schema.parse(raw);
             if (!options.browserControl) {
-                throw new Error('Browser control runtime is unavailable');
+                return unavailableBrowserControl();
             }
             const result = await options.browserControl.dispatchCommand(request.command, {
                 authority: context?.callerAuthority ?? 'account_automation',
