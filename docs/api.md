@@ -2228,10 +2228,12 @@ Artifact bytes and grants. See the
 ### Artifacts
 - In 0.3 development, Homes advertise `features.artifacts.kindFiltering.enabled`.
   Only an explicit `true` admits coarse kind inputs. `GET /v1/artifacts?kind=skill`
-  (also `prompt`, `plugin_ui`, or `other`) returns
+  (also `prompt`, `plugin_ui`, `work_board`, or `other`) returns
   `{items: [...], hasUnclassified: boolean}` with the same authorized header
   projection and paging as the unfiltered list. `hasUnclassified` covers null-kind
   rows readable by the caller, including grants, independently of the current page.
+  The page and witness share one read snapshot; a true witness stays conservative
+  while classification or access changes, and the fallback scan rechecks access.
   A true flag makes clients restart with the full inventory; a missing or malformed
   feature bit keeps the existing full scan without sending the new query parameter.
   Omitting `kind` preserves the array response. Rows expose nullable plaintext

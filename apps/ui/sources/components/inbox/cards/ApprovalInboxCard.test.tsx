@@ -1,7 +1,14 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { act } from 'react-test-renderer';
+import type { Artifact, ArtifactHeader, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { useArtifacts } from '@/sync/domains/state/storage';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { fetchAndApplyArtifactsList } from '@/sync/engine/artifacts/syncArtifacts';
+import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
 import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
@@ -48,6 +55,7 @@ beforeEach(async () => {
   }, concurrentSessionListCacheByServerId: { [serverIdB]: { serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 } } } });
 });
 afterEach(async () => {
+  resetServerFeaturesClientForTests();
   setPreferredLanguageFromSettings('en');
   standardCleanup();
   storage.setState(initialState, true);
@@ -55,6 +63,48 @@ afterEach(async () => {
 });
 
 describe('ApprovalInboxCard', () => {
+  it('reads and mounts unclassified and stale-kind approvals without updating any Artifact', async () => {
+    const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
+    primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({
+      features: { artifacts: { kindFiltering: { enabled: true } } }, capabilities: {},
+    }) } });
+    const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'read-only-approval',
+        surface: 'cli', serverId: serverIdB, actionId: 'session.list' } });
+    const rows: Artifact[] = [undefined, 'prompt' as const].map((kind, index) => ({
+      id: `11111111-1111-4111-8111-11111111111${index}`, ownerAccountId: 'owner', access: 'owner',
+      encryptionMode: 'plain', kind, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }),
+      publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: index, createdAt: 1, updatedAt: 1,
+    }));
+    const requests: Array<{ path: string; method: string }> = [];
+    // Only the Home HTTP boundary is replaced; sync, codecs, store and mounted cards stay real.
+    const request = async (path: string, init?: RequestInit) => {
+      requests.push({ path, method: init?.method ?? 'GET' });
+      if (path.startsWith('/v1/artifacts?')) return Response.json(rows.map(({ body: _body, ...head }) => head));
+      if (path === '/v1/artifacts/read') return Response.json({ items: rows.map(artifact => ({
+        artifactId: artifact.id, ok: true, artifact, recipientCensus: null,
+      })) });
+      return Response.json({ success: true });
+    };
+    function ApprovalRead() {
+      return <>{useArtifacts().filter(isOpenApprovalInboxArtifact).map(artifact =>
+        <ApprovalInboxCard key={artifact.id} artifact={artifact} onPress={() => {}} />)}</>;
+    }
+    storage.setState({ artifacts: {} });
+    const screen = await renderScreen(<ApprovalRead />);
+    await act(async () => {
+      await fetchAndApplyArtifactsList({ credentials: { token: 'fixture' }, encryption: null,
+        artifactDataKeys: new Map(), request, applyArtifacts: artifacts => storage.getState().applyArtifacts(artifacts) });
+    });
+    for (const row of rows) {
+      expect(screen.findByTestId(`inbox.approval.${row.id}`)).not.toBeNull();
+      expect(storage.getState().artifacts[row.id]).toMatchObject({ kind: row.kind, body: JSON.stringify(approval), isDecrypted: true });
+    }
+    expect(requests.filter(({ path, method }) => method !== 'GET' && path !== '/v1/artifacts/read')).toEqual([]);
+  });
   it('localizes the first-party title in French and resolves its document through the shared reference reader', async () => {
     const { ApprovalInboxCard } = await import('./ApprovalInboxCard');
     await preloadTranslations('fr');
