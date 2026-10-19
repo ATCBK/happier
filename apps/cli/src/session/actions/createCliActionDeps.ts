@@ -502,6 +502,10 @@ import type {
 } from './externalSessions/pluginExternalSessionAdmissionOwner';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { fetchAccountProfile } from '@/api/accountProfile';
+import { readSessionOperationCredentialReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
+import { resolveMachineRpcRoutePolicy } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import { TeamCredentialResourceEntitledPageV1Schema, type TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { PushNotificationClient } from '@/api/pushNotifications';
 import { dispatchActivityNotificationAsync, listActivityNotificationChannels,
   NotificationChannelCatalogUnavailableError } from '@/notifications/activity/dispatchActivityNotification';
@@ -8203,7 +8207,7 @@ export function createCliActionDeps(params: Readonly<{
       });
     },
 
-    sessionStatusGet: async ({ sessionId, live, readiness, context, signal, serverId }) => {
+    sessionStatusGet: async ({ sessionId, live, readiness, operation, credentialPurpose, credentialTeamSelection, context, signal, serverId }) => {
       const operationSignal = signal ?? context?.signal;
       operationSignal?.throwIfAborted();
       if (!params.credentials) {
@@ -8214,6 +8218,8 @@ export function createCliActionDeps(params: Readonly<{
       const credentials = params.credentials;
       const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
       const read = () => getSessionStatus({ credentials, idOrPrefix: sessionId, live: live === true,
+        ...(operation ? { operation } : {}), ...(credentialPurpose ? { credentialPurpose } : {}),
+        ...(credentialTeamSelection ? { credentialTeamSelection } : {}),
         readiness: readiness === true, ...(operationSignal ? { signal: operationSignal } : {}),
         ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
         ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
@@ -8222,6 +8228,52 @@ export function createCliActionDeps(params: Readonly<{
         // A credential-only external root has no requester Machine projection. Never use host custody instead.
         ...(!context?.externalActionCredential || context.externalActionExecutionAuthorization ? {
           readReadinessInventory: input => actionDeps.machinesAgentsList!(input, context ?? { surface: 'cli' }),
+          readReadinessCredential: async ({ machineId, purpose, machineAccess, teamSelection }) => {
+            const currentContext = context ?? { surface: 'cli' as const };
+            const described = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await callMachineAction({
+              machineId, method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+              request: { machineId }, context: currentContext, effectActionId: 'session.status.get', exactMachine: true,
+              ...(operationSignal ? { signal: operationSignal } : {}),
+            }));
+            const authorizeRequest = (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
+              resolveServerRequestHeaders(currentContext, 'session.status.get', request);
+            const store = teamSelection ? null : createCliConnectedAccountCatalogStore({ credentials, operationContext: params.savedSecretOperationContext,
+              authorizeRequest, ...(operationSignal ? { signal: operationSignal } : {}) });
+            const catalog = store ? await store.readAdmittedCatalog('purposes') : null;
+            if (!teamSelection && (!catalog || catalog.status !== 'ready' || catalog.record.key !== 'purposes')) return { kind: 'unknown' as const };
+            const profile = teamSelection ? null : await fetchAccountProfile({ token: credentials.token, authorizeRequest,
+              ...(operationSignal ? { signal: operationSignal } : {}) });
+            store?.assertCurrent();
+            if (profile && homeAccountId && profile.id !== homeAccountId) return { kind: 'unknown' as const };
+            const team = teamSelection;
+            let resource: TeamCredentialResourceCatalogEntryV1 | null = null;
+            const homeDomainAction = (readEffectiveDeps?.() ?? actionDeps).homeDomainAction;
+            if (team && homeDomainAction) {
+              let cursor: string | null = null;
+              do {
+                const page = TeamCredentialResourceEntitledPageV1Schema.parse(await homeDomainAction({
+                  actionId: 'teams.credentials.entitled.list', input: { teamId: team.teamId, ...(cursor ? { cursor } : {}) },
+                  context: currentContext, ...(operationSignal ? { signal: operationSignal } : {}),
+                }));
+                resource = page.resources.find(candidate => candidate.id === team.selection.resourceId) ?? null;
+                cursor = page.nextCursor;
+              } while (!resource && cursor);
+            }
+            store?.assertCurrent();
+            const descriptors = Object.values(described.projection.familiesById.connectedAccounts?.entriesById ?? {}).flatMap(entry => {
+              const parsed = ConnectedAccountUiProjectionEntryV1Schema.safeParse(entry);
+              return parsed.success && parsed.data.availability.state === 'available' ? [parsed.data] : [];
+            });
+            return readSessionOperationCredentialReadinessV1({ purpose, machineId, machineAccess, executionAccountId: profile?.id ?? homeAccountId,
+              repairAccess: resolveMachineRpcRoutePolicy(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD).sharedMachineAccess,
+              bindings: catalog?.status === 'ready' && catalog.record.key === 'purposes' ? catalog.record.value : { v: 1, bindings: [] },
+              ...(teamSelection ? { teamSelection } : {}),
+              projection: described.projection, accounts: profile?.connectedAccountsV4 ?? [], groups: profile?.connectedAccountGroupsV4 ?? [],
+              now: Date.now(), teamResource: resource, readAuthentication: service => {
+                const matching = descriptors.filter(descriptor => descriptor.pluginId === service.pluginId && descriptor.serviceId === service.localId);
+                return matching.length === 1 ? matching[0]!.authentication : null;
+              } });
+          },
         } : {}),
       });
       return await withProjectHome(read);

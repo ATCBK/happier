@@ -355,6 +355,41 @@ export type SessionControlActionInputById = {
         sessionId: SessionTargetV1<true>;
         live?: boolean | undefined;
         readiness?: boolean | undefined;
+        operation?: 'conversation' | 'credential' | undefined;
+        credentialPurpose?: {
+            consumer: {
+                pluginId: string;
+                localId: string;
+            };
+            purpose: string;
+        } | undefined;
+        credentialTeamSelection?: {
+            purpose: {
+                consumer: {
+                    pluginId: string;
+                    localId: string;
+                };
+                purpose: string;
+            };
+            teamId: string;
+            selection: {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'direct';
+                disclosedMember: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'brokered';
+                disclosedMember?: undefined;
+            };
+        } | undefined;
     };
     readonly "session.work_state.get": {
         [x: string]: unknown;
@@ -460,17 +495,6 @@ export type SessionControlActionInputById = {
         } | {
             v: 2;
             bindingsByServiceId?: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            } | {
                 source: 'team_resource';
                 resourceId: string;
                 deliveryMode: 'direct';
@@ -486,6 +510,17 @@ export type SessionControlActionInputById = {
                 resourceId: string;
                 deliveryMode: 'brokered';
                 disclosedMember?: undefined;
+            } | {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
             }> | undefined;
         };
         machineId: string;

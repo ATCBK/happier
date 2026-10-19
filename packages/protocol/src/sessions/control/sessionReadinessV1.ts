@@ -6,10 +6,17 @@ import { MachinesAgentsSignInStartInputSchema } from '../../daemon/agentSignIn.j
 import { CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_INPUT_SCHEMAS } from '../../connect/authenticationActionsV1.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../../connect/connectedAccountPurposeIdentity.js';
 import { TeamCredentialResourceReadinessV1Schema } from '../../teams/credentials/readinessV1.js';
-import { TeamCredentialResourceRecoveryActionV1Schema } from '../../teams/credentials/resourceV1.js';
+import { TeamCredentialResourceRecoveryActionV1Schema, resolveTeamResourceConnectedServiceSelectionV1 } from '../../teams/credentials/resourceV1.js';
 import { SessionEffectiveAccessV1Schema } from '../access/sessionEffectiveAccessV1.js';
 import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connectedServiceBindings.js';
 import { SessionModelSelectionV2Schema } from '../../providers/selection/v2.js';
+import { qualifiedPurposeKey, type QualifiedConnectedAccountPurposeBindingsV1, type QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
+import { readDeclaredConnectedAccountPurposeV1, resolveConnectedAccountPurposeSelectedAccountV1 } from '../../connect/connectedAccountPurposeSelectionV1.js';
+import { isQualifiedConnectedAccountProfileUsableV4 } from '../../connect/qualifiedConnectedAccountsV4.js';
+import type { TeamCredentialResourceCatalogEntryV1 } from '../../teams/credentials/resourceV1.js';
+import type { TeamResourceConnectedServiceSelectionV2 } from '../../connect/connectedServiceBindings.js';
+import type { AccessibleMachineAccessV1 } from '../../machines/machineAccessV1.js';
+import type { MachineRpcRoutePolicyV1 } from '../../machines/peer/mediation/rpc/routePolicyV1.js';
 
 /** Diagnostic only: unread owner/Provider selection never borrows native sign-in or viewer defaults. */
 export function isSessionReadinessNativeSelectionV1(input: Readonly<{
@@ -44,6 +51,73 @@ export const SessionCredentialReadinessV1Schema = lazyZodSchema(() => z.discrimi
     usable: z.nullable(z.boolean()), repair: z.nullable(SessionReadinessRepairV1Schema) }),
 ]));
 export type SessionCredentialReadinessV1 = z.infer<typeof SessionCredentialReadinessV1Schema>;
+
+/** Exact recipient selection; preserve the resource owner's readiness/recovery vocabulary. */
+export function readSessionTeamCredentialReadiness(input: Readonly<{
+  teamId: string;
+  selection: TeamResourceConnectedServiceSelectionV2;
+  resource: TeamCredentialResourceCatalogEntryV1 | null;
+}>): SessionCredentialReadinessV1 {
+  const resource = input.resource;
+  const source = resource?.sourcePresentation;
+  const current = resource && resolveTeamResourceConnectedServiceSelectionV1({ ...input, resource,
+    services: input.selection.deliveryMode === 'direct' ? [input.selection.disclosedMember.service]
+      : source?.kind === 'connected_service' ? [source.service] : [] });
+  return { kind: 'team', teamId: input.teamId, resourceId: input.selection.resourceId,
+    readiness: current ? resource.readiness : null, recoveryAction: current ? resource.recoveryAction : null };
+}
+
+/** The existing purpose/profile owner decides usability; this projection never selects another account. */
+export function readSessionPersonalCredentialReadiness(input: Parameters<typeof resolveConnectedAccountPurposeSelectedAccountV1>[0] & Readonly<{
+  current: boolean; mayRepair: boolean; repair: SessionReadinessRepairV1 | null;
+}>): SessionCredentialReadinessV1 {
+  if (!input.current) return { kind: 'personal', purpose: input.purpose, usable: null, repair: null };
+  const selected = resolveConnectedAccountPurposeSelectedAccountV1(input);
+  const authentication = selected ? input.readAuthentication?.(selected.ref.service) : null;
+  const usable = selected ? authentication ? isQualifiedConnectedAccountProfileUsableV4({
+    profile: selected, authentication, now: input.now,
+  }) : null : false;
+  return { kind: 'personal', purpose: input.purpose, usable,
+    repair: usable === false && input.mayRepair ? input.repair : null };
+}
+
+/** A requested operation consumes its execution Account's purpose setup, independently of Agent login. */
+export function readSessionOperationCredentialReadinessV1(input: Omit<Parameters<typeof resolveConnectedAccountPurposeSelectedAccountV1>[0], 'serviceRefs' | 'bindings'> & Readonly<{
+  bindings: QualifiedConnectedAccountPurposeBindingsV1;
+  teamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1;
+  projection: Parameters<typeof readDeclaredConnectedAccountPurposeV1>[0]['projection'];
+  teamResource: TeamCredentialResourceCatalogEntryV1 | null;
+  machineId: string;
+  executionAccountId: string | null;
+  machineAccess: AccessibleMachineAccessV1 | null;
+  repairAccess: MachineRpcRoutePolicyV1['sharedMachineAccess'];
+}>): SessionCredentialReadinessV1 {
+  const declared = readDeclaredConnectedAccountPurposeV1({ purpose: input.purpose, projection: input.projection });
+  if (!declared) return { kind: 'unknown' };
+  const key = qualifiedPurposeKey(input.purpose);
+  const team = input.teamSelection;
+  if (team) {
+    if (qualifiedPurposeKey(team.purpose) !== key) return { kind: 'unknown' };
+    const resource = input.teamResource;
+    const compatible = resource && resolveTeamResourceConnectedServiceSelectionV1({
+      resource, teamId: team.teamId, selection: team.selection, services: declared.serviceRefs,
+    });
+    return readSessionTeamCredentialReadiness({ ...team, resource: compatible ? resource : null });
+  }
+  const selected = resolveConnectedAccountPurposeSelectedAccountV1({ ...input, serviceRefs: declared.serviceRefs });
+  const target = input.bindings.bindings.find(binding => qualifiedPurposeKey(binding.purpose) === key)?.target;
+  if (!target) return { kind: 'unknown' };
+  const account = target?.kind === 'account' ? target.account : selected?.ref;
+  const repair: SessionReadinessRepairV1 | null = account && declared.serviceRefs.some(service =>
+    service.pluginId === account.service.pluginId && service.localId === account.service.localId)
+    ? { actionId: 'connectedServices.authentication.beginReconnect', input: { machineId: input.machineId, account } } : null;
+  const access = input.machineAccess;
+  const mayRepair = access?.accessState === 'ready' && (input.repairAccess === 'custodian_only'
+    ? access.custodian.accountId === input.executionAccountId
+    : input.repairAccess === 'manage' ? access.role === 'manage' : true);
+  return readSessionPersonalCredentialReadiness({ ...input, serviceRefs: declared.serviceRefs,
+    current: true, mayRepair, repair });
+}
 
 export const SessionReadinessAgentV1Schema = lazyZodSchema(() => z.strictObject({
   agentId: z.string().check(z.minLength(1)), definitionId: z.optional(z.string().check(z.minLength(1))),
