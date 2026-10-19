@@ -360,6 +360,27 @@ test('build-tauri retries transient rustup toolchain downloads in build and fina
   }
 });
 
+test('Tauri finalization prepares the bundled WebKit without changing the native candidate build', async () => {
+  const workflow = parse(await readFile(workflowPath, 'utf8'));
+  const actionPath = './.github/actions/install-tauri-linux-dependencies';
+  const buildStep = workflow.jobs.build.steps.find((step) => step.uses === actionPath);
+  assert.notEqual(buildStep?.with?.['bundled-webkit'], 'true');
+  const steps = workflow.jobs.finalize.steps;
+  const sdkIndex = steps.findIndex((step) => step.uses === actionPath);
+  assert.equal(steps[sdkIndex]?.with?.['bundled-webkit'], 'true');
+  assert.ok(sdkIndex < steps.findIndex((step) => step.name === 'Install trusted finalizer dependencies'));
+
+  const action = parse(await loadFile('.github/actions/install-tauri-linux-dependencies/action.yml'));
+  const cache = action.runs.steps.find((step) => step.id === 'webkit-cache');
+  assert.ok(cache?.uses?.startsWith('actions/cache@'));
+  assert.equal(cache.with['restore-keys'], undefined);
+  assert.match(cache.with.key, /jammy.*x64/);
+  assert.match(cache.with.key, /prepare-tauri-webkit/);
+  const installation = action.runs.steps.find((step) => step.name === 'Prepare and install bundled WebKit SDK');
+  assert.ok(installation.run.indexOf('prepare-tauri-webkit.sh') < installation.run.indexOf('sudo cp -a'));
+
+});
+
 test('Tauri build and trusted finalizer share the complete Linux bundling dependency owner', async () => {
   const workflow = parse(await readFile(workflowPath, 'utf8'));
   const actionPath = './.github/actions/install-tauri-linux-dependencies';
@@ -373,7 +394,7 @@ test('Tauri build and trusted finalizer share the complete Linux bundling depend
   }
 
   const action = parse(await readFile(new URL('../../.github/actions/install-tauri-linux-dependencies/action.yml', import.meta.url), 'utf8'));
-  const installScript = String(action?.runs?.steps?.[0]?.run ?? '');
+  const installScript = String(action?.runs?.steps?.find((step) => step.name === 'Install native and packaging dependencies')?.run ?? '');
   for (const packageName of [
     'build-essential',
     'pkg-config',
