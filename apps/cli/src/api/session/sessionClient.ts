@@ -3266,9 +3266,37 @@ export class ApiSessionClient extends EventEmitter {
         };
     }
 
+    private async traceMetadataTuplePhase<T>(
+        operation: 'metadata' | 'publisher_metadata' | 'agent_state',
+        phase: string,
+        effect: () => Promise<T>,
+    ): Promise<T> {
+        const startedAt = performance.now();
+        const startedCpu = process.cpuUsage();
+        let status = 'failed';
+        try {
+            const result = await effect();
+            status = 'completed';
+            return result;
+        } finally {
+            const cpu = process.cpuUsage(startedCpu);
+            logger.infoFile('[API] Session tuple mutation phase', {
+                operation, phase, status,
+                durationMs: Math.round(performance.now() - startedAt),
+                processUserCpuMs: Math.round(cpu.user / 1_000),
+                processSystemCpuMs: Math.round(cpu.system / 1_000),
+            });
+        }
+    }
+
     updateMetadata(handler: (metadata: Metadata) => Metadata, options?: Readonly<{ expectedMetadataRevision?: number }>): Promise<void> {
-        return this.metadataLock.inLock(async () =>
-            await this.updateMetadataLocked(handler, undefined, options?.expectedMetadataRevision));
+        const queuedAt = performance.now();
+        return this.metadataLock.inLock(async () => {
+            logger.infoFile('[API] Session tuple mutation phase', { operation: 'metadata', phase: 'lock_wait',
+                durationMs: Math.round(performance.now() - queuedAt) });
+            await this.traceMetadataTuplePhase('metadata', 'locked_mutation', () =>
+                this.updateMetadataLocked(handler, undefined, options?.expectedMetadataRevision));
+        });
     }
 
     updateMetadataAsCurrentPublisher(
@@ -3281,9 +3309,13 @@ export class ApiSessionClient extends EventEmitter {
                 'Current-publisher Session metadata authority',
             ));
         }
+        const queuedAt = performance.now();
         return this.metadataLock.inLock(async () => {
+            logger.infoFile('[API] Session tuple mutation phase', { operation: 'publisher_metadata', phase: 'lock_wait',
+                durationMs: Math.round(performance.now() - queuedAt) });
             const publisherPrecondition =
-                await this.readCurrentPublisherPrecondition();
+                await this.traceMetadataTuplePhase('publisher_metadata', 'publisher_authority', () =>
+                    this.readCurrentPublisherPrecondition());
             if (!publisherPrecondition) {
                 throw Object.assign(
                     new Error('Session publisher authority was superseded'),
@@ -3293,10 +3325,8 @@ export class ApiSessionClient extends EventEmitter {
                     },
                 );
             }
-            await this.updateMetadataLocked(
-                handler,
-                publisherPrecondition,
-            );
+            await this.traceMetadataTuplePhase('publisher_metadata', 'locked_mutation', () =>
+                this.updateMetadataLocked(handler, publisherPrecondition));
         });
     }
 
@@ -3369,7 +3399,9 @@ export class ApiSessionClient extends EventEmitter {
             await this.updateSharedMetadataLocked(handler, publisherPrecondition);
             return;
         }
-        const credentials = await this.readCurrentOwnerCredentials();
+        const operation = publisherPrecondition ? 'publisher_metadata' : 'metadata';
+        const credentials = await this.traceMetadataTuplePhase(operation, 'owner_credentials', () =>
+            this.readCurrentOwnerCredentials());
         if (!credentials || credentials.token !== this.token) {
             throw Object.assign(
                 new Error('Owner session metadata encryption material is unavailable'),
@@ -3379,32 +3411,34 @@ export class ApiSessionClient extends EventEmitter {
                 },
             );
         }
-        const accountEncryptionCurrentness = await this.runSessionRequest(() => this.getAccountEncryptionCurrentness());
-        const updated = await this.runSessionRequest(async () => updateSessionMetadataEnvelopeTupleWithRetry({
-            token: this.token,
-            sessionId: this.sessionId,
-            authority: {
-                kind: 'owner',
-                credentials,
-                accountEncryptionCurrentness,
-            },
-            ...this.getMetadataTupleCryptoContext(),
-            initialSnapshot:
-                await this.acquireMetadataTupleWriterSnapshot(
+        const accountEncryptionCurrentness = await this.traceMetadataTuplePhase(operation, 'account_currentness', () =>
+            this.runSessionRequest(() => this.getAccountEncryptionCurrentness()));
+        const updated = await this.runSessionRequest(async () => {
+            const cryptoContext = this.getMetadataTupleCryptoContext();
+            const initialSnapshot = await this.traceMetadataTuplePhase(operation, 'snapshot_read', () =>
+                this.acquireMetadataTupleWriterSnapshot(credentials, accountEncryptionCurrentness));
+            return await this.traceMetadataTuplePhase(operation, 'tuple_commit', () => updateSessionMetadataEnvelopeTupleWithRetry({
+                token: this.token,
+                sessionId: this.sessionId,
+                authority: {
+                    kind: 'owner',
                     credentials,
                     accountEncryptionCurrentness,
-                ),
-            mutation: {
-                kind: 'metadata',
-                ...(expectedMetadataRevision !== undefined ? { expectedMetadataRevision } : {}),
-                update: handler,
-            },
-            ...(publisherPrecondition
-                ? { publisherPrecondition }
-                : {}),
-            mutateLegacy: async (request) =>
-                await this.mutateLegacySessionTuple(request),
-        }));
+                },
+                ...cryptoContext,
+                initialSnapshot,
+                mutation: {
+                    kind: 'metadata',
+                    ...(expectedMetadataRevision !== undefined ? { expectedMetadataRevision } : {}),
+                    update: handler,
+                },
+                ...(publisherPrecondition
+                    ? { publisherPrecondition }
+                    : {}),
+                mutateLegacy: async (request) =>
+                    await this.mutateLegacySessionTuple(request),
+            }));
+        });
         if (updated.mode === 'shared_editor') {
             throw Object.assign(
                 new Error('Owner session metadata mutation changed to shared-editor authority'),
@@ -4032,7 +4066,10 @@ export class ApiSessionClient extends EventEmitter {
             );
         }
         logger.debugLargeJson('Updating agent state', this.agentState);
+        const queuedAt = performance.now();
         return this.metadataLock.inLock(async () => {
+            logger.infoFile('[API] Session tuple mutation phase', { operation: 'agent_state', phase: 'lock_wait',
+                durationMs: Math.round(performance.now() - queuedAt) });
             if (
                 this.metadataLayoutVersion !== 0
                 && this.metadataLayoutVersion
@@ -4043,7 +4080,8 @@ export class ApiSessionClient extends EventEmitter {
                     retryable: false,
                 });
             }
-            const credentials = await this.readCurrentOwnerCredentials();
+            const credentials = await this.traceMetadataTuplePhase('agent_state', 'owner_credentials', () =>
+                this.readCurrentOwnerCredentials());
             if (!credentials || credentials.token !== this.token) {
                 throw Object.assign(
                     new Error('Owner session metadata encryption material is unavailable'),
@@ -4053,31 +4091,33 @@ export class ApiSessionClient extends EventEmitter {
                     },
                 );
             }
-            const accountEncryptionCurrentness = await this.runSessionRequest(() => this.getAccountEncryptionCurrentness());
-            const updated = await this.runSessionRequest(async () => updateSessionMetadataEnvelopeTupleWithRetry({
-                token: this.token,
-                sessionId: this.sessionId,
-                authority: {
-                    kind: 'owner',
-                    credentials,
-                    accountEncryptionCurrentness,
-                },
-                ...this.getMetadataTupleCryptoContext(),
-                initialSnapshot:
-                    await this.acquireMetadataTupleWriterSnapshot(
+            const accountEncryptionCurrentness = await this.traceMetadataTuplePhase('agent_state', 'account_currentness', () =>
+                this.runSessionRequest(() => this.getAccountEncryptionCurrentness()));
+            const updated = await this.runSessionRequest(async () => {
+                const cryptoContext = this.getMetadataTupleCryptoContext();
+                const initialSnapshot = await this.traceMetadataTuplePhase('agent_state', 'snapshot_read', () =>
+                    this.acquireMetadataTupleWriterSnapshot(credentials, accountEncryptionCurrentness));
+                return await this.traceMetadataTuplePhase('agent_state', 'tuple_commit', () => updateSessionMetadataEnvelopeTupleWithRetry({
+                    token: this.token,
+                    sessionId: this.sessionId,
+                    authority: {
+                        kind: 'owner',
                         credentials,
                         accountEncryptionCurrentness,
-                    ),
-                mutation: {
-                    kind: 'agentState',
-                    update: (state) => {
-                        const next = handler(state);
-                        return this.agentStateRequestStore?.applyAppliedCompletions(next) ?? next;
                     },
-                },
-                mutateLegacy: async (request) =>
-                    await this.mutateLegacySessionTuple(request),
-            }));
+                    ...cryptoContext,
+                    initialSnapshot,
+                    mutation: {
+                        kind: 'agentState',
+                        update: (state) => {
+                            const next = handler(state);
+                            return this.agentStateRequestStore?.applyAppliedCompletions(next) ?? next;
+                        },
+                    },
+                    mutateLegacy: async (request) =>
+                        await this.mutateLegacySessionTuple(request),
+                }));
+            });
             if (updated.mode === 'shared_editor') {
                 throw Object.assign(
                     new Error('Owner session Agent-state mutation changed to shared-editor authority'),

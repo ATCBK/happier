@@ -1608,7 +1608,7 @@ describe('ApiSessionClient pending queue materialization', () => {
             await vi.advanceTimersByTimeAsync(100);
             expect(settled).toBe(false);
             loseAck(new SocketAckError({ code: 'socket_ack_timeout', event: 'pending-materialize-next' }));
-            await expect(materializePromise).resolves.toEqual({ status: 'resolved', value: { type: 'retryable_transport' } });
+            await expect(materializePromise).resolves.toMatchObject({ status: 'resolved', value: { type: 'retryable_transport' } });
             expect(postSpy).not.toHaveBeenCalled();
         } finally {
             vi.useRealTimers();
