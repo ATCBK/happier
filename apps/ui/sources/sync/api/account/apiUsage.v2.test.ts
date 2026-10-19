@@ -12,6 +12,22 @@ afterEach(() => {
 const credentials: AuthCredentials = { token: 'test-token', secret: 'test-secret' };
 
 describe('apiUsage v2 analytics query', () => {
+    it('admits analytics once at HTTP and still refuses malformed responses', async () => {
+        const { queryUsageAnalytics } = await import('./apiUsage');
+        const { UsageAnalyticsQueryResponseSchema } = await import('@happier-dev/protocol/usage/usageAnalyticsContracts');
+        const parse = vi.spyOn(UsageAnalyticsQueryResponseSchema, 'parse');
+        const response = { v: 1, totals: { eventCount: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } } };
+        expect(await queryUsageAnalytics(credentials, UsageAnalyticsQueryRequestSchema.parse({}), {
+            request: async () => Response.json(response),
+        })).toMatchObject(response);
+        expect(parse.mock.calls.length).toBe(1);
+        await expect(queryUsageAnalytics(credentials, UsageAnalyticsQueryRequestSchema.parse({}), {
+            request: async () => Response.json({ ...response, totals: { ...response.totals, eventCount: -1 } }),
+        })).rejects.toThrow();
+    });
+
     it('classifies richer HTTP authority refusal for the canonical Resource lifecycle', async () => {
         const { queryUsageAnalytics } = await import('./apiUsage');
         await expect(queryUsageAnalytics(credentials, UsageAnalyticsQueryRequestSchema.parse({}), {

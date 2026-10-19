@@ -34,6 +34,7 @@ type UsageLimitRecoveryPayload = Readonly<{
 type UsageLimitRecoveryResumePromptMode = 'standard' | 'off' | 'custom';
 
 type UsageLimitRecoveryOperationOptions = Readonly<{
+    signal?: AbortSignal;
     machineOnly?: boolean;
     serverId?: string | null;
     refreshMachineTargets?: () => Promise<void>;
@@ -149,6 +150,7 @@ async function runUsageLimitRecoveryMachineRpc(
             serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
             method,
             payload,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         return readOperationResult(response, sessionId);
     } catch (error) {
@@ -173,6 +175,7 @@ async function runUsageLimitRecoveryRpc(
             serverId: opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId),
             method,
             payload,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         return readOperationResult(response, sessionId);
     } catch (error) {

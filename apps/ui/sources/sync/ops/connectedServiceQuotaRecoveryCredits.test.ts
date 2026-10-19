@@ -195,11 +195,20 @@ describe('connectedServiceQuotaRecoveryCredits ops', () => {
             serviceId: 'openai-codex',
             profileId: 'work',
             providerCreditId: 'credit-1',
-            snapshotFetchedAtMs: 2_000,
+            snapshotFetchedAtMs: 1_000,
         });
 
         expect(fromSettings).toBe(fromSessionBanner);
-        expect(fromSessionBanner).toBe('connected-service-quota-recovery-credit:v1:openai-codex:work:credit:credit-1');
+        expect(fromSessionBanner).toBe('connected-service-quota-recovery-credit:v1:openai-codex:work:credit-observation:["credit-1",1000]');
+        const laterObservation = buildConnectedServiceQuotaRecoveryCreditIdempotencyKey({
+            surface: 'settings-account-card',
+            sessionId: null,
+            serviceId: 'openai-codex',
+            profileId: 'work',
+            providerCreditId: 'credit-1',
+            snapshotFetchedAtMs: 2_000,
+        });
+        expect(laterObservation).not.toBe(fromSessionBanner);
     });
 
     it('fails closed before dispatching invalid profile requests', async () => {

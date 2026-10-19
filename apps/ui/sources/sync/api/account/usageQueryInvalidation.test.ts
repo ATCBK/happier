@@ -2,9 +2,92 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
-import { getUsageQueryMachineInvalidationKey, observeUsageProjection, subscribeUsageQueryStateInvalidation } from './usageQueryInvalidation';
+import { getUsageProjectionNextReadAtMs, getUsageQueryMachineInvalidationKey, observeUsageProjection, subscribeUsageQueryStateInvalidation } from './usageQueryInvalidation';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { handleEphemeralSocketUpdate } from '@/sync/engine/socket/socket';
+import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 
 afterEach(() => { vi.restoreAllMocks(); });
+
+it('reconsiders existing accounts when their Usage capability arrives, but not when only its title changes', () => {
+    const previous = storage.getState();
+    const scope = { serverId: 'usage-capability.test', accountId: 'account' };
+    const service = { pluginId: 'acme.meter', localId: 'meter' };
+    storage.setState({ profileScope: scope, profile: { ...previous.profile, connectedAccountsV4: [{
+        ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [],
+    }] } });
+    const install = (capabilities: string[], title = 'Meter') => installConnectedAccountDescriptorProjection({
+        scopeKey: 'capability', status: 'ready', conflicts: [], errorReason: null,
+        descriptors: [{ id: service.localId, serviceId: service.localId, pluginId: service.pluginId, title, provenance: 'external',
+            sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
+                outcomeReconciliation: 'none', fields: [] }] }, capabilities,
+            availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }],
+    });
+    install([]);
+    let invalidations = 0;
+    const release = subscribeUsageQueryStateInvalidation(() => { invalidations++; });
+    try {
+        install(['usage']);
+        expect(invalidations).toBe(1);
+        install(['usage'], 'Renamed meter');
+        expect(invalidations).toBe(1);
+        install([]);
+        expect(invalidations).toBe(2);
+    } finally {
+        release?.();
+        installConnectedAccountDescriptorProjection({ scopeKey: 'capability', status: 'loading', conflicts: [], errorReason: null, descriptors: [] });
+        storage.setState({ profile: previous.profile, profileScope: previous.profileScope });
+    }
+});
+
+it('keeps a healthy current-server quota reader idle for 120 seconds and ignores unrelated exact wakes', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const serverId = 'idle-current-usage.test';
+    const observation = observeUsageProjection({ serverId, initialReadCompleted: true,
+        busy: () => false, read: async () => { reads++; },
+        nextReadAtMs: () => getUsageProjectionNextReadAtMs({ consecutiveErrors: 0 }) });
+    try {
+        for (let index = 0; index < 30; index++) {
+            publishHomeAccountChange(serverId, ['unrelated-session'], { changeKinds: ['session'] });
+            await vi.advanceTimersByTimeAsync(4_000);
+        }
+        expect(reads).toBe(0);
+        publishHomeAccountChange(serverId, ['self', 'unrelated-session', 'machine-a'], {
+            changeKinds: ['account', 'session', 'machine'], usageQueryAffects: true,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(0);
+        publishHomeAccountChange(serverId, ['provider-account-usage'], {
+            changeKinds: ['account'], usageQueryAffects: true,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(1);
+        publishHomeAccountChange(serverId, ['self']);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(2);
+    } finally { observation.dispose(); vi.useRealTimers(); }
+});
+
+it.each(['usage', 'usage-sources-invalidated'] as const)('still refreshes Usage readers for a scoped %s socket wake', async type => {
+    let reads = 0;
+    const observation = observeUsageProjection({
+        serverId: 'usage-scoped-wake.test', initialReadCompleted: true,
+        busy: () => false, read: async () => { reads++; }, nextReadAtMs: () => Number.POSITIVE_INFINITY,
+    });
+    try {
+        await handleEphemeralSocketUpdate({
+            sourceServerId: 'usage-scoped-wake.test',
+            update: type === 'usage'
+                ? { type, id: null, key: 'agent:model', tokens: { total: 1 }, cost: { total: 0 }, timestamp: 1_000 }
+                : { type, machineId: 'machine', installationId: 'installation' },
+            addActivityUpdate: () => {}, addMachineActivityUpdate: () => {},
+            getSessionEncryption: () => null, getSession: () => undefined, applyMessages: () => {},
+        });
+        expect(reads).toBe(1);
+    } finally { observation.dispose(); }
+});
 
 it('observes a completed initial read without repeating it and still reads on invalidation and expiry', async () => {
     vi.useFakeTimers();
@@ -78,7 +161,58 @@ it('keeps presence heartbeats from changing the usage Resource machine invalidat
     }, machine.activeAt!, scope)).not.toBe(key);
     expect(getUsageQueryMachineInvalidationKey({
         [machine.id]: { ...machine, revokedAt: machine.activeAt },
-    }, machine.activeAt!, scope)).not.toBe(key);
+    }, machine.activeAt!, scope)).toBe(key); // Coverage labels consume identity/name only.
+});
+
+it('keys pool selection by its resolved machine and Session evidence by only its hosting machines', () => {
+    const nowMs = 1_900_000_000_000;
+    const scope = { serverId: 'usage-machine-consumers.test', accountId: 'account-a' };
+    const machines = Object.fromEntries(['a', 'b', 'c'].map(id => [id, createMachineFixture({ id, activeAt: nowMs })]));
+    const consumers = { poolMachineFilters: [[]], sessionMachineIds: [] };
+    const key = getUsageQueryMachineInvalidationKey(machines, nowMs, scope, consumers);
+    const two = { ...machines, c: { ...machines.c!, active: false, activeAt: 1 } };
+    expect(getUsageQueryMachineInvalidationKey(two, nowMs, scope, consumers)).toBe(key);
+    const one = { ...two, b: { ...machines.b!, active: false, activeAt: 1 } };
+    expect(getUsageQueryMachineInvalidationKey(one, nowMs, scope, consumers)).not.toBe(key);
+    const sessionConsumers = { poolMachineFilters: [], sessionMachineIds: ['a'] };
+    const sessionKey = getUsageQueryMachineInvalidationKey(machines, nowMs, scope, sessionConsumers);
+    expect(getUsageQueryMachineInvalidationKey(two, nowMs, scope, sessionConsumers)).toBe(sessionKey);
+    expect(getUsageQueryMachineInvalidationKey({ ...machines, a: { ...machines.a!, active: false, activeAt: 1 } }, nowMs, scope, sessionConsumers)).not.toBe(sessionKey);
+    expect(getUsageQueryMachineInvalidationKey({ ...machines, a: { ...machines.a!, replacedByMachineId: 'b' } }, nowMs, scope, sessionConsumers)).not.toBe(sessionKey);
+});
+
+it('ignores equivalent Profile and Settings refreshes but invalidates changed quota inputs', () => {
+    const previous = storage.getState();
+    const scope = { serverId: 'usage-invalidation.test', accountId: 'account-a' };
+    storage.setState({ profileScope: scope, settingsScope: scope,
+        profile: { ...previous.profile, connectedAccountsV4: [{
+            ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' },
+            status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+            credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [],
+        }] } });
+    let invalidations = 0;
+    const release = subscribeUsageQueryStateInvalidation(() => { invalidations++; });
+    try {
+        for (let index = 0; index < 8; index++) {
+            const state = storage.getState();
+            storage.setState({ profileScope: { ...scope }, settingsScope: { ...scope },
+                profile: { ...state.profile, connectedAccountsV4: structuredClone(state.profile.connectedAccountsV4),
+                    connectedAccountGroupsV4: structuredClone(state.profile.connectedAccountGroupsV4) },
+                settings: { ...state.settings, featureToggles: { ...state.settings.featureToggles } } });
+        }
+        expect(invalidations).toBe(0);
+        const state = storage.getState();
+        storage.setState({ settings: { ...state.settings, experiments: !state.settings.experiments } });
+        expect(invalidations).toBe(1);
+        storage.setState({ settingsScope: { ...scope, accountId: 'other-account' } });
+        expect(invalidations).toBe(2);
+        storage.setState({ profile: { ...storage.getState().profile, connectedAccountsV4: [] } });
+        expect(invalidations).toBe(3);
+    } finally {
+        release?.();
+        storage.setState({ profile: previous.profile, profileScope: previous.profileScope,
+            settings: previous.settings, settingsScope: previous.settingsScope });
+    }
 });
 
 it('does not reread machine details for unrelated store notifications, but observes presence expiry', () => {
@@ -94,7 +228,9 @@ it('does not reread machine details for unrelated store notifications, but obser
     const previousProfileScope = storage.getState().profileScope;
     storage.setState({ machines: { [machine.id]: machine }, profileScope: { serverId: 'usage-invalidation.test', accountId: 'account-a' } });
     let invalidated = false;
-    const release = subscribeUsageQueryStateInvalidation(() => { invalidated = true; });
+    const release = subscribeUsageQueryStateInvalidation(() => { invalidated = true; }, () => ({
+        poolMachineFilters: [[machine.id]], sessionMachineIds: [],
+    }));
     try {
         detailReads = 0;
         for (let index = 0; index < 128; index++) storage.setState({ isDataReady: !storage.getState().isDataReady });
