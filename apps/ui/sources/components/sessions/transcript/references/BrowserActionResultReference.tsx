@@ -269,7 +269,21 @@ function BrowserActionWatchButton(props: Readonly<{
         multiPaneEnabled,
     });
     const { watch } = props;
+    const lifetime = React.useMemo(() => ({ current: true, controller: null as AbortController | null }),
+        [detailsAvailable, machine?.machineId, serverId, watch.browserSessionId, watch.viewId]);
+    React.useEffect(() => {
+        lifetime.current = true;
+        setOpening(false);
+        return () => {
+            lifetime.current = false;
+            lifetime.controller?.abort();
+        };
+    }, [lifetime]);
     const open = React.useCallback(async () => {
+        if (!lifetime.current || !detailsAvailable) return;
+        lifetime.controller?.abort();
+        const controller = new AbortController();
+        lifetime.controller = controller;
         setOpening(true);
         try {
             const localView = readRegisteredBrowserRuntimeControlAdapter(watch.browserSessionId)?.readState()?.viewsById[watch.viewId];
@@ -278,7 +292,9 @@ function BrowserActionWatchButton(props: Readonly<{
             if (!target && machine && serverId) {
                 const result = await listBrowserDaemonViewsViaMachineRpc({
                     machineId: machine.machineId, serverId, browserSessionId: watch.browserSessionId,
+                    signal: controller.signal,
                 });
+                if (controller.signal.aborted || !lifetime.current) return;
                 const view = result.ok ? result.views.find(candidate => candidate.browserSessionId === watch.browserSessionId
                     && candidate.viewId === watch.viewId) : null;
                 target = view ? resolveBrowserDaemonStreamTarget(view) : null;
@@ -291,9 +307,9 @@ function BrowserActionWatchButton(props: Readonly<{
                 target, browserSessionId: watch.browserSessionId, viewId: watch.viewId,
             }), { intent: 'default' });
         } finally {
-            setOpening(false);
+            if (lifetime.current && lifetime.controller === controller) setOpening(false);
         }
-    }, [machine, pane, serverId, watch]);
+    }, [detailsAvailable, lifetime, machine, pane, serverId, watch]);
     if (!detailsAvailable) return null;
     return (
         <RoundButton

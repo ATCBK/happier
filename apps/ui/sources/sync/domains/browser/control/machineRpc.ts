@@ -88,6 +88,7 @@ export function createBrowserDaemonControlCommandSender(
     input: Readonly<{
         machineId: string;
         serverId: string;
+        signal?: AbortSignal;
         onResult?: (result: BrowserDaemonControlDispatchClientResult) => void;
     }>,
 ): BrowserDaemonControlCommandSender {
@@ -96,6 +97,7 @@ export function createBrowserDaemonControlCommandSender(
             machineId: input.machineId,
             serverId: input.serverId,
             command,
+            signal: input.signal,
         });
         if (result.ok && result.result.status === 'dispatched') onEvents?.(result.result.events);
         input.onResult?.(result);
