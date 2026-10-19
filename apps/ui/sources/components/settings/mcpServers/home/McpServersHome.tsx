@@ -498,8 +498,16 @@ const LegendRow = React.memo(function LegendRow(
   const fix = React.useCallback(() => onOpen(server.id), [onOpen, server.id]);
   const { status } = server;
   const fixLabel = status ? presentCapabilityStatus(status, 'row').fixLabel : undefined;
-  // Healthy and untested is quiet: only a known tool count speaks. A problem keeps its chip and its one fix.
-  const action = status ? (
+  // Healthy and untested is quiet: only a known tool count speaks. A problem keeps its chip and its one fix
+  // together at the end of the name's line (lab hm-A2); the row drops them beneath the name only when they do not fit.
+  const action =
+    !status && server.toolCount !== null ? (
+      <Text variant="meta" style={styles.tools}>
+        {t('capabilities.mcpHome.tools', { count: server.toolCount })}
+      </Text>
+    ) : undefined;
+  const fact = legendFact(server);
+  const summary = status ? (
     <View style={styles.fix}>
       <CapabilityStatusChip
         status={status}
@@ -515,23 +523,19 @@ const LegendRow = React.memo(function LegendRow(
         />
       ) : null}
     </View>
-  ) : server.toolCount === null ? undefined : (
-    <Text variant="meta" style={styles.tools}>
-      {t('capabilities.mcpHome.tools', { count: server.toolCount })}
-    </Text>
+  ) : (
+    fact
   );
-  const fact = legendFact(server);
   return (
     <CapabilityRow
       testID={`mcp.home.legend.${server.id}`}
       title={server.title}
-      {...(fact ? { whereSummary: fact } : {})}
+      {...(summary ? { whereSummary: summary } : {})}
       mark={<McpServerMark transport={server.server.transport} size={16} />}
       {...(action ? { action } : {})}
       density="rail"
       divider={false}
       // A problem's fix is the row's one button (a pressable row cannot hold a button); a healthy row opens its page.
-      // A legend row is a name and its fix, so its chip and button stay on the name's line (lab hm-A2).
       {...(status ? {} : { onPress: fix })}
       onPreviewChange={(active) => onPreview(active ? server.id : null)}
     />
