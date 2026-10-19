@@ -9,7 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
-import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { callerHoldsWorkspaceBundleLock, withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
+import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
+import { WORKSPACE_BUILD_MODE_ENV } from './workspaceChildBuildEnv.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
 const runner = fileURLToPath(new URL('./runTypeScriptCli.mjs', import.meta.url));
 const serverRunner = fileURLToPath(new URL('../../apps/server/scripts/runTypeScriptCli.mjs', import.meta.url));
@@ -44,6 +47,7 @@ async function fixture(t, { tree = false, route = false, windows = false, platfo
   const fakeCompiler = join(root, 'compiler.cjs');
   const preload = join(root, 'preload.cjs');
   const workerPidFile = join(root, 'worker.pid');
+  const routedArgsFile = join(root, 'routed-args.json');
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'cancellation-fixture', type: 'module', main: './dist/index.js' }));
   await mkdir(join(root, 'dist'));
   await writeFile(join(root, 'dist', 'index.js'), 'last-green');
@@ -116,6 +120,7 @@ esac
           return original(process.execPath, ['-e', 'process.exit(7)'], options);
         }` : ''}
         ${route ? `if (command === ${JSON.stringify(fileURLToPath(new URL('../../apps/stack/bin/hstack-exec', import.meta.url)))} && args[0] !== '--heavyweight-admission') {
+          require('node:fs').writeFileSync(${JSON.stringify(routedArgsFile)}, JSON.stringify({ args, cwd: options.cwd ?? process.cwd() }));
           command = process.execPath;
           args = [${JSON.stringify(fakeCompiler)}];
         }` : ''}
@@ -161,12 +166,13 @@ esac
     workerPidFile,
     root,
     fakeCompiler,
+    routedArgsFile,
     start(args, options = {}) {
       const { command = process.execPath, ...childOptions } = options;
-      const env = { ...process.env,
+      const env = { ...buildNativeAdmissionFixtureEnv(),
         // This OS-boundary fixture is an independent admitted machine, not
         // the AUTO test runner's worker cache or parent reservation.
-        HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
+        HAPPIER_HSTACK_EXECUTION: '1', HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
         HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
         HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
         ...options.env, PATH: `${join(root, 'bin')}:${options.env?.PATH ?? process.env.PATH}`,
@@ -174,6 +180,7 @@ esac
       if (route || windows) {
         delete env.HAPPIER_HSTACK_EXECUTION;
         delete env.HAPPIER_DEV_TARGET_EXECUTION;
+        delete env.HAPPIER_TYPECHECK_DISPATCHED;
       }
       child = spawn(command, args, {
         ...childOptions,
@@ -195,6 +202,63 @@ test('Windows compiler noEmit uses the local native compiler instead of the POSI
   const { child, stderr } = setup.start([runner, '--noEmit']);
   assert.deepEqual(await once(child, 'exit'), [0, null], stderr());
   assert.ok(Number(await readFile(setup.pidFile, 'utf8')) > 0);
+});
+
+for (const args of [[], ['-p', 'apps/ui/tsconfig.json'], ['--build', 'apps/ui/tsconfig.json'], ['--noEmit', 'true']]) {
+  test(`direct compiler dispatches through AUTO before project preparation: ${args.join(' ') || 'default project'}`, { skip: process.platform === 'win32' }, async t => {
+    const setup = await fixture(t, { route: true, exitCode: 7 });
+    const { child, stderr } = setup.start([runner, ...args], { env: { CODEX_CI: '1', CI: 'true' } });
+    assert.deepEqual(await once(child, 'exit'), [7, null], stderr());
+    const routed = JSON.parse(await readFile(setup.routedArgsFile, 'utf8'));
+    assert.deepEqual(routed.args.slice(0, 2), ['--', 'node']);
+    assert.equal(fileURLToPath(new URL(routed.args[2], `file://${setup.root}/`)), runner);
+    assert.deepEqual(routed.args.slice(3), args);
+    assert.equal(routed.cwd, setup.root);
+  });
+}
+
+for (const marker of ['HAPPIER_HSTACK_EXECUTION', 'HAPPIER_DEV_TARGET_EXECUTION', 'HAPPIER_TYPECHECK_DISPATCHED']) {
+  test(`executor-internal compiler retains placement: ${marker}`, async t => {
+    const setup = await fixture(t, { exitCode: 7 });
+    const { child, stderr } = setup.start([runner], { env: {
+      HAPPIER_HSTACK_EXECUTION: '', HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_TYPECHECK_DISPATCHED: '', [marker]: '1',
+    } });
+    assert.deepEqual(await once(child, 'exit'), [7, null], stderr());
+    await assert.rejects(readFile(setup.routedArgsFile), { code: 'ENOENT' });
+    assert.ok(Number(await readFile(setup.pidFile, 'utf8')) > 0);
+  });
+}
+
+test('direct compiler --local delegates the explicit escape to executor policy', { skip: process.platform === 'win32' }, async t => {
+  const setup = await fixture(t, { route: true, exitCode: 0 });
+  const { child, stderr } = setup.start([runner, '--local', '--allow-local-compilation', '-p', 'tsconfig.json']);
+  assert.deepEqual(await once(child, 'exit'), [0, null], stderr());
+  const routed = JSON.parse(await readFile(setup.routedArgsFile, 'utf8'));
+  assert.deepEqual(routed.args.slice(0, 4), ['--local', '--allow-local-compilation', '--', 'node']);
+  assert.deepEqual(routed.args.slice(5), ['-p', 'tsconfig.json']);
+});
+
+test('compiler --local executes on its current worker without forwarding executor flags to TypeScript', { skip: process.platform === 'win32' }, async t => {
+  const setup = await fixture(t, { exitCode: 0, compilerBody: `
+    if (process.argv.includes('--local') || process.argv.includes('--allow-local-compilation')) process.exit(9);
+  ` });
+  const { child, stderr } = setup.start([runner, '--local'], { env: { HAPPIER_DEV_TARGET_EXECUTION: '1' } });
+  assert.deepEqual(await once(child, 'exit'), [0, null], stderr());
+  assert.ok(Number(await readFile(setup.pidFile, 'utf8')) > 0);
+});
+
+test('root yarn tsc delegates direct project compilation to the same AUTO owner', { skip: process.platform === 'win32' }, async t => {
+  const setup = await fixture(t, { route: true, exitCode: 7 });
+  const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+  await writeFile(join(setup.root, 'package.json'), JSON.stringify({
+    private: true, scripts: { tsc: manifest.scripts.tsc.replace('scripts/workspaces/runTypeScriptCli.mjs', JSON.stringify(runner)) },
+  }));
+  const yarn = resolveYarnCommandInvocation(['-s', 'tsc', '-p', 'apps/ui/tsconfig.json']);
+  const { child, stderr } = setup.start(yarn.args, { command: yarn.command });
+  assert.deepEqual(await once(child, 'exit'), [7, null], stderr());
+  const routed = JSON.parse(await readFile(setup.routedArgsFile, 'utf8'));
+  assert.deepEqual(routed.args.slice(0, 2), ['--', 'node']);
+  assert.deepEqual(routed.args.slice(3), ['-p', 'apps/ui/tsconfig.json']);
 });
 
 for (const env of [
@@ -370,10 +434,54 @@ test('package build cancellation reaps the compiler, preserves dist, and exits w
   const { child, stderr } = setup.start([buildRunner]);
   await waitUntil(() => readFile(setup.pidFile).then(() => true, () => false), `compiler did not start: ${stderr()}`);
   const pid = Number(await readFile(setup.pidFile, 'utf8'));
-  const exited = once(child, 'exit');
+  let parentResult = null;
+  let compilerState = 'unobserved';
+  const exited = once(child, 'exit').then(result => { parentResult = result; return result; });
   child.kill('SIGTERM');
-  await waitUntil(() => !alive(pid), `package build compiler ${pid} survived cancellation`);
+  assert.equal(await readFile(join(setup.root, 'dist', 'index.js'), 'utf8'), 'last-green');
+  await waitUntil(async () => {
+    if (!alive(pid)) return true;
+    if (process.platform === 'linux') {
+      const status = await readFile(`/proc/${pid}/status`, 'utf8').catch(() => '');
+      compilerState = status.split('\n').filter(line => /^(State|PPid):/.test(line)).join(', ');
+    }
+    return false;
+  }, () => `package build compiler ${pid} survived cancellation (${compilerState}; parent=${JSON.stringify(parentResult)})`);
   assert.deepEqual(await exited, [null, 'SIGTERM']);
+  assert.equal(await readFile(join(setup.root, 'dist', 'index.js'), 'utf8'), 'last-green');
+});
+
+test('package build cancellation while queued releases its waiter and preserves the foreign publisher', { skip: process.platform !== 'linux' }, async t => {
+  const setup = await fixture(t);
+  await writeFile(join(setup.root, 'tsconfig.json'), JSON.stringify({ files: ['source.ts'] }));
+  await writeFile(join(setup.root, 'source.ts'), 'export const value = 1;\n');
+  const lockPath = resolveWorkspacePackageBuildLockPath(setup.root, { name: 'cancellation-fixture' });
+  await withWorkspaceBundleLock(async ({ heldLockValue }) => {
+    const code = `import { buildTypeScriptPackageDist } from ${JSON.stringify(new URL('./buildTypeScriptPackageDist.mjs', import.meta.url).href)};
+      import { exitWithCommandResult } from ${JSON.stringify(procModule)};
+      try { await buildTypeScriptPackageDist(); } catch (error) {
+        await new Promise(resolve => process.stdout.write(JSON.stringify({ status: error.exitCode, signal: error.signal }), resolve));
+        exitWithCommandResult({ status: error.exitCode, signal: error.signal });
+      }`;
+    const { child, stderr, stdout } = setup.start(['--input-type=module', '-e', code], { stdio: ['ignore', 'pipe', 'pipe'] });
+    await waitUntil(() => stderr().includes('workspace-lease-busy'), () => `build did not queue: ${stderr()}`);
+    const exited = once(child, 'exit');
+    child.kill('SIGTERM');
+    assert.deepEqual(await exited, [null, 'SIGTERM']);
+    assert.deepEqual(JSON.parse(stdout().toString()), { status: null, signal: 'SIGTERM' });
+    assert.deepEqual(await readdir(join(setup.root, 'host-admission', 'waiters')), []);
+    assert.equal(callerHoldsWorkspaceBundleLock(lockPath, heldLockValue), true);
+    await assert.rejects(readFile(setup.pidFile), { code: 'ENOENT' });
+    assert.equal(await readFile(join(setup.root, 'dist', 'index.js'), 'utf8'), 'last-green');
+  }, { lockPath });
+});
+
+test('package build preserves numeric compiler exit 130 without inventing a caller signal', async t => {
+  const setup = await fixture(t, { exitCode: 130 });
+  await writeFile(join(setup.root, 'tsconfig.json'), JSON.stringify({ files: ['source.ts'] }));
+  await writeFile(join(setup.root, 'source.ts'), 'export const value = 1;\n');
+  const { child, stderr } = setup.start([buildRunner]);
+  assert.deepEqual(await once(child, 'exit'), [130, null], stderr());
   assert.equal(await readFile(join(setup.root, 'dist', 'index.js'), 'utf8'), 'last-green');
 });
 
@@ -769,7 +877,10 @@ for (const [label, entry, signal] of [['compiler', runner, 'SIGTERM'], ['compile
       : entry === heartbeatRunner
         ? (() => { const invocation = resolveTypeScriptCliInvocation({}); return [entry, '--', invocation.command, ...invocation.argsPrefix]; })()
         : [entry];
-    const { child, stderr } = setup.start(entryArgs);
+    // This case owns cancellation of the strict build's semantic compiler;
+    // AUTO's source-test preparation may otherwise select runtime-only output.
+    const { child, stderr } = setup.start(entryArgs, entry === cliBuildRunner
+      ? { env: { [WORKSPACE_BUILD_MODE_ENV]: 'strict' } } : {});
     await waitUntil(() => readFile(setup.pidFile).then(() => true, () => false), () => `compiler did not start: ${stderr()}`);
     const pid = Number(await readFile(setup.pidFile, 'utf8'));
     const exited = once(child, 'exit');

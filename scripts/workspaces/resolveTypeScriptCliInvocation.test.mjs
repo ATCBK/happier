@@ -14,7 +14,7 @@ import {
 } from './resolveTypeScriptCliInvocation.mjs';
 import { createTempFixture } from '../../apps/stack/scripts/testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
-import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
 test('compiler leaf uses the package admission policy instead of escalating CLI to the UI envelope', () => {
   const workspaceDir = fileURLToPath(new URL('../../', import.meta.url));
@@ -55,7 +55,7 @@ case "$*" in
 esac
 ` });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, CI: '',
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, CI: '',
     HAPPIER_STACK_PM_CACHE_BASE_DIR: '',
     FIXTURE_MEMORY: memory, COMPILER_STARTED: fixture.path('started'),
     HAPPIER_HSTACK_EXECUTION: '1', HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_TYPECHECK_DISPATCHED: '',
@@ -188,7 +188,7 @@ esac
   }
 });
 
-test('routes direct no-emit compilation through hstack but executes an admitted payload directly', () => {
+test('routes direct compilation through hstack but executes an admitted payload directly', () => {
   assert.equal(shouldRouteTypeScriptCliThroughHstack({
     args: ['--noEmit', '-p', 'tsconfig.json'],
     env: {},
@@ -208,7 +208,16 @@ test('routes direct no-emit compilation through hstack but executes an admitted 
   assert.equal(shouldRouteTypeScriptCliThroughHstack({
     args: ['-p', 'tsconfig.json', '--outDir', 'dist'],
     env: {},
-  }), false);
+  }), true);
+  for (const args of [[], ['--build'], ['--noEmit', 'true'], ['source.ts'], ['--version', '-p', 'tsconfig.json']]) {
+    assert.equal(shouldRouteTypeScriptCliThroughHstack({ args, env: { CODEX_CI: '1', CI: 'true' } }), true, args.join(' '));
+  }
+  for (const arg of ['--version', '-v', '--help', '-h']) {
+    assert.equal(shouldRouteTypeScriptCliThroughHstack({ args: [arg], env: {} }), false, arg);
+  }
+  for (const env of [{ HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '1:1' }, { HAPPIER_WORKSPACE_BUILD_STARTUP: '1' }]) {
+    assert.equal(shouldRouteTypeScriptCliThroughHstack({ args: ['-p', 'tsconfig.json'], env }), false);
+  }
 });
 
 test('canonical compiler preserves ordinary CI capacity ownership and guards placed CI workers', () => {
@@ -220,7 +229,11 @@ test('canonical compiler preserves ordinary CI capacity ownership and guards pla
   const ordinary = resolveTypeScriptCliInvocation({ ...params, env: { CI: 'true' } });
   assert.equal(ordinary.command, '/managed/node');
   assert.deepEqual(ordinary.argsPrefix, [ordinary.compilerPath]);
-  for (const env of [{ CI: 'true', HAPPIER_DEV_TARGET_EXECUTION: '1' }, { CI: 'true', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '1:1' }]) {
+  for (const env of [
+    { CI: 'true', HAPPIER_DEV_TARGET_EXECUTION: '1' },
+    { CI: 'true', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '1:1' },
+    { CI: 'true', HAPPIER_HSTACK_LOCAL_ADMISSION_REQUIRED: '1' },
+  ]) {
     const guarded = resolveTypeScriptCliInvocation({ ...params, env });
     assert.match(guarded.command, /\/apps\/stack\/bin\/hstack-exec$/);
     assert.equal(guarded.argsPrefix[0], '--heavyweight-admission');

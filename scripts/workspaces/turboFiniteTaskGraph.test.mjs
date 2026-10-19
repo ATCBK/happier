@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { resolveYarnCommandInvocation } from './execYarnCommand.mjs';
 import { createTempFixture } from '../../apps/stack/scripts/testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -284,13 +284,12 @@ if (result.error) throw result.error;
 process.exit(result.status ?? 1);
 `);
     const env = {
-      ...process.env,
+      ...buildNativeAdmissionFixtureEnv(),
       PATH: `${fixture.path('bin')}:${process.env.PATH}`,
       HAPPIER_DEV_TARGET_EXECUTION: '1',
       HAPPIER_UNRELATED_ADMISSION_FIXTURE: 'must-not-pass',
       TURBO_TELEMETRY_DISABLED: '1',
     };
-    for (const key of Object.keys(env)) if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete env[key];
     const result = spawnSync(native.launcher, [
       '--heavyweight-admission', '--class=compilation', '--machine=worker', '--',
       process.execPath, path.join(repoRoot, 'node_modules/turbo/bin/turbo'),

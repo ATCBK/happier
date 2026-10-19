@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import test from 'node:test';
@@ -11,11 +11,11 @@ import { installNativeAdmissionFixture } from '../../../apps/stack/scripts/testk
 
 const uiDir = resolve('apps/ui');
 function readProject(name, packageDir = uiDir) {
-  const configPath = join(packageDir, name);
+  const configPath = resolve(packageDir, name);
   const config = ts.readConfigFile(configPath, ts.sys.readFile);
   assert.equal(config.error && ts.flattenDiagnosticMessageText(config.error.messageText, '\n'),
     undefined, `${name} must exist and parse`);
-  const project = ts.parseJsonConfigFileContent(config.config, ts.sys, packageDir, undefined, configPath);
+  const project = ts.parseJsonConfigFileContent(config.config, ts.sys, dirname(configPath), undefined, configPath);
   assert.deepEqual(project.errors, []);
   return project;
 }
@@ -83,17 +83,19 @@ function assertOneCheckerInvocations(nativeCalls, projects) {
   }
 }
 
-function assertProjectCoverage(packageDir, sourceNames, testNames = ['tsconfig.test.json'], peerReferences = []) {
+function assertProjectCoverage(packageDir, sourceNames, testNames = ['tsconfig.test.json'], peerReferences = [], declarationOverrides = new Map()) {
   const original = readProject('tsconfig.json', packageDir);
   const sources = sourceNames.map((name) => readProject(name, packageDir));
   const tests = testNames.map((name) => readProject(name, packageDir));
-  const commonTestRoots = new Set(ts.readConfigFile(join(packageDir, 'tsconfig.test.json'), ts.sys.readFile)
-    .config.files?.map((file) => resolve(packageDir, file)) ?? []);
-  const originalRoots = new Set(original.fileNames);
+  const currentRoot = file => declarationOverrides.get(file) ?? file;
+  const originalRoots = new Set([...original.fileNames.map(currentRoot), ...declarationOverrides.values()]);
+  const sharedRoots = new Set([...originalRoots].filter(isSharedDeclaration));
+  const expectedRoots = new Set([...originalRoots, ...readProject('tsconfig.test.json', packageDir).fileNames
+    .filter(file => existsSync(file) && !file.includes('.composed.')).map(currentRoot)]);
   const projects = [...sources, ...tests];
   const counts = new Map();
   for (const project of projects) {
-    for (const file of project.fileNames.filter((file) => originalRoots.has(file))) {
+    for (const file of project.fileNames.filter((file) => expectedRoots.has(file))) {
       counts.set(file, (counts.get(file) ?? 0) + 1);
     }
     const plumbing = new Set(['configFilePath', 'composite', 'noEmit', 'emitDeclarationOnly',
@@ -102,9 +104,9 @@ function assertProjectCoverage(packageDir, sourceNames, testNames = ['tsconfig.t
       .filter(([key]) => !plumbing.has(key)));
     assert.deepEqual(strictOptions(project.options), strictOptions(original.options));
   }
-  assert.deepEqual([...counts.keys()].sort(), [...originalRoots].sort());
+  assert.deepEqual([...counts.keys()].sort(), [...expectedRoots].sort());
   for (const [file, count] of counts) {
-    const expected = isSharedDeclaration(file) ? projects.length : commonTestRoots.has(file) ? tests.length : 1;
+    const expected = sharedRoots.has(file) ? projects.length : 1;
     assert.equal(count, expected, file);
   }
   for (const source of sources) {
@@ -117,28 +119,30 @@ function assertProjectCoverage(packageDir, sourceNames, testNames = ['tsconfig.t
     assert.equal(project.options.disableSourceOfProjectReferenceRedirect, true);
     assert.deepEqual(project.projectReferences.map(({ path }) => path),
       [sourceNames.at(-1), ...peerReferences].map(name => resolve(packageDir, name)));
-    assert.ok([...commonTestRoots].every((file) => project.fileNames.includes(file)),
-      'each test partition retains the common explicit fixtures and configuration roots');
   }
   assert.equal(new Set(tests.map((project) => project.options.tsBuildInfoFile)).size, tests.length);
 }
 
 test('UI projects preserve every original root across complementary test partitions', async () => {
-  const { deriveUiTypecheckProjects } = await import('../../../apps/ui/scripts/deriveTypecheckProjects.mjs');
-  const inventory = await deriveUiTypecheckProjects(uiDir);
+  const { prepareUiTypecheckProjects } = await import('../../../apps/ui/scripts/deriveTypecheckProjects.mjs');
   const pkg = JSON.parse(readFileSync(join(uiDir, 'package.json'), 'utf8'));
   const args = pkg.scripts['typecheck:source:finite'].trim().split(/\s+/u);
   const projects = args.filter((arg, index) => ['--project', '-p'].includes(args[index - 1]));
   const sources = ['tsconfig.foundation.json', 'tsconfig.core.json', 'tsconfig.source.json'];
   const tests = ['tsconfig.test-components.json', 'tsconfig.test-other.json'];
   assert.deepEqual(projects, [...sources, ...tests], 'public typecheck must check both test groups instead of the monolithic project');
+  const inventory = await prepareUiTypecheckProjects(projects.map(project => ({ project })), uiDir);
   const derivedSources = inventory.slice(0, sources.length).map(({ configPath }) => relative(uiDir, configPath));
   const derivedTests = inventory.slice(sources.length).map(({ configPath }) => relative(uiDir, configPath));
-  assertProjectCoverage(uiDir, derivedSources, derivedTests);
+  const routeDeclaration = join(uiDir, 'node_modules/.cache/tsc/router.d.ts');
+  assertProjectCoverage(uiDir, derivedSources, derivedTests, [], new Map([
+    [join(uiDir, '.expo/types/router.d.ts'), routeDeclaration],
+  ]));
   const baseline = readProject('tsconfig.test.json');
   const groups = derivedTests.map((name) => readProject(name));
   const isTest = (file) => /\.(?:test|spec)\.tsx?$/u.test(file);
-  const originalTests = baseline.fileNames.filter(isTest);
+  const originalTests = [...new Set([...readProject('tsconfig.json').fileNames, ...baseline.fileNames])]
+    .filter(file => existsSync(file) && !file.includes('.composed.') && isTest(file));
   const groupTests = groups.map((project) => project.fileNames.filter(isTest));
   assert.deepEqual(groupTests.flat().sort(), originalTests.sort(), 'every original test/spec root is checked exactly once');
   assert.ok(groupTests.every((files) => files.length > 0));
@@ -146,21 +150,25 @@ test('UI projects preserve every original root across complementary test partiti
   assert.ok(groupTests[1].every((file) => !file.replaceAll('\\', '/').includes('/sources/components/')));
   for (const project of groups) {
     assert.ok(project.fileNames.every((file) => !file.replaceAll('\\', '/').includes('/sources/trash/')
-      && !file.replaceAll('\\', '/').includes('/node_modules/')));
+      && (!file.replaceAll('\\', '/').includes('/node_modules/') || file === routeDeclaration)));
   }
 });
 
-test('native UI source emission leaves test-only Protocol and SDK fixtures in the noEmit project', () => {
+test('native UI source emission leaves test-only Protocol and SDK fixtures in the noEmit project', async () => {
+  const { prepareUiTypecheckProjects } = await import('../../../apps/ui/scripts/deriveTypecheckProjects.mjs');
+  const names = ['foundation', 'core', 'source', 'test-components', 'test-other'];
+  const inventory = await prepareUiTypecheckProjects(names.map(name => ({ project: `tsconfig.${name}.json` })), uiDir);
+  const configs = new Map(inventory.map(({ project, configPath }) => [project, configPath]));
   const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), workspaceDir: uiDir });
   const inputs = (name) => {
     const result = spawnSync(invocation.command, [...invocation.argsPrefix,
-      '--project', join(uiDir, `tsconfig.${name}.json`), '--listFilesOnly'],
+      '--project', configs.get(name), '--listFilesOnly'],
     { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     return result.stdout.trim().split(/\r?\n/u).map((file) => resolve(file.trim()));
   };
   for (const name of ['foundation', 'core', 'source']) {
-    const roots = new Set(readProject(`tsconfig.${name}.json`).fileNames.map((file) => resolve(file)));
+    const roots = new Set(readProject(configs.get(name)).fileNames.map((file) => resolve(file)));
     const unlisted = inputs(name).filter((file) => /\.[cm]?tsx?$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file) && !roots.has(file));
     assert.equal(unlisted.length, 0, `${name} must own every source it declaration-emits; later partitions must not be pulled into earlier ones: ${unlisted.slice(0, 12).join(', ')}`);
   }
@@ -279,14 +287,14 @@ test('CLI projects preserve every original root and compiler strictness', async 
   const args = pkg.scripts['typecheck:source:finite'].trim().split(/\s+/u);
   assert.deepEqual(args.filter((arg, index) => ['--project', '-p'].includes(args[index - 1])),
     [...sourceNames, 'tsconfig.test.json'], 'public CLI compiler must release each source partition before checking its consumer');
-  const { deriveCliTypecheckProjects } = await import('../../../apps/cli/scripts/deriveTypecheckProjects.mjs');
-  const inventory = await deriveCliTypecheckProjects(packageDir);
+  const { prepareCliTypecheckProjects } = await import('../../../apps/cli/scripts/deriveTypecheckProjects.mjs');
+  const inventory = await prepareCliTypecheckProjects([...sourceNames, 'tsconfig.test.json'].map(project => ({ project })), packageDir);
   const derivedSources = inventory.slice(0, sourceNames.length).map(({ configPath }) => relative(packageDir, configPath));
   const derivedTests = inventory.slice(sourceNames.length).map(({ configPath }) => relative(packageDir, configPath));
   assertProjectCoverage(packageDir, derivedSources, derivedTests, ['../ui/tsconfig.source.json']);
   const original = readProject('tsconfig.json', packageDir);
-  const sources = sourceNames.map((name) => readProject(name, packageDir));
-  const tests = readProject('tsconfig.test.json', packageDir);
+  const sources = derivedSources.map((name) => readProject(name, packageDir));
+  const tests = readProject(derivedTests[0], packageDir);
   const isTest = (path) => /\.(?:test|spec)\.tsx?$/u.test(path)
     || path.replaceAll('\\', '/').includes('/__tests__/');
   assert.equal(original.fileNames.some(isTest), true, 'inherited CLI project must contain test roots');
@@ -297,7 +305,7 @@ test('CLI projects preserve every original root and compiler strictness', async 
   assert.equal(new Set([...sources, tests].map((project) => project.options.tsBuildInfoFile)).size, 5);
   const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), workspaceDir: packageDir });
   const inputs = spawnSync(invocation.command, [...invocation.argsPrefix,
-    ...sourceNames.flatMap((name) => ['--project', join(packageDir, name)]), '--listFilesOnly'],
+    ...derivedSources.flatMap((name) => ['--project', join(packageDir, name)]), '--listFilesOnly'],
   { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   assert.equal(inputs.status, 0, inputs.stdout + inputs.stderr);
   const roots = new Set(sources.flatMap((source) => source.fileNames.map((file) => resolve(file))));
@@ -325,7 +333,8 @@ function assertNativeProjectBoundary(packageDir) {
     { encoding: 'utf8', cwd: fixtureDir });
   try {
     const options = { types: [], paths: { '@/*': ['./sources/*'] }, rootDir: '.' };
-    write('tsconfig.json', JSON.stringify({ include: ['sources/**/*.ts', 'stage/**/*.ts'], exclude: ['sources/trash/**'] }));
+    write('tsconfig.json', JSON.stringify({ extends: join(packageDir, 'tsconfig.json'), compilerOptions: options,
+      include: ['sources/**/*.ts', 'stage/**/*.ts'], exclude: ['sources/trash/**'] }));
     for (const [index, name] of precedingNames.entries()) {
       const label = name.slice('tsconfig.'.length, -'.json'.length);
       const previous = precedingNames[index - 1]?.slice('tsconfig.'.length, -'.json'.length);
@@ -401,13 +410,14 @@ function assertNativeProjectBoundary(packageDir) {
     write('compiler-spawns.jsonl', '');
     const measured = publicCompiler.run();
     assert.equal(measured.status, 0, measured.stdout + measured.stderr);
+    const derivedProjects = publicCompiler.projects.map(project => join(fixtureDir, 'node_modules/.cache/tsc', project));
     assertOneCheckerInvocations(publicCompiler.nativeCalls(),
-      publicCompiler.projects.map((project) => join(fixtureDir, project)));
+      derivedProjects);
     if (process.platform === 'linux') {
       const reports = measured.stderr.split('\n').filter((line) => line.startsWith('[typescript] {'))
         .map((line) => JSON.parse(line.slice('[typescript] '.length)));
       assert.deepEqual(reports.map(({ project, status, signal }) => ({ project, status, signal })),
-        publicCompiler.projects.map((project) => ({ project: join(fixtureDir, project), status: 0, signal: null })));
+        derivedProjects.map(project => ({ project, status: 0, signal: null })));
       assert.ok(reports.every(({ maxRssKiB }) => maxRssKiB > 0));
     }
   } finally {
@@ -430,7 +440,7 @@ test('native UI projects redirect direct and transitive imports across the compl
     const moduleDeclaration = 'sources/activity/adapters/desktop/runtime/desktopActivityOverlayQaFixtures.d.ts';
     const downstreamImplementation = 'sources/activity/adapters/desktop/runtime/desktopActivityOverlayBridge.ts';
     const files = { foundation: ['foundation.ts', 'flags.json', 'sources/theme.ts'], core: ['left.ts', 'right.ts', downstreamImplementation],
-      source: ['entry.ts'], 'test-components': [], 'test-other': [] };
+      source: ['entry.ts'], 'test-components': ['sources/components/entry.test.ts'], 'test-other': ['sources/dev/entry.spec.ts'] };
     const commonTestOptions = ts.readConfigFile(join(uiDir, 'tsconfig.test.json'), ts.sys.readFile).config.compilerOptions;
     for (let index = 0; index < names.length; index++) {
       const name = names[index];
@@ -567,17 +577,20 @@ test('native UI serial checker derives added and removed files while preserving 
     symlinkSync(join(uiDir, 'node_modules/expo'), join(fixtureDir, 'node_modules/expo'), process.platform === 'win32' ? 'junction' : 'dir');
     write('tsconfig.json', JSON.stringify({ extends: join(uiDir, 'tsconfig.json'),
       compilerOptions: { types: [], paths: {} }, include: ['*.ts'], exclude: ['cache', 'node_modules'] }));
-    const names = ['foundation', 'core', 'source', 'test'];
-    const files = [['base.ts'], ['left.ts', 'right.ts'], ['entry.ts'], ['entry.test.ts']];
+    const names = ['foundation', 'core', 'source', 'test-components', 'test-other'];
+    const commonTestOptions = readProject('tsconfig.test.json').raw.compilerOptions;
+    const files = [['base.ts'], ['left.ts', 'right.ts'], ['entry.ts'], [], ['entry.test.ts']];
     for (let index = 0; index < names.length; index++) {
       const name = names[index];
       const actual = readProject(`tsconfig.${name}.json`).raw;
       write(`tsconfig.${name}.json`, JSON.stringify({ extends: './tsconfig.json',
-        compilerOptions: { ...actual.compilerOptions, rootDir: '.',
+        compilerOptions: { ...(name.startsWith('test-') ? commonTestOptions : {}), ...actual.compilerOptions, rootDir: '.',
           outDir: `./cache/${name}`, tsBuildInfoFile: `./cache/${name}.tsbuildinfo` },
-        ...(index ? { references: [{ path: `./tsconfig.${names[index - 1]}.json` }] } : {}),
+        ...(index ? { references: [{ path: `./tsconfig.${name.startsWith('test-') ? 'source' : names[index - 1]}.json` }] } : {}),
         files: files[index], include: [], exclude: [] }));
     }
+    write('tsconfig.test.json', JSON.stringify({ extends: './tsconfig.json', compilerOptions: commonTestOptions,
+      files: ['entry.test.ts'], include: [], references: [{ path: './tsconfig.source.json' }] }));
     write('base.ts', "export { added } from './added';\n");
     write('added.ts', 'export const added: string = "new";\n');
     write('left.ts', "import { added } from './base'; import { right } from './right'; export const left = (): string => added + right();\n");
@@ -623,9 +636,17 @@ test('native UI serial checker derives added and removed files while preserving 
     writeCli('tsconfig.json', JSON.stringify({ compilerOptions: {
       strict: true, types: [], target: 'es2022', module: 'esnext', moduleResolution: 'bundler',
     }, files: ['cli.ts', 'consumer.test.ts', 'neighbor.test.ts', 'cliAmbient.d.ts'] }));
-    writeCli('tsconfig.source.json', JSON.stringify({ extends: './tsconfig.json',
-      compilerOptions: { composite: true, declaration: true, emitDeclarationOnly: true, rootDir: '.', outDir: './cache' },
-      files: ['cli.ts', 'cliAmbient.d.ts'] }));
+    const cliCompiler = publicFiniteCompiler(resolve('apps/cli'), cliDir, writeCli, invocation, admission);
+    const cliSources = cliCompiler.projects.filter(name => name !== 'tsconfig.test.json');
+    for (const [index, name] of cliSources.entries()) {
+      const actual = readProject(name, resolve('apps/cli')).raw;
+      const label = name.slice('tsconfig.'.length, -'.json'.length);
+      writeCli(name, JSON.stringify({ extends: './tsconfig.json',
+        compilerOptions: { ...actual.compilerOptions, rootDir: '.', outDir: `./cache/${label}`,
+          tsBuildInfoFile: `./cache/${label}.tsbuildinfo` },
+        files: ['cli.ts', 'cliAmbient.d.ts'], include: [],
+        references: cliSources.slice(0, index).map(path => ({ path: `./${path}` })) }));
+    }
     writeCli('tsconfig.test.json', JSON.stringify({ extends: './tsconfig.json',
       compilerOptions: { noEmit: true, disableSourceOfProjectReferenceRedirect: true },
       files: ['consumer.test.ts', 'neighbor.test.ts', 'cliAmbient.d.ts'],
@@ -637,7 +658,6 @@ test('native UI serial checker derives added and removed files while preserving 
     // The admission fixture's PATH is shared by these two tiny real compilers.
     mkdirSync(join(cliDir, 'bin'));
     symlinkSync(join(fixtureDir, 'bin/awk'), join(cliDir, 'bin/awk'));
-    const cliCompiler = publicFiniteCompiler(resolve('apps/cli'), cliDir, writeCli, invocation, admission);
     const cli = cliCompiler.run(['--listFiles']);
     assert.equal(cli.status, 0, cli.stdout + cli.stderr);
     const loaded = cli.stdout.trim().split(/\r?\n/u).map(file => resolve(file.trim()));
