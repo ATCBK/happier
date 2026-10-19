@@ -16,7 +16,7 @@ import type { AgentInstallJobFailureCode, AgentInstallJobIntent, AgentInstallJob
 export type MachineAgentState =
     /** Installed with required authentication satisfied, or explicitly not required. */
     | 'ready'
-    /** Installed, but neither the agent's own probe nor a connected account says it can sign in. */
+    /** Installed, but the selected Account default or Session credential is signed out. */
     | 'needsSignIn'
     /** Ready, and a newer version is available from a source Happier can update from. */
     | 'updateAvailable'
@@ -44,11 +44,17 @@ export type MachineAgentConnectedService = Readonly<{
     /** The connected account's label ("Work · Max"), when connected. */
     profileLabel: string | null;
     /** Exact account health; absent while descriptor/transport facts cannot evaluate profiles. */
-    profiles?: readonly Readonly<{ profileId: string; healthy: boolean; profileLabel: string | null }>[];
+    profiles?: readonly Readonly<{ profileId: string; healthy: boolean; profileLabel: string | null; reconnectRequired?: boolean }>[];
 }>;
 
 export type MachineAgentSignIn = Readonly<{
-    /** Retained probe facts; aggregate connected availability does not replace native authentication. */
+    /** Exact selected account refusal; native sign-in and sibling accounts cannot repair it. */
+    connectedAccountFailure?: Readonly<{
+        code: 'connected_service_credential_reconnect_required';
+        serviceId: string;
+        profileId: string;
+    }>;
+    /** Retained native probe facts; projecting a selected credential never replaces these. */
     native?: MachineAgentInventoryItem['signIn'];
     status: MachineAgentSignInStatus;
     /** How it is signed in, when it is. */

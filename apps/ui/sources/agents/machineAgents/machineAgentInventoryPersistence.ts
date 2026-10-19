@@ -1,8 +1,8 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
 import { serverAccountScopedStorageKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
-const SnapshotSchema = z.object({ items: z.array(MachineAgentInventoryItemSchema), lastCheckedAt: z.number().nonnegative() }).strict();
+const SnapshotSchema = z.strictObject({ items: z.array(MachineAgentInventoryItemSchema), lastCheckedAt: z.number().check(z.nonnegative()) });
 export type PersistedMachineAgentInventory = z.infer<typeof SnapshotSchema>;
 export type MachineAgentInventoryStorage = Readonly<{ getString(key: string): string | undefined; set(key: string, value: string): void }>;
 

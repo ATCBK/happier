@@ -1,9 +1,9 @@
 import { buildMachineAgentInventoryKey, type MachineAgentInventoryDescriptor, type MachineAgentInventoryItem, type MachineAgentInventoryUnavailable } from '@happier-dev/protocol/capabilities';
 import type { MachineAgent, MachineAgentConnectedService } from './machineAgentTypes';
-import { projectMachineAgent, reconcileMachineAgents } from './machineAgentModel';
+import { projectMachineAgent, reconcileMachineAgents, type MachineAgentCredentialSelection } from './machineAgentModel';
 
 export type MachineAgentsSnapshot = Readonly<{
-    status: 'loading' | 'ready' | 'offline' | 'error';
+    status: 'idle' | 'loading' | 'ready' | 'offline' | 'error';
     agents: readonly MachineAgent[];
     lastCheckedAt: number | null;
 }>;
@@ -14,11 +14,12 @@ export type MachineAgentInventoryObservation = Readonly<{
     lastCheckedAt: number | null;
     descriptors?: readonly MachineAgentInventoryDescriptor[];
     connectedServicesByAgentId?: Readonly<Record<string, readonly MachineAgentConnectedService[]>>;
+    credentialSelectionsByAgentId?: Readonly<Record<string, MachineAgentCredentialSelection>>;
     jobsByAgentId?: Readonly<Record<string, MachineAgent['job']>>;
     dependencyTitlesByKey?: Readonly<Record<string, string>>;
 }>;
 
-export const EMPTY_MACHINE_AGENTS: MachineAgentsSnapshot = Object.freeze({ status: 'loading', agents: Object.freeze([]), lastCheckedAt: null });
+export const EMPTY_MACHINE_AGENTS: MachineAgentsSnapshot = Object.freeze({ status: 'idle', agents: Object.freeze([]), lastCheckedAt: null });
 
 export function createMachineAgentInventoryStore() {
     const snapshots = new Map<string, MachineAgentsSnapshot>();
@@ -26,6 +27,7 @@ export function createMachineAgentInventoryStore() {
     const agentListeners = new Map<string, Set<() => void>>();
     const factsByScope = new Map<string, Map<string, MachineAgentInventoryItem>>();
     const jobsByScope = new Map<string, Readonly<Record<string, MachineAgent['job']>>>();
+    const credentialsByScope = new Map<string, NonNullable<MachineAgentInventoryObservation['credentialSelectionsByAgentId']>>();
     return {
         read(key: string): MachineAgentsSnapshot { return snapshots.get(key) ?? EMPTY_MACHINE_AGENTS; },
         subscribe(key: string, listener: () => void) {
@@ -43,6 +45,8 @@ export function createMachineAgentInventoryStore() {
             const previous = snapshots.get(key) ?? EMPTY_MACHINE_AGENTS;
             if (observation.jobsByAgentId) jobsByScope.set(key, observation.jobsByAgentId);
             const jobs = jobsByScope.get(key);
+            if (observation.credentialSelectionsByAgentId) credentialsByScope.set(key, observation.credentialSelectionsByAgentId);
+            const credentials = credentialsByScope.get(key);
             const factsById = factsByScope.get(key) ?? new Map<string, MachineAgentInventoryItem>();
             for (const item of observation.items) factsById.set(buildMachineAgentInventoryKey(item), item);
             factsByScope.set(key, factsById);
@@ -59,6 +63,7 @@ export function createMachineAgentInventoryStore() {
                 unavailableReason: unavailableById.get(buildMachineAgentInventoryKey(descriptor))
                     ?? (refreshedIds.has(buildMachineAgentInventoryKey(descriptor)) ? undefined : previousById.get(buildMachineAgentInventoryKey(descriptor))?.unavailableReason),
                 connectedServices: observation.connectedServicesByAgentId?.[descriptor.agentId] ?? previousById.get(buildMachineAgentInventoryKey(descriptor))?.signIn.connectedServices ?? [],
+                credentialSelection: credentials?.[descriptor.agentId] ?? { credentialBindings: null },
                 job: jobs ? jobs[buildMachineAgentInventoryKey(descriptor)] ?? null : previousById.get(buildMachineAgentInventoryKey(descriptor))?.job ?? null,
                 dependencyTitlesByKey: observation.dependencyTitlesByKey,
             })));

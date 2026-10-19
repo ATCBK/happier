@@ -1,5 +1,6 @@
 import { t } from '@/text';
 import type { MachineAgentJob } from '../machineAgentTypes';
+import { formatResetAtTime } from '@/utils/time/formatResetAtTime';
 import { AgentInstallJobRpcError } from './api';
 
 /** Transport and lookup failures do not establish an installer outcome. */
@@ -29,6 +30,17 @@ export type AgentInstallJobFailurePresentation = Readonly<{
     recovery: Readonly<{ kind: 'retry' | 'guide' | 'chooseAgent' | 'reconnect'; label: string; guideUrl?: string }>;
 }>;
 
+const ISO_INSTANT = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/;
+
+/** The installer states GitHub's reset as an ISO instant inside its credential-free message. */
+function rateLimitBody(message: string | null): string {
+    const iso = message?.match(ISO_INSTANT)?.[0];
+    const resetAt = iso ? Date.parse(iso) : Number.NaN;
+    return Number.isFinite(resetAt)
+        ? t('agentInstallJob.rateLimitedBody', { time: formatResetAtTime(resetAt) })
+        : t('agentInstallJob.rateLimitedBodyNoTime');
+}
+
 export function presentAgentInstallJobFailure(
     failure: AgentInstallJobFailurePresentationInput,
 ): AgentInstallJobFailurePresentation {
@@ -39,6 +51,7 @@ export function presentAgentInstallJobFailure(
             case 'install_not_available': return { title: t('agentInstallJob.manualInstall'), body: t('agentInstallJob.manualBody'), kind: 'guide' } as const;
             case 'update_not_available': return { title: t('agentInstallJob.updateUnavailable'), body: t('agentInstallJob.updateBody'), kind: 'guide' } as const;
             case 'download_failed': return { title: t('agentInstallJob.downloadFailed'), body: t('agentInstallJob.downloadBody'), kind: 'retry' } as const;
+            case 'rate_limited': return { title: t('agentInstallJob.rateLimited'), body: rateLimitBody(failure.message), kind: 'retry' } as const;
             case 'verification_failed': return { title: t('agentInstallJob.verificationFailed'), body: t('agentInstallJob.verificationBody'), kind: 'retry' } as const;
             case 'timeout': return { title: t('agentInstallJob.timeout'), body: t('agentInstallJob.timeoutBody'), kind: 'retry' } as const;
             case 'cancelled': return { title: t('agentInstallJob.cancelled'), body: t('agentInstallJob.cancelledBody'), kind: 'retry' } as const;

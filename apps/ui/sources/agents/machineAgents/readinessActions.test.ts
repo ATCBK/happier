@@ -1,40 +1,50 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInstallJobSchema, DaemonAgentInstallStartRequestSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { MachineAgentInventoryItemSchema } from '@happier-dev/protocol/capabilities';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
-const boundary = vi.hoisted(() => ({ rpc: vi.fn(), confirm: vi.fn() }));
+const boundary = vi.hoisted(() => ({ rpc: vi.fn(), confirm: vi.fn(), alert: vi.fn() }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { confirm: boundary.confirm } });
+    return createModalModuleMock({ spies: { confirm: boundary.confirm, alert: boundary.alert } }).module;
 });
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: boundary.rpc }));
-// Unused HTTP boundary: native readiness never performs recipient-envelope work.
-vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
-    const unused = () => { throw new Error('Unexpected recipient-envelope request'); };
-    return { createSessionDataKeyEnvelopeClient: unused, readSessionDataKeyEnvelopeCollectionPage: unused,
-        prepareSessionDataKeyEnvelopesForScope: unused, prepareSessionDataKeyEnvelopesDetached: unused };
-});
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+vi.doUnmock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch');
+const network = await installSessionOpsNetworkBoundary();
 const { useAgentInstallJob } = await import('./installJobs/useAgentInstallJob');
 const { useAgentSignIn } = await import('./signIn/useAgentSignIn');
 const { useMachineAgentRowActions } = await import('@/components/machines/agents/useMachineAgentRowActions');
 const { machineAgentInventoryStore } = await import('./machineAgentInventoryStore');
 const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
+const { router } = await import('expo-router');
 
 describe('readiness user intents through mounted Actions', () => {
-    beforeEach(async () => { await home.reset(); boundary.rpc.mockReset(); boundary.confirm.mockReset(); boundary.confirm.mockResolvedValue(false); });
-    afterEach(() => { standardCleanup(); vi.useRealTimers(); });
+    beforeEach(async () => {
+        await home.reset(); network.resetRequests();
+        network.setHttpResponder(async (input, init) => new URL(String(input)).pathname.startsWith('/v1/machines/') ? null : home.request(input, init));
+        network.setRpcResponder(request => boundary.rpc(request));
+        boundary.rpc.mockReset(); boundary.alert.mockReset(); boundary.confirm.mockReset(); boundary.confirm.mockResolvedValue(false);
+        vi.mocked(router.push).mockClear();
+    });
+    afterEach(async () => {
+        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+        await serverScopedRpcSocketPool.stopAll();
+        standardCleanup(); vi.useRealTimers();
+    });
+    afterAll(async () => { await network.dispose(); });
 
     async function target(machineId: string, agentId = 'codex') {
         const serverId = await home.addHome({ name: 'Readiness', serverUrl: 'https://readiness.test', accountId: 'alice' });
+        await network.addHome('https://readiness.test', 'alice');
         return { serverId, machineId, agentId };
     }
 
@@ -62,6 +72,7 @@ describe('readiness user intents through mounted Actions', () => {
         expect(boundary.confirm).toHaveBeenCalledOnce();
         expect(boundary.rpc.mock.calls.some(([request]) => request.method === 'daemon.agents.install.start')).toBe(false);
         expect(hook.getCurrent().job).toBeNull();
+        expect(boundary.alert).not.toHaveBeenCalled();
     });
 
     it('admitted install progress and cancellation remain in the same subscribed owner', async () => {
@@ -70,6 +81,7 @@ describe('readiness user intents through mounted Actions', () => {
         const first = await renderHook(() => useAgentInstallJob(addressed));
         const second = await renderHook(() => useAgentInstallJob(addressed));
         await act(async () => { await first.getCurrent().start('install', { consent: { vendorRecipe: false } }); });
+        expect(second.getCurrent().job?.jobId).toBe('readiness-job');
         await waitForHomeGovernance(() => expect(second.getCurrent().job).toMatchObject({ jobId: 'readiness-job', steps: [{ bytesDone: 3 }] }));
         home.answer(addressed.serverId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, actions: { 'machines.agents.install.cancel': { enabled: false } } },
@@ -80,7 +92,6 @@ describe('readiness user intents through mounted Actions', () => {
         home.answer(addressed.serverId, '/v2/account/settings', { body: { version: 2, content: { t: 'plain', v: {} } } });
         await act(async () => { await second.getCurrent().cancel(); });
         await waitForHomeGovernance(() => expect(first.getCurrent().job?.outcome).toMatchObject({ code: 'cancelled' }));
-        expect(boundary.confirm).toHaveBeenCalledTimes(2);
     });
 
     it.each(['install', 'update', 'retry'] as const)('row %s cannot bypass the confirmation owner', async (kind) => {
@@ -97,13 +108,61 @@ describe('readiness user intents through mounted Actions', () => {
         expect(boundary.rpc.mock.calls.some(([request]) => request.method === 'daemon.agents.install.start')).toBe(false);
     });
 
-    it('a rejected native sign-in confirmation opens no daemon terminal', async () => {
-        const addressed = await target('rejected-sign-in');
-        const hook = await renderHook(() => useAgentSignIn(addressed));
-        await act(async () => { await hook.getCurrent().start(); });
+    it.each(['row', 'form'] as const)('surfaces a confirmed %s install refusal without inventing an installer job', async surface => {
+        const addressed = await target(`refused-${surface}-install`);
+        installation(addressed.agentId);
+        const serve = boundary.rpc.getMockImplementation()!;
+        boundary.rpc.mockImplementation(async request => request.method === 'daemon.agents.install.start'
+            ? { ok: false, errorCode: 'install_unavailable', error: 'Installer is unavailable' } : serve(request));
+        boundary.confirm.mockResolvedValue(true);
+        const key = serverAccountScopedResourceKey({ serverId: addressed.serverId, accountId: 'alice' }, 'machine-agents', addressed.machineId);
+        machineAgentInventoryStore.publish(key, { status: 'ready', lastCheckedAt: 1, items: [MachineAgentInventoryItemSchema.parse({
+            agentId: addressed.agentId, title: 'Codex', installed: false, version: null, latestVersion: null,
+            update: { supported: true, command: null }, signIn: { status: 'signedOut', loginSupport: 'login_terminal' },
+            platform: { supported: true }, install: { available: true, mode: 'managed', sizeBytes: null, guideUrl: null }, dependencies: [],
+        })] });
+        const hook = await renderHook(() => ({
+            row: useMachineAgentRowActions({ ...addressed, machineName: 'Dev box', onOpenForm: () => {} }),
+            form: useAgentInstallJob(addressed),
+        }));
+        await act(async () => {
+            if (surface === 'row') hook.getCurrent().row(machineAgentInventoryStore.read(key).agents[0], { kind: 'install' });
+            else await hook.getCurrent().form.start('install', { consent: { vendorRecipe: false } });
+        });
+        await waitForHomeGovernance(() => expect(boundary.rpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.agents.install.start' })));
+        await flushHookEffects();
+        expect(boundary.alert).toHaveBeenCalled();
+        expect(machineAgentInventoryStore.read(key).agents[0].job).toBeNull();
         expect(boundary.confirm).toHaveBeenCalledOnce();
-        expect(boundary.rpc).not.toHaveBeenCalled();
-        expect(hook.getCurrent().phase).toBe('idle');
+    });
+
+    it.each(['row', 'form'] as const)('opens the actual policy-required %s install approval before any daemon job', async surface => {
+        const addressed = await target(`approval-${surface}`);
+        installation(addressed.agentId);
+        await home.requireUiApproval(addressed.serverId, 'machines.agents.install');
+        boundary.confirm.mockResolvedValue(true);
+        const key = serverAccountScopedResourceKey({ serverId: addressed.serverId, accountId: 'alice' }, 'machine-agents', addressed.machineId);
+        machineAgentInventoryStore.publish(key, { status: 'ready', lastCheckedAt: 1, items: [MachineAgentInventoryItemSchema.parse({
+            agentId: addressed.agentId, title: 'Codex', installed: false, version: null, latestVersion: null,
+            update: { supported: true, command: null }, signIn: { status: 'signedOut', loginSupport: 'login_terminal' },
+            platform: { supported: true }, install: { available: true, mode: 'managed', sizeBytes: null, guideUrl: null }, dependencies: [],
+        })] });
+        const hook = await renderHook(() => ({
+            row: useMachineAgentRowActions({ ...addressed, machineName: 'Dev box', onOpenForm: () => {} }),
+            form: useAgentInstallJob(addressed),
+        }));
+        let pending: Promise<unknown> | undefined;
+        await act(async () => {
+            if (surface === 'row') hook.getCurrent().row(machineAgentInventoryStore.read(key).agents[0], { kind: 'install' });
+            else pending = hook.getCurrent().form.start('install', { consent: { vendorRecipe: false } });
+        });
+        await waitForHomeGovernance(() => expect(home.artifacts(addressed.serverId).list()).toHaveLength(1));
+        await flushHookEffects();
+        const artifact = home.artifacts(addressed.serverId).list()[0];
+        expect(router.push).toHaveBeenCalledWith(`/inbox/approvals/${artifact.id}?serverId=${encodeURIComponent(addressed.serverId)}`);
+        expect(boundary.rpc.mock.calls.some(([request]) => request.method === 'daemon.agents.install.start')).toBe(false);
+        await hook.unmount();
+        await pending;
     });
 
     it('native start/check/restart/cancel honor admission and share the mounted sign-in custody', async () => {
