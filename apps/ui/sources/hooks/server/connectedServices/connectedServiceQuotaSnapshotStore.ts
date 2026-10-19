@@ -55,16 +55,19 @@ export type LegacyQuotaSnapshotLoadContext = Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
     resolveAccountMode: () => Promise<CredentialScopedAccountMode>;
+}>;
+
+export type QuotaSnapshotLoadContext = LegacyQuotaSnapshotLoadContext;
+
+export type QuotaSnapshotRefreshContext = QuotaSnapshotLoadContext & Readonly<{
     assertOperationAllowed(
         operation: BuiltInLegacyConnectedAccountOperation,
         signal?: AbortSignal,
     ): Promise<void>;
 }>;
 
-export type QuotaSnapshotLoadContext = LegacyQuotaSnapshotLoadContext;
-
 export type QuotaRecoveryConsumeContext =
-    LegacyQuotaSnapshotLoadContext & Readonly<{
+    QuotaSnapshotRefreshContext & Readonly<{
     machineId: string;
     providerCreditId?: string | null;
     signal?: AbortSignal;
@@ -369,7 +372,7 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
     };
 }
 
-export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadContext): Promise<void> {
+export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotRefreshContext): Promise<void> {
     const entry = getOrCreateEntry(key);
     const previousRefresh = entry.refreshPromise;
     if (previousRefresh && entry.refreshing) {
