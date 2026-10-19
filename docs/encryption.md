@@ -2587,8 +2587,9 @@ resource admission path.
   stay unchanged. Filtered listings report unclassified rows and readers use
   the full inventory until classification is complete. The inventory writer also
   repairs a stored kind that no longer matches its header (for example a Board
-  stored as `other` before `work_board` existed). Board listing reads
-  `work_board` only, so it never scans unrelated Account headers. An opaque header edit
+  stored as `other` before `work_board` existed). Board listing requests
+  `work_board`, using the shared full-inventory fallback while unclassified rows
+  remain. An opaque header edit
   without a kind invalidates the previous hint, including edits from old clients.
 - Plain Artifact values are base64-encoded `{ t:'plain', v }` envelopes with the
   canonical plain data-key marker.
