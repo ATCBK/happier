@@ -14,7 +14,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { DetailsSplitWorkspace } from '@/components/appShell/panes/details/workspace/DetailsSplitWorkspace';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { DestinationInstanceHost, useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { DestinationInstanceHost, useDestinationPaneScopeId, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { BrowserPresentationRetentionProvider } from '@/components/browser/surfaces/browserPresentationRetention';
 import { createBrowserViewDetailsTab } from '@/components/browser/surfaces/browserSurfaceDetailsTabModel';
@@ -44,7 +44,12 @@ afterEach(async () => {
 
 describe('Session right-panel Browser source lifetime', () => {
     it('keeps the actual Browser control and page navigation while its pane is parked and rebound', async () => {
-        const navigation = createExpoRouterMock().module.router;
+        const router = createExpoRouterMock().module.router;
+        const navigation = {
+            push: router.push,
+            replace: router.replace,
+            back: router.back,
+        } satisfies DestinationNavigation;
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://browser-viewer-home.example.test',
             request: async (input) => {

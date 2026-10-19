@@ -370,9 +370,7 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('expo-router', async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
-            get pathname() {
-                return nativeBoundary.pathname;
-            },
+            pathname: () => nativeBoundary.pathname,
             router: {
                 push: routerPushSpy,
                 replace: vi.fn(),
@@ -435,7 +433,7 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     return createSyncOpsModuleMock({
         importOriginal,
         overrides: {
-            sessionStopWithServerScope: vi.fn(async () => ({ success: true })),
+            sessionStopWithServerScope: vi.fn(async (sessionId: string) => ({ success: true, sessionId, stopped: true as const })),
             sessionArchiveWithServerScope: vi.fn(async () => ({ success: true })),
         },
     });
@@ -728,7 +726,7 @@ describe('SessionsList (native virtualization)', () => {
         // These host rows represent the focused Account's restored native cache.
         // Credential observers must be able to prove its Account before retaining them.
         setWarmCacheAccountScope('account-a');
-        home.answer(homeA, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 1 } } });
+        home.answer(homeA, pinPath, { body: { pin: { sessionId: 'sess_a', sortKey: null, pinnedAt: 1, listPinned: true, railPinned: false } } });
         home.answer(homeA, tagsPath, { body: { sessionId: 'sess_a', tagIds: ['fixture-tag-2'] } });
         const activeHome = listServerProfiles().find(profile => profile.id === homeA);
         const accountId = activeHome ? home.findByServerUrl(activeHome.serverUrl)?.accountId : null;
@@ -2044,8 +2042,10 @@ describe('SessionsList (native virtualization)', () => {
             serverId: homeA, serverUrl: 'https://server-a.example.test', input: { pinned: true }, token: home.findByServerUrl('https://server-a.example.test')?.token,
         })]);
         const { storage } = await import('@/sync/domains/state/storageStore');
-        expect(storage.getState().sessionOrganizationPinsBySessionKey[buildSessionOrganizationSessionKey('srv_server_a', 'sess_a')]).toEqual({
-            sessionId: 'sess_a', sortKey: null, pinnedAt: 1,
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().sessionOrganizationPinsBySessionKey[buildSessionOrganizationSessionKey('srv_server_a', 'sess_a')]).toEqual({
+                sessionId: 'sess_a', sortKey: null, pinnedAt: 1, listPinned: true, railPinned: false,
+            });
         });
     });
 

@@ -71,15 +71,10 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         groups: [{ id: 'main', name: 'Main', serverIds: [homeA.id, homeBScope, ...(homeC ? [homeC.id] : [])], presentation: 'grouped' }],
         activeTargetKind: 'group', activeTargetId: 'main',
     }));
-    vi.doMock('socket.io-client', async (importOriginal) => ({
-        ...await importOriginal<typeof import('socket.io-client')>(),
-        io: (...args: unknown[]) => {
-            io(...args);
-            const socket = createSocketIoBoundaryStub();
-            sockets.push(socket);
-            return socket.socket;
-        },
-    }));
+    network.setSocketConfigurator(boundary => {
+        io(boundary.serverUrl, boundary.options);
+        sockets.push(boundary);
+    });
     const fetchedUrls: string[] = [];
     let sessions: string[] = [];
     let machines: string[] = [];
@@ -156,7 +151,6 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         await (await import('@/sync/runtime/nativeIrohTunnels/runtime')).disposeIrohHomeTunnelRuntime();
         (await import('@/sync/api/capabilities/serverFeaturesClient')).resetServerFeaturesClientForTests();
         await network.dispose();
-        vi.doUnmock('socket.io-client');
         for (const home of [homeB, homeA, ...(homeC ? [homeC] : [])]) {
             const profile = profiles.getServerProfileById(home.id);
             if (profile) await profiles.removeServerProfile(profile.id);
@@ -199,13 +193,12 @@ async function resetHarness(): Promise<void> {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    vi.resetModules();
     delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
 }
 
 // Load the real Sync graph only after installing its native/network ports.
 // Cold transforms exceeded a case's deadline before its race even started;
-// collect them once, retire that fixture, and keep every case's fresh runtime.
+// collect them once and retire resources through their real lifecycle owners.
 vi.useFakeTimers();
 try {
     await installHarness();
@@ -214,7 +207,6 @@ try {
 }
 
 beforeEach(() => {
-    vi.resetModules();
     vi.useFakeTimers();
     process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
 });

@@ -10,6 +10,11 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const routerParamsRef = vi.hoisted(() => ({ current: { id: 'machine-1', page: 'doctor' } as Record<string, string> }));
 installTerminalRouteCommonModuleMocks({
+    text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+        translate: (key, params) => key === 'machine.runtimeSummary'
+            ? `summary:${params?.cliVersion}:${params?.daemonVersion}:${params?.installationCount}:${params?.serviceCount}:${params?.warningCount}`
+            : key,
+    }),
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
         params: () => routerParamsRef.current,
     }).module,
@@ -24,7 +29,6 @@ let machineCollectBugReportDiagnosticsMock = vi.spyOn(machinesOps, 'machineColle
 let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | null = null;
 let otherHome: Awaited<ReturnType<typeof network.addHome>>;
 let blockedSwitch: ReturnType<typeof createDeferred<void>> | null = null;
-let restoreBlockedSwitch: (() => void) | null = null;
 let diagnosticsResponder: (machineId: string, options?: { serverId?: string | null }) => unknown | Promise<unknown>;
 
 beforeEach(async () => {
@@ -186,8 +190,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
     blockedSwitch?.resolve();
-    restoreBlockedSwitch?.();
-    restoreBlockedSwitch = null;
     blockedSwitch = null;
     await standardCleanup();
     await home?.dispose();
@@ -213,9 +215,10 @@ describe('MachineDetailScreen runtime inventory', () => {
         });
 
     it('uses the machine list server id for runtime inventory when the route has no serverId param', async () => {
-            home!.storage.getState().applyMachines([], true, { sourceServerId: home!.home.id, sourceAccountId: home!.home.accountId });
+            home!.state.machines = [];
+            await home!.sync.refreshMachines();
             diagnosticsResponder = async (_machineId: string, options?: { serverId?: string | null }) => {
-                if (options?.serverId !== 'server-b') {
+                if (options?.serverId !== otherHome.id) {
                     return null;
                 }
 
@@ -268,9 +271,9 @@ describe('MachineDetailScreen runtime inventory', () => {
 
             await flushHookEffects({ cycles: 2, turns: 2 });
 
-            expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
+            await vi.waitFor(() => expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
                 serverId: otherHome.id,
-            }));
+            })));
             expect(screen.getTextContent()).toContain('machine.runtimeInventory');
         });
 
@@ -304,20 +307,11 @@ describe('MachineDetailScreen runtime inventory', () => {
                     ],
                 },
             });
-            let resolveSwitch: (() => void) | null = null;
-            (() => {
             blockedSwitch = createDeferred<void>();
-            resolveSwitch = () => blockedSwitch!.resolve();
-            const originalRequest = navigator.locks.request.bind(navigator.locks);
-            const gatedRequest = async <T,>(name: string, optionsOrCallback: LockOptions | LockGrantedCallback<T>, callback?: LockGrantedCallback<T>): Promise<T> => {
-                await blockedSwitch!.promise;
-                return typeof optionsOrCallback === 'function'
-                    ? originalRequest<T>(name, optionsOrCallback)
-                    : originalRequest<T>(name, optionsOrCallback, callback!);
+            const switchReleased = blockedSwitch.promise;
+            home!.state.beforeRequest = async url => {
+                if (url.origin === new URL(otherHome.serverUrl).origin) await switchReleased;
             };
-            const requestObserver = vi.spyOn(navigator.locks, 'request').mockImplementation(gatedRequest);
-            restoreBlockedSwitch = () => requestObserver.mockRestore();
-        })();
 
             const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
             const screen = await home!.render(MachineDetailScreen);
@@ -328,14 +322,12 @@ describe('MachineDetailScreen runtime inventory', () => {
             expect(screen.getTextContent()).not.toContain('SERVER_B_ONLY_WARNING');
 
             await act(async () => {
-                if (typeof resolveSwitch === 'function') {
-                    resolveSwitch();
-                }
+                blockedSwitch!.resolve();
             });
             await flushHookEffects({ cycles: 2, turns: 2 });
-            expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
+            await vi.waitFor(() => expect(machineCollectBugReportDiagnosticsMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
                 serverId: otherHome.id,
-            }));
+            })));
             expect(screen.getTextContent()).toContain('machine.runtimeInventory');
         });
 

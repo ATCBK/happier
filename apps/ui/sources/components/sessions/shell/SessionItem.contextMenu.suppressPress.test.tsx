@@ -640,7 +640,6 @@ describe('SessionItem context menu press suppression', () => {
             serverId: account.home.id,
             metadata: {
                 name: 'Old Session',
-                serverId: 'server_a',
                 path: '/repo',
                 host: 'devbox',
             },

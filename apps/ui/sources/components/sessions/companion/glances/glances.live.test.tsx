@@ -8,7 +8,7 @@ import { HappierWidgetFrame } from '@happier-dev/plugin-ui/presentation';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
-import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
@@ -53,10 +53,13 @@ const runtime = installSessionPaneRuntimeTestHarness({
         if ((init?.method ?? 'GET').toUpperCase() !== 'POST' || path !== '/v2/sessions/query') return null;
         const sessions = Object.values(storage.getState().sessions)
             .filter((candidate) => areServerProfileIdentifiersEquivalent(candidate.serverId, runtime.serverId))
-            .map((candidate) => createPlainSessionCurrentProjectionRecordFixture({
-                id: candidate.id, seq: candidate.seq, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
-                active: candidate.active, activeAt: candidate.activeAt, archivedAt: candidate.archivedAt,
-                metadataVersion: candidate.metadataVersion, agentStateVersion: candidate.agentStateVersion,
+            .map((candidate) => ({
+                ...createPlainSessionCurrentProjectionRecordFixture({
+                    id: candidate.id, seq: candidate.seq, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
+                    active: candidate.active, activeAt: candidate.activeAt, archivedAt: candidate.archivedAt,
+                    metadataVersion: candidate.metadataVersion, agentStateVersion: candidate.agentStateVersion,
+                }),
+                viewer: createSessionOwnerViewerFixture(candidate),
             }));
         return Response.json(SessionListQueryResponseV1Schema.parse({
             sessions, nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
