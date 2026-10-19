@@ -22,8 +22,12 @@ function failed(error: unknown): TriageTaskWriteResultV1 {
     return error instanceof JiraRefusal ? { kind: 'refused', reason: error.message } : { kind: 'failed', failure: jiraFailure(error) };
 }
 
+function normalizeJiraBody(body: string): string {
+    return body.replace(/\r\n/gu, '\n');
+}
+
 export function jiraAdfBody(body: string) {
-    return { type: 'doc', version: 1, content: body.replace(/\r\n/gu, '\n').split('\n').map((text) => ({ type: 'paragraph',
+    return { type: 'doc', version: 1, content: normalizeJiraBody(body).split('\n').map((text) => ({ type: 'paragraph',
         content: text.length === 0 ? [] : [{ type: 'text', text }] })) };
 }
 
@@ -61,14 +65,18 @@ function validateMetadata(fields: Record<string, unknown>, metadata: Record<stri
 
 function matches(issue: JiraIssue, fields: TriageTaskFieldsV1): boolean {
     const native = issue.fields;
+    // Get issue's fields projection does not guarantee each requested key.
+    // Omission is unavailable evidence; null/[] explicitly represent a clear.
+    // https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-get
+    if (Object.entries(JIRA_FIELD_IDS).some(([field, key]) => Object.hasOwn(fields, field) && !Object.hasOwn(native, key))) return false;
     const sorted = (value: unknown) => Array.isArray(value) ? [...new Set(value.map(String))].sort().join('\u0000') : '';
     return (fields.title === undefined || native.summary === fields.title)
-        && (fields.body === undefined || jiraAdfText(native.description).trimEnd() === fields.body.replace(/\r\n/gu, '\n').trimEnd())
-        && (fields.labelIds === undefined || sorted(native.labels) === sorted(fields.labelIds))
-        && (fields.assigneeIds === undefined || (string(object(native.assignee).accountId) ?? null) === (fields.assigneeIds[0] ?? null))
-        && (fields.priority === undefined || (object(native.priority).id ?? null) === (fields.priority === null ? null : String(fields.priority)))
-        && (fields.dueDate === undefined || (native.duedate ?? null) === fields.dueDate)
-        && (fields.parent === undefined || (object(native.parent).id ?? null) === (fields.parent?.entryId ?? null));
+        && (fields.body === undefined || normalizeJiraBody(jiraAdfText(native.description)).trimEnd() === normalizeJiraBody(fields.body).trimEnd())
+        && (fields.labelIds === undefined || (Array.isArray(native.labels) && sorted(native.labels) === sorted(fields.labelIds)))
+        && (fields.assigneeIds === undefined || (native.assignee === null ? null : object(native.assignee).accountId) === (fields.assigneeIds[0] ?? null))
+        && (fields.priority === undefined || (native.priority === null ? null : object(native.priority).id) === (fields.priority === null ? null : String(fields.priority)))
+        && (fields.dueDate === undefined || native.duedate === fields.dueDate)
+        && (fields.parent === undefined || (native.parent === null ? null : object(native.parent).id) === (fields.parent?.entryId ?? null));
 }
 
 type Dispatch = { ok: true; value: unknown } | { ok: false; error: unknown };
@@ -175,7 +183,8 @@ export async function commentJiraIssue(raw: unknown, context: PluginInvocationCo
                 try {
                     const comment = object(await client.request(`/rest/api/3/issue/${id}/comment/${encodeURIComponent(commentId)}`));
                     const { observation } = await confirmedObservation(client, configuration, id);
-                    return { kind: comment.id === commentId && jiraAdfText(comment.body).trimEnd() === input.body.trimEnd() ? 'applied' as const : 'uncertain' as const, observation };
+                    return { kind: comment.id === commentId && Object.hasOwn(comment, 'body')
+                        && normalizeJiraBody(jiraAdfText(comment.body)).trimEnd() === normalizeJiraBody(input.body).trimEnd() ? 'applied' as const : 'uncertain' as const, observation };
                 } catch (error) { return { kind: 'uncertain' as const, failure: jiraFailure(error) }; }
             },
         }));
