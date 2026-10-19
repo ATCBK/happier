@@ -474,13 +474,11 @@ async function assertReviewCommentAccountWriteCurrentnessInTx(
         tx,
         params.accountId,
     );
+    // Account.seq tracks all Account changes, including unrelated Session
+    // activity. The locked persisted mode and key binding own this admission.
     if (
         fence.status !== "ready"
         || fence.account.currentness.encryptionMode !== params.storageMode
-        || (
-            typeof params.accountVersion === "number"
-            && fence.account.version !== params.accountVersion
-        )
         || (
             params.accountEncryptionCurrentness
             && !accountEncryptionCurrentnessMatches(

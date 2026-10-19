@@ -25,12 +25,12 @@ export type ReviewCommentCreateOperationParams = ReviewCommentPrincipal & Readon
     input: ReviewCommentCreateRequestV1;
 }>;
 
-export type ReviewCommentGetOperationParams = Pick<ReviewCommentPrincipal, "accountId"> & Partial<Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "ledSubtreeSessionIds" | "storageMode">> & Readonly<{
+export type ReviewCommentGetOperationParams = Pick<ReviewCommentPrincipal, "accountId"> & Partial<Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "workflowScope" | "ledSubtreeSessionIds" | "storageMode">> & Readonly<{
     accountId: string;
     input: ReviewCommentGetRequestV1;
 }>;
 
-export type ReviewCommentListOperationParams = Pick<ReviewCommentPrincipal, "accountId"> & Partial<Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "ledSubtreeSessionIds" | "storageMode">> & Readonly<{
+export type ReviewCommentListOperationParams = Pick<ReviewCommentPrincipal, "accountId"> & Partial<Pick<ReviewCommentPrincipal, "actor" | "workflowOriginSessionId" | "workflowScope" | "ledSubtreeSessionIds" | "storageMode">> & Readonly<{
     accountId: string;
     input: ReviewCommentListRequestV1;
 }>;
@@ -159,7 +159,7 @@ export function createReviewCommentOperations(
             return { comment };
         },
         async listStored(params) {
-            const sessionId = params.actor ? reviewCommentPrincipalSessionId({ ...params, actor: params.actor }) : undefined;
+            const sessionId = params.input.sessionId ?? (params.actor ? reviewCommentPrincipalSessionId({ ...params, actor: params.actor }) : undefined);
             if (params.actor && params.input.sessionId !== undefined) assertReviewCommentSessionScope({ ...params, actor: params.actor }, params.input.sessionId);
             const result = await store.listSources({ accountId: params.accountId, filters: { ...params.input, ...(sessionId ? { sessionId: params.input.sessionId ?? sessionId } : {}) } });
             for (const item of result.items) {
@@ -175,7 +175,7 @@ export function createReviewCommentOperations(
         },
         async list(params) {
             assertPlainReadMode(params.storageMode);
-            const sessionId = params.actor ? reviewCommentPrincipalSessionId({ ...params, actor: params.actor }) : undefined;
+            const sessionId = params.input.sessionId ?? (params.actor ? reviewCommentPrincipalSessionId({ ...params, actor: params.actor }) : undefined);
             if (params.actor && params.input.sessionId !== undefined) assertReviewCommentSessionScope({ ...params, actor: params.actor }, params.input.sessionId);
             const result = await store.list({ accountId: params.accountId, filters: { ...params.input, ...(sessionId ? { sessionId: params.input.sessionId ?? sessionId } : {}) } });
             return { items: [...result.items], cursor: result.cursor };
