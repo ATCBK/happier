@@ -585,6 +585,12 @@ and Account Data admission do not inherit Machine reachability.
 A structurally supported native Host API method reaches that controller for its
 current unavailable result and target explanation; the renderer adapter does not
 replace that decision with an early generic refusal.
+In development source, a failed mounted-target read also carries its classified
+failure through that same Host API boundary. A target-read timeout remains a
+retryable `timeout`, with the existing transport explanation and diagnostic;
+it does not claim that the selected Machine lacks the operation. The Account
+renderer remains interactive, and successful target discovery removes that
+failure without replacing its controller. This adds no retry or RPC deadline.
 
 The existing ephemeral UI sharing scope also remains available without an
 execution occurrence. In that case it uses the selected immutable Artifact digest
