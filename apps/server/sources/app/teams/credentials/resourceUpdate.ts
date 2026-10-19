@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from 'zod/mini';
 import { TeamCredentialDisclosureCeilingV1Schema, TeamCredentialSessionUsePolicyV1Schema, TeamCredentialRequestPolicyV1Schema, TeamCredentialBrokerPlacementV1Schema, TeamCredentialResourceReplacementV1Schema, TeamCredentialResourceUpdateInputV1Schema, TeamCredentialDeliveryModeV1Schema, narrowTeamCredentialDeliveryModeToBrokeredOnlyV1, type TeamCredentialDeliveryModeV1, type TeamCredentialDisclosureCeilingV1, type TeamCredentialSessionUsePolicyV1, type TeamCredentialRequestPolicyV1, type TeamCredentialBrokerPlacementV1, type TeamCredentialResourceReplacementV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import { AccountStatus } from "@/storage/enums.generated";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
@@ -426,8 +427,21 @@ export async function updateTeamCredentialResourceInTx(
         || (patch.requestPolicy !== undefined && !z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(patch.requestPolicy).success)) {
         return { ok: false, error: "invalid_resource_input" };
     }
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: patch.resourceId }, select: { custodianAccountId: true, teamId: true } });
+    if (!resourceIdentity) return { ok: false, error: "resource_not_found" };
+    const materializedRecipients = await tx.teamCredentialRecipientMaterial.findMany({
+        where: { resourceId: patch.resourceId }, select: { recipientAccountId: true }, distinct: ["recipientAccountId"],
+    });
+    await acquireTeamMembershipAccountAdmissionInTx(tx, {
+        teamId: resourceIdentity.teamId,
+        accountIds: [input.actorAccountId, resourceIdentity.custodianAccountId, ...materializedRecipients.map(row => row.recipientAccountId)],
+        membershipIds: patch.replacement?.memberGrants.map(grant => grant.teamMembershipId) ?? [],
+    });
     const resource = await tx.teamCredentialResource.findUnique({ where: { id: patch.resourceId } });
     if (!resource) return { ok: false, error: "resource_not_found" };
+    if (resource.custodianAccountId !== resourceIdentity.custodianAccountId) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
     if (patch.replacement !== undefined) {
         return applyResourceReplacementInTx(tx, {
             actorAccountId: input.actorAccountId,

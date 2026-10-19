@@ -1,7 +1,8 @@
-import { assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
-import type { Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
 import { readDiscussionGrantAudienceForTeamsInTx, reconcileDiscussionGrantAudienceForTeamsInTx } from "@/app/discussions/accessService";
+import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 
 /**
  * The stable coalescing identity for Team invalidation.
@@ -14,6 +15,17 @@ import { readDiscussionGrantAudienceForTeamsInTx, reconcileDiscussionGrantAudien
  * everything a snapshot would have.
  */
 export const TEAM_CHANGE_ENTITY_ID = TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1;
+
+async function readTeamProjectionAdministratorAccountIdsInTx(tx: Tx): Promise<readonly string[]> {
+    return (await tx.account.findMany({
+        where: { status: "active", homeRole: { in: ["owner", "admin"] } }, select: { id: true },
+    })).map(account => account.id);
+}
+
+/** Team creation has no persisted Team identity yet, but its initial recipients are known. */
+export async function readTeamCreationPublicationAudienceInTx(tx: Tx, initialAccountIds: readonly string[]): Promise<readonly string[]> {
+    return [...new Set([...initialAccountIds, ...await readTeamProjectionAdministratorAccountIdsInTx(tx)])].sort();
+}
 
 async function readTeamsChangedAudienceInTx(
     tx: Tx,
@@ -30,14 +42,23 @@ async function readTeamsChangedAudienceInTx(
         where: { teamId: { in: teamIds } },
         select: { accountId: true },
     });
-    const administrators = await tx.account.findMany({
-        where: { status: "active", homeRole: { in: ["owner", "admin"] } },
-        select: { id: true },
-    });
+    const administrators = await readTeamProjectionAdministratorAccountIdsInTx(tx);
     const audience = new Set<string>(memberships.map(({ accountId }) => accountId));
-    for (const administrator of administrators) audience.add(administrator.id);
+    for (const accountId of administrators) audience.add(accountId);
     for (const accountId of input.additionalAccountIds ?? []) audience.add(accountId);
     return [...audience].filter((accountId) => !excluded.has(accountId)).sort();
+}
+
+/** Pure complete recipient census for the Team publisher and its resource effects. */
+export async function readTeamChangePublicationAudienceInTx(
+    tx: Tx,
+    input: Readonly<{ teamIds: readonly string[]; additionalAccountIds?: readonly string[]; excludeAccountIds?: readonly string[] }>,
+): Promise<readonly string[]> {
+    const [teamAccountIds, discussionAccountIds] = await Promise.all([
+        readTeamsChangedAudienceInTx(tx, input),
+        readDiscussionGrantAudienceForTeamsInTx(tx, input),
+    ]);
+    return [...new Set([...teamAccountIds, ...discussionAccountIds])].sort();
 }
 
 async function publishTeamsChangedInTx(
@@ -147,11 +168,7 @@ export async function readAccountTeamMembershipsChangeAudienceInTx(
     input: Readonly<{ accountId: string; additionalAccountIds?: readonly string[]; excludeAccountIds?: readonly string[] }>,
 ): Promise<readonly string[]> {
     const teamIds = await readAccountTeamIdsInTx(tx, input.accountId);
-    const [teamAccountIds, discussionAccountIds] = await Promise.all([
-        readTeamsChangedAudienceInTx(tx, { ...input, teamIds }),
-        readDiscussionGrantAudienceForTeamsInTx(tx, { teamIds, additionalAccountIds: input.additionalAccountIds }),
-    ]);
-    return [...new Set([...teamAccountIds, ...discussionAccountIds])].sort();
+    return await readTeamChangePublicationAudienceInTx(tx, { ...input, teamIds });
 }
 
 /**
@@ -164,17 +181,46 @@ export async function publishAccountCredentialSourceTeamsChangedInTx(
     tx: Tx,
     input: Readonly<{ accountId: string }>,
 ): Promise<number> {
-    const resources = await tx.teamCredentialResource.findMany({
-        where: { custodianAccountId: input.accountId },
-        select: { teamId: true },
-    });
+    const teamIds = await readAccountCredentialSourceTeamIdsInTx(tx, input.accountId);
     return await publishTeamsChangedInTx(tx, {
-        teamIds: resources.map(({ teamId }) => teamId),
-        // A departed active custodian is no longer in the Team audience but
-        // still owns an administration projection for the resource. Source
-        // currentness changes must wake that reader too.
+        teamIds,
+        // Departed custodians retain their source administration projection.
         additionalAccountIds: [input.accountId],
     });
+}
+
+async function readAccountCredentialSourceTeamIdsInTx(tx: Tx, accountId: string): Promise<readonly string[]> {
+    const resources = await tx.teamCredentialResource.findMany({
+        where: { custodianAccountId: accountId },
+        select: { teamId: true },
+    });
+    return [...new Set(resources.map(({ teamId }) => teamId))].sort();
+}
+
+/** Complete live publication recipients of credential-source changes. */
+export async function readAccountCredentialSourceTeamAdmissionAccountIdsInTx(
+    tx: Tx, input: Readonly<{ accountId: string }>,
+): Promise<readonly string[]> {
+    const teamIds = await readAccountCredentialSourceTeamIdsInTx(tx, input.accountId);
+    const accountIds = await readTeamChangePublicationAudienceInTx(tx, { teamIds, additionalAccountIds: [input.accountId] });
+    return [...new Set([input.accountId, ...accountIds])].sort();
+}
+
+/** Admit source changes with their caller's strongest intent across the complete
+ * publication scope. Return the same census check for a later source fence. */
+export async function acquireAccountCredentialSourceTeamAdmissionInTx(
+    tx: Tx, input: Readonly<{ accountId: string; intent: AccountAdmissionIntent }>,
+): Promise<() => Promise<void>> {
+    const accountIds = await readAccountCredentialSourceTeamAdmissionAccountIdsInTx(tx, input);
+    await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true, intent: input.intent });
+    const admitted = new Set(accountIds);
+    const recheck = async () => {
+        if ((await readAccountCredentialSourceTeamAdmissionAccountIdsInTx(tx, input)).some(accountId => !admitted.has(accountId))) {
+            throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+        }
+    };
+    await recheck();
+    return recheck;
 }
 
 /**
@@ -190,13 +236,24 @@ export async function publishIdentityProviderTeamsChangedInTx(
     tx: Tx,
     input: Readonly<{ providerInstanceId: string }>,
 ): Promise<number> {
+    const teamIds = await readIdentityProviderTeamIdsInTx(tx, input.providerInstanceId);
+    return await publishTeamsChangedInTx(tx, { teamIds });
+}
+
+export async function readIdentityProviderTeamIdsInTx(tx: Tx, providerInstanceId: string): Promise<readonly string[]> {
     const connections = await tx.teamIdentityConnection.findMany({
-        where: { providerInstanceId: input.providerInstanceId },
+        where: { providerInstanceId },
         select: { teamId: true },
     });
-    return await publishTeamsChangedInTx(tx, {
-        teamIds: connections.flatMap(({ teamId }) => teamId === null ? [] : [teamId]),
-    });
+    return [...new Set(connections.flatMap(({ teamId }) => teamId === null ? [] : [teamId]))].sort();
+}
+
+/** Complete live Team/Discussion recipients of a managed provider change. */
+export async function readIdentityProviderTeamsChangeAudienceInTx(
+    tx: Tx, input: Readonly<{ providerInstanceId: string }>,
+): Promise<readonly string[]> {
+    const teamIds = await readIdentityProviderTeamIdsInTx(tx, input.providerInstanceId);
+    return await readTeamChangePublicationAudienceInTx(tx, { teamIds });
 }
 
 /**
@@ -212,11 +269,23 @@ export async function publishGitHubAppRegistrationTeamsChangedInTx(
     tx: Tx,
     input: Readonly<{ registrationId: string }>,
 ): Promise<number> {
+    const teamIds = await readGitHubAppRegistrationTeamIdsInTx(tx, input.registrationId);
+    return await publishTeamsChangedInTx(tx, { teamIds });
+}
+
+export async function readGitHubAppRegistrationTeamsChangeAudienceInTx(
+    tx: Tx, input: Readonly<{ registrationId: string }>,
+): Promise<readonly string[]> {
+    const teamIds = await readGitHubAppRegistrationTeamIdsInTx(tx, input.registrationId);
+    return await readTeamChangePublicationAudienceInTx(tx, { teamIds });
+}
+
+export async function readGitHubAppRegistrationTeamIdsInTx(tx: Tx, registrationId: string): Promise<readonly string[]> {
     const installations = await tx.gitHubAppInstallation.findMany({
-        where: { registrationId: input.registrationId },
+        where: { registrationId },
         select: { id: true },
     });
-    if (installations.length === 0) return 0;
+    if (installations.length === 0) return [];
     const installationIds = installations.map(({ id }) => id);
     const [identityConnections, directorySources] = await Promise.all([
         tx.teamIdentityConnection.findMany({
@@ -230,10 +299,8 @@ export async function publishGitHubAppRegistrationTeamsChangedInTx(
             select: { teamId: true },
         }),
     ]);
-    return await publishTeamsChangedInTx(tx, {
-        teamIds: [
+    return [...new Set([
             ...identityConnections.flatMap(({ teamId }) => teamId === null ? [] : [teamId]),
             ...directorySources.map(({ teamId }) => teamId),
-        ],
-    });
+        ])].sort();
 }

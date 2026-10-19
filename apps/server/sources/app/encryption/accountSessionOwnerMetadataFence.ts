@@ -1,7 +1,42 @@
-import type { Tx } from "@/storage/inTx";
+import { getTransactionContext, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
 
 export type AccountAdmissionIntent = "content" | "exclusive";
+
+const admissionSymbol = Symbol("account-admission");
+type AdmissionContext = { [admissionSymbol]?: ReadonlyMap<string, boolean> };
+
+function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], exclusive: boolean): void {
+    const context = getTransactionContext(tx, { optional: true });
+    // Unmanaged callers retain the primitive SQL contract. Read snapshots do
+    // not participate in a managed write transaction's publication ordering.
+    if (!context || context.readOnly) return;
+    const owner = context as typeof context & AdmissionContext;
+    const admitted = owner[admissionSymbol];
+    if (!admitted) {
+        owner[admissionSymbol] = new Map(ids.map(id => [id, exclusive]));
+        return;
+    }
+    if (ids.some(id => !admitted.has(id) || exclusive && !admitted.get(id))) {
+        // The first batch must contain all prospective publication recipients.
+        // Never acquire a newly discovered or stronger lock after domain work.
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
+}
+
+/** Verify queued recipients against the same entry cohort, without acquiring locks. */
+export function assertAccountSessionOwnerMetadataAdmissionAudienceInTx(tx: Tx, accountIds: readonly string[]): void {
+    // SQLite's single writer cannot form a row-lock audience cycle. Its Session
+    // writers deliberately avoid the row-provider audience census.
+    if (getDbProviderFromEnv(process.env, "postgres") === "sqlite") return;
+    const context = getTransactionContext(tx, { optional: true });
+    if (!context || context.readOnly) return;
+    const admitted = (context as typeof context & AdmissionContext)[admissionSymbol];
+    // Pure allocator consumers have no domain admission cohort to extend.
+    if (admitted && accountIds.some(id => !admitted.has(id))) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
+}
 
 export class AccountSessionOwnerMetadataFenceAccountNotFoundError extends Error {
     constructor(accountId: string) {
@@ -54,6 +89,9 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
     const ids = [...new Set(accountIds)].sort();
     if (ids.length === 0) return [];
     const provider = getDbProviderFromEnv(process.env, "postgres");
+    if (provider !== "sqlite") {
+        assertManagedAdmissionAudience(tx, ids, intent === "exclusive" || provider === "mysql");
+    }
 
     if (provider === "sqlite") {
         const present: string[] = [];

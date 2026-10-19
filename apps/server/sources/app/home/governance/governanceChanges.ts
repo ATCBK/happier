@@ -1,5 +1,6 @@
 import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFencesInTx, type AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import { HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from "@happier-dev/protocol/changes";
 
 export async function readHomeGovernanceChangeAccountIdsInTx(
@@ -22,6 +23,23 @@ export async function readHomeGovernanceChangeAccountIdsInTx(
         select: { id: true },
     });
     return viewers.map(viewer => viewer.id).filter(accountId => !excluded.has(accountId));
+}
+
+/** Role and owner mutations admit their complete Home projection before domain work. */
+export async function acquireHomeGovernanceAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{
+        accountIds: readonly string[];
+        intent: AccountAdmissionIntent;
+        audience?: "administrators" | "all_active_accounts";
+    }>,
+): Promise<void> {
+    const accountIds = [...input.accountIds, ...await readHomeGovernanceChangeAccountIdsInTx(tx, { audience: input.audience })];
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, accountIds, input.intent);
+    const captured = new Set(accountIds);
+    if ((await readHomeGovernanceChangeAccountIdsInTx(tx, { audience: input.audience })).some(accountId => !captured.has(accountId))) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
 }
 
 /**

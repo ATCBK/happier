@@ -47,10 +47,45 @@ describe('fresh Account verified mailbox admission', () => {
             insertSemantics: { kind: 'idempotent_verified_signing_identity', publicKey },
             encryptionMode: 'e2ee',
         }));
-        const repeated = await inTx((tx) => provisionFreshAccountInTx(tx, {
-            insertSemantics: { kind: 'idempotent_verified_signing_identity', publicKey },
-            encryptionMode: 'e2ee',
-        }));
+        const originalTransaction = db.$transaction;
+        let staleCaptureUsed = false;
+        // Model a DB snapshot captured just before another transaction's
+        // equal-key winner became visible. The upsert and transaction remain real.
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(target, receiver, args: unknown[]) {
+                const operation = args[0];
+                if (typeof operation !== 'function') return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [async (tx: object) => operation(new Proxy(tx, {
+                    get(target, property, receiver) {
+                        if (property !== 'account') return Reflect.get(target, property, receiver);
+                        const account = Reflect.get(target, property);
+                        return new Proxy(account, {
+                            get(target, property, receiver) {
+                                const method = Reflect.get(target, property, receiver);
+                                if (property !== 'findUnique') return method;
+                                return async (query: { where?: { publicKey?: string } }) => {
+                                    if (!staleCaptureUsed && query.where?.publicKey === publicKey) {
+                                        staleCaptureUsed = true;
+                                        return null;
+                                    }
+                                    return Reflect.apply(method, target, [query]);
+                                };
+                            },
+                        });
+                    },
+                })), ...args.slice(1)]);
+            },
+        });
+        let repeated: Awaited<ReturnType<typeof provisionFreshAccountInTx>>;
+        try {
+            repeated = await inTx((tx) => provisionFreshAccountInTx(tx, {
+                insertSemantics: { kind: 'idempotent_verified_signing_identity', publicKey },
+                encryptionMode: 'e2ee',
+            }));
+        } finally {
+            db.$transaction = originalTransaction;
+        }
+        expect(staleCaptureUsed).toBe(true);
         expect(repeated.id).toBe(first.id);
         expect(await db.account.count()).toBe(1);
 

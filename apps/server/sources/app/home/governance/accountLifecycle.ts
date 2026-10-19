@@ -1,5 +1,5 @@
 import type { AccountStatusV1 } from '@happier-dev/protocol/home/governance';
-import { afterTx, type Tx } from "@/storage/inTx";
+import { afterTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { auth } from "@/app/auth/auth";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { eventRouter } from "@/app/events/connectionEventRouter";
@@ -35,6 +35,14 @@ export async function acquireAccountLifecycleAdmissionInTx(
         additionalAccountIds: [input.accountId, ...(input.additionalAccountIds ?? []), ...homeAudience, ...teamAudience],
         intent: "exclusive",
     });
+    const captured = new Set([input.accountId, ...(input.additionalAccountIds ?? []), ...homeAudience, ...teamAudience]);
+    const [currentHomeAudience, currentTeamAudience] = await Promise.all([
+        readHomeGovernanceChangeAccountIdsInTx(tx),
+        readAccountTeamMembershipsChangeAudienceInTx(tx, { accountId: input.accountId }),
+    ]);
+    if ([...currentHomeAudience, ...currentTeamAudience].some(accountId => !captured.has(accountId))) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
 }
 
 export type AccountLifecycleInput = Readonly<{

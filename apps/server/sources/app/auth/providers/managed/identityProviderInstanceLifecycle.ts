@@ -4,7 +4,10 @@ import { normalizeTeamAuthenticationPolicyV1, TeamAuthenticationPolicyV1Schema }
 import type { ProviderCatalogContext } from "@/app/auth/providers/providerReference";
 import { resolveDeploymentProviderSnapshot } from "@/app/auth/providers/providerModules";
 import { resolveAuthMethodRegistry } from "@/app/auth/methods/registry";
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireAccountSessionOwnerMetadataFencesInTx, type AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { readHomeGovernanceChangeAccountIdsInTx } from "@/app/home/governance/governanceChanges";
+import { readIdentityProviderTeamIdsInTx, readTeamChangePublicationAudienceInTx } from "@/app/teams/teamChanges";
 
 import {
     parseIdentityProviderConfig,
@@ -15,8 +18,8 @@ import {
 } from "./identityProviderDocuments";
 import { decryptIdentityProviderSecrets, encryptIdentityProviderSecrets } from "./identityProviderSecretCipher";
 import { isGitHubAppInstallationEligibleForOwnerInTx } from "@/app/integrations/github/githubAppInstallationEligibility";
-import { publishProviderLinkedIdentityChangesInTx } from "@/app/auth/providers/accountIdentityLifecycle";
-import { applyTeamSessionAuthenticationContextEffectsInTx } from "@/app/teams/memberships/sessionAccessEffects";
+import { publishProviderLinkedIdentityChangesInTx, readProviderLinkedAccountIdsInTx } from "@/app/auth/providers/accountIdentityLifecycle";
+import { applyTeamSessionAuthenticationContextEffectsInTx, readTeamSessionAuthenticationContextChangeAudienceInTx } from "@/app/teams/memberships/sessionAccessEffects";
 
 export type IdentityProviderInstanceView = Readonly<{
     id: string;
@@ -100,10 +103,45 @@ function sameOwner(row: Pick<IdentityProviderInstanceRow, "ownerTeamId">, owner:
     return row.ownerTeamId === ownerTeamId(owner);
 }
 
-async function applyProviderAuthenticationContextEffectsInTx(
+/** Canonical full provider admission; recheck after the provider row fence before effects. */
+export async function acquireIdentityProviderMutationAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{ owner: ProviderCatalogContext; id?: string; additionalAccountIds?: readonly string[]; additionalTeamIds?: readonly string[]; intent?: AccountAdmissionIntent }>,
+): Promise<() => Promise<void>> {
+    const readTeamIds = async () => {
+        const [referenced, authenticationContext] = await Promise.all([
+            input.id ? readIdentityProviderTeamIdsInTx(tx, input.id) : Promise.resolve([]),
+            input.id && input.intent !== "content"
+                ? readProviderAuthenticationContextTeamIdsInTx(tx, input.id) : Promise.resolve([]),
+        ]);
+        return [...new Set([...(input.additionalTeamIds ?? []), ...(input.owner.kind === "team" ? [input.owner.teamId] : []), ...referenced, ...authenticationContext])].sort();
+    };
+    const readAudience = async () => {
+        const [home, teams, linked, authenticationContext] = await Promise.all([
+            input.owner.kind === "home" ? readHomeGovernanceChangeAccountIdsInTx(tx) : Promise.resolve([]),
+            readTeamChangePublicationAudienceInTx(tx, { teamIds: await readTeamIds() }),
+            input.id ? readProviderLinkedAccountIdsInTx(tx, input.id) : Promise.resolve([]),
+            input.id && input.intent !== "content"
+                ? readProviderAuthenticationContextChangeAudienceInTx(tx, input.id) : Promise.resolve([]),
+        ]);
+        return [...new Set([...(input.additionalAccountIds ?? []), ...home, ...teams, ...linked, ...authenticationContext])];
+    };
+    const accountIds = await readAudience();
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, accountIds, input.intent ?? "exclusive");
+    const captured = new Set(accountIds);
+    const recheck = async () => {
+        if ((await readAudience()).some(accountId => !captured.has(accountId))) {
+            throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+        }
+    };
+    await recheck();
+    return recheck;
+}
+
+async function readProviderAuthenticationContextTeamIdsInTx(
     tx: Tx,
     providerInstanceId: string,
-): Promise<void> {
+): Promise<readonly string[]> {
     const [connections, teams] = await Promise.all([
         tx.teamIdentityConnection.findMany({
             where: { providerInstanceId },
@@ -130,7 +168,23 @@ async function applyProviderAuthenticationContextEffectsInTx(
             ? [team.id]
             : [];
     });
-    await applyTeamSessionAuthenticationContextEffectsInTx(tx, { teamIds: affectedTeamIds });
+    return affectedTeamIds;
+}
+
+export async function readProviderAuthenticationContextChangeAudienceInTx(
+    tx: Tx,
+    providerInstanceId: string,
+): Promise<readonly string[]> {
+    return readTeamSessionAuthenticationContextChangeAudienceInTx(tx,
+        { teamIds: await readProviderAuthenticationContextTeamIdsInTx(tx, providerInstanceId) });
+}
+
+async function applyProviderAuthenticationContextEffectsInTx(
+    tx: Tx,
+    providerInstanceId: string,
+): Promise<void> {
+    await applyTeamSessionAuthenticationContextEffectsInTx(tx,
+        { teamIds: await readProviderAuthenticationContextTeamIdsInTx(tx, providerInstanceId) });
 }
 
 function projectInstance(row: IdentityProviderInstanceSafeRow): IdentityProviderInstanceView | null {
@@ -321,6 +375,7 @@ export async function recordIdentityProviderInstanceSuccessfulTestInTx(
         testedAt: Date;
     }>,
 ): Promise<RecordIdentityProviderInstanceSuccessfulTestResult> {
+    const recheckAdmission = await acquireIdentityProviderMutationAdmissionInTx(tx, input);
     const row = await tx.identityProviderInstance.findUnique({
         where: { id: input.id },
         select: instanceSafeSelect,
@@ -340,6 +395,7 @@ export async function recordIdentityProviderInstanceSuccessfulTestInTx(
         },
     });
     if (updated.count === 0) return { status: "configuration_changed" };
+    await recheckAdmission();
     const latest = await tx.identityProviderInstance.findUnique({
         where: { id: input.id },
         select: instanceSafeSelect,
@@ -364,6 +420,8 @@ export async function createIdentityProviderInstanceInTx(tx: Tx, input: Readonly
     githubAppInstallationId?: string;
     createdByAccountId: string | null;
 }>): Promise<CreateIdentityProviderInstanceResult> {
+    const recheckAdmission = await acquireIdentityProviderMutationAdmissionInTx(tx,
+        { owner: input.owner, additionalAccountIds: input.createdByAccountId ? [input.createdByAccountId] : [] });
     const config = parseIdentityProviderConfig(input.kind, input.config);
     const secrets = parseIdentityProviderSecrets(input.kind, input.secrets);
     const displayName = input.displayName.trim();
@@ -405,6 +463,7 @@ export async function createIdentityProviderInstanceInTx(tx: Tx, input: Readonly
         },
         select: instanceRuntimeSelect,
     });
+    await recheckAdmission();
     return { status: "created", instance: projectInstance(row)! };
 }
 
@@ -420,6 +479,8 @@ export async function updateIdentityProviderInstanceInTx(tx: Tx, input: Readonly
     displayName?: string;
     config?: unknown;
 }>): Promise<InstanceMutationResult> {
+    const recheckAdmission = await acquireIdentityProviderMutationAdmissionInTx(tx,
+        { ...input, intent: input.config === undefined ? "content" : "exclusive" });
     const current = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceRuntimeSelect });
     if (!current || !sameOwner(current, input.owner)) return { status: "not_found" };
     const currentView = projectInstance(current);
@@ -456,6 +517,7 @@ export async function updateIdentityProviderInstanceInTx(tx: Tx, input: Readonly
     const latest = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceSafeSelect });
     const projected = latest ? projectInstance(latest) : null;
     if (updated.count > 0) {
+        await recheckAdmission();
         // A rename changes what an already-linked member sees, so the linked-provider projection
         // is republished. It is not security-effective, so it must not invalidate authentication.
         await publishProviderLinkedIdentityChangesInTx(tx, input.id);
@@ -472,6 +534,7 @@ export async function replaceIdentityProviderSecretsInTx(tx: Tx, input: Readonly
     expectedRevision: number;
     secrets: unknown;
 }>): Promise<InstanceMutationResult> {
+    const recheckAdmission = await acquireIdentityProviderMutationAdmissionInTx(tx, input);
     const current = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceRuntimeSelect });
     if (!current || !sameOwner(current, input.owner)) return { status: "not_found" };
     const currentView = projectInstance(current);
@@ -492,6 +555,7 @@ export async function replaceIdentityProviderSecretsInTx(tx: Tx, input: Readonly
     const latest = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceSafeSelect });
     const projected = latest ? projectInstance(latest) : null;
     if (updated.count > 0) {
+        await recheckAdmission();
         await publishProviderLinkedIdentityChangesInTx(tx, input.id);
         await applyProviderAuthenticationContextEffectsInTx(tx, input.id);
     }
@@ -508,6 +572,7 @@ export async function setIdentityProviderInstanceEnabledInTx(tx: Tx, input: Read
     enabled: boolean;
     now?: Date;
 }>): Promise<InstanceMutationResult> {
+    const recheckAdmission = await acquireIdentityProviderMutationAdmissionInTx(tx, input);
     const current = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceRuntimeSelect });
     if (!current || !sameOwner(current, input.owner)) return { status: "not_found" };
     const currentView = projectInstance(current);
@@ -532,6 +597,7 @@ export async function setIdentityProviderInstanceEnabledInTx(tx: Tx, input: Read
     const latest = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceSafeSelect });
     const projected = latest ? projectInstance(latest) : null;
     if (updated.count > 0) {
+        await recheckAdmission();
         await publishProviderLinkedIdentityChangesInTx(tx, input.id);
         await applyProviderAuthenticationContextEffectsInTx(tx, input.id);
     }
@@ -608,6 +674,7 @@ export async function deleteIdentityProviderInstanceInTx(tx: Tx, input: Readonly
     owner: ProviderCatalogContext;
     expectedRevision: number;
 }>): Promise<DeleteIdentityProviderInstanceResult> {
+    const recheckAdmission = await acquireIdentityProviderMutationAdmissionInTx(tx, input);
     const current = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceSafeSelect });
     if (!current || !sameOwner(current, input.owner)) return { status: "not_found" };
     if (current.revision !== input.expectedRevision) {
@@ -618,7 +685,10 @@ export async function deleteIdentityProviderInstanceInTx(tx: Tx, input: Readonly
     const deleted = await tx.identityProviderInstance.deleteMany({
         where: { id: input.id, ownerTeamId: ownerTeamId(input.owner), revision: input.expectedRevision },
     });
-    if (deleted.count === 1) return { status: "deleted" };
+    if (deleted.count === 1) {
+        await recheckAdmission();
+        return { status: "deleted" };
+    }
     const latest = await tx.identityProviderInstance.findUnique({ where: { id: input.id }, select: instanceSafeSelect });
     return latest ? { status: "revision_conflict", instance: projectInstance(latest) } : { status: "not_found" };
 }

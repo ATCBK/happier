@@ -39,7 +39,6 @@ import {
     type VerifiedAccountContentKeyBinding,
 } from "@/app/encryption/accountContentKeyAdmission";
 import { inTx } from "@/storage/inTx";
-import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import {
     HomeGovernanceInvariantError,
     replaceAccountForProviderResetInTx,
@@ -58,7 +57,7 @@ import {
     requireCurrentOAuthPendingRuntime,
     requireCurrentOAuthPendingRuntimeInTx,
 } from "./oauthSecurityBinding";
-import { requireTeamOAuthAdmissionInTx, TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
+import { acquireTeamOAuthAdmissionAccountsInTx, requireTeamOAuthAdmissionInTx, TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
 import { readOAuthAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
 import { upsertVerifiedMailboxEvidenceInTx } from "@/app/auth/verifiedMailboxEvidence";
 import {
@@ -621,10 +620,14 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                 | null = null;
             try {
                 freshAccountWrite = await inTx(async (tx) => {
+                    await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                        accountIds: [proposedAccountId], provider: parsedValue.securityBinding?.provider,
+                        connection: parsedValue.securityBinding?.connection,
+                        admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                    });
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
-                    // The current policy decision and exact pending delete are
-                    // the first transaction operations. Every durable effect
-                    // below rolls back if either authority has gone stale.
+                    // Current policy and exact pending consumption precede
+                    // provisioning; stale authority rolls every effect back.
                     if (!await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
                         env: requestHomeEnv,
                         methodId: providerId,
@@ -779,7 +782,11 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                 }>;
             try {
                 existingAccountWrite = await inTx(async (tx) => {
-                    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [existingAccount.id], "exclusive");
+                    await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                        accountIds: [existingAccount.id], provider: parsedValue.securityBinding?.provider,
+                        connection: parsedValue.securityBinding?.connection,
+                        admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                    });
                     await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                     if (
                         isAccountDirectory

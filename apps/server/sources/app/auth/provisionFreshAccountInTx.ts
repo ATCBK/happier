@@ -14,6 +14,7 @@ import type { PreparedIdentityConnection } from "@/app/auth/providers/identityPr
 import { randomUUID } from "node:crypto";
 import {
     requireTeamOAuthAdmissionInTx,
+    acquireTeamOAuthAdmissionAccountsInTx,
     TeamOAuthAdmissionAbort,
 } from "@/app/teams/memberships/teamOAuthAdmission";
 import type { ProviderReference } from "@/app/auth/providers/providerReference";
@@ -80,6 +81,15 @@ export async function provisionFreshAccountInTx(tx: Tx, prepared: PreparedFreshA
             contentPublicKeySig: prepared.contentKeyBinding.contentPublicKeySignature,
         } : {}),
     };
+    const existing = prepared.insertSemantics.kind === "idempotent_verified_signing_identity"
+        ? await tx.account.findUnique({ where: { publicKey: prepared.insertSemantics.publicKey }, select: { id: true } }) : null;
+    const recheckAdmission = await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+        accountIds: [existing?.id ?? data.id],
+        provider: prepared.teamOAuthAdmission?.provider,
+        connection: prepared.teamOAuthAdmission?.connection,
+        admission: prepared.teamOAuthAdmission?.source,
+        intent: "exclusive",
+    });
     // Only the already-verified Key Challenge retry contract may select this
     // idempotent arm. Native/OAuth/mTLS/JIT/directory admission must explicitly
     // create a new Account even when a submitted signing key already exists.
@@ -91,6 +101,7 @@ export async function provisionFreshAccountInTx(tx: Tx, prepared: PreparedFreshA
         })
         : await tx.account.create({ data });
     await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
+    await recheckAdmission();
     if (prepared.contentKeyBinding) {
         const admission = await admitAccountContentKey(tx, {
             accountId: account.id,

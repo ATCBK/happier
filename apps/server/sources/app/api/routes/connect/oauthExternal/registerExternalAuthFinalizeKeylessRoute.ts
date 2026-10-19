@@ -37,7 +37,7 @@ import {
     requireCurrentOAuthPendingRuntime,
     requireCurrentOAuthPendingRuntimeInTx,
 } from "./oauthSecurityBinding";
-import { requireTeamOAuthAdmissionInTx, TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
+import { acquireTeamOAuthAdmissionAccountsInTx, requireTeamOAuthAdmissionInTx, TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
 import { readOAuthAuthenticationEvidenceInTx } from "@/app/auth/authenticationEvidence";
 import {
     ensureSameServiceHomeEntryInTx,
@@ -306,6 +306,11 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                 throw new Error("Same-service Home descriptor identity mismatch");
             }
             const finalized = await inTx(async (tx) => {
+                await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                    accountIds: [identity.accountId], provider: parsedValue.securityBinding?.provider,
+                    connection: parsedValue.securityBinding?.connection,
+                    admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                });
                 await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                 if (!isAccountDirectory
                     && !isTeamOwnedConnectionAdmission(parsedValue.securityBinding)
@@ -457,6 +462,11 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                 preferredUsername: desiredUsername,
             });
             const account = await inTx(async (tx) => {
+                await acquireTeamOAuthAdmissionAccountsInTx(tx, {
+                    accountIds: [accountId], provider: parsedValue.securityBinding?.provider,
+                    connection: parsedValue.securityBinding?.connection,
+                    admission: parsedValue.securityBinding?.admission, intent: "exclusive",
+                });
                 await requireCurrentOAuthPendingRuntimeInTx(tx, bindingInput);
                 if (!await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
                     env: requestHomeEnv,

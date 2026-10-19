@@ -6,6 +6,7 @@ import type { AuthPolicy } from "@/app/auth/authPolicy";
 import { prepareIdentityLink, unlinkIdentity } from "@/app/auth/providers/accountIdentityLifecycle";
 import { bindDirectoryProvisionedIdentitiesInTx, type DirectoryProvisionedIdentityMatch } from "@/app/teams/directory/provisionedIdentityBinding";
 import { inTx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "@/app/teams/memberships/sessionAccessEffects";
 import type { WorkosPlatformConfigResolution } from "@/app/integrations/workos/workosPlatform";
 
 import {
@@ -117,6 +118,13 @@ export function createWorkosProviderModule(input: WorkosProviderModuleInput): Pr
         return {
             ...(verifiedMailbox ? { verifiedMailbox } : {}),
             connectInTx: async (tx) => {
+                await acquireTeamMutationAccountAdmissionInTx(tx, {
+                    teamId: teamConnection.teamId,
+                    accountIds: [params.ctx.uid, ...(params.transferFromAccountId ? [params.transferFromAccountId] : [])],
+                    affectedAccountIds: [params.ctx.uid],
+                    membershipChange: { kind: "teamMembership", teamId: teamConnection.teamId },
+                    intent: "exclusive",
+                });
                 await preparedIdentity.connectInTx(tx);
                 // The link above is the identity proof; the directory owner
                 // decides on its own evidence whether a provisioned person is
