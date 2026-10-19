@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants, createReadStream } from 'node:fs';
 import { access, chmod, mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   createManagedToolScratchDir,
@@ -40,13 +40,13 @@ function installRoot(installId: string, env?: NodeJS.ProcessEnv): string {
 const MANAGED_VERSION_FILENAME = '.happier-managed-version';
 const MANAGED_EXECUTABLE_DIGEST_FILENAME = '.happier-managed-executable-sha256';
 
-const PinnedArchiveManagedDefinitionReceiptSchema = z.object({
-  version: z.string().min(1),
-  definitionId: z.string().trim().min(1),
-  title: z.string().trim().min(1),
+const PinnedArchiveManagedDefinitionReceiptSchema = z.strictObject({
+  version: z.string().check(z.minLength(1)),
+  definitionId: z.string().check(z.trim(), z.minLength(1)),
+  title: z.string().check(z.trim(), z.minLength(1)),
   kind: z.literal('archive'),
-}).strict();
-const PinnedArchiveManagedDefinitionStoredReceiptSchema = PinnedArchiveManagedDefinitionReceiptSchema.strip();
+});
+const PinnedArchiveManagedDefinitionStoredReceiptSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(PinnedArchiveManagedDefinitionReceiptSchema);
 
 export type PinnedArchiveManagedVersion =
   | Readonly<{ version: string; kind?: undefined; definitionId?: undefined; title?: undefined }>

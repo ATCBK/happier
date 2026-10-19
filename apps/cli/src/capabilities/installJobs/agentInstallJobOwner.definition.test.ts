@@ -156,7 +156,10 @@ describe('definition-qualified managed Agent jobs', () => {
       const foreignLaunch = await resolveAcpLaunch({ accountId: 'bob', definition: definitions[0]!, platform: process.platform, arch: process.arch, env });
       expect(ownLaunch.kind).toBe('ready'); expect(foreignLaunch.kind).toBe('ready');
       if (ownLaunch.kind === 'ready' && foreignLaunch.kind === 'ready') expect(foreignLaunch.command).not.toBe(ownLaunch.command);
-      expect(owner.list('alice').jobs.some(job => job.jobId === foreign.jobId)).toBe(false);
+      const listed = owner.list('alice');
+      expect(listed.ok).toBe(true);
+      if (!listed.ok) throw new Error(listed.error);
+      expect(listed.jobs.some(job => job.jobId === foreign.jobId)).toBe(false);
       expect(owner.read({ jobId: foreign.jobId, cursor: 0 }, 'alice')).toMatchObject({ ok: false, errorCode: 'job_not_found' });
       expect(await owner.cancel({ jobId: foreign.jobId }, 'alice')).toMatchObject({ ok: false, errorCode: 'job_not_found' });
       sessions.push({ pid: process.pid, startedBy: 'daemon', spawnOptions: { directory: root,

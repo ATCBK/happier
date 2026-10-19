@@ -1,7 +1,6 @@
 import { AgentCliNotFoundError } from './agentCliNotFoundError';
 import { commandExistsOnPath } from '@happier-dev/cli-common/process';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
-import { resolveAccountConfiguredAcpLaunchForAgent } from '@/agent/runtime/registry/engineRegistry/accountConfiguredAcp';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import {
@@ -21,6 +20,7 @@ export async function resolveAgentCliLaunchSpecForSession(agentId: string, opts:
   options: Pick<SpawnSessionOptions, 'directory' | 'agentTarget' | 'runtimeDescriptorV1'>;
   savedSecretOperationContext?: SavedSecretOperationContextV1;
 }>): Promise<AgentCliLaunchSpec | null> {
+  const { resolveAccountConfiguredAcpLaunchForAgent } = await import('@/agent/runtime/registry/engineRegistry/accountConfiguredAcp');
   const declaration = (opts.catalogSnapshot ?? readAgentCatalogSnapshot()).agentDefinitionsById.get(agentId);
   const identity = declaration?.identity;
   const configured = identity ? await resolveAccountConfiguredAcpLaunchForAgent({ identity,

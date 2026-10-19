@@ -10,6 +10,8 @@ import { buildMachineAgentsDetectRequest } from '@happier-dev/protocol/capabilit
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 
 import { withAgentCliUpdates } from './agentCliUpdates';
+import { fetchAgentCliLatestVersion } from '@happier-dev/cli-common/agents';
+import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime/github';
 
 /** Claude's manifest update facts (packages/plugins/claude/src/manifest.ts `cli.install`). */
 const claudeRuntimeSpec: AgentCliRuntimeDescriptor = {
@@ -64,6 +66,7 @@ describe.skipIf(process.platform === 'win32')('withAgentCliUpdates (K6)', () => 
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     removeTempDirSync(root);
   });
 
@@ -155,6 +158,34 @@ describe.skipIf(process.platform === 'win32')('withAgentCliUpdates (K6)', () => 
     });
     await cap.detect({ request, context: { cliSnapshot: null } });
     expect(fetchLatestVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors GitHub reset time in the existing update cache across inventory refreshes', async () => {
+    let now = 1792364399000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const fetchImpl = vi.fn(async () => new Response('', { status: 403, headers: {
+      'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792364400',
+    } }));
+    const spec: AgentCliRuntimeDescriptor = { ...claudeRuntimeSpec,
+      managedInstall: { kind: 'github_release_binary', githubRepo: 'fixture/tool', binaryName: 'claude' },
+    };
+    const cap = withAgentCliUpdates(
+      createInstalledCliCapability({ resolvedPath: launcher, version: () => '2.1.0' }), 'claude',
+      deps({ resolveRuntimeSpec: () => spec,
+        fetchLatestVersion: (runtimeSpec, installSource) => fetchAgentCliLatestVersion({ runtimeSpec, installSource,
+          deps: { fetchGitHubLatestRelease: (params) => fetchGitHubLatestRelease({ ...params, fetchImpl }) },
+        }),
+      }),
+    );
+    const probe = (bypassCache = false) => cap.detect({
+      request: { id: 'cli.claude', params: { includeLatestVersion: true, bypassCache } }, context: { cliSnapshot: null },
+    });
+    await probe();
+    await expect(probe(true)).resolves.toMatchObject({ available: true, version: '2.1.0', latestVersion: null });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    now = 1792364400000;
+    await probe();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('updates through the install owner after confirmation and succeeds only on a changed re-read version', async () => {

@@ -11,6 +11,7 @@ import { InstallableDependencyDescriptorSchema } from '@happier-dev/protocol/ins
 import { ensureRuntimeInstallableDescriptorForLaunch } from '../ensureForLaunch';
 import { getRuntimeInstallableAdapterForDescriptor } from '../registry';
 import { getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
+import { accountSettingsParse } from '@happier-dev/protocol';
 
 const { configurationState } = vi.hoisted(() => ({ configurationState: { happyHomeDir: '' } }));
 vi.mock('@/configuration', () => ({ configuration: configurationState }));
@@ -115,7 +116,7 @@ describe('pinned archive acquisition progress and cancellation', () => {
     })).rejects.toThrow('not executable');
     const env = { HAPPIER_HOME_DIR: selectedHome };
     await expect(ensureRuntimeInstallableDescriptorForLaunch({
-      descriptor, settings: {}, machineId: 'machine-1', env,
+      descriptor, settings: accountSettingsParse({}), machineId: 'machine-1', env,
       managedAcpDefinition: { definitionId: 'definition-1', title: 'Registry agent' },
     })).resolves.toEqual({
       ok: true, installedKeys: ['registry-agent'],

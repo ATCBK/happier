@@ -16,7 +16,7 @@ import {
 import { extractReleasePayloadRootFromArchive } from '@happier-dev/cli-common/firstPartyRuntime';
 import { removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 import { ExecFileTerminationError, resolveWindowsCommandOnPath } from '@happier-dev/cli-common/process';
-import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime/github';
+import { fetchGitHubLatestRelease, GitHubReleaseRateLimitError } from '@happier-dev/release-runtime/github';
 import { ArchiveExtractionTimeoutError } from '@happier-dev/release-runtime/archiveExtraction';
 
 import { configuration } from '@/configuration';
@@ -335,6 +335,7 @@ async function installGitHubReleaseBinary(
       logPath,
       ...(error instanceof ArchiveExtractionTimeoutError
         ? { errorCode: 'command-timed-out' as const }
+        : error instanceof GitHubReleaseRateLimitError ? { errorCode: 'rate-limited' as const }
         : error instanceof AgentCliDownloadError ? { errorCode: error.errorCode } : errorCode ? { errorCode } : {}),
     };
   }

@@ -28,7 +28,7 @@ function mapInstallResult(result: RuntimeInstallableInstallResult): Capabilities
 
   return {
     ok: false,
-    error: { message: result.errorMessage, code: 'install-failed' },
+    error: { message: result.errorMessage, code: result.errorCode ?? 'install-failed' },
     ...(result.logPath ? { logPath: result.logPath } : {}),
   };
 }

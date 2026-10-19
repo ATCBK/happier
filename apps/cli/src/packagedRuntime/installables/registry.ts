@@ -55,6 +55,7 @@ export type RuntimeInstallableInstallResult =
 
 export type RuntimeInstallableInstallErrorCode =
   | 'download-failed'
+  | 'rate-limited'
   | 'verification-failed'
   | 'command-timed-out'
   | 'termination-failed';

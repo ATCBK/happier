@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { accessSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -13,9 +14,11 @@ const boundary = vi.hoisted(() => ({
   requests: [] as string[],
   offline: false,
   releaseWait: null as Promise<void> | null,
+  server: null as Server | null,
 }));
 
-// Configuration, release HTTP transport and signing authority are external boundaries.
+// Configuration and signing authority are external boundaries. A real loopback
+// release server keeps HTTP parsing, resolution and verification on the real path.
 // Resolution, signature verification, extraction, promotion and capability logic stay real.
 vi.mock('@/configuration', () => ({
   configuration: {
@@ -29,18 +32,6 @@ vi.mock('@/configuration', () => ({
     memoryMaxTranscriptWindowMessages: 500,
   },
 }));
-vi.mock('../../../../../packages/release-runtime/src/http', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    requestJson: async ({ url }: { url: string }) => {
-      boundary.requests.push(url);
-      await boundary.releaseWait;
-      if (boundary.offline) throw new Error('offline fixture');
-      return boundary.release;
-    },
-  };
-});
 vi.mock('@happier-dev/release-runtime/minisign', async (importOriginal) => ({
   ...await importOriginal<typeof import('@happier-dev/release-runtime/minisign')>(),
   get DEFAULT_MINISIGN_PUBLIC_KEY() { return boundary.publicKey; },
@@ -162,6 +153,17 @@ beforeEach(async () => {
   boundary.offline = false;
   boundary.releaseWait = null;
   vi.stubEnv('HAPPIER_HOME_DIR', boundary.home);
+  vi.stubEnv('NODE_ENV', 'development');
+  boundary.server = createServer(async (request, response) => {
+    boundary.requests.push(request.url ?? '');
+    await boundary.releaseWait;
+    response.writeHead(boundary.offline ? 400 : 200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(boundary.release));
+  });
+  await new Promise<void>(resolve => boundary.server!.listen(0, '127.0.0.1', resolve));
+  const address = boundary.server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing loopback release server port');
+  vi.stubEnv('HAPPIER_FIRST_PARTY_RELEASE_API_BASE_URL', `http://127.0.0.1:${address.port}`);
   await mkdir(join(boundary.home, 'source'), { recursive: true });
   await writeFile(join(boundary.home, 'source', 'package.json'), '{}');
   await prepareSignedOptionalRelease();
@@ -169,6 +171,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (boundary.server) await new Promise<void>((resolve, reject) => boundary.server!.close(error => error ? reject(error) : resolve()));
+  boundary.server = null;
   await rm(boundary.home, { recursive: true, force: true });
   vi.unstubAllEnvs();
   resetActiveAccountSettingsSnapshotForTests();

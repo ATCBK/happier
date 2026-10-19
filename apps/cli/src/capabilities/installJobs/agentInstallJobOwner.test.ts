@@ -17,6 +17,8 @@ import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree
 import type { ResolvedInstallableContribution } from '@/plugins/projection/registry/types';
 import { createAgentInstallJobOwner as createProductionAgentInstallJobOwner, type AgentInstallJobOwner } from './agentInstallJobOwner';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime/github';
+import { DaemonAgentInstallReadResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 
 const fixtureWaitTimeout = cliTestConfig.test?.testTimeout;
 if (typeof fixtureWaitTimeout !== 'number') throw new Error('CLI unit test timeout must be configured');
@@ -37,7 +39,7 @@ test.skipIf(process.platform === 'win32')('ordinary install refuses replacing ex
     const spec: AgentCliRuntimeDescriptor = { id: 'fixture-live', title: 'Fixture live', binaryName: 'fixture-live',
       sourcePreferenceDefault: 'managed-first', manualInstallKind: 'none', manualInstallRecipes: {}, acceptsJavaScriptFileOverride: false,
       managedInstall: { kind: 'github_release_binary', githubRepo: 'fixture/live', binaryName: 'fixture-live' } };
-    const env = { HAPPIER_HOME_DIR: root, HOME: root, PATH: '' };
+    const env = { NODE_ENV: process.env.NODE_ENV, HAPPIER_HOME_DIR: root, HOME: root, PATH: '' };
     owner = createAgentInstallJobOwner({ env, readRegistry: () => registryWith(spec), readTrackedSessions: () => [{
       pid: process.pid, startedBy: 'daemon', spawnOptions: { directory: root,
         runtimeDescriptorV1: { v: 1, agentId: spec.id, agent: {} } },
@@ -96,6 +98,35 @@ function registryWith(runtimeSpec: AgentCliRuntimeDescriptor) {
   // descriptor owner as an installed plugin. No installer or job logic is mocked.
   return { agents: [{ id: runtimeSpec.id, runtimeSpec, pluginId: 'fixture.plugin' }], managedDependencies: [] };
 }
+
+test('an exhausted GitHub REST install retains a typed rate-limit outcome and reset time', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-job-ratelimit-'));
+  const spec: AgentCliRuntimeDescriptor = {
+    id: 'fixture-limit', title: 'Fixture limit', binaryName: 'fixture-limit',
+    sourcePreferenceDefault: 'managed-first', acceptsJavaScriptFileOverride: false,
+    manualInstallKind: 'none', manualInstallRecipes: null,
+    managedInstall: { kind: 'github_release_binary', githubRepo: 'fixture/limit', binaryName: 'fixture-limit' },
+  };
+  const owner = createAgentInstallJobOwner({
+    env: { HOME: root, HAPPIER_HOME_DIR: root, PATH: '' }, readRegistry: () => registryWith(spec),
+    installerDeps: { fetchGitHubLatestRelease: (params) => fetchGitHubLatestRelease({ ...params,
+      fetchImpl: async () => new Response('', { status: 403, headers: {
+        'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792364400',
+      } }),
+    }) },
+  });
+  try {
+    const started = owner.start({ agentId: spec.id, intent: 'install', consent: { vendorRecipe: false } });
+    if (!started.ok) throw new Error('Expected install admission');
+    expect(await outcome(owner, started.jobId)).toMatchObject({ kind: 'failed', code: 'rate_limited',
+      message: expect.stringContaining('2026-10-18T23:00:00.000Z'),
+    });
+    expect(DaemonAgentInstallReadResponseSchema.safeParse(owner.read({ jobId: started.jobId, cursor: 0 })).success).toBe(true);
+  } finally {
+    await stopFixture(owner);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test.skipIf(process.platform === 'win32')('plugin agent job streams bytes, rejects fresh closed-drain starts and preserves accepted installation custody', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-job-'));

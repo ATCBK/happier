@@ -1,9 +1,11 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallReadResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { getAgentCliRuntimeSpec, getAgentCliSetupRecommendedIds } from '@happier-dev/agents';
 import { configuration, reloadConfiguration } from '@/configuration';
@@ -50,9 +52,10 @@ describe('Agent CLI compiled install jobs', () => {
     // Only machine transport and credential storage are replaced; the CLI
     // compiler, strict schemas, approval policy and Action executor stay real.
     const executor = createActionExecutor({
-      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, { v: 1,
+      ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: requireApproval ? {} : { 'machines.agents.install': ['cli'], 'machines.agents.uninstall': ['cli'], 'machines.agents.install.cancel': ['cli'] },
-      }, context),
+      }), context),
       machineAgentInstallStart: async request => {
         const { machineId, serverId: _serverId, signal: _signal, ...job } = request;
         requests.push({ machineId, ...DaemonAgentInstallStartRequestSchema.parse(job) });
@@ -147,22 +150,47 @@ describe('Agent CLI compiled install jobs', () => {
     } finally { output.restore(); }
   });
 
+  it('reports a failed setup dry-run through the canonical error envelope', async () => {
+    const output = captureConsoleLogAndMuteStdout();
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    if (!platformDescriptor) throw new Error('Expected OS platform descriptor');
+    try {
+      // The OS platform is the external boundary; keep real selection and planning.
+      Object.defineProperty(process, 'platform', { value: 'aix' });
+      await handleAgentsCommand(['setup', '--provider', 'codex', '--dry-run', '--json']);
+      expect(JSON.parse(output.logs.join('\n'))).toMatchObject({
+        ok: false, kind: 'agents_setup', error: { code: 'install_failed', agents: [
+          { agentId: 'codex', ok: false, errorCode: 'unsupported_platform' },
+        ] },
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      Object.defineProperty(process, 'platform', platformDescriptor);
+      output.restore();
+    }
+  });
+
   it('setup selects only missing recommended Agents and submits the same compiled jobs', async () => {
     const existing = getAgentCliSetupRecommendedIds()[0];
     if (!existing) throw new Error('Expected recommended Agent');
-    const binary = getAgentCliRuntimeSpec(existing).binaryName;
+    const runtimeSpec = getAgentCliRuntimeSpec(existing);
+    if (!runtimeSpec) throw new Error('Recommended Agent has no CLI runtime');
+    const binary = runtimeSpec.binaryName;
     await mkdir(join(home, 'bin'), { recursive: true });
     await writeFile(join(home, 'bin', process.platform === 'win32' ? `${binary}.cmd` : binary), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const owner = fixture(); const output = captureConsoleLogAndMuteStdout();
     try {
       await owner.run(['list', '--json']);
-      const roster = z.object({ data: z.object({ agents: z.array(z.object({ id: z.string(), installed: z.boolean() }).passthrough()) }) })
+      const roster = z.object({ data: z.object({ agents: z.array(z.looseObject({ id: z.string(), installed: z.boolean() })) }) })
         .parse(JSON.parse(String(output.logs.at(-1)))).data.agents;
       expect(roster.find(row => row.id === existing)?.installed).toBe(true);
       await owner.run(['setup', '--yes', '--json']);
       const starts = owner.requests.filter((value): value is { agentId: string } => !!value && typeof value === 'object' && 'agentId' in value);
-      expect(starts.map(row => row.agentId)).toEqual(getAgentCliSetupRecommendedIds().filter(id =>
-        roster.some(row => row.id === id && !row.installed) && getAgentCliRuntimeSpec(id).manualInstallKind !== 'none'));
+      expect(starts.map(row => row.agentId)).toEqual(getAgentCliSetupRecommendedIds().filter(id => {
+        const spec = getAgentCliRuntimeSpec(id);
+        if (!spec) throw new Error('Recommended Agent has no CLI runtime');
+        return roster.some(row => row.id === id && !row.installed) && spec.manualInstallKind !== 'none';
+      }));
     } finally { output.restore(); }
   });
 });
