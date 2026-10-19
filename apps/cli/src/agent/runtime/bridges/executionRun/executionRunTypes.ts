@@ -246,6 +246,8 @@ export type ExecutionRunState = Readonly<{
     secretReferenceOverlay?: SecretReferenceOverlayV1;
   }>;
   status: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'timeout';
+  /** Original terminal fact, retained independently of optional parent-report ACK. */
+  terminalOccurrenceId?: string;
   startedAtMs: number;
   finishedAtMs?: number;
   error?: ExecutionRunError;

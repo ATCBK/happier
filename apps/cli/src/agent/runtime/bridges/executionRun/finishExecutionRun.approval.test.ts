@@ -132,6 +132,8 @@ describe('terminal Run approval occurrence custody', () => {
     // Read the producer's sealed persisted state through its actual restart reader.
     const retained = await readRetainedExecutionRunRecord(run.runId);
     expect(retained?.state.status).toBe(status);
+    // Source identity survives independently of optional parent-report custody.
+    expect(retained?.state).toMatchObject({ terminalOccurrenceId: expect.any(String) });
     runs.set(run.runId, retained!.state);
     const decide = () => executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, {
       surface: 'cli', authority: 'present_user', serverId: 'home', serverIdentityId: 'srv_home',

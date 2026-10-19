@@ -43,6 +43,7 @@ const RetainedRunStateSchema = z.strictObject({
     secretReferenceOverlay: z.optional(SecretReferenceOverlayV1Schema),
   })),
   status: ExecutionRunStatusSchema, startedAtMs: z.number().check(z.int(), z.nonnegative()), finishedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  terminalOccurrenceId: z.optional(z.string().check(z.minLength(1))),
   error: z.optional(z.strictObject(ExecutionRunErrorSchema.shape)),
   summary: z.optional(z.string()), structuredMeta: z.optional(z.pipe(z.strictObject({ kind: z.string(), payload: z.unknown() }), z.transform((value) => ({ kind: value.kind, payload: value.payload })))),
   latestToolResult: z.optional(z.unknown()),
@@ -82,13 +83,14 @@ export function projectExecutionRunHostLoss(record: RetainedExecutionRunRecord, 
   if (run.status !== 'running') return record;
   const summary = 'Execution host lost; output may be partial. Resume this run if recovery is available.';
   const current = run.inputTurns?.current;
+  const terminalOccurrenceId = `host-loss:${run.runId}:${record.ownerProcessStartTimeMs ?? record.ownerPid}:${run.inputTurns?.occurrenceId ?? run.startedAtMs}`;
   return {
     ...record,
     // Replays of this committed loss share custody; a later resumed host's
     // loss is a different observation even before it admits another input.
-    terminalEventId: `host-loss:${run.runId}:${record.ownerProcessStartTimeMs ?? record.ownerPid}:${run.inputTurns?.occurrenceId ?? run.startedAtMs}`,
+    terminalEventId: terminalOccurrenceId,
     state: {
-      ...run, status: 'failed', finishedAtMs: nowMs, summary,
+      ...run, status: 'failed', finishedAtMs: nowMs, summary, terminalOccurrenceId,
       error: { code: 'execution_run_host_lost', message: summary },
       // A prior successful result is not the result of the interrupted turn.
       latestToolResult: { status: 'failed', runId: run.runId, callId: run.callId, sidechainId: run.sidechainId, errorCode: 'execution_run_host_lost', summary },

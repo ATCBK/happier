@@ -10,6 +10,7 @@ import type {
 import { combinePermissionModeQueuedPrompts } from '@/agent/runtime/permissions/queuedPrompt';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, settleSessionInputRequestV1,
   withSessionInputAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import {
   ProviderConnectionIdSchema,
   withParticipantRecipientV1,
@@ -23,6 +24,36 @@ source_kind="legacyUnknown"
 </happier_input_context>`;
 
 describe('registerPermissionModeMessageQueueBinding', () => {
+  it('keeps only public-safe matched reasons from the exact admitted Follow receipt on its queued original', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => {} });
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+      original: { sourceSessionId: 'source', sourceMessage: { localId: 'source-original', seq: 2 } },
+      event: { kind: 'update_posted' } });
+    const inputAdmissionReceipt = { v: 1 as const, issuer: 'authenticatedMachine' as const,
+      admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' },
+      followDeliveryV1: delivery,
+      followRelations: [{ relation: 'manager' as const, attachedAt: 1 }, { relation: 'follower' as const }],
+      followSources: [{ rule: { ruleId: 'private-rule', ruleVersion: 1 }, sourceSessionId: 'source',
+        destinationSessionId: 'receiver', evaluation: 'receiver' as const,
+        sourceMessage: { localId: 'source-original', seq: 2 } }],
+    };
+    const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+      followDeliveryV1: delivery });
+    const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+    harness.emit({ role: 'user', content: { type: 'text', text: '' }, localId: 'follow-input', inputAdmissionReceipt,
+      meta: withSessionInputAuthorityV1({}, authority) });
+    const queued = await queue.waitForMessagesAndGetAsString();
+    expect(queued?.message.followDeliveries).toEqual([{ delivery, localInputId: 'follow-input', userMessageSeq: null,
+      followMatches: [{ kind: 'relation', relation: 'manager' }, { kind: 'relation', relation: 'follower' }, { kind: 'rule' }],
+    }]);
+    expect(JSON.stringify(queued)).not.toContain('private-rule');
+  });
+
   it('dequeues two admitted Discussion questions as separate native prompts before a later peer answer', async () => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'same-provider-mode', {
       batcher: combinePermissionModeQueuedPrompts,

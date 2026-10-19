@@ -266,9 +266,8 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     const admittedFollow = (() => {
       if (!followDelivery) return undefined;
       try {
-        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt });
-        return true;
-      } catch { return false; }
+        return assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: message.inputAdmissionReceipt });
+      } catch { return undefined; }
     })();
     if (followDelivery && !admittedFollow) {
       try {
@@ -399,7 +398,12 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       ...(inputContextBlock ? { inputContextBlock } : {}),
       ...(inputProvenance ? { inputProvenance } : {}),
       ...(returnedAnswer ? { returnedAnswer } : {}),
-      ...(followDelivery && admittedFollow && localId ? { followDeliveries: [{ delivery: followDelivery, localInputId: localId, userMessageSeq }] } : {}),
+      ...(followDelivery && admittedFollow && localId ? { followDeliveries: [{ delivery: followDelivery, localInputId: localId, userMessageSeq,
+        ...((admittedFollow.followRelations?.length || admittedFollow.followSources?.length) ? { followMatches: [
+          ...(admittedFollow.followRelations ?? []).map(({ relation }) => ({ kind: 'relation' as const, relation })),
+          ...(admittedFollow.followSources?.length ? [{ kind: 'rule' as const }] : []),
+        ] } : {}),
+      }] } : {}),
     };
 
     if (discussionAddressing) {

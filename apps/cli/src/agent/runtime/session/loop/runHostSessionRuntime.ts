@@ -46,6 +46,7 @@ import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creat
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
+import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import type { SessionModelMutationScopeV1 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
@@ -2412,7 +2413,8 @@ export async function runHostSessionRuntime(
     });
   };
   const commitContextOnlyWorkerEvents = async (
-    localId: string, events: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[], fallback: TranscriptRawAgentEventV1,
+    localId: string, events: readonly Readonly<{ localId: string; update: WorkerUpdateV1;
+      followMatches?: readonly WorkerUpdateFollowMatchV1[]; followInputLocalId?: string }>[], fallback: TranscriptRawAgentEventV1,
     followWakeEventLocalId?: string,
   ): Promise<void> => {
     if (!events.some((event) => event.localId === localId)) {
@@ -2421,10 +2423,13 @@ export async function runHostSessionRuntime(
     await commitWorkerUpdateEvents(events, followWakeEventLocalId);
   };
   const commitWorkerUpdateEvents = async (
-    events: readonly Readonly<{ localId: string; update: WorkerUpdateV1 }>[], followWakeEventLocalId?: string,
+    events: readonly Readonly<{ localId: string; update: WorkerUpdateV1;
+      followMatches?: readonly WorkerUpdateFollowMatchV1[]; followInputLocalId?: string }>[], followWakeEventLocalId?: string,
   ): Promise<void> => {
     for (const event of events) {
       await commitContextOnlyHostEvent(event.localId, { type: 'worker-update', update: event.update,
+        ...(event.followMatches?.length ? { followMatches: event.followMatches } : {}),
+        ...(event.followInputLocalId ? { followInputLocalId: event.followInputLocalId } : {}),
         ...(followWakeEventLocalId ? { followWakeEventLocalId } : {}) });
     }
   };
