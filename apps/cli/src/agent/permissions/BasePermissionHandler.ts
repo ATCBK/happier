@@ -11,10 +11,17 @@ import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/pr
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/mini';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { ACCOUNT_STORED_CONTENT_SESSION_TURN_WAITING_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { SessionNeedsYouRaiseInputV1Schema, type SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import { normalizeInteractionTransientQuestionsV1 } from '@happier-dev/protocol/plugins/interactions/transientV1';
+import { toStructuredQuestionPermissionInput } from './structuredQuestionPermissionInput';
+import { SESSION_NEEDS_YOU_REQUEST_SOURCE } from './requestKind';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permissions/modeFromMetadata';
 import { isApprovalReviewerModelEligible } from './approvalReviewerEligibility';
 import { logger } from "@/ui/logger";
+import { configuration } from '@/configuration';
 import type { ApiSessionClient } from "@/api/session/sessionClient";
 import { AgentState } from "@/api/types";
 import { updateAgentStateBestEffort as updateAgentStateBestEffortShared } from "@/api/session/sessionWritesBestEffort";
@@ -24,16 +31,17 @@ import { recordToolTraceEvent, type ToolTraceProtocol } from '@/agent/tools/trac
 import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ExecutionRunStartResponseSchema, ExecutionRunWaitResultSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
-import { SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionRemoteRespondInputV1Schema, SessionUserActionRemoteAnswerInputV1Schema, SessionPermissionRequestIdV1Schema, SESSION_PERMISSION_REMOTE_QUESTION_CHOICE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_QUESTION_TEXT_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_DETAIL_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION, SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS, SESSION_PERMISSION_REMOTE_SUMMARY_TITLE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_TOOL_LABEL_UTF8_BYTES } from '@happier-dev/protocol/sessions/permissions/v1';
+import { SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionRemoteRespondInputV1Schema, SessionUserActionRemoteAnswerInputV1Schema, SessionPermissionRequestIdV1Schema, SESSION_PERMISSION_REMOTE_QUESTION_CHOICE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_QUESTION_TEXT_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_DETAIL_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_TITLE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_TOOL_LABEL_UTF8_BYTES } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionPermissionRemoteGrantRecordV1Schema, SessionPermissionRemoteSettlementRecordV1Schema, SESSION_REMOTE_PERMISSION_ACTIVE_GRANTS_MAX, SESSION_REMOTE_PERMISSION_MEDIATION_ROWS_MAX } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { SessionPermissionRespondRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
+import { SessionPermissionRespondRpcParamsV1Schema, SessionUserActionPassUpRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
+import type { SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
 import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import { StructuredQuestionAnswersV1Schema } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
+import { StructuredQuestionAnswersV1Schema, StructuredQuestionResponseV1Schema } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import type { AccountSettings, SessionPermissionRemoteRespondInputV1, SessionPermissionRemoteRespondOutputV1, SessionPermissionRemotePendingListOutputV1, SessionUserActionRemoteAnswerInputV1, SessionUserActionRemoteAnswerOutputV1, SessionPermissionRemoteGrantRecordV1, SessionPermissionRemoteGrantsListOutputV1, SessionPermissionRemoteGrantRevokeOutputV1, SessionPermissionMediationRecordIdentityV1, SessionPermissionExternalHumanDecisionActorV1, SessionPermissionSourceAuthorityV1, AgentRequestQuestionSummary, StructuredQuestionAnswersV1 } from '@happier-dev/protocol';
-import { buildAgentRequestSemanticSummary, formatPermissionRequestSummary, summarizeToolInputForNotification } from '@happier-dev/protocol/activity/agentRequestSummary';
+import { buildAgentRequestSemanticSummary, formatPermissionRequestSummary, requiresFullFormForRemoteUserAction, summarizeToolInputForNotification } from '@happier-dev/protocol/activity/agentRequestSummary';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '@happier-dev/protocol/agents/claude/permissionRequestSource';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, parseSocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
@@ -42,7 +50,9 @@ import type { RpcHandlerContext } from '@/api/rpc/types';
 import type {
     PermissionRequestPushSender as PermissionRequestPushSenderFromSettings,
 } from '@/settings/notifications/permissionRequestPush';
-import { HAPPIER_ACTION_REQUEST_SOURCE, resolveAgentRequestKind } from './requestKind';
+import { HAPPIER_ACTION_REQUEST_SOURCE, isAgentStructuredQuestionRequest, resolveAgentRequestKind } from './requestKind';
+import { admitManagerQuestionAnswer, resolveInitialQuestionHandler } from './sessionQuestionManager';
+import { normalizeStructuredQuestionPermissionAnswers } from './structuredQuestionAnswers';
 import { AgentStateRequestStore } from './agentStateRequestStore';
 import type {
     AgentStateRequestResponseTarget,
@@ -175,7 +185,8 @@ export type PermissionRespondRpcResult =
         errorCode:
             | 'permission_request_not_found'
             | 'permission_actor_unattributable'
-            | 'permission_response_invalid';
+            | 'permission_response_invalid'
+            | 'present_user_required';
         requestId: string;
     }>;
 
@@ -336,7 +347,6 @@ function projectRemoteMediatedQuestion(
         questionText.trim().length === 0
         || REMOTE_MEDIATION_TEXT_ENCODER.encode(questionText).byteLength
             > SESSION_PERMISSION_REMOTE_QUESTION_TEXT_UTF8_BYTES
-        || question.choices.length > SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION
     ) {
         return null;
     }
@@ -374,6 +384,7 @@ function projectRemoteMediatedRequestSummary(params: Readonly<{
     kind: 'permission' | 'user_action';
     toolName: string;
     toolInput: unknown;
+    resolveFullFormUrl?: () => string;
 }>): MediatedPendingRequestSummary | null {
     const semantic = buildAgentRequestSemanticSummary(params);
     if (params.kind === 'permission') {
@@ -397,11 +408,14 @@ function projectRemoteMediatedRequestSummary(params: Readonly<{
         };
     }
 
-    if (
-        semantic.questions.length === 0
-        || semantic.questions.length > SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS
-    ) {
-        return null;
+    if (semantic.questions.length === 0) return null;
+    if (requiresFullFormForRemoteUserAction(semantic.questions)) {
+        if (!params.resolveFullFormUrl) return null;
+        return {
+            kind: 'user_action',
+            questions: [],
+            fullForm: { questionCount: semantic.questionCount, url: params.resolveFullFormUrl() },
+        };
     }
     const answerKeys = new Set<string>();
     const questions: MediatedPendingUserActionQuestion[] = [];
@@ -542,7 +556,8 @@ function isPermissionResponseAuthorityValid(params: Readonly<{
         return !hasAllowedTools && !hasUpdatedPermissions && !hasExecPolicyAmendment && !hasAnswers;
     }
     if (requestKind === 'user_action') {
-        return !hasAllowedTools && !hasUpdatedPermissions && !hasExecPolicyAmendment;
+        return !hasAllowedTools && !hasUpdatedPermissions && !hasExecPolicyAmendment
+            && (response.decision === undefined || response.decision === 'approved');
     }
     if (hasAnswers) return false;
 
@@ -1557,9 +1572,7 @@ export abstract class BasePermissionHandler {
 
         const structured = StructuredQuestionAnswersV1Schema.safeParse(answersRaw);
         if (structured.success) {
-            if (Object.keys(structured.data).length > 0) {
-                result.answers = structured.data;
-            }
+            result.answers = structured.data;
             return true;
         }
 
@@ -1572,9 +1585,7 @@ export abstract class BasePermissionHandler {
             normalized[key] = [value];
         }
 
-        if (Object.keys(normalized).length > 0) {
-            result.answers = normalized;
-        }
+        result.answers = normalized;
         return true;
     }
 
@@ -1630,10 +1641,91 @@ export abstract class BasePermissionHandler {
         logger.debug(`${this.getLogPrefix()} ${params.debugMessage}`);
     }
 
-    /**
-     * Setup RPC handler for permission responses.
-     */
+    private async raiseNeedsYouQuestion(input: unknown, context?: RpcHandlerContext) {
+        const parsed = SessionNeedsYouRaiseInputV1Schema.safeParse(input);
+        if (!parsed.success) return { ok: false, errorCode: 'question_input_invalid' } as const;
+        const origin = context?.sessionActionOrigin;
+        if (origin?.caller.kind !== 'session' || origin.caller.sessionId !== this.session.sessionId
+            || (parsed.data.sessionId !== undefined && parsed.data.sessionId !== this.session.sessionId)) {
+            return { ok: false, errorCode: 'question_author_forbidden' } as const;
+        }
+        const data = parsed.data;
+        if ('withdraw' in data) {
+            return this.requestCoordinator.withResponseClaim(data.requestId, async () => {
+                const request = this.requestStore.readOutstandingRequest(data.requestId);
+                if (!request || !isAgentStructuredQuestionRequest(request)) {
+                    return { ok: false, errorCode: 'permission_request_not_found', requestId: data.requestId } as const;
+                }
+                const withdrawn = await this.requestStore.completeRequest({ requestId: data.requestId,
+                    status: 'canceled', decision: 'abort', reason: data.withdraw });
+                if (withdrawn) this.requestCoordinator.cancelRequest(data.requestId, data.withdraw);
+                return withdrawn
+                    ? { ok: true, requestId: data.requestId, withdrawn: true } as const
+                    : { ok: false, errorCode: 'permission_request_not_found', requestId: data.requestId } as const;
+            });
+        }
+        if (context?.signal.aborted) return { ok: false, errorCode: 'question_author_cancelled' } as const;
+        if (data.mode === 'wait') {
+            const snapshot = this.session.getServerFeaturesSnapshot?.();
+            const wireVersion = snapshot?.status === 'ready'
+                ? snapshot.features.capabilities.accountStoredContentCompatibility?.currentProtocolVersion : undefined;
+            // This is wire admission, not a feature toggle: older strict Homes
+            // cannot persist the wait mutation after the native turn has ended.
+            if (typeof this.session.yieldQuestionTurn !== 'function'
+                || wireVersion === undefined || wireVersion < ACCOUNT_STORED_CONTENT_SESSION_TURN_WAITING_PROTOCOL_VERSION) {
+                return { ok: false, errorCode: 'question_turn_yield_unavailable' } as const;
+            }
+        }
+        // Reuse the admitted Action identity rather than minting a second retry identity.
+        const requestId = origin.requestId;
+        return this.requestCoordinator.withResponseClaim(requestId, async () => {
+            const existing = this.requestStore.readOutstandingRequest(requestId);
+            const completed = this.session.getAgentStateSnapshot?.()?.completedRequests?.[requestId];
+            if (existing || completed) {
+                const prior = existing ?? completed!;
+                if (prior.source !== SESSION_NEEDS_YOU_REQUEST_SOURCE) {
+                    return { ok: false, errorCode: 'question_request_conflict', requestId } as const;
+                }
+                if (existing?.questionV1?.mode === 'wait'
+                    && (!existing.turnId || !await this.session.yieldQuestionTurn(existing.turnId))) {
+                    return { ok: false, errorCode: 'question_turn_yield_unavailable', requestId } as const;
+                }
+                return { ok: true, requestId, mode: prior.questionV1?.mode ?? data.mode } as const;
+            }
+            const questionV1: SessionQuestionContextV1 = { mode: data.mode, type: data.type,
+                lasting: data.lasting ?? false, ...(data.assumption === undefined ? {} : { assumption: data.assumption }),
+                ...(data.reason === undefined ? {} : { reason: data.reason }) };
+            return this.withPendingRequestPreparation({ requestId, toolName: 'AskUserQuestion', input: data,
+                signal: context?.signal }, async (assertCurrent) => {
+                const currentHandler = typeof this.session.readQuestionSessionSnapshot === 'function'
+                    ? await resolveInitialQuestionHandler({ sessionId: this.session.sessionId, lasting: questionV1.lasting,
+                        readSession: sessionId => this.session.readQuestionSessionSnapshot(sessionId) })
+                    : { kind: 'person' as const };
+                assertCurrent();
+                const form = normalizeInteractionTransientQuestionsV1({ kind: 'questions',
+                    questions: data.questions, ...(data.title === undefined ? {} : { title: data.title }) });
+                await this.requestStore.publishRequestAndWait({ requestId, toolName: 'AskUserQuestion',
+                    toolInput: toStructuredQuestionPermissionInput(form), createdAt: Date.now(),
+                    turnId: origin.sourceTurnId, kind: 'user_action', source: SESSION_NEEDS_YOU_REQUEST_SOURCE,
+                    questionV1, currentHandler,
+                    responseTarget: { kind: 'session_question_answer', sessionId: this.session.sessionId, sourceTurnId: origin.sourceTurnId,
+                        ...(origin.sourceInputId ? { sourceInputId: origin.sourceInputId } : {}) },
+                });
+                assertCurrent();
+                this.pendingRequests.delete(requestId);
+                if (data.mode === 'wait' && !await this.session.yieldQuestionTurn(origin.sourceTurnId)) {
+                    // The durable question remains recoverable; never claim a turn ended when it did not.
+                    return { ok: false, errorCode: 'question_turn_yield_unavailable', requestId } as const;
+                }
+                return { ok: true, requestId, mode: data.mode } as const;
+            });
+        });
+    }
+
+    /** Setup RPC handlers at the existing request owner. */
     protected setupRpcHandler(): void {
+        this.session.rpcHandlerManager.registerHandler(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE,
+            (input: unknown, context) => this.raiseNeedsYouQuestion(input, context));
         const parsePermissionResponse = (input: unknown, legacy = false): PermissionResponse | null => {
             let candidate = input;
             if (legacy && input && typeof input === 'object' && !Array.isArray(input)) {
@@ -1670,6 +1762,14 @@ export abstract class BasePermissionHandler {
             expectedRequestKind?: 'permission' | 'user_action',
         ): Promise<PermissionRespondRpcResult> => {
             const permissionDecisionActorV1 = this.resolvePresentUserPermissionActor(rpcContext);
+            // The predecessor's single method carries both kinds. Its codec
+            // adapter must not bypass the canonical question authority owner.
+            const context = expectedRequestKind === undefined
+                ? this.requestCoordinator.getResponseContext(response.id) : null;
+            if (context && (context.kind ?? resolveAgentRequestKind(context.toolName)) === 'user_action'
+                && (rpcContext?.sessionActionOrigin || permissionDecisionActorV1)) {
+                return await handleUserActionAnswer(response, rpcContext, permissionDecisionActorV1 ?? undefined);
+            }
             if (!permissionDecisionActorV1) {
                 return {
                     ok: false,
@@ -1709,9 +1809,102 @@ export abstract class BasePermissionHandler {
             }
             return undefined;
         };
-        const handleUserActionAnswer = async (response: PermissionResponse): Promise<PermissionRespondRpcResult> => {
+        const managerQuestionRefusal = (requestId: string): PermissionRespondRpcResult => ({
+            ok: false, errorCode: 'present_user_required', requestId,
+        });
+        const handleManagerQuestionResponse = async (
+            requestId: string,
+            rpcContext: RpcHandlerContext | undefined,
+            response: PermissionResponse | null,
+        ): Promise<PermissionRespondRpcResult> => {
+            const origin = rpcContext?.sessionActionOrigin;
+            if (!rpcContext || !origin) return managerQuestionRefusal(requestId);
+            return await this.requestCoordinator.withResponseClaim(requestId, async (): Promise<PermissionRespondRpcResult> => {
+                const context = this.requestCoordinator.getResponseContext(requestId);
+                if (!context) return { ok: false, errorCode: 'permission_request_not_found', requestId };
+                const actor = this.resolvePresentUserPermissionActor(rpcContext);
+                const readSession = this.session.readQuestionSessionSnapshot?.bind(this.session);
+                if (!actor || !context.currentHandler || !readSession
+                    || rpcContext.signal.aborted
+                    || (response && (!response.approved || !response.answers
+                        || (response.decision !== undefined && response.decision !== 'approved')))) {
+                    return managerQuestionRefusal(requestId);
+                }
+                let admitted: boolean;
+                try {
+                    admitted = await admitManagerQuestionAnswer({
+                        sessionId: this.session.sessionId, callerSessionId: origin.caller.sessionId,
+                        accountId: actor.accountId, handler: context.currentHandler,
+                        question: isAgentStructuredQuestionRequest(context),
+                        lasting: context.questionV1?.lasting !== false, readSession,
+                    });
+                } catch (error) {
+                    logger.debug(`${this.getLogPrefix()} Manager question admission unavailable`, error);
+                    return managerQuestionRefusal(requestId);
+                }
+                if (!admitted || rpcContext.signal.aborted) return managerQuestionRefusal(requestId);
+                if (!response) {
+                    let currentHandler: SessionQuestionHandlerV1;
+                    try {
+                        currentHandler = await resolveInitialQuestionHandler({
+                            sessionId: origin.caller.sessionId, lasting: false, readSession,
+                        });
+                    } catch (error) {
+                        logger.debug(`${this.getLogPrefix()} Manager question pass-up unavailable`, error);
+                        return managerQuestionRefusal(requestId);
+                    }
+                    if (rpcContext.signal.aborted) return managerQuestionRefusal(requestId);
+                    const changed = await this.requestCoordinator.changeQuestionHandler({
+                        requestId, expectedCreatedAt: context.createdAt, expectedHandler: context.currentHandler, currentHandler,
+                    });
+                    return changed ? undefined : { ok: false, errorCode: 'permission_request_not_found', requestId };
+                }
+                const outcome = await this.handleIncomingPermissionResponseUnclaimed(response, {
+                    expectedRequestKind: 'user_action',
+                    answeredBy: { kind: 'session', sessionId: origin.caller.sessionId },
+                    isCurrent: () => {
+                        const current = this.requestCoordinator.getResponseContext(requestId);
+                        return !rpcContext.signal.aborted && current?.createdAt === context.createdAt
+                            && isDeepStrictEqual(current.currentHandler, context.currentHandler);
+                    },
+                });
+                return outcome.status === 'resolved' ? undefined : {
+                    ok: false, errorCode: outcome.status === 'invalid' ? 'permission_response_invalid' : 'permission_request_not_found', requestId,
+                };
+            });
+        };
+        const handleUserActionAnswer = async (
+            response: PermissionResponse,
+            rpcContext?: RpcHandlerContext,
+            permissionDecisionActorV1?: SocketRpcSessionPermissionRespondAuthorizationContext['actor'],
+        ): Promise<PermissionRespondRpcResult> => {
+            if (rpcContext?.sessionActionOrigin) return await handleManagerQuestionResponse(response.id, rpcContext, response);
+            const nonPerson = (rpcContext?.callerAuthority !== undefined && rpcContext.callerAuthority !== 'present_user')
+                || (rpcContext?.localActionContext?.authority !== undefined && rpcContext.localActionContext.authority !== 'present_user');
+            const tokenQuestionContext = nonPerson ? this.requestCoordinator.getResponseContext(response.id) : null;
+            const isTokenQuestionAnswerEligible = (): boolean => {
+                // RpcHandlerManager has already verified this exact request's
+                // signed input binding and grant. This domain exception is
+                // conversational only: it cannot authorize approval wrappers
+                // or a lasting person-only question.
+                const binding = rpcContext?.callerInputAuthorization?.binding;
+                const context = this.requestCoordinator.getResponseContext(response.id);
+                return Boolean(!rpcContext?.signal.aborted && binding && 'grant' in binding
+                    && binding.actionId === 'session.user_action.answer'
+                    && binding.target.kind === 'session' && binding.target.sessionId === this.session.sessionId
+                    && context && context.createdAt === tokenQuestionContext?.createdAt
+                    && isAgentStructuredQuestionRequest(context) && context.questionV1?.lasting !== true);
+            };
+            if (nonPerson && !isTokenQuestionAnswerEligible()) {
+                return managerQuestionRefusal(response.id);
+            }
+            permissionDecisionActorV1 ??= !nonPerson
+                ? this.resolvePresentUserPermissionActor(rpcContext) ?? undefined : undefined;
             const outcome = await this.handleIncomingPermissionResponse(response, {
                 expectedRequestKind: 'user_action',
+                ...(permissionDecisionActorV1 ? { permissionDecisionActorV1 } : {}),
+                ...(!nonPerson && permissionDecisionActorV1 ? { answeredBy: { kind: 'person' as const } } : {}),
+                ...(nonPerson ? { isCurrent: isTokenQuestionAnswerEligible } : {}),
             });
             if (outcome.status === 'not_found') {
                 return {
@@ -1738,11 +1931,27 @@ export abstract class BasePermissionHandler {
         );
         this.session.rpcHandlerManager.registerHandler<unknown, PermissionRespondRpcResult>(
             'session.user_action.answer',
-            (input) => {
+            (input, rpcContext) => {
+                const passUp = SessionUserActionPassUpRpcParamsV1Schema.safeParse(input);
+                if (passUp.success) return handleManagerQuestionResponse(passUp.data.id, rpcContext, null);
                 const response = parsePermissionResponse(input);
-                return response ? handleUserActionAnswer(response) : invalidResponse(input);
+                return response ? handleUserActionAnswer(response, rpcContext) : invalidResponse(input);
             },
         );
+        // Moving 0.2 predecessor codec: retain its lossless carrier and void
+        // success contract, delegating authorization and completion in place.
+        this.session.rpcHandlerManager.registerHandler<unknown, PermissionRespondRpcResult>(
+            SESSION_RPC_METHODS.SESSION_STRUCTURED_QUESTION_RESPOND_V1,
+            (input, rpcContext) => {
+                const response = StructuredQuestionResponseV1Schema.safeParse(input);
+                return response.success ? handleUserActionAnswer({
+                    id: response.data.id, approved: true, answers: response.data.structuredAnswersV1,
+                }, rpcContext) : invalidResponse(input);
+            },
+        );
+        this.updateAgentStateBestEffort((state) => ({
+            ...state, capabilities: { ...state.capabilities, structuredQuestionAnswersV1Supported: true },
+        }), 'structured-question-answer-capability');
         this.session.rpcHandlerManager.registerHandler<unknown, PermissionRespondRpcResult>(
             'permission',
             // Compatibility adapter for released clients that used this one
@@ -1830,6 +2039,17 @@ export abstract class BasePermissionHandler {
                 kind,
                 toolName: context.toolName,
                 toolInput: context.toolInput,
+                resolveFullFormUrl: () => {
+                    const url = new URL(`/session/${encodeURIComponent(this.session.sessionId)}`, configuration.webappUrl);
+                    url.username = '';
+                    url.password = '';
+                    const snapshot = this.session.getServerFeaturesSnapshot();
+                    const serverIdentityId = snapshot?.status === 'ready'
+                        ? snapshot.features.capabilities.serverIdentity.serverIdentityId
+                        : undefined;
+                    if (serverIdentityId) url.searchParams.set('serverId', serverIdentityId);
+                    return url.toString();
+                },
             });
             if (!agentRequestSummary) {
                 hasUnprojectedSourceRequest = true;
@@ -2317,7 +2537,7 @@ export abstract class BasePermissionHandler {
         });
         if (
             semantic.questions.length === 0
-            || semantic.questions.length > SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS
+            || requiresFullFormForRemoteUserAction(semantic.questions)
         ) {
             return null;
         }
@@ -3411,6 +3631,7 @@ export abstract class BasePermissionHandler {
         options?: Readonly<{
             expectedRequestKind?: 'permission' | 'user_action';
             permissionDecisionActorV1?: SocketRpcSessionPermissionRespondAuthorizationContext['actor'];
+            answeredBy?: SessionQuestionHandlerV1;
             isCurrent?: () => boolean;
         }>,
     ): Promise<PermissionResponseRoutingResult> {
@@ -3500,6 +3721,7 @@ export abstract class BasePermissionHandler {
         options?: Readonly<{
             expectedRequestKind?: 'permission' | 'user_action';
             permissionDecisionActorV1?: SocketRpcSessionPermissionRespondAuthorizationContext['actor'];
+            answeredBy?: SessionQuestionHandlerV1;
             isCurrent?: () => boolean;
         }>,
     ): Promise<PermissionResponseRoutingResult> {
@@ -3535,6 +3757,14 @@ export abstract class BasePermissionHandler {
             return { status: 'invalid' };
         }
 
+        if (response.approved && isAgentStructuredQuestionRequest(context)) {
+            const answers = normalizeStructuredQuestionPermissionAnswers({
+                toolName: context.toolName, toolInput: context.toolInput, answers: response.answers ?? {},
+            });
+            if (!answers) return { status: 'invalid' };
+            response = { ...response, answers };
+        }
+
         const completed = await this.handlePermissionResponseWithContext({
             response,
             context,
@@ -3542,6 +3772,7 @@ export abstract class BasePermissionHandler {
             ...(options?.permissionDecisionActorV1 ? {
                 permissionDecisionActorV1: options.permissionDecisionActorV1,
             } : {}),
+            ...(options?.answeredBy ? { answeredBy: options.answeredBy } : {}),
             ...(options?.isCurrent ? { isCurrent: options.isCurrent } : {}),
         });
         return completed ? { status: 'resolved' } : { status: 'not_found' };
@@ -3552,6 +3783,7 @@ export abstract class BasePermissionHandler {
         context: PermissionRequestCoordinatorContext;
         legacyPending: PendingRequest | undefined;
         permissionDecisionActorV1?: SocketRpcSessionPermissionRespondAuthorizationContext['actor'];
+        answeredBy?: SessionQuestionHandlerV1;
         remoteMediationSettlementId?: string;
         isCurrent?: () => boolean;
     }>): Promise<boolean> {
@@ -3560,6 +3792,7 @@ export abstract class BasePermissionHandler {
             context,
             legacyPending,
             permissionDecisionActorV1,
+            answeredBy,
             remoteMediationSettlementId,
             isCurrent,
         } = params;
@@ -3591,16 +3824,27 @@ export abstract class BasePermissionHandler {
         }
 
         const requestSource = { toolName: context.toolName, input: context.toolInput };
+        const responseCompletion = this.buildCompletedRequestForResponse(
+            effectiveResponse,
+            result,
+            responseAllowedTools,
+            updatedPermissions,
+            requestSource,
+            permissionDecisionActorV1,
+            remoteMediationSettlementId,
+        );
+        const orphanedQuestionAnswer = effectiveResponse.approved && isAgentStructuredQuestionRequest(context)
+            && context.status !== 'live' && !context.responseTarget;
         const completedRequest = {
-            ...this.buildCompletedRequestForResponse(
-                effectiveResponse,
-                result,
-                responseAllowedTools,
-                updatedPermissions,
-                requestSource,
-                permissionDecisionActorV1,
-                remoteMediationSettlementId,
-            ),
+            ...responseCompletion,
+            ...(result.answers ? { structuredAnswersV1: result.answers } : {}),
+            ...(answeredBy ? { answeredBy } : {}),
+            ...(orphanedQuestionAnswer ? { extraCompletedFields: {
+                ...responseCompletion.extraCompletedFields,
+                questionV1: context.questionV1 ?? { mode: 'wait', lasting: false, type: 'decision' },
+                responseTarget: { kind: 'session_question_answer', sessionId: this.session.sessionId,
+                    ...(context.turnId ? { sourceTurnId: context.turnId } : {}) },
+            } } : {}),
             ...(isCurrent ? { isCurrent } : {}),
         };
         const completed = await this.completePendingPermissionRequest(
@@ -3806,7 +4050,42 @@ export abstract class BasePermissionHandler {
         return allowedIdentifiers;
     }
 
-    protected requestPermissionDecision(
+    private async withPendingRequestPreparation<T>(params: Readonly<{
+        requestId: string;
+        toolName: string;
+        input: unknown;
+        owner?: PermissionRequestOwner;
+        causalPermissionContext?: AcpPermissionCallContext;
+        signal?: AbortSignal;
+    }>, work: (assertCurrent: () => void) => Promise<T>): Promise<T> {
+        let rejectPreparation!: (error: Error) => void;
+        const cancellation = new Promise<never>((_, reject) => { rejectPreparation = reject; });
+        const pending: PendingRequest = { toolName: params.toolName, input: params.input,
+            ...(params.owner ? { owner: params.owner } : {}),
+            ...(params.causalPermissionContext ? { causalPermissionContext: params.causalPermissionContext } : {}),
+            resolve: () => rejectPreparation(new Error('Permission request aborted')), reject: rejectPreparation };
+        this.pendingRequests.set(params.requestId, pending);
+        const onAbort = () => rejectPreparation(new Error('Permission request aborted'));
+        params.signal?.addEventListener('abort', onAbort, { once: true });
+        if (params.signal?.aborted) onAbort();
+        const assertCurrent = () => {
+            if (this.pendingRequests.get(params.requestId) !== pending || params.signal?.aborted) {
+                throw new Error('Permission request aborted');
+            }
+        };
+        try {
+            const preparation = (async () => {
+                assertCurrent();
+                return work(assertCurrent);
+            })();
+            return await Promise.race([preparation, cancellation]);
+        } finally {
+            params.signal?.removeEventListener('abort', onAbort);
+            if (this.pendingRequests.get(params.requestId) === pending) this.pendingRequests.delete(params.requestId);
+        }
+    }
+
+    protected async requestPermissionDecision(
         toolCallId: string,
         toolName: string,
         input: unknown,
@@ -3821,60 +4100,91 @@ export abstract class BasePermissionHandler {
         }>,
     ): Promise<PermissionResult> {
         const source = typeof options?.source === 'string' ? options.source.trim() : '';
-        const hasExistingContext = this.requestCoordinator.getResponseContext(toolCallId) !== null;
-        if (!hasExistingContext) {
-            this.recordPermissionRequestTrace(toolCallId, toolName, input, source);
-        }
-
-        const owner = resolvePermissionRequestOwner({
-            owner: options?.owner,
-            causalPermissionContext: options?.causalPermissionContext,
-        });
-        const turnId = resolvePermissionRequestTurnId(options?.causalPermissionContext);
-        let ownsPendingRecord = false;
-        let pendingRecord = this.pendingRequests.get(toolCallId);
-        if (!pendingRecord) {
-            pendingRecord = {
-                toolName,
-                input,
-                ...(owner ? { owner } : {}),
-                ...(options?.causalPermissionContext ? { causalPermissionContext: options.causalPermissionContext } : {}),
-                ...(options?.resolveCurrentPermissionDecision
-                    ? { resolveCurrentPermissionDecision: options.resolveCurrentPermissionDecision }
-                    : {}),
-                ...(options?.acknowledgeDecisionApplication
-                    ? { acknowledgeDecisionApplication: options.acknowledgeDecisionApplication }
-                    : {}),
-                coordinatorManaged: true,
-                resolve: (value) => {
-                    this.resolvePendingPermissionRequest(toolCallId, value);
-                },
-                reject: (error) => {
-                    this.rejectPendingPermissionRequest(toolCallId, error);
-                },
-            };
-            this.pendingRequests.set(toolCallId, pendingRecord);
-            ownsPendingRecord = true;
-        }
-
-        const pending = this.requestCoordinator.requestDecision({
-            requestId: toolCallId,
-            toolName,
-            toolInput: input,
-            createdAt: Date.now(),
-            ...(options?.mcpTool ? { mcpTool: options.mcpTool } : {}),
-            ...(turnId ? { turnId } : {}),
-            ...(options?.causalPermissionContext?.lifetime ? { lifetime: options.causalPermissionContext.lifetime } : {}),
-            ...(source ? { source } : {}),
-            ...(owner ? { owner } : {}),
-        }, { signal: options?.signal });
-
-        if (ownsPendingRecord) void this.respondAsApprovalReviewer(toolCallId);
-
-        return pending.finally(() => {
-            if (ownsPendingRecord && this.pendingRequests.get(toolCallId) === pendingRecord) {
-                this.pendingRequests.delete(toolCallId);
+        const existingQuestion = this.requestCoordinator.getResponseContext(toolCallId);
+        const isQuestion = isAgentStructuredQuestionRequest({ toolName, source });
+        const questionV1 = isQuestion
+            ? existingQuestion?.questionV1 ?? { mode: 'wait' as const, lasting: false, type: 'decision' as const }
+            : undefined;
+        const currentHandler = isQuestion
+            ? existingQuestion ? existingQuestion.currentHandler ?? { kind: 'person' as const }
+                : { kind: 'person' as const }
+            : undefined;
+        const publish = (currentHandler: SessionQuestionHandlerV1 | undefined): Promise<PermissionResult> => {
+            const hasExistingContext = this.requestCoordinator.getResponseContext(toolCallId) !== null;
+            if (!hasExistingContext) {
+                this.recordPermissionRequestTrace(toolCallId, toolName, input, source);
             }
+
+            const owner = resolvePermissionRequestOwner({
+                owner: options?.owner,
+                causalPermissionContext: options?.causalPermissionContext,
+            });
+            const turnId = resolvePermissionRequestTurnId(options?.causalPermissionContext);
+            let ownsPendingRecord = false;
+            let pendingRecord = this.pendingRequests.get(toolCallId);
+            if (!pendingRecord) {
+                pendingRecord = {
+                    toolName,
+                    input,
+                    ...(owner ? { owner } : {}),
+                    ...(options?.causalPermissionContext ? { causalPermissionContext: options.causalPermissionContext } : {}),
+                    ...(options?.resolveCurrentPermissionDecision
+                        ? { resolveCurrentPermissionDecision: options.resolveCurrentPermissionDecision }
+                        : {}),
+                    ...(options?.acknowledgeDecisionApplication
+                        ? { acknowledgeDecisionApplication: options.acknowledgeDecisionApplication }
+                        : {}),
+                    coordinatorManaged: true,
+                    resolve: (value) => {
+                        this.resolvePendingPermissionRequest(toolCallId, value);
+                    },
+                    reject: (error) => {
+                        this.rejectPendingPermissionRequest(toolCallId, error);
+                    },
+                };
+                this.pendingRequests.set(toolCallId, pendingRecord);
+                ownsPendingRecord = true;
+            }
+
+            const pending = this.requestCoordinator.requestDecision({
+                requestId: toolCallId,
+                toolName,
+                toolInput: input,
+                createdAt: Date.now(),
+                ...(options?.mcpTool ? { mcpTool: options.mcpTool } : {}),
+                ...(turnId ? { turnId } : {}),
+                ...(options?.causalPermissionContext?.lifetime ? { lifetime: options.causalPermissionContext.lifetime } : {}),
+                ...(source ? { source } : {}),
+                ...(questionV1 ? { questionV1, currentHandler, kind: 'user_action' } : {}),
+                ...(owner ? { owner } : {}),
+            }, { signal: options?.signal });
+
+            if (ownsPendingRecord) void this.respondAsApprovalReviewer(toolCallId);
+
+            return pending.finally(() => {
+                if (ownsPendingRecord && this.pendingRequests.get(toolCallId) === pendingRecord) {
+                    this.pendingRequests.delete(toolCallId);
+                }
+            });
+        };
+        if (!isQuestion || existingQuestion || typeof this.session.readQuestionSessionSnapshot !== 'function') {
+            return publish(currentHandler);
+        }
+        const owner = resolvePermissionRequestOwner({ owner: options?.owner,
+            causalPermissionContext: options?.causalPermissionContext });
+        return this.withPendingRequestPreparation({ requestId: toolCallId, toolName, input,
+            ...(owner ? { owner } : {}),
+            ...(options?.causalPermissionContext ? { causalPermissionContext: options.causalPermissionContext } : {}),
+            ...(options?.signal ? { signal: options.signal } : {}),
+        }, async (assertCurrent) => {
+            const handler = await resolveInitialQuestionHandler({ sessionId: this.session.sessionId,
+                lasting: questionV1!.lasting,
+                readSession: (sessionId) => this.session.readQuestionSessionSnapshot(sessionId) });
+            assertCurrent();
+            // Transfer the same preparation identity to the live coordinator
+            // synchronously, without an unowned await before publication.
+            this.pendingRequests.delete(toolCallId);
+            return publish(handler);
         });
     }
 
@@ -4025,14 +4335,22 @@ export abstract class BasePermissionHandler {
         }
     }
 
-    private async cancelPendingRequests(reason: string, scope?: 'foreground'): Promise<void> {
+    private async cancelPendingRequests(reason: string, scope?: 'foreground', preserveQuestions = false): Promise<void> {
         const pendingSnapshot = Array.from(this.pendingRequests.entries()).filter(
             ([requestId]) => scope !== 'foreground' || !readRunScopedExecutionPermissionRequestIdentity(requestId),
         );
         // Retire preparation before awaiting durable cancellation, so shared
         // hydration cannot advance a cancelled request into publication.
         this.cancelUncoordinatedPendingRequests(pendingSnapshot, reason);
-        await this.requestCoordinator.cancelAll(reason, scope ? { scope } : undefined);
+        // After rejoin the request, not host-local yield intent, retains the
+        // waiting turn. Capture it before cancellation retires the request.
+        const questionWaitTurnIds = preserveQuestions ? [] : this.requestStore.listOutstandingRequests()
+            .filter(request => request.source === SESSION_NEEDS_YOU_REQUEST_SOURCE && request.questionV1?.mode === 'wait')
+            .flatMap(request => request.turnId ? [request.turnId] : []);
+        await Promise.all([
+            this.requestCoordinator.cancelAll(reason, { ...(scope ? { scope } : {}), ...(preserveQuestions ? { preserveQuestions } : {}) }),
+            ...(!preserveQuestions ? [this.session.clearQuestionWaitTurn?.(questionWaitTurnIds)] : []),
+        ]);
         for (const [requestId, pending] of pendingSnapshot) {
             if (this.pendingRequests.get(requestId) === pending) this.pendingRequests.delete(requestId);
         }
@@ -4059,8 +4377,8 @@ export abstract class BasePermissionHandler {
         await this.requestCoordinator.cancelByPlugin(normalizedPluginId, reason);
     }
 
-    async abortPendingRequestsAndFlush(reason: string = 'Aborted by user'): Promise<void> {
-        await this.cancelPendingRequests(reason);
+    async abortPendingRequestsAndFlush(reason: string = 'Aborted by user', options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void> {
+        await this.cancelPendingRequests(reason, undefined, options?.preserveQuestions);
         try {
             await this.session.flush?.();
         } catch (error) {
@@ -4068,10 +4386,13 @@ export abstract class BasePermissionHandler {
         }
     }
 
-    async abortPendingRequestAndFlush(requestId: string, reason: string = 'Aborted by user'): Promise<void> {
+    async abortPendingRequestAndFlush(requestId: string, reason: string = 'Aborted by user', options?: Readonly<{ preserveQuestions?: boolean }>): Promise<void> {
         const pending = this.pendingRequests.get(requestId);
         if (pending) this.cancelUncoordinatedPendingRequests([[requestId, pending]], reason);
-        await this.requestCoordinator.cancelRequests([requestId], reason);
+        const request = this.requestStore.readOutstandingRequest(requestId) ?? pending;
+        if (options?.preserveQuestions && request && isAgentStructuredQuestionRequest(request)) {
+            this.requestCoordinator.cancelRequest(requestId, reason);
+        } else await this.requestCoordinator.cancelRequests([requestId], reason);
         try {
             await this.session.flush?.();
         } catch (error) {
@@ -4098,7 +4419,7 @@ export abstract class BasePermissionHandler {
 
     private async performReset(): Promise<void> {
         try {
-            await this.cancelPendingRequests('Session reset');
+            await this.cancelPendingRequests('Session reset', undefined, true);
 
             this.allowedToolIdentifiers.clear();
             this.allowedToolIdentifiersByOwner.clear();

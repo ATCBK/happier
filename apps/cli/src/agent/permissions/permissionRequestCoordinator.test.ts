@@ -147,6 +147,74 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
 }
 
 describe('PermissionRequestCoordinator', () => {
+    it('retires stored-only turn approvals on incidental turn end while retaining questions and other turns', async () => {
+        const { coordinator, session, store } = createHarness();
+        const owner = { kind: 'plugin' as const, pluginId: 'plugin-a' };
+        store.publishRequest({ ...bashRequest, requestId: 'retiring-approval', turnId: 'turn-1', owner });
+        store.publishRequest({ ...bashRequest, requestId: 'other-turn', turnId: 'turn-2', owner });
+        store.publishRequest({ ...bashRequest, requestId: 'other-plugin', turnId: 'turn-1',
+            owner: { kind: 'plugin', pluginId: 'plugin-b' } });
+        store.publishRequest({ requestId: 'retained-question', toolName: 'AskUserQuestion', toolInput: {},
+            createdAt: 1, turnId: 'turn-1', owner });
+        const occurrence = coordinator.requestDecision({ ...bashRequest, requestId: 'retained-occurrence',
+            turnId: 'turn-1', lifetime: 'occurrence', owner }).catch(() => null);
+        coordinator.cancelRequest('retained-occurrence', 'Transport detached');
+        await occurrence;
+        await coordinator.cancelByPluginTurn('plugin-a', 'turn-1', 'agent_turn-completed');
+        expect(Object.keys(session.agentState.requests ?? {}).sort())
+            .toEqual(['other-plugin', 'other-turn', 'retained-occurrence', 'retained-question']);
+        expect(session.agentState.completedRequests?.['retiring-approval'])
+            .toMatchObject({ status: 'canceled', reason: 'agent_turn-completed' });
+    });
+
+    it.each(['dispose', 'reset', 'plugin', 'turn', 'signal'] as const)(
+        'retains native and occurrence questions through incidental %s while retiring approvals', async (lifecycle) => {
+            const { coordinator, session, store } = createHarness();
+            const owner = { kind: 'plugin' as const, pluginId: 'plugin-a' };
+            const question = { requestId: 'native-question', toolName: 'AskUserQuestion',
+                toolInput: { questions: [{ question: 'Which branch?' }] }, createdAt: 1, turnId: 'turn-1', owner };
+            const asynchronous = { ...question, requestId: 'occurrence-question', lifetime: 'occurrence' as const };
+            const approval = { ...bashRequest, requestId: 'approval', turnId: 'turn-1', owner };
+            const abort = new AbortController();
+            const nativeWait = coordinator.requestDecision(question, { signal: abort.signal }).catch(() => null);
+            const asyncWait = coordinator.requestDecision(asynchronous, { signal: abort.signal }).catch(() => null);
+            const approvalWait = coordinator.requestDecision(approval, { signal: abort.signal }).catch(() => null);
+            const planApprovalWait = coordinator.requestDecision({ ...approval, requestId: 'plan-approval', toolName: 'ExitPlanMode' },
+                { signal: abort.signal }).catch(() => null);
+            const questionNamedApprovalWait = coordinator.requestDecision({ ...approval, requestId: 'question-named-approval',
+                toolName: 'AskUserQuestion', kind: 'permission', source: 'happier_action' },
+                { signal: abort.signal }).catch(() => null);
+            store.publishRequest({ ...question, requestId: 'stored-only-question' });
+            if (lifecycle === 'dispose') await coordinator.dispose();
+            if (lifecycle === 'reset') await coordinator.reset();
+            if (lifecycle === 'plugin') await coordinator.cancelByPlugin('plugin-a', 'agent_runtime_replaced');
+            if (lifecycle === 'turn') await coordinator.cancelByPluginTurn('plugin-a', 'turn-1', 'turn ended');
+            if (lifecycle === 'signal') {
+                abort.abort();
+                await Promise.all([nativeWait, asyncWait, approvalWait, planApprovalWait, questionNamedApprovalWait]);
+            }
+            expect(Object.keys(session.agentState.requests ?? {}).sort())
+                .toEqual(['native-question', 'occurrence-question', 'stored-only-question']);
+            expect(session.agentState.completedRequests?.approval).toMatchObject({ status: 'canceled' });
+            expect(session.agentState.completedRequests?.['plan-approval']).toMatchObject({ status: 'canceled' });
+            expect(session.agentState.completedRequests?.['question-named-approval']).toMatchObject({ status: 'canceled' });
+            await Promise.all([nativeWait, asyncWait, approvalWait, planApprovalWait, questionNamedApprovalWait]);
+            expect(coordinator.getResponseContext(question.requestId)).toMatchObject({ requestId: question.requestId });
+            const reloaded = lifecycle === 'signal' ? coordinator : createPermissionRequestCoordinator<TestPermissionResult>({ store });
+            const rejoined = lifecycle === 'signal' ? null : reloaded.requestDecision(question);
+            expect(await reloaded.handleResponse({ requestId: question.requestId, buildCompletion: () => ({
+                result: { decision: 'approved', answers: { 'Which branch?': 'main' } },
+                completedRequest: { status: 'approved', decision: 'approved' },
+            }) })).toBe(true);
+            if (rejoined) await expect(rejoined).resolves.toMatchObject({ answers: { 'Which branch?': 'main' } });
+            else expect(session.agentState.completedRequests?.[question.requestId]).toMatchObject({ status: 'approved' });
+            await reloaded.cancelAll('Explicit person Stop');
+            expect(session.agentState.requests).toEqual({});
+            expect(session.agentState.completedRequests?.['occurrence-question'])
+                .toMatchObject({ status: 'canceled', reason: 'Explicit person Stop' });
+        },
+    );
+
     it.each(['Session', 'plugin', 'foreground'] as const)('retires the provider waiter for every request the %s store cancels while an older ACK drains', async (scope) => {
         const session = new DeferredUpdateSession();
         const { coordinator } = createHarness(session);

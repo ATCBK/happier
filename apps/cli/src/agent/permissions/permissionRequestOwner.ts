@@ -42,6 +42,17 @@ export function isPermissionRequestOwnedByPlugin(
     );
 }
 
+export function isPermissionRequestOwnedByPluginTurn(
+    request: Readonly<{ owner?: PermissionRequestOwner | null; turnId?: string; lifetime?: 'turn' | 'occurrence' }>,
+    pluginId: string,
+    turnId: string,
+): boolean {
+    return Boolean(turnId.trim())
+        && request.lifetime !== 'occurrence'
+        && (request.turnId === turnId || request.turnId === undefined)
+        && isPermissionRequestOwnedByPlugin(request.owner, pluginId);
+}
+
 export function permissionRequestOwnersEqual(
     left: PermissionRequestOwner | null | undefined,
     right: PermissionRequestOwner | null | undefined,

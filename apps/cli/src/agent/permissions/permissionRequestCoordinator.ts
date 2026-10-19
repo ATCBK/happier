@@ -1,7 +1,10 @@
 import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import { deepEqual } from '@/utils/deterministicJson';
 import { logger } from '@/ui/logger';
+import { isAgentStructuredQuestionRequest } from './requestKind';
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import type { SessionQuestionContextV1, SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import type { StructuredQuestionAnswersV1 } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 import type {
     AgentStateOutstandingRequest,
     AgentStateRequestCompletion,
@@ -10,6 +13,7 @@ import type {
     AgentStateRequestResponseTarget,
     AgentStateResponseTargetDispatch,
     AgentStateRequestCancellation,
+    AgentStateQuestionHandlerChange,
     PermissionResponseClaim,
     PermissionResponseClaimAcquisition,
     PermissionResponseClaimRejoin,
@@ -25,6 +29,8 @@ import {
 } from './permissionRequestOwner';
 
 export type PermissionRequestCoordinatorRequest = Readonly<{
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     requestId: string;
     toolName: string;
     toolInput: unknown;
@@ -44,6 +50,8 @@ export type PermissionRequestCoordinatorRequest = Readonly<{
 }>;
 
 export type PermissionRequestCoordinatorContext = Readonly<{
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     requestId: string;
     toolName: string;
     toolInput: unknown;
@@ -63,6 +71,8 @@ export type PermissionRequestCoordinatorContext = Readonly<{
 }>;
 
 export type PermissionRequestCoordinatorCompletedRequest = Readonly<{
+    answeredBy?: SessionQuestionHandlerV1;
+    structuredAnswersV1?: StructuredQuestionAnswersV1;
     status: string;
     decision?: string;
     reason?: string;
@@ -80,13 +90,17 @@ export type PermissionRequestCoordinatorCompletion<TResult> = Readonly<{
 }>;
 
 export type PermissionRequestCoordinatorStore = Readonly<{
+    changeQuestionHandler?(params: AgentStateQuestionHandlerChange): Promise<boolean>;
     publishRequest(params: Readonly<{
+        questionV1?: SessionQuestionContextV1;
+        currentHandler?: SessionQuestionHandlerV1;
         requestId: string;
         toolName: string;
         toolInput: unknown;
         createdAt: number;
         mcpTool?: ResolvedMcpToolIdentityV1;
         turnId?: string;
+        lifetime?: 'turn' | 'occurrence';
         kind?: string;
         source?: string;
         responseTarget?: AgentStateRequestResponseTarget | null;
@@ -99,6 +113,8 @@ export type PermissionRequestCoordinatorStore = Readonly<{
     readAppliedCompletion?(params: AgentStateRequestCompletion): AppliedRequestCompletion | null;
     recoverAppliedCompletions?(): Promise<void>;
     completeRequest(params: Readonly<{
+        answeredBy?: SessionQuestionHandlerV1;
+        structuredAnswersV1?: StructuredQuestionAnswersV1;
         requestId: string;
         status: string;
         decision?: string;
@@ -111,11 +127,14 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         applicationAcknowledged?: AgentStateRequestApplication;
         observedRetirement?: true;
         fallback?: Readonly<{
+            questionV1?: SessionQuestionContextV1;
+            currentHandler?: SessionQuestionHandlerV1;
             toolName: string;
             mcpTool?: ResolvedMcpToolIdentityV1;
             toolInput: unknown;
             createdAt: number;
             turnId?: string;
+            lifetime?: 'turn' | 'occurrence';
             kind?: string;
             source?: string;
             responseTarget?: AgentStateRequestResponseTarget | null;
@@ -127,12 +146,15 @@ export type PermissionRequestCoordinatorStore = Readonly<{
     }>): boolean | void | Promise<boolean | void>;
     cancelAllRequests?(params: Readonly<{
         scope?: 'foreground';
+        preserveQuestions?: boolean;
         reason: string;
         decision?: string;
         requestIds: readonly string[];
     }>): Promise<readonly AgentStateRequestCancellation[]>;
     cancelRequestsByOwner?(params: Readonly<{
         owner: PermissionRequestOwner;
+        turnId?: string;
+        preserveQuestions?: boolean;
         observedRetirement?: true;
         reason: string;
         decision?: string;
@@ -175,6 +197,8 @@ type PendingPermissionWaiter<TResult> = {
 };
 
 type PendingPermissionRequest<TResult> = {
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     requestId: string;
     toolName: string;
     toolInput: unknown;
@@ -296,6 +320,8 @@ export class PermissionRequestCoordinator<TResult> {
             toolName: request.toolName,
             toolInput: request.toolInput,
             createdAt: request.createdAt ?? Date.now(),
+            ...(request.questionV1 ? { questionV1: request.questionV1 } : {}),
+            ...(request.currentHandler ? { currentHandler: request.currentHandler } : {}),
             ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
             lifetime: request.lifetime ?? 'turn',
             ...(typeof request.turnId === 'string' ? { turnId: request.turnId } : {}),
@@ -316,21 +342,29 @@ export class PermissionRequestCoordinator<TResult> {
         };
 
         this.pendingRequests.set(request.requestId, entry);
-        this.store.publishRequest({
-            requestId: entry.requestId,
-            toolName: entry.toolName,
-            toolInput: entry.toolInput,
-            createdAt: entry.createdAt,
-            ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
-            ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
-            ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
-            ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
-            ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
-            ...(typeof entry.subagentRef !== 'undefined' ? { subagentRef: entry.subagentRef } : {}),
-            ...(typeof entry.sidechainId === 'string' ? { sidechainId: entry.sidechainId } : {}),
-            ...(typeof entry.permissionSuggestions !== 'undefined' ? { permissionSuggestions: entry.permissionSuggestions } : {}),
-            ...(entry.owner ? { owner: entry.owner } : {}),
-        });
+        try {
+            this.store.publishRequest({
+                requestId: entry.requestId,
+                toolName: entry.toolName,
+                toolInput: entry.toolInput,
+                createdAt: entry.createdAt,
+                ...(entry.questionV1 ? { questionV1: entry.questionV1 } : {}),
+                ...(entry.currentHandler ? { currentHandler: entry.currentHandler } : {}),
+                ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
+                ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                lifetime: entry.lifetime,
+                ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
+                ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
+                ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
+                ...(typeof entry.subagentRef !== 'undefined' ? { subagentRef: entry.subagentRef } : {}),
+                ...(typeof entry.sidechainId === 'string' ? { sidechainId: entry.sidechainId } : {}),
+                ...(typeof entry.permissionSuggestions !== 'undefined' ? { permissionSuggestions: entry.permissionSuggestions } : {}),
+                ...(entry.owner ? { owner: entry.owner } : {}),
+            });
+        } catch (error) {
+            if (this.pendingRequests.get(request.requestId) === entry) this.pendingRequests.delete(request.requestId);
+            throw error;
+        }
 
         return this.attachWaiter(entry, options?.signal);
     }
@@ -351,6 +385,8 @@ export class PermissionRequestCoordinator<TResult> {
                 toolName: entry.toolName,
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
+                ...(entry.questionV1 ? { questionV1: entry.questionV1 } : {}),
+                ...(entry.currentHandler ? { currentHandler: entry.currentHandler } : {}),
                 ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
                 ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
                 ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
@@ -376,6 +412,8 @@ export class PermissionRequestCoordinator<TResult> {
             toolName: outstanding.toolName,
             toolInput: outstanding.toolInput,
             createdAt: outstanding.createdAt,
+            ...(outstanding.questionV1 ? { questionV1: outstanding.questionV1 } : {}),
+            ...(outstanding.currentHandler ? { currentHandler: outstanding.currentHandler } : {}),
             ...(outstanding.mcpTool ? { mcpTool: outstanding.mcpTool } : {}),
             ...(typeof outstanding.turnId === 'string' ? { turnId: outstanding.turnId } : {}),
             ...(typeof outstanding.kind === 'string' ? { kind: outstanding.kind } : {}),
@@ -405,6 +443,17 @@ export class PermissionRequestCoordinator<TResult> {
             if (context) contexts.push(context);
         }
         return contexts;
+    }
+
+    /** The answer owner holds withResponseClaim while admitting and passing up. */
+    async changeQuestionHandler(params: AgentStateQuestionHandlerChange): Promise<boolean> {
+        const entry = this.pendingRequests.get(params.requestId);
+        if (entry?.cancelReason || entry?.completionPersistence) return false;
+        const changed = await this.store.changeQuestionHandler?.(params) ?? false;
+        if (changed && entry) {
+            entry.currentHandler = this.store.readOutstandingRequest(params.requestId)?.currentHandler ?? params.currentHandler;
+        }
+        return changed;
     }
 
     async withResponseClaim<T>(
@@ -509,7 +558,10 @@ export class PermissionRequestCoordinator<TResult> {
                         toolName: entry.toolName,
                         toolInput: entry.toolInput,
                         createdAt: entry.createdAt,
+                        ...(entry.questionV1 ? { questionV1: entry.questionV1 } : {}),
+                        ...(entry.currentHandler ? { currentHandler: entry.currentHandler } : {}),
                         ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                        lifetime: entry.lifetime,
                         ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
                         ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
                         ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
@@ -671,7 +723,10 @@ export class PermissionRequestCoordinator<TResult> {
                             toolName: entry.toolName,
                             toolInput: entry.toolInput,
                             createdAt: entry.createdAt,
+                            ...(entry.questionV1 ? { questionV1: entry.questionV1 } : {}),
+                            ...(entry.currentHandler ? { currentHandler: entry.currentHandler } : {}),
                             ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                            lifetime: entry.lifetime,
                             ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
                             ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
                             ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
@@ -691,10 +746,11 @@ export class PermissionRequestCoordinator<TResult> {
         }
     }
 
-    async cancelAll(reason: string, options?: Readonly<{ scope: 'foreground' }>): Promise<void> {
+    async cancelAll(reason: string, options?: Readonly<{ scope?: 'foreground'; preserveQuestions?: boolean }>): Promise<void> {
         const isSelected = (requestId: string) => options?.scope !== 'foreground'
             || !readRunScopedExecutionPermissionRequestIdentity(requestId);
-        const entries = [...this.pendingRequests.values()].filter(entry => isSelected(entry.requestId));
+        const selectedEntries = [...this.pendingRequests.values()].filter(entry => isSelected(entry.requestId));
+        const entries = selectedEntries.filter(entry => !options?.preserveQuestions || !isAgentStructuredQuestionRequest(entry));
         const cachedDecisions = [...this.cachedDecisions.entries()].filter(([requestId]) => isSelected(requestId));
         // The Session store may hold requests without coordinator-local waiters.
         await this.cancelEntries({
@@ -702,11 +758,17 @@ export class PermissionRequestCoordinator<TResult> {
             reason,
             persist: async (requestIds) => await this.store.cancelAllRequests?.({
                 ...(options?.scope ? { scope: options.scope } : {}),
+                ...(options?.preserveQuestions ? { preserveQuestions: true } : {}),
                 reason,
                 decision: 'abort',
                 requestIds,
             }),
         });
+        if (options?.preserveQuestions) {
+            for (const entry of selectedEntries) {
+                if (isAgentStructuredQuestionRequest(entry)) this.cancelRequest(entry.requestId, reason);
+            }
+        }
         for (const [requestId, cached] of cachedDecisions) {
             if (this.cachedDecisions.get(requestId) === cached) this.cachedDecisions.delete(requestId);
         }
@@ -715,18 +777,35 @@ export class PermissionRequestCoordinator<TResult> {
     async cancelByPluginTurn(pluginId: string, turnId: string, reason: string): Promise<void> {
         const normalizedPluginId = pluginId.trim();
         if (!normalizedPluginId || !turnId.trim()) return;
-        const requestIds = [...this.pendingRequests.values()]
-            .filter((entry) => isPermissionRequestOwnedByPluginTurn(entry, normalizedPluginId, turnId))
-            .map((entry) => entry.requestId);
-        await this.cancelRequests(requestIds, reason);
+        const entries = [...this.pendingRequests.values()]
+            .filter((entry) => !isAgentStructuredQuestionRequest(entry)
+                && isPermissionRequestOwnedByPluginTurn(entry, normalizedPluginId, turnId));
+        if (entries.length > 0 || this.store.listOutstandingRequests().some(
+            entry => !isAgentStructuredQuestionRequest(entry)
+                && isPermissionRequestOwnedByPluginTurn(entry, normalizedPluginId, turnId),
+        )) {
+            await this.cancelEntries({ entries, reason,
+                persist: async requestIds => await this.store.cancelRequestsByOwner?.({
+                    owner: { kind: 'plugin', pluginId: normalizedPluginId }, turnId,
+                    preserveQuestions: true, reason, decision: 'abort', requestIds,
+                    ...(entries.length === 0 ? { observedRetirement: true } : {}),
+                }),
+            });
+        }
+        for (const entry of this.pendingRequests.values()) {
+            if (isAgentStructuredQuestionRequest(entry)
+                && isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId)
+                && (entry.turnId === undefined || entry.turnId === turnId)) this.cancelRequest(entry.requestId, reason);
+        }
     }
 
     async cancelByPlugin(pluginId: string, reason: string): Promise<void> {
         const normalizedPluginId = pluginId.trim();
         if (!normalizedPluginId) return;
-        const ownedEntries = [...this.pendingRequests.values()].filter(
+        const allOwnedEntries = [...this.pendingRequests.values()].filter(
             (entry) => isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId),
         );
+        const ownedEntries = allOwnedEntries.filter(entry => !isAgentStructuredQuestionRequest(entry));
         if (ownedEntries.length > 0 || this.store.listOutstandingRequests().some(
             entry => isPermissionRequestOwnedByPlugin(entry.owner, normalizedPluginId),
         )) {
@@ -735,6 +814,7 @@ export class PermissionRequestCoordinator<TResult> {
                 reason,
                 persist: async (requestIds) => await this.store.cancelRequestsByOwner?.({
                     owner: { kind: 'plugin', pluginId: normalizedPluginId },
+                    preserveQuestions: true,
                     reason,
                     decision: 'abort',
                     requestIds,
@@ -742,7 +822,9 @@ export class PermissionRequestCoordinator<TResult> {
                 }),
             });
         }
-
+        for (const entry of allOwnedEntries) {
+            if (isAgentStructuredQuestionRequest(entry)) this.cancelRequest(entry.requestId, reason);
+        }
     }
 
     private async cancelEntries(params: Readonly<{
@@ -806,11 +888,11 @@ export class PermissionRequestCoordinator<TResult> {
     }
 
     async reset(): Promise<void> {
-        await this.cancelAll('Permission coordinator reset');
+        await this.cancelAll('Permission coordinator reset', { preserveQuestions: true });
     }
 
     async dispose(): Promise<void> {
-        await this.cancelAll('Permission coordinator disposed');
+        await this.cancelAll('Permission coordinator disposed', { preserveQuestions: true });
     }
 
     private attachWaiter(entry: PendingPermissionRequest<TResult>, signal: AbortSignal | undefined): Promise<TResult> {
@@ -849,6 +931,14 @@ export class PermissionRequestCoordinator<TResult> {
             return;
         }
 
+        if (isAgentStructuredQuestionRequest(entry)) {
+            // The native waiter belongs to this runtime; its question belongs
+            // to the durable Session and remains answerable after replacement.
+            rejectWaiter(waiter, createPermissionRequestAbortError());
+            this.cancelRequest(entry.requestId, 'Permission request detached');
+            return;
+        }
+
         if (
             entry.completionPersistence
             || this.store.hasPermissionResponseClaim?.(entry.requestId) === true
@@ -883,7 +973,10 @@ export class PermissionRequestCoordinator<TResult> {
                 ...(entry.mcpTool ? { mcpTool: entry.mcpTool } : {}),
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
+                ...(entry.questionV1 ? { questionV1: entry.questionV1 } : {}),
+                ...(entry.currentHandler ? { currentHandler: entry.currentHandler } : {}),
                 ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                lifetime: entry.lifetime,
                 ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
                 ...(typeof entry.source === 'string' ? { source: entry.source } : {}),
                 ...(entry.responseTarget ? { responseTarget: entry.responseTarget } : {}),
@@ -984,6 +1077,7 @@ function isCompatibleOutstandingRequest(
         || !deepEqual(outstanding.toolInput, request.toolInput)
         || !deepEqual(outstanding.responseTarget ?? null, request.responseTarget ?? null)
         || !permissionSourcesEqual(outstanding.source, request.source)
+        || (outstanding.lifetime !== undefined && outstanding.lifetime !== (request.lifetime ?? 'turn'))
         || !permissionOwnersEqual(outstanding.owner, normalizePermissionRequestOwner(request.owner))
     ) {
         return false;
@@ -1015,7 +1109,9 @@ function createPendingRequestFromOutstanding<TResult>(
         ...(outstanding.mcpTool ? { mcpTool: outstanding.mcpTool } : {}),
         toolInput: outstanding.toolInput,
         createdAt: outstanding.createdAt,
-        lifetime,
+        ...(outstanding.questionV1 ? { questionV1: outstanding.questionV1 } : {}),
+        ...(outstanding.currentHandler ? { currentHandler: outstanding.currentHandler } : {}),
+        lifetime: outstanding.lifetime ?? lifetime,
         ...(typeof outstanding.turnId === 'string' ? { turnId: outstanding.turnId } : {}),
         ...(typeof outstanding.kind === 'string' ? { kind: outstanding.kind } : {}),
         ...(typeof outstanding.source === 'string' ? { source: outstanding.source } : {}),

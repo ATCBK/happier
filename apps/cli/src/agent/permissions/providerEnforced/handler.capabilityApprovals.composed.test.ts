@@ -101,8 +101,11 @@ async function fixture() {
             readSession: async () => ({ metadata: read('session').content as object, revision: read('session').revision,
                 sessionRunning: true, agent: { vendorResume: 'supported', skillsLiveReload: 'supported' }, launchRestart: 'automatic' }),
             resolveItem: async ({ id }) => catalog().servers.some(server => server.id === id) ? id : null,
-            writeMetadata: async ({ metadata, expectedRevision }) => db.prepare('UPDATE rows SET content = ?, revision = revision + 1 WHERE id = ? AND revision = ?')
-                .run(JSON.stringify(metadata), 'session', expectedRevision).changes ? 'updated' : 'conflict',
+            writeMetadata: async ({ update }) => {
+                const current = read('session');
+                return db.prepare('UPDATE rows SET content = ?, revision = revision + 1 WHERE id = ? AND revision = ?')
+                    .run(JSON.stringify(update(current.content as object)), 'session', current.revision).changes ? 'updated' : 'conflict';
+            },
         },
         approvalsCreate: async ({ request }) => {
             const parsed = ApprovalRequestSchema.parse(request);
@@ -211,7 +214,8 @@ it('Agent enable uses the existing request with reason and Always preserves the 
             }, changeRules: change => reach.getCurrent().change(change), undoRules: () => reach.getCurrent().undoLast() });
         f.setFailWrite(true);
         await act(async () => { await controller.choose('always'); });
-        expect(controller.getSnapshot()).toMatchObject({ status: 'always_failed', approved: true });
+        expect(controller.getSnapshot(), JSON.stringify({ replayResult, approval: f.readApproval() }))
+            .toMatchObject({ status: 'always_failed', approved: true });
         expect(readSessionCapabilitySelectionFromMetadataV1(f.metadata()).mcp.forceIncludeServerIds).toEqual(['github-id']);
         expect(resolveReachV1(f.catalog().bindings, { agentId: 'gemini', machineId: 'machine', projectKey: 'project', machinePlatform: 'posix', directory: '/repo' }).enabled).toBe(false);
         f.setFailWrite(false);

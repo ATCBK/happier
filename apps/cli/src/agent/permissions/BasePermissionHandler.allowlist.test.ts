@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { isDeepStrictEqual } from 'node:util';
 import { SESSION_REMOTE_PERMISSION_ACTIVE_GRANTS_MAX } from '@happier-dev/protocol';
+import { SessionPermissionRemotePendingListOutputV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 import { createDeferred } from '@/testkit/async/deferred';
 import { BasePermissionHandler, type PermissionResult } from './BasePermissionHandler';
 import type {
@@ -37,12 +39,19 @@ class FakeSession {
     return this.agentState;
   }
 
+  getServerFeaturesSnapshot() {
+    return { status: 'ready', features: { capabilities: { serverIdentity: { serverIdentityId: 'home-one' } } } };
+  }
+
   updateAgentState(updater: any) {
+    const previousRequests = this.agentState.requests;
     const nextState = updater(this.agentState);
-    if (Object.values(nextState.requests ?? {}).some((request: any) => (
+    // Unrelated AgentState writes can retain an already persisted claim.
+    if (Object.entries(nextState.requests ?? {}).some(([requestId, request]) => (
       request
       && typeof request === 'object'
-      && Object.hasOwn(request, 'permissionResponseClaimV1')
+      && 'permissionResponseClaimV1' in request
+      && !isDeepStrictEqual(previousRequests?.[requestId]?.permissionResponseClaimV1, request.permissionResponseClaimV1)
     ))) {
       this.permissionResponseClaimWriteCount += 1;
     }
@@ -665,7 +674,10 @@ describe('BasePermissionHandler allowlist', () => {
     }
   });
 
-  it('does not certify exact absence when a live source-bound question exceeds the remote projection', async () => {
+  it.each([
+    { questionCount: 5, choiceCount: 2 },
+    { questionCount: 1, choiceCount: 9 },
+  ])('keeps an above-cap form locally answerable and refuses remote partial answers: %o', async ({ questionCount, choiceCount }) => {
     const session = new FakeSession();
     const handler = new TestPermissionHandler(session as any);
     const sourceAuthority = {
@@ -677,9 +689,9 @@ describe('BasePermissionHandler allowlist', () => {
       remoteApprovalMaxScope: 'off',
     } as const;
     const pending = handler.request('remote-overbound-question', 'AskUserQuestion', {
-      questions: Array.from({ length: 5 }, (_, index) => ({
+      questions: Array.from({ length: questionCount }, (_, index) => ({
         question: `Question ${index + 1}?`,
-        options: [{ label: 'Yes' }, { label: 'No' }],
+        options: Array.from({ length: choiceCount }, (_, choice) => ({ label: `Choice ${choice + 1}` })),
       })),
     }, {
       causalPermissionContext: {
@@ -693,15 +705,46 @@ describe('BasePermissionHandler allowlist', () => {
     });
 
     try {
-      expect(handler.listMediatedPendingRequests({
+      const projection = handler.listMediatedPendingRequests({
         mediatorPluginId: 'happier.channels',
         sourceRef: 'binding:ops',
         sourceRevisionOrEpoch: '42',
-      })).toEqual({ requests: [], truncated: true, nextCursor: null });
+      });
+      expect(SessionPermissionRemotePendingListOutputV1Schema.safeParse(projection).success).toBe(true);
+      expect(projection).toMatchObject({
+        requests: [{
+          kind: 'user_action', requestId: 'remote-overbound-question',
+          turnId: 'turn-remote-overbound-question',
+          agentRequestSummary: { kind: 'user_action', questions: [], fullForm: { questionCount, url: expect.stringContaining('/session/session-1?serverId=home-one') } },
+        }],
+        truncated: false,
+        nextCursor: null,
+      });
       expect(await settledState(pending)).toBe('pending');
+      await expect(handler.respondToMediatedPendingUserAction({
+        sessionId: session.sessionId,
+        turnId: 'turn-remote-overbound-question',
+        requestId: 'remote-overbound-question',
+        sourceRef: 'binding:ops',
+        sourceRevisionOrEpoch: '42',
+        answers: [{ questionIndex: 0, values: ['Choice 1'] }],
+        mediator: { pluginId: 'happier.channels', contributionLocalId: 'discord' },
+      })).resolves.toEqual({ status: 'rejected', code: 'answerInvalid' });
+      expect(await settledState(pending)).toBe('pending');
+      expect(session.agentState.requests['remote-overbound-question'].arguments.questions).toHaveLength(questionCount);
+      const answers = Object.fromEntries(Array.from({ length: questionCount }, (_, index) => [
+        `Question ${index + 1}?`, ['Choice 1'],
+      ]));
+      const answerInHappier = session.rpcHandlerManager.handlers.get('session.user_action.answer');
+      await answerInHappier!({
+        id: 'remote-overbound-question',
+        approved: true,
+        answers,
+      }, serverStampedPermissionContext());
+      await expect(pending).resolves.toEqual({ decision: 'approved', answers });
     } finally {
       await handler.reset();
-      await expect(pending).rejects.toThrow('Session reset');
+      await Promise.allSettled([pending]);
     }
   });
 
@@ -5198,16 +5241,19 @@ describe('BasePermissionHandler allowlist', () => {
     const session = new FakeSession();
     const handler = new TestPermissionHandler(session as any);
 
-    const input = { questions: [{ question: 'q1', choices: ['a', 'b'] }] };
+    const input = { questions: [
+      { question: 'q1', options: [{ label: 'a' }, { label: 'b' }] },
+      { question: 'q2', options: [{ label: 'Alpha, Beta' }, { label: 'Gamma' }], multiSelect: true },
+    ] };
     const promise = handler.request('perm-ask', 'AskUserQuestion', input);
 
     const rpc = session.rpcHandlerManager.handlers.get('session.user_action.answer');
     expect(rpc).toBeDefined();
-    await rpc!({
+    await expect(rpc!({
       id: 'perm-ask',
       approved: true,
       answers: { q1: ['a'], q2: ['Alpha, Beta', 'Gamma'] },
-    });
+    })).resolves.toBeUndefined();
 
     const result = await promise;
     expect(result.decision).toBe('approved');
@@ -5217,7 +5263,7 @@ describe('BasePermissionHandler allowlist', () => {
     });
   });
 
-  it('keeps the user-action answer route available after a turn reset', async () => {
+  it('keeps a preserved question and the user-action answer route available after a turn reset', async () => {
     const session = new FakeSession();
     const handler = new TestPermissionHandler(session as any);
     const previous = handler.request('previous-question', 'AskUserQuestion', {
@@ -5226,6 +5272,7 @@ describe('BasePermissionHandler allowlist', () => {
     const previousCancelled = expect(previous).rejects.toThrow('Session reset');
     await handler.reset();
     await previousCancelled;
+    expect(session.agentState.requests['previous-question']).toBeDefined();
 
     const rpc = session.rpcHandlerManager.handlers.get('session.user_action.answer');
     expect(rpc).toBeDefined();
@@ -5233,10 +5280,10 @@ describe('BasePermissionHandler allowlist', () => {
       id: 'previous-question',
       approved: true,
       answers: { 'Previous?': ['Yes'] },
-    })).resolves.toEqual({
-      ok: false,
-      errorCode: 'permission_request_not_found',
-      requestId: 'previous-question',
+    })).resolves.toBeUndefined();
+    expect(session.agentState.requests['previous-question']).toBeUndefined();
+    expect(session.agentState.completedRequests['previous-question']).toMatchObject({
+      status: 'approved', structuredAnswersV1: { 'Previous?': ['Yes'] },
     });
 
     const next = handler.request('next-question', 'AskUserQuestion', {
@@ -5254,18 +5301,19 @@ describe('BasePermissionHandler allowlist', () => {
     expect(session.agentState.requests['next-question']).toBeUndefined();
   });
 
-  it('retains the released preview scalar answer reader for old UI to new CLI skew', async () => {
+  it('accepts predecessor scalar answers through the legacy permission adapter', async () => {
     const session = new FakeSession();
     const handler = new TestPermissionHandler(session as any);
     const promise = handler.request('perm-ask-legacy', 'AskUserQuestion', {
-      questions: [{ question: 'q1', choices: ['a', 'b'] }],
+      questions: [{ question: 'q1', options: [{ label: 'Alpha, Beta' }, { label: 'Gamma' }] }],
     });
 
-    await session.rpcHandlerManager.handlers.get('session.user_action.answer')!({
+    // ui-web-v0.2.10-dev.177 (2811eddd55eb) sends scalar answers over `permission`.
+    await expect(session.rpcHandlerManager.handlers.get('permission')!({
       id: 'perm-ask-legacy',
       approved: true,
       answers: { q1: 'Alpha, Beta' },
-    });
+    })).resolves.toBeUndefined();
 
     await expect(promise).resolves.toMatchObject({
       decision: 'approved',
@@ -5281,13 +5329,19 @@ describe('BasePermissionHandler allowlist', () => {
     });
     const rpc = session.rpcHandlerManager.handlers.get('session.user_action.answer');
 
-    await expect(rpc!({
-      id: 'question-retryable',
-      approved: true,
-      answers: { q1: ['a', 'a'] },
-    })).rejects.toThrow('Invalid structured question answers');
-    expect(session.agentState.requests['question-retryable']).toBeDefined();
-    expect(await settledState(pending)).toBe('pending');
+    for (const answers of [{ q1: 'a' }, { q1: ['a', 'a'] }]) {
+      expect(await rpc!({
+        id: 'question-retryable',
+        approved: true,
+        answers,
+      })).toEqual({
+        ok: false,
+        errorCode: 'permission_response_invalid',
+        requestId: 'question-retryable',
+      });
+      expect(session.agentState.requests['question-retryable']).toBeDefined();
+      expect(await settledState(pending)).toBe('pending');
+    }
 
     await rpc!({
       id: 'question-retryable',

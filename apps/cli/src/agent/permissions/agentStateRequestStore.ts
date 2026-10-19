@@ -1,7 +1,7 @@
 import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import type { AgentState } from '@/api/types';
 import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
-import { HAPPIER_ACTION_REQUEST_SOURCE, resolveAgentRequestKind } from '@/agent/permissions/requestKind';
+import { HAPPIER_ACTION_REQUEST_SOURCE, isAgentStructuredQuestionRequest, resolveAgentRequestKind } from '@/agent/permissions/requestKind';
 import {
     applyAgentStateRequestPushNotifiedAt,
     clonePlainObjectToNullProto,
@@ -18,6 +18,13 @@ import {
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionPermissionApprovalReviewerClaimV1Schema, SessionPermissionAccountUserDecisionActorV1Schema, SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionIdempotencyKeyV1Schema, SessionPermissionSourceRefV1Schema, SessionPermissionSourceRevisionOrEpochV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { SessionQuestionContextV1Schema, SessionQuestionHandlerV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
+import { readForegroundAgentRequestFollowEvent as readRequestFollowEvent } from './activeForegroundRequests';
+import type { FollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
+import { SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1, projectSessionFollowRuleSharedSourceEvidenceV1, SessionFollowRuleSourceEvidenceV1Schema, type SessionFollowRuleSourceEvidenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import type { SessionQuestionContextV1, SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import type { StructuredQuestionAnswersV1 } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AccountSettings, SessionPermissionApprovalReviewerClaimV1, SessionPermissionAccountUserDecisionActorV1, SessionPermissionExternalHumanDecisionActorV1 } from '@happier-dev/protocol';
@@ -27,12 +34,19 @@ import {
 } from '@/agent/runtime/notifications/sessionNotificationContext';
 import {
     isPermissionRequestOwnedByPlugin,
+    isPermissionRequestOwnedByPluginTurn,
     normalizePermissionRequestOwner,
     type PermissionRequestOwner,
 } from './permissionRequestOwner';
 
 type AgentStateRequestEntry = NonNullable<AgentState['requests']>[string];
 type AgentStateCompletedEntry = NonNullable<AgentState['completedRequests']>[string];
+
+function isStoredQuestion(entry: Readonly<Record<string, unknown>>): boolean {
+    return isAgentStructuredQuestionRequest({ toolName: typeof entry.tool === 'string' ? entry.tool : '',
+        ...(typeof entry.kind === 'string' ? { kind: entry.kind } : {}),
+        ...(typeof entry.source === 'string' ? { source: entry.source } : {}) });
+}
 
 /**
  * The one persisted first-answer-wins claim for an outstanding permission.
@@ -196,10 +210,13 @@ export type AgentStateOutstandingRequest = Readonly<{
     requestId: string;
     toolName: string;
     toolInput: unknown;
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     createdAt: number;
     mcpTool?: ResolvedMcpToolIdentityV1;
     /** Exact host turn that owns a source-mediated pending permission. */
     turnId?: string;
+    lifetime?: 'turn' | 'occurrence';
     kind?: string;
     source?: string;
     responseTarget?: AgentStateRequestResponseTarget;
@@ -215,7 +232,13 @@ type SessionLike = Readonly<{
     updateAgentStateRequestSettlement: (updater: (state: AgentState) => AgentState) => Promise<void>;
     getAgentStateSnapshot?: () => AgentState | null | undefined;
     getMetadataSnapshot?: () => unknown;
+    getArchivedAtSnapshot?: () => number | null | undefined;
+    onArchivedAtChange?: (listener: (archivedAt: number | null) => void) => () => void;
     getAgentStateResponseTargetDispatcher?: () => AgentStateResponseTargetDispatcher;
+    captureSessionFollowRuleEvidence?: (event: FollowEventV1) => SessionFollowRuleSourceEvidenceV1 | null;
+    notifySessionFollowRuleRequestCommitted?: (occurrence: Readonly<{
+        requestId: string; createdAt: number; turnId?: string; evidence: SessionFollowRuleSourceEvidenceV1;
+    }>) => Promise<SessionActivityChangedResult | null | void> | SessionActivityChangedResult | null | void;
 }>;
 
 /**
@@ -241,9 +264,12 @@ type AgentStateRequestPublication = Readonly<{
     requestId: string;
     toolName: string;
     toolInput: unknown;
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     createdAt: number;
     mcpTool?: import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1').ResolvedMcpToolIdentityV1;
     turnId?: string;
+    lifetime?: 'turn' | 'occurrence';
     kind?: string;
     source?: string;
     responseTarget?: AgentStateRequestResponseTarget | null;
@@ -272,9 +298,19 @@ function createSessionPersistenceTarget(session: SessionLike): AgentStateRequest
 
 export type AgentStateRequestApplication = Readonly<{ pending: AgentStateRequestEntry }>;
 
+export type AgentStateQuestionHandlerChange = Readonly<{
+    requestId: string;
+    /** Existing request occurrence custody, captured before asynchronous answer admission. */
+    expectedCreatedAt: number;
+    expectedHandler: SessionQuestionHandlerV1;
+    currentHandler: SessionQuestionHandlerV1;
+}>;
+
 export type AgentStateRequestCompletion = Readonly<{
     requestId: string;
     status: string;
+    answeredBy?: SessionQuestionHandlerV1;
+    structuredAnswersV1?: StructuredQuestionAnswersV1;
     decision?: string;
     reason?: string;
     mode?: string;
@@ -288,10 +324,13 @@ export type AgentStateRequestCompletion = Readonly<{
     isCurrent?: () => boolean;
     fallback?: Readonly<{
         toolName: string;
+        questionV1?: SessionQuestionContextV1;
+        currentHandler?: SessionQuestionHandlerV1;
         mcpTool?: ResolvedMcpToolIdentityV1;
         toolInput: unknown;
         createdAt: number;
         turnId?: string;
+        lifetime?: 'turn' | 'occurrence';
         kind?: string;
         source?: string;
         responseTarget?: AgentStateRequestResponseTarget | null;
@@ -345,6 +384,8 @@ export class AgentStateRequestStore {
     private permissionRequestPushNotifier: PermissionRequestPushNotifier | null = null;
     private responseTargetDispatcher: AgentStateResponseTargetDispatcher;
     private ownsResponseTargetDispatcher: boolean;
+    private unsubscribeArchiveState: (() => void) | null = null;
+    private archiveCleanup: Promise<void> | null = null;
 
     constructor(params: Readonly<{
         session?: SessionLike;
@@ -380,6 +421,7 @@ export class AgentStateRequestStore {
         this.getAgentDisplayName = typeof params.getAgentDisplayName === 'function'
             ? params.getAgentDisplayName
             : (() => getSessionNotificationAgentDisplayName(() => this.session?.getMetadataSnapshot?.() ?? null));
+        this.observeSessionArchive();
     }
 
     updateSession(session: SessionLike): void {
@@ -387,6 +429,7 @@ export class AgentStateRequestStore {
         if (nextTarget.scopeId !== this.target.scopeId) {
             this.retireAppliedCompletions();
             this.appliedCompletions = new Map();
+            this.archiveCleanup = null;
         }
         const nextDispatcher = nextTarget.getResponseTargetDispatcher?.();
         if (nextDispatcher) {
@@ -398,15 +441,41 @@ export class AgentStateRequestStore {
         }
         this.session = session;
         this.target = nextTarget;
+        this.observeSessionArchive();
         this.permissionRequestPushNotifier?.dispose();
         this.permissionRequestPushNotifier = null;
 
         // Handlers outlive the transport reference. The completed projection
         // is the durable recovery source, so each authoritative rebind gets
         // one best-effort, at-least-once replay through the existing handler.
-        for (const kind of [...this.responseTargetDispatcher.kinds()]) {
-            this.replayCompletedResponseTargetsForHandler(kind);
-        }
+        this.replayCompletedResponseTargets();
+    }
+
+    private isSessionArchived(): boolean {
+        return this.session?.getArchivedAtSnapshot?.() != null;
+    }
+
+    private observeSessionArchive(): void {
+        this.unsubscribeArchiveState?.();
+        const reconcile = () => {
+            void this.reconcileSessionArchive().catch(error => {
+                logger.infoFile(`${this.logPrefix} Archived Session request withdrawal failed`, {
+                    errorName: error instanceof Error ? error.name : typeof error,
+                });
+            });
+        };
+        this.unsubscribeArchiveState = this.session?.onArchivedAtChange?.(reconcile) ?? null;
+        reconcile();
+    }
+
+    /** Archive is an explicit withdrawal, including when a retained host is first rebound. */
+    async reconcileSessionArchive(): Promise<void> {
+        if (!this.isSessionArchived()) return;
+        if (this.archiveCleanup) return await this.archiveCleanup;
+        const cleanup = this.cancelAllRequests({ reason: 'Session archived', decision: 'abort', requestIds: [] }).then(() => undefined);
+        this.archiveCleanup = cleanup;
+        try { await cleanup; }
+        finally { if (this.archiveCleanup === cleanup) this.archiveCleanup = null; }
     }
 
     /** A replacement view of the same live Session keeps one applied-fact owner. */
@@ -418,6 +487,7 @@ export class AgentStateRequestStore {
 
     captureRequestApplication(requestId: string): AgentStateRequestApplication | null {
         const pending = this.target.readState()?.requests?.[requestId];
+        if (pending && this.isSessionArchived() && isStoredQuestion(pending)) return null;
         return pending ? { pending: structuredClone(pending) } : null;
     }
 
@@ -468,6 +538,7 @@ export class AgentStateRequestStore {
     }
 
     async recoverAppliedCompletions(): Promise<void> {
+        await this.reconcileSessionArchive();
         if (this.appliedCompletions.size === 0) return;
         await Promise.resolve(this.target.updateState((state) => this.applyAppliedCompletions(state)));
         this.confirmAppliedCompletions();
@@ -498,6 +569,14 @@ export class AgentStateRequestStore {
     readOutstandingRequest(requestId: string): AgentStateOutstandingRequest | null {
         const entry = this.target.readState()?.requests?.[requestId];
         if (!entry) return null;
+        if (this.isSessionArchived() && isStoredQuestion(entry)) return null;
+
+        // Session adapters can expose raw AgentState before SessionCore's stored-read schema.
+        // A malformed present context cannot acquire the absent legacy wait/person meaning.
+        if (entry.questionV1 !== undefined && !SessionQuestionContextV1Schema.safeParse(entry.questionV1).success
+            || entry.currentHandler !== undefined && !SessionQuestionHandlerV1Schema.safeParse(entry.currentHandler).success) {
+            throw new Error('invalid_question_metadata');
+        }
 
         const metadata = readAgentStateRequestMetadata(entry);
 
@@ -520,6 +599,37 @@ export class AgentStateRequestStore {
             if (request) outstanding.push(request);
         }
         return outstanding;
+    }
+
+    /** Pass-up changes the same live question, without settling its answer or waiters. */
+    async changeQuestionHandler(params: AgentStateQuestionHandlerChange): Promise<boolean> {
+        if (this.isSessionArchived()) return false;
+        const nextHandler = SessionQuestionHandlerV1Schema.parse(params.currentHandler);
+        let changed: AgentStateRequestEntry | null = null;
+        await Promise.resolve(this.target.updateState((state) => {
+            // A discarded updater attempt cannot authorize a notification.
+            changed = null;
+            if (this.isSessionArchived()) return state;
+            const pending = state.requests?.[params.requestId];
+            if (!pending || !SessionQuestionContextV1Schema.safeParse(pending.questionV1).success
+                || pending.createdAt !== params.expectedCreatedAt
+                || !deepEqual(pending.currentHandler, params.expectedHandler)
+                || deepEqual(pending.currentHandler, nextHandler)
+                || isAgentStateRequestCoveredByCompletedRequests({ requestId: params.requestId,
+                    request: pending, completedRequests: state.completedRequests,
+                    options: PENDING_REQUEST_COVERAGE_OPTIONS })) return state;
+            changed = { ...pending, currentHandler: nextHandler };
+            const requests = cloneStringKeyedRecordToNullProto<AgentStateRequestEntry>(state.requests);
+            requests[params.requestId] = changed;
+            return { ...state, requests };
+        }));
+        if (!changed) return false;
+        if (nextHandler.kind === 'person') {
+            const pending = this.readOutstandingRequest(params.requestId);
+            if (pending) this.notifyPermissionRequestPushBestEffort({ permissionId: params.requestId,
+                toolName: pending.toolName, toolInput: pending.toolInput, createdAtMs: pending.createdAt });
+        }
+        return true;
     }
 
     /**
@@ -703,14 +813,30 @@ export class AgentStateRequestStore {
         return unsubscribe;
     }
 
-    private beginRequestPublication(params: AgentStateRequestPublication): Readonly<{
+    /** A successful snapshot/reconnect retries retained source-owned deliveries. */
+    replayCompletedResponseTargets(): void {
+        for (const kind of [...this.responseTargetDispatcher.kinds()]) {
+            this.replayCompletedResponseTargetsForHandler(kind);
+        }
+    }
+
+    private beginRequestPublication(params: AgentStateRequestPublication, preserveExisting = false): Readonly<{
         result: Promise<void> | void;
         notify: () => void;
     }> {
+        const assertActiveQuestion = () => {
+            if (this.isSessionArchived() && isAgentStructuredQuestionRequest(params)) {
+                throw Object.assign(new Error('session_archived'), { code: 'session_archived' });
+            }
+        };
+        assertActiveQuestion();
         let shouldNotify = false;
         let didRunUpdater = false;
+        let publishedRequest: AgentStateRequestEntry | null = null;
         const notify = () => {
             if (!didRunUpdater || !shouldNotify) return;
+            const current = this.target.readState()?.requests?.[params.requestId];
+            if (!current || !publishedRequest || !isSameAgentStateRequestOccurrence(current, publishedRequest)) return;
             this.notifyPermissionRequestPushBestEffort({
                 permissionId: params.requestId,
                 toolName: params.toolName,
@@ -720,7 +846,12 @@ export class AgentStateRequestStore {
         };
 
         const result = this.target.updateState((currentState) => {
+            assertActiveQuestion();
             didRunUpdater = true;
+            // A transcript mirror has no new request tuple. It cannot replace
+            // an owning producer's pending question or revive its completion.
+            if (preserveExisting && (Object.hasOwn(currentState.requests ?? {}, params.requestId)
+                || Object.hasOwn(currentState.completedRequests ?? {}, params.requestId))) return currentState;
             const requests = cloneStringKeyedRecordToNullProto<AgentStateRequestEntry>(currentState.requests);
             const completedRequests = cloneStringKeyedRecordToNullProto<AgentStateCompletedEntry>(currentState.completedRequests);
             const existingOutstanding = clonePlainObjectToNullProto(requests[params.requestId]);
@@ -743,6 +874,37 @@ export class AgentStateRequestStore {
                 entry.permissionSuggestions = [...params.permissionSuggestions];
             }
             applyAgentStateRequestMetadata(entry, params);
+            const sameOccurrence = existingOutstanding && isSameAgentStateRequestOccurrence(existingOutstanding, entry);
+            if (sameOccurrence) {
+                // Native notifier acceptance belongs to the original request,
+                // so a handler reload must not reopen its delivered alert.
+                if (typeof existingOutstanding.pushNotifiedAt === 'number'
+                    && Number.isFinite(existingOutstanding.pushNotifiedAt) && existingOutstanding.pushNotifiedAt > 0) {
+                    entry.pushNotifiedAt = existingOutstanding.pushNotifiedAt;
+                }
+                // A rejoined request keeps its production-time facts, including
+                // absence on historical requests; current metadata is not proof.
+                if (Object.hasOwn(existingOutstanding, SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1)) {
+                    entry[SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1] = existingOutstanding[SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1];
+                }
+            } else if (!params.sidechainId && !readRunScopedExecutionPermissionRequestIdentity(params.requestId)) {
+                const event = readRequestFollowEvent(entry);
+                const evidence = event && this.session?.captureSessionFollowRuleEvidence?.(event);
+                // Session request state is shared with Session readers. Account-
+                // private project/tag evidence must remain at its private owner.
+                if (evidence) entry[SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1] = projectSessionFollowRuleSharedSourceEvidenceV1(evidence);
+            }
+            if (existingOutstanding) {
+                const retained = readAgentStateRequestMetadata(existingOutstanding);
+                const candidate = { ...entry,
+                    ...(!entry.questionV1 && retained.questionV1 ? { questionV1: retained.questionV1 } : {}),
+                };
+                if (isSameAgentStateRequestOccurrence(existingOutstanding, candidate)) {
+                    // Rebinding an existing host must not select the handler again.
+                    if (retained.questionV1) entry.questionV1 = retained.questionV1;
+                    if (retained.currentHandler) entry.currentHandler = retained.currentHandler;
+                }
+            }
             delete completedRequests[params.requestId];
             if (isAgentStateRequestCoveredByCompletedRequests({
                 requestId: params.requestId,
@@ -757,6 +919,7 @@ export class AgentStateRequestStore {
                 return typeof params.updateState === 'function' ? params.updateState(coveredState) : coveredState;
             }
             requests[params.requestId] = entry;
+            publishedRequest = entry;
             shouldNotify = true;
 
             const nextState: AgentState = {
@@ -769,9 +932,9 @@ export class AgentStateRequestStore {
         return { result, notify };
     }
 
-    publishRequest(params: AgentStateRequestPublication): void {
+    private publishRequestBestEffort(params: AgentStateRequestPublication, preserveExisting: boolean): void {
         try {
-            const publication = this.beginRequestPublication(params);
+            const publication = this.beginRequestPublication(params, preserveExisting);
             const { result } = publication;
             if (isPromiseLike(result)) {
                 void Promise.resolve(result)
@@ -784,8 +947,18 @@ export class AgentStateRequestStore {
 
             publication.notify();
         } catch (error) {
+            if (error && typeof error === 'object' && 'code' in error && error.code === 'session_archived') throw error;
             logger.debug(`${this.logPrefix} Failed to update agent state (publish_request) (non-fatal)`, error);
         }
+    }
+
+    publishRequest(params: AgentStateRequestPublication): void {
+        this.publishRequestBestEffort(params, false);
+    }
+
+    /** Legacy transcript producers join the existing request owner; they never assert a replacement occurrence. */
+    publishMirroredRequest(params: AgentStateRequestPublication): void {
+        this.publishRequestBestEffort(params, true);
     }
 
     /**
@@ -863,6 +1036,11 @@ export class AgentStateRequestStore {
             return { state: currentState };
         }
         const existingEntry = clonePlainObjectToNullProto(existing);
+        if (this.isSessionArchived() && params.status !== 'canceled'
+            && (existingEntry ? isStoredQuestion(existingEntry)
+                : params.fallback && isAgentStructuredQuestionRequest(params.fallback))) {
+            return { state: currentState };
+        }
         if (params.observedRetirement && existingEntry) {
             const expected = params.fallback;
             // Observed retirement belongs to the detached local occurrence,
@@ -910,6 +1088,8 @@ export class AgentStateRequestStore {
 
         completedEntry.completedAt = Date.now();
         completedEntry.status = params.status;
+        if (params.answeredBy) completedEntry.answeredBy = SessionQuestionHandlerV1Schema.parse(params.answeredBy);
+        if (params.structuredAnswersV1) completedEntry.structuredAnswersV1 = params.structuredAnswersV1;
         if (typeof params.decision === 'string') completedEntry.decision = params.decision;
         if (typeof params.reason === 'string' && params.reason.length > 0) completedEntry.reason = params.reason;
         if (typeof params.mode === 'string') completedEntry.mode = params.mode;
@@ -957,9 +1137,10 @@ export class AgentStateRequestStore {
         if (!normalizedTurnId) return;
         await this.updateAgentStateAndWait((currentState) => {
             const requests = cloneStringKeyedRecordToNullProto(currentState.requests);
-            if (Object.values(requests).some((rawEntry) => (
-                clonePlainObjectToNullProto(rawEntry)?.turnId === normalizedTurnId
-            ))) return currentState;
+            if (Object.values(requests).some((rawEntry) => {
+                const entry = clonePlainObjectToNullProto(rawEntry);
+                return entry?.turnId === normalizedTurnId && !isStoredQuestion(entry);
+            })) return currentState;
 
             const completedRequests = cloneStringKeyedRecordToNullProto<AgentStateCompletedEntry>(currentState.completedRequests);
             let changed = false;
@@ -1087,6 +1268,7 @@ export class AgentStateRequestStore {
 
     async cancelAllRequests(params: Readonly<{
         scope?: 'foreground';
+        preserveQuestions?: boolean;
         reason: string;
         decision?: string;
         requestIds: readonly string[];
@@ -1096,6 +1278,8 @@ export class AgentStateRequestStore {
 
     async cancelRequestsByOwner(params: Readonly<{
         owner: PermissionRequestOwner;
+        turnId?: string;
+        preserveQuestions?: boolean;
         observedRetirement?: true;
         reason: string;
         decision?: string;
@@ -1119,10 +1303,12 @@ export class AgentStateRequestStore {
 
     private async cancelRequests(params: Readonly<{
         scope?: 'foreground';
+        preserveQuestions?: boolean;
         reason: string;
         decision?: string;
         requestIds: readonly string[];
         pluginId?: string;
+        turnId?: string;
         source?: string;
         observedRetirement?: true;
     }>): Promise<readonly AgentStateRequestCancellation[]> {
@@ -1144,6 +1330,12 @@ export class AgentStateRequestStore {
                     for (const [id, request] of Object.entries(pendingRequests)) {
                         if (params.scope === 'foreground' && readRunScopedExecutionPermissionRequestIdentity(id)) continue;
                         const entry = clonePlainObjectToNullProto(request) ?? Object.create(null);
+                        if (params.preserveQuestions && isStoredQuestion(entry)) continue;
+                        if (params.turnId && !isPermissionRequestOwnedByPluginTurn({
+                            owner: normalizePermissionRequestOwner(entry.owner, 'stored'),
+                            ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                            ...(entry.lifetime === 'occurrence' ? { lifetime: entry.lifetime } : {}),
+                        }, params.pluginId ?? '', params.turnId)) continue;
                         if (params.observedRetirement && this.canJournalRequestRetirement(id, entry) !== durableRetirement) continue;
                         if (params.source !== undefined && entry.source !== params.source) continue;
                         if (
@@ -1177,6 +1369,12 @@ export class AgentStateRequestStore {
                         const completed = completedRequests[id];
                         if (!completed) continue;
                         const entry = clonePlainObjectToNullProto(completed) ?? Object.create(null);
+                        if (params.preserveQuestions && isStoredQuestion(entry)) continue;
+                        if (params.turnId && !isPermissionRequestOwnedByPluginTurn({
+                            owner: normalizePermissionRequestOwner(entry.owner, 'stored'),
+                            ...(typeof entry.turnId === 'string' ? { turnId: entry.turnId } : {}),
+                            ...(entry.lifetime === 'occurrence' ? { lifetime: entry.lifetime } : {}),
+                        }, params.pluginId ?? '', params.turnId)) continue;
                         if (params.observedRetirement && this.canJournalRequestRetirement(id, entry) !== durableRetirement) continue;
                         if (params.source !== undefined && entry.source !== params.source) continue;
                         if (entry.status === 'canceled') continue;
@@ -1220,6 +1418,8 @@ export class AgentStateRequestStore {
     }
 
     dispose(): void {
+        this.unsubscribeArchiveState?.();
+        this.unsubscribeArchiveState = null;
         if (this.appliedCompletionOwner === this) this.retireAppliedCompletions();
         this.permissionRequestPushNotifier?.dispose();
         this.permissionRequestPushNotifier = null;
@@ -1232,6 +1432,10 @@ export class AgentStateRequestStore {
         toolInput: unknown;
         createdAtMs?: number;
     }>): void {
+        if (this.target.readState()?.requests?.[params.permissionId]?.currentHandler?.kind === 'session') {
+            void this.notifyRequestSourceCommitted(params.permissionId);
+            return;
+        }
         if (this.target.notifyRequest) {
             try {
                 void Promise.resolve(this.target.notifyRequest({
@@ -1248,7 +1452,10 @@ export class AgentStateRequestStore {
             return;
         }
         const notifier = this.getOrCreatePermissionRequestPushNotifier();
-        if (!notifier) return;
+        if (!notifier) {
+            void this.notifyRequestSourceCommitted(params.permissionId);
+            return;
+        }
 
         try {
             const snapshot = this.target.readState() ?? null;
@@ -1256,6 +1463,7 @@ export class AgentStateRequestStore {
             const notifiedAt = typeof existing?.pushNotifiedAt === 'number' ? existing.pushNotifiedAt : null;
             if (typeof notifiedAt === 'number' && Number.isFinite(notifiedAt) && notifiedAt > 0) {
                 notifier.markAlreadyNotified(params.permissionId);
+                void this.notifyRequestSourceCommitted(params.permissionId);
                 return;
             }
         } catch {
@@ -1327,6 +1535,7 @@ export class AgentStateRequestStore {
     }
 
     private dispatchResponseTargetBestEffort(dispatch: AgentStateResponseTargetDispatch | null): void {
+        if (dispatch && this.isSessionArchived() && isStoredQuestion(dispatch.completedRequest)) return;
         const delivery = this.responseTargetDispatcher.dispatch(dispatch, this.logPrefix);
         if (!dispatch || !delivery) return;
         void delivery.then(async (delivered) => {
@@ -1377,6 +1586,25 @@ export class AgentStateRequestStore {
             getSettingsSecretsReadKeys: () => this.getAccountSettingsSecretsReadKeys(),
             getSessionTitle: () => this.getSessionTitle(),
             getAgentDisplayName: () => this.getAgentDisplayName(),
+            getRequestFollowEvent: (requestId) => {
+                const request = this.target.readState()?.requests?.[requestId];
+                return request ? readRequestFollowEvent(request) : null;
+            },
+            prepareRequestNotification: async (requestId) => {
+                const request = this.target.readState()?.requests?.[requestId];
+                if (!request || request.currentHandler?.kind === 'session') return null;
+                const isCurrent = () => {
+                    const current = this.target.readState()?.requests?.[requestId];
+                    return Boolean(current && isSameAgentStateRequestOccurrence(current, request)
+                        && deepEqual(current.currentHandler, request.currentHandler) && !this.isSessionArchived());
+                };
+                const result = await this.notifyRequestSourceCommitted(requestId);
+                if (result === null || !isCurrent()) return null;
+                const contribution = result?.personalFollow;
+                const policies = contribution?.sourceSessionId === session.sessionId
+                    ? contribution.requests?.find(candidate => candidate.requestId === requestId)?.policies : undefined;
+                return { isCurrent, ...(policies ? { admittedRulePolicies: policies } : {}) };
+            },
             sessionId: session.sessionId,
             logPrefix: this.logPrefix,
             onNotifiedAt: (permissionId, notifiedAtMs) => {
@@ -1391,11 +1619,29 @@ export class AgentStateRequestStore {
 
         return this.permissionRequestPushNotifier;
     }
+
+    private async notifyRequestSourceCommitted(requestId: string): Promise<SessionActivityChangedResult | null | void> {
+        const request = this.target.readState()?.requests?.[requestId];
+        if (!request || request.sidechainId || readRunScopedExecutionPermissionRequestIdentity(requestId)) return;
+        const evidence = SessionFollowRuleSourceEvidenceV1Schema.safeParse(request[SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]);
+        if (!evidence.success) return;
+        try {
+            return await this.session?.notifySessionFollowRuleRequestCommitted?.({
+                requestId, createdAt: request.createdAt,
+                ...(request.turnId ? { turnId: request.turnId } : {}), evidence: evidence.data,
+            });
+        } catch (error) {
+            logger.debug(`${this.logPrefix} Follow request notification failed; original request retained`, error);
+        }
+    }
 }
 
 type AgentStateRequestMetadata = Readonly<{
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     source?: string;
     turnId?: string;
+    lifetime?: 'turn' | 'occurrence';
     responseTarget?: AgentStateRequestResponseTarget;
     subagentRef?: unknown;
     sidechainId?: string;
@@ -1414,12 +1660,16 @@ export function isSameAgentStateRequestOccurrence(left: unknown, right: unknown)
     const first = clonePlainObjectToNullProto(left);
     const second = clonePlainObjectToNullProto(right);
     if (!first || !second) return false;
-    const identity = (record: Record<string, unknown>) => ({
-        tool: record.tool, arguments: record.arguments, createdAt: record.createdAt,
-        kind: typeof record.kind === 'string' ? record.kind
-            : resolveAgentRequestKind(typeof record.tool === 'string' ? record.tool : ''),
-        ...readAgentStateRequestMetadata(record),
-    });
+    const identity = (record: Record<string, unknown>) => {
+        // Retirement lifetime does not mint a new occurrence; older stored rows omit it.
+        const { currentHandler: _currentHandler, lifetime: _lifetime, ...metadata } = readAgentStateRequestMetadata(record);
+        return {
+            tool: record.tool, arguments: record.arguments, createdAt: record.createdAt,
+            kind: typeof record.kind === 'string' ? record.kind
+                : resolveAgentRequestKind(typeof record.tool === 'string' ? record.tool : ''),
+            ...metadata,
+        };
+    };
     // Completion timestamps, decisions and delivery markers are not occurrence
     // identity. Native-effect application retains its stronger pendingIdentity fence.
     return deepEqual(identity(first), identity(second));
@@ -1436,9 +1686,14 @@ function readAgentStateRequestMetadata(entry: unknown): AgentStateRequestMetadat
         : undefined;
     const owner = normalizePermissionRequestOwner(record.owner, 'stored');
     const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse(record.mcpTool);
+    const question = SessionQuestionContextV1Schema.safeParse(record.questionV1);
+    const handler = SessionQuestionHandlerV1Schema.safeParse(record.currentHandler);
     return {
+        ...(question.success ? { questionV1: question.data } : {}),
+        ...(handler.success ? { currentHandler: handler.data } : {}),
         ...(typeof record.source === 'string' ? { source: record.source } : {}),
         ...(turnId.success ? { turnId: turnId.data } : {}),
+        ...(record.lifetime === 'turn' || record.lifetime === 'occurrence' ? { lifetime: record.lifetime } : {}),
         ...(responseTarget ? { responseTarget } : {}),
         ...(typeof record.subagentRef !== 'undefined' ? { subagentRef: record.subagentRef } : {}),
         ...(typeof record.sidechainId === 'string' ? { sidechainId: record.sidechainId } : {}),
@@ -1451,7 +1706,10 @@ function readAgentStateRequestMetadata(entry: unknown): AgentStateRequestMetadat
 function applyAgentStateRequestMetadata(
     entry: Record<string, unknown>,
     metadata: Readonly<{
+        questionV1?: SessionQuestionContextV1;
+        currentHandler?: SessionQuestionHandlerV1;
         turnId?: string;
+        lifetime?: 'turn' | 'occurrence';
         responseTarget?: AgentStateRequestResponseTarget | null;
         subagentRef?: unknown;
         sidechainId?: string | null;
@@ -1461,11 +1719,16 @@ function applyAgentStateRequestMetadata(
     }>,
 ): void {
     const turnId = TurnIdSchema.safeParse(metadata.turnId);
+    const question = SessionQuestionContextV1Schema.safeParse(metadata.questionV1);
+    const handler = SessionQuestionHandlerV1Schema.safeParse(metadata.currentHandler);
+    if (question.success) entry.questionV1 = question.data;
+    if (handler.success) entry.currentHandler = handler.data;
     const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse(metadata.mcpTool);
     if (mcpTool.success) entry.mcpTool = mcpTool.data;
     if (turnId.success) {
         entry.turnId = turnId.data;
     }
+    if (metadata.lifetime !== undefined) entry.lifetime = metadata.lifetime;
     const responseTarget = readResponseTarget(metadata.responseTarget);
     if (responseTarget) {
         entry.responseTarget = responseTarget;
