@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { extend, omit } from 'zod/mini';
 import {
     ProjectSourcesListInputV1Schema, ProjectSourcesListOutputV1Schema,
@@ -13,7 +13,7 @@ import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorCon
 import { createProjectSourceInTx, readProjectSourceInTx, listProjectSourcesInTx, updateProjectSourceInTx, deleteProjectSourceInTx } from '@/app/projects/sources/projectSourceService';
 import type { Fastify } from '../../types';
 
-const params = z.object({ id: z.string().min(1) }).strict();
+const params = z.strictObject({ id: z.string().check(z.minLength(1)) });
 function resultStatus(result: { ok: boolean; error?: 'source_invalid' | 'source_unavailable' }): 200 | 400 | 404;
 function resultStatus(result: { ok: boolean; error?: 'source_invalid' | 'source_unavailable' | 'source_access_denied' | 'source_conflict' }): 200 | 400 | 403 | 404 | 409;
 function resultStatus(result: { ok: boolean; error?: string }): 200 | 400 | 403 | 404 | 409 | 503;
@@ -29,7 +29,7 @@ function resultStatus(result: { ok: boolean; error?: string }): 200 | 400 | 403 
 export function projectSourceRoutes(app: Fastify): void {
     const readResponse = { 200: ProjectSourcesReadOutputV1Schema, 400: ProjectSourcesReadOutputV1Schema, 403: ProjectSourcesReadOutputV1Schema, 404: ProjectSourcesReadOutputV1Schema, 409: ProjectSourcesFailureV1Schema, 503: ProjectSourcesFailureV1Schema };
     app.get('/v1/projects/sources', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
-        querystring: extend(omit(ProjectSourcesListInputV1Schema, { audience: true, limit: true }), { audience: z.string().optional(), limit: z.coerce.number().int().positive().optional() }),
+        querystring: extend(omit(ProjectSourcesListInputV1Schema, { audience: true, limit: true }), { audience: z.optional(z.string()), limit: z.optional(z.coerce.number().check(z.int(), z.positive())) }),
         response: { 200: ProjectSourcesListOutputV1Schema, 400: ProjectSourcesListOutputV1Schema, 403: ProjectSourcesListOutputV1Schema, 404: ProjectSourcesListOutputV1Schema, 409: ProjectSourcesFailureV1Schema, 503: ProjectSourcesFailureV1Schema },
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });

@@ -1,5 +1,5 @@
 import { InactiveAccountError } from "@/app/auth/accountStatus";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { inTx } from "@/storage/inTx";
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { AccountEncryptionModeResponseSchema, AccountEncryptionCurrentnessResponseSchema, AccountEncryptionCurrentnessErrorResponseSchema, AccountEncryptionModeUpdateRequestSchema } from '@happier-dev/protocol/account/encryptionMode';

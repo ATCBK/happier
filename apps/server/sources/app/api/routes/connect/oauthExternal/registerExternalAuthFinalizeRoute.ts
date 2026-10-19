@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { type Fastify } from "../../../types";
 import {
@@ -103,10 +103,10 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                     // transfer. It is refused before any row is mutated and is
                     // reported as a typed conflict rather than a new success
                     // shape; released clients fall back on the non-2xx path.
-                    z.object({
+                    z.strictObject({
                         error: z.literal("team_membership_transfer_conflict"),
-                        details: z.object({ teamIds: z.array(z.string()) }).strict(),
-                    }).strict(),
+                        details: z.strictObject({ teamIds: z.array(z.string()) }),
+                    }),
                 ]),
             },
         },

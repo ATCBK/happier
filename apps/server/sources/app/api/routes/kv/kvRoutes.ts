@@ -1,6 +1,6 @@
 import { AccountStoredContentUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { Fastify } from "../../types";
 import { kvGet } from "@/app/kv/kvGet";
 import { kvList } from "@/app/kv/kvList";
@@ -81,11 +81,11 @@ export function kvRoutes(app: Fastify) {
                 key: z.string()
             }),
             response: {
-                200: z.object({
+                200: z.nullable(z.object({
                     key: z.string(),
                     value: z.string(),
                     version: z.number()
-                }).nullable(),
+                })),
                 404: z.object({
                     error: z.literal('Key not found')
                 }),
@@ -145,9 +145,9 @@ export function kvRoutes(app: Fastify) {
         },
         schema: {
             querystring: z.object({
-                prefix: z.string().optional(),
-                afterKey: z.string().optional(),
-                limit: z.coerce.number().int().min(1).max(1000).default(100)
+                prefix: z.optional(z.string()),
+                afterKey: z.optional(z.string()),
+                limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(1000)), 100)
             }),
             response: {
                 200: z.object({
@@ -205,7 +205,7 @@ export function kvRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             body: z.object({
-                keys: z.array(z.string()).min(1).max(100)
+                keys: z.array(z.string()).check(z.minLength(1), z.maxLength(100))
             }),
             response: {
                 200: z.object({
@@ -277,7 +277,7 @@ export function kvRoutes(app: Fastify) {
                         key: z.string(),
                         error: z.literal('version-mismatch'),
                         version: z.number(),
-                        value: z.string().nullable()
+                        value: z.nullable(z.string())
                     }))
                 }),
                 400: z.object({

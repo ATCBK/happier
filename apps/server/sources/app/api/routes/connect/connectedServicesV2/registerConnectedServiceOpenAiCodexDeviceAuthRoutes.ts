@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../../../types";
 
@@ -26,18 +26,15 @@ export function registerConnectedServiceOpenAiCodexDeviceAuthRoutes(app: Fastify
     },
     schema: {
       body: z.object({
-        publicKey: z.string()
-          .min(1)
-          .max(CONNECTED_SERVICE_OAUTH_PUBLIC_KEY_MAX_LEN)
-          .refine(isValidOpenAiCodexDeviceAuthRecipientPublicKey),
+        publicKey: z.string().check(z.minLength(1), z.maxLength(CONNECTED_SERVICE_OAUTH_PUBLIC_KEY_MAX_LEN), z.refine(isValidOpenAiCodexDeviceAuthRecipientPublicKey)),
       }),
       response: {
         200: z.object({
-          transactionId: z.string().min(1),
-          deviceAuthId: z.string().min(1),
-          userCode: z.string().min(1),
-          intervalMs: z.number().int().min(1),
-          verificationUrl: z.string().url(),
+          transactionId: z.string().check(z.minLength(1)),
+          deviceAuthId: z.string().check(z.minLength(1)),
+          userCode: z.string().check(z.minLength(1)),
+          intervalMs: z.number().check(z.int(), z.minimum(1)),
+          verificationUrl: z.string().check(z.url()),
         }),
       },
     },
@@ -61,20 +58,20 @@ export function registerConnectedServiceOpenAiCodexDeviceAuthRoutes(app: Fastify
     },
     schema: {
       body: z.union([
-        z.object({
-          transactionId: z.string().min(1).max(DEVICE_AUTH_TRANSACTION_ID_MAX_LEN),
-        }).strict(),
-        z.object({
-          publicKey: z.string().min(1).max(CONNECTED_SERVICE_OAUTH_PUBLIC_KEY_MAX_LEN),
-          deviceAuthId: z.string().min(1).max(DEVICE_AUTH_TRANSACTION_ID_MAX_LEN),
-          userCode: z.string().min(1).max(RELEASED_DEVICE_AUTH_USER_CODE_MAX_LEN),
-          intervalMs: z.number().int().min(1).optional(),
-        }).strict(),
+        z.strictObject({
+          transactionId: z.string().check(z.minLength(1), z.maxLength(DEVICE_AUTH_TRANSACTION_ID_MAX_LEN)),
+        }),
+        z.strictObject({
+          publicKey: z.string().check(z.minLength(1), z.maxLength(CONNECTED_SERVICE_OAUTH_PUBLIC_KEY_MAX_LEN)),
+          deviceAuthId: z.string().check(z.minLength(1), z.maxLength(DEVICE_AUTH_TRANSACTION_ID_MAX_LEN)),
+          userCode: z.string().check(z.minLength(1), z.maxLength(RELEASED_DEVICE_AUTH_USER_CODE_MAX_LEN)),
+          intervalMs: z.optional(z.number().check(z.int(), z.minimum(1))),
+        }),
       ]),
       response: {
         200: z.union([
-          z.object({ status: z.literal("pending"), retryAfterMs: z.number().int().min(1) }),
-          z.object({ status: z.literal("success"), bundle: z.string().min(1) }),
+          z.object({ status: z.literal("pending"), retryAfterMs: z.number().check(z.int(), z.minimum(1)) }),
+          z.object({ status: z.literal("success"), bundle: z.string().check(z.minLength(1)) }),
         ]),
         404: z.object({ error: z.literal("device_auth_transaction_not_found") }),
         410: z.object({ error: z.literal("device_auth_transaction_expired") }),

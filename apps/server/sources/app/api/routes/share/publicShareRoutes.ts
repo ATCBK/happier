@@ -1,5 +1,5 @@
 import { type Fastify } from "../../types";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { assertSessionCapabilityInTx } from "@/app/session/access/sessionAccess";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, toShareUserProfile } from "@/app/account/profile/accountDisplayProfile";
 import { registerPublicShareOwnerRoutes } from "./registerPublicShareOwnerRoutes";
@@ -35,9 +35,9 @@ export function publicShareRoutes(app: Fastify): void {
             params: z.object({
                 sessionId: z.string()
             }),
-            querystring: z.object({
-                limit: z.coerce.number().int().min(1).max(100).default(50)
-            }).optional()
+            querystring: z.optional(z.object({
+                limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(100)), 50)
+            }))
         }
     }, async (request, reply) => {
         const userId = request.userId;

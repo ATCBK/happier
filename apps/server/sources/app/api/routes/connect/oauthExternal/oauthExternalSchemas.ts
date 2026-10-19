@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { z as mini } from 'zod/mini';
 import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
 import { ManagedGitHubAppOwnerV1Schema } from '@happier-dev/protocol/identity/githubApps';
@@ -7,21 +7,21 @@ import { GitHubAppManagementAuthenticationV1Schema } from "@/app/integrations/gi
 import { ProviderReferenceSchema } from "@/app/auth/providers/providerReference";
 import { teamOAuthAdmissionSourceSchema } from "@/app/teams/memberships/teamOAuthAdmissionSource";
 
-export const oauthSecurityBindingSchema = z.object({
+export const oauthSecurityBindingSchema = z.strictObject({
     provider: ProviderReferenceSchema,
-    connection: z.object({
-        id: z.string().trim().min(1).max(512),
-        revision: z.number().int().positive(),
-    }).strict().nullable(),
-    admission: teamOAuthAdmissionSourceSchema.nullable(),
-    purpose: z.enum([
+    connection: z.nullable(z.strictObject({
+        id: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+        revision: z.number().check(z.int(), z.positive()),
+    })),
+    admission: z.nullable(teamOAuthAdmissionSourceSchema),
+    purpose: z.nullable(z.enum([
         "account_directory",
         "account_encryption_first_key",
         "account_password_enrollment",
         "team_admission",
         "identity_connection_test",
-    ]).nullable(),
-}).strict().superRefine((value, context) => {
+    ])),
+}).check(z.superRefine((value, context) => {
     if (value.purpose !== "team_admission" && value.admission !== null) {
         context.addIssue({
             code: "custom",
@@ -29,7 +29,7 @@ export const oauthSecurityBindingSchema = z.object({
             message: "Team admission authority requires the Team admission purpose",
         });
     }
-});
+}));
 
 export type OAuthSecurityBinding = z.infer<typeof oauthSecurityBindingSchema>;
 
@@ -39,46 +39,46 @@ export function hasInvalidOAuthSecurityBinding(value: unknown): boolean {
         && !oauthSecurityBindingSchema.safeParse(value.securityBinding).success;
 }
 
-export const oauthStateAttemptSchema = z.object({
+export const oauthStateAttemptSchema = z.strictObject({
     provider: z.string(),
-    callbackProvider: z.string().optional(),
-    securityBinding: oauthSecurityBindingSchema.optional(),
+    callbackProvider: z.optional(z.string()),
+    securityBinding: z.optional(oauthSecurityBindingSchema),
     pkceCodeVerifier: z.string(),
     nonce: z.string(),
-    connectFinalization: z.literal("credential_adoption_v1").optional(),
-    webAppOAuthReturnUrl: z.string().optional(),
-    purpose: z.enum([
+    connectFinalization: z.optional(z.literal("credential_adoption_v1")),
+    webAppOAuthReturnUrl: z.optional(z.string()),
+    purpose: z.optional(z.enum([
         "account_directory",
         "team_admission",
         "identity_connection_test",
         "github_app_installation_verification",
         "github_app_manifest_setup",
-    ]).optional(),
-    userId: z.string().trim().min(1).max(256).optional(),
-    proofHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
-    requestDigest: z.union([
+    ])),
+    userId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    proofHash: z.optional(z.string().check(z.regex(/^[0-9a-f]{64}$/))),
+    requestDigest: z.optional(z.union([
         AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
         PasswordCredentialMutationDigestV1Schema,
-    ]).optional(),
-    githubAppInstallationVerification: z.object({
+    ])),
+    githubAppInstallationVerification: z.optional(z.strictObject({
         owner: ManagedGitHubAppOwnerV1Schema,
-        registrationId: z.string().trim().min(1),
-        registrationRevision: z.number().int().positive(),
-        registrationSecurityRevision: z.number().int().positive(),
-        installationRevision: z.number().int().min(0),
-        networkPolicyFingerprint: z.string().trim().min(1),
-        githubInstallationId: z.string().regex(/^[1-9][0-9]*$/u),
-        githubOrganizationId: z.string().regex(/^[1-9][0-9]*$/u),
+        registrationId: z.string().check(z.trim(), z.minLength(1)),
+        registrationRevision: z.number().check(z.int(), z.positive()),
+        registrationSecurityRevision: z.number().check(z.int(), z.positive()),
+        installationRevision: z.number().check(z.int(), z.minimum(0)),
+        networkPolicyFingerprint: z.string().check(z.trim(), z.minLength(1)),
+        githubInstallationId: z.string().check(z.regex(/^[1-9][0-9]*$/u)),
+        githubOrganizationId: z.string().check(z.regex(/^[1-9][0-9]*$/u)),
         authentication: mini.optional(GitHubAppManagementAuthenticationV1Schema),
-    }).strict().optional(),
-    githubAppManifestSetup: z.object({
+    })),
+    githubAppManifestSetup: z.optional(z.strictObject({
         owner: ManagedGitHubAppOwnerV1Schema,
         authentication: mini.optional(GitHubAppManagementAuthenticationV1Schema),
-    }).strict().optional(),
-    endpointUrl: z.string().url().optional(),
-    endpointServerIdentityId: z.string().trim().min(1).optional(),
-    canonicalServerUrl: z.string().url().optional(),
-}).strict().superRefine((value, context) => {
+    })),
+    endpointUrl: z.optional(z.string().check(z.url())),
+    endpointServerIdentityId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    canonicalServerUrl: z.optional(z.string().check(z.url())),
+}).check(z.superRefine((value, context) => {
     const isInstallationVerification = value.purpose === "github_app_installation_verification";
     const isManifestSetup = value.purpose === "github_app_manifest_setup";
     const boundPurpose = value.securityBinding?.purpose ?? value.purpose ?? null;
@@ -107,54 +107,54 @@ export const oauthStateAttemptSchema = z.object({
     } else if (hasAccountSecurityProof) {
         context.addIssue({ code: "custom", message: "Account-security proof binding requires its purpose" });
     }
-});
+}));
 
-export const connectPendingSchema = z.object({
+export const connectPendingSchema = z.strictObject({
     flow: z.literal("connect"),
     provider: z.string(),
-    securityBinding: oauthSecurityBindingSchema.optional(),
+    securityBinding: z.optional(oauthSecurityBindingSchema),
     userId: z.string(),
     profileEnc: z.string(),
     /**
      * Absent when the provider declared `accessTokenCustody: "identity_proof_only"`: the
      * continuation carries no token because nothing after the callback reads one.
      */
-    accessTokenEnc: z.string().optional(),
-    refreshTokenEnc: z.string().optional(),
-}).strict();
+    accessTokenEnc: z.optional(z.string()),
+    refreshTokenEnc: z.optional(z.string()),
+});
 
 const authPendingSharedSchema = z.object({
     flow: z.literal("auth"),
     provider: z.string(),
-    securityBinding: oauthSecurityBindingSchema.optional(),
+    securityBinding: z.optional(oauthSecurityBindingSchema),
     profileEnc: z.string(),
     /** See `connectPendingSchema`: an identity-proof-only provider persists no token. */
-    accessTokenEnc: z.string().optional(),
-    refreshTokenEnc: z.string().optional(),
-    suggestedUsername: z.string().nullable().optional(),
-    usernameRequired: z.boolean().optional(),
-    usernameReason: z.string().nullable().optional(),
+    accessTokenEnc: z.optional(z.string()),
+    refreshTokenEnc: z.optional(z.string()),
+    suggestedUsername: z.optional(z.nullable(z.string())),
+    usernameRequired: z.optional(z.boolean()),
+    usernameReason: z.optional(z.nullable(z.string())),
 });
 
-const authPendingLegacyKeylessSchema = authPendingSharedSchema.extend({
+const authPendingLegacyKeylessSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(authPendingSharedSchema, {
     authMode: z.literal("keyless"),
     proofHash: z.string(),
-}).strict();
+}));
 
-const authPendingLegacyKeyedSchema = authPendingSharedSchema.extend({
+const authPendingLegacyKeyedSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(authPendingSharedSchema, {
     publicKeyHex: z.string(),
-}).strict();
+}));
 
-const authPendingV2Schema = authPendingSharedSchema.extend({
+const authPendingV2Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(authPendingSharedSchema, {
     v: z.literal(2),
-    authMode: z.enum(["keyed", "keyless"]).optional(),
-    proofHash: z.string().optional(),
-    publicKeyHex: z.string().optional(),
-    purpose: z.literal("account_directory").optional(),
-    endpointUrl: z.string().url().optional(),
-    endpointServerIdentityId: z.string().trim().min(1).optional(),
-    canonicalServerUrl: z.string().url().optional(),
-}).strict().superRefine((value, ctx) => {
+    authMode: z.optional(z.enum(["keyed", "keyless"])),
+    proofHash: z.optional(z.string()),
+    publicKeyHex: z.optional(z.string()),
+    purpose: z.optional(z.literal("account_directory")),
+    endpointUrl: z.optional(z.string().check(z.url())),
+    endpointServerIdentityId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    canonicalServerUrl: z.optional(z.string().check(z.url())),
+})).check(z.superRefine((value, ctx) => {
     const isAccountDirectory = value.purpose === "account_directory";
     const hasEndpointUrl = value.endpointUrl !== undefined;
     const hasEndpointServerIdentityId =
@@ -204,7 +204,7 @@ const authPendingV2Schema = authPendingSharedSchema.extend({
         message:
             "Account Directory pending state requires exactly one keyed or keyless binding",
     });
-});
+}));
 
 export const authPendingSchema = z.union([
     authPendingV2Schema,
@@ -212,39 +212,35 @@ export const authPendingSchema = z.union([
     authPendingLegacyKeyedSchema,
 ]);
 
-export const accountEncryptionFirstKeyStepUpPendingSchema = z
-    .object({
+export const accountEncryptionFirstKeyStepUpPendingSchema = z.strictObject({
         v: z.literal(3),
         flow: z.literal("auth"),
         purpose:
             z.literal("account_encryption_first_key"),
-        provider: z.string().min(1),
-        credentialRevision: z.number().int().min(1).max(2_147_483_647).optional(),
-        nativeIdentityId: z.string().min(1).max(256).optional(),
-        securityBinding: oauthSecurityBindingSchema.optional(),
-        userId: z.string().min(1),
-        providerUserId: z.string().min(1),
-        proofHash: z.string().regex(/^[0-9a-f]{64}$/),
+        provider: z.string().check(z.minLength(1)),
+        credentialRevision: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(2_147_483_647))),
+        nativeIdentityId: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+        securityBinding: z.optional(oauthSecurityBindingSchema),
+        userId: z.string().check(z.minLength(1)),
+        providerUserId: z.string().check(z.minLength(1)),
+        proofHash: z.string().check(z.regex(/^[0-9a-f]{64}$/)),
         requestDigest:
             AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
-    })
-    .strict().refine(value => value.provider === "email_password"
+    }).check(z.refine(value => value.provider === "email_password"
         ? value.credentialRevision !== undefined && value.nativeIdentityId !== undefined && value.securityBinding === undefined
-        : value.credentialRevision === undefined && value.nativeIdentityId === undefined);
+        : value.credentialRevision === undefined && value.nativeIdentityId === undefined));
 
-export const accountPasswordEnrollmentStepUpPendingSchema = z
-    .object({
+export const accountPasswordEnrollmentStepUpPendingSchema = z.strictObject({
         v: z.literal(3),
         flow: z.literal("auth"),
         purpose: z.literal("account_password_enrollment"),
-        provider: z.string().min(1),
+        provider: z.string().check(z.minLength(1)),
         securityBinding: oauthSecurityBindingSchema,
-        userId: z.string().min(1),
-        providerUserId: z.string().min(1),
-        proofHash: z.string().regex(/^[0-9a-f]{64}$/),
+        userId: z.string().check(z.minLength(1)),
+        providerUserId: z.string().check(z.minLength(1)),
+        proofHash: z.string().check(z.regex(/^[0-9a-f]{64}$/)),
         requestDigest: PasswordCredentialMutationDigestV1Schema,
-    })
-    .strict();
+    });
 
 export const oauthAuthPendingSchema = z.union([
     authPendingSchema,

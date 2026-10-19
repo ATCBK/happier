@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../../../types";
 import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -18,13 +18,13 @@ export function registerConnectedServiceProfilesRoutesV2(app: Fastify): void {
         200: z.object({
           serviceId: ConnectedServiceIdSchema,
           profiles: z.array(z.object({
-            profileId: z.string().min(1),
+            profileId: z.string().check(z.minLength(1)),
             status: z.enum(["connected", "refreshing", "needs_reauth", "refresh_failed_retryable"]),
-            kind: z.enum(["oauth", "token"]).nullable().optional(),
-            providerEmail: z.string().nullable().optional(),
-            providerAccountId: z.string().nullable().optional(),
-            expiresAt: z.number().int().nonnegative().nullable().optional(),
-            lastUsedAt: z.number().int().nonnegative().nullable().optional(),
+            kind: z.optional(z.nullable(z.enum(["oauth", "token"]))),
+            providerEmail: z.optional(z.nullable(z.string())),
+            providerAccountId: z.optional(z.nullable(z.string())),
+            expiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+            lastUsedAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
           })),
         }),
       },

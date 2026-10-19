@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { PLUGIN_WEBHOOK_MAX_RAW_BODY_BYTES_V1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import {
@@ -243,7 +243,7 @@ export function registerPluginWebhookIngressRoute(
 
         scoped.post("/v1/plugins/webhooks/:opaqueRouteId", {
             schema: {
-                params: z.object({ opaqueRouteId: z.string().regex(ROUTE_ID_PATTERN_V1) }).strict(),
+                params: z.strictObject({ opaqueRouteId: z.string().check(z.regex(ROUTE_ID_PATTERN_V1)) }),
             },
             onRequest: async (request, reply) => {
                 if (!await isServerFeatureEnabledForHome("plugins.webhooks", { env, request })) {

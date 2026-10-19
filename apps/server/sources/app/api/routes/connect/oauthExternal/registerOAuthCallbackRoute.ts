@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { type Fastify } from "../../../types";
 import { auth } from "@/app/auth/auth";
@@ -101,14 +101,13 @@ export function registerOAuthCallbackRoute(app: Fastify) {
             querystring: z
                 .object({
                     state: z.string(),
-                    code: z.string().optional(),
-                    iss: z.string().optional(),
-                    error: z.string().optional(),
-                    error_description: z.string().optional(),
-                })
-                .refine((q) => Boolean(q.code) || Boolean(q.error), {
+                    code: z.optional(z.string()),
+                    iss: z.optional(z.string()),
+                    error: z.optional(z.string()),
+                    error_description: z.optional(z.string()),
+                }).check(z.refine((q) => Boolean(q.code) || Boolean(q.error), {
                     message: "Expected OAuth code or error",
-                }),
+                })),
         },
     }, async (request, reply) => {
         const requestHomeEnv = await readRequestHomeEnv(request);

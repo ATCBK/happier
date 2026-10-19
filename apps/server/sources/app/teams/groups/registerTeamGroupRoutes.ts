@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { decodeMembershipSessionDataKeyEnvelopeCursorV1, MembershipSessionDataKeyEnvelopePageQueryV1Schema, MembershipSessionDataKeyEnvelopePageV1Schema, PatchMembershipSessionDataKeyEnvelopesResultV1Schema, PatchMembershipSessionDataKeyEnvelopesV1Schema } from '@happier-dev/protocol/sessions/encryption/membershipSessionDataKeyEnvelopes';
 import {
@@ -84,11 +84,11 @@ const TEAM_ERROR_RESPONSES = {
 const GROUP_MEMBERSHIP_SESSION_DATA_KEY_ENVELOPES_PATH =
     "/v2/teams/:teamId/groups/:groupId/members/:accountId/sessions/data-key/envelopes";
 
-const GroupMembershipEnvelopeParamsSchema = z.object({
-    teamId: z.string().min(1),
-    groupId: z.string().min(1),
-    accountId: z.string().min(1),
-}).strict();
+const GroupMembershipEnvelopeParamsSchema = z.strictObject({
+    teamId: z.string().check(z.minLength(1)),
+    groupId: z.string().check(z.minLength(1)),
+    accountId: z.string().check(z.minLength(1)),
+});
 
 export function registerTeamGroupRoutes(app: Fastify) {
     const teamsApp = createTeamRouteApp(app);

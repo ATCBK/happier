@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { Fastify } from "../../types";
 import { db, getDbProviderFromEnv } from "@/storage/db";
 import { RelationshipStatus, type RelationshipStatus as RelationshipStatusType } from "@/storage/prisma";
@@ -91,7 +91,7 @@ export async function userRoutes(app: Fastify) {
             querystring: UsersSearchQueryV1Schema,
             response: {
                 200: UsersSearchResponseSchema,
-                400: z.object({ error: z.literal("invalid_cursor") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid_cursor") }),
                 404: NotFoundSchema,
             }
         },

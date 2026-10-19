@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
 import { HomeQrPairingStatusV2Schema, verifyHomeQrRendezvousSecretV2 } from '@happier-dev/protocol/crypto/qrProvisioningV2';
@@ -37,39 +37,39 @@ function sanitizeDeviceLabel(raw: unknown): string | null {
     return trimmed ? trimmed.slice(0, 120) : null;
 }
 
-const canonicalBase64Url32 = z.string().refine((value) => decodeCanonicalBase64Url32(value) !== null);
-const notFound = z.object({ error: z.literal("not_found") }).strict();
-const serverIdentityUnavailable = z.object({ error: z.literal("server_identity_unavailable") }).strict();
+const canonicalBase64Url32 = z.string().check(z.refine((value) => decodeCanonicalBase64Url32(value) !== null));
+const notFound = z.strictObject({ error: z.literal("not_found") });
+const serverIdentityUnavailable = z.strictObject({ error: z.literal("server_identity_unavailable") });
 
 export function registerPairingAuthRoutes(app: Fastify): void {
     const gated = createServerFeatureGatedRouteApp(app, "auth.pairing.boundQrV2");
     const policy = resolvePairingAuthPolicyFromEnv(process.env);
 
-    const forwardStartBody = z.object({
+    const forwardStartBody = z.strictObject({
         direction: z.literal("trusted_home_displays"),
         secretHash: canonicalBase64Url32,
-    }).strict();
+    });
     // Immutable server-v0.2.11 clients sent exactly `{ secretHash }`. This is
     // a recognition-only refusal adapter: it never recreates the V1 lifecycle.
-    const releasedV1StartBody = z.object({
-        secretHash: z.string().min(8).max(128),
-    }).strict();
-    const reverseStartBody = z.object({
+    const releasedV1StartBody = z.strictObject({
+        secretHash: z.string().check(z.minLength(8), z.maxLength(128)),
+    });
+    const reverseStartBody = z.strictObject({
         direction: z.literal("requester_displays"),
         secretHash: canonicalBase64Url32,
         pairId: canonicalBase64Url32,
-        expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    }).strict();
+        expiresAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+    });
     const startBody = z.union([forwardStartBody, reverseStartBody, releasedV1StartBody]);
-    const startResponse = z.object({ pairId: z.string(), expiresAt: z.string() }).strict();
-    const invalidProposedExpiry = z.object({ error: z.literal("invalid_proposed_expiry") }).strict();
-    const requestValidationError = z.object({
+    const startResponse = z.strictObject({ pairId: z.string(), expiresAt: z.string() });
+    const invalidProposedExpiry = z.strictObject({ error: z.literal("invalid_proposed_expiry") });
+    const requestValidationError = z.looseObject({
         statusCode: z.literal(400),
-        error: z.string().min(1),
-        message: z.string().min(1),
-    }).passthrough();
-    const pairIdConflict = z.object({ error: z.literal("pair_id_conflict") }).strict();
-    const clientUpdateRequired = z.object({ error: z.literal("client_update_required") }).strict();
+        error: z.string().check(z.minLength(1)),
+        message: z.string().check(z.minLength(1)),
+    });
+    const pairIdConflict = z.strictObject({ error: z.literal("pair_id_conflict") });
+    const clientUpdateRequired = z.strictObject({ error: z.literal("client_update_required") });
     gated.post(
         "/v1/auth/pairing/start",
         {
@@ -147,20 +147,20 @@ export function registerPairingAuthRoutes(app: Fastify): void {
         },
     );
 
-    const requestBody = z.object({
-        pairId: z.string().min(1).max(128),
+    const requestBody = z.strictObject({
+        pairId: z.string().check(z.minLength(1), z.maxLength(128)),
         secret: canonicalBase64Url32,
-        publicKey: z.string().min(1).max(256),
+        publicKey: z.string().check(z.minLength(1), z.maxLength(256)),
         bindingProof: canonicalBase64Url32,
-        homeServerIdentityId: z.string().trim().min(1).max(128),
-        expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-        deviceLabel: z.string().max(256).optional(),
-    }).strict();
-    const requestOk = z.object({ state: z.literal("requested") }).strict();
-    const invalidKey = z.object({ error: z.literal("Invalid public key") }).strict();
-    const alreadyRequested = z.object({ error: z.literal("already_requested") }).strict();
-    const wrongHome = z.object({ error: z.literal("wrong_home") }).strict();
-    const wrongExpiry = z.object({ error: z.literal("wrong_expiry") }).strict();
+        homeServerIdentityId: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+        expiresAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+        deviceLabel: z.optional(z.string().check(z.maxLength(256))),
+    });
+    const requestOk = z.strictObject({ state: z.literal("requested") });
+    const invalidKey = z.strictObject({ error: z.literal("Invalid public key") });
+    const alreadyRequested = z.strictObject({ error: z.literal("already_requested") });
+    const wrongHome = z.strictObject({ error: z.literal("wrong_home") });
+    const wrongExpiry = z.strictObject({ error: z.literal("wrong_expiry") });
 
     gated.post(
         "/v1/auth/pairing/request",
@@ -260,7 +260,7 @@ export function registerPairingAuthRoutes(app: Fastify): void {
         },
     );
 
-    const statusQuery = z.object({ pairId: z.string().min(1).max(128) }).strict();
+    const statusQuery = z.strictObject({ pairId: z.string().check(z.minLength(1), z.maxLength(128)) });
     gated.get(
         "/v1/auth/pairing/status",
         {
@@ -311,13 +311,13 @@ export function registerPairingAuthRoutes(app: Fastify): void {
         },
     );
 
-    const consumePairId = z.string().min(1).max(128);
+    const consumePairId = z.string().check(z.minLength(1), z.maxLength(128));
     const consumeBody = z.union([
-        z.object({ pairId: consumePairId }).strict(),
-        z.object({ pairId: consumePairId, intent: z.enum(["reject", "cancel"]) }).strict(),
+        z.strictObject({ pairId: consumePairId }),
+        z.strictObject({ pairId: consumePairId, intent: z.enum(["reject", "cancel"]) }),
     ]);
-    const consumeOk = z.object({ success: z.literal(true) }).strict();
-    const alreadyDecided = z.object({ error: z.literal("already_decided") }).strict();
+    const consumeOk = z.strictObject({ success: z.literal(true) });
+    const alreadyDecided = z.strictObject({ error: z.literal("already_decided") });
     gated.post(
         "/v1/auth/pairing/consume",
         {

@@ -1,5 +1,6 @@
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
-import { z } from "zod";
+import { z } from "zod/mini";
 import { superRefine } from "zod/mini";
 import type { FastifyReply } from "fastify";
 
@@ -16,13 +17,10 @@ import {
 
 const MAX_TRANSACTION_LIFETIME_MS = 24 * 60 * 60_000;
 
-const TransactionParamsSchema = z.object({
+const TransactionParamsSchema = z.strictObject({
     kind: z.enum(["oauth", "device"]),
-    attemptId: z.string()
-        .min(1)
-        .max(160)
-        .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u),
-}).strict();
+    attemptId: z.string().check(z.minLength(1), z.maxLength(160), z.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)),
+});
 
 const MAX_TRANSACTION_CONTENT_UTF8_BYTES = 524_288;
 
@@ -32,52 +30,52 @@ const MAX_TRANSACTION_CONTENT_UTF8_BYTES = 524_288;
  * Account `{ t: 'encrypted', c }`, and the store admits it against the persisted
  * Account mode.
  */
-const TransactionEnvelopeSchema = StoredJsonContentEnvelopeSchema
+const TransactionEnvelopeSchema = lazyZodSchema(() => StoredJsonContentEnvelopeSchema
     .check(superRefine((value, context) => {
         if (
             new TextEncoder().encode(JSON.stringify(value)).byteLength
             > MAX_TRANSACTION_CONTENT_UTF8_BYTES
         ) {
             context.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 message: "Connected-account attempt transaction content exceeds its byte limit",
             });
         }
-    }));
+    })));
 
-const TransactionScopeSchema = z.object({
-    machineId: z.string().min(1).max(256),
-    service: z.object({
-        pluginId: z.string().min(1).max(256),
-        localId: z.string().min(1).max(256),
-    }).strict(),
-    modeId: z.string().min(1).max(256),
+const TransactionScopeSchema = z.strictObject({
+    machineId: z.string().check(z.minLength(1), z.maxLength(256)),
+    service: z.strictObject({
+        pluginId: z.string().check(z.minLength(1), z.maxLength(256)),
+        localId: z.string().check(z.minLength(1), z.maxLength(256)),
+    }),
+    modeId: z.string().check(z.minLength(1), z.maxLength(256)),
     intent: z.enum(["connect", "reconnect"]),
     phase: z.enum(["starting", "awaitingOAuth", "awaitingDeviceAuthorization", "outcomeUnknown"]),
-    createdAtMs: z.number().int().nonnegative(),
-}).strict();
+    createdAtMs: z.number().check(z.int(), z.nonnegative()),
+});
 
-const TransactionContentSchema = z.object({
+const TransactionContentSchema = z.strictObject({
     content: TransactionEnvelopeSchema,
-    expiresAtMs: z.number().int().positive(),
+    expiresAtMs: z.number().check(z.int(), z.positive()),
     scope: TransactionScopeSchema,
-}).strict();
+});
 
-const TransactionMutationSchema = TransactionContentSchema.extend({
-    expectedRevision: z.number().int().min(1),
-}).strict();
+const TransactionMutationSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TransactionContentSchema, {
+    expectedRevision: z.number().check(z.int(), z.minimum(1)),
+}));
 
-const TransactionDeleteSchema = z.object({
-    expectedRevision: z.number().int().min(1),
-}).strict();
+const TransactionDeleteSchema = z.strictObject({
+    expectedRevision: z.number().check(z.int(), z.minimum(1)),
+});
 
-const TransactionRecordSchema = z.object({
-    revision: z.number().int().min(1),
+const TransactionRecordSchema = z.strictObject({
+    revision: z.number().check(z.int(), z.minimum(1)),
     content: TransactionEnvelopeSchema,
-    expiresAtMs: z.number().int().positive(),
-}).strict();
+    expiresAtMs: z.number().check(z.int(), z.positive()),
+});
 
-const TransactionErrorSchema = z.object({
+const TransactionErrorSchema = z.strictObject({
     error: z.enum([
         "connected_account_attempt_transaction_not_found",
         "connected_account_attempt_transaction_conflict",
@@ -85,7 +83,7 @@ const TransactionErrorSchema = z.object({
         "connected_account_attempt_transaction_storage_mode_mismatch",
         "connected_account_attempt_transaction_unreadable",
     ]),
-}).strict();
+});
 
 function expiryIsValid(expiresAtMs: number, nowMs: number): boolean {
     return expiresAtMs > nowMs
@@ -134,23 +132,23 @@ export function registerConnectedAccountAttemptTransactionRoutes(
             ),
         },
         schema: {
-            querystring: z.object({
-                machineId: z.string().min(1).max(256),
-                pluginId: z.string().min(1).max(256),
-                localId: z.string().min(1).max(256),
-            }).strict(),
+            querystring: z.strictObject({
+                machineId: z.string().check(z.minLength(1), z.maxLength(256)),
+                pluginId: z.string().check(z.minLength(1), z.maxLength(256)),
+                localId: z.string().check(z.minLength(1), z.maxLength(256)),
+            }),
             response: {
-                200: z.object({
-                    attempts: z.array(z.object({
+                200: z.strictObject({
+                    attempts: z.array(z.strictObject({
                         attemptId: TransactionParamsSchema.shape.attemptId,
                         kind: TransactionParamsSchema.shape.kind,
-                        modeId: z.string().min(1).max(256),
+                        modeId: z.string().check(z.minLength(1), z.maxLength(256)),
                         intent: z.enum(["connect", "reconnect"]),
                         phase: TransactionScopeSchema.shape.phase,
-                        createdAtMs: z.number().int().nonnegative(),
-                        expiresAtMs: z.number().int().positive(),
-                    }).strict()),
-                }).strict(),
+                        createdAtMs: z.number().check(z.int(), z.nonnegative()),
+                        expiresAtMs: z.number().check(z.int(), z.positive()),
+                    })),
+                }),
                 409: TransactionErrorSchema,
             },
         },
@@ -277,7 +275,7 @@ export function registerConnectedAccountAttemptTransactionRoutes(
             params: paramsSchema,
             body: TransactionDeleteSchema,
             response: {
-                200: z.object({ status: z.literal("deleted") }).strict(),
+                200: z.strictObject({ status: z.literal("deleted") }),
                 ...errorResponses,
             },
         },

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { Fastify } from "../../types";
 
@@ -14,9 +14,9 @@ export function devRoutes(app: Fastify) {
                 timestamp: z.string(),
                 level: z.string(),
                 message: z.string(),
-                messageRawObject: z.any().optional(),
+                messageRawObject: z.optional(z.any()),
                 source: z.enum(["mobile", "cli"]),
-                platform: z.string().optional(),
+                platform: z.optional(z.string()),
             }),
         },
     }, async (request, reply) => {

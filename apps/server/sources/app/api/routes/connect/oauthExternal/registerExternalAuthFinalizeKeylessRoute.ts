@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { type Fastify } from "../../../types";
 import { prepareExternalIdentityConnection } from "@/app/auth/providers/identity";
@@ -61,9 +61,9 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
         schema: {
             params: z.object({ provider: z.string() }),
             body: z.object({
-                pending: z.string().min(1),
-                proof: z.string().min(1),
-                username: z.string().min(1).optional(),
+                pending: z.string().check(z.minLength(1)),
+                proof: z.string().check(z.minLength(1)),
+                username: z.optional(z.string().check(z.minLength(1))),
             }),
             response: {
                 200: ExternalOAuthFinalizeAuthSuccessResponseSchema,

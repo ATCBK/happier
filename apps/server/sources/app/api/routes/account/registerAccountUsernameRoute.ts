@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { db } from "@/storage/db";
 import { Context } from "@/context";
 import { UsernameTakenError, usernameUpdate } from "@/app/social/usernameUpdate";

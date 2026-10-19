@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
 
@@ -12,6 +12,7 @@ import { oauthExternalRateLimitAuthParamsPerIp } from "./oauthExternal/oauthExte
 import { OAUTH_NOT_CONFIGURED_ERROR } from "./oauthExternal/oauthExternalErrors";
 import { registerExternalAuthFinalizeRoute } from "./oauthExternal/registerExternalAuthFinalizeRoute";
 import { registerExternalAuthFinalizeKeylessRoute } from "./oauthExternal/registerExternalAuthFinalizeKeylessRoute";
+import { registerExternalAuthTokenExchangeRoute } from "./oauthExternal/registerExternalAuthTokenExchangeRoute";
 import { oauthAuthPendingSchema } from "./oauthExternal/oauthExternalSchemas";
 import { deleteOAuthPendingBestEffort, loadValidOAuthPending } from "./connectRoutes.oauthPending";
 import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema } from '@happier-dev/protocol/account/encryptionMigrate';
@@ -58,29 +59,27 @@ export function connectAuthExternalRoutes(app: Fastify) {
             params: z.object({ provider: z.string() }),
             querystring: z
                 .object({
-                    publicKey: z.string().optional(),
-                    mode: z.enum(["keyed", "keyless"]).optional(),
-                    proofHash: z.string().optional(),
-                    purpose: z
+                    publicKey: z.optional(z.string()),
+                    mode: z.optional(z.enum(["keyed", "keyless"])),
+                    proofHash: z.optional(z.string()),
+                    purpose: z.optional(z
                         .enum([
                             "account_encryption_first_key",
                             "account_password_enrollment",
                             "account_directory",
                             "team_admission",
-                        ])
-                        .optional(),
-                    requestDigest: z.union([
+                        ])),
+                    requestDigest: z.optional(z.union([
                         AccountEncryptionMigrateExternalAuthBindingDigestV1Schema,
                         PasswordCredentialMutationDigestV1Schema,
-                    ]).optional(),
-                    endpointUrl: z.string().optional(),
-                    endpointServerIdentityId: z.string().optional(),
-                    canonicalServerUrl: z.string().optional(),
-                    teamId: z.string().optional(),
-                    connectionId: z.string().optional(),
-                    origin: z.enum(["home", "team"]).optional(),
-                })
-                .refine((q) => {
+                    ])),
+                    endpointUrl: z.optional(z.string()),
+                    endpointServerIdentityId: z.optional(z.string()),
+                    canonicalServerUrl: z.optional(z.string()),
+                    teamId: z.optional(z.string()),
+                    connectionId: z.optional(z.string()),
+                    origin: z.optional(z.enum(["home", "team"])),
+                }).check(z.refine((q) => {
                     if (q.purpose === "account_encryption_first_key" || q.purpose === "account_password_enrollment") {
                         return q.mode === "keyless"
                             && Boolean(q.proofHash)
@@ -109,7 +108,7 @@ export function connectAuthExternalRoutes(app: Fastify) {
                     return Boolean(q.publicKey);
                 }, {
                     message: "Expected a valid external-auth challenge binding",
-                }),
+                })),
             response: {
                 200: ExternalOAuthParamsResponseSchema,
                 400: ExternalOAuthErrorResponseSchema,
@@ -438,6 +437,7 @@ export function connectAuthExternalRoutes(app: Fastify) {
 
     registerExternalAuthFinalizeRoute(app);
     registerExternalAuthFinalizeKeylessRoute(app);
+    registerExternalAuthTokenExchangeRoute(app);
 
     app.delete("/v1/auth/external/:provider/pending/:pending", {
         schema: {

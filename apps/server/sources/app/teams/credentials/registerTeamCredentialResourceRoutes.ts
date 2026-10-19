@@ -10,7 +10,7 @@ import { resolveTeamCredentialExternalApiAvailability } from '@happier-dev/proto
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { parseProviderContributionIdentityV1 } from "@happier-dev/protocol/providers/contribution-identity";
 import { DaemonProviderConnectionsDescribeResponseV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Fastify } from "@/app/api/types";
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
 import { inTx } from "@/storage/inTx";
@@ -733,7 +733,7 @@ export function registerTeamCredentialResourceRoutes(
             response: {
                 200: RunnerBrokerReadinessResponseV1Schema,
                 400: TeamCredentialResourceErrorV1Schema,
-                403: z.union([z.object({}).strict(), TeamCredentialResourceErrorV1Schema]),
+                403: z.union([z.strictObject({}), TeamCredentialResourceErrorV1Schema]),
                 404: TeamCredentialResourceErrorV1Schema,
                 409: TeamCredentialResourceErrorV1Schema,
                 503: TeamCredentialResourceErrorV1Schema,

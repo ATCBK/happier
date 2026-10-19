@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema, AccountEncryptionMigrateExternalAuthProofSchema } from '@happier-dev/protocol/account/encryptionMigrate';
 import { PASSWORD_MAX_UTF8_BYTES_V1 } from '@happier-dev/protocol/auth/accountPasswordCredential';
 import type { Fastify } from "../../types";
@@ -14,13 +14,13 @@ export function registerNativePasswordStepUpRoutes(app: Fastify): void {
         preHandler: [app.authenticate, requirePresentUser],
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "auth.email.stepUp") },
         schema: {
-            body: z.object({ v: z.literal(1), password: z.string().max(PASSWORD_MAX_UTF8_BYTES_V1),
-                purpose: z.literal("account_encryption_first_key"), requestDigest: AccountEncryptionMigrateExternalAuthBindingDigestV1Schema }).strict(),
+            body: z.strictObject({ v: z.literal(1), password: z.string().check(z.maxLength(PASSWORD_MAX_UTF8_BYTES_V1)),
+                purpose: z.literal("account_encryption_first_key"), requestDigest: AccountEncryptionMigrateExternalAuthBindingDigestV1Schema }),
             response: {
-                200: z.object({ externalAuthProof: AccountEncryptionMigrateExternalAuthProofSchema }).strict(),
-                401: z.object({ error: z.string() }).strict(),
-                403: z.union([PresentUserRequiredResponseSchema, z.object({ error: z.literal("method_not_available") }).strict()]),
-                503: z.object({ error: z.literal("password_hash_overloaded") }).strict(),
+                200: z.strictObject({ externalAuthProof: AccountEncryptionMigrateExternalAuthProofSchema }),
+                401: z.strictObject({ error: z.string() }),
+                403: z.union([PresentUserRequiredResponseSchema, z.strictObject({ error: z.literal("method_not_available") })]),
+                503: z.strictObject({ error: z.literal("password_hash_overloaded") }),
             },
         },
     }, async (request, reply) => {

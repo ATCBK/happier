@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Fastify } from "../../types";
 import { resolveStoredContentPublicShareShell } from "@/app/share/storedContentPublicShare";
 import { PUBLIC_SHARE_VIEWER_SCRIPT } from "./publicShareViewerBundle.generated";
@@ -14,7 +14,7 @@ const csp = `${ARTIFACT_HTML_SHELL_CSP}; frame-ancestors 'none'`;
 
 /** Private preview needs ordinary Artifact access, not public-link availability. */
 export function registerArtifactHtmlViewerRoutes(app: Fastify): void {
-    const privateSchema = { params: z.object({ artifactId: z.string().min(1) }).strict() };
+    const privateSchema = { params: z.strictObject({ artifactId: z.string().check(z.minLength(1)) }) };
     for (const asset of [false, true]) {
         app.get(asset ? '/a/:artifactId/viewer.js' : '/a/:artifactId', { schema: privateSchema }, async (request, reply) => {
             const configEnv = await readRequestHomeEnv(request);
@@ -34,7 +34,7 @@ export function registerArtifactHtmlViewerRoutes(app: Fastify): void {
 
 /** Delivery delegates every public admission decision to the stored-content share owner. */
 export function registerPublicShareViewerRoutes(app: Fastify): void {
-    const schema = { params: z.object({ lookupId: z.string().min(1) }).strict() };
+    const schema = { params: z.strictObject({ lookupId: z.string().check(z.minLength(1)) }) };
     for (const asset of [false, true]) {
         app.get(asset ? "/s/:lookupId/viewer.js" : "/s/:lookupId", { schema }, async (request, reply) => {
             reply.header("Cache-Control", "no-store");

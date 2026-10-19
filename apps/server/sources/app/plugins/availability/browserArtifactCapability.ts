@@ -1,3 +1,4 @@
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 
 import { PluginHostedWebOriginV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/hostedWebSecurity';
@@ -5,7 +6,7 @@ import { GENERATED_HOSTED_WEB_ASSET_PROFILE_V1 } from '@happier-dev/protocol/plu
 import { PluginUiArtifactIdV2Schema } from '@happier-dev/protocol/plugins/ui/uiArtifactsManifest';
 import { PluginUiArtifactDigestV1Schema } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { decodeBase64, encodeBase64 } from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import {
     resolveConfiguredPublicServerUrl,
@@ -33,53 +34,50 @@ export const BROWSER_ARTIFACT_CAPABILITY_ROUTE_PREFIX =
 export const BROWSER_ARTIFACT_CAPABILITY_ROUTE_PATH =
     `${BROWSER_ARTIFACT_CAPABILITY_ROUTE_PREFIX}/:capability/*`;
 
-const BrowserArtifactHostedWebScopeV1Schema = z.object({
+const BrowserArtifactHostedWebScopeV1Schema = z.strictObject({
     profile: z.literal(GENERATED_HOSTED_WEB_ASSET_PROFILE_V1),
-    assetRootId: z.string().trim().min(1).max(1024),
-    entryPath: z.string().trim().min(1).max(1024),
-}).strict().refine(
-    (scope) => scope.entryPath.startsWith(`${scope.assetRootId}/`),
-    "Expected the generated Artifact entry beneath its signed root",
-);
+    assetRootId: z.string().check(z.trim(), z.minLength(1), z.maxLength(1024)),
+    entryPath: z.string().check(z.trim(), z.minLength(1), z.maxLength(1024)),
+}).check(z.refine((scope) => scope.entryPath.startsWith(`${scope.assetRootId}/`), "Expected the generated Artifact entry beneath its signed root"));
 export type BrowserArtifactHostedWebScopeV1 = z.infer<typeof BrowserArtifactHostedWebScopeV1Schema>;
 
-const BrowserArtifactCapabilityClaimsV1Schema = z.object({
+const BrowserArtifactCapabilityClaimsV1Schema = z.strictObject({
     v: z.literal(1),
     audience: z.literal(BROWSER_ARTIFACT_CAPABILITY_AUDIENCE),
-    accountId: z.string().trim().min(1).max(512),
-    release: z.object({
-        pluginId: z.string().trim().min(1).max(512),
-        version: z.string().trim().min(1).max(512),
-    }).strict(),
-    contributionId: z.string().trim().min(1).max(512),
+    accountId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    release: z.strictObject({
+        pluginId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+        version: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    }),
+    contributionId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
     tier: z.literal("hostedWeb"),
     platform: z.literal("web"),
     artifactId: PluginUiArtifactIdV2Schema,
     artifactDigest: PluginUiArtifactDigestV1Schema,
     hostedWebScope: BrowserArtifactHostedWebScopeV1Schema,
     embeddingOrigin: PluginHostedWebOriginV1Schema,
-    artifactOrigin: PluginHostedWebOriginV1Schema.refine(
+    artifactOrigin: lazyZodSchema(() => PluginHostedWebOriginV1Schema.check(z.refine(
         (origin) => new URL(origin).protocol === "https:",
         "Expected a dedicated HTTPS Artifact origin",
-    ),
-    issuedAt: z.number().int().nonnegative(),
-    expiresAt: z.number().int().positive(),
-}).strict().superRefine((value, context) => {
+    ))),
+    issuedAt: z.number().check(z.int(), z.nonnegative()),
+    expiresAt: z.number().check(z.int(), z.positive()),
+}).check(z.superRefine((value, context) => {
     if (value.expiresAt <= value.issuedAt) {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["expiresAt"],
             message: "Capability expiry must follow issuance",
         });
     }
     if (value.expiresAt - value.issuedAt > BROWSER_ARTIFACT_CAPABILITY_TTL_MS) {
         context.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             path: ["expiresAt"],
             message: "Capability expiry exceeds the bounded browser Artifact lifetime",
         });
     }
-});
+}));
 
 export type BrowserArtifactCapabilityClaimsV1 = z.infer<typeof BrowserArtifactCapabilityClaimsV1Schema>;
 

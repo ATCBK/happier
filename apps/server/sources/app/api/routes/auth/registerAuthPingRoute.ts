@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { type Fastify } from "../../types";
 
 export function registerAuthPingRoute(app: Fastify): void {

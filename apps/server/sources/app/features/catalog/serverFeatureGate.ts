@@ -59,7 +59,7 @@ export function isPeerMediationGrantSigningAdvertisedForRequest(env: NodeJS.Proc
 }
 
 type RouteHandler = (request: any, reply: any) => unknown | Promise<unknown>;
-type RoutePreHandler = (request: any, reply: any) => unknown | Promise<unknown>;
+type RoutePreHandler = (request: any, reply: any) => void | Promise<unknown>;
 
 /**
  * The refusal a gated family sends when its feature is off.

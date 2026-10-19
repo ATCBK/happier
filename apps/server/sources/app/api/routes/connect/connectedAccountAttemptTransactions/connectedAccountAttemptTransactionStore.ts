@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { isStoredJsonContentEnvelopeModeCompatible, type StoredJsonContentEnvelope } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -60,24 +60,24 @@ export type ConnectedAccountAttemptTransactionReadResult =
         status: "not_found" | "storage_mode_mismatch" | "unreadable";
     }>;
 
-const StoredConnectedAccountAttemptTransactionSchema = z.object({
+const StoredConnectedAccountAttemptTransactionSchema = z.strictObject({
     version: z.literal(2),
-    revision: z.number().int().min(1),
-    attemptId: z.string().min(1).max(160),
+    revision: z.number().check(z.int(), z.minimum(1)),
+    attemptId: z.string().check(z.minLength(1), z.maxLength(160)),
     kind: z.enum(["oauth", "device"]),
-    scope: z.object({
-        machineId: z.string().min(1).max(256),
-        service: z.object({
-            pluginId: z.string().min(1).max(256),
-            localId: z.string().min(1).max(256),
-        }).strict(),
-        modeId: z.string().min(1).max(256),
+    scope: z.strictObject({
+        machineId: z.string().check(z.minLength(1), z.maxLength(256)),
+        service: z.strictObject({
+            pluginId: z.string().check(z.minLength(1), z.maxLength(256)),
+            localId: z.string().check(z.minLength(1), z.maxLength(256)),
+        }),
+        modeId: z.string().check(z.minLength(1), z.maxLength(256)),
         intent: z.enum(["connect", "reconnect"]),
         phase: z.enum(["starting", "awaitingOAuth", "awaitingDeviceAuthorization", "outcomeUnknown"]),
-        createdAtMs: z.number().int().nonnegative(),
-    }).strict(),
-    content: z.string().min(1),
-}).strict();
+        createdAtMs: z.number().check(z.int(), z.nonnegative()),
+    }),
+    content: z.string().check(z.minLength(1)),
+});
 
 function accountTransactionPrefix(accountId: string): string {
     const accountDigest = createHash("sha256")

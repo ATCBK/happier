@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { TeamInvitationPostAuthContinuationV1Schema, type TeamInvitationAcceptResultV1, type TeamInvitationPostAuthContinuationV1 } from '@happier-dev/protocol/teams/invitation';
 
 import type { Tx } from "@/storage/inTx";
@@ -8,14 +8,14 @@ import { acceptTeamInvitationAdmissionReferenceInTx } from "./accept";
 
 const TEAM_INVITATION_POST_AUTH_REFERENCE_PREFIX = "team_invitation_post_auth_";
 
-const storedPostAuthContinuationSchema = z.object({
+const storedPostAuthContinuationSchema = z.strictObject({
     v: z.literal(1),
     kind: z.literal("team_invitation_post_auth"),
-    accountId: z.string().trim().min(1),
-    teamId: z.string().trim().min(1),
-    invitationId: z.string().trim().min(1),
-    tokenHash: z.string().regex(/^[0-9a-f]{64}$/u),
-}).strict();
+    accountId: z.string().check(z.trim(), z.minLength(1)),
+    teamId: z.string().check(z.trim(), z.minLength(1)),
+    invitationId: z.string().check(z.trim(), z.minLength(1)),
+    tokenHash: z.string().check(z.regex(/^[0-9a-f]{64}$/u)),
+});
 
 export type ClaimedTeamInvitationPostAuthContinuation = Readonly<{
     continuation: TeamInvitationPostAuthContinuationV1;

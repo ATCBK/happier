@@ -1,5 +1,5 @@
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { type Fastify } from "../../../types";
 import { prepareExternalIdentityConnection } from "@/app/auth/providers/identity";

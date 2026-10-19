@@ -1,6 +1,6 @@
 import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryResponseSchema, UsageEventIngestRequestSchema, UsageNativeHistoryDeleteRequestSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsageModelPriceCatalogSchema } from '@happier-dev/protocol/usage/usageModelPriceSchemas';
-import { z } from "zod";
+import { z } from "zod/mini";
 import { inTx, type Tx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { queryUsageAnalyticsInTx } from "@/app/usage/usageQueryService";
@@ -39,17 +39,17 @@ export function registerAccountUsageRoutes(app: Fastify): void {
     }, async (_request, reply) => reply.send(await readUsageModelPriceCatalog()));
 
     app.post(accountUsageRoutePaths.pricesRefresh, {
-        schema: { body: z.object({}).strict(), response: { 200: UsageModelPriceCatalogSchema } },
+        schema: { body: z.strictObject({}), response: { 200: UsageModelPriceCatalogSchema } },
         preHandler: app.authenticate,
     }, async (_request, reply) => reply.send(await refreshUsageModelPriceCatalog()));
 
     app.post(accountUsageRoutePaths.legacyQuery, {
         schema: {
             body: z.object({
-                sessionId: z.string().nullish(),
-                startTime: z.number().int().positive().nullish(),
-                endTime: z.number().int().positive().nullish(),
-                groupBy: z.enum(['hour', 'day']).nullish(),
+                sessionId: z.nullish(z.string()),
+                startTime: z.nullish(z.number().check(z.int(), z.positive())),
+                endTime: z.nullish(z.number().check(z.int(), z.positive())),
+                groupBy: z.nullish(z.enum(['hour', 'day'])),
             }),
         },
         preHandler: app.authenticate,
@@ -161,7 +161,7 @@ export function registerAccountUsageRoutes(app: Fastify): void {
         schema: {
             body: UsageNativeHistoryDeleteRequestSchema,
             response: {
-                200: z.object({ success: z.literal(true), deletedEventCount: z.number().int().min(0) }),
+                200: z.object({ success: z.literal(true), deletedEventCount: z.number().check(z.int(), z.minimum(0)) }),
                 404: z.object({ error: z.literal('Machine not found') }),
                 500: z.object({ error: z.literal('Failed to delete native usage history') }),
             },

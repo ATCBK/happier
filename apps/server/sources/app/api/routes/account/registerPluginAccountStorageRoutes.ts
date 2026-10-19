@@ -1,6 +1,6 @@
 import { PluginAccountStorageMutationRequestV1Schema, PluginAccountStorageMutationResponseV1Schema, PluginAccountStorageReadResponseV1Schema, PluginAccountStorageUnavailableV1Schema } from '@happier-dev/protocol/plugins/data/accountKvV1';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import {
     mutatePluginAccountStorageInTx,
@@ -9,21 +9,21 @@ import {
 import { readAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { asServerProtocolZod } from "@/app/api/utils/protocolComposableZodAdapter";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 
 import { type Fastify } from "../../types";
 
-const PluginAccountStorageRouteParamsSchema = z.object({
+const PluginAccountStorageRouteParamsSchema = z.strictObject({
     pluginId: asServerProtocolZod(PluginIdSchema),
-}).strict();
+});
 
-const InvalidParamsSchema = z.object({
+const InvalidParamsSchema = z.strictObject({
     error: z.literal("invalid-params"),
-}).strict();
+});
 
-const InternalErrorSchema = z.object({
+const InternalErrorSchema = z.strictObject({
     error: z.literal("internal"),
-}).strict();
+});
 
 function unavailable() {
     return { error: "plugin_account_storage_unavailable" as const };
@@ -66,10 +66,10 @@ export function registerPluginAccountStorageRoutes(app: Fastify): void {
             return reply.code(503).send(unavailable());
         }
         try {
-            const result = await inTx(async (tx) => await readPluginAccountStorageInTx(tx, {
+            const result = await inReadSnapshot(async (tx) => await readPluginAccountStorageInTx(tx, {
                 accountId: request.userId,
                 pluginId: request.params.pluginId,
-            }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
+            }));
             const response = readResponseForStorageResult(result);
             if (response === null) return reply.code(503).send(unavailable());
             return reply.send(response);

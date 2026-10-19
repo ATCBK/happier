@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { extend } from "zod/mini";
 
 import { type Fastify } from "../../types";
@@ -61,17 +61,17 @@ export function connectConnectedServicesQuotasV2Routes(app: Fastify) {
                 serviceId: ConnectedServiceIdSchema,
                 profileId: ConnectedServiceProfileIdSchema,
             }),
-            body: z.object({
+            body: z.strictObject({
                 sealed: extend(SealedConnectedServiceQuotaSnapshotV1Schema, {
-                    ciphertext: z.string().min(1).max(MAX_QUOTA_SNAPSHOT_CIPHERTEXT_CHARS),
+                    ciphertext: z.string().check(z.minLength(1), z.maxLength(MAX_QUOTA_SNAPSHOT_CIPHERTEXT_CHARS)),
                 }),
-                metadata: z.object({
-                    fetchedAt: z.number().int().nonnegative(),
-                    staleAfterMs: z.number().int().nonnegative(),
+                metadata: z.strictObject({
+                    fetchedAt: z.number().check(z.int(), z.nonnegative()),
+                    staleAfterMs: z.number().check(z.int(), z.nonnegative()),
                     status: z.enum(["ok", "unavailable", "estimated", "error"]),
-                    materialFingerprint: z.string().min(1).max(256).optional(),
-                }).strict(),
-            }).strict(),
+                    materialFingerprint: z.optional(z.string().check(z.minLength(1), z.maxLength(256))),
+                }),
+            }),
             response: {
                 200: z.object({ success: z.literal(true) }),
                 400: z.object({ error: z.literal("invalid-params") }),
@@ -116,10 +116,10 @@ export function connectConnectedServicesQuotasV2Routes(app: Fastify) {
                 200: z.object({
                     sealed: SealedConnectedServiceQuotaSnapshotV1Schema,
                     metadata: z.object({
-                        fetchedAt: z.number().int().nonnegative(),
-                        staleAfterMs: z.number().int().nonnegative(),
+                        fetchedAt: z.number().check(z.int(), z.nonnegative()),
+                        staleAfterMs: z.number().check(z.int(), z.nonnegative()),
                         status: z.enum(["ok", "unavailable", "estimated", "error"]),
-                        refreshRequestedAt: z.number().int().nonnegative().optional(),
+                        refreshRequestedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
                     }),
                 }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_quotas_not_found") })]),

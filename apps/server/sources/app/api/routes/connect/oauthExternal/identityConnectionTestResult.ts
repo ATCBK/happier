@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { IdentityConnectionTestDiagnosticsV1Schema, type IdentityConnectionTestDiagnosticsV1 } from '@happier-dev/protocol/identity/testDiagnostics';
 
 import type { Tx } from "@/storage/inTx";
@@ -6,20 +6,17 @@ import { db } from "@/storage/db";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { oauthSecurityBindingSchema, type OAuthSecurityBinding } from "./oauthExternalSchemas";
 
-const identityConnectionTestResultSchema = z.object({
+const identityConnectionTestResultSchema = z.strictObject({
     v: z.literal(1),
     purpose: z.literal("identity_connection_test"),
-    initiatorAccountId: z.string().trim().min(1),
-    securityBinding: oauthSecurityBindingSchema.refine(
-        (binding) => binding.purpose === "identity_connection_test",
-        { message: "Expected identity-connection test binding" },
-    ),
-    providerUserId: z.string().min(1).max(1024),
+    initiatorAccountId: z.string().check(z.trim(), z.minLength(1)),
+    securityBinding: oauthSecurityBindingSchema.check(z.refine((binding) => binding.purpose === "identity_connection_test", { message: "Expected identity-connection test binding" })),
+    providerUserId: z.string().check(z.minLength(1), z.maxLength(1024)),
     // A provider that supplies no sanitized evidence, and any result written before
     // diagnostics existed, simply omits this field.
     diagnostics: z.optional(IdentityConnectionTestDiagnosticsV1Schema),
-    testedAt: z.string().datetime(),
-}).strict();
+    testedAt: z.string().check(z.iso.datetime()),
+});
 
 export type IdentityConnectionTestResult = Readonly<{
     initiatorAccountId: string;

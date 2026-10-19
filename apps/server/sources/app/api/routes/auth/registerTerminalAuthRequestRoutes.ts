@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import * as privacyKit from "privacy-kit";
 import { createHash } from "node:crypto";
 import { db } from "@/storage/db";
@@ -107,19 +107,19 @@ export function registerTerminalAuthRequestRoutes(
         schema: {
             body: z.object({
                 publicKey: z.string(),
-                supportsV2: z.boolean().nullish(),
-                claimSecretHash: z.string().length(43).regex(BASE64_URL_REGEX).nullish(),
+                supportsV2: z.nullish(z.boolean()),
+                claimSecretHash: z.nullish(z.string().check(z.length(43), z.regex(BASE64_URL_REGEX))),
             }),
             response: {
                 200: z.union([
-                    z.object({ state: z.literal('requested'), expiresAt: z.number().int() }).strict(),
-                    z.object({
+                    z.strictObject({ state: z.literal('requested'), expiresAt: z.number().check(z.int()) }),
+                    z.strictObject({
                         state: z.literal('authorized'),
                         token: z.string(),
                         response: z.string(),
-                        serverIdentityId: z.string().optional(),
-                    }).strict(),
-                    z.object({ state: z.literal('authorized') }).strict(),
+                        serverIdentityId: z.optional(z.string()),
+                    }),
+                    z.strictObject({ state: z.literal('authorized') }),
                 ]),
                 409: z.object({ error: z.enum([
                     'claim_mismatch',
@@ -287,7 +287,7 @@ export function registerTerminalAuthRequestRoutes(
         schema: {
             body: z.object({
                 publicKey: z.string(),
-                claimSecret: z.string().min(1).max(256).regex(BASE64_URL_REGEX),
+                claimSecret: z.string().check(z.minLength(1), z.maxLength(256), z.regex(BASE64_URL_REGEX)),
             }),
             response: {
                 200: z.union([
@@ -296,7 +296,7 @@ export function registerTerminalAuthRequestRoutes(
                         state: z.literal("authorized"),
                         token: z.string(),
                         response: z.string(),
-                        serverIdentityId: z.string().optional(),
+                        serverIdentityId: z.optional(z.string()),
                     }),
                 ]),
                 409: z.object({ error: z.enum([
@@ -404,27 +404,27 @@ export function registerTerminalAuthRequestRoutes(
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "auth.terminalRequest.complete") },
         preHandler: [app.authenticate, requirePresentUser],
         schema: {
-            body: z.object({
+            body: z.strictObject({
                 response: z.string(),
                 publicKey: z.string(),
-                responseKind: z.enum(["tokenOnly", "dataKey"]).optional(),
-                authorizeUnattendedTeamAccess: z.boolean().optional(),
-            }).strict(),
+                responseKind: z.optional(z.enum(["tokenOnly", "dataKey"])),
+                authorizeUnattendedTeamAccess: z.optional(z.boolean()),
+            }),
             response: {
                 200: z.object({ success: z.literal(true) }),
                 400: z.object({ error: z.literal("invalid_provisioning_response") }),
                 401: z.object({ error: z.literal("Invalid public key") }),
                 403: PresentUserRequiredResponseSchema,
                 404: z.object({ error: z.literal("Request not found") }),
-                409: z.object({
+                409: z.strictObject({
                     error: z.enum([
                         "provisioning_kind_mismatch",
                         "provisioning_material_unavailable",
                         "already_completed",
                         "credential_authentication_evidence_unavailable",
                     ]),
-                }).strict(),
-                426: z.object({ error: z.literal("terminal_provisioning_update_required") }).strict(),
+                }),
+                426: z.strictObject({ error: z.literal("terminal_provisioning_update_required") }),
             },
         }
     }, async (request, reply) => {

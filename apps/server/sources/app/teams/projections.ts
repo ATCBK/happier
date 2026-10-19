@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Prisma } from "@prisma/client";
 
 import { resolveTeamAdmissionProjectionV1, type TeamSummaryCountsV1, type TeamSummaryV1 } from '@happier-dev/protocol/teams/projections';
@@ -71,12 +71,12 @@ export type TeamRecord = Readonly<{
  * reading of an unrecognized branding reference is "no logo" rather than a
  * projected path of unknown provenance.
  */
-export const StoredTeamLogoSchema = z.object({
-    path: z.string().min(1),
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
-    thumbhash: z.string().min(1),
-}).strict();
+export const StoredTeamLogoSchema = z.strictObject({
+    path: z.string().check(z.minLength(1)),
+    width: z.number().check(z.int(), z.positive()),
+    height: z.number().check(z.int(), z.positive()),
+    thumbhash: z.string().check(z.minLength(1)),
+});
 export type StoredTeamLogo = z.infer<typeof StoredTeamLogoSchema>;
 
 export function readStoredTeamLogo(value: unknown, teamId?: string): StoredTeamLogo | null {
