@@ -88,12 +88,13 @@ export function resolveVitestShardTimeoutMs(env) {
   return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? undefined;
 }
 
-export function resolveVitestShardConcurrency(env, argv) {
+export function resolveVitestShardConcurrency(env, argv, parallelism = os.availableParallelism()) {
   const flagOverride = parsePositiveInt(resolveConcurrencyFlagValue(argv));
-  if (flagOverride) return flagOverride;
-
   const envOverride = parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_CONCURRENCY);
-  return envOverride ?? 1;
+  // Every partition has a Vite transform server as well as at least one fork.
+  // Eight partitions previously multiplied the four-fork policy into 40 Node
+  // processes on a 12-CPU worker, oversubscribing cold module loading.
+  return Math.min(flagOverride ?? envOverride ?? 1, Math.max(1, Math.floor(parallelism / 2)));
 }
 
 export function resolveVitestConfigPath(argv) {
@@ -418,9 +419,10 @@ async function main(argv) {
   const passthroughArgs = resolveVitestPassthroughArgs(argv);
   const { parseCLI } = await import('vitest/node');
   const { options } = parseCLI(['vitest', 'run', ...passthroughArgs]);
+  const workers = resolveVitestWorkers({ legacyUiOverride: true });
   const vitestEnv = {
     ...process.env,
-    ...resolveVitestPoolEnv(resolveVitestWorkers({ legacyUiOverride: true })),
+    ...resolveVitestPoolEnv(workers),
     NODE_OPTIONS: nodeOptions,
   };
   // Native CLI arguments, including percentages, retain Vitest's own resolution.
@@ -456,6 +458,24 @@ async function main(argv) {
     startShard: shardRange.start,
     endShard: shardRange.end,
   });
+
+  const activePartitions = Math.max(1, Math.min(shardConcurrency, plan.length));
+  // Preserve a native minimum rather than making it conflict with a lowered default maximum.
+  const maxWorkers = options.minWorkers === undefined
+    ? Math.min(workers.maxWorkers, Math.max(1, Math.floor(os.availableParallelism() / activePartitions) - 1))
+    : workers.maxWorkers;
+  Object.assign(vitestEnv, resolveVitestPoolEnv({ ...workers, maxWorkers }));
+  // Explicit native Vitest worker arguments retain their precedence, including percentages.
+  if (options.maxWorkers !== undefined) {
+    delete vitestEnv.VITEST_MAX_FORKS;
+    delete vitestEnv.VITEST_MAX_THREADS;
+  }
+  if (options.minWorkers !== undefined) {
+    delete vitestEnv.VITEST_MIN_FORKS;
+    delete vitestEnv.VITEST_MIN_THREADS;
+  }
+  // eslint-disable-next-line no-console
+  console.log(`[vitest] partitions=${activePartitions}; maxWorkers=${options.maxWorkers ?? maxWorkers}; cpus=${os.availableParallelism()}`);
 
   const startShard = (entry) => {
     // eslint-disable-next-line no-console
