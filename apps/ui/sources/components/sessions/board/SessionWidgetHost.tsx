@@ -228,6 +228,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...happierPageTextMetrics('sectionTitle'),
         color: theme.colors.text.primary,
     },
+    cardTopMark: { position: 'absolute', top: 0, left: 0, right: 0, height: 0 },
     provenance: {
         ...Typography.default(),
         ...happierPageTextMetrics('meta'),
@@ -430,10 +431,20 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
                         recordRevision={props.item.revision} testID={`${testID}.save.widget`} /> : null,
         };
     }, [props.canEdit, props.density, props.item.itemId, props.item.revision, props.sessionId, readyItem, title, widgetDescriptor, appRuntime, boardSurface.scope, testID, itemMark]);
+    const cardTopRef = React.useRef<View>(null);
+    const snapshotCard = React.useMemo(() => ({
+        anchorRef: cardTopRef,
+        // Web scrolls the card to the top of the pane so the panel opens downward over its own card.
+        reveal: () => {
+            const node: unknown = cardTopRef.current;
+            if (Platform.OS === 'web' && typeof HTMLElement !== 'undefined' && node instanceof HTMLElement) node.scrollIntoView({ block: 'start' });
+        },
+    }), []);
     const definitionFlows = useWidgetDefinitionFlows({
         instance: widgetInstance,
         scope: boardSurface.scope,
         anchorRef: inputs.anchorRef,
+        snapshotCard,
         editInputs: inputs.editInputs,
         sessionItem,
         providedContext: boardSurface.scope ? readSessionWidgetProvidedContext({ serverId: boardSurface.scope.serverId, sessionId: props.sessionId, session: props.session }) : {},
@@ -779,6 +790,11 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             </TitleFrame>
     );
 
+    // A posted snapshot says when its numbers are from on the same source line ("Snapshot by you · As of 11:08 AM"),
+    // never in a second header column that squeezes the line out at a wide pane; it never updates.
+    const snapshotAsOf = state.kind === 'ready' && state.item.snapshot ? Date.parse(state.item.snapshot.asOf) : null;
+    const asOfLabel = snapshotAsOf !== null && Number.isFinite(snapshotAsOf)
+        ? t('widgetDefinition.asOf', { time: formatHappierAsOfTime(snapshotAsOf) }) : null;
     // Shown at every density, including an inert preview: the source IS most of what a preview
     // says, and it is the only thing that tells two plugin widgets apart. The visible name may
     // clip (or leave first when the frame narrows); the announced one keeps the exact identity.
@@ -787,15 +803,14 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
             testID={`${testID}-provenance`}
             style={styles.provenance}
             numberOfLines={1}
-            accessibilityLabel={provenance.accessibilityLabel}
+            accessibilityLabel={asOfLabel ? `${provenance.accessibilityLabel} · ${asOfLabel}` : provenance.accessibilityLabel}
         >
-            {provenance.label}
+            {asOfLabel ? `${provenance.label} · ${asOfLabel}` : provenance.label}
         </Text>
     ) : undefined;
 
     // A Companion section identifies its shared Board record. Board cards keep their header
     // clear; Companion membership still controls drag admission and the menu's inverse action.
-    const snapshotAsOf = state.kind === 'ready' && state.item.snapshot ? Date.parse(state.item.snapshot.asOf) : null;
     const meta = section ? (
         <View
             testID={`${testID}-on-board-mark`}
@@ -806,11 +821,6 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         >
             <Icon name="squares-four" size={13} color={theme.colors.text.tertiary} />
         </View>
-    ) : snapshotAsOf !== null ? (
-        // A posted snapshot (lab VS) says when its numbers are from; it never updates.
-        <Text testID={`${testID}-snapshot-as-of`} style={styles.provenance} numberOfLines={1}>
-            {t('widgetDefinition.asOf', { time: formatHappierAsOfTime(snapshotAsOf) })}
-        </Text>
     ) : null;
 
     const controls = moveHandle || itemActions.length > 0 || props.headerAccessory ? (
@@ -837,6 +847,8 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
 
     return (
         <View ref={entityDrag.ref} onLayout={entityDrag.onLayout} collapsable={false}>
+            {/* A zero-height mark at the card's top edge: Post a snapshot opens on its own card from here. */}
+            <View ref={cardTopRef} pointerEvents="none" style={styles.cardTopMark} />
             <SessionSurfaceEntityTargetFeedback drag={entityDrag} testID={testID} />
             {inputs.popover}
             {definitionFlows.panel}

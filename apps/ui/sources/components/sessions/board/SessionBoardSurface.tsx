@@ -152,6 +152,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: GRID_GAP,
         paddingTop: GRID_GAP,
     },
+    freshnessSlot: {
+        height: 0,
+        zIndex: 1,
+    },
+    freshnessFloat: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+    },
     freshness: {
         ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
@@ -1280,11 +1290,17 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                 </Text>
             ) : null}
             {freshnessLabel ? (
-                <SurfaceFreshnessLine
-                    testID={`${testID}-freshness`}
-                    reason={freshnessLabel}
-                    tone={offline ? 'warning' : 'neutral'}
-                />
+                // A zero-height slot at the body's top edge: the line floats over it, so the cards never
+                // move when it arrives or leaves ("healthy state is quiet; nothing moves").
+                <View style={styles.freshnessSlot} pointerEvents="box-none">
+                    <View style={styles.freshnessFloat} pointerEvents="box-none">
+                        <SurfaceFreshnessLine
+                            testID={`${testID}-freshness`}
+                            reason={freshnessLabel}
+                            tone={offline ? 'warning' : 'neutral'}
+                        />
+                    </View>
+                </View>
             ) : null}
             {layoutCard ?? offlineEmptyCard ?? (
                 <ScrollView
