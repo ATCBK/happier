@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ExecutionRunGetResponseSchema, ExecutionRunWaitResultSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import type { AutomationRunLifecycleSource, AutomationRunLifecycleOccurrenceEvidenceV1 } from '@happier-dev/protocol';
 import type { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
@@ -48,7 +49,7 @@ export function createAutomationRunLifecycleObservers(deps: Readonly<{
                 // snapshot is not completion and must never become a local polling loop.
                 if (outcome.kind === 'outcome_uncertain') throw Object.assign(new Error(outcome.code), { code: outcome.code });
                 const output = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema).safeParse(
-                  snapshot.structuredMeta?.kind === 'scm_diff_summary.v1' ? snapshot.structuredMeta.payload : snapshot.latestToolResult);
+                  snapshot.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary ? snapshot.structuredMeta.payload : snapshot.latestToolResult);
                 const sourceRevision = output.success ? output.data.revision ?? snapshot.run.finishedAtMs : snapshot.run.finishedAtMs;
                 if (sourceRevision === undefined) throw new Error('execution_run_terminal_fact_unavailable');
                 await deps.report({ v: 1, kind: 'runLifecycle', source, condition: 'terminal', sourceRevision,

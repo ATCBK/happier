@@ -5,6 +5,7 @@ import { createActionExecutor } from '@happier-dev/protocol/actions';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 import {
+  materializeWorkflowAcceptedSnapshotV1,
   projectWorkflowRetainedRuntimeSelectionV1,
   validateWorkflowDefinition,
   WorkflowProgressEnvelopeV1Schema,
@@ -79,6 +80,67 @@ async function admitPreparedInput(params: Parameters<WorkflowStepExecutor>[0]): 
 }
 
 describe('workflow coordinator', () => {
+  it('dispatches the full frozen model participant from the accepted leaf', async () => {
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const launch = {
+      executionTarget: { serverId: 'home-b', machineId: 'machine-1' },
+      directory: { kind: 'path' as const, path: '/review' }, agentTarget,
+      profileId: 'review-profile', configuration: { mode: { value: 'plan', updatedAtMs: 1 },
+        model: { value: 'review-model', updatedAtMs: 2 },
+        permissionIntent: { value: 'read-only' as const, updatedAtMs: 3 },
+        options: { reasoning_effort: { value: 'high', updatedAtMs: 4 } } },
+    };
+    const leaf = step('review');
+    const resolveSelectedWorkspace = vi.fn(async () => ({ ok: true as const, workspace }));
+    const observed: unknown[] = [];
+    const coordinator = createWorkflowCoordinator({ store, resolveWorkspace: resolveSelectedWorkspace,
+      isAcceptedAuthorizationCurrent: async () => true,
+      prepareStep: async params => {
+        observed.push(params.participant);
+        return { conversationWorkspace: { machineId: 'machine-1', directory: '/review' } };
+      },
+      executeStep: async params => {
+        observed.push(params.participant);
+        await params.beforeInputAdmission();
+        return { kind: 'completed', result: 'reviewed' };
+      } });
+    const run = { runId: 'model-participant-dispatch', definition: definition([leaf]), inputs: {}, executionTarget, authorization,
+      materializedLeaves: [{ sourceKey: '$root', blockId: leaf.id, kind: 'step' as const,
+        selection: { agentTarget, conversation: { kind: 'fresh' as const } }, executionTarget,
+        participant: { kind: 'model' as const, launch }, authoredWorkspace: { kind: 'inherit' as const } }] };
+    expect(await coordinator.run(run)).toMatchObject({ state: 'succeeded' });
+    expect(observed).toEqual([{ kind: 'model', launch }, { kind: 'model', launch }]);
+    expect(resolveSelectedWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      useConversationWorkspace: true, conversationWorkspace: { machineId: 'machine-1', directory: '/review' },
+    }));
+  });
+  it('rejoins the exact persisted Discussion context after preparation interruption without rereading history', async () => {
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const context = { frontier: 4, text: 'the addressed question' };
+    const leaf = { ...freshStep('answer'), input: [{ kind: 'discussion_context' as const, scope: 'so_far' as const }] };
+    const run = { runId: 'discussion-context-rejoin', inputs: {}, definition: definition([leaf]), executionTarget, authorization,
+      materializedLeaves: [{ sourceKey: '$root', blockId: leaf.id, kind: 'step' as const,
+        selection: { agentTarget, conversation: { kind: 'fresh' as const } }, executionTarget,
+        authoredWorkspace: { kind: 'inherit' as const } }] };
+    const interrupted = createWorkflowCoordinator({ store, resolveWorkspace, isAcceptedAuthorizationCurrent: async () => true,
+      sessionContext: { resolveDiscussionContext: async () => context },
+      prepareStep: async () => { throw new WorkflowRuntimeInterruption(); },
+      executeStep: async () => { throw new Error('Preparation did not release an input'); } });
+    await expect(interrupted.run(run)).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+    const row = store.list().find(record => record.blockId === leaf.id);
+    expect(row?.input?.input).toEqual([context]);
+    const dispatched: unknown[] = [];
+    const recovered = createWorkflowCoordinator({ store, resolveWorkspace, isAcceptedAuthorizationCurrent: async () => true,
+      sessionContext: { resolveDiscussionContext: async () => { throw new Error('History advanced and must not be reread'); } },
+      executeStep: async params => {
+        await params.beforeInputAdmission();
+        dispatched.push(params.input.values);
+        return { kind: 'completed', result: 'answer' };
+      } });
+    expect(await recovered.run(run)).toMatchObject({ state: 'succeeded' });
+    expect(dispatched).toEqual([[context]]);
+    expect(store.list().filter(record => record.blockId === leaf.id).map(record => record.recordId)).toEqual([row?.recordId]);
+  });
   it('records scalar For-each display labels on exact private item frames, including waiting items', async () => {
     const store = createInMemoryWorkflowCoordinatorStore();
     const values: WorkflowJsonValue[] = ['#1482', { nested: { hidden: 'not a label' }, title: ' src/main.ts ' },
@@ -1052,6 +1114,29 @@ describe('workflow coordinator', () => {
       executionTarget,
       sessionId: 'session-a',
     })).toBe(false);
+  });
+
+  it('resolves immediate participant input before deciding self-wait', async () => {
+    const selectedSession = { serverId: 'home-b', sessionId: 'review-session' };
+    const participant = { kind: 'session' as const, session: selectedSession };
+    const authored: WorkflowDefinitionV1 = { version: 1, defaults: {},
+      inputs: [{ name: 'reviewer', valueType: 'json', required: true,
+        inputType: { hostType: 'agentParticipant' } }],
+      blocks: [{ ...step('review'), execution: { participant: { kind: 'input', name: 'reviewer' } } }] };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: authored,
+      context: { source: { kind: 'inline' }, inputs: { reviewer: participant }, machineId: 'machine-1',
+        executionTarget, workspaceTarget: { project: workspace }, origin: { kind: 'direct' },
+        authorization: { principal: { kind: 'host' } } }, admission: { kind: 'user' },
+      effects: { resolveTargetAvailability: async () => true,
+        resolveSessionTarget: async () => ({ address: selectedSession, machineId: 'machine-2' }) } });
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    const guard = (sessionId: string) => doesWorkflowImmediateEligibleStepTargetSession({
+      definition: accepted.snapshot.authoredDefinition, checkpoint: null, executionTarget,
+      materializedLeaves: accepted.snapshot.materializedLeaves, inputs: accepted.snapshot.inputs, sessionId,
+    });
+    expect(guard('review-session')).toBe(true);
+    expect(guard('other-session')).toBe(false);
   });
 
   it('executes depth-first declaration order and resumes without replaying completed invocations', async () => {

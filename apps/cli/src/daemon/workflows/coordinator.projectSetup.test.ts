@@ -49,7 +49,13 @@ describe('Workflow Project setup consent custody', () => {
     });
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'requester' })).toString('base64url')}.signature`;
     const { executor } = createCliActionExecutorHarness({ token, credentials: { token, encryption: null },
-      sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'home', serverHttpBaseUrl: 'https://home.test' });
+      sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'home', serverHttpBaseUrl: 'https://home.test',
+      machineActionDirectTargetTransport: { machineId: workspaceRef.machineId,
+        invoke: async (method, request, options) => await machineTransport.callExactMachineRpc({
+          credentials: { token, encryption: null }, machineId: workspaceRef.machineId, method, request,
+          ...(options?.localActionContext?.actionRequestId ? { requestId: options.localActionContext.actionRequestId } : {}),
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }) } });
     const coordinator = createTestWorkflowCoordinator({ store, isAcceptedAuthorizationCurrent: async () => true,
       resolveWorkspace: createCoordinatorWorkspaceResolver({ store,
         projectWorkspace: { machineId: 'machine', directory: rootPath, checkoutRootPath: rootPath },
@@ -61,7 +67,8 @@ describe('Workflow Project setup consent custody', () => {
     });
     const input = { runId: 'run', definition: workflow, inputs: {}, executionTarget: { kind: 'session' as const },
       authorization: { admittedPermissionCeiling: 'default' as const, principal: { kind: 'host' as const } } };
-    expect(await coordinator.run(input)).toMatchObject({ state: 'interrupted' });
+    const heldResult = await coordinator.run(input);
+    expect(heldResult, JSON.stringify({ heldResult, rows: store.list() })).toMatchObject({ state: 'interrupted' });
     const held = store.list().find(row => row.blockId === 'prepare');
     expect(held).toMatchObject({ lifecycle: 'needs_attention', reason: code, attempt: 0,
       workspace: { descriptor: { machineId: 'machine' } }, execution: { kind: 'action', input: { workspace: workspaceRef } } });

@@ -52,13 +52,15 @@ function openMode(encryption: WorkflowRunEncryptionV1) {
 
 type RecoveryCandidate = Readonly<{ run: WorkflowRunSummaryV1; parentAttempt: number }>;
 
-export type WorkflowInvocationRecoveryObservation =
+export type WorkflowInvocationRecoveryObservation = (
   | Readonly<{ kind: 'unresolved'; code?: string; waitForCompletion?: () => Promise<void>;
     setupConsentOutput?: Readonly<{ operation: ActionOperationSnapshotV1 }> }>
   | Readonly<{ kind: 'completed'; result: JsonValue; usage?: WorkflowUsageV1 }>
-  | Readonly<{ kind: 'failed'; code: string; message?: string; usage?: WorkflowUsageV1 }>
+  | Readonly<{ kind: 'failed'; code: string; message?: string; runtimeIssueV1?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['runtimeIssueV1']; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
-  | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>;
+  | Readonly<{ kind: 'stopped'; code: string }>
+  | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>
+) & Readonly<{ execution?: WorkflowProgressEnvelopeV1['execution'] }>;
 
 type ReconciledInvocationTransition = Readonly<{
   id: string;
@@ -172,7 +174,7 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
   const adaptCompletion = async (
     invocation: NonNullable<Awaited<ReturnType<typeof readInvocation>>>,
     observation: Extract<WorkflowInvocationRecoveryObservation, { kind: 'completed' }>,
-  ): Promise<WorkflowInvocationRecoveryObservation> => {
+  ): Promise<Exclude<WorkflowInvocationRecoveryObservation, { kind: 'stopped' }>> => {
     let resolved: Awaited<ReturnType<typeof resolveFrozenLeaf>>;
     try {
       resolved = await resolveFrozenLeaf(invocation);
@@ -181,7 +183,7 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
     }
     const step = resolved?.leaf;
     if (!step || (step.kind !== 'step' && step.kind !== 'action')) return { kind: 'unresolved', code: 'workflow_invocation_binding_unavailable' };
-    const execution = invocation.progress.execution;
+    const execution = observation.execution ?? invocation.progress.execution;
     if (step.kind === 'action') {
       const consent = readWorkflowProjectSetupConsentHold(step.actionId, observation.result);
       if (consent) return { kind: 'unresolved', code: consent.code };
@@ -253,10 +255,15 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
       && (currentLifecycle === 'completed' || currentLifecycle === 'failed'
         || currentLifecycle === 'cancelled' || currentLifecycle === 'skipped')) return null;
     if (currentLifecycle === 'waiting_for_review' || currentLifecycle === 'superseded') return null;
+    // This retires custody only. It cannot resolve an interrupted Run's input
+    // outcome or make a new attempt eligible from unknown historical effects.
+    if (observed.kind === 'stopped' && !TERMINAL_RUN_STATES.has(params.run.state)) return null;
     const prior = progress.previousAttemptRecordId ? await readInvocation(progress.previousAttemptRecordId) : undefined;
     const generation = prior?.progress.review?.decision?.kind === 'generate';
     const step = observed.kind === 'completed' || generation ? (await resolveFrozenLeaf(invocation).catch(() => undefined))?.leaf : undefined;
-    const observation = observed.kind === 'completed' ? await adaptCompletion(invocation, observed) : observed;
+    const observation = observed.kind === 'stopped'
+      ? { kind: 'cancelled' as const, code: observed.code }
+      : observed.kind === 'completed' ? await adaptCompletion(invocation, observed) : observed;
     const setupConsent = observation.kind === 'unresolved' && observation.setupConsentOutput
       && progress.execution?.kind === 'action' && !TERMINAL_RUN_STATES.has(params.run.state)
       && currentLifecycle !== 'cancel_requested' && currentLifecycle !== 'outcome_uncertain'
@@ -265,11 +272,17 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
       throw Object.assign(new Error('workflow_outcome_unresolved'), { code: 'workflow_outcome_unresolved' });
     }
     if (observation.kind === 'unresolved' && !setupConsent
-      || (params.expectedRevision !== undefined && observation.kind === 'outcome_uncertain')
-      || (currentLifecycle === 'outcome_uncertain' && observation.kind === 'outcome_uncertain')) return null;
+      || (params.expectedRevision !== undefined && observation.kind === 'outcome_uncertain')) return null;
+    if (currentLifecycle === 'outcome_uncertain' && observation.kind === 'outcome_uncertain') {
+      // Another leaf may have kept custody pending after this fact was committed.
+      // Re-observing definitive uncertainty resolves this pass without rewriting
+      // the same fact or requiring a success/cancellation that cannot be known.
+      return { id: exactIndex.id, expectedLifecycle: currentLifecycle, lifecycle: currentLifecycle,
+        expectedContentRevision: exactIndex.contentRevision };
+    }
     const resolvingUncertain = currentLifecycle === 'outcome_uncertain';
-    const stoppedWithUncertainEffects = resolvingUncertain
-      && (observation.kind === 'failed' || observation.kind === 'cancelled');
+    const stoppedWithUncertainEffects = observed.kind === 'stopped' || (resolvingUncertain
+      && (observation.kind === 'failed' || observation.kind === 'cancelled'));
     const reviewRequired = classifyWorkflowReviewEntryV1({
       mayEnterReview: !TERMINAL_RUN_STATES.has(params.run.state) && currentLifecycle !== 'cancel_requested',
       pauseForReview: Boolean(step && 'pauseForReview' in step && step.pauseForReview),
@@ -277,14 +290,16 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
       inputCompleted: observed.kind === 'completed',
       observation,
     }) === 'waiting_for_review';
-    const lifecycle: WorkflowInvocationLifecycleV1 = setupConsent ? 'needs_attention' : reviewRequired ? 'waiting_for_review' : stoppedWithUncertainEffects
+    const lifecycle: WorkflowInvocationLifecycleV1 = setupConsent ? 'needs_attention' : reviewRequired ? 'waiting_for_review' : stoppedWithUncertainEffects && !TERMINAL_RUN_STATES.has(params.run.state)
       ? 'needs_attention'
       : observation.kind === 'unresolved' ? 'needs_attention' : observation.kind;
     const nextProgress: WorkflowProgressEnvelopeV1 = {
       ...applyWorkflowInvocationFactV1(progress, {
+        ...(observed.execution ? { execution: observed.execution } : {}),
         ...(observation.kind === 'completed' ? { result: observation.result } : {}),
         ...(observation.kind !== 'unresolved' && observation.usage ? { usage: observation.usage } : {}),
         ...(observation.kind !== 'completed' && observation.code ? { reason: observation.code,
+          ...(observation.kind === 'failed' && observation.runtimeIssueV1 ? { runtimeIssueV1: observation.runtimeIssueV1 } : {}),
           ...(observation.kind === 'failed' && observation.message !== undefined ? { reasonMessage: observation.message } : {}) } : {}),
       }, { previousLifecycle: currentLifecycle, lifecycle, observedAtMs: Date.now() }),
       ...(observation.kind === 'completed' && (reviewRequired || generation) && !progress.review?.resultSource
@@ -556,6 +571,7 @@ export function createWorkflowRunRecoveryReader(params: Readonly<{
   onReviewEntered?: (entry: Readonly<{ runId: string }>) => Promise<void>;
 }>): (trigger: WorkflowRecoveryTrigger, signal?: AbortSignal) => Promise<void> {
   let inFlight: Promise<void> | null = null;
+  let requestedRecovery: Readonly<{ trigger: WorkflowRecoveryTrigger; signal?: AbortSignal }> | null = null;
   const completionWaits = new Set<string>();
   const onReviewEntered = params.onReviewEntered ?? createWorkflowRunReviewEntryNotificationHandler();
   const recoverCandidate = async (
@@ -623,29 +639,41 @@ export function createWorkflowRunRecoveryReader(params: Readonly<{
       });
     }
   };
+  const recoverIndexedCandidates = async (trigger: WorkflowRecoveryTrigger, signal?: AbortSignal) => {
+    const accountEncryption = await params.resolveAccountEncryption(signal);
+    let cursor: string | undefined;
+    do {
+      const page = parseRunPage(await params.storage.execute({
+        operation: 'recovery.list',
+        pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
+        ...(cursor ? { cursor } : {}),
+      }, signal ? { signal } : {}));
+      for (const candidate of page.candidates) {
+        if (signal?.aborted) return;
+        await recoverCandidate(candidate, trigger, accountEncryption, signal);
+      }
+      cursor = page.nextCursor;
+    } while (cursor && !signal?.aborted);
+  };
   return async (trigger, signal) => {
+    if (signal?.aborted) return;
+    requestedRecovery = { trigger, ...(signal ? { signal } : {}) };
     if (inFlight) return await inFlight;
     const operation = (async () => {
-      const accountEncryption = await params.resolveAccountEncryption(signal);
-      let cursor: string | undefined;
-      do {
-        const page = parseRunPage(await params.storage.execute({
-          operation: 'recovery.list',
-          pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
-          ...(cursor ? { cursor } : {}),
-        }, signal ? { signal } : {}));
-        for (const candidate of page.candidates) {
-          if (signal?.aborted) return;
-          await recoverCandidate(candidate, trigger, accountEncryption, signal);
+      try {
+        // A release/control notification can arrive after the current pass
+        // captured its index page. Coalesce notifications, not the last wake:
+        // reread the index once more before releasing this recovery owner.
+        while (requestedRecovery) {
+          const request = requestedRecovery;
+          requestedRecovery = null;
+          await recoverIndexedCandidates(request.trigger, request.signal);
         }
-        cursor = page.nextCursor;
-      } while (cursor && !signal?.aborted);
+      } finally {
+        inFlight = null;
+      }
     })();
     inFlight = operation;
-    try {
-      await operation;
-    } finally {
-      if (inFlight === operation) inFlight = null;
-    }
+    await operation;
   };
 }

@@ -16,7 +16,7 @@ import {
 } from '@happier-dev/protocol';
 
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
-import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
@@ -28,15 +28,7 @@ import {
   type AutomationReplyHandoffRpcRegistrationOptions,
 } from './automationReplyHandoff';
 
-const emptyContributions = {
-  agents: [],
-  actions: [],
-  resources: [],
-  activationTargets: [],
-  catalogEntriesById: {},
-  agentDefinitionsById: new Map<string, never>(),
-  pluginDiagnosticsByPluginId: {},
-} satisfies ResolvedContributionRegistry;
+const emptyContributions = createResolvedContributionRegistry({});
 
 type AutomationReplyHandoffActionExecutor = NonNullable<
   AutomationReplyHandoffRpcRegistrationOptions['executeContributedAction']
@@ -209,6 +201,7 @@ function createRuntimeRegistry(): ResolvedExecutablePluginRuntimeRegistry {
       resolveScope: () => null,
     }),
     contributes: emptyContributions,
+    declarationContributes: emptyContributions,
     resolvePromptAssetBlocks: async () => [],
     resolveCaptureSource: async () => { throw new Error('Capture-source resolution is unavailable in this fixture'); },
     resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,

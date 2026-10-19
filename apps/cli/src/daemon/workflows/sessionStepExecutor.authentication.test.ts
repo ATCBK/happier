@@ -11,6 +11,8 @@ import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemo
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createProductionFreshWorkflowSessionConversation } from './sessionStepExecutor';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
+import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
 
 let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
 beforeAll(async () => {
@@ -23,6 +25,7 @@ it.each(['profile', 'group', 'override', 'native', 'explicit_native'] as const)(
   'spawns Workflow Claude with the resolved %s authentication, not the native inventory state', async (authentication) => {
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'workflow-account' })).toString('base64url')}.signature`, encryption: null } as const;
     const serviceId = 'happier.agent.claude/claude-subscription';
+    let birthMetadata: ReturnType<typeof buildCommittedLaunchMetadata> | undefined;
     const scope = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'claude',
       contributions: runtime.registry.contributes })?.authorizedPurposes.find(entry => entry.serviceRefs[0]?.localId === 'claude-subscription');
     if (!scope?.serviceRefs[0]) throw new Error('Real Claude purpose unavailable');
@@ -42,7 +45,7 @@ it.each(['profile', 'group', 'override', 'native', 'explicit_native'] as const)(
               : { kind: 'account', account: { service: scope.serviceRefs[0], accountId: 'claude-default' } },
           }] } } } }) };
       if (path === '/v2/sessions/connected-child') return { status: 200, data: { session: createSessionRecordFixture({
-        id: 'connected-child', encryptionMode: 'plain', metadata: JSON.stringify({ path: process.cwd(), host: 'fixture' }),
+        id: 'connected-child', encryptionMode: 'plain', metadata: JSON.stringify({ path: process.cwd(), host: 'fixture', ...birthMetadata }),
       }) } };
       return { status: 404, data: { error: 'unsupported' } };
     });
@@ -51,9 +54,11 @@ it.each(['profile', 'group', 'override', 'native', 'explicit_native'] as const)(
       throw new Error('Unexpected Home mutation');
     });
     const admitted: unknown[] = [];
-    vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async ({ method, request }) => {
+    vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async ({ method, request }) => {
       if (method !== RPC_METHODS.SPAWN_HAPPY_SESSION) throw new Error('Unexpected Machine method');
       admitted.push(request);
+      birthMetadata = buildCommittedLaunchMetadata({ options: SpawnDaemonSessionRequestSchema.parse(request),
+        directory: process.cwd(), accountSettings: {} });
       // This Machine has no native credentials. Connected profile/pool
       // materialization is the only authentication accepted by its OS boundary.
       if (authentication === 'native' || authentication === 'explicit_native') return {

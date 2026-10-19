@@ -1,8 +1,9 @@
-import { areWorkflowRetainedRuntimeSelectionsEqualV1, projectWorkflowRetainedRuntimeSelectionV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { areWorkflowRetainedRuntimeSelectionsEqualV1, projectWorkflowRetainedRuntimeSelectionV1, WorkflowRetainedRuntimeSelectionV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { assertNonEscalatingPermissionMode } from '@happier-dev/protocol/actions/permissionPrivilege';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { HappierStructuredInputV1Schema } from '@happier-dev/protocol/runtime/input/structuredInputV1';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ExecutionRunResultContractV1, ExecutionRunResumeHandle, WorkflowAuthoredProducerRef, WorkflowProgressEnvelopeV1, WorkflowRetainedRuntimeSelectionV1 } from '@happier-dev/protocol';
 
 type ExecutionRunResumeHandleProviderSessionV1 = Extract<
@@ -117,6 +118,21 @@ async function actionContextFor(
               if (value.localInputId !== observation.localInputId) {
                 throw new Error('workflow_invocation_fact_conflict');
               }
+              if (value.kind === 'project_setup') {
+                const operation = value.operation;
+                const target = operation.domainRef;
+                if (target?.kind !== 'projectCommand' || target.purpose !== 'setup'
+                  || target.machineId !== params.workspace.machineId || operation.scope.machineId !== params.workspace.machineId) {
+                  throw new Error('workflow_invocation_fact_conflict');
+                }
+                await params.onExecutionObservation?.({ execution: { kind: 'action', actionId: operation.actionId,
+                  actionRequestId: `${observation.localInputId}:execution-run-start`, localInputId: observation.localInputId,
+                  input: { runId: value.runId, runtimeSelection: projectNativeJsonValueForTransport(observation.runtimeSelection) },
+                  output: projectNativeJsonValueForTransport({ operation }),
+                  awaitedOperations: [{ key: 'startup', serverId: target.serverId, machineId: target.machineId,
+                    operationId: operation.operationId }] }, setupConsentOutput: { operation } });
+                return;
+              }
               const execution = {
                 kind: 'detached_run',
                 runId: value.runId,
@@ -183,7 +199,8 @@ function projectObservation(
 ): WorkflowStepExecutionResult {
   switch (observation.kind) {
     case 'completed': return { kind: 'completed', result: observation.result, resultEncoding: 'typed' };
-    case 'failed': return { kind: 'failed', code: observation.code };
+    case 'failed': return { kind: 'failed', code: observation.code,
+      ...(observation.message ? { message: observation.message } : {}) };
     case 'cancelled': return { kind: 'cancelled', ...(observation.code ? { code: observation.code } : {}) };
     case 'outcome_uncertain': return { kind: 'outcome_uncertain', code: observation.code };
   }
@@ -568,6 +585,17 @@ export function createWorkflowDetachedExecutionRunStepExecutor(
   ): Promise<WorkflowStepExecutionResult> {
     const existing = params.invocation.execution;
     if (existing) {
+      if (existing.kind === 'action' && existing.actionId === 'execution.run.start'
+        && typeof existing.input.runId === 'string') {
+        const retained = WorkflowRetainedRuntimeSelectionV1Schema.safeParse(existing.input.runtimeSelection);
+        if (!retained.success) return { kind: 'needs_attention', code: 'continuation_unavailable' };
+        const execution = { kind: 'detached_run' as const, runId: existing.input.runId,
+          localInputId: existing.localInputId, runtimeSelection: retained.data };
+        const observed = await observeExactRunInput({ deps, executionParams: params, runId: execution.runId,
+          localInputId: execution.localInputId, sessionId: null, context: await actionContextFor(deps, params), deadline });
+        if (observed.kind === 'completed') await params.onInputAccepted(execution);
+        return observed;
+      }
       if (existing.kind !== 'detached_run') {
         return { kind: 'needs_attention', code: 'continuation_unavailable' };
       }

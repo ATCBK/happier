@@ -28,7 +28,7 @@ import { invalidateActiveAutomationRun } from './automationRunInvalidation';
 import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import type { createProductionWorkflowRunCoordinator } from '@/daemon/workflows/production';
 import type { DaemonAdmissionDrain } from '../lifecycle/admissionDrain';
-import type { LiveWorkItemV1, LiveWorkProducerV1 } from '../lifecycle/managedActivity';
+import type { LiveWorkItemV1, LiveWorkListenerV1, LiveWorkProducerV1 } from '../lifecycle/managedActivity';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 
 type AutomationMachineAdmissionTransport = NonNullable<
@@ -85,7 +85,7 @@ export function startAutomationWorker(params: {
   machineAdmissionTransport?: AutomationMachineAdmissionTransport;
   env?: NodeJS.ProcessEnv;
   coordinateWorkflowRun?: ReturnType<typeof createProductionWorkflowRunCoordinator>;
-  /** Existing lifecycle-indexed custody reader, woken by an exact persisted control invalidation. */
+  /** Existing custody reader, woken by control invalidation or release of a Workflow claim. */
   recoverWorkflowRuns?: () => Promise<void>;
 }): AutomationWorkerHandle {
   const env = params.env ?? process.env;
@@ -133,7 +133,7 @@ export function startAutomationWorker(params: {
 
   let claimTimer: NodeJS.Timeout | null = null;
   let claimTimerAt = 0;
-  let claimInFlight = false;
+  let claimInFlight: Promise<void> | null = null;
   let refreshSoonTimer: NodeJS.Timeout | null = null;
   // One map owns capacity and cancellation. Workflow claims open their private
   // accepted graph before reserving a slot; existing-Session writes reserve none.
@@ -149,13 +149,18 @@ export function startAutomationWorker(params: {
     coordinatorWork?: LiveWorkProducerV1;
     unsubscribeCoordinatorWork?: () => void;
   }>();
-  const activityListeners = new Set<() => void>();
-  const publishActivity = () => { for (const listener of activityListeners) listener(); };
+  const activityListeners = new Set<LiveWorkListenerV1>();
+  const publishActivity: LiveWorkListenerV1 = change => { for (const listener of activityListeners) listener(change); };
   const liveWorkProducer: LiveWorkProducerV1 = {
     read: async () => {
-      const items: LiveWorkItemV1[] = claimInFlight ? [{ category: 'workflow_run', ownerRef: claimClient,
-        attribution, state: 'active' }] : [];
-      let coverage: 'complete' | 'unknown' = 'complete';
+      // A claim is an observation until Home returns material custody. Join
+      // its completion so an empty periodic poll cannot reset aggregate idle,
+      // and a drain cannot prove absence while a claim may still acquire work.
+      if (claimInFlight) await claimInFlight;
+      const items: LiveWorkItemV1[] = [];
+      // An unreadable claim may have acquired a Run. The existing retry owner
+      // clears this marker only after a valid authoritative claim response.
+      let coverage: 'complete' | 'unknown' = claimRetryAfter > 0 ? 'unknown' : 'complete';
       for (const active of activeExecutions.values()) {
         if (active.materialWorkReleased) continue;
         if (active.coordinatorWork) {
@@ -365,6 +370,15 @@ export function startAutomationWorker(params: {
     }
   };
 
+  const recoverWorkflowCustody = (runId: string) => {
+    void params.recoverWorkflowRuns?.().catch((error) => {
+      logAutomationWarn('Workflow cancellation custody recovery failed; pending custody retained', error, {
+        machineId: params.machineId,
+        runId,
+      });
+    });
+  };
+
   const refreshAssignments = async () => {
     if (stopped) return;
     if (paused) return;
@@ -450,9 +464,10 @@ export function startAutomationWorker(params: {
     // the incumbent claim slot only after rechecking that asynchronous gap.
     if (claimInFlight) return;
     let claimedRunStarted = false;
+    let releaseClaim = () => {};
     try {
-      claimInFlight = true;
-      publishActivity();
+      claimInFlight = new Promise<void>(resolve => { releaseClaim = resolve; });
+      publishActivity('observation');
       pendingQueuedWake = false;
       // The Account owner performs same-id predecessor conversion (or an
       // encrypted-source pause) before dispatch. Already admitted Run snapshots
@@ -581,6 +596,12 @@ export function startAutomationWorker(params: {
             activeExecutions.delete(claimed.run.id);
             publishActivity();
             wakeCapacityWaiters();
+            // A Cancel hint delivered to this claim interrupts its observation;
+            // startup itself may still be running. Transfer retained custody to
+            // recovery so its existing operation-completion wait stays armed.
+            // This also covers cancellation learned by the coordinator's read.
+            if (!stopped && (claimed.run.automationId === null || claimed.run.recipeKind === 'workflow-v2'
+              || claimed.run.executionInputEnvelope !== null)) recoverWorkflowCustody(claimed.run.id);
           }
           if (!stopped && !paused) {
             // This is the same bounded map's capacity continuation. The
@@ -610,8 +631,8 @@ export function startAutomationWorker(params: {
         assignmentCount: assignments.getAll().length,
       });
     } finally {
-      claimInFlight = false;
-      publishActivity();
+      claimInFlight = null;
+      releaseClaim();
 
       if (claimedRunStarted) {
         // Refill through the same map and claim timer after releasing request
@@ -696,12 +717,7 @@ export function startAutomationWorker(params: {
         && body.workflowControl === 'cancel_requested'
         && !activeExecutions.has(body.runId)
       ) {
-        void params.recoverWorkflowRuns?.().catch((error) => {
-          logAutomationWarn('Workflow cancellation custody recovery failed; pending custody retained', error, {
-            machineId: params.machineId,
-            runId: body.runId,
-          });
-        });
+        recoverWorkflowCustody(body.runId);
         return;
       }
 

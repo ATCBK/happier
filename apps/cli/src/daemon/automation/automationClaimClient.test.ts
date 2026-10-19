@@ -469,6 +469,7 @@ describe('createAutomationClaimClient', () => {
     axiosGet.mockResolvedValue({ data: { assignments: [], settings: DEFAULT_WORKER_SETTINGS } });
     axiosPost
       .mockResolvedValueOnce({ data: START_RESPONSE })
+      .mockResolvedValueOnce({ data: { ok: true, leaseExpiresAt: 123_456 } })
       .mockResolvedValue({ data: undefined });
 
     const client = createAutomationClaimClient({ token: 'token-z' });
@@ -481,7 +482,8 @@ describe('createAutomationClaimClient', () => {
       attempt: 2,
       accountCurrentness: CLAIM_CURRENTNESS,
     })).resolves.toEqual(START_CURRENTNESS);
-    await client.heartbeatRun({ protocol: 'v3', runId: 'run/1', machineId: 'm1', attempt: 2, leaseDurationMs: 12_000 });
+    await expect(client.heartbeatRun({ protocol: 'v3', runId: 'run/1', machineId: 'm1', attempt: 2, leaseDurationMs: 12_000 }))
+      .resolves.toBe(123_456);
     await client.succeedRun({
       protocol: 'v3',
       runId: 'run/1',

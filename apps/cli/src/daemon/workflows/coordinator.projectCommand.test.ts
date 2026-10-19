@@ -185,7 +185,12 @@ describe('finite Project command Workflow completion', () => {
       pluginActionExecutionOwner: 'current_process', accountServerActionDeps: createAccountServerActionDeps({
         token: preparation.requester.credentials.token, credentials: preparation.requester.credentials,
         serverId: 'home', serverHttpBaseUrl: preparation.requester.serverHttpBaseUrl,
-      }) });
+      }), machineActionDirectTargetTransport: { machineId,
+        invoke: async (method, request, options) => await machineTransport.callExactMachineRpc({
+          credentials: preparation.requester.credentials, machineId, method, request,
+          ...(options?.localActionContext?.actionRequestId ? { requestId: options.localActionContext.actionRequestId } : {}),
+          ...(options?.signal ? { signal: options.signal } : {}),
+        }) } });
     const context = { surface: 'agent' as const, authority: 'account_automation' as const, serverId: 'home',
       actionsSettings: settings };
     const store = createInMemoryWorkflowCoordinatorStore();

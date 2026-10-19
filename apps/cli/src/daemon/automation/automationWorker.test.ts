@@ -26,6 +26,11 @@ import { startAutomationWorker } from './automationWorker';
 import { createDaemonAdmissionDrain } from '../lifecycle/admissionDrain';
 import { createManagedActivityInventory, type LiveWorkInventoryV1 } from '../lifecycle/managedActivity';
 import { projectMachineWorkSummary } from '../machines/machineWorkSummary';
+import { createApiSessionSocketStub, createAvailableSessionSpawnMachineSnapshot,
+  respondToExactMachineSessionSpawnRpc, type ApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { socketRpcCodec } from '@happier-dev/sync-client';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import type { SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 
 const { mockGet, mockPost, mockIsAxiosError, mockCreate } = vi.hoisted(() => ({
   mockGet: vi.fn(),
@@ -36,6 +41,7 @@ const { mockGet, mockPost, mockIsAxiosError, mockCreate } = vi.hoisted(() => ({
 const migrationBoundary = vi.hoisted(() => ({ credentials: null as StoredCredentials | null,
   list: vi.fn(), get: vi.fn(), reconcile: vi.fn() }));
 const freshSpawnBoundary = vi.hoisted(() => vi.fn());
+const socketIoBoundary = vi.hoisted(() => vi.fn());
 
 function startCapacityAutomationWorker(params: Parameters<typeof startAutomationWorker>[0]) {
   migrationBoundary.credentials = params.credentials;
@@ -50,29 +56,26 @@ vi.mock('@/api/automations', async importOriginal => ({ ...await importOriginal<
   listAutomationDefinitions: migrationBoundary.list, getAutomationDefinition: migrationBoundary.get,
   reconcileAutomationDefinition: migrationBoundary.reconcile }));
 
-// Machine RPC is the process boundary for both resume and fresh Session spawn.
-// Canonical readiness and Agent selection remain real.
-vi.mock('@/session/transport/rpc/machineRpc', () => {
-  const resumed = new Map<string, string>();
-  return { callMachineRpc: async (input: Parameters<typeof import('@/session/transport/rpc/machineRpc').callMachineRpc>[0]) => {
-    const { method, request } = input;
-    const resumeRequest = request as { sessionId?: string; spawnNonce?: string };
-    if ((method === RPC_METHODS.SPAWN_HAPPY_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) && !resumeRequest.sessionId) {
-      return freshSpawnBoundary(input);
-    }
-    if (method === RPC_METHODS.SPAWN_HAPPY_SESSION && resumeRequest.sessionId && resumeRequest.spawnNonce) {
-      resumed.set(resumeRequest.spawnNonce, resumeRequest.sessionId);
-      return { type: 'success', sessionId: resumeRequest.sessionId };
-    }
-    return { status: 'success', sessionId: resumed.get(resumeRequest.spawnNonce ?? '') };
-  } };
-});
+// Only Home's Socket.IO transport is replaced; exact-Machine admission,
+// request/receipt codecs and Session creation remain real.
+vi.mock('socket.io-client', () => ({ io: socketIoBoundary }));
 
 vi.mock('axios', () => {
   const client = {
     get: (url: string, ...args: unknown[]) => url.endsWith('/worker/run-lifecycle')
       ? Promise.resolve({ data: { sources: [] } }) : mockGet(url, ...args),
-    post: mockPost,
+    // The real claim executor confirms its lease before admission. Model that
+    // HTTP endpoint separately from each test's claim/settlement responses.
+    post: (url: string, ...args: unknown[]) => {
+      if (url.endsWith('/heartbeat')) {
+        const body = args[0];
+        if (!body || typeof body !== 'object' || !('leaseDurationMs' in body) || typeof body.leaseDurationMs !== 'number') {
+          throw new Error('Missing heartbeat lease duration');
+        }
+        return Promise.resolve({ data: { ok: true, leaseExpiresAt: Date.now() + body.leaseDurationMs } });
+      }
+      return mockPost(url, ...args);
+    },
     isAxiosError: mockIsAxiosError,
   };
 
@@ -188,6 +191,47 @@ describe('automationWorker', () => {
   beforeEach(() => {
     migrationBoundary.credentials = { token: 'token-1', encryption: null };
     freshSpawnBoundary.mockReset();
+    const resumed = new Map<string, string>();
+    socketIoBoundary.mockReset().mockImplementation(() => createApiSessionSocketStub({
+      emitWithAck: async (event, payload, socket) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object') {
+          throw new Error(`Unexpected automation socket event: ${event}`);
+        }
+        const method = Reflect.get(payload, 'method');
+        if (typeof method !== 'string') throw new Error('Missing exact Machine RPC method');
+        const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, Reflect.get(payload, 'params'), method);
+        const request = decoded.params;
+        if (!request || typeof request !== 'object') throw new Error('Missing Machine RPC request');
+        const sessionId = Reflect.get(request, 'sessionId');
+        const spawnNonce = Reflect.get(request, 'spawnNonce');
+        if ((method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION}`)
+          || method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`)) && !sessionId) {
+          await freshSpawnBoundary(socket);
+        }
+        if (typeof sessionId === 'string' && typeof spawnNonce === 'string') resumed.set(spawnNonce, sessionId);
+        let acknowledgement: unknown;
+        const handled = respondToExactMachineSessionSpawnRpc({ event,
+          args: [{ method, params: request }, (value: unknown) => { acknowledgement = value; }],
+          machineId: 'machine-1', sessionId: typeof sessionId === 'string' ? sessionId : 'fresh-session' });
+        const isSpawn = method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION}`)
+          || method.endsWith(`:${RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE}`);
+        let result: unknown;
+        if (isSpawn && typeof sessionId === 'string') {
+          // Resume reads the daemon's SpawnSessionResult, not the fresh public
+          // Session-creation acknowledgement modeled by the shared helper.
+          result = { type: 'success', sessionId } satisfies SpawnSessionResult;
+        } else if (handled && acknowledgement && typeof acknowledgement === 'object') {
+          result = Reflect.get(acknowledgement, 'result');
+        } else if (method.endsWith(`:${RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE}`)
+          || method.endsWith(`:${RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE}`)) {
+          const resolved = resumed.get(typeof spawnNonce === 'string' ? spawnNonce : '');
+          result = resolved ? { status: 'success', sessionId: resolved } : { status: 'not_found' };
+        } else {
+          throw new Error(`Unexpected automation Machine RPC: ${method}`);
+        }
+        return { ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, result, decoded.callId) };
+      },
+    }));
     migrationBoundary.list.mockReset().mockResolvedValue({ automations: [], nextCursor: null });
     migrationBoundary.get.mockReset();
     migrationBoundary.reconcile.mockReset();
@@ -230,7 +274,7 @@ describe('automationWorker', () => {
     } finally { worker.stop(); }
   });
 
-  it('projects admitted claim custody through the sole inventory until its response settles without blanking custodian summary', async () => {
+  it('keeps an outstanding claim observation pending after stop until Home proves no work was claimed', async () => {
     mockPost.mockClear();
     const now = Date.now();
     process.env.HAPPIER_SERVER_URL = 'https://api.example.test';
@@ -241,7 +285,7 @@ describe('automationWorker', () => {
     let releaseClaim!: () => void;
     mockPost.mockImplementation(async () => {
       await new Promise<void>(resolve => { releaseClaim = resolve; });
-      return { data: { run: null, automation: null } };
+      return { data: { run: null, automation: null, accountCurrentness: null } };
     });
     const target = { serverId: 'home', machineId: 'machine-1', installationId: 'installation' };
     const attribution = { ...target, accountId: 'alice' };
@@ -251,12 +295,6 @@ describe('automationWorker', () => {
     const inventory = createManagedActivityInventory({ producers: [worker.liveWorkProducer] });
     const project = async () => projectMachineWorkSummary({ inventory: await inventory.read(), target,
       custodianAccountId: 'alice', requesterIdentities: new Map() });
-    const states: string[] = [];
-    const unsubscribe = worker.liveWorkProducer.subscribe(() => {
-      void Promise.resolve(worker.liveWorkProducer.read()).then(snapshot => {
-        states.push(snapshot.items.length ? 'busy' : 'idle');
-      });
-    });
     try {
       await worker.refreshAssignments();
       expect(await worker.liveWorkProducer.read()).toEqual({ coverage: 'complete', items: [] });
@@ -265,19 +303,16 @@ describe('automationWorker', () => {
         startedAt: null, finishedAt: null, updatedAt: now, machineId: null, targetMachineId: 'machine-1',
       } } satisfies Update);
       await waitForCondition(() => mockPost.mock.calls.some(([url]) => String(url).endsWith('/runs/claim')));
-      expect(await worker.liveWorkProducer.read()).toMatchObject({ coverage: 'complete', items: [
-        { category: 'workflow_run', state: 'active', attribution },
-      ] });
-      expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['workflow_run'] });
-      expect(await project()).toEqual({ kind: 'current', requesters: [] });
+      let observed = false;
+      const observation = inventory.readDecision().then(result => { observed = true; return result; });
       worker.stop();
-      expect((await worker.liveWorkProducer.read()).items).toHaveLength(1);
+      await settleRequestDispatch();
+      expect(observed).toBe(false);
       releaseClaim();
-      await waitForCondition(() => states.at(-1) === 'idle');
+      expect(await observation).toMatchObject({ kind: 'idle' });
       expect(await worker.liveWorkProducer.read()).toEqual({ coverage: 'complete', items: [] });
-      expect(states).toContain('busy');
       expect(await project()).toEqual({ kind: 'current', requesters: [] });
-    } finally { unsubscribe(); inventory.dispose(); worker.stop(); releaseClaim?.(); }
+    } finally { inventory.dispose(); worker.stop(); releaseClaim?.(); }
   });
 
   it('counts admitted Workflow coordinator work and releases parked custody before a pending assignment refresh finishes', async () => {
@@ -1245,6 +1280,9 @@ describe('automationWorker', () => {
           content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') },
         }) };
       if (url.endsWith('/v2/sessions/destination')) return { status: 200, data: { session: destination } };
+      if (url.endsWith(`/v1/machines/${machineId}`)) return { status: 200,
+        data: { machine: { ...createAvailableSessionSpawnMachineSnapshot(machineId), storageMode: 'plain' } } };
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: now } };
       return { data: { assignments: [{ machineId, automationId: 'automation-0', nextClaimAt: now + 60_000,
         executionRecipeVersion: 2 }], settings: { maxActiveRunsPerMachine: projectedBudget } } };
     });
@@ -1267,8 +1305,9 @@ describe('automationWorker', () => {
     });
     const starts: Array<() => void> = [];
     const writes: string[] = [];
-    const startSignals: AbortSignal[] = [];
-    const coordinationErrors: unknown[] = [];
+    const startingSockets: ApiSessionSocketStub[] = [];
+    const activeStartingSockets = new Set<ApiSessionSocketStub>();
+    const coordinationErrors: Array<Readonly<{ runId: string; error: unknown }>> = [];
     const coordinationResults: unknown[] = [];
     let resolveFreshStartup!: () => void;
     let rejectFreshStartup!: (error: unknown) => void;
@@ -1277,13 +1316,18 @@ describe('automationWorker', () => {
       rejectFreshStartup = reject;
     });
     void freshStartup.catch(() => undefined);
-    freshSpawnBoundary.mockImplementation(async (request: Parameters<typeof import('@/session/transport/rpc/machineRpc').callMachineRpc>[0]) => {
-      if (request.signal) startSignals.push(request.signal);
-      await new Promise<void>(resolve => {
-        starts.push(resolve);
-        if (starts.length === budget) resolveFreshStartup();
-      });
-      throw new Error('start_boundary_stopped');
+    freshSpawnBoundary.mockImplementation(async (socket: ApiSessionSocketStub) => {
+      startingSockets.push(socket);
+      activeStartingSockets.add(socket);
+      try {
+        await new Promise<void>(resolve => {
+          starts.push(resolve);
+          if (starts.length === budget) resolveFreshStartup();
+        });
+        throw new Error('start_boundary_stopped');
+      } finally {
+        activeStartingSockets.delete(socket);
+      }
     });
     const coordinators = stores.map((storage, index) => createProductionWorkflowRunCoordinator({
       token: 'token', accountId, machineId, storage,
@@ -1305,7 +1349,7 @@ describe('automationWorker', () => {
     const worker = startCapacityAutomationWorker({ token: 'token', credentials: { token: 'token', encryption: null }, machineId,
       coordinateWorkflowRun: async claim => {
         try { const result = await coordinators[ids.indexOf(claim.runId)]!(claim); coordinationResults.push(result); return result; }
-        catch (error) { coordinationErrors.push(error); rejectFreshStartup(error); throw error; }
+        catch (error) { coordinationErrors.push({ runId: claim.runId, error }); rejectFreshStartup(error); throw error; }
       },
     });
     try {
@@ -1322,7 +1366,8 @@ describe('automationWorker', () => {
         throw new Error(JSON.stringify({ claims, ordinal, starts: starts.length, writes, coordinationResults,
           httpObservations, activity: { coverage: activity.coverage,
             items: activity.items.map(item => ({ category: item.category, attribution: item.attribution, state: item.state })) },
-          states: stores.map(store => store.run().state), progress: stores.map(store => store.rows()), operations: stores.map(store => store.operations()) }), { cause: error });
+          states: stores.map(store => store.run().state), progress: stores.map(store => store.rows().map(row => row.index)),
+          operations: stores.map(store => store.operations()) }), { cause: error });
       });
       expect(coordinationErrors).toEqual([]);
       expect({ starts: starts.length, writes: writes.length }, JSON.stringify({ coordinationResults, progress: stores.map(store => store.rows()) })).toEqual({ starts: budget, writes: 2 });
@@ -1335,14 +1380,18 @@ describe('automationWorker', () => {
         starts[0]!();
         await waitForCondition(() => stores[waiterIndex]!.rows().length > 1);
         if (budget === DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE) {
+          // Accepted graph rows precede the replacement's actual process admission.
+          await waitForCondition(() => activeStartingSockets.size === budget);
           projectedBudget = 2;
           await worker.refreshAssignments();
-          expect(startSignals.length).toBeGreaterThanOrEqual(budget);
-          expect(startSignals.every(signal => !signal.aborted)).toBe(true);
+          expect(startingSockets.length).toBeGreaterThanOrEqual(budget);
+          expect(activeStartingSockets.size).toBe(budget);
+          expect([...activeStartingSockets].every(socket => socket.connected)).toBe(true);
         }
       } else {
         worker.stop();
-        await waitForCondition(() => coordinationErrors.length === 1);
+        await waitForCondition(() => coordinationErrors.some(entry => entry.runId === ids[waiterIndex]));
+        expect(coordinationErrors.find(entry => entry.runId === ids[waiterIndex])?.error).toMatchObject({ name: 'AbortError' });
         starts[0]!();
         expect(stores[waiterIndex]!.rows()).toHaveLength(1);
       }

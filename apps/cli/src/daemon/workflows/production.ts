@@ -22,19 +22,22 @@ import { prepareWorkflowRunDataKeyV1, resolveWorkflowRunDataKeyV1, runWorkflowRe
 import { renderSessionRoleBlockV1 } from '@happier-dev/protocol/prompts/roles/renderSessionRoleBlockV1';
 import { ReviewStartTerminalValueV1Schema } from '@happier-dev/protocol/actions/specs/executionRunCompletion';
 import { openAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
-import { sameAutomationAccountCurrentnessWitnessV1, sameAutomationAccountContentIdentityV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { sameAutomationAccountContentIdentityV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import type { WorkflowRunEncryptionV1, WorkflowRunRecipientCensusResponseV1, WorkflowCheckpointEnvelopeV1, WorkflowProgressEnvelopeV1, WorkflowRunInvocationIndexV1, WorkflowRunSummaryV1, WorkflowRunStepProgressV1, TriggerTargetV1, WorkflowDefinitionV1, MaterializeWorkflowAcceptedSnapshotV1Input } from '@happier-dev/protocol';
 import { assertControllerDominates } from '@happier-dev/protocol/actions/executor/workflowRunActions';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import { resolveCanonicalAbsolutePath } from '@/utils/path/expandHomeDirPath';
 import { createWorkflowInteractionCapacityError } from '@/agent/permissions/interactionPersistenceError';
 import { readWorktreeChangeFingerprint } from '@/scm/readWorktreeChangeFingerprint';
+import { classifyDaemonServerWorkError } from '@/daemon/serverWork/classifyDaemonServerWorkError';
 
 import { getRandomBytes } from '@/api/encryption';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createWorkflowDefinitionActions } from '@/session/actions/workflowDefinitions';
 import { PushNotificationClient } from '@/api/pushNotifications';
+import { logger } from '@/ui/logger';
 import { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
 import { createWorkflowRunCommittedNotificationHandler, createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
 import {
@@ -305,6 +308,7 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
       ...(progress.reason ? { reason: progress.reason.code } : {}),
       ...(progress.reason?.message !== undefined ? { reasonMessage: progress.reason.message } : {}),
       ...(progress.reason?.details ? { reasonDetails: progress.reason.details } : {}),
+      ...(progress.reason?.runtimeIssueV1 ? { runtimeIssueV1: progress.reason.runtimeIssueV1 } : {}),
       ...(progress.validationIssues ? { validationIssues: progress.validationIssues } : {}),
       ...(progress.execution ? { execution: progress.execution } : {}),
       ...(progress.sharedConversationInvocationRecordId ? { sharedConversationInvocationRecordId: progress.sharedConversationInvocationRecordId } : {}),
@@ -585,10 +589,18 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
     if (!current || !persisted) throw new Error('workflow_invocation_intent_missing');
     if (current.lifecycle === 'waiting_for_review' && fact.interaction !== undefined) return current;
     const { key: _key, lifecycle: _lifecycle, review, ...ownedFact } = fact;
-    const { reason: _reason, reasonMessage: _reasonMessage, reasonDetails: _reasonDetails, ...withoutInvalidResultReason } = ownedFact;
+    const { reason: _reason, reasonMessage: _reasonMessage, reasonDetails: _reasonDetails, runtimeIssueV1: _runtimeIssueV1, ...withoutInvalidResultReason } = ownedFact;
     const publishedResultWins = fact.lifecycle === 'waiting_for_review' && fact.reason === 'invalid_result_contract'
       && persisted.progress.review?.resultSource?.kind === 'published' && persisted.progress.result !== undefined;
-    let progress = WorkflowProgressEnvelopeV1Schema.parse({ ...applyWorkflowInvocationFactV1(persisted.progress,
+    // The structural root reports the current orchestration failure, rather
+    // than a leaf's immutable observation/review history. A newly admitted
+    // running boundary retires its old failure; a new refusal replaces it.
+    // Aggregate refreshes alone cannot authorize either transition.
+    const updatesRootReason = current.recordId === this.params.rootRecordId
+      && (fact.reason !== undefined || (fact.lifecycle === 'running' && !stepProgress && !loopProgress));
+    const { reason: _previousRootReason, ...withoutRootReason } = persisted.progress;
+    const priorProgress = updatesRootReason ? withoutRootReason : persisted.progress;
+    let progress = WorkflowProgressEnvelopeV1Schema.parse({ ...applyWorkflowInvocationFactV1(priorProgress,
       WorkflowInvocationFactV1Schema.parse(publishedResultWins ? withoutInvalidResultReason : ownedFact),
       { previousLifecycle: current.lifecycle, lifecycle: fact.lifecycle, observedAtMs: Date.now() }),
       ...(review ? { review: { ...review, ...(persisted.progress.review?.resultSource ? { resultSource: persisted.progress.review.resultSource } : {}) } } : {}),
@@ -667,6 +679,8 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
         && (fact.reason === undefined || refreshed.reason === fact.reason)
         && (fact.reasonMessage === undefined || refreshed.reasonMessage === fact.reasonMessage)
         && (fact.reasonDetails === undefined || sameStrictJsonValue(refreshed.reasonDetails, fact.reasonDetails))
+        && (fact.runtimeIssueV1 === undefined || sameStrictJsonValue(refreshed.runtimeIssueV1, fact.runtimeIssueV1))
+        && (!updatesRootReason || sameStrictJsonValue(this.persisted.get(fact.key)?.progress.reason, progress.reason))
         && (effectiveFact.execution === undefined || sameStrictJsonValue(refreshed.execution, effectiveFact.execution))
         && (fact.observationDeadline === undefined || sameStrictJsonValue(refreshed.observationDeadline, fact.observationDeadline))
         && (fact.input === undefined || sameStrictJsonValue(refreshed.input, fact.input))
@@ -1186,6 +1200,7 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
 
 export type WorkflowProductionExecutionDeps = Readonly<{
   credentials: StoredCredentials;
+  sessionStartup?: import('./sessionStepExecutor').WorkflowSessionStartup;
   /** Stable Home identity used by Account-scoped domain rows. */
   serverIdentityId?: string;
   /** Device-local profile/routing key used by Session and Action transports. */
@@ -1201,7 +1216,7 @@ export type WorkflowProductionExecutionDeps = Readonly<{
 }>;
 
 export function createWorkflowRunPushNotificationClient(token: string): PushNotificationClient {
-  return new PushNotificationClient(token, resolveServerHttpBaseUrl());
+  return new PushNotificationClient(token);
 }
 
 export type WorkflowTriggerClaimSource =
@@ -1280,6 +1295,12 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
   storage?: StorageClient;
 }>): (claim: WorkflowClaimForCoordination) => Promise<WorkflowClaimCoordinationResult> {
   const storage = params.storage ?? createWorkflowRunStorageClient({ token: params.token, machineId: params.machineId });
+  const readRunReportPolicy = createSessionRunReportPolicyReader({
+    serverId: params.execution.serverId, serverHttpBaseUrl: resolveServerHttpBaseUrl(), accountId: params.accountId,
+    readCredentials: async () => params.execution.credentials,
+    // This coordinator captures one admitted Account credential; it never follows ambient Account changes.
+    isCurrent: () => params.execution.credentials.token === params.token,
+  });
   const onCommittedTransition = params.onCommittedTransition
     ?? createWorkflowRunCommittedNotificationHandler({
       expoPushSender: createWorkflowRunPushNotificationClient(params.token),
@@ -1289,7 +1310,16 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
   });
   return async (claim) => {
     const accountEncryption = await params.resolveAccountEncryption(claim.signal);
-    if (!sameAutomationAccountCurrentnessWitnessV1(accountEncryption.witness, claim.accountCurrentness)) {
+    // The claim owns this Run/attempt, not the Account-wide change cursor.
+    // Unrelated publications can advance that cursor before we open content;
+    // mode/key identity plus the storage and accepted-authority fences govern it.
+    if (!sameAutomationAccountContentIdentityV1(accountEncryption.witness, claim.accountCurrentness)) {
+      logger.debug('[WORKFLOW] Claim content identity unavailable before initialization', {
+        runId: claim.runId, attempt: claim.attempt, stage: 'claim_content_identity', reason: 'content_unavailable',
+        claimVersion: claim.accountCurrentness.version, currentVersion: accountEncryption.witness.version,
+        modeMatches: accountEncryption.witness.mode === claim.accountCurrentness.mode,
+        contentKeyMatches: accountEncryption.witness.contentKeyFingerprint === claim.accountCurrentness.contentKeyFingerprint,
+      });
       return claim.definitionEnvelope === undefined
         ? { state: 'failed', reason: 'content_unavailable' }
         : refuseWorkflowTriggerAdmission('content_unavailable');
@@ -1298,14 +1328,20 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
     // Admission happens once. A reclaim/Continue uses the same immutable
     // snapshot and recipient key custody as a direct Run, not the live source.
     if (claim.definitionEnvelope !== undefined && resolvedAcceptedEnvelope === undefined) {
-      if (!claim.automationId || !claim.automationCause) return refuseWorkflowTriggerAdmission('content_unavailable');
+      const refuse = (stage: string, reason: string, blockId?: string) => {
+        logger.debug('[WORKFLOW] Trigger admission refused before initialization', {
+          runId: claim.runId, attempt: claim.attempt, stage, reason,
+        });
+        return refuseWorkflowTriggerAdmission(reason, blockId);
+      };
+      if (!claim.automationId || !claim.automationCause) return refuse('claim', 'content_unavailable');
       let storedInput: unknown;
       try { storedInput = JSON.parse(claim.definitionEnvelope); } catch { storedInput = null; }
       const frozen = createStoredReadSchema(AutomationRunExecutionInputV1Schema).safeParse(storedInput);
       let definitionContent: unknown;
       if (frozen.success) {
         if (!sameStrictJsonValue(frozen.data.origin, toAutomationRunExecutionInputV1Origin(claim.automationCause))) {
-          return refuseWorkflowTriggerAdmission('content_unavailable');
+          return refuse('definition_payload', 'content_unavailable');
         }
         // Unattended admission has Account custody only. In particular, a later
         // device Save cannot grant consent to open this Run's retained ciphertext.
@@ -1314,7 +1350,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           ...(isAvailableE2eeAutomationAccountEncryptionV1(accountEncryption)
             ? { material: accountEncryption.material.material } : {}),
         });
-        if (!opened.ok) return refuseWorkflowTriggerAdmission('content_unavailable');
+        if (!opened.ok) return refuse('definition_payload', 'content_unavailable');
         const session = frozen.data.targetType === 'existing_session' && opened.template.existingSessionId
           ? await params.execution.resolveExistingSessionConversation({ sessionId: opened.template.existingSessionId,
             machineId: params.machineId, ...(claim.signal ? { signal: claim.signal } : {}) }) : null;
@@ -1323,7 +1359,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           ...(session ? { session: { project: { machineId: session.machineId, directory: session.directory },
             executionSelection: { ...session.runtimeSelection, ...(session.agentTarget ? { agentTarget: session.agentTarget } : {}) } } } : {}),
         });
-        if (converted.kind !== 'available') return refuseWorkflowTriggerAdmission('source_unavailable');
+        if (converted.kind !== 'available') return refuse('legacy_source', 'source_unavailable');
         const { machineId: _machineId, ...workspace } = converted.project;
         definitionContent = { workspace, executionTarget: converted.executionTarget, inlineDefinition: converted.definition };
       } else {
@@ -1335,14 +1371,14 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       const storedDefinition = AutomationStoredWorkflowDefinitionV2ReadSchema.safeParse(definitionContent);
       const target = readTriggerTargetV1({ workflowDefinitionId: frozen.success ? null : claim.workflowDefinitionId,
         scopeSessionId }, definitionContent);
-      if (!storedDefinition.success || target.kind !== 'available') return refuseWorkflowTriggerAdmission('source_unavailable');
+      if (!storedDefinition.success || target.kind !== 'available') return refuse('definition_payload', 'source_unavailable');
       const source = await resolveWorkflowTriggerClaimSource({
         target: target.target, credentials: params.execution.credentials, encryption: accountEncryption,
         ...(claim.signal ? { signal: claim.signal } : {}),
       });
       if (!source || claim.causeWorkDepth === undefined
         || !Number.isSafeInteger(claim.causeWorkDepth) || claim.causeWorkDepth < 0) {
-        return refuseWorkflowTriggerAdmission('source_unavailable');
+        return refuse('source', 'source_unavailable');
       }
       const evidenceContent = claim.automationEvidenceEnvelope === null
         ? null
@@ -1375,7 +1411,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       // project that execution receives, without creating any Run-owned worktree.
       const fingerprintWorkspace = scopeSessionId && source.definition.inputs.some((input) => input.name === 'diffFingerprint')
         ? await prepareClaimWorkspace() : undefined;
-      if (fingerprintWorkspace?.ok === false) return refuseWorkflowTriggerAdmission(fingerprintWorkspace.code);
+      if (fingerprintWorkspace?.ok === false) return refuse('workspace', fingerprintWorkspace.code);
       const fingerprint = fingerprintWorkspace?.ok
         ? await readWorktreeChangeFingerprint(fingerprintWorkspace.workspaceTarget.project.directory)
         : undefined;
@@ -1390,12 +1426,21 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         inputs = bindAutomationWorkflowInputs({ definition: source.definition, evidence: occurrenceSeed,
           constants: storedDefinition.data.inputs });
       } catch (error) {
-        return refuseWorkflowTriggerAdmission(error instanceof WorkflowInputResolutionError ? error.code : 'content_unavailable');
+        return refuse('inputs', error instanceof WorkflowInputResolutionError ? error.code : 'content_unavailable');
       }
       const workspace = fingerprintWorkspace ?? await prepareClaimWorkspace();
-      if (!workspace.ok) return refuseWorkflowTriggerAdmission(workspace.code);
-      if (!params.resolveMaterializationHost) return refuseWorkflowTriggerAdmission('target_unavailable');
+      if (!workspace.ok) return refuse('workspace', workspace.code);
+      if (!params.resolveMaterializationHost) return refuse('materialization_host', 'target_unavailable');
       const originSessionId = scopeSessionId ?? undefined;
+      let reportPolicy: Awaited<ReturnType<typeof readRunReportPolicy>> | undefined;
+      if (storedDefinition.data.onComplete?.kind === 'originating_session' && originSessionId) {
+        try {
+          reportPolicy = await readRunReportPolicy(claim.signal);
+        } catch {
+          claim.signal?.throwIfAborted();
+          return refuse('report_policy', 'content_unavailable');
+        }
+      }
       let host: Awaited<ReturnType<NonNullable<typeof params.resolveMaterializationHost>>>;
       try {
         host = await params.resolveMaterializationHost({
@@ -1408,7 +1453,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         claim.signal?.throwIfAborted();
         const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
         if (code === 'source_unavailable' || code === 'content_unavailable' || code === 'target_unavailable') {
-          return refuseWorkflowTriggerAdmission(code);
+          return refuse('materialization_host', code);
         }
         throw error;
       }
@@ -1430,18 +1475,24 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           ...(source.kind === 'saved' ? { metadata: source.metadata } : {}),
           ...(originSessionId ? { origin: { kind: 'direct', originSessionId } } : {}),
           ...(storedDefinition.data.onComplete?.kind === 'originating_session' && originSessionId ? {
-            resultDelivery: { kind: 'originating_session', originSessionId },
+            resultDelivery: { kind: 'originating_session', originSessionId, reportPolicy },
           } : {}),
         },
       });
-      if (!created.ok) return refuseWorkflowTriggerAdmission(created.error.code, created.error.blockId);
+      if (!created.ok) return refuse('materialization', created.error.code, created.error.blockId);
       // Only a lifecycle event has a source turn that can feed back into itself.
       // A manual/scheduled scoped habit intentionally continues its destination.
       const sourceSessionId = claim.automationCause.kind === 'trigger' && claim.automationCause.triggerKind === 'sessionLifecycle'
         ? claim.automationCause.evidence.sourceSessionId : undefined;
-      const selfTarget = sourceSessionId ? created.snapshot.materializedLeaves.find((leaf) =>
-        leaf.selection.conversation?.kind === 'existing_session' && leaf.selection.conversation.sessionId === sourceSessionId) : undefined;
-      if (selfTarget) return refuseWorkflowTriggerAdmission('self_target', selfTarget.blockId);
+      const selfTarget = sourceSessionId ? created.snapshot.materializedLeaves.find((leaf) => {
+        if (leaf.selection.conversation?.kind !== 'existing_session' || leaf.selection.conversation.sessionId !== sourceSessionId) return false;
+        // A declared source-context input preserves origin_session semantics.
+        // An independently selected or literal existing Session still cannot
+        // feed the lifecycle event back into its own source.
+        return originSessionId !== sourceSessionId || leaf.sessionBindings?.defaultFrom !== 'origin_session'
+          || !leaf.sessionBindings?.targets.some((target) => target.address.sessionId === sourceSessionId);
+      }) : undefined;
+      if (selfTarget) return refuse('self_target', 'self_target', selfTarget.blockId);
       if (diffFingerprint !== undefined && claim.lastSucceededRun) {
         // Use the previous Run's canonical key census. Checkpoints are bound to
         // their Run and cannot be opened with the new occurrence's key.
@@ -1496,7 +1547,11 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
     }
     const initial = parseRunSnapshot(await storage.execute({ operation: 'get', runId: claim.runId }, { ...(claim.signal ? { signal: claim.signal } : {}) }));
     const resolved = resolveWorkflowRunDataKeyV1({ encryption: accountEncryption, census: initial.keyCensus });
-    if (resolved.kind !== 'available' || initial.keyCensus.ownerAccountId !== params.accountId) return { state: 'failed', reason: 'content_unavailable' };
+    if (resolved.kind !== 'available' || initial.keyCensus.ownerAccountId !== params.accountId) {
+      logger.debug('[WORKFLOW] Run key unavailable before initialization', { runId: claim.runId, attempt: claim.attempt,
+        stage: 'run_key', reason: resolved.kind === 'unavailable' ? resolved.reason : 'owner_mismatch' });
+      return { state: 'failed', reason: 'content_unavailable' };
+    }
     const encryption = resolved.encryption;
     const prepareRecipients = async (signal?: AbortSignal) => await runWorkflowRecipientKeyPreparationV1({
       runId: claim.runId, runCrypto: encryption.runCrypto, openedDataEncryptionKey: initial.keyCensus.callerDataEncryptionKey,
@@ -1506,16 +1561,26 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       ...(signal ? { signal } : {}),
     });
     if (resolvedAcceptedEnvelope !== undefined && initial.acceptedEnvelope !== resolvedAcceptedEnvelope) {
+      logger.debug('[WORKFLOW] Accepted snapshot unavailable before initialization', {
+        runId: claim.runId, attempt: claim.attempt, stage: 'accepted_snapshot', reason: 'envelope_mismatch' });
       return { state: 'failed', reason: 'content_unavailable' };
     }
     const acceptedEnvelope = parseWorkflowStoredContentEnvelopeV1(resolvedAcceptedEnvelope ?? initial.acceptedEnvelope);
-    if (!acceptedEnvelope) return { state: 'failed', reason: 'content_unavailable' };
+    if (!acceptedEnvelope) {
+      logger.debug('[WORKFLOW] Accepted snapshot unavailable before initialization', {
+        runId: claim.runId, attempt: claim.attempt, stage: 'accepted_snapshot', reason: 'invalid_envelope' });
+      return { state: 'failed', reason: 'content_unavailable' };
+    }
     const openedAccepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({
       ...openMode(encryption),
       binding: { v: 1, purpose: 'accepted_snapshot', accountId: params.accountId, runId: claim.runId },
       envelope: acceptedEnvelope,
     });
-    if (openedAccepted.kind !== 'available') return { state: 'failed', reason: 'content_unavailable' };
+    if (openedAccepted.kind !== 'available') {
+      logger.debug('[WORKFLOW] Accepted snapshot unavailable before initialization', {
+        runId: claim.runId, attempt: claim.attempt, stage: 'accepted_snapshot', reason: openedAccepted.kind });
+      return { state: 'failed', reason: 'content_unavailable' };
+    }
     const accepted = WorkflowAcceptedSnapshotV1Schema.parse(openedAccepted.content);
     const inputs = accepted.inputs;
     if (initial.run.machineId !== params.machineId
@@ -1673,6 +1738,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       ...(accepted.origin?.originSessionId ? { originSessionId: accepted.origin.originSessionId } : {}),
       machineAdmissionTransport: params.execution.machineAdmissionTransport,
       visibleTeamId: initial.keyCensus.visibleTeamId,
+      ...(params.execution.sessionStartup ? { sessionStartup: params.execution.sessionStartup } : {}),
       ...(params.execution.resolveTeamCredentialResourceCatalog
         ? { resolveTeamCredentialResourceCatalog: params.execution.resolveTeamCredentialResourceCatalog }
         : {}),
@@ -1680,6 +1746,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
     const resolveFrozenRole = (executionParams: Pick<Parameters<WorkflowStepExecutor>[0], 'role'>) => executionParams.role;
     const conversations = createProductionWorkflowConversationOwner({
       credentials: params.execution.credentials,
+      serverId: params.execution.serverId,
       machineId: params.machineId,
       createFreshConversation: freshConversation,
       resolveSharedRunConversation: resolveSharedSessionConversation,
@@ -1748,6 +1815,10 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
     };
     const rootInvocation = await durableStore.readByLogicalInvocation(rootRecordId);
     if (!rootInvocation) throw new Error('workflow_root_invocation_missing');
+    if (rootInvocation.reason !== undefined
+      && (rootInvocation.lifecycle === 'running' || rootInvocation.lifecycle === 'needs_attention')) {
+      await durableStore.commitFact({ key: rootInvocation.key, lifecycle: 'running' });
+    }
     const coordinator = createWorkflowCoordinator({
       store: durableStore,
       ...(params.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: params.requesterWorkAttributionV1 } : {}),
@@ -1795,6 +1866,11 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
                     directory: preparedStep.existing.directory,
                   },
                 }
+              : executionParams.participant?.kind === 'model' && executionParams.participant.launch.directory.kind === 'path'
+                ? { conversationWorkspace: {
+                    machineId: executionParams.participant.launch.executionTarget.machineId,
+                    directory: executionParams.participant.launch.directory.path,
+                  } }
               : {}),
           };
         } catch (error) {
@@ -1852,10 +1928,26 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           frozenChildren: accepted.frozenChildren,
           workDepth: accepted.workDepth,
           authorization: accepted.authorization,
+          ...(accepted.origin ? { origin: accepted.origin } : {}),
           ...(initial.run.origin.kind === 'automation' && initial.run.origin.cause
             ? { automationCause: initial.run.origin.cause } : {}),
           ...(accepted.origin?.originSessionId ? { originSessionId: accepted.origin.originSessionId } : {}),
           ...(claim.signal ? { signal: claim.signal } : {}) });
+      } catch (error) {
+        if (claim.signal?.aborted || typeof error !== 'object' || error === null
+          || !('workflowStorageOperation' in error)
+          || classifyDaemonServerWorkError(error).kind !== 'server_error') throw error;
+        // A storage 5xx can follow a committed write. Preserve every admitted
+        // identity and pending custody; never replay the failed mutation or
+        // turn an unavailable acknowledgement into a terminal effect outcome.
+        // If storage is still unavailable, this write also fails and the
+        // incumbent lease-reclaim owner remains responsible for recovery.
+        const root = await durableStore.readByLogicalInvocation(rootRecordId);
+        if (!root) throw error;
+        await durableStore.commitFact({ key: root.key, lifecycle: 'needs_attention',
+          reason: 'storage_unavailable',
+          reasonMessage: 'Workflow storage is temporarily unavailable. Previously saved work is preserved; review the run before continuing.' });
+        return { state: 'interrupted', reason: 'storage_unavailable' } satisfies WorkflowCoordinatorResult;
       }
       finally { releaseActivity?.(); }
     };

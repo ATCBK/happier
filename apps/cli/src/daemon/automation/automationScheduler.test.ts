@@ -32,9 +32,10 @@ describe('resolveAutomationPollingConfig', () => {
         HAPPIER_AUTOMATION_LEASE_MS: '5000',
         HAPPIER_AUTOMATION_HEARTBEAT_MS: '60000',
       });
-      const onHeartbeat = vi.fn(async () => {});
+      const onHeartbeat = vi.fn(async () => Date.now() + config.leaseDurationMs);
       const heartbeat = startAutomationLeaseHeartbeat({
         heartbeatMs: config.heartbeatMs,
+        leaseExpiresAtMs: Date.now() + config.leaseDurationMs,
         onHeartbeat,
         onError: vi.fn(),
       });

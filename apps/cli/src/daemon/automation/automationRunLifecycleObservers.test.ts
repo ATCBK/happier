@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { describe, expect, it, vi } from 'vitest';
 import { ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema, ExecutionRunWaitResultSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
@@ -6,6 +7,7 @@ import { AutomationRunLifecycleSourceSchema, AutomationRunLifecycleOccurrenceEvi
   type AutomationRunLifecycleOccurrenceEvidenceV1 } from '@happier-dev/protocol/automations/automationRunLifecycle';
 import { ScmDiffSummaryGenerateOutputSchema, normalizeScmDiffSummaryModelOutput } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 
 type Source = Extract<ReturnType<typeof AutomationRunLifecycleSourceSchema.parse>, { kind: 'execution_run' }>;
 function createObservers(deps: Readonly<{
@@ -14,12 +16,12 @@ function createObservers(deps: Readonly<{
   onError: (error: unknown, source: Source) => void;
 }>) {
   const boundarySource = (sessionId: string | null, request: { runId: string; waitForOutput?: Source['observation'] },
-    options?: Readonly<{ targetMachineId?: string; signal?: AbortSignal }>) => {
+    options?: Readonly<{ targetMachineId?: string | null; signal?: AbortSignal }>) => {
     // Attached Run RPCs resolve their Machine through the authenticated Session
     // directory. These fixture Sessions both belong to machine-one.
     const machineId = sessionId === 'session' || sessionId === 'unrelated-session' ? 'machine-one' : options?.targetMachineId;
     if (!machineId || !options?.signal) throw new Error('Run transport scope or cancellation was not bound');
-    return { source: AutomationRunLifecycleSourceSchema.options[0].parse({ kind: 'execution_run',
+    return { source: AutomationRunLifecycleSourceSchema._zod.def.options[0].parse({ kind: 'execution_run',
       machineId, runId: request.runId,
       ...(sessionId ? { sessionId } : {}), ...(request.waitForOutput ? { observation: request.waitForOutput } : {}),
     }), signal: options.signal };
@@ -38,7 +40,7 @@ function createObservers(deps: Readonly<{
   };
   // Only the remote Run RPC transport is replaced; Action admission, request/output
   // schemas, source observation and notification occurrence production remain real.
-  return createAutomationRunLifecycleObservers({ executor: createActionExecutor(transports as ActionExecutorDeps),
+  return createAutomationRunLifecycleObservers({ executor: createActionExecutor({ ...createUnavailableActionTransportDeps(), ...transports }),
     report: deps.report, onError: deps.onError });
 }
 

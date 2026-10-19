@@ -4,6 +4,7 @@ import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDe
 import { createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows';
+import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { createTargetActionInvocationRegistry } from '@/plugins/runtime/invocation/targetActionRegistry';
 import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
 import { createUnavailablePluginServicesFactory } from '@/plugins/runtime/invocation/services/factory';
@@ -24,12 +25,14 @@ const inputSchema = { type: 'object', properties: {
   sessionId: { type: 'string' }, content: { type: 'object', properties: {
     text: { type: 'string' }, html: { type: 'string' },
   }, required: ['text'], additionalProperties: false },
-}, required: ['routerBindingId', 'audienceGroupId', 'subject', 'sessionId', 'content'], additionalProperties: false };
+}, required: ['routerBindingId', 'audienceGroupId', 'subject', 'sessionId', 'content'], additionalProperties: false } satisfies PluginJsonSchemaV2;
 const outputSchema = { type: 'object', properties: { kind: { const: 'accepted' }, custodyId: { type: 'string' } },
   required: ['kind', 'custodyId'], additionalProperties: false };
 
 describe('workflow contributed Action leaves', () => {
   it.each(['approved', 'rejected'] as const)('preserves 120 KB output, caller and target confirmation (%s), without replaying the effect', async decision => {
+    const attribution = { requestRef: 'accepted-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'release-bot' }, origin: null };
     const html = `<html>${'x'.repeat(120 * 1024)}</html>`;
     const content = { text: 'French morning brief', html };
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
@@ -46,10 +49,11 @@ describe('workflow contributed Action leaves', () => {
     ] };
     const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
       context: { source: { kind: 'inline' }, inputs: {}, machineId: workspace.machineId, executionTarget: { kind: 'session' },
-        workspaceTarget: { project: workspace }, origin: { kind: 'direct' }, authorization }, admission: { kind: 'user' },
+        workspaceTarget: { project: workspace }, origin: { kind: 'direct', actionRequestAttributionV1: attribution }, authorization }, admission: { kind: 'user' },
       effects: { resolveTargetAvailability: async () => true, readActionContract: async id => id === actionId
         ? { inputSchema, outputSchema } : null } });
     if (!accepted.ok) throw new Error(accepted.error.code);
+    attribution.requester.accountId = 'carol';
     const effects: unknown[] = [];
     const contexts: ActionExecutorContext[] = [];
     const confirmations: unknown[] = [];
@@ -104,6 +108,7 @@ describe('workflow contributed Action leaves', () => {
       const row = store.list().find(value => value.blockId === 'send')!;
       expect(row.execution).toMatchObject({ kind: 'action', actionId, input: { content } });
       expect(contexts).toEqual([expect.objectContaining({ actionCaller: { kind: 'workflowRun', runId: run.runId, authorization },
+        actionRequestAttributionV1: expect.objectContaining({ requestRef: 'accepted-input', requester: { serverId: 'home', accountId: 'bob' } }),
         actionRequestId: `${run.runId}/${row.logicalInvocationRecordId ?? row.recordId}/0`, surface: 'agent', authority: 'account_automation' })]);
       await coordinator.run(run);
       expect(contexts).toHaveLength(1);

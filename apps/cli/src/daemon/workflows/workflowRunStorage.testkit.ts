@@ -338,8 +338,15 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
         if (operation.lifecycle === 'admitting') expectInputAdmissionOpen();
         const contentEnvelope = String(operation.contentEnvelope);
         if (row.index.lifecycle === operation.lifecycle && row.contentEnvelope === contentEnvelope) return { ...row.index, parentRevision: revision };
+        const resolvesObservedTerminal = operation.resolution === 'observed_terminal_execution'
+          && (operation.expectedRevision !== undefined
+            ? ['completed', 'failed', 'cancelled', 'needs_attention'].includes(String(operation.lifecycle))
+            : operation.lifecycle === 'completed' || operation.lifecycle === 'needs_attention'
+              || ((operation.lifecycle === 'failed' || operation.lifecycle === 'cancelled')
+                && TERMINAL_RUN_STATES.some(candidate => candidate === state)));
         if (TERMINAL_INVOCATION_LIFECYCLES.some((candidate) => candidate === row.index.lifecycle)
-          && operation.lifecycle !== row.index.lifecycle) {
+          && operation.lifecycle !== row.index.lifecycle
+          && !(row.index.lifecycle === 'outcome_uncertain' && resolvesObservedTerminal)) {
           throw storageError('currentness_conflict');
         }
         const index = WorkflowRunInvocationIndexV1Schema.parse({

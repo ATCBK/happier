@@ -1,4 +1,4 @@
-import { sameAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { sameAutomationAccountContentIdentityV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { sealAutomationRunFailureDetailStoredEnvelopeV1 } from '@happier-dev/protocol/automations/automationRunFailureDetailStoredContent';
 import type { AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol';
 import {
@@ -55,7 +55,7 @@ type AutomationRunClaimClient = Readonly<{
     machineId: string;
     attempt: number;
     leaseDurationMs: number;
-  }) => Promise<void>;
+  }) => Promise<number>;
   failRun: (params: AutomationV3RunFailureSettlement) => Promise<void>;
 }>;
 
@@ -76,7 +76,7 @@ async function resolveMatchingAutomationCurrentness(params: Readonly<{
     return null;
   }
   if (params.signal.aborted || resolved.kind !== 'available') return null;
-  return sameAutomationAccountCurrentnessWitnessV1(resolved.witness, params.expected)
+  return sameAutomationAccountContentIdentityV1(resolved.witness, params.expected)
     ? resolved
     : null;
 }
@@ -209,25 +209,31 @@ export async function executeClaimedRun(params: {
 
   try {
     if (!isCurrent()) return;
-    // Workflow admission and execution remain covered by this exact claim lease.
+    const renewLease = async () => await claimClient.heartbeatRun({
+      protocol: claimed.protocol,
+      runId: claimed.run.id,
+      machineId,
+      attempt,
+      leaseDurationMs,
+    });
+    const checkCurrentness = async () => {
+      if (workflowAuthorizationCurrentnessCheck
+        && !await workflowAuthorizationCurrentnessCheck(executionController.signal)) {
+        abortExecution(WORKFLOW_AUTHORIZATION_NOT_CURRENT_ABORT_REASON);
+      }
+      if (workflowControlCheck && await workflowControlCheck() === 'cancel_requested') {
+        abortExecution(WORKFLOW_CANCEL_REQUESTED_ABORT_REASON);
+      }
+    };
+    // The successful claim grants the existing lease duration. Its first
+    // renewal uses the same lifecycle as every later one; an extra preflight
+    // heartbeat would reintroduce abort-on-first-transport-error here.
+    const leaseExpiresAtMs = Date.now() + leaseDurationMs;
     heartbeat = startAutomationLeaseHeartbeat({
-      heartbeatMs,
-      onHeartbeat: async () => {
-        await claimClient.heartbeatRun({
-          protocol: claimed.protocol,
-          runId: claimed.run.id,
-          machineId,
-          attempt,
-          leaseDurationMs,
-        });
-        if (workflowAuthorizationCurrentnessCheck
-          && !await workflowAuthorizationCurrentnessCheck(executionController.signal)) {
-          abortExecution(WORKFLOW_AUTHORIZATION_NOT_CURRENT_ABORT_REASON);
-        }
-        if (workflowControlCheck && await workflowControlCheck() === 'cancel_requested') {
-          abortExecution(WORKFLOW_CANCEL_REQUESTED_ABORT_REASON);
-        }
-      },
+      heartbeatMs, leaseExpiresAtMs, onHeartbeat: renewLease, onRenewed: checkCurrentness,
+      onTransientError: (error) => logAutomationWarn('Lease heartbeat failed; retaining the confirmed lease', error, {
+        runId: claimed.run.id, automationId: claimedAutomationId,
+      }),
       onError: (error) => {
         abortExecution();
         logAutomationWarn('Lease heartbeat failed', error, {
@@ -236,6 +242,7 @@ export async function executeClaimedRun(params: {
         });
       },
     });
+    if (!isCurrent()) return;
 
     try {
       if (isDirectWorkflowRunClaim(claimed)) {

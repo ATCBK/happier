@@ -1,6 +1,6 @@
 import { selectWorkflowLexicalScope } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { resolveWorkflowInvocationStructureV1 } from '@happier-dev/protocol/workflows/workflowInvocationStructureV1';
-import type { WorkflowAuthoredProducerRef, WorkflowScopeFrameV1, WorkflowInvocationBindingRowV1, WorkflowInvocationBindingParamsV1, WorkflowStep, WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows';
+import type { WorkflowAuthoredProducerRef, WorkflowScopeFrameV1, WorkflowInvocationBindingRowV1, WorkflowInvocationBindingParamsV1, WorkflowStep, WorkflowDefinitionV1, WorkflowResolvedInputsV1 } from '@happier-dev/protocol/workflows';
 import type { WorkflowCoordinatorInvocation, WorkflowCoordinatorStore } from './coordinator';
 import { WorkflowInputResolutionError } from './input';
 export type WorkflowScopeFrame = WorkflowScopeFrameV1;
@@ -22,11 +22,12 @@ export async function resolveWorkflowInvocationStructure(params: WorkflowInvocat
   frame: WorkflowScopeFrame;
   inheritedConversationOwnerRecordId: string;
   rootConversationOwnerRecordId: string;
+  inputs: WorkflowResolvedInputsV1;
 }> | undefined> {
   const resolved = await resolveWorkflowInvocationStructureV1(params);
   return resolved?.leaf.kind === 'step' ? { step: resolved.leaf, definition: resolved.definition, sourceKey: resolved.sourceKey, frame: resolved.frame,
     inheritedConversationOwnerRecordId: resolved.inheritedConversationOwnerRecordId,
-    rootConversationOwnerRecordId: resolved.rootConversationOwnerRecordId } : undefined;
+    rootConversationOwnerRecordId: resolved.rootConversationOwnerRecordId, inputs: resolved.inputs } : undefined;
 }
 
 /** CODEC's step-only projection consumes the same exact ancestry owner. */

@@ -1,4 +1,6 @@
 import type { StoredCredentials } from '@/persistence';
+import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 export { readProjectSetupConsentHoldV1 as readWorkflowProjectSetupConsentHold } from '@happier-dev/protocol/actions/projectActionFamily';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
 import {
@@ -10,6 +12,7 @@ import {
   type WaitForSessionInputResult,
 } from '@/session/services/sendSessionMessage';
 import type { SessionMessageModelSelectionInput } from '@/session/services/resolveSessionMessageModel';
+import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import {
   buildWorkflowSessionInputAdmissionV2,
 } from '@/session/services/sessionInputAdmissionIdentity';
@@ -21,7 +24,7 @@ import type { MentionRefV1, PortableComposerAttachmentV1, ExecutionRunResultCont
 export type WorkflowSessionInputObservation =
   | Readonly<{ kind: 'pending' }>
   | Readonly<{ kind: 'completed'; result: string; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'failed'; code: string; message: string; usage?: SessionInputUsageV1 }>
+  | Readonly<{ kind: 'failed'; code: string; message: string; runtimeIssueV1?: SessionRuntimeIssueV1; usage?: SessionInputUsageV1 }>
   | Readonly<{ kind: 'cancelled'; usage?: SessionInputUsageV1 }>;
 
 /** Classifies the exact Session outcome; cancellation custody stays with its caller. */
@@ -40,6 +43,7 @@ export function classifyWorkflowSessionInputResult(
     };
     case 'failed': return {
       kind: 'failed', code: 'session_input_failed', message: result.message,
+      ...(result.runtimeIssueV1 ? { runtimeIssueV1: result.runtimeIssueV1 } : {}),
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'cancelled': return {
@@ -52,7 +56,7 @@ export function classifyWorkflowSessionInputResult(
 export type WorkflowDetachedExecutionRunObservation =
   | Readonly<{ kind: 'pending' }>
   | Readonly<{ kind: 'completed'; result: string | import('@happier-dev/protocol').JsonValue }>
-  | Readonly<{ kind: 'failed'; code: string }>
+  | Readonly<{ kind: 'failed'; code: string; message?: string; runtimeIssueV1?: SessionRuntimeIssueV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string }>
   | Readonly<{ kind: 'outcome_uncertain'; code: string }>;
 
@@ -168,6 +172,11 @@ export async function observeWorkflowDetachedExecutionRunInput(params: Readonly<
   }
   const turn = resolveWorkflowDetachedExecutionRunInputTurn(response.run, params.runId, params.localInputId);
   if (!turn) {
+    // A different retained turn says nothing about this input's outcome.
+    // Pre-native refusal is correlated by startExecutionRun at the initial-input producer.
+    if (response.run.inputTurns?.current || response.run.inputTurns?.last) {
+      return { kind: 'outcome_uncertain', code: 'execution_run_input_not_observed' };
+    }
     // An attached Workflow input is first durably admitted by Session Pending.
     // Until that owner delivers it into the retained Run, absence from the
     // Run's current/last projection is not proof of lost custody.
@@ -181,9 +190,9 @@ export async function observeWorkflowDetachedExecutionRunInput(params: Readonly<
   if (turn.state === 'failed') {
     return {
       kind: 'failed',
-      code: response.run.error?.code === 'workflow_interaction_capacity_exceeded'
-        ? response.run.error.code
-        : 'execution_run_input_failed',
+      code: response.run.error?.code ?? 'execution_run_input_failed',
+      ...(response.run.error?.message ? { message: response.run.error.message } : {}),
+      ...(response.run.error?.runtimeIssueV1 ? { runtimeIssueV1: response.run.error.runtimeIssueV1 } : {}),
     };
   }
   if (!turn.result) {
@@ -216,10 +225,14 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
   permissionMode?: string | null;
   /** Immutable mediated source retained by the accepted Workflow Run. */
   sourceAuthority?: SessionInputSourceAuthorityV1;
+  /** Original accepted request cause, independent of the executing Session's owner. */
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
   /** Coordinator-resolved authoring selection; Session owns model normalization. */
   modelSelectionInput?: SessionMessageModelSelectionInput;
   modelSelectionUpdatedAt?: number;
   incomingResumeOptions?: Parameters<typeof sendSessionMessage>[0]['incomingResumeOptions'];
+  /** Frozen Session placement; input admission rechecks it against current owner metadata. */
+  targetMachineId?: string;
   /** Frozen identity from the accepted Run. When supplied it must equal the canonical derivation. */
   localInputId?: string;
   signal?: AbortSignal;
@@ -244,6 +257,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
     {
       ...(requestedPermissionCeiling ? { requestedPermissionCeiling } : {}),
       ...(params.sourceAuthority ? { sourceAuthority: params.sourceAuthority } : {}),
+      ...(params.actionRequestAttributionV1 ? { actionRequestAttributionV1: params.actionRequestAttributionV1 } : {}),
     },
   );
   const displayText = typeof params.displayText === 'string' && params.displayText.trim().length > 0
@@ -268,7 +282,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
     idOrPrefix: params.sessionId,
     message: params.text,
     wait: false,
-    timeoutMs: 30_000,
+    timeoutMs: resolveSessionMessageAdmissionTimeoutMs(),
     localId,
     requestedAction: { v: 1, kind: 'enqueue' },
     ...(params.executionRunTarget
@@ -282,6 +296,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
     ...(params.modelSelectionUpdatedAt === undefined ? {} : { modelSelectionUpdatedAt: params.modelSelectionUpdatedAt }),
     ...(params.incomingResumeOptions ? { incomingResumeOptions: params.incomingResumeOptions } : {}),
     inputAdmission,
+    ...(params.targetMachineId ? { targetMachineId: params.targetMachineId } : {}),
     machineAdmissionTransport: params.machineAdmissionTransport,
     ...(params.signal ? { signal: params.signal } : {}),
   });

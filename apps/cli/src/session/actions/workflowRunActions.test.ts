@@ -41,6 +41,7 @@ function plainRunKeyCensus(runId: string, version = 1): WorkflowRunRecipientCens
 
 function createWorkflowRunActionOwner(deps: Parameters<typeof createRunOwner>[0]) {
   return createRunOwner({
+    resolveRunReportPolicy: async () => ({ preset: 'important' }),
     resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
     resolveAgentStartContext: async () => ({
       caller: { kind: 'session', sessionId: 'calling-session', starterDepth: 0, turnDepth: 0 },
@@ -972,17 +973,20 @@ describe('workflow Run Actions', () => {
   });
 
   it('freezes trusted workspace and causal authorization into a direct admission', async () => {
+    const attribution = { requestRef: 'accepted-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'release-bot' }, origin: null };
     const admittedRunId = '11111111-1111-4111-8111-111111111111';
     const accountCurrentness = { mode: 'plain' as const, version: 7, contentKeyFingerprint: null };
+    const run = { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
+      id: admittedRunId, origin: { kind: 'direct', originSessionId: 'session-1' }, state: 'queued', revision: 0,
+      machineId: 'machine-1', workflowCustodyState: 'pending', originDeliveryAckRevision: 0,
+      availability: { pause: true, resumeBoundary: false,
+        restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
     const execute = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error('not found'), { response: { status: 404 } }))
-      .mockResolvedValueOnce({ kind: 'created', run: { sourceArtifactId: null, ownerAccountId: 'account-1', visibleTeamId: null,
-        id: admittedRunId, origin: { kind: 'direct', originSessionId: 'session-1' }, state: 'queued', revision: 0,
-        machineId: 'machine-1', workflowCustodyState: 'pending', originDeliveryAckRevision: 0,
-        availability: { pause: true, resumeBoundary: false,
-           restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
-        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-      } });
+      .mockResolvedValueOnce({ kind: 'created', run });
     const owner = createWorkflowRunActionOwner({
       resolveAccountId: async () => 'account-1', storage: { execute }, definitions: { get: vi.fn() },
       resolveEncryption: async () => ({ kind: 'available', witness: accountCurrentness }),
@@ -1000,6 +1004,7 @@ describe('workflow Run Actions', () => {
     }, context: {
       externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: '/repo' } },
       defaultSessionId: 'session-1', callerPermissionMode: 'yolo',
+      actionRequestAttributionV1: attribution,
       causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
     } });
 
@@ -1020,6 +1025,7 @@ describe('workflow Run Actions', () => {
       kind: 'available',
       content: {
         metadata: { title: 'Agent-created frozen title' },
+        origin: { kind: 'direct', originSessionId: 'session-1', actionRequestAttributionV1: attribution },
         executionTarget: { kind: 'detached_run' },
         resultDelivery: {
           kind: 'originating_session',
@@ -1027,6 +1033,12 @@ describe('workflow Run Actions', () => {
         },
       },
     });
+    execute.mockResolvedValueOnce({ run, acceptedEnvelope: admitted.acceptedEnvelope,
+      checkpointEnvelope: null, resultEnvelope: null, keyCensus: plainRunKeyCensus(admittedRunId, 7) })
+      .mockResolvedValueOnce({ invocations: [], progressEnvelopesByInvocationId: {} });
+    const observed = await owner.execute({ actionId: 'workflow.run.get', input: { runId: admittedRunId }, context: {} });
+    expect(observed).toMatchObject({ acceptedContext: { origin: { kind: 'direct', originSessionId: 'session-1' } } });
+    expect(observed).not.toHaveProperty('acceptedContext.origin.actionRequestAttributionV1');
   });
 
   it('records boundary Resume through the shared key-free control owner', async () => {

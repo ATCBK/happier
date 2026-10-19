@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteAutomationDefinition, listAutomationDefinitions, reconcileAutomationDefinition, runAutomationNowReceipt } from './automations';
+import { createAutomationDefinition, deleteAutomationDefinition, getAutomationDefinition, listAutomationDefinitions, reconcileAutomationDefinition, runAutomationNowReceipt } from './automations';
+import { normalizeWorkflowActionThrownError } from '@happier-dev/protocol/actions/executor/workflowAccountActions';
 
 const { get, post, request } = vi.hoisted(() => ({
   get: vi.fn(),
@@ -29,6 +30,42 @@ describe('runAutomationNow', () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(['run', 'list', 'get', 'create', 'reconcile', 'delete'] as const)(
+    'preserves typed HTTP refusal through the Workflow failure consumer for %s without disclosing raw content', async operation => {
+      const response = { status: 400, data: { code: 'FST_ERR_VALIDATION', error: 'Bad Request',
+        message: 'private validation input', headers: { authorization: 'private credential' } } };
+      post.mockResolvedValue(response);
+      get.mockResolvedValue(response);
+      request.mockResolvedValue(response);
+      const input = { automationId: 'automation-1', name: 'Triggers', enabled: true,
+        executionRecipe: { v: 2 as const, templateVersion: 1, triggerEvidence: null, workflow: { t: 'plain' as const, v: { inlineDefinition: {
+          version: 1 as const, blocks: [{ kind: 'wait' as const, id: 'wait', document: { text: 'Wait', references: [], attachments: [] } }],
+        }, executionTarget: { kind: 'session' as const }, workspace: { directory: '/work' } } } }, assignments: [], triggers: [] };
+      const invoke = () => {
+        switch (operation) {
+          case 'run': return runAutomationNowReceipt({ token: 'token-1', automationId: 'automation-1' });
+          case 'list': return listAutomationDefinitions({ token: 'token-1' });
+          case 'get': return getAutomationDefinition({ token: 'token-1', automationId: 'automation-1' });
+          case 'create': return createAutomationDefinition({ token: 'token-1', input });
+          case 'reconcile': return reconcileAutomationDefinition({ token: 'token-1', automationId: 'automation-1', input: {
+            expectedTemplateVersion: 1, name: 'Triggers', description: null, enabled: true, assignments: [], triggers: [], removedTriggers: [],
+          } });
+          case 'delete': return deleteAutomationDefinition({ token: 'token-1', automationId: 'automation-1' });
+        }
+      };
+      const failure = await invoke().catch(normalizeWorkflowActionThrownError);
+      expect(failure).toMatchObject({ ok: false, errorCode: 'workflow_http_error',
+        error: expect.stringContaining('FST_ERR_VALIDATION'), details: { status: 400, code: 'FST_ERR_VALIDATION' } });
+      expect(JSON.stringify(failure)).not.toContain('private');
+    });
+
+  it('keeps unknown HTTP bodies private while preserving the response status', async () => {
+    post.mockResolvedValue({ status: 502, data: { error: 'private_token_value', message: 'private response', details: { secret: 'private' } } });
+    const failure = await runAutomationNowReceipt({ token: 'token-1', automationId: 'automation-1' }).catch(normalizeWorkflowActionThrownError);
+    expect(failure).toEqual({ ok: false, errorCode: 'workflow_outcome_unresolved', error: expect.any(String) });
+    expect(JSON.stringify(failure)).not.toContain('private');
+  });
+
   it('returns removed-revision evidence and preserves older success receipts without inventing evidence', async () => {
     request.mockResolvedValue({ status: 200, data: { ok: true, removedRevision: 11 } });
     await expect(deleteAutomationDefinition({ token: 'token-1', automationId: 'automation-1' }))
@@ -36,6 +73,16 @@ describe('runAutomationNow', () => {
     request.mockResolvedValue({ status: 200, data: { ok: true } });
     await expect(deleteAutomationDefinition({ token: 'token-1', automationId: 'automation-1' }))
       .resolves.toEqual({ ok: true });
+  });
+  it.each(['lost', 'invalid', 'server'] as const)('keeps a %s definition mutation receipt unresolved through the real failure reader', async kind => {
+    const input = { expectedTemplateVersion: 1, name: 'Triggers', description: null, enabled: true,
+      assignments: [], triggers: [], removedTriggers: [] };
+    if (kind === 'lost') request.mockRejectedValueOnce(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+    else request.mockResolvedValueOnce({ status: kind === 'server' ? 500 : 200, data: {} });
+    const result = await reconcileAutomationDefinition({ token: 'token-1', automationId: 'automation-1', input })
+      .catch(normalizeWorkflowActionThrownError);
+    expect(result).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it('preserves the complete saved-occurrence receipt and rejects mismatched Workflow Run correspondence', async () => {
@@ -119,10 +166,10 @@ describe('runAutomationNow', () => {
       'https://api.example.test/v3/automations/automation%2F1/run-now',
       undefined,
       expect.objectContaining({
-        headers: {
+        headers: expect.objectContaining({
           Authorization: 'Bearer token-1',
           'Idempotency-Key': 'ci-build-42',
-        },
+        }),
       }),
     );
   });

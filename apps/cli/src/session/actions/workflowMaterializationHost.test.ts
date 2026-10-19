@@ -28,7 +28,7 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
     throw new Error(`unexpected_session_read:${url}`);
   });
   return createWorkflowMaterializationHostV1({
-    credentials, serverHttpBaseUrl: 'http://127.0.0.1:41371',
+    credentials, serverId: 'workflow-home', serverIdentityId: 'srv_workflow_home', serverHttpBaseUrl: 'http://127.0.0.1:41371',
     readRoleSelection: async () => ({}), readLaunchProfile: async () => null,
     readWorkflowDefinition: async () => null,
     ...(readAcpCatalog ? { readAcpCatalog } : {}),
@@ -55,6 +55,79 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
 
 describe('exact-machine workflow materialization effects', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
+
+  it('resolves typed Session inputs from exact authorized metadata rather than the coordinator Machine', async () => {
+    const host = sessionAdmissionHost('review-machine');
+    const admission = await host({ machineId: 'coordinator-machine', directory: '/repo' });
+    const resolve = admission.effects.resolveSessionTarget;
+    expect(await resolve?.(sessionId)).toEqual({
+      address: { serverId: 'srv_workflow_home', sessionId }, machineId: 'review-machine',
+    });
+    // Repeated references in this admission share its authorized observation;
+    // replay constructs a fresh host rather than retaining this observation.
+    vi.mocked(axios.get).mockRejectedValue(new Error('later_session_observation_unavailable'));
+    expect(await resolve?.({ serverId: 'workflow-home', sessionId })).toEqual({
+      address: { serverId: 'workflow-home', sessionId }, machineId: 'review-machine',
+    });
+    expect(await resolve?.({ serverId: 'foreign-home', sessionId })).toBeNull();
+  });
+
+  it('refuses a typed Session input when its exact identity or authoritative Machine is unavailable', async () => {
+    const host = sessionAdmissionHost('');
+    const admission = await host({ machineId: 'coordinator-machine', directory: '/repo' });
+    expect(await admission.effects.resolveSessionTarget?.({ serverId: 'srv_workflow_home', sessionId })).toBeNull();
+    // Even a successful exact-detail transport cannot substitute a record with a different ID.
+    sessionAdmissionHost('review-machine');
+    const read = vi.mocked(axios.get).getMockImplementation()!;
+    const prefix = 'c123456789012345';
+    vi.mocked(axios.get).mockImplementation((url, config) => read(String(url).replace(prefix, sessionId), config));
+    expect(await admission.effects.resolveSessionTarget?.({ serverId: 'srv_workflow_home', sessionId: prefix })).toBeNull();
+  });
+
+  it('admits the full accepted model target on its Run Machine and refuses a foreign Home or Machine', async () => {
+    const admission = await sessionAdmissionHost('run-machine')({ machineId: 'run-machine', directory: '/repo' });
+    const launch = { executionTarget: { serverId: 'srv_workflow_home', machineId: 'run-machine' },
+      directory: { kind: 'path' as const, path: '/review' },
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'test.agent', localId: 'agent' } },
+      configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: null, updatedAtMs: 0 }, options: {} },
+      connectedServices: { v: 2 as const, bindingsByServiceId: {} },
+    };
+    const leaf = { blockId: 'participant', selection: {}, executionTarget: { kind: 'session' as const },
+      participant: { kind: 'model' as const, launch } };
+    await expect(admission.effects.resolveTargetAvailability(leaf, { sessionIds: [] })).resolves.toBe(true);
+    await expect(admission.effects.resolveTargetAvailability({ ...leaf,
+      participant: { kind: 'model', launch: { ...launch, executionTarget: { ...launch.executionTarget,
+        machineId: 'replacement-machine' } } } }, { sessionIds: [] }))
+      .resolves.toMatchObject({ reason: 'selection_unavailable' });
+    await expect(admission.effects.resolveTargetAvailability({ ...leaf,
+      participant: { kind: 'model', launch: { ...launch, executionTarget: { ...launch.executionTarget,
+        serverId: 'foreign-home' } } } }, { sessionIds: [] }))
+      .resolves.toMatchObject({ reason: 'selection_unavailable' });
+  });
+
+  it.each([true, false])('admits a contributed Session input through production materialization (context default: %s)', async (contextDefault) => {
+    const ownerMachine = contextDefault ? 'run-machine' : 'review-machine';
+    const selectedHome = contextDefault ? 'srv_workflow_home' : 'workflow-home';
+    const host = sessionAdmissionHost(ownerMachine);
+    const admitted = await materializeWorkflowAcceptedSnapshotV1({
+      ...await host({ machineId: 'run-machine', directory: '/repo' }), admission: { kind: 'user' },
+      definition: { version: 1, inputs: [{ name: 'source', valueType: 'json', required: true,
+        defaultFrom: 'origin_session', inputType: { hostType: 'session' } }],
+        defaults: { conversation: { kind: 'input', name: 'source' } },
+        blocks: [{ kind: 'step', id: 'continue', document: { text: 'Continue', references: [], attachments: [] } }] },
+      context: { source: { kind: 'catalog', ref: 'plugin:test.workflow/source', version: 1 },
+        inputs: contextDefault ? {} : { source: { serverId: selectedHome, sessionId } }, machineId: 'run-machine',
+        executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId: 'run-machine', directory: '/repo', checkoutRootPath: '/repo' } },
+        ...(contextDefault ? { origin: { kind: 'direct' as const, originSessionId: sessionId } } : {}),
+        authorization: { principal: { kind: 'host' } } },
+    });
+    expect(admitted).toMatchObject({ ok: true, snapshot: {
+      inputs: { source: { serverId: selectedHome, sessionId } },
+      materializedLeaves: [{ selection: { conversation: { kind: 'existing_session', sessionId, machineId: ownerMachine } } }],
+    } });
+  });
 
   it('keeps a connected authentication override on admission and replay despite native sign-out', async () => {
     const connectedServices = { v: 2 as const, bindingsByServiceId: {

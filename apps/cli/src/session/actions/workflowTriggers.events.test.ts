@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AutomationDefinitionCreateRequestSchema,
@@ -41,7 +42,7 @@ const event = {
 const privateDefinition = { v: 1 as const, sourceInstanceId: event.sourceInstanceId,
   sourceConfig: event.sourceConfig, displayLabel: event.displayLabel, filter: event.filter,
   maximumObservationAgeMs: event.maximumObservationAgeMs };
-const binding: Extract<AutomationTriggerDefinitionBindingV1, { triggerKind: 'pluginEvent' }> = AutomationTriggerDefinitionBindingV1Schema.options[0].parse({ v: 1, automationId: 'automation', triggerId: 'trigger',
+const binding: Extract<AutomationTriggerDefinitionBindingV1, { triggerKind: 'pluginEvent' }> = AutomationTriggerDefinitionBindingV1Schema._zod.def.options[0].parse({ v: 1, automationId: 'automation', triggerId: 'trigger',
   triggerRevision: 3, triggerKind: 'pluginEvent', eventRef: event.eventRef,
   sourceSelectorId: '9d5af559-2c82-4c22-b6a0-ecabce38a631' });
 const resolveUnusedWorkflow = async (): Promise<typeof definition> => {

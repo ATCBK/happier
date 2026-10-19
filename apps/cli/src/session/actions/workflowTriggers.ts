@@ -9,11 +9,10 @@ import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedService
 import { getRandomBytes } from '@/api/encryption';
 import type { StoredCredentials } from '@/persistence';
 import { createAutomationAccountEncryptionMaterialSnapshotV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { resolveAutomationTemplateRetainedSession } from '@/daemon/automation/automationRetainedSession';
 import { readManagedMachine } from '@/machines/managed/readManagedMachine';
-import { configuration } from '@/configuration';
 
 /** CLI adapts canonical Account currentness/crypto and Automation transport, not trigger semantics. */
 export function createCliWorkflowTriggerActions(params: Readonly<{
@@ -38,7 +37,11 @@ export function createCliWorkflowTriggerActions(params: Readonly<{
       create: (input) => onServer(() => createAutomationDefinition({ token, input })),
       reconcile: (automationId, input) => onServer(() => reconcileAutomationDefinition({ token, automationId, input })),
       delete: (automationId) => onServer(() => deleteAutomationDefinition({ token, automationId })),
-      runNow: (automationId, options) => onServer(() => runAutomationNowReceipt({ token, automationId, ...options })),
+      runNow: (automationId, options, caller) => onServer(() => runAutomationNowReceipt({ token, automationId, ...options,
+        ...(caller?.externalActionExecutionAuthorization ? { authorization: caller.externalActionExecutionAuthorization } : {}),
+        ...(caller?.externalActionCredential ? { requiresRequesterCustody: true } : {}),
+        ...(caller?.signal ? { signal: caller.signal } : {}),
+      })),
     },
     resolveEncryption: async () => {
       const resolved = await resolveValidatedAutomationAccountEncryptionV1({
@@ -62,7 +65,7 @@ export function createCliWorkflowTriggerActions(params: Readonly<{
     ...(params.resolveRunTrigger ? { resolveRunTrigger: params.resolveRunTrigger } : {}),
     ...(params.resolveRunSource ? { resolveRunSource: params.resolveRunSource } : {}),
     resolveManagedMachine: (input, caller) => readManagedMachine({ ...input, credentials: params.credentials,
-      serverHttpBaseUrl: params.serverHttpBaseUrl ?? configuration.apiServerUrl,
+      serverHttpBaseUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
       ...(caller?.signal ? { signal: caller.signal } : {}),
       ...(caller?.externalActionExecutionAuthorization ? { authorization: caller.externalActionExecutionAuthorization } : {}),
     }),

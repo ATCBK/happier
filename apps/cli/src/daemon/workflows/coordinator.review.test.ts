@@ -80,6 +80,23 @@ describe('workflow review pipeline', () => {
       { ...leaf('tail'), input: [{ kind: 'result', producer: { scope: { kind: 'current' }, blockId: 'person' }, path: [], optional: true }] }]),
       inputs: {}, executionTarget, authorization })).state).toBe('succeeded');
   });
+  it('reports the missing final-output reference after a fieldless Wait is continued', async () => {
+    const runId = 'fieldless-wait-output';
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const key = workflowInvocationKey({ runId, blockId: 'review-ready', scope: [], attempt: 0 });
+    await store.ensureIntent({ key, recordId: 'wait-row', runId, blockKind: 'wait', blockId: 'review-ready', memberOrdinal: '0',
+      path: { blockId: 'review-ready', scope: [] }, attempt: 0, acceptedAtMs: 1, lifecycle: 'pending' });
+    await store.commitFact({ key, lifecycle: 'completed' });
+    const workflow = definition([{ kind: 'wait', id: 'review-ready', document: { text: 'Confirm readiness', references: [], attachments: [] } }]);
+    const coordinator = createWorkflowCoordinator({ store, resolveWorkspace: async () => ({ ok: true, workspace }),
+      isAcceptedAuthorizationCurrent: async () => true, executeStep: async () => { throw new Error('Wait must not launch an Agent'); } });
+    await expect(coordinator.run({ runId, definition: { ...workflow,
+      finalOutput: { kind: 'result', producer: { blockId: 'review-ready', scope: { kind: 'current' } }, path: [] } },
+      inputs: {}, executionTarget, authorization })).resolves.toMatchObject({ state: 'failed', reason: 'missing_reference' });
+    expect(store.records.get(key)?.lifecycle).toBe('completed');
+    await expect(coordinator.run({ runId, definition: workflow, inputs: {}, executionTarget, authorization }))
+      .resolves.toMatchObject({ state: 'succeeded' });
+  });
   it('releases the retained conversation gate at durable entry before notification while keeping the draft fixed', async () => {
     const store = createInMemoryWorkflowCoordinatorStore();
     const notificationDelivered = deferred<void>();

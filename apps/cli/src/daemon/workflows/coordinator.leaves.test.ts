@@ -645,7 +645,10 @@ describe('workflow Action leaves', () => {
     const result = await coordinator.run({ runId: 'immediate', definition: definition([goal]), materializedLeaves: [frozen(goal)],
       inputs: {}, executionTarget, authorization, originSessionId: 'origin' });
     expect(result).toMatchObject({ state: 'succeeded' });
-    expect(writes).toEqual([{ sessionId: 'origin', status: 'complete' }]);
+    const invocation = store.list()[0]!;
+    const actionRequestId = `immediate/${invocation.logicalInvocationRecordId ?? invocation.recordId}/0`;
+    expect(writes).toEqual([{ sessionId: 'origin', status: 'complete', actionRequestId,
+      context: { surface: 'cli', authority: 'account_automation', actionRequestId } }]);
     expect(store.list()[0]).toMatchObject({ blockKind: 'action', lifecycle: 'completed', result: { ok: true },
       execution: { kind: 'action', actionId: 'session.goal.set', actionRequestId: expect.any(String) } });
   });
