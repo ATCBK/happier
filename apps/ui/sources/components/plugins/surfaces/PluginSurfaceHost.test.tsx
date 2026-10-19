@@ -224,6 +224,7 @@ const EXPECTED_GENERIC_DESTINATION_HOST_METHODS = [
     'openNewSession',
     'activeComposer',
     'readComposer',
+    'readDiscussionComposer',
     'watchComposer',
     'applyComposer',
     'focusComposer',
@@ -2943,6 +2944,7 @@ describe('PluginSurfacePlacementHost', () => {
                 serverId: 'settings-server',
                 serverIdentityId: 'settings-server-identity',
                 pluginId: 'acme.settings-page',
+                signal: expect.any(AbortSignal),
             });
         });
         expect(declarativeSettingsGetMock).not.toHaveBeenCalledWith('ambient-machine', expect.anything());

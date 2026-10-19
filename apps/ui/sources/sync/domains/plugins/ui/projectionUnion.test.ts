@@ -320,7 +320,9 @@ it('reuses the live occurrence for the same declared root without confusing runt
     // Observe real serialization rather than replacing the declaration comparator.
     const serialize = vi.spyOn(JSON, 'stringify');
     try {
-        const repeated = Array.from({ length: 100 }, () => mergeInstalledPluginUiProjections(installed, runtime));
+        // AppShell creates a new wrapper when another Machine reports. The
+        // immutable projection inputs, rather than that wrapper, own identity.
+        const repeated = Array.from({ length: 100 }, () => mergeInstalledPluginUiProjections([...installed], runtime));
         expect(serialize).toHaveBeenCalledTimes(0);
         expect(repeated.every(value => value === merged)).toBe(true);
     } finally {
@@ -333,6 +335,25 @@ it('reuses the live occurrence for the same declared root without confusing runt
         [String(entry.id)]: { ...declared.surfacePlacementsById[String(entry.id)]!, renderer: { ...declaredEntry.renderer,
             model: { ...declarative, root: { ...declarative.root, text: 'New content' } } } } } };
     expect(mergeInstalledPluginUiProjections([changed], runtime)?.surfacePlacementsById[String(entry.id)]?.occurrenceId).toBeUndefined();
+});
+
+it('compares declaration snapshots without serialization while preserving native optional fields and authored payloads', () => {
+    const declaredEntry = Object.freeze({ pluginId: 'acme.fixture', occurrenceId: undefined,
+        payload: { first: 'value', optional: undefined, items: [1, { enabled: false }] } });
+    const runtimeEntry = Object.freeze({ pluginId: 'acme.fixture', occurrenceId: 'runtime:1',
+        payload: { items: [1, { enabled: false }], first: 'value' } });
+    const declared = Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, unknownEntriesById: { entry: declaredEntry } });
+    const runtime = Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, unknownEntriesById: { entry: runtimeEntry } });
+    const serialize = vi.spyOn(JSON, 'stringify');
+    try {
+        const merged = mergeInstalledPluginUiProjections([declared], runtime);
+        expect(merged?.unknownEntriesById.entry).toBe(runtimeEntry);
+        expect(serialize).not.toHaveBeenCalled();
+    } finally { serialize.mockRestore(); }
+    // Equal generation or a shared plugin id cannot stand in for declaration content.
+    const replacement = { ...runtime, unknownEntriesById: { entry: { ...runtimeEntry,
+        payload: { ...runtimeEntry.payload, items: [1, { enabled: true }] } } } };
+    expect(mergeInstalledPluginUiProjections([declared], replacement)?.unknownEntriesById.entry).toBe(declaredEntry);
 });
 
 it('retains the declaring installation default beside each exact contribution supply', () => {

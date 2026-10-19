@@ -482,6 +482,42 @@ export function resolvePluginExecutionOriginReasonDetail(reason: PluginMachineOr
 }
 
 /**
+ * One honest sentence for a plugin that Administration found on a Machine but could not use, and
+ * whether the way forward is the plugin's own page. `machine` is the one Machine that refused, or
+ * `undefined` when several did. Returns `null` when nothing is installed (the caller leads to installing)
+ * so "install it" is only ever said when it is true.
+ */
+export function describePluginExecutionOriginRefusal(params: Readonly<{
+    reasons: readonly (PluginMachineOriginRejectionReasonV1 | 'no_materialization')[];
+    plugin: string;
+    machine: string | undefined;
+}>): Readonly<{ sentence: string; manage: boolean }> | null {
+    const reasons = params.reasons.filter((reason): reason is PluginMachineOriginRejectionReasonV1 => reason !== 'no_materialization' && reason !== 'missing');
+    if (reasons.length === 0) return null;
+    if (params.machine === undefined) {
+        return { sentence: t('settingsPlugins.surfaces.pluginNotReadyAnywhere', { plugin: params.plugin }), manage: true };
+    }
+    const groupOf = (reason: PluginMachineOriginRejectionReasonV1) => {
+        switch (reason) {
+            case 'activation_refused':
+            case 'daemon_unsupported':
+            case 'daemon_invalid_response': return 'start';
+            case 'offline':
+            case 'stale':
+            case 'home_unreachable':
+            case 'daemon_unavailable': return 'unreachable';
+            default: return 'notReady';
+        }
+    };
+    // Mixed causes have no single next step: lead to the plugin's page, where each Machine's state is shown.
+    const groups = new Set(reasons.map(groupOf));
+    const values = { plugin: params.plugin, machine: params.machine };
+    if (groups.size === 1 && groups.has('start')) return { sentence: t('settingsPlugins.surfaces.pluginCouldNotStart', values), manage: false };
+    if (groups.size === 1 && groups.has('unreachable')) return { sentence: t('settingsPlugins.surfaces.pluginMachineUnreachable', values), manage: false };
+    return { sentence: t('settingsPlugins.surfaces.pluginNotReady', values), manage: true };
+}
+
+/**
  * The one reason → next-step classification for plugin surfaces.
  *
  * - `retry`: transient — asking again can change the answer (transport,

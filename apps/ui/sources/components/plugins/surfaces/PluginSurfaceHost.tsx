@@ -38,7 +38,7 @@ import {
     PluginSurfaceSourceCauseContext,
     resolvePluginSurfaceSourceCause,
 } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
-import type { PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { getPluginExecutionOriginCandidateOrigin, type PluginExecutionOriginContextualTarget } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { SessionExecutionTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import {
@@ -2353,9 +2353,16 @@ function PluginSurfaceHostMount(props: Readonly<(
         ?? origin?.machineId
         ?? (needsMachineExecution ? pluginExecution.selection.storedTarget?.machineId : null)
         ?? (accountUnionMount ? null : props.machineId);
-    const machineDisplayIds = React.useMemo(() => (
-        typeof machineId === 'string' && machineId.trim() ? [machineId] : []
-    ), [machineId]);
+    // Administration's refusal, with the one Machine that refused when it is only one.
+    const executionSelectionState = needsMachineExecution ? pluginExecution.selection.state : null;
+    const refusingMachineIds = React.useMemo(() => executionSelectionState?.kind === 'unavailable'
+        ? [...new Set(executionSelectionState.candidates.map(candidate => (
+            getPluginMachineExecutionOriginRef(getPluginExecutionOriginCandidateOrigin(candidate)).machineId)))]
+        : [], [executionSelectionState]);
+    const machineDisplayIds = React.useMemo(() => [
+        ...(typeof machineId === 'string' && machineId.trim() ? [machineId] : []),
+        ...refusingMachineIds,
+    ], [machineId, refusingMachineIds]);
     const machineDisplayNamesById = useMachineDisplayNamesById(machineDisplayIds);
     const homeHasMachines = useHomeHasMachines();
     const machineDisplayName = typeof machineId === 'string'
@@ -2924,6 +2931,12 @@ function PluginSurfaceHostMount(props: Readonly<(
     const controllerFacts = Object.freeze({
         ...baseControllerFacts,
         executionOriginSelectionKind: needsMachineExecution ? pluginExecution.selection.state.kind : undefined,
+        ...(executionSelectionState?.kind === 'unavailable' && executionSelectionState.candidates.length > 0
+            ? { executionOriginRefusal: Object.freeze({
+                reasons: executionSelectionState.reasons,
+                ...(refusingMachineIds.length === 1 ? { machineDisplayName: machineDisplayNamesById[refusingMachineIds[0]!] ?? null } : {}),
+            }) }
+            : {}),
         isDaemonConnectionPending: () => machineConnectionPending,
         resolveContributedAction,
         ...(currentUiContextReader

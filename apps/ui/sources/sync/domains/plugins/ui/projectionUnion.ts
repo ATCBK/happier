@@ -31,6 +31,7 @@ import { PluginDeclarativeProjectedModelV1Schema, projectPluginDeclarativeModelC
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
 import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1, type PluginMachineExecutionOriginRejectionV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
@@ -94,10 +95,12 @@ export type PluginUiContributionSupplyV1 = PluginUiContributionOriginV1 & Readon
     executionTargetAutoPick?: boolean;
 }>;
 
-// Availability publishes immutable declaration arrays; each machine's runtime
-// projection also keeps its identity until that owner replaces it. Reuse only
-// this merge's last inputs, leaving live authority to the union below.
-const installedProjectionMerges = new WeakMap<readonly PluginUiProjectionModel[], Readonly<{
+// Availability and currentness publish immutable projection snapshots. An
+// AppShell render may wrap those same inputs in a fresh array; that wrapper
+// cannot invalidate the merge. Retain only the last merge per declaration
+// snapshot and compare every input, including live authority, below.
+const installedProjectionMerges = new WeakMap<PluginUiProjectionModel, Readonly<{
+    installed: readonly PluginUiProjectionModel[];
     runtime: PluginUiProjectionModel | null;
     materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined;
     explicitOrigins: PluginUiProjectionUnionOriginSelections | undefined;
@@ -133,8 +136,10 @@ export function mergeInstalledPluginUiProjections(
     explicitOrigins?: PluginUiProjectionUnionOriginSelections,
 ): PluginUiProjectionModel | null {
     if (installed.length === 0) return runtime;
-    const previous = installedProjectionMerges.get(installed);
-    if (previous?.runtime === runtime && previous.materializations === materializations
+    const firstInstalled = installed[0]!;
+    const previous = installedProjectionMerges.get(firstInstalled);
+    if (previous?.installed.length === installed.length && installed.every((model, index) => model === previous.installed[index])
+        && previous.runtime === runtime && previous.materializations === materializations
         && previous.explicitOrigins === explicitOrigins) return previous.projection;
     const installedPluginIds = new Set(installed.flatMap(model => declarationMaps(model).flatMap(map =>
         Object.values(map).flatMap(entry => { const id = readString(asRecord(entry)?.pluginId); return id ? [id] : []; }))));
@@ -182,7 +187,7 @@ export function mergeInstalledPluginUiProjections(
             }
             if (!pluginId || !installedPluginIds.has(pluginId)
                 || (artifactFacts && matchesInstalledArtifactSlot(entry, materializations))
-                || (declared[key] && stableContent(declarationContent(declared[key])) === stableContent(declarationContent(entry)))) {
+                || (declared[key] && sameDeclarationContent(declared[key], entry))) {
                 declared[key] = entry;
             }
         }
@@ -211,7 +216,7 @@ export function mergeInstalledPluginUiProjections(
         skillsById: merge(model => model.skillsById),
         unknownEntriesById: merge(model => model.unknownEntriesById),
     });
-    installedProjectionMerges.set(installed, { runtime, materializations, explicitOrigins, projection });
+    installedProjectionMerges.set(firstInstalled, { installed: [...installed], runtime, materializations, explicitOrigins, projection });
     return projection;
 }
 
@@ -403,6 +408,26 @@ function declarationContent(entry: unknown): unknown {
     if (renderer?.kind !== 'declarative' || renderer.model === undefined) return content;
     const model = PluginDeclarativeProjectedModelV1Schema.safeParse(renderer.model);
     return model.success ? { ...content, renderer: { ...renderer, model: projectPluginDeclarativeModelComparisonV1(model.data) } } : content;
+}
+
+// These entries belong to immutable Availability/currentness snapshots. Keep
+// their declaration-only JSON once per input identity, including the canonical
+// treatment of native optional members. This is presentation comparison, never
+// an execution-origin or currentness decision. Weak keys retire with the input.
+const declarationComparisonSnapshots = new WeakMap<UnknownRecord, JsonValue>();
+
+function readDeclarationComparisonSnapshot(entry: unknown): JsonValue {
+    const record = asRecord(entry);
+    if (!record) return projectNativeJsonValueForTransport(entry);
+    const previous = declarationComparisonSnapshots.get(record);
+    if (previous !== undefined) return previous;
+    const snapshot = projectNativeJsonValueForTransport(declarationContent(record));
+    declarationComparisonSnapshots.set(record, snapshot);
+    return snapshot;
+}
+
+function sameDeclarationContent(left: unknown, right: unknown): boolean {
+    return left === right || sameStrictJsonValue(readDeclarationComparisonSnapshot(left), readDeclarationComparisonSnapshot(right));
 }
 
 function stableContent(value: unknown): string {
@@ -989,8 +1014,7 @@ export function unionPluginUiProjections(
             const representative = selectedMembersByPluginId.get(entry.pluginId)?.projection.registrySourcesById[id]
                 ?? registrySourcesById[id];
             // A supplier must declare this row's content, not a conflicting URL.
-            if (representative && stableContent(declarationContent(entry.definition))
-                !== stableContent(declarationContent(representative.definition))) continue;
+            if (representative && !sameDeclarationContent(entry.definition, representative.definition)) continue;
             const origin = model.installedPackagesById[entry.pluginId]?.enabled === true ? originFor(entry) : null;
             if (origin) publishFirstAdmitted(registrySourcesById, id, stamp(entry, origin), origin);
         }
