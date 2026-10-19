@@ -1170,7 +1170,7 @@ const settingsSessionHandoffTranslationExtensions = {
         relationshipTitle: 'Relació d’espais de treball', linkedTitle: ({ hub }: { hub: string }) => `Fes servir l’espai de treball enllaçat · via ${hub}`,
         relationshipId: 'ID de la relació d’espais de treball', relationshipPlaceholder: 'Tria una relació existent per continuar sincronitzant.', relationshipSelected: 'Aquesta carpeta ja se sincronitza amb aquest espai de treball. Obre’n els detalls.',
     },
-    targetBootstrap: { title: 'Carpeta de destinació', materializeTitle: 'Prepara-la des d’aquest espai de treball', materializeSubtitle: 'Prepara-la des d’aquest espai de treball. Si ja hi ha fitxers a la destinació, se substituiran.', useExistingTitle: 'Fes servir la carpeta existent', useExistingSubtitle: 'Conserva el contingut actual de la carpeta i comença a sincronitzar-lo.' },
+    targetBootstrap: { title: 'Carpeta de destinació', materializeTitle: 'Prepara-la des d’aquest espai de treball', materializeSubtitle: 'Prepara-la des d’aquest espai de treball. Si ja hi ha fitxers a la destinació, se substituiran.', useExistingTitle: 'Fes servir la carpeta existent', useExistingSubtitle: 'Conserva el contingut actual de la carpeta i comença a sincronitzar-lo.', useExistingUnavailable: 'Aquesta carpeta és buida o encara no existeix.' },
     advanced: { title: 'Avançat', subtitle: 'Rèplica, sincronització bidireccional i selecció de contingut.', modeTitle: 'Comportament avançat de sincronització' },
     contentSelection: { title: 'Contingut de l’espai de treball', gitTitle: 'Fitxers amb control de versions', gitSubtitle: 'Fes servir la selecció i les exclusions de Git de l’espai de treball.', allFilesTitle: 'Tots els fitxers', allFilesSubtitle: 'Inclou tota la carpeta autoritzada, també els espais de treball sense Git.' },
     title: 'Transferencia de sessio',
@@ -13936,7 +13936,14 @@ settingsSession: {
     },
 
     usage: {
-        board: { page: {
+        widgets: { usage_source_coverage: "Cobertura", usage_unpriced: "Sense preu" },
+        board: { sources: {
+            foundCaption: "L’ús natiu es compta després d’afegir una font",
+            coveragePurpose: "Què informa l’historial seleccionat",
+            unpricedPurpose: "Tokens sense preu",
+            coverageAvailable: "Informat",
+            coverageUnknown: "Cobertura desconeguda",
+        }, page: {
             oldestSourceUpdate: ({ time }: { time: string }) => `Actualització de font més antiga: ${time}`,
             sourceClaudeResponses: "Respostes de Claude",
             sourceClaudeSessionSummaries: "Resums de sessió de Claude",

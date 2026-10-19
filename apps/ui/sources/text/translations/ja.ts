@@ -1195,6 +1195,7 @@ const settingsSessionHandoffTranslationExtensions = {
       materializeSubtitle: 'このワークスペースから準備します。移行先にすでにファイルがある場合は置き換えられます。',
       useExistingTitle: '既存のフォルダーを使用',
       useExistingSubtitle: 'フォルダーの現在の内容を保持し、それを使って同期を開始します。',
+      useExistingUnavailable: 'このフォルダーは空か、まだ存在しません。',
     },
     advanced: {
       title: '詳細設定',
@@ -15393,6 +15394,8 @@ settingsSession: {
           usage_recap: "振り返り",
           usage_footprint: "フットプリント",
           usage_sources: "ソース",
+          usage_source_coverage: "データの網羅性",
+          usage_unpriced: "価格未設定",
         },
         presets: {
           "overview": "概要",
@@ -16209,7 +16212,11 @@ settingsSession: {
           },
           sources: {
             // usage-board:sources
-            foundCaption: "このページで集計する内容(マシン別)",
+            foundCaption: "ネイティブの使用量はソース追加後に集計されます",
+            coveragePurpose: "選択した履歴が報告する内容",
+            unpricedPurpose: "価格がないトークン",
+            coverageAvailable: "報告済み",
+            coverageUnknown: "網羅性不明",
             continueInHappier: "Happier で続ける",
             rootOnMachine: ({ machine, path }: { machine: string | number; path: string | number }) => `${machine} の ${path}`,
             defaultFolder: "既定のフォルダー",
@@ -16244,6 +16251,9 @@ settingsSession: {
             happierLive: "ライブ · 実行中に集計",
             countedAsOf: ({ time }: { time: string | number }) => `集計済み · ${time} に読み込み`,
             machinesUnreadable: "エージェントの使用状況ファイルを読み込めませんでした",
+            notFoundAgents: ({ agents }: { agents: string | number }) => `このマシンで見つかりません: ${agents}`,
+            chooseFolders: "フォルダを選択",
+            countedToggle: ({ agent }: { agent: string | number }) => `${agent}の使用量を集計`,
             noMachinesTitle: "マシンはまだありません",
             noMachinesReason: "マシンを接続すると、そこにあるエージェントの使用量を Happier が見つけます。",
             sourceOptions: ({ agent }: { agent: string | number }) => `ソースのオプション: ${agent}`,

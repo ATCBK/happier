@@ -14555,6 +14555,7 @@ const enSettingsSession = {
       useExistingTitle: 'Use existing folder',
       useExistingSubtitle:
         'Keep the folder’s current contents and begin syncing with them.',
+      useExistingUnavailable: 'This folder is empty or doesn’t exist yet.',
     },
     advanced: {
       title: 'Advanced',
@@ -18685,6 +18686,8 @@ const enUsage = {
     usage_recap: "Recap",
     usage_footprint: "Footprint",
     usage_sources: "Sources",
+    usage_source_coverage: "Coverage",
+    usage_unpriced: "Unpriced",
   },
   presets: {
     "overview": "Overview",
@@ -19519,7 +19522,11 @@ const enUsage = {
     },
     sources: {
       // usage-board:sources
-      foundCaption: "what this page counts, per machine",
+      foundCaption: "Native usage is counted after you add a source",
+      coveragePurpose: "What the selected history reports",
+      unpricedPurpose: "Tokens without a price",
+      coverageAvailable: "Reported",
+      coverageUnknown: "Coverage unknown",
       continueInHappier: "Continue in Happier",
       rootOnMachine: ({ path, machine }: { path: string | number; machine: string | number }) => `${path} on ${machine}`,
       defaultFolder: "Default folder",
@@ -19554,6 +19561,9 @@ const enUsage = {
       happierLive: "Live · counted as they run",
       countedAsOf: ({ time }: { time: string | number }) => `Counted · read ${time}`,
       machinesUnreadable: "Couldn't read their agent usage files",
+      notFoundAgents: ({ agents }: { agents: string | number }) => `Not found on this machine: ${agents}`,
+      chooseFolders: "Choose folders",
+      countedToggle: ({ agent }: { agent: string | number }) => `Count ${agent} usage`,
       noMachinesTitle: "No machines yet",
       noMachinesReason: "Connect a machine and Happier finds the agent usage already on it.",
       emptyScopedTitle: "No native sources in this scope",

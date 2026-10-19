@@ -1184,6 +1184,7 @@ const settingsSessionHandoffTranslationExtensions = {
       materializeSubtitle: 'Przygotuj z tego obszaru roboczego. Jeśli miejsce docelowe zawiera już pliki, zostaną one zastąpione.',
       useExistingTitle: 'Użyj istniejącego folderu',
       useExistingSubtitle: 'Zachowaj bieżącą zawartość folderu i rozpocznij jej synchronizację.',
+      useExistingUnavailable: 'Ten folder jest pusty albo jeszcze nie istnieje.',
     },
     advanced: {
       title: 'Zaawansowane',
@@ -14935,7 +14936,14 @@ settingsSession: {
   },
 
   usage: {
-    board: { page: {
+    widgets: { usage_source_coverage: "Pokrycie", usage_unpriced: "Bez ceny" },
+    board: { sources: {
+      foundCaption: "Natywne użycie jest liczone po dodaniu źródła",
+      coveragePurpose: "Co zgłasza wybrana historia",
+      unpricedPurpose: "Tokeny bez ceny",
+      coverageAvailable: "Zgłoszone",
+      coverageUnknown: "Pokrycie nieznane",
+    }, page: {
       oldestSourceUpdate: ({ time }: { time: string }) => `Najstarsza aktualizacja źródła: ${time}`,
       sourceClaudeResponses: "Odpowiedzi Claude",
       sourceClaudeSessionSummaries: "Podsumowania sesji Claude",

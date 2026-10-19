@@ -1193,6 +1193,7 @@ const settingsSessionHandoffTranslationExtensions = {
       materializeSubtitle: '从此工作区准备。如果目标位置已有文件，它们将被替换。',
       useExistingTitle: '使用现有文件夹',
       useExistingSubtitle: '保留文件夹的当前内容，并以这些内容开始同步。',
+      useExistingUnavailable: '此文件夹为空或尚不存在。',
     },
     advanced: {
       title: '高级',
@@ -14751,6 +14752,8 @@ settingsSession: {
           usage_recap: "回顾",
           usage_footprint: "足迹",
           usage_sources: "来源",
+          usage_source_coverage: "覆盖情况",
+          usage_unpriced: "未定价",
         },
         presets: {
           "overview": "概览",
@@ -15567,7 +15570,11 @@ settingsSession: {
           },
           sources: {
             // usage-board:sources
-            foundCaption: "此页面统计的内容(按机器)",
+            foundCaption: "添加来源后才会统计原生用量",
+            coveragePurpose: "所选历史记录报告的内容",
+            unpricedPurpose: "没有价格的 token",
+            coverageAvailable: "已报告",
+            coverageUnknown: "覆盖情况未知",
             continueInHappier: "在 Happier 中继续",
             rootOnMachine: ({ machine, path }: { machine: string | number; path: string | number }) => `${machine} 上的 ${path}`,
             defaultFolder: "默认文件夹",
@@ -15602,6 +15609,9 @@ settingsSession: {
             happierLive: "实时 · 运行时统计",
             countedAsOf: ({ time }: { time: string | number }) => `已统计 · 读取于 ${time}`,
             machinesUnreadable: "无法读取其代理使用文件",
+            notFoundAgents: ({ agents }: { agents: string | number }) => `在此机器上未找到：${agents}`,
+            chooseFolders: "选择文件夹",
+            countedToggle: ({ agent }: { agent: string | number }) => `统计 ${agent} 的用量`,
             noMachinesTitle: "还没有设备",
             noMachinesReason: "连接一台设备后，Happier 会找到其中已有的智能体用量。",
             sourceOptions: ({ agent }: { agent: string | number }) => `来源选项：${agent}`,

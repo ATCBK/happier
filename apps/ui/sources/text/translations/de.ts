@@ -12065,6 +12065,7 @@ settingsSession: {
                   materializeSubtitle: 'Aus diesem Workspace vorbereiten. Enthält das Ziel bereits Dateien, werden sie ersetzt.',
                   useExistingTitle: 'Bestehenden Ordner verwenden',
                   useExistingSubtitle: 'Den aktuellen Inhalt des Ordners behalten und mit ihm synchronisieren.',
+                  useExistingUnavailable: 'Dieser Ordner ist leer oder existiert noch nicht.',
               },
               advanced: {
                   title: 'Erweitert',
@@ -15254,6 +15255,8 @@ settingsSession: {
           usage_recap: "Rückblick",
           usage_footprint: "Fußabdruck",
           usage_sources: "Quellen",
+          usage_source_coverage: "Abdeckung",
+          usage_unpriced: "Ohne Preis",
         },
         presets: {
           "overview": "Übersicht",
@@ -16088,7 +16091,11 @@ settingsSession: {
           },
           sources: {
             // usage-board:sources
-            foundCaption: "was diese Seite zählt, pro Maschine",
+            foundCaption: "Native Nutzung wird erst nach dem Hinzufügen einer Quelle gezählt",
+            coveragePurpose: "Was der ausgewählte Verlauf meldet",
+            unpricedPurpose: "Tokens ohne Preis",
+            coverageAvailable: "Gemeldet",
+            coverageUnknown: "Abdeckung unbekannt",
             continueInHappier: "In Happier fortsetzen",
             rootOnMachine: ({ path, machine }: { path: string | number; machine: string | number }) => `${path} auf ${machine}`,
             defaultFolder: "Standardordner",
@@ -16123,6 +16130,9 @@ settingsSession: {
             happierLive: "Live · laufend gezählt",
             countedAsOf: ({ time }: { time: string | number }) => `Gezählt · gelesen ${time}`,
             machinesUnreadable: "Ihre Nutzungsdateien von Agents konnten nicht gelesen werden",
+            notFoundAgents: ({ agents }: { agents: string | number }) => `Auf diesem Gerät nicht gefunden: ${agents}`,
+            chooseFolders: "Ordner wählen",
+            countedToggle: ({ agent }: { agent: string | number }) => `${agent}: Nutzung zählen`,
             noMachinesTitle: "Noch keine Rechner",
             noMachinesReason: "Verbinde einen Rechner, dann findet Happier die vorhandene Agent-Nutzung darauf.",
             emptyScopedTitle: "Keine nativen Quellen in dieser Auswahl",

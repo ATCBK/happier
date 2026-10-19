@@ -1188,6 +1188,7 @@ const settingsSessionHandoffTranslationExtensions = {
       materializeSubtitle: 'Prepara desde este espacio de trabajo. Si el destino ya contiene archivos, se reemplazarán.',
       useExistingTitle: 'Usar carpeta existente',
       useExistingSubtitle: 'Conserva el contenido actual de la carpeta y empieza a sincronizar con él.',
+      useExistingUnavailable: 'Esta carpeta está vacía o todavía no existe.',
     },
     advanced: {
       title: 'Avanzado',
@@ -15120,6 +15121,8 @@ settingsSession: {
           usage_recap: "Recapitulación",
           usage_footprint: "Huella",
           usage_sources: "Fuentes",
+          usage_source_coverage: "Cobertura",
+          usage_unpriced: "Sin precio",
         },
         presets: {
           "overview": "Resumen",
@@ -15936,7 +15939,11 @@ settingsSession: {
           },
           sources: {
             // usage-board:sources
-            foundCaption: "lo que cuenta esta página, por máquina",
+            foundCaption: "El uso nativo se cuenta después de añadir una fuente",
+            coveragePurpose: "Lo que informa el historial seleccionado",
+            unpricedPurpose: "Tokens sin precio",
+            coverageAvailable: "Registrado",
+            coverageUnknown: "Cobertura desconocida",
             continueInHappier: "Continuar en Happier",
             rootOnMachine: ({ path, machine }: { path: string | number; machine: string | number }) => `${path} en ${machine}`,
             defaultFolder: "Carpeta predeterminada",
@@ -15971,6 +15978,9 @@ settingsSession: {
             happierLive: "En vivo · se cuentan mientras se ejecutan",
             countedAsOf: ({ time }: { time: string | number }) => `Contada · leída ${time}`,
             machinesUnreadable: "No se pudieron leer sus archivos de uso de agentes",
+            notFoundAgents: ({ agents }: { agents: string | number }) => `No encontrado en esta máquina: ${agents}`,
+            chooseFolders: "Elegir carpetas",
+            countedToggle: ({ agent }: { agent: string | number }) => `Contar el uso de ${agent}`,
             noMachinesTitle: "Aún no hay máquinas",
             noMachinesReason: "Conecta una máquina y Happier encontrará el uso de agentes que ya tiene.",
             sourceOptions: ({ agent }: { agent: string | number }) => `Opciones de la fuente: ${agent}`,

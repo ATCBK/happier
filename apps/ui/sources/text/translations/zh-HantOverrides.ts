@@ -12282,7 +12282,13 @@ settingsSession: {
     },
 
     usage: {
-        board: { page: {
+        board: { sources: {
+            foundCaption: "加入來源後才會統計原生用量",
+            coveragePurpose: "所選歷史記錄報告的內容",
+            unpricedPurpose: "沒有價格的 token",
+            coverageAvailable: "已報告",
+            coverageUnknown: "涵蓋情況未知",
+        }, page: {
             oldestSourceUpdate: ({ time }: { time: string }) => `最早的來源更新：${time}`,
             sourceClaudeResponses: "Claude 回覆",
             sourceClaudeSessionSummaries: "Claude 工作階段摘要",
@@ -12366,6 +12372,8 @@ settingsSession: {
           usage_recap: "回顧",
           usage_footprint: "足跡",
           usage_sources: "來源",
+          usage_source_coverage: "涵蓋情況",
+          usage_unpriced: "未定價",
         },
         presets: {
           "overview": "概覽",

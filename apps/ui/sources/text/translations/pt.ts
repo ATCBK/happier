@@ -1220,6 +1220,7 @@ const settingsSessionHandoffTranslationExtensions = {
       materializeSubtitle: 'Prepare a partir deste workspace. Se o destino já tiver arquivos, eles serão substituídos.',
       useExistingTitle: 'Usar pasta existente',
       useExistingSubtitle: 'Mantenha o conteúdo atual da pasta e comece a sincronizar com ele.',
+      useExistingUnavailable: 'Esta pasta está vazia ou ainda não existe.',
     },
     advanced: {
       title: 'Avançado',
@@ -15231,6 +15232,8 @@ settingsSession: {
           usage_recap: "Recapitulação",
           usage_footprint: "Pegada",
           usage_sources: "Fontes",
+          usage_source_coverage: "Cobertura",
+          usage_unpriced: "Sem preço",
         },
         presets: {
           "overview": "Visão geral",
@@ -16047,7 +16050,11 @@ settingsSession: {
           },
           sources: {
             // usage-board:sources
-            foundCaption: "o que esta página conta, por máquina",
+            foundCaption: "O uso nativo é contado após adicionar uma fonte",
+            coveragePurpose: "O que o histórico selecionado informa",
+            unpricedPurpose: "Tokens sem preço",
+            coverageAvailable: "Informado",
+            coverageUnknown: "Cobertura desconhecida",
             continueInHappier: "Continuar no Happier",
             rootOnMachine: ({ path, machine }: { path: string | number; machine: string | number }) => `${path} em ${machine}`,
             defaultFolder: "Pasta padrão",
@@ -16082,6 +16089,9 @@ settingsSession: {
             happierLive: "Ao vivo · contadas enquanto rodam",
             countedAsOf: ({ time }: { time: string | number }) => `Contada · lida ${time}`,
             machinesUnreadable: "Não foi possível ler os arquivos de uso de agentes",
+            notFoundAgents: ({ agents }: { agents: string | number }) => `Não encontrado nesta máquina: ${agents}`,
+            chooseFolders: "Escolher pastas",
+            countedToggle: ({ agent }: { agent: string | number }) => `Contar o uso de ${agent}`,
             noMachinesTitle: "Nenhuma máquina ainda",
             noMachinesReason: "Conecte uma máquina e o Happier encontra o uso de agentes que já existe nela.",
             sourceOptions: ({ agent }: { agent: string | number }) => `Opções da fonte: ${agent}`,
