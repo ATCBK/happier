@@ -99,6 +99,8 @@ export type OptionPickerOption<TValue = string> = Readonly<{
     label: string;
     /** Quiet text after the label ("· via DeepSeek") that tells apart rows with the same name; searchable. */
     labelSuffix?: string;
+    /** Search aliases that need not be displayed, such as a model's exact native id. */
+    searchText?: string;
     icon?: React.ReactNode;
     trailingStatusIcon?: React.ReactNode;
     description?: string;
@@ -569,7 +571,8 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                     id: valueKey,
                     testID: `${optionTestIDPrefix}:${valueKey}`,
                     label: option.label,
-                    ...(option.labelSuffix ? { titleAccessory: option.labelSuffix, searchText: option.labelSuffix } : {}),
+                    ...(option.labelSuffix ? { titleAccessory: option.labelSuffix } : {}),
+                    searchText: [option.searchText, option.labelSuffix].filter(Boolean).join(' '),
                     onPressIn: () => {
                         selectionPressPendingRef.current = true;
                     },

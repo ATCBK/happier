@@ -218,12 +218,13 @@ export function buildSessionModelPickerSections(input: Readonly<{
             return [{
                 value,
                 label: presentation.label,
+                searchText: model.value,
                 description: presentation.description,
                 disabled: true,
                 source: nativeSource,
             }];
         }
-        return [{ value, label: model.label, description: model.description, source: nativeSource }];
+        return [{ value, label: model.label, searchText: model.value, description: model.description, source: nativeSource }];
     });
 
     const providerSections = input.providerGroups.flatMap((group): SessionModelPickerSection[] => {
@@ -246,6 +247,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
             return [{ row, option: {
                 value: row.ref,
                 label: presentation.label,
+                searchText: row.ref.modelId,
                 description: presentation.description,
                 source,
                 disabled: presentation.selectionDisabled
@@ -303,6 +305,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
             return [{
                 value: row.selection,
                 label: row.descriptor.name || row.selection.modelId,
+                searchText: row.selection.modelId,
                 source: { label: resource.displayName, native: false },
                 description: [resource.displayName, delivery, unavailableReason, recovery]
                     .filter((value): value is string => Boolean(value))
@@ -401,6 +404,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
             options: [{
                 value: selectedValue,
                 label,
+                searchText: selectedValue.modelId,
                 description: recovery
                     ? t(presentProviderError(recovery.error).descriptionKey)
                     : isTeamCredentialProviderModelPickerValue(selectedValue)
