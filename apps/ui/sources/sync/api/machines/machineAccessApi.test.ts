@@ -5,6 +5,19 @@ import { serveAccountHomes, serveActionHomes } from '@/dev/testkit/harness/actio
 import { executeMachineAccessHttpAction } from './machineAccessApi';
 
 describe('Machine access through the real Action front door', () => {
+    it('reports a Home that is not answering yet as a read failure of the transport kind, not as an unknown failure', async () => {
+        const home = await serveAccountHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-connecting.test', accountId: 'alice' }],
+            route: () => undefined });
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const before = storage.getState().endpointStatus;
+        try {
+            // The connection supervisor has concluded the Home is not answering: no transport can be acquired for it.
+            storage.setState({ endpointStatus: 'offline' });
+            const scope = { serverId: home.homes.machine!.id, accountId: 'alice' };
+            await expect(executeMachineAccessHttpAction({ scope, actionId: 'machines.access.grants.list',
+                input: { serverId: scope.serverId, machineId: 'machine' } })).rejects.toMatchObject({ code: 'machine_access_request_failed' });
+        } finally { storage.setState({ endpointStatus: before }); await home.dispose(); }
+    });
     it('accepts a bound local profile target at the captured Home while rejecting another Home', async () => {
         const home = await serveAccountHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-alias.test', accountId: 'alice',
             serverIdentityId: 'srv_machine_alias' }],

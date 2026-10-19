@@ -7,6 +7,7 @@ import { createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector }
 import { listWorkflowTriggerSets } from '@/sync/domains/workflows/workflowTriggerActions';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { useActiveHomeSettling } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 
 const EMPTY_SETS: readonly WorkflowTriggerSetV1[] = [];
 
@@ -39,8 +40,10 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     }), [accountLifetime]);
     React.useEffect(() => {
         if (readRequest === null || (addressed && !accountLifetime?.isCurrent())) return;
+        // No Account scope yet is not a failed read: right after sign-in the page mounts before its Account
+        // is established. The lifetime is a dependency, so the read starts, and settles, once it arrives.
         if (!lifetime) {
-            setState({ identity, status: 'failed' });
+            setState(current => current.identity === identity ? current : { identity, status: 'loading' });
             return;
         }
         const controller = new AbortController();
@@ -61,7 +64,18 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
         return () => { controller.abort(); retirement.dispose(); };
     }, [attempt, changeSignal, identity, readRequest, addressed, accountLifetime, lifetime]);
     const retry = React.useCallback(() => setAttempt((value) => value + 1), []);
+    // A read that failed while the Home was still being reached (right after sign-in or a restart) has not
+    // settled into a failure: it reads as loading, and is read again once the Home has answered.
+    const homeSettling = useActiveHomeSettling() && !addressed;
+    const failedRef = React.useRef(false);
+    failedRef.current = state.identity === identity && state.status === 'failed';
+    const wasSettling = React.useRef(false);
+    React.useEffect(() => {
+        if (wasSettling.current && !homeSettling && failedRef.current) setAttempt((value) => value + 1);
+        wasSettling.current = homeSettling;
+    }, [homeSettling]);
+    const status = state.identity !== identity ? 'loading' as const
+        : state.status === 'failed' && homeSettling ? 'loading' as const : state.status;
     return { sets: request === null ? EMPTY_SETS : addressed ? state.identity === identity && accountLifetime?.isCurrent()
-        ? state.sets ?? EMPTY_SETS : EMPTY_SETS : sets, status: request === null ? 'ready' as const
-        : state.identity === identity ? state.status : 'loading' as const, retry };
+        ? state.sets ?? EMPTY_SETS : EMPTY_SETS : sets, status: request === null ? 'ready' as const : status, retry };
 }

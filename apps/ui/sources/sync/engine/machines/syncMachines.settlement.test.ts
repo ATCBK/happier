@@ -43,6 +43,58 @@ function createInventory() {
 }
 
 describe('Machine-list settlement through sync and the real store', () => {
+    it.each(['same-key', 'newer-content-hint', 'different-owner-key'] as const)('hydrates a presence shell while socket hints advance during the list read: %s', async (hint) => {
+        const inventory = createInventory();
+        const secret = new Uint8Array(32).fill(17);
+        const encryption = await Encryption.create(secret);
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const dataKey = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await encryption.encryptEncryptionKey(dataKey), 'base64');
+        const otherEnvelope = encodeBase64(await encryption.encryptEncryptionKey(new Uint8Array(32).fill(29)), 'base64');
+        await encryption.initializeMachines(new Map([['online', dataKey]]));
+        const machine = createMachineFixture({ id: 'online', active: true, activeAt: Date.now(),
+            metadataVersion: 2, daemonStateVersion: 0, dataEncryptionKey: envelope });
+        const row: FetchedMachineRow = { ...machine,
+            metadata: await encryption.getMachineEncryption('online')!.encryptMetadata(machine.metadata!),
+            daemonState: null, daemonStateVersion: 0,
+            keyBasis: { dataEncryptionKey: envelope, metadataVersion: 2, daemonStateVersion: 0 } };
+        encryption.removeMachineEncryption('online');
+        const seed = { ...createMachineFixture({ id: 'online', active: true, activeAt: machine.activeAt,
+            metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+            dataEncryptionKey: envelope }), availability: undefined,
+            keyBasis: { dataEncryptionKey: envelope, metadataVersion: 1, daemonStateVersion: 0 } };
+        const shell = (await buildUpdatedMachineFromSocketUpdate({ existingMachine: seed,
+            machineUpdate: { machineId: 'online' }, updateSeq: 1, updateCreatedAt: seed.updatedAt,
+            keyBasis: seed.keyBasis, getMachineEncryption: id => encryption.getMachineEncryption(id) }))!;
+        storage.getState().applyMachines([shell], false, { sourceServerId: inventory.serverId });
+        const entered = createDeferred<void>(), release = createDeferred<void>();
+        const pending = fetchAndApplyMachines({ ...inventory.callbacks,
+            credentials: { ...credentials, secret: encodeBase64(secret, 'base64url') }, expectedAccountMode: 'e2ee',
+            encryption, machineDataKeys: new Map(), request: async () => {
+                entered.resolve(); await release.promise; return Response.json([row]);
+            }, applyMachineDisplayEntries: (machines, options) => storage.getState().replaceMachineDisplays(machines,
+                { sourceServerId: inventory.serverId, ...options }),
+        });
+        try {
+            await entered.promise;
+            const updated = await buildUpdatedMachineFromSocketUpdate({
+                existingMachine: storage.getState().machines.online,
+                machineUpdate: { machineId: 'online' }, updateSeq: 2, updateCreatedAt: shell.updatedAt + 1,
+                keyBasis: { ...row.keyBasis!, metadataVersion: hint === 'newer-content-hint' ? 3 : 2,
+                    dataEncryptionKey: hint === 'different-owner-key' ? otherEnvelope : envelope },
+                getMachineEncryption: id => encryption.getMachineEncryption(id),
+            });
+            storage.getState().applyMachines([updated!], false, { sourceServerId: inventory.serverId });
+            release.resolve(); await pending;
+            expect(storage.getState().machines.online).toMatchObject(hint === 'same-key'
+                ? { metadata: machine.metadata, metadataVersion: 2, availability: { kind: 'available' } }
+                : hint === 'newer-content-hint'
+                ? { metadata: machine.metadata, metadataVersion: 2, availability: undefined,
+                    keyBasis: { metadataVersion: 3 } }
+                : { metadata: null, metadataVersion: 0, keyBasis: { dataEncryptionKey: otherEnvelope } });
+        } finally { release.resolve(); await pending; }
+    });
+
     it('opens online content without joining an offline peer data-key batch', async () => {
         const inventory = createInventory();
         const secret = new Uint8Array(32).fill(17);

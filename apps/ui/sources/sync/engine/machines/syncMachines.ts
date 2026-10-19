@@ -416,7 +416,7 @@ export function buildMachineFromMachineActivityEphemeralUpdate(params: {
     };
 }
 
-/** A presence-only publication cannot retire a captured content/access read. */
+/** Presence and same-key version hints cannot retire a captured content/access read. */
 function isMachineReadSnapshotCurrent(
     current: Machine | null | undefined,
     captured: Machine | null | undefined,
@@ -427,8 +427,14 @@ function isMachineReadSnapshotCurrent(
         return isMachineActivityPlaceholder(current);
     }
     return Object.keys(current).length === Object.keys(captured).length
-        && Object.entries(current).every(([key, value]) => key === 'active' || key === 'activeAt'
-            || value === captured[key as keyof Machine]);
+        && Object.entries(current).every(([key, value]) => {
+            if (key === 'active' || key === 'activeAt' || key === 'updatedAt') return true;
+            // Socket hints replace the basis object as published versions advance.
+            // Only its key identity retires this read; hydration still withholds
+            // execution until both opened fields satisfy the latest version hints.
+            if (key === 'keyBasis') return current.keyBasis?.dataEncryptionKey === captured.keyBasis?.dataEncryptionKey;
+            return value === captured[key as keyof Machine];
+        });
 }
 
 /** Opened socket content can advance one field while the list opens the other. */
@@ -572,6 +578,18 @@ export async function fetchAndApplyMachines(params: {
             const presence = readIncumbentRow(machine.id);
             const captured = requestMachineSnapshot ? requestMachineSnapshot[machine.id] : incumbentRows.get(machine.id);
             if (!presence) return machine;
+            const readBasis = machine.keyBasis;
+            const currentBasis = presence.keyBasis;
+            // Preserve newer same-key hints before warm publication as well as
+            // hydration. An older HTTP row may open useful metadata, but cannot
+            // erase a socket's pending-content requirement and admit execution.
+            const keyBasis = readBasis && currentBasis
+                && readBasis.dataEncryptionKey === currentBasis.dataEncryptionKey
+                && (currentBasis.metadataVersion > readBasis.metadataVersion
+                    || currentBasis.daemonStateVersion > readBasis.daemonStateVersion)
+                ? { ...readBasis, metadataVersion: Math.max(readBasis.metadataVersion, currentBasis.metadataVersion),
+                    daemonStateVersion: Math.max(readBasis.daemonStateVersion, currentBasis.daemonStateVersion) }
+                : readBasis;
             const merged = {
                 ...machine,
                 ...(hydratingPublishedRows ? {
@@ -582,6 +600,7 @@ export async function fetchAndApplyMachines(params: {
                         ? { daemonState: presence.daemonState, daemonStateVersion: presence.daemonStateVersion } : {}),
                     ...(presence.keyBasis ? { keyBasis: presence.keyBasis } : {}),
                 } : {}),
+                ...(keyBasis ? { keyBasis } : {}),
                 ...(presence.active !== captured?.active || presence.activeAt !== captured?.activeAt
                     ? { active: presence.active, activeAt: presence.activeAt } : {}),
             };

@@ -336,6 +336,8 @@ describe('Account trigger editing', () => {
         storage.getState().upsertWorkflowTriggerSet({ queryKey: 'account_inline', set });
         const read = createDeferred<void>();
         listReply = async () => { await read.promise; throw new Error('Down'); };
+        // This failure is settled; a Home still being connected keeps a failed read as loading.
+        storage.setState({ endpointStatus: 'offline' });
         const screen = await renderAccountScreen(<AccountTriggersSection />);
         // Refreshing retained rows says nothing: no reserved line, no status above the rows.
         expect(screen.findByTestId('account-triggers-read-slot')).toBeNull();

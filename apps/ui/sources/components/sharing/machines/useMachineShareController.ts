@@ -22,6 +22,7 @@ import type { ShareGrantRowModel, ShareOperationModel, ShareSheetActions,
     ShareSheetModel, ShareUiError, ShareUiReason } from '../shareSheetTypes';
 import { presentSharePrincipal } from '../sharePrincipalPresentation';
 import { useShareViewerProfile } from '../useShareViewerProfile';
+import { useActiveHomeSettling } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 
 export type MachineShareGrantRow = ShareGrantRowModel & Readonly<{
     removalConsequences: readonly string[];
@@ -165,6 +166,17 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
         void load();
         return () => { unsubscribe(); stopCredentials(); lifetime.abort(); pending.current?.abort(); };
     }, [load, scope.serverId, scope.accountId, machineId, machineName, clearProjection]);
+    // A read that failed while the Home was still being reached (right after a restart) has not settled into a
+    // failure: it reads as loading, and is read again once the Home answers.
+    const homeSettling = useActiveHomeSettling(scope.serverId);
+    const phaseRef = React.useRef(state.phase);
+    phaseRef.current = state.phase;
+    const wasSettling = React.useRef(false);
+    React.useEffect(() => {
+        if (wasSettling.current && !homeSettling && phaseRef.current === 'error') void load();
+        wasSettling.current = homeSettling;
+    }, [homeSettling, load]);
+    const readSettling = homeSettling && state.phase === 'error' && state.issue?.retryable === true;
     const approval = useActionApprovalContinuation({ scopeKey: identity, serverId: scope.serverId, onExecuted: () => { void load(); } });
     const directory = useSessionAccessDirectory({ scope, availability: 'available', contextTeams: NO_TEAMS,
         operations: state.operations, revision, enabled: response?.canManage === true && state.phase === 'ready' });
@@ -312,7 +324,7 @@ export function useMachineShareController(input: Readonly<{ machineId: string; m
             }),
         })) },
     };
-    return { model, actions, response, viewerRow, inherited, canLeave, loading: state.phase === 'initial', issue: state.issue,
+    return { model, actions, response, viewerRow, inherited, canLeave, loading: state.phase === 'initial' || readSettling, issue: readSettling ? undefined : state.issue,
         notice, retryContent: load, approvalId: approval.approvalId,
         prepareKeys: (ref: PrincipalRefV1) => { if (canWrite && response?.grants.some(row =>
             sessionAccessSubjectKey(row.principal) === sessionAccessSubjectKey(ref) && row.audience.some(member => member.canPrepareKeys)))

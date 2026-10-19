@@ -5,6 +5,7 @@ import { MachineTargetV1Schema, MachineAccessRefusalV1Schema } from '@happier-de
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { ServerScopedTransportUnavailableError } from '@/sync/runtime/homeCarrier';
 import { runWithServerAccountScopeRequestGuard } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 
 export class MachineAccessApiError extends Error {
@@ -30,6 +31,10 @@ export async function executeMachineAccessHttpAction(params: Readonly<{
         machineId: (input as Readonly<{ machineId: string }>).machineId,
     });
     if (!areServerProfileIdentifiersEquivalent(target.serverId, params.scope.serverId)) throw new MachineAccessApiError('machine_access_stale_scope');
+    // A Home that is not answering (yet) fails the read before any request is issued. That is the read's
+    // transport failure, the same code a failed request carries, never an unknown failure.
+    const readFailure = (error: unknown) => actionId === 'machines.access.grants.list' && error instanceof ServerScopedTransportUnavailableError
+        ? new MachineAccessApiError('machine_access_request_failed') : error;
     return runWithServerAccountScopeRequestGuard({
         scope: params.scope, isCurrent: params.isCurrent, signal: params.signal,
         staleError: () => new MachineAccessApiError('machine_access_stale_scope'),
@@ -86,5 +91,5 @@ export async function executeMachineAccessHttpAction(params: Readonly<{
             await prepare().catch(() => undefined);
         }
         return value;
-    });
+    }).catch((error: unknown) => { throw readFailure(error); });
 }

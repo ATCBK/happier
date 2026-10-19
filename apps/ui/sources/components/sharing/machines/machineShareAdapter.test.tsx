@@ -128,6 +128,51 @@ describe('Machine sharing through the canonical controller and sheet', () => {
         } finally { await home.dispose(); }
     });
 
+    it('reads a failed access check as loading while the Home is still being reached, and reports it once the Home has answered', async () => {
+        const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        let reads = 0;
+        const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-settling.test', accountId: 'alice' }],
+            route: request => {
+                if (request.path !== '/v1/machines/machine/access') return undefined;
+                reads++;
+                throw new TypeError('Network unavailable');
+            } });
+        const before = getStorage().getState().endpointStatus;
+        try {
+            const scope = { serverId: home.homes.machine!.id, accountId: 'alice' };
+            publishAppliedActiveServerSnapshot({ ...getActiveServerSnapshot(), serverId: scope.serverId }, true);
+            let current: ReturnType<typeof useMachineShareController> | undefined;
+            function Surface() {
+                const controller = useMachineShareController({ machineId: 'machine', machineName: 'Devbox', scope });
+                current = controller;
+                return <ShareSheet model={controller.model} actions={controller.actions}
+                    adapter={createMachineShareAdapter({ machineName: 'Devbox', online: true, controller })}
+                    presentation="full" testID="machine-share-editor" />;
+            }
+            const screen = await renderScreen(<Surface />);
+            // A read that fails against a Home that is not answering is a transport failure.
+            await vi.waitFor(() => expect(current?.issue?.message).toBe(t('machines.sharing.readError', { machine: 'Devbox' })));
+
+            // Right after a restart the Home is still being connected: the same failure has not settled.
+            await act(async () => { getStorage().setState({ endpointStatus: 'connecting', socketStatus: 'connecting' }); });
+            expect(current?.loading).toBe(true);
+            expect(current?.issue).toBeUndefined();
+            expect(screen.getTextContent()).not.toContain(t('machines.sharing.readError', { machine: 'Devbox' }));
+            expect(screen.getTextContent()).not.toContain(t('machines.sharing.unavailable', { machine: 'Devbox' }));
+
+            // Once the Home has answered the read is made again, and a failure that persists is reported.
+            const beforeSettled = reads;
+            await act(async () => { getStorage().setState({ endpointStatus: 'online', socketStatus: 'connected' }); });
+            await vi.waitFor(() => expect(current?.issue?.message).toBe(t('machines.sharing.readError', { machine: 'Devbox' })));
+            expect(reads).toBeGreaterThan(beforeSettled);
+            expect(current?.loading).toBe(false);
+        } finally {
+            publishAppliedActiveServerRuntimeAvailability(false);
+            getStorage().setState({ endpointStatus: before });
+            await home.dispose();
+        }
+    });
     it('retires the census and in-flight read on credential removal, and restores with a fresh same-Account read', async () => {
         const localStorage = installLocalStorageMock();
         const serverUrl = 'https://machine-census-credential.test';
