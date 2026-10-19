@@ -1430,10 +1430,10 @@ async function enqueuePendingMessageWithAdmission(
                 const protectedRequest = readSessionInputRequest(readPlainMessageMeta(content));
                 if (reply?.success && reply.data.humanOrigin && (!protectedRequest
                     || requiresAuthenticatedMachineAdmissionForSessionInput(protectedRequest))) return { ok: false, error: 'invalid-params' } as const;
-                const protectedReply = protectedRequest?.v === 1 && protectedRequest.replyIntent
+                const protectedReply = protectedRequest?.replyIntent
                     ? { mode: protectedRequest.replyIntent.mode, ...(protectedRequest.sourceSession ? { sourceSession: protectedRequest.sourceSession } : {}),
                         ...(protectedRequest.replyIntent.humanOrigin ? { humanOrigin: protectedRequest.replyIntent.humanOrigin } : {}),
-                        ...(protectedRequest.discussionAddressing ? { discussion: protectedRequest.discussionAddressing } : {}),
+                        ...(protectedRequest.v === 1 && protectedRequest.discussionAddressing ? { discussion: protectedRequest.discussionAddressing } : {}),
                         ...(protectedRequest.actionRequestAttributionV1 ? { actionRequestAttributionV1: protectedRequest.actionRequestAttributionV1 } : {}) } : undefined;
                 // A proven foreign original may enter blocked custody before
                 // private source hydration. It carries no executable authority.

@@ -142,9 +142,9 @@ export async function observeWorkflowInvocationRecoveryEvidence(params: Readonly
       sessionId: execution.sessionId, localId: execution.localInputId, deadlineMs: Date.now(),
       ...(params.signal ? { signal: params.signal } : {}) });
     if (!observed.ok || observed.sessionId !== execution.sessionId || observed.localId !== execution.localInputId) return unavailable;
-    const result = classifyWorkflowSessionInputResult(observed.result);
+    const result = classifyWorkflowSessionInputResult(observed.result, observed.replyOutcome);
     const evidence: WorkflowInvocationRecoveryEvidence = {
-      activity: result.kind === 'pending' ? 'unknown' : 'not_active',
+      activity: result.kind === 'pending' || result.kind === 'needs_attention' ? 'unknown' : 'not_active',
       canReattach: true, canContinueConversation: false,
     };
     try {
@@ -461,15 +461,16 @@ export function createWorkflowInvocationRecoveryObserver(params: Readonly<{
             ...(input.signal ? { signal: input.signal } : {}),
           });
           if (!settled.ok || settled.sessionId !== execution.sessionId || settled.localId !== execution.localInputId
-            || classifyWorkflowSessionInputResult(settled.result).kind === 'pending') {
+            || ['pending', 'needs_attention'].includes(classifyWorkflowSessionInputResult(settled.result).kind)) {
             throw new Error('session_input_terminal_observation_unavailable');
           }
         },
       };
-      const result = classifyWorkflowSessionInputResult(observed.result);
+      const result = classifyWorkflowSessionInputResult(observed.result, observed.replyOutcome);
       switch (result.kind) {
         case 'completed': return result;
         case 'failed': return result;
+        case 'needs_attention': return { ...result, kind: 'unresolved' };
         case 'pending':
           if (input.observationOnly || (!input.terminalParent && !input.cancellationRequested)) {
             return { kind: 'unresolved', code: 'session_input_pending', ...completion };

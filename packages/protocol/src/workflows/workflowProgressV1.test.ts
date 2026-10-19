@@ -32,6 +32,16 @@ import {
 } from './workflowProgressV1.js';
 
 describe('workflow progress v1', () => {
+  it('retains the original typed reply outcome independently of selected result text', () => {
+    const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+      invocationPath: { blockId: 'review', scope: [] }, attempt: '0', logicalInvocationRecordId: 'review-invocation',
+      execution: { kind: 'session', sessionId: 'reviewer', localInputId: 'workflow-input' } });
+    const settled = applyWorkflowInvocationFactV1(progress, { result: '', replyOutcome: { kind: 'pass' } });
+    expect(WorkflowProgressEnvelopeV1Schema.parse(JSON.parse(JSON.stringify(settled)))).toMatchObject({ result: '',
+      execution: { kind: 'session', sessionId: 'reviewer', localInputId: 'workflow-input' }, replyOutcome: { kind: 'pass' } });
+    expect(applyWorkflowInvocationFactV1(settled, { interaction: { status: 'read' } }).replyOutcome).toEqual({ kind: 'pass' });
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...settled, replyOutcome: { kind: 'pass', guessedAnswer: true } }).success).toBe(false);
+  });
   it('retains the exact terminal runtime issue when recovery follows an earlier attention reason', () => {
     const issue = SessionRuntimeIssueV1Schema.parse({ v: 1, scope: 'primary_session', status: 'failed',
       code: 'usage_limit', source: 'usage_limit', occurredAt: 100,

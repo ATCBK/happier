@@ -1,5 +1,6 @@
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { SessionMessageReplyOutcomeV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 import { z } from 'zod/mini';
 import { ActionCompletionStateV1Schema } from '../actions/actionCompletion.js';
 import { AGENT_START_REFUSAL_CODES_V1, AgentStartRefusalV1Schema } from '../account/settings/admitAgentStartV1.js';
@@ -579,6 +580,8 @@ export const WorkflowProgressEnvelopeV1Schema = lazyZodSchema(() => z.strictObje
   input: zMini.optional(StrictJsonValueSchema),
   validationIssues: z.optional(WorkflowResultValidationIssuesV1Schema),
   result: zMini.optional(StrictJsonValueSchema),
+  /** Original admitted Session input outcome; selected/reviewed result text stays independent. */
+  replyOutcome: z.optional(SessionMessageReplyOutcomeV1Schema),
   review: z.optional(WorkflowReviewV1Schema),
   usage: z.optional(WorkflowUsageV1Schema),
   /**
@@ -686,6 +689,7 @@ export const WorkflowInvocationFactV1Schema = lazyZodSchema(() => z.strictObject
   resultProvenance: z.optional(WorkflowResultProvenanceV1Schema),
   validationIssues: z.optional(WorkflowResultValidationIssuesV1Schema),
   result: zMini.optional(StrictJsonValueSchema),
+  replyOutcome: z.optional(SessionMessageReplyOutcomeV1Schema),
   resultContract: zMini.optional(StrictJsonValueSchema),
   usage: z.optional(WorkflowUsageV1Schema),
   interaction: zMini.optional(StrictJsonValueSchema),

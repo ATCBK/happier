@@ -606,16 +606,15 @@ type CurrentPromptDeliveryOutcome =
 
 type FulfilledReplyObservation = Readonly<{ kind: 'fulfilled'; outcome: SessionMessageReplyOutcomeV1 }>;
 
-async function readOriginalReplyOutcome(params: Readonly<{
+async function readOriginalReply(params: Readonly<{
   credentials: StoredCredentials;
   sessionId: string;
   localId: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: ResolveSessionMessageAuthorizationHeaders;
-}>): Promise<SessionMessageReplyOutcomeV1 | undefined> {
+}>) {
   const { readSessionMessageReply } = await import('./sessionMessageReply');
-  const original = await readSessionMessageReply(params);
-  return original.status === 'available' ? original.progress.outcome : undefined;
+  return readSessionMessageReply(params);
 }
 
 function formatBlockedPromptDeliveryFailure(reason: PendingQueueDeliveryBlockedReason): string {
@@ -667,7 +666,8 @@ async function waitForCurrentPromptDelivery(params: CurrentPromptDeliveryObserva
       if (materialized) return { kind: 'materialized', message: materialized };
       if (params.replyCredentials) {
         try {
-          const outcome = await readOriginalReplyOutcome({ ...params, credentials: params.replyCredentials });
+          const original = await readOriginalReply({ ...params, credentials: params.replyCredentials });
+          const outcome = original.status === 'available' ? original.progress.outcome : undefined;
           params.signal?.throwIfAborted();
           // Pre-provider failure/cancellation can settle original Pending custody
           // without ever producing a committed transcript input or answer.
@@ -925,10 +925,15 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
       const revision = events.currentRevision();
       try {
         let replyOutcome: SessionMessageReplyOutcomeV1 | undefined;
+        let originalHasNoReply = false;
         if (params.reply) {
-          replyOutcome = await readOriginalReplyOutcome({ credentials: params.reply.credentials,
+          const original = await readOriginalReply({ credentials: params.reply.credentials,
             sessionId: params.sessionId, localId: params.localId, ...(params.signal ? { signal: params.signal } : {}),
             ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}) });
+          // Historical inputs have no obligation; unavailable custody never
+          // authorizes falling back to an unrelated or merely later final.
+          originalHasNoReply = original.status === 'none';
+          replyOutcome = original.status === 'available' ? original.progress.outcome : undefined;
           if (replyOutcome) {
             params.reply.onOutcome(replyOutcome);
             if (replyOutcome.kind !== 'answer' || 'publicationRef' in replyOutcome) {
@@ -940,7 +945,7 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           ...(replyOutcome?.kind === 'answer' && 'result' in replyOutcome
             && replyOutcome.result.sessionId === params.sessionId
             ? { resultMessageId: replyOutcome.result.messageId } : {}) });
-        if (!params.reply && outcome.kind !== 'missing') return outcome;
+        if ((!params.reply || originalHasNoReply) && outcome.kind !== 'missing') return outcome;
         if (replyOutcome?.kind === 'answer' && 'result' in replyOutcome
           && replyOutcome.result.sessionId === params.sessionId
           && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) return outcome;
@@ -1378,8 +1383,6 @@ export async function sendSessionMessage(
     }
   }
   const originalAdmission = params.inputAdmission ?? (params.replyIntent ? buildTrustedHostSessionInputAdmissionV1('cli') : undefined);
-  if (params.replyIntent && originalAdmission?.request.v !== 1) return { ok: false, code: 'unsupported',
-    admissionResult: { status: 'rejected', code: 'session_input_target_update_required' } };
   let protectedAdmission: NonNullable<typeof originalAdmission> | null;
   try {
     protectedAdmission = originalAdmission ? {
@@ -1390,7 +1393,7 @@ export async function sendSessionMessage(
   } catch {
     return { ok: false, code: 'admission_rejected', admissionResult: { status: 'rejected', code: 'session_input_invalid' } };
   }
-  const replyIntent = protectedAdmission?.request.v === 1 ? protectedAdmission.request.replyIntent : undefined;
+  const replyIntent = protectedAdmission?.request.replyIntent;
   if (replyIntent) {
     const { supportsSessionMessageReply } = await import('./sessionMessageReply');
     if (!(await supportsSessionMessageReply({ credentials: params.credentials, sessionId,

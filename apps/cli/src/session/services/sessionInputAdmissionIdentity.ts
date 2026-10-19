@@ -200,6 +200,7 @@ export function buildWorkflowSessionInputAdmissionV2(
   params: SessionInputWorkflowV2,
   options: Readonly<{
     requestedPermissionCeiling?: SessionInputRequestV2['permission']['requestedPermissionCeiling'];
+    replyIntent?: SessionInputRequestV2['replyIntent'];
     sourceAuthority?: SessionInputSourceAuthorityV1;
     actionRequestAttributionV1?: ActionRequestAttributionV1;
   }> = {},
@@ -221,6 +222,7 @@ export function buildWorkflowSessionInputAdmissionV2(
       v: 2,
       producer: 'workflow',
       caller: { kind: 'host' },
+      ...(options.replyIntent ? { replyIntent: options.replyIntent } : {}),
       ...(options.sourceAuthority ? { sourceAuthority: options.sourceAuthority } : {}),
       ...(options.actionRequestAttributionV1 ? { actionRequestAttributionV1: options.actionRequestAttributionV1 } : {}),
       workflow,

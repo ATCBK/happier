@@ -135,11 +135,13 @@ it.each([
   const finishedAt = '2026-09-08T12:03:00.000Z';
   const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(finishedAt));
   try {
-    const observation = scenario.kind === 'completed' ? { kind: 'completed' as const, result: 'done' }
-      : { kind: scenario.kind, code: 'provider_stopped' };
+    const replyOutcome = { kind: scenario.kind === 'completed' ? 'pass' as const : scenario.kind };
+    const observation = scenario.kind === 'completed' ? { kind: 'completed' as const, result: '', replyOutcome }
+      : { kind: scenario.kind, code: 'provider_stopped', replyOutcome };
     await writer.commitObservation(child, observation);
     const settled = await writer.readInvocation(childId);
     expect(settled?.index.lifecycle).toBe(scenario.kind);
+    expect(settled?.progress.replyOutcome).toEqual(replyOutcome);
     expect(settled?.progress.timing).toEqual(scenario.startedAt ? { startedAt: scenario.startedAt, finishedAt } : undefined);
     expect(settled?.index).toMatchObject({ id: childId, attempt: child.index.attempt });
     clock.mockReturnValue(Date.parse('2026-09-08T12:04:00.000Z'));
@@ -586,6 +588,7 @@ describe('workflow Run startup/reconnect recovery', () => {
           recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } });
         if (url.pathname === `/v2/sessions/${sessionId}`) return reply({ session: createSessionRecordFixture({ id: sessionId,
           active: true, machineId, encryptionMode: 'plain', metadata: JSON.stringify({ machineId, path: '/repo', sessionCreationCorrespondenceV1: correspondence }) }) });
+        if (url.pathname.endsWith('/reply')) return reply({ v: 1, status: 'none' });
         if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) { inputReads++; return reply({ message: inputMessage }); }
         if (url.pathname === `/v1/sessions/${sessionId}/messages`) return reply({ messages: terminal ? messages : [inputMessage] });
         return reply({ error: 'not-found' }, 404);
@@ -717,6 +720,7 @@ describe('workflow Run startup/reconnect recovery', () => {
         id: sessionId, active: false, encryptionMode: 'plain', machineId,
         metadata: JSON.stringify({ machineId, path: '/repo' }),
       }) });
+      if (url.pathname.endsWith('/reply')) return reply({ v: 1, status: 'none' });
       if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) return quiet
         ? reply({ message: hostInput }) : reply({ error: 'Message not found' }, 404);
       if (quiet && url.pathname === `/v1/sessions/${sessionId}/turns`) return reply({ v: 1, sessionId, updatedAt: 200,
@@ -817,6 +821,7 @@ describe('workflow Run startup/reconnect recovery', () => {
         id: sessionId, active: false, encryptionMode: 'plain', machineId,
         metadata: JSON.stringify({ machineId, path: '/repo' }),
       }) });
+      if (url.pathname.endsWith('/reply')) return reply({ v: 1, status: 'none' });
       if (url.pathname.startsWith(`/v2/sessions/${sessionId}/messages/by-local-id/`)) return reply({ message: inputMessage });
       if (url.pathname === `/v1/sessions/${sessionId}/messages`) return reply({ messages: terminal ? [inputMessage, terminalMessage] : [inputMessage] });
       if (url.pathname === `/v2/sessions/${sessionId}/pending/${localId}/discard`) return reply({ error: 'not-found' }, 404);

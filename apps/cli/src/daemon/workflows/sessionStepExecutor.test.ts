@@ -1395,6 +1395,9 @@ describe('workflow Session step executor', () => {
   });
 
   it('leaves live Session permission revalidation with canonical input admission', async () => {
+    const read = readiness.get.getMockImplementation()!;
+    readiness.get.mockImplementation(async (url: string) => url.endsWith('/reply-capability')
+      ? { status: 200, data: { v: 1, protocolVersions: [1] } } : read(url));
     const credentials = { token: 'token', encryption: null };
     const machineAdmissionTransport = vi.fn(async (_request: Parameters<Parameters<typeof createProductionWorkflowSessionStepExecutor>[0]['machineAdmissionTransport']>[0]) => ({
       status: 'rejected' as const,

@@ -31,12 +31,18 @@ vi.mock('axios', () => ({ default: { ...http, isAxiosError: () => false } }));
 vi.mock('@/api/session/sockets', async importOriginal => ({
   ...await importOriginal<typeof import('@/api/session/sockets')>(),
   createUserScopedSocketConnection: machineSockets.connect,
+  createSessionScopedSocketConnection: () => {
+    const socket = createApiSessionSocketStub({ connected: true });
+    return { socket, transport: createSocketTransportAdapter(socket) };
+  },
 }));
 
 const sessionId = 'c123456789012345678901234';
 
 import {
   enqueueWorkflowSessionInput,
+  observeWorkflowSessionInputResult,
+  classifyWorkflowSessionInputResult,
   observeWorkflowDetachedExecutionRunInput,
 
   sendWorkflowDetachedExecutionRunInput,
@@ -44,6 +50,14 @@ import {
 import { createProductionWorkflowSessionStepExecutor } from './sessionStepExecutor';
 
 describe('Workflow Session step execution', () => {
+  it.each([
+    { outcome: { kind: 'pass' as const }, expected: { kind: 'completed', result: '' } },
+    { outcome: { kind: 'terminal_no_result' as const }, expected: { kind: 'completed', result: '' } },
+    { outcome: { kind: 'cancelled' as const }, expected: { kind: 'cancelled' } },
+    { outcome: { kind: 'failed' as const }, expected: { kind: 'failed', code: 'session_input_failed' } },
+  ])('classifies the original Workflow reply $outcome.kind without waiting for another final', ({ outcome, expected }) => {
+    expect(classifyWorkflowSessionInputResult({ kind: 'fulfilled', outcome })).toMatchObject({ ...expected, replyOutcome: outcome });
+  });
   afterEach(() => { vi.unstubAllEnvs(); });
   beforeEach(() => {
     machineRpc.callMachineRpc.mockReset();
@@ -63,6 +77,8 @@ describe('Workflow Session step execution', () => {
       return { socket, transport: createSocketTransportAdapter(socket) };
     });
     http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'none' } };
       if (url.endsWith('/v1/account/encryption/currentness')) return {
         status: 200,
         data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
@@ -71,7 +87,7 @@ describe('Workflow Session step execution', () => {
       if (url.endsWith('/v1/machines/machine-1')) return { status: 200, data: {
         machine: { ...createAvailableSessionSpawnMachineSnapshot('machine-1'), storageMode: 'plain' },
       } };
-      if (url.includes(`/v2/sessions/${sessionId}`)) return {
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) return {
         status: 200,
         data: { session: createSessionRecordFixture({
           id: sessionId, active: true, encryptionMode: 'plain',
@@ -83,10 +99,52 @@ describe('Workflow Session step execution', () => {
     });
   });
 
+  it.each([
+    { outcome: { kind: 'pass' as const }, classified: { kind: 'completed', result: '' } },
+    { outcome: { kind: 'answer' as const, publicationRef: { kind: 'session' as const,
+      session: { serverId: 'home', sessionId: 'other-session' }, messageId: 'explicit-publication' } },
+      classified: { kind: 'needs_attention', code: 'session_input_result_unavailable' } },
+  ])('admits a Workflow reply under its existing V2 local id and rejoins explicit $outcome.kind', async ({ outcome, classified }) => {
+    const previousGet = http.get.getMockImplementation()!;
+    let originalLocalId = '';
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (url.endsWith(`/by-local-id/${encodeURIComponent(originalLocalId)}/reply`)) return { status: 200, data: { v: 1, status: 'available',
+        progress: { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'accepted-turn', outcome } } };
+      if (url.endsWith(`/by-local-id/${encodeURIComponent(originalLocalId)}`)) return { status: 200, data: { message: {
+        id: 'original-row', localId: originalLocalId, seq: 1, createdAt: 100, updatedAt: 100,
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Review' } } },
+      } } };
+      return previousGet(url);
+    });
+    const admitted: unknown[] = [];
+    const admission = await enqueueWorkflowSessionInput({ credentials: { token: 'token', encryption: null }, sessionId,
+      workflow: { purpose: 'invocation', runId: 'run-1', invocationRecordId: 'reply-invocation' }, text: 'Review',
+      machineAdmissionTransport: async request => {
+        originalLocalId = request.localId;
+        admitted.push(request);
+        return { status: 'accepted', localId: request.localId };
+      } });
+    expect(admission).toEqual({ status: 'accepted', localId: originalLocalId });
+    expect(admitted).toEqual([expect.objectContaining({ reply: { mode: 'wait' }, content: { t: 'plain', v: expect.objectContaining({
+      meta: expect.objectContaining({ happierInputRequestV1: expect.objectContaining({ v: 2, producer: 'workflow',
+        workflow: { purpose: 'invocation', runId: 'run-1', invocationRecordId: 'reply-invocation' }, replyIntent: { mode: 'wait' } }) }),
+    }) } })]);
+    const observe = () => observeWorkflowSessionInputResult({ credentials: { token: 'token', encryption: null }, sessionId,
+      localId: originalLocalId, deadlineMs: Date.now() });
+    const observed = await observe();
+    expect(observed).toMatchObject({ ok: true, localId: originalLocalId, replyOutcome: outcome,
+      result: { kind: 'fulfilled', outcome } });
+    if (!observed.ok) throw new Error('Workflow reply observation failed');
+    expect(classifyWorkflowSessionInputResult(observed.result, observed.replyOutcome)).toMatchObject({ ...classified, replyOutcome: outcome });
+    await expect(observe()).resolves.toMatchObject({ ok: true, localId: originalLocalId, replyOutcome: outcome });
+    expect(admitted).toHaveLength(1);
+  });
+
   it('resumes an offline Workflow target with frozen native launch intent through Session input admission', async () => {
     const model = { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'incoming-model' };
     const previousGet = http.get.getMockImplementation()!;
-    http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
+    http.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${sessionId}`)
       ? { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, active: false,
           encryptionMode: 'plain', machineId: 'machine-1', path: '/repo',
           metadata: JSON.stringify({ machineId: 'machine-1', path: '/repo',
@@ -113,7 +171,7 @@ describe('Workflow Session step execution', () => {
 
   it('readies an existing offline Session without inventing a Workflow input', async () => {
     const previousGet = http.get.getMockImplementation()!;
-    http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
+    http.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${sessionId}`)
       ? { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, active: false,
           encryptionMode: 'plain', machineId: 'machine-1', path: '/repo', metadata: JSON.stringify({
             machineId: 'machine-1', path: '/repo', runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
@@ -157,7 +215,7 @@ describe('Workflow Session step execution', () => {
 
   it('rejects failed explicit existing Session readiness before Pending admission or an input receipt', async () => {
     const previousGet = http.get.getMockImplementation()!;
-    http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
+    http.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${sessionId}`)
       ? { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, active: false,
           encryptionMode: 'plain', machineId: 'machine-1', path: '/repo', metadata: JSON.stringify({
             machineId: 'machine-1', path: '/repo', runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
@@ -227,7 +285,7 @@ describe('Workflow Session step execution', () => {
     { modelId: 'native-model', providerConnectionId: null, reset: false },
   ])('normalizes Action and Workflow model sends together: $modelId / $providerConnectionId', async ({ modelId, providerConnectionId, reset }) => {
     const previousGet = http.get.getMockImplementation()!;
-    http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
+    http.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${sessionId}`)
       ? { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, active: true,
           encryptionMode: 'plain', machineId: 'machine-1', metadata: JSON.stringify({ machineId: 'machine-1', flavor: 'codex',
             modelSelectionIntentV1: { v: 1, updatedAt: 1, selection: {

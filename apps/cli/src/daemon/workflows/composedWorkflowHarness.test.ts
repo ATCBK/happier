@@ -888,7 +888,7 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
   }
 });
 
-it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
+it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
   const directory = await projectDirectory();
   const runId = '41414141-4141-4141-8141-414141414143';
   const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
@@ -933,21 +933,25 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('s
   });
   const sessionInput = sessionInputBoundary();
   const interrupted = new AbortController();
-  let rejectCorrespondence = mode === 'lost-claim';
+  let rejectCorrespondence = mode === 'lost-claim' || mode === 'lost-claim-root';
   const coordinate = workflowDaemonProcess({ storage: { ...kit, execute: async (operation, options) => {
     if (rejectCorrespondence && operation.operation === 'invocations.fact' && operation.lifecycle === 'running'
-      && operation.invocationId === rowFor(kit, 'launch')?.id) {
+      && (mode === 'lost-claim'
+        ? operation.invocationId === rowFor(kit, 'launch')?.id
+        : operation.invocationId !== rowFor(kit, 'launch')?.id && rowFor(kit, 'launch')?.lifecycle === 'running')) {
       rejectCorrespondence = false;
       interrupted.abort(new WorkflowRuntimeInterruption());
       return refuse();
     }
     return kit.execute(operation, options);
   } }, sessionInput, directory, sessionStartup });
-  if (mode === 'lost-claim') {
+  if (mode === 'lost-claim' || mode === 'lost-claim-root') {
     await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
       acceptedEnvelope, signal: interrupted.signal })).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
-    expect(rowFor(kit, 'launch')?.lifecycle).toBe('pending');
-    expect(openRowProgress(kit, rowFor(kit, 'launch')!).execution).toBeUndefined();
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe(mode === 'lost-claim' ? 'pending' : 'running');
+    const execution = openRowProgress(kit, rowFor(kit, 'launch')!).execution;
+    if (mode === 'lost-claim') expect(execution).toBeUndefined();
+    else expect(execution).toMatchObject({ kind: 'action', actionId: 'session.spawn_new', output: { operation: { state: 'running' } } });
     expect(await operations.handlers.getV2({ operationId: 'failed-start' })).toMatchObject({ kind: 'found', operation: {
       state: 'failed', error: { errorCode: 'ERR_BAD_REQUEST', error: refusalMessage },
     } });

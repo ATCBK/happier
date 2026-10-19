@@ -60,7 +60,7 @@ export type WorkflowInvocationRecoveryObservation = (
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'stopped'; code: string }>
   | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>
-) & Readonly<{ execution?: WorkflowProgressEnvelopeV1['execution'] }>;
+) & Readonly<{ execution?: WorkflowProgressEnvelopeV1['execution']; replyOutcome?: WorkflowProgressEnvelopeV1['replyOutcome'] }>;
 
 type ReconciledInvocationTransition = Readonly<{
   id: string;
@@ -299,6 +299,7 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
     const nextProgress: WorkflowProgressEnvelopeV1 = {
       ...applyWorkflowInvocationFactV1(progress, {
         ...(observed.execution ? { execution: observed.execution } : {}),
+        ...(observed.replyOutcome ? { replyOutcome: observed.replyOutcome } : {}),
         ...(observation.kind === 'completed' ? { result: observation.result } : {}),
         ...(observation.kind !== 'unresolved' && observation.usage ? { usage: observation.usage } : {}),
         ...(observation.kind !== 'completed' && observation.code ? { reason: observation.code,

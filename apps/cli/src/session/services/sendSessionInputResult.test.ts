@@ -245,6 +245,22 @@ describe('waitForSessionInputResult', () => {
     });
   });
 
+  it.each(['none', 'unavailable', 'unfulfilled', 'answer'] as const)('rejoins original reply custody %s without upgrading old inputs or inventing answers', async status => {
+    const { httpGet } = await arrange({ rowsAfterInput: () => [rawAssistantText('exact answer'), rawLifecycle('task_complete')] });
+    const previousGet = httpGet.getMockImplementation()!;
+    const outcome = { kind: 'answer' as const, result: { sessionId, messageId: 'row-1' } };
+    httpGet.mockImplementation(async (url, config) => url.endsWith('/reply') ? { status: 200, data:
+      status === 'none' || status === 'unavailable' ? { v: 1, status } : { v: 1, status: 'available',
+        progress: { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'turn-1', ...(status === 'answer' ? { outcome } : {}) } },
+    } : previousGet(url, config));
+    const observed = await waitForSessionInputResult({ credentials: { token: 'token', encryption: null }, serverId: session.serverId,
+      idOrPrefix: sessionId, localId: 'automation:run:run-1', observeReply: true,
+      observation: { kind: 'absolute_deadline', deadlineMs: Date.now() } });
+    expect(observed).toMatchObject({ ok: true, result: status === 'none' || status === 'answer'
+      ? { kind: 'final_text', text: 'exact answer', messageRef: resultMessageRef(1) } : { kind: 'pending' } });
+    if (status === 'answer') expect(observed).toMatchObject({ replyOutcome: outcome });
+  });
+
   it('returns owner-reported turn usage with the exact completed input', async () => {
     const { wait } = await arrange({
       rowsAfterInput: () => [

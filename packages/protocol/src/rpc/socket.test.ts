@@ -22,6 +22,18 @@ it('admits turn abort under its own Action while retaining submit-input capabili
   });
 });
 
+it('keeps explicit replies on the exact publisher Session with Action authority and origin', () => {
+  const method = 'session.message.reply';
+  expect(socketProtocol.resolveSocketRpcSessionAuthorization(`session-a:${method}`)).toMatchObject({
+    authority: 'sessionOwner', actionId: method, routeToSessionOwnerDaemon: true,
+  });
+  expect(socketProtocol.isSessionActionRpcMethodV1(`session-a:${method}`)).toBe(true);
+  expect(resolveMachineRpcRoutePolicy(method)).toMatchObject({
+    routeClass: 'server_required', sharedMachineAccess: 'custodian_only',
+    scope: { sessionRequired: true },
+  });
+});
+
 it('carries Session question origin only through the modern question operations', () => {
   expect(socketProtocol.isSessionActionRpcMethodV1(RPC_METHODS.SESSION_USER_ACTION_ANSWER)).toBe(true);
   expect(socketProtocol.isSessionActionRpcMethodV1(SESSION_RPC_METHODS.SESSION_NEEDS_YOU_RAISE)).toBe(true);

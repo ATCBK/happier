@@ -127,6 +127,7 @@ export type WorkflowsActionInputById = {
         attention?: 'required' | undefined;
         originSessionId?: string | undefined;
         targetSessionId?: string | undefined;
+        underSessionId?: string | undefined;
         automationId?: string | undefined;
         machineId?: string | undefined;
     };
@@ -10287,6 +10288,32 @@ export type WorkflowsActionResultById = {
                     message: string;
                 }[] | undefined;
                 result?: JsonValue | undefined;
+                replyOutcome?: {
+                    kind: 'answer';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'answer';
+                    publicationRef: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                } | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -11016,6 +11043,32 @@ export type WorkflowsActionResultById = {
                     message: string;
                 }[] | undefined;
                 result?: JsonValue | undefined;
+                replyOutcome?: {
+                    kind: 'answer';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'answer';
+                    publicationRef: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                } | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';
@@ -11970,6 +12023,32 @@ export type WorkflowsActionResultById = {
                     message: string;
                 }[] | undefined;
                 result?: JsonValue | undefined;
+                replyOutcome?: {
+                    kind: 'answer';
+                    result: {
+                        sessionId: string;
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'answer';
+                    publicationRef: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                } | {
+                    kind: 'failed' | 'cancelled' | 'pass' | 'terminal_no_result' | 'declined';
+                } | undefined;
                 review?: {
                     resultSource?: {
                         kind: 'execution_input';

@@ -1091,7 +1091,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       } else expect(socketAckMock).not.toHaveBeenCalled();
     });
 
-  it('settles Workflow V2 provenance and authority through the existing Session permission owner', async () => {
+  it('settles Workflow V2 provenance, reply and authority through the existing Session permission owner', async () => {
     const socket = createSocketStub();
     const contractResult = {
       mode: 'session_sync_v2_pending_input_v1' as const,
@@ -1105,6 +1105,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       v: 2 as const,
       producer: 'workflow' as const,
       caller: { kind: 'host' as const },
+      replyIntent: { mode: 'wait' as const },
       workflow: {
         purpose: 'invocation' as const,
         runId: 'workflow-run-1',
@@ -1173,6 +1174,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     expect(socketAckMock).toHaveBeenNthCalledWith(2, 'session-pending-admission-settlement-v1', expect.objectContaining({
       decision: expect.objectContaining({
         kind: 'admit',
+        validation: { reply: { mode: 'wait' } },
         finalContent: expect.objectContaining({
           t: 'plain',
           v: expect.objectContaining({
@@ -1180,6 +1182,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
               happierInputAuthorityV1: expect.objectContaining({
                 v: 2,
                 producer: 'workflow',
+                replyIntent: { mode: 'wait' },
                 workflow: request.workflow,
                 permission: {
                   requestedPermissionCeiling: 'read-only',

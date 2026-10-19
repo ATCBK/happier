@@ -62,6 +62,18 @@ passes name the original input; an unrelated later final or publication cannot
 fulfill it. A committed explicit publication wins over automatic final fallback.
 Failed, cancelled, passed, and terminal-without-result outcomes remain distinct.
 
+Protected Workflow V2 invocation inputs use that same reply intent and original
+custody, retaining their derived Workflow input localId through Pending retirement.
+The Workflow producer requests `wait` and its observer reads the typed original
+outcome; a pass does not depend on response text. The existing Workflow progress
+retains that typed outcome across restart, independently of selected result text.
+A reference-only answer with no readable text needs attention rather than becoming
+fabricated text. Historical inputs with authoritative reply status `none` retain
+exact-input transcript observation; unavailable or unfulfilled reply custody holds.
+V2 input remains host-authored:
+a return destination requires admitted source-Session correlation, and it cannot
+claim a person's composer origin or downgrade to V1 to acquire reply support.
+
 The existing `waitForSessionInputResult` observes this custody and resolves an
 answer's exact committed message, not the latest assistant text. A strict
 `SessionMessageRefV1` contains the captured Home, Session, and actual committed

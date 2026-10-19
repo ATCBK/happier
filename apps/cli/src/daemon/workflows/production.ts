@@ -303,6 +303,7 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
       ...(index.parentRecordId ? { parentKey: this.recordsById.get(index.parentRecordId)?.key } : {}),
       path: progress.invocationPath, attempt, acceptedAtMs: Date.parse(index.createdAt), lifecycle: index.lifecycle,
       ...(progress.result === undefined ? {} : { result: progress.result }),
+      ...(progress.replyOutcome ? { replyOutcome: progress.replyOutcome } : {}),
       ...(progress.resultContract === undefined ? {} : { resultContract: progress.resultContract }),
       ...(progress.usage === undefined ? {} : { usage: progress.usage }),
       ...(progress.reason ? { reason: progress.reason.code } : {}),

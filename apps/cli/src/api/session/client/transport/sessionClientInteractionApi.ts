@@ -213,19 +213,18 @@ function buildInputSettlementValidation(
     request: SessionInputRequest,
     autonomousCheckIn?: Readonly<{ afterTurns: number | null }>,
 ): SessionInputSettlementValidationV1 | undefined {
-    if (request.v === 2) return undefined;
     const validation = {
         ...(request.sourceSession
             ? { sourceSession: request.sourceSession }
             : {}),
-        ...(request.automation ? { automation: request.automation } : {}),
+        ...(request.v === 1 && request.automation ? { automation: request.automation } : {}),
         ...(request.replyIntent ? { reply: { mode: request.replyIntent.mode,
             ...(request.replyIntent.humanOrigin ? { humanOrigin: request.replyIntent.humanOrigin } : {}),
-            ...(request.discussionAddressing ? { discussion: request.discussionAddressing } : {}),
+            ...(request.v === 1 && request.discussionAddressing ? { discussion: request.discussionAddressing } : {}),
             ...(request.actionRequestAttributionV1 ? { actionRequestAttributionV1: request.actionRequestAttributionV1 } : {}),
             ...(request.sourceSession ? { sourceSession: request.sourceSession } : {}) } } : {}),
-        ...(request.returnedAnswer ? { returnedAnswer: request.returnedAnswer } : {}),
-        ...(autonomousCheckIn ? { autonomousCheckIn } : {}),
+        ...(request.v === 1 && request.returnedAnswer ? { returnedAnswer: request.returnedAnswer } : {}),
+        ...(request.v === 1 && autonomousCheckIn ? { autonomousCheckIn } : {}),
     };
     return Object.keys(validation).length > 0 ? validation : undefined;
 }

@@ -1846,7 +1846,8 @@ describe('production workflow coordinator', () => {
           attempt: index.attempt, logicalInvocationRecordId: blockId === 'parallel-1' ? oldParentId : index.id,
           ...(previousAttemptRecordId ? { previousAttemptRecordId } : {}),
           ...(blockKind === 'parallel' ? { container: { kind: 'parallel' as const, nextBranchOrdinal: '0' } } : {}),
-          ...(blockKind === 'step' ? { result: 'kept' } : {}),
+          ...(blockKind === 'step' ? { result: 'kept', replyOutcome: { kind: 'answer' as const,
+            result: { sessionId: 'reviewer-session', messageId: 'committed-answer' } } } : {}),
         },
       }));
     const details = new Map([
@@ -1875,7 +1876,8 @@ describe('production workflow coordinator', () => {
       runId, blockId: 'successful-step', scope: [],
       parentKey: workflowInvocationKey({ runId, blockId: 'parallel-1', scope: [], attempt: 2 }),
       memberOrdinal: '0',
-    })).resolves.toMatchObject({ recordId: childId, lifecycle: 'completed', result: 'kept' });
+    })).resolves.toMatchObject({ recordId: childId, lifecycle: 'completed', result: 'kept',
+      replyOutcome: { kind: 'answer', result: { sessionId: 'reviewer-session', messageId: 'committed-answer' } } });
     expect(execute.mock.calls.filter(([operation]) => operation.operation === 'invocations.current')
       .map(([operation]) => operation.parentRecordId)).toEqual([newParentId, middleParentId, oldParentId]);
   });

@@ -8703,8 +8703,8 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     sideEffectClass: 'external',
     safety: 'safe',
     placements: [],
-    bindings: { mcpToolName: 'session_message_reply', voiceClientToolName: 'session_message_reply' },
-    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    bindings: { mcpToolName: 'session_message_reply', voiceClientToolName: 'session_message_reply', rpcMethod: 'session.message.reply' },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     inputHints: { title: 'Reply to a Session request', fields: [
       { path: 'sessionId', title: 'Receiving Session', widget: 'text', required: true },
       { path: 'requestLocalId', title: 'Original input id', widget: 'text', required: true },

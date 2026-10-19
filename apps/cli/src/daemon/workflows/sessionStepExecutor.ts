@@ -575,7 +575,7 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
                 ? { deadlineMs: Date.parse(params.invocation.observationDeadline.expiresAt) }
                 : params.step.timeoutMs === undefined ? {} : { timeoutAfterInputMs: params.step.timeoutMs }),
             });
-            return settled.ok ? settleObservedInput(settled.result)
+            return settled.ok ? settleObservedInput(settled.result, settled.replyOutcome)
               : { kind: 'needs_attention' as const, code: settled.code };
           } catch {
             return { kind: 'needs_attention' as const, code: 'session_input_result_read_failed' };
@@ -597,10 +597,12 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
     };
     const settleObservedInput = (
       result: Parameters<typeof classifyWorkflowSessionInputResult>[0],
+      replyOutcome?: Parameters<typeof classifyWorkflowSessionInputResult>[1],
     ): WorkflowStepExecutionResult => {
-      const observed = classifyWorkflowSessionInputResult(result);
+      const observed = classifyWorkflowSessionInputResult(result, replyOutcome);
       switch (observed.kind) {
         case 'completed':
+        case 'needs_attention':
         case 'failed': return observed;
         case 'pending': return { kind: 'needs_attention', code: 'workflow_step_timeout' };
         case 'cancelled': return { ...observed, code: 'session_input_cancelled' };
@@ -638,7 +640,7 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
       if (!observed.ok) return observed.code === 'cancelled'
         ? await settleAcceptedInputAfterAbort(params.invocation.execution.sessionId, params.invocation.execution.localInputId)
         : { kind: 'needs_attention', code: observed.code };
-      return settleObservedInput(observed.result);
+      return settleObservedInput(observed.result, 'replyOutcome' in observed ? observed.replyOutcome : undefined);
     }
     if (!assertNonEscalatingPermissionMode({
       requestedMode: requestedPermissionCeiling ?? 'default',
@@ -782,7 +784,7 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
       if (!observed.ok) return observed.code === 'cancelled'
         ? await settleAcceptedInputAfterAbort(conversation.sessionId, localId)
         : { kind: 'needs_attention', code: observed.code };
-      return settleObservedInput(observed.result);
+      return settleObservedInput(observed.result, observed.replyOutcome);
     }
     await params.beforeInputAdmission();
     assertWorkflowAdmissionSignal(params.signal);
@@ -846,7 +848,7 @@ export function createWorkflowSessionStepExecutor(deps: Readonly<{
     if (!observed.ok) return observed.code === 'cancelled'
       ? await settleAcceptedInputAfterAbort(conversation.sessionId, admission.localId)
       : { kind: 'needs_attention', code: observed.code };
-    return settleObservedInput(observed.result);
+    return settleObservedInput(observed.result, observed.replyOutcome);
   };
 }
 
