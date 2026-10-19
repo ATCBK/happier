@@ -678,17 +678,27 @@ describe('local service preview routes', () => {
         }
     }, 15_000);
 
-    it('admits a slow relay WebSocket upgrade beside Socket.IO, keeps Socket.IO and closes an unclaimed upgrade', async () => {
+    it.each(['private', 'public'] as const)('admits a slow %s relay WebSocket upgrade beside Socket.IO, keeps Socket.IO and closes an unclaimed upgrade', async (kind) => {
         const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'test-master-secret',
             HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
             HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
             HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: '0',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: '1',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: 'default',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: '1',
             [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: '1',
             [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: '5173' };
         const runtimes = createLocalServiceRouteRuntimes(env);
         const registered = runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' });
         if (!registered.ok || !registered.accessUrl) throw new Error('preview registration failed');
-        const url = new URL(registered.accessUrl);
+        const exposure = runtimes.public.createExposure({ preview, requestedMode: 'secret_link', requestedTtlMs: 60_000,
+            actorId: 'user_1', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' });
+        if (!exposure.ok) throw new Error('public exposure failed');
+        const url = new URL(kind === 'private' ? registered.accessUrl : exposure.exposure.publicUrl);
         const network = tunnelBoundary('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n');
         // The remote machine takes longer than Socket.IO's default unclaimed-upgrade deadline (1 s) to answer.
         const slowTunnel: OpenLocalServicePreviewTunnel = async (input) => {

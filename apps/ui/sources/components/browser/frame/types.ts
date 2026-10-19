@@ -158,6 +158,8 @@ export type WebIframeEngineConfig = Readonly<{
     csp?: string;
     onLoad?: () => void;
     onError?: () => void;
+    /** A relay preview's documents report their own history and loading; no other framed page can. */
+    onNavigationStateChange?: (navigationState: BrowserFrameNavigationState) => void;
     /**
      * An opaque Artifact guest cannot expose its loaded URL to the host. Its
      * first load is the declared entry; every later load retires the frame.

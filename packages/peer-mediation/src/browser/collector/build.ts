@@ -7,6 +7,7 @@ import {
     INJECTED_LIFECYCLE_FOOTER,
     INJECTED_LIFECYCLE_PAGE_RUNTIME,
 } from './lifecycle.js';
+import { INJECTED_COOPERATIVE_NAVIGATION_RUNTIME } from './navigation.js';
 import { INJECTED_NETWORK_HELPERS, INJECTED_NETWORK_INTERCEPTORS } from './network.js';
 import { INJECTED_OBJECT_INSPECTOR_RUNTIME } from './objectInspector.js';
 import { INJECTED_SANITIZE_RUNTIME } from './sanitize.js';
@@ -28,6 +29,12 @@ export function buildInjectedBrowserDiagnosticsRuntimeScript(config: string): st
         INJECTED_DOM_SNAPSHOT_RUNTIME,
         INJECTED_NETWORK_INTERCEPTORS,
         INJECTED_LIFECYCLE_FOOTER,
+        `  if (config.cooperativePreview) {${INJECTED_COOPERATIVE_NAVIGATION_RUNTIME}  }\n`,
         '})(); true;\n',
     ].join('');
+}
+
+/** The reporter alone, for the in-frame documents that follow the pane's own navigation. */
+export function buildCooperativeNavigationRuntimeScript(config: string): string {
+    return `(function () {\n  var config = ${config};\n${INJECTED_COOPERATIVE_NAVIGATION_RUNTIME}})(); true;\n`;
 }

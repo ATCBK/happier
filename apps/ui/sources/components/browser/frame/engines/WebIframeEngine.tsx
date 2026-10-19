@@ -10,6 +10,7 @@ import type {
     BrowserDiagnosticsEngineBridgeConfig,
     BrowserFrameMessageReceipt,
     BrowserFrameNavigationCommand,
+    BrowserFrameNavigationState,
     BrowserWebFrameMessageBridgeConfig,
     WebIframeSource,
 } from '../types';
@@ -23,8 +24,9 @@ import {
 } from '../../adapters/diagnostics';
 import { createWebIframeAutomationOwner } from '../../adapters/automation';
 import {
-    COOPERATIVE_COLLECTOR_STATE_QUERY, buildCooperativeCollectorNavigationUrl,
-    cooperativeCollectorIdentity, isCooperativeCollectorMessage, parseCooperativeCollectorConfig,
+    COOPERATIVE_COLLECTOR_STATE_QUERY, buildCooperativeCollectorNavigationUrl, buildCooperativeNavigationCommandMessage,
+    cooperativeCollectorIdentity, isCooperativeCollectorMessage, parseCooperativeCollectorConfig, parseCooperativeNavigationState,
+    type CooperativeNavigationCommand,
 } from '@happier-dev/peer-mediation/browser/collector/cooperative';
 
 const iframeStyle: React.CSSProperties = {
@@ -93,6 +95,8 @@ type WebIframeEngineProps = Readonly<{
     csp?: string;
     onLoad?: () => void;
     onError?: () => void;
+    /** Reported only by a relay preview, whose documents carry the navigation reporter. */
+    onNavigationStateChange?: (navigationState: BrowserFrameNavigationState) => void;
     revokeOnUnexpectedNavigation?: boolean;
     onUnexpectedNavigation?: () => void;
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
@@ -132,6 +136,19 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     const onErrorRef = React.useRef(props.onError);
     onErrorRef.current = props.onError;
     const cooperativeDocumentRetiredRef = React.useRef(false);
+    const onNavigationStateChangeRef = React.useRef(props.onNavigationStateChange);
+    onNavigationStateChangeRef.current = props.onNavigationStateChange;
+    // The page the relay preview is on now, as its own document last reported it.
+    const frameUrlRef = React.useRef<string | null>(null);
+    const [reloadBase, setReloadBase] = React.useState<Readonly<{ navigationKey: string; forUrl: string | undefined; url: string | null }> | null>(null);
+    // A reload (the host's fresh navigation key) reloads the page the preview is on, not the one it was
+    // opened at. The new identity still arrives in the navigation URL, so the base is chosen before the
+    // frame sees any source change.
+    if (props.navigationKey !== undefined && reloadBase?.navigationKey !== props.navigationKey) {
+        setReloadBase({ navigationKey: props.navigationKey, forUrl: props.url, url: frameUrlRef.current });
+    }
+    const navigationUrl = (props.navigationKey !== undefined && reloadBase?.navigationKey === props.navigationKey
+        && reloadBase.forUrl === props.url ? reloadBase.url : null) ?? props.url;
     const diagnosticsRef = React.useRef(props.diagnostics);
     const automationRef = React.useRef(props.automation);
     diagnosticsRef.current = props.diagnostics;
@@ -178,11 +195,11 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         const sourceOrigin = normalizePostMessageOrigin(diagnostics?.sourceOrigin);
         const parentOrigin = normalizePostMessageOrigin(diagnostics?.webPostMessageTargetOrigin);
         const sandbox = props.sandbox.split(/\s+/);
-        if (!props.url || !diagnostics || props.automation?.adapterKind !== 'localPreview'
+        if (!navigationUrl || !diagnostics || props.automation?.adapterKind !== 'localPreview'
             || !sourceOrigin || !parentOrigin || sourceOrigin === parentOrigin
             || !sandbox.includes('allow-scripts') || !sandbox.includes('allow-same-origin')) return null;
         try {
-            const url = new URL(props.url);
+            const url = new URL(navigationUrl);
             if (url.origin !== sourceOrigin || !['http:', 'https:'].includes(url.protocol)) return null;
             const config = parseCooperativeCollectorConfig(JSON.stringify({
                 browserSessionId: diagnostics.browserSessionId, viewId: diagnostics.viewId,
@@ -195,7 +212,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
             if (!config) return null;
             return { url: buildCooperativeCollectorNavigationUrl(url.href, config), config, sourceOrigin };
         } catch { return null; }
-    }, [props.url, props.sandbox, props.automation?.adapterKind, collectorScript, props.diagnostics?.sourceOrigin]);
+    }, [navigationUrl, props.sandbox, props.automation?.adapterKind, collectorScript, props.diagnostics?.sourceOrigin]);
 
     const previewProbeUrl = React.useMemo(() => {
         const href = cooperativeNavigation?.url ?? (props.localPreview ? props.url : undefined);
@@ -233,6 +250,28 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         window.addEventListener('message', listener);
         return () => window.removeEventListener('message', listener);
     }, [cooperativeNavigation]);
+
+    // Navigation truth is independent of automation admission: every document of the bound preview
+    // reports it, including those that follow an in-frame navigation retired from page automation.
+    React.useLayoutEffect(() => {
+        if (!cooperativeNavigation || typeof window === 'undefined') return;
+        const listener = (event: MessageEvent) => {
+            if (event.origin !== cooperativeNavigation.sourceOrigin || !iframeRef.current?.contentWindow
+                || event.source !== iframeRef.current.contentWindow || typeof event.data !== 'string') return;
+            let message: unknown;
+            try { message = JSON.parse(event.data); } catch { return; }
+            const state = parseCooperativeNavigationState(message, cooperativeNavigation.config);
+            if (!state || normalizePostMessageOrigin(state.url) !== cooperativeNavigation.sourceOrigin) return;
+            frameUrlRef.current = state.url;
+            onNavigationStateChangeRef.current?.({ loading: state.loading, canGoBack: state.canGoBack, canGoForward: state.canGoForward });
+        };
+        window.addEventListener('message', listener);
+        return () => window.removeEventListener('message', listener);
+    }, [cooperativeNavigation]);
+
+    React.useLayoutEffect(() => {
+        frameUrlRef.current = null;
+    }, [props.url, props.html]);
 
     React.useEffect(() => {
         if (!previewProbeUrl || !hasLoadedCurrentNavigationRef.current
@@ -301,7 +340,8 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
                 try {
                     const message: unknown = JSON.parse(event.data);
                     if (isCooperativeCollectorMessage(message, 'browser.collector.ready', cooperativeNavigation.config)
-                        || isCooperativeCollectorMessage(message, 'browser.collector.retire', cooperativeNavigation.config)) return;
+                        || isCooperativeCollectorMessage(message, 'browser.collector.retire', cooperativeNavigation.config)
+                        || parseCooperativeNavigationState(message, cooperativeNavigation.config)) return;
                 } catch { /* The diagnostics parser reports malformed messages below. */ }
             }
 
@@ -714,8 +754,21 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
         props.html,
     ]);
 
+    const cooperativeNavigationRef = React.useRef(cooperativeNavigation);
+    cooperativeNavigationRef.current = cooperativeNavigation;
     React.useEffect(() => {
-        applyWebIframeNavigationCommand(iframeRef.current, props.navigationCommand);
+        const command = props.navigationCommand;
+        if (!command) return;
+        const cooperative = cooperativeNavigationRef.current;
+        if (!cooperative) {
+            applyWebIframeNavigationCommand(iframeRef.current, command);
+            return;
+        }
+        // The frame is cross-origin, so only its own document can act on history. Its reload is the host's
+        // fresh navigation key, which has no command of its own.
+        if (command.kind === 'reload') return;
+        const collectorCommand: CooperativeNavigationCommand = command.kind === 'goBack' ? 'back' : command.kind === 'goForward' ? 'forward' : 'stop';
+        iframeRef.current?.contentWindow?.postMessage(buildCooperativeNavigationCommandMessage(cooperative.config, collectorCommand), cooperative.sourceOrigin);
     }, [props.navigationCommand?.commandId, props.navigationCommand?.kind]);
 
     const handleLoad = React.useCallback(() => {
@@ -749,7 +802,7 @@ function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
                 referrerPolicy: props.referrerPolicy ?? 'no-referrer',
                 ...(props.csp ? { csp: props.csp } : {}),
                 sandbox: props.sandbox,
-                ...(props.html === undefined ? { src: cooperativeNavigation?.url ?? props.url } : { srcDoc: props.html }),
+                ...(props.html === undefined ? { src: cooperativeNavigation?.url ?? navigationUrl } : { srcDoc: props.html }),
                 style: iframeStyle,
                 title: props.title,
             })}

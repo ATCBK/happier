@@ -324,6 +324,9 @@ export function buildBrowserAdapterCapabilities(
     const desktopWebViewNavigation = primaryEngine === 'desktopWebView'
         ? input.desktopWebViewSupport
         : null;
+    // A relay preview's documents carry the cooperative navigation reporter, so its web iframe has
+    // history and stop truth. Any other framed page is cross-origin and uncontrollable beyond reload.
+    const relayPreviewNavigation = primaryEngine === 'webIframe' && input.adapterKind === 'localPreview';
     const diagnosticsFidelityByFamily = buildDiagnosticsFidelityByFamily(input, primaryEngine);
     return BrowserAdapterCapabilitiesV1Schema.parse({
         adapterKind: input.adapterKind,
@@ -338,11 +341,13 @@ export function buildBrowserAdapterCapabilities(
             ),
             canGoBack: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.goBackForward === true
             ),
             canGoForward: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.goBackForward === true
             ),
@@ -354,6 +359,7 @@ export function buildBrowserAdapterCapabilities(
             ),
             canStop: !simulatorPreview && (
                 daemonNavigation
+                || relayPreviewNavigation
                 || primaryEngine === 'nativeWebView'
                 || desktopWebViewNavigation?.stop === true
             ),

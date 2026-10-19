@@ -251,7 +251,7 @@ function redirectPreviewTokenExchange(reply: RouteReply, target: PreviewHttpRout
         .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
             name: 'happier_preview_token',
             path: target.exchangeCookiePath,
-            rawToken,
+            value: rawToken,
         }))
         .header?.("Location", target.exchangeRedirectLocation)
         .send?.();

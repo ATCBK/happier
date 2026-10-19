@@ -4,6 +4,19 @@ import type { BrowserDiagnosticCollectorV1 } from '@happier-dev/protocol';
 export const COOPERATIVE_COLLECTOR_QUERY = '__happierCollector';
 export const COOPERATIVE_COLLECTOR_STATE_QUERY = '__happierCollectorState';
 export const COOPERATIVE_COLLECTOR_LOADER_PATH = '/__happier/collector-loader.js';
+/** Marks a loader request that serves only the navigation reporter to an in-frame document. */
+export const COOPERATIVE_COLLECTOR_NAVIGATION_QUERY = '__happierCollectorNavigation';
+/**
+ * Binds the pane's collector identity to its preview origin. The document loaded with the pane's own
+ * query sets it, so later in-frame documents (which carry no query) can report navigation to the same
+ * host. It is scoped like the preview admission cookie and never reaches the upstream application.
+ */
+export const COOPERATIVE_COLLECTOR_BINDING_COOKIE = 'happier_preview_collector';
+
+export const COOPERATIVE_NAVIGATION_STATE_KIND = 'browser.collector.navigation';
+export const COOPERATIVE_NAVIGATION_COMMAND_KIND = 'browser.collector.navigate';
+export type CooperativeNavigationCommand = 'back' | 'forward' | 'stop';
+export type CooperativeNavigationState = Readonly<{ loading: boolean; canGoBack: boolean; canGoForward: boolean; url: string }>;
 
 /** Document-scoped transport configuration, not an access grant. Preview authorization is separate. */
 export type CooperativeCollectorConfig = Readonly<{
@@ -74,4 +87,22 @@ export function isCooperativeCollectorMessage(value: unknown, kind: 'browser.col
     return message.v === 1 && message.kind === kind
         && Object.keys(message).length === Object.keys(identity).length + 2
         && Object.entries(identity).every(([key, expected]) => message[key] === expected);
+}
+
+/** The host-to-document command message; the document accepts it only from its embedding window. */
+export function buildCooperativeNavigationCommandMessage(config: CooperativeCollectorConfig, command: CooperativeNavigationCommand): string {
+    return JSON.stringify({ v: 1, kind: COOPERATIVE_NAVIGATION_COMMAND_KIND, ...cooperativeCollectorIdentity(config), command });
+}
+
+/** Parses a document's navigation report; null unless it carries exactly this pane's identity. */
+export function parseCooperativeNavigationState(value: unknown, config: CooperativeCollectorConfig): CooperativeNavigationState | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const message = value as Record<string, unknown>;
+    const identity = cooperativeCollectorIdentity(config);
+    if (message.v !== 1 || message.kind !== COOPERATIVE_NAVIGATION_STATE_KIND
+        || Object.keys(message).length !== Object.keys(identity).length + 5
+        || !Object.entries(identity).every(([key, expected]) => message[key] === expected)) return null;
+    const { loading, canGoBack, canGoForward, url } = message;
+    if (typeof loading !== 'boolean' || typeof canGoBack !== 'boolean' || typeof canGoForward !== 'boolean' || typeof url !== 'string') return null;
+    return { loading, canGoBack, canGoForward, url };
 }

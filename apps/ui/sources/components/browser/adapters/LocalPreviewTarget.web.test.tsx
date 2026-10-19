@@ -62,6 +62,26 @@ describe('LocalPreviewTarget web', () => {
         expect(lifecycle).toHaveBeenLastCalledWith({ kind: 'loadFinished', url: props.url });
     });
 
+    it('feeds the preview documents\' own history and loading truth to the control lifecycle without moving the view\'s URL', async () => {
+        const host = new EventTarget();
+        vi.stubGlobal('window', host);
+        const frame = {};
+        const identity = { browserSessionId: 'bs', viewId: 'v', navigationGeneration: 1, collectorId: 'c', nonce: 'n' };
+        const lifecycle = vi.fn();
+        const screen = await renderScreen(<LocalPreviewTarget title="Preview" url="https://preview.example.test/" testID="local-preview" onLifecycle={lifecycle}
+            diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
+            automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: [], controlService: createBrowserAutomationControlService({ nowMs: Date.now }) }} />,
+        { createNodeMock: element => element.type === 'iframe' ? { contentWindow: frame } : null });
+        const event = new Event('message') as MessageEvent;
+        Object.defineProperties(event, {
+            data: { value: JSON.stringify({ v: 1, kind: 'browser.collector.navigation', ...identity, loading: false, canGoBack: true, canGoForward: false, url: 'https://preview.example.test/other' }) },
+            origin: { value: 'https://preview.example.test' }, source: { value: frame },
+        });
+        await act(async () => { host.dispatchEvent(event); });
+        expect(lifecycle).toHaveBeenCalledWith({ kind: 'navigationStateChanged', loading: false, canGoBack: true, canGoForward: false });
+        await screen.unmount();
+    });
+
     it('keeps path-mode previews sandboxed without same-origin privileges', async () => {
         const screen = await renderScreen(
             <LocalPreviewTarget

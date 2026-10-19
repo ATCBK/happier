@@ -681,6 +681,12 @@ only opted-in HTML responses. It decodes supported upstream compression using th
 existing response-body budget, preserves CSP, and leaves non-HTML transport bytes streaming.
 Same-preview redirects retain the navigation identity; external redirects never receive it.
 The loader and UI/native/desktop injection share one collector generator rather than copies.
+The pane's own document also sets a relay-owned binding cookie (never forwarded to or settable by
+the application). Later in-frame HTML documents of that preview carry only the navigation
+reporter, selected by that cookie on iframe document requests: it reports history position, loading
+and its page URL to the embedding host and obeys back, forward and stop from that host only, while
+page automation and diagnostics stay with the pane's own document. A web iframe offers
+Back, Forward and Stop for relay previews through that reporter; every other framed page keeps Reload.
 
 #### Sessionless managed-Service admission (0.3 development)
 

@@ -317,7 +317,7 @@ function redirectPublicTokenExchange(
         .header?.("Set-Cookie", scopedLocalServiceViewerTokenCookie({
             name: LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
             path: localServicePublicTokenCookiePath(input.exposureId, input.hostExposure),
-            rawToken: input.rawToken,
+            value: input.rawToken,
         }))
         .header?.("Location", input.hostPath ? `${input.path}${input.search}` : publicRedirectLocation(input))
         .send?.();

@@ -75,6 +75,11 @@ export function LocalPreviewTarget(props: Readonly<{
                     props.onError?.();
                     onLifecycle?.({ kind: 'loadFailed', errorCode: WEBVIEW_LOAD_FAILED_ERROR_CODE, url: props.url });
                 },
+                // The preview's own documents are the only source of its history truth.
+                onNavigationStateChange: (navigationState) => onLifecycle?.({
+                    kind: 'navigationStateChanged',
+                    ...navigationState,
+                }),
                 diagnostics: props.diagnostics,
                 automation: props.automation,
             }}
