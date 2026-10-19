@@ -138,5 +138,6 @@ type ResultFamiliesMustCorrespond = AssertNever<FamilyCorrespondenceFailures<Sch
 
 // Edit consumers share the canonical op grammar, including its input type.
 // A validator's default `unknown` input must not erase the entire union in DTOs.
-type WorkflowDraftEditOpsMustRemainConcrete = AssertTrue<Concrete<SchemaInputs['workflow.authoring.draft.edit']['ops'][number]>>;
-type WorkflowSavedEditOpsMustRemainConcrete = AssertTrue<Concrete<SchemaInputs['workflow.definition.edit']['ops'][number]>>;
+// A Workflow value reference can supply the array; inspect the literal-array arm.
+type WorkflowDraftEditOpsMustRemainConcrete = AssertTrue<Concrete<Extract<SchemaInputs['workflow.authoring.draft.edit']['ops'], readonly unknown[]>[number]>>;
+type WorkflowSavedEditOpsMustRemainConcrete = AssertTrue<Concrete<Extract<SchemaInputs['workflow.definition.edit']['ops'], readonly unknown[]>[number]>>;
