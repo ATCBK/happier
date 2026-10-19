@@ -11,14 +11,15 @@ import { resolveSessionActionDefaultBackend, resolveSessionActionDefaultTargetKe
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
+import { resolveDisplayIdentityForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import { storage } from '@/sync/domains/state/storage';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import type { LazyActionAccountContext } from './actionAccountContext';
 
 /** Status stays usable without a running Agent; detail reads are explicit and use the existing inventory. */
-export function createUiSessionStatusGet(account: LazyActionAccountContext | null | undefined): NonNullable<ActionExecutorDeps['sessionStatusGet']> {
+export function createUiSessionStatusGet(account: LazyActionAccountContext | null | undefined,
+  options?: Readonly<{ refreshReadiness?: boolean }>): NonNullable<ActionExecutorDeps['sessionStatusGet']> {
   return async ({ sessionId, readiness, serverId, signal }) => {
     if (!account) return { ok: false, code: 'not_authenticated' };
     account.assertCurrent();
@@ -41,15 +42,17 @@ export function createUiSessionStatusGet(account: LazyActionAccountContext | nul
         : isLegacyAuthCredentials(account.credentials) ? { type: 'legacy' } : null });
     const result = { ok: true as const, session: summary, awareness: projectUiSessionAwareness(session, Date.now()) };
     if (readiness !== true) return result;
-    const target = resolveMachineControlTargetForSessionFromState({ ...storage.getState(),
-      sessions: { [sessionId]: session }, sessionListRowsByServerId: {} }, { ...account.accountLifetime.scope, sessionId });
-    const selectedMachineId = target?.machineId ?? null;
+    // Diagnostics keep stable attribution when control admission correctly refuses an offline Machine.
+    const target = resolveDisplayIdentityForSessionFromState({ state: storage.getState(),
+      serverId: account.serverId, sessionId, metadata, preferProvidedMetadata: true });
+    const selectedMachineId = target.machineId || null;
     const agentId = resolveAgentIdFromSessionMetadata(metadata);
     const definitionId = readAcpConfiguredBackendV1FromMetadata(metadata)?.backendId;
     if (selectedMachineId && agentId && invocation?.capabilities.submitAgentInput) {
       try {
         await refreshMachineAgents({ serverId: account.serverId, machineId: selectedMachineId,
-          accountLifetime: account.accountLifetime, agentId, ...(definitionId ? { definitionId } : {}) });
+          accountLifetime: account.accountLifetime, agentId, ...(definitionId ? { definitionId } : {}),
+          ...(options?.refreshReadiness ? { force: true } : {}), ...(signal ? { signal } : {}) });
       } catch { signal?.throwIfAborted(); }
       account.assertCurrent();
       signal?.throwIfAborted();
