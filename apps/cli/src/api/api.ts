@@ -631,8 +631,11 @@ export class ApiClient {
       await sleep(e2eCreateSessionDelayMs);
     }
 
-    // Create session (retry transient 5xx, but do not enter offline mode for 5xx).
+    // The same creation tag reconciles a lost receipt as well as transient 5xx.
+    // A later failed attempt cannot prove that an earlier ambiguous birth rolled back.
+    let unresolvedCreationError: Error | null = null;
     for (let attempt = 1; attempt <= retryMaxAttempts; attempt += 1) {
+      if (opts.signal?.aborted && unresolvedCreationError) throw unresolvedCreationError;
       opts.signal?.throwIfAborted();
       try {
         const metadataEnvelopeFields = desiredSessionEncryptionMode === 'plain'
@@ -859,11 +862,10 @@ export class ApiClient {
           ...(sessionCreationOutcome ? { sessionCreationOutcome } : {}),
         };
       } catch (error) {
-        // Creation may have committed even when cancellation or response loss
-        // prevents its receipt. Do not turn that into the offline/null result.
-        if (error instanceof Error && 'code' in error && error.code === 'outcome_unknown') throw error;
+        const outcomeUnknown = error instanceof Error && 'code' in error && error.code === 'outcome_unknown';
+        if (outcomeUnknown) unresolvedCreationError ??= error;
         if (opts.signal?.aborted) {
-          throw opts.signal.reason ?? error;
+          throw unresolvedCreationError ?? opts.signal.reason ?? error;
         }
         if (error instanceof SessionCreationCorrespondenceConflictError) {
           throw error;
@@ -875,6 +877,7 @@ export class ApiClient {
           && upgradeRequired.requirement.kind
             === 'account-stored-content'
         ) {
+          if (unresolvedCreationError) throw unresolvedCreationError;
           throw Object.assign(
             new Error(
               'Session creation requires a stored-content-compatible server',
@@ -890,20 +893,21 @@ export class ApiClient {
         const initialTriggerError = axios.isAxiosError(error) && typeof status === 'number'
           ? readSessionCreationInitialTriggerError(error.response?.data, status)
           : null;
-        if (initialTriggerError) throw initialTriggerError;
+        if (initialTriggerError) throw unresolvedCreationError ?? initialTriggerError;
         const initialAccessServerError = axios.isAxiosError(error) && typeof status === 'number'
           ? readSessionInitialAccessServerError(error.response?.data, status)
           : null;
-        if (initialAccessServerError) throw initialAccessServerError;
+        if (initialAccessServerError) throw unresolvedCreationError ?? initialAccessServerError;
         const isRetryable5xx = typeof status === 'number' && status >= 500 && status < 600;
-        if (isRetryable5xx && attempt < retryMaxAttempts) {
+        if ((outcomeUnknown || isRetryable5xx) && attempt < retryMaxAttempts) {
           // Do not log raw Axios errors: they can contain bearer tokens or vendor keys.
-          logger.debug('[API] [WARN] getOrCreateSession transient server error, retrying:', serializeAxiosErrorForLog(error));
+          logger.debug('[API] [WARN] getOrCreateSession creation receipt unavailable, retrying the same tag:', serializeAxiosErrorForLog(error));
           const delayMs = Math.min(retryMaxDelayMs, retryBaseDelayMs * Math.pow(2, attempt - 1));
-          await sleep(delayMs);
+          await sleep(delayMs).catch((cause: unknown) => { throw unresolvedCreationError ?? cause; });
           continue;
         }
 
+        if (unresolvedCreationError) throw unresolvedCreationError;
         return settleGetOrCreateSessionFailure(error);
       }
     }

@@ -94,6 +94,7 @@ for (const owner of ['api', 'http'] as const) {
     afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
     it.each([true, false])('respects caller lifetime and the legacy POST cutoff (callerLifetime=%s)', async (hasLifetime) => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '1');
       vi.useFakeTimers();
       const lifetime = new AbortController();
       const post = vi.mocked(axios.post).getMockImplementation()!;
@@ -125,6 +126,7 @@ for (const owner of ['api', 'http'] as const) {
     });
 
     it('keeps uncertain creation diagnostics free of request credentials and content', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '1');
       const secret = 'fixture-creation-private-content';
       vi.mocked(axios.post).mockRejectedValueOnce(Object.assign(new Error('Response lost'), {
         isAxiosError: true, code: 'ECONNRESET',
@@ -303,7 +305,12 @@ for (const owner of ['api', 'http'] as const) {
       expect(vi.mocked(axios.get).mock.calls.some((call) => String(call[0]).includes('/v1/user/'))).toBe(false);
     });
 
-    it.each([true, false])('prepares collective E2EE access using the returned Session key (created=%s)', async (created) => {
+    it.each([
+      { created: true, lostReceipt: false },
+      { created: false, lostReceipt: false },
+      ...(owner === 'api' ? [{ created: false, lostReceipt: true }] : []),
+    ])('prepares collective E2EE access using the returned Session key ($created, lostReceipt=$lostReceipt)', async ({ created, lostReceipt }) => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
       const callerMachineKey = new Uint8Array(32).fill(7);
       const recipient = tweetnacl.box.keyPair();
       const signing = tweetnacl.sign.keyPair();
@@ -343,6 +350,9 @@ for (const owner of ['api', 'http'] as const) {
         originalPayload ??= body as NonNullable<typeof originalPayload>;
         const payload = originalPayload;
         returnedOwnerEnvelope = payload.dataEncryptionKey;
+        if (firstCreate && lostReceipt) {
+          throw new axios.AxiosError('Committed creation response lost', 'ECONNRESET');
+        }
         return { status: 200, data: { created: firstCreate || created, organizationPlacement: { folderId: null, tagIds: [] }, session: {
           id: 'created-session', seq: 0, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
           encryptionMode: 'e2ee', metadataLayoutVersion: 1, metadata: payload.sharedMetadata.ciphertext,
@@ -350,7 +360,7 @@ for (const owner of ['api', 'http'] as const) {
           agentState: payload.agentState, agentStateVersion: 0, dataEncryptionKey: returnedOwnerEnvelope,
         } } };
       });
-      if (!created) {
+      if (!created && !lostReceipt) {
         const originalParams = { ...creation, credentials: e2eeCredentials, initialAccess };
         if (owner === 'http') await getOrCreateSessionByTag(originalParams);
         else await (await ApiClient.create(e2eeCredentials)).getOrCreateSession(originalParams);
@@ -366,6 +376,12 @@ for (const owner of ['api', 'http'] as const) {
         envelope: decodeBase64(committed!.entries[0]!.encryptedDataKey), recipientSecretKeyOrSeed: recipient.secretKey,
       })).toEqual(openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(returnedOwnerEnvelope), recipientSecretKeyOrSeed: callerMachineKey }));
       expect(vi.mocked(axios.post).mock.calls[0]?.[1]).not.toHaveProperty('primaryTeamId');
+      if (lostReceipt) {
+        expect(vi.mocked(axios.post).mock.calls.map(call => call[1])).toMatchObject([
+          { tag: creation.tag, initialAccess },
+          { tag: creation.tag, initialAccess },
+        ]);
+      }
     });
 
     it('materializes a ready direct E2EE recipient envelope only at the physical create boundary', async () => {
@@ -595,12 +611,47 @@ for (const owner of ['api', 'http'] as const) {
       expect(axios.post).toHaveBeenCalledTimes(1);
     });
 
-    it('does not retry without access or infer no effect after a transport timeout', async () => {
+    it('preserves access and the creation key after a transport timeout', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
       vi.mocked(axios.post).mockRejectedValueOnce({ isAxiosError: true, code: 'ETIMEDOUT', message: 'timeout' });
       const result = await create({ initialAccess }).catch((error: unknown) => error);
-      expect(result).not.toMatchObject({ kind: 'update_required' });
-      expect(axios.post).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess });
+      expect(result).toMatchObject(owner === 'api'
+        ? { id: 'created-session' }
+        : { code: 'outcome_unknown' });
+      expect(axios.post).toHaveBeenCalledTimes(owner === 'api' ? 2 : 1);
+      for (const call of vi.mocked(axios.post).mock.calls) {
+        expect(call[1]).toMatchObject({ tag: creation.tag, initialAccess });
+      }
+    });
+
+    if (owner === 'api') it.each(['ECONNRESET', 'ENOTFOUND', 'access_refusal'])(
+      'keeps the original unknown receipt when reconciliation exhausts or fails (%s)', async (nextFailure) => {
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '2');
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
+        const lostReceipt = new axios.AxiosError('Committed creation response lost', 'ECONNRESET');
+        vi.mocked(axios.post).mockRejectedValueOnce(lostReceipt).mockRejectedValueOnce(nextFailure === 'access_refusal'
+          ? { isAxiosError: true, response: { status: 503, data: { error: 'session_access_authentication_unavailable' } } }
+          : new axios.AxiosError('Reconciliation unavailable', nextFailure));
+        await expect(create({ initialAccess })).rejects.toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNRESET' } });
+        expect(axios.post).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    if (owner === 'api') it('cancels reconciliation without losing the original unknown creation outcome', async () => {
+      vi.useFakeTimers();
+      const lifetime = new AbortController();
+      vi.mocked(axios.post).mockRejectedValue(new axios.AxiosError('Committed creation response lost', 'ECONNRESET'));
+      const pending = create({ signal: lifetime.signal }).catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        lifetime.abort(new Error('Caller cancelled'));
+        expect(await pending).toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNRESET' } });
+        expect(axios.post).toHaveBeenCalledTimes(1);
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
     });
 
     it('preserves create-or-load settlement without a follow-up access mutation', async () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
@@ -10,6 +10,7 @@ import { ApiClient } from './api';
 import type { Metadata } from './types';
 import { decodeBase64, decrypt } from './encryption';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 
 const mockPost = vi.fn();
 const mockGet = vi.fn();
@@ -55,7 +56,9 @@ vi.mock('@/ui/logger', () => ({
 }));
 
 describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
   beforeEach(() => {
+    resetServerFeaturesClientForTests();
     mockPost.mockReset();
     mockGet.mockReset();
     mockGet.mockResolvedValue({
@@ -460,7 +463,8 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
     expect(session.metadata).not.toHaveProperty('ownerMetadata');
   });
 
-  it('rejects a rejoined Session whose immutable creation correspondence differs from the admitted request', async () => {
+  it.each([false, true])('rejects a rejoined Session whose immutable creation correspondence differs from the admitted request (lostReceipt=%s)', async (lostReceipt) => {
+    vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
     const credential = {
       token: 'token-test',
       encryption: null,
@@ -474,11 +478,11 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
         v: 1,
         sessionCreationTag,
         recipe: {
-          execution: { machineId: 'machine-1', directory },
+          execution: { machineId: 'machine-1', directory: { kind: 'path', path: directory } },
           organization: { folderId: null, tagIds: [] },
           agentTarget: {
             kind: 'agent',
-            identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+            identity: { pluginId: 'example.external-agent', localId: 'external' },
           },
           modelSelection: null,
           profileId: null,
@@ -553,6 +557,7 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
         },
       },
     });
+    if (lostReceipt) mockPost.mockRejectedValueOnce({ isAxiosError: true, code: 'ECONNRESET' });
 
     const admittedMetadata: Metadata & Readonly<{
       sessionCreationCorrespondenceV1: typeof admittedCorrespondence;
@@ -569,6 +574,7 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
     })).rejects.toMatchObject({
       code: 'creation_conflict',
     });
+    expect(mockPost).toHaveBeenCalledTimes(lostReceipt ? 2 : 1);
   });
 
   it('creates encrypted fresh sessions on layout 1 without exposing owner metadata in the shared envelope', async () => {
