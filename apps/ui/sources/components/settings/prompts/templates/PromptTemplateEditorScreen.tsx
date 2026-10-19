@@ -22,7 +22,7 @@ import { t } from '@/text';
 import { PromptDocSelectionGroup } from '@/components/settings/prompts/shared/PromptDocSelectionGroup';
 import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
 import { PromptEditorHeader } from '@/components/settings/prompts/collection/PromptEditorHeader';
-import { publishPromptCollectionDraftTitle } from '@/components/settings/prompts/collection/PromptCollectionList';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { promptCollectionItemHref, promptCollectionRoot } from '@/components/settings/prompts/collection/promptCollectionModel';
 import { useUnsavedDraftNavigationGuard } from '@/utils/navigation/useUnsavedDraftNavigationGuard';
 
@@ -143,11 +143,12 @@ export const PromptTemplateEditorScreen = React.memo((props: Readonly<{ invocati
     setPristineToken,
   ]);
 
+  const draftTitle = useCollectionDraftTitle();
   React.useEffect(() => {
     if (!isNew) return undefined;
-    publishPromptCollectionDraftTitle('template', title);
-    return () => publishPromptCollectionDraftTitle('template', '');
-  }, [isNew, title]);
+    draftTitle.publish(title);
+    return () => draftTitle.publish('');
+  }, [draftTitle, isNew, title]);
 
   const changed = titleField.changed || tokenField.changed || targetField.changed || behaviorField.changed || allowArgsField.changed;
   // Saving makes the fields pristine, so a saved draft opens in its place without asking.

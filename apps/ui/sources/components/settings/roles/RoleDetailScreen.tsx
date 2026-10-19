@@ -1,8 +1,10 @@
 import * as React from 'react';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { RoleArtifactV1Schema } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
 import { resolveRoleRunsAsKindV1 } from '@happier-dev/protocol/prompts/roles/roleArtifactV1';
-import { renderSessionRoleBlockV1 } from '@happier-dev/protocol/prompts/roles/renderSessionRoleBlockV1';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode,
+  type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type {
   ResolvedRoleV1,
   RoleArtifactV1,
@@ -63,7 +65,6 @@ import { RoleEngineField } from '@/components/roles/engine/RoleEngineField';
 import {
   ROLES_COLLECTION_ROOT,
   recordRoleCollectionVisit,
-  roleDraftTitle,
   roleRoute,
 } from './roleCollectionRoutes';
 
@@ -82,6 +83,7 @@ type RolePatch = Partial<
     | 'profileId'
     | 'workspaceWrites'
     | 'secondOpinion'
+    | 'canDelegateToOtherRoles'
     | 'enabled'
   >
 >;
@@ -120,12 +122,14 @@ async function sendRoleCopy(role: ResolvedRoleV1): Promise<void> {
 }
 
 async function reportFailure(
-  result: Readonly<{ ok: boolean; error?: string }>,
+  result: ActionExecuteResult,
 ): Promise<boolean> {
   if (result.ok) {
+    if (ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) return false;
     invalidateRoleCatalog();
     return true;
   }
+  if (isActionApprovalDeclinedErrorCode(result.errorCode)) return false;
   await Modal.alertAsync(t('roles.settings.saveFailed'), result.error ?? '');
   return false;
 }
@@ -281,12 +285,7 @@ const RoleDetail = React.memo(function RoleDetail(
               destructive: true,
               testID: 'settings.roles.detail.delete',
               onSelect: async () => {
-                const confirmed = await Modal.confirm(
-                  t('roles.settings.deleteConfirmTitle'),
-                  t('roles.settings.deleteConfirmBody', { name: role.name }),
-                  { confirmText: t('common.delete'), destructive: true },
-                );
-                if (!confirmed || !entry.revision) return;
+                if (!entry.revision) return;
                 if (
                   await reportFailure(
                     await roleActions.remove(entry.roleId, entry.revision),
@@ -483,6 +482,20 @@ const RoleDetail = React.memo(function RoleDetail(
             void commit({ secondOpinion });
           }}
         />
+        <Item
+          testID="settings.roles.detail.canDelegateToOtherRoles"
+          title={t('roles.settings.canDelegateToOtherRolesTitle')}
+          subtitle={t('roles.settings.canDelegateToOtherRolesDescription')}
+          showChevron={false}
+          rightElement={
+            <Switch
+              value={role.canDelegateToOtherRoles === true}
+              onValueChange={(canDelegateToOtherRoles) => {
+                void commit({ canDelegateToOtherRoles });
+              }}
+            />
+          }
+        />
         {ownRole ? (
           <Item
             testID="settings.roles.detail.enabled"
@@ -514,31 +527,15 @@ const RoleDetail = React.memo(function RoleDetail(
   );
 });
 
-/** The block an agent receives as session instructions, from the one role renderer — the preview is the prompt. */
-function OrchestratorRolePreview(props: Readonly<{ entry: RoleCatalogEntry }>) {
+/** Keep one selectable preview mounted while the resolved trait changes its catalog demand. */
+function RolePreview(props: Readonly<{ entry: RoleCatalogEntry }>) {
   const block = useRoleCatalogPromptPreview(props.entry.role);
   return <RolePreviewBlock block={block} />;
 }
 
-function RolePreview(props: Readonly<{ entry: RoleCatalogEntry }>) {
-  const block = React.useMemo(
-    () =>
-      renderSessionRoleBlockV1({
-        role: props.entry.role,
-        source: 'dispatch',
-      }),
-    [props.entry.role],
-  );
-  return props.entry.roleId === 'orchestrator' ? (
-    <OrchestratorRolePreview entry={props.entry} />
-  ) : (
-    <RolePreviewBlock block={block} />
-  );
-}
-
 /**
  * "What agents read": rare, read-only detail, so it opens in place under Advanced. The block (and,
- * for the Orchestrator, the cross-role facts it names) is resolved only while it is open.
+ * for a delegating role, the cross-role facts it names) is resolved only while it is open.
  */
 function RolePreviewDisclosure(props: Readonly<{ entry: RoleCatalogEntry }>) {
   const [expanded, setExpanded] = React.useState(false);
@@ -663,6 +660,7 @@ function CommitOnBlurField(
 
 /** A new role: its name and instructions, created as your own role. */
 const RoleDraft = React.memo(function RoleDraft() {
+  const roleDraftTitle = useCollectionDraftTitle();
   const router = useRouter();
   const [name, setName] = React.useState('');
   const [instructions, setInstructions] = React.useState('');
@@ -671,7 +669,7 @@ const RoleDraft = React.memo(function RoleDraft() {
     () => () => {
       roleDraftTitle.publish('');
     },
-    [],
+    [roleDraftTitle],
   );
   const create = async () => {
     setSaving(true);

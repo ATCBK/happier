@@ -44,7 +44,8 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 
 import { openProfileCollectionHref } from './ProfileCollectionList';
-import { newProfileRoute, PROFILES_COLLECTION_ROOT, profileRoute, publishProfileDraftTitle } from './profileCollectionRoutes';
+import { newProfileRoute, PROFILES_COLLECTION_ROOT, profileRoute } from './profileCollectionRoutes';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { useProfilesCollection, type ProfilesCollection } from './useProfilesCollection';
 import { registerMountedProfileDraft } from './profileEditorActionRuntime';
 import { createHappierCollectionDraftTitleStore, type HappierCollectionDraftTitleStore } from '@happier-dev/plugin-ui/presentation';
@@ -235,7 +236,9 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
     // A saved edit remounts the editor on the saved profile, so its unsaved-changes baseline is fresh.
     const [saveGeneration, setSaveGeneration] = React.useState(0);
     const [migrationView, setMigrationView] = React.useState<MigrationView>(null);
-    const [nameStore] = React.useState<HappierCollectionDraftTitleStore>(() => createHappierCollectionDraftTitleStore());
+    const draftTitle = useCollectionDraftTitle();
+    const [savedNameStore] = React.useState<HappierCollectionDraftTitleStore>(() => createHappierCollectionDraftTitleStore());
+    const nameStore = isDraft ? draftTitle : savedNameStore;
 
     React.useEffect(() => {
         isDirtyRef.current = isDirty;
@@ -243,11 +246,10 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
 
     const onNameChange = React.useCallback((name: string) => {
         nameStore.publish(name);
-        if (isDraft) publishProfileDraftTitle(name);
-    }, [isDraft, nameStore]);
+    }, [nameStore]);
     React.useEffect(() => () => {
-        if (isDraft) publishProfileDraftTitle('');
-    }, [isDraft]);
+        if (isDraft) nameStore.publish('');
+    }, [isDraft, nameStore]);
 
     /** Leaves the detail on purpose (after a save, delete or discard), past the unsaved-changes guard. */
     const leaveTo = React.useCallback((href: string, tag: string) => {
@@ -387,7 +389,7 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
                 id: 'discard',
                 title: t('profilesPage.discardDraft'),
                 testID: 'settings.profiles.detail.discard',
-                onSelect: discardEditorDraft,
+                onSelect: () => { discardEditorDraft(); },
             }];
         }
         const favorite = collection.isFavorite(profile.id);

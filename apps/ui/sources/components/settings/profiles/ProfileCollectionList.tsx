@@ -19,11 +19,11 @@ import {
     profileRoute,
     recordProfileCollectionVisit,
     resolveProfileCollectionSelection,
-    profileDraftTitle,
 } from './profileCollectionRoutes';
 import { useProfilesCollection } from './useProfilesCollection';
 import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 /** The collection offers a search field only once it no longer fits at a glance. */
 const SEARCH_THRESHOLD = 8;
@@ -175,11 +175,12 @@ export const ProfileCollectionRail = React.memo(function ProfileCollectionRail()
 
 /** The profile being added, at the top of the rail while its editor is open. */
 const ProfileDraftRow = React.memo(function ProfileDraftRow() {
+    const titles = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow
             testID="settings.profiles.rail.draft"
-            titles={profileDraftTitle}
+            titles={titles}
             placeholder={t('profilesPage.newProfileTitle')}
             mark={(
                 <HappierCollectionListMark>

@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import type { PromptStackEntryV1 } from '@happier-dev/protocol';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
+import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 
 import { MemoryDocumentBody } from '@/components/memory/MemoryDocumentBody';
 import { MemorySearchPanel } from '@/components/memory/MemorySearchPanel';
@@ -34,10 +35,12 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
     description: string;
     serverId: string;
     entry: PromptStackEntryV1 | null;
-    footer: string;
+    footer: string | ((shared: boolean | null) => string | undefined);
     emptyText: string;
     readOnly?: boolean;
     scopeTarget?: MemoryScopeTargetV1;
+    /** Read scope is independent of permission to remember or manage this layer. */
+    searchScope?: MemorySearchScope;
     /** Takes the memory document out of this layer (the document itself stays in the library). */
     onDetach?: () => void;
     /** Sets or clears the entry's `maxChars`; omitted where this viewer cannot change the layer. */
@@ -119,13 +122,13 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
                 </View>
             )}
         >
-            {searching ? <MemorySearchPanel testID={`${props.testID}.searchPanel`} serverId={serverId} /> : null}
+            {searching ? <MemorySearchPanel testID={`${props.testID}.searchPanel`} serverId={serverId} scope={props.searchScope} /> : null}
             {searching ? null : <MemoryDocumentBody
                 testID={props.testID}
                 source={source}
                 serverId={serverId}
                 collapsedFactCount={COLLAPSED_FACTS}
-                footer={props.footer}
+                footer={typeof props.footer === 'function' ? props.footer(source.stale ? null : source.view?.shared ?? null) : props.footer}
                 readOnly={props.readOnly}
                 composing={composing}
                 onComposingChange={setComposing}

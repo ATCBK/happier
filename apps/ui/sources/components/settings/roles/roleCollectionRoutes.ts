@@ -1,4 +1,4 @@
-import { createHappierCollectionDraftTitleStore, createHappierCollectionVisitMemory } from '@happier-dev/plugin-ui/presentation';
+import { createHappierCollectionVisitMemory } from '@happier-dev/plugin-ui/presentation';
 
 /** Settings › Roles: the collection's own route. */
 export const ROLES_COLLECTION_ROOT = '/settings/roles';
@@ -39,6 +39,3 @@ export function resolveRolesChildRoute(pathname: string): string {
 const roleVisits = createHappierCollectionVisitMemory<string>();
 export const recordRoleCollectionVisit = roleVisits.record;
 export const readLastVisitedRoleId = roleVisits.read;
-
-/** The name typed into the open new-role draft, shown by the collection's draft row. */
-export const roleDraftTitle = createHappierCollectionDraftTitleStore();

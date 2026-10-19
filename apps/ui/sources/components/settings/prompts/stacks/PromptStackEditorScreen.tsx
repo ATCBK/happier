@@ -158,7 +158,8 @@ export const PromptStackEditorScreen = React.memo(
             serverId={scope.serverId}
             entry={memoryEntry}
             scopeTarget={{ scope: 'account' }}
-            footer={`${t('memoryContext.memory.accessPrivate')} · ${t('memoryContext.memory.usedWithMemoryOn')}`}
+            footer={shared => shared === null ? undefined
+              : `${t(shared ? 'memoryContext.memory.accessShared' : 'memoryContext.memory.accessPrivate')} · ${t('memoryContext.memory.usedWithMemoryOn')}`}
             emptyText={t('contextPages.account.memoryEmpty')}
             onBudgetChange={setMemoryBudget}
             disabled={!stack.canUpdate}

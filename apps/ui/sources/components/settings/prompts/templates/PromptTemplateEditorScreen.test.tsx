@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { createPlainPromptLibraryCatalogHomeFixture } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -25,6 +25,7 @@ installPromptTemplatesCommonModuleMocks({
             ScrollView: 'ScrollView',
             View: 'View',
             Switch: 'Switch',
+            useWindowDimensions: () => ({ width: 1440, height: 1000, scale: 1, fontScale: 1 }),
             Platform: {
                 OS: 'web',
                 select: ({ web, default: defaultValue }: { web?: unknown; default?: unknown }) =>
@@ -68,6 +69,7 @@ const preventRemoveState = vi.hoisted(() => ({ last: null as boolean | null }));
 // The navigator's remove interception is the navigation library boundary; record what the screen asks for.
 vi.mock('@react-navigation/native', async (importOriginal) => ({
     ...await importOriginal<typeof import('@react-navigation/native')>(),
+    ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
     usePreventRemove: (preventRemove: boolean) => {
         preventRemoveState.last = preventRemove;
     },
@@ -97,6 +99,44 @@ async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, ar
 }
 
 describe('PromptTemplateEditorScreen', () => {
+    it.each(['doc', 'template'] as const)('isolates %s draft rail titles and cleanup between retained collection destinations', async kind => {
+        if (kind === 'doc') {
+            // Monaco is a browser SDK boundary; without its API the real editor uses its text-input fallback.
+            vi.stubGlobal('window', {});
+            onTestFinished(() => { vi.unstubAllGlobals(); });
+        }
+        const { PromptTemplateEditorScreen } = await import('./PromptTemplateEditorScreen');
+        const { PromptDocEditorScreen } = await import('../docs/PromptDocEditorScreen');
+        const { PromptCollectionLayout } = await import('../collection/PromptCollectionList');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { WorkspaceRouteOutlet } = await import('@/components/appShell/workspace/WorkspaceRouteOutlet');
+        const { router } = await import('expo-router');
+        const renderDestination = async (id: string) => {
+            const screen = await renderScreen(<DestinationInstanceHost tabId={id} ref={{ kind: 'settings', params: {} }}
+                pathname={`/settings/prompts/${kind === 'doc' ? 'docs' : 'templates'}/new`} navigation={router} focused visible>
+                <WorkspaceRouteOutlet.Provider value={kind === 'doc' ? <PromptDocEditorScreen artifactId={null} /> : <PromptTemplateEditorScreen invocationId={null} />}>
+                    <PromptCollectionLayout kind={kind} />
+                </WorkspaceRouteOutlet.Provider>
+            </DestinationInstanceHost>);
+            await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId(`settings-prompts-${kind}-layout`), 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: 1000 } },
+            }); });
+            return screen;
+        };
+        const first = await renderDestination('first');
+        const titleId = kind === 'doc' ? 'promptDoc.title' : 'promptTemplate.title';
+        await act(async () => { first.changeTextByTestId(titleId, 'First draft'); });
+        const second = await renderDestination('second');
+        await act(async () => { second.changeTextByTestId(titleId, 'Second draft'); });
+        const title = (screen: typeof first) => screen.findAll(node => node.props.testID === `promptLibrary.collection.${kind}.draft`
+            && typeof node.props.title === 'string').map(node => node.props.title);
+        expect(title(first)).toContain('First draft');
+        expect(title(first)).not.toContain('Second draft');
+        expect(title(second)).toContain('Second draft');
+        await act(async () => { second.unmount(); });
+        expect(title(first)).toContain('First draft');
+    });
+
     afterEach(() => {
         standardCleanup();
         clearActiveUnsavedChangesGuard();

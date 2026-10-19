@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILT_IN_ROLES_V1, renderSessionRoleBlockV1 } from '@happier-dev/protocol';
+import { RoleOverrideRecordV1Schema } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
@@ -104,6 +105,57 @@ async function openPreview(screen: Awaited<ReturnType<typeof renderScreen>>) {
 }
 
 describe('Settings › Roles detail', () => {
+    it('writes the delegation trait through the role Artifact or built-in override writer', async () => {
+        const own = await renderRole('ui-builder');
+        const toggle = (screen: Awaited<ReturnType<typeof renderRole>>) => screen.findByTestId('settings.roles.detail.canDelegateToOtherRoles')!
+            .findAll(node => typeof node.props?.onValueChange === 'function')[0]!;
+        expect(toggle(own).props.value).toBe(false);
+        await act(async () => { await toggle(own).props.onValueChange(true); });
+        await vi.waitFor(() => expect(writes()).toEqual([{
+            actionId: 'roles.update', input: { roleId: 'ui-builder',
+                role: { name: ownRole.name, instructions: ownRole.instructions, runsAs: ownRole.runsAs,
+                    workspaceWrites: 'allow', secondOpinion: 'off', enabled: true, canDelegateToOtherRoles: true },
+                expectedRevision: { headerVersion: 3, bodyVersion: 7 } },
+        }]));
+        const builtIn = await renderRole('orchestrator');
+        expect(toggle(builtIn).props.value).toBe(true);
+        await act(async () => { await toggle(builtIn).props.onValueChange(false); });
+        await vi.waitFor(() => expect(writes().at(-1)).toEqual({
+            actionId: 'roles.override.set', input: { roleId: 'orchestrator', secondOpinion: 'encouraged', canDelegateToOtherRoles: false },
+        }));
+    });
+
+    it('shows cross-role preview for a delegating custom role without changing its runs-in choices', async () => {
+        const { roleId, ...role } = ownRole;
+        const screen = await renderRole('ui-builder');
+        expect(screen.findAll(node => node.props?.testIDPrefix === 'settings.roles.detail.runsAs').length).toBeGreaterThan(0);
+        await openPreview(screen);
+        const block = screen.findByTestId('settings.roles.detail.preview.block');
+        expect(previewText(screen)).not.toContain('"roleId":"orchestrator"');
+        for (const canDelegateToOtherRoles of [true, false]) {
+            shared.items[1] = { roleId, role: { ...role, canDelegateToOtherRoles },
+                revision: { headerVersion: 3, bodyVersion: canDelegateToOtherRoles ? 8 : 9 },
+                shared: false, viewOnly: false, migratedFromV0_2: false };
+            await act(async () => { invalidateRoleCatalog(); });
+            await vi.waitFor(() => expect(previewText(screen).includes('"roleId":"orchestrator"')).toBe(canDelegateToOtherRoles));
+            // Preserve the mounted selectable/code surface while the saved trait changes its contents.
+            expect(screen.findByTestId('settings.roles.detail.preview.block')).toBe(block);
+        }
+    });
+
+    it('omits cross-role preview after an explicit Orchestrator delegation override while retaining current-session placement', async () => {
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot({ serverId: 'server-1', accountId: 'account-1' }, {
+                catalog: { status: 'ready', rows: [{ record: { key: 'role-overrides', value: RoleOverrideRecordV1Schema.parse({
+                    v: 1, overrides: { orchestrator: { roleId: 'orchestrator', canDelegateToOtherRoles: false } },
+                }) }, revision: 2 }], tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0,
+            }, true);
+        });
+        const screen = await renderRole('orchestrator');
+        expect(screen.findHostByTestId('settings.roles.detail.runsAs.thisSession')).toBeTruthy();
+        await openPreview(screen);
+        expect(previewText(screen)).not.toContain('"roleId":"ui-builder"');
+    });
     it('updates only the Orchestrator preview when a consumed cross-role fact changes', async () => {
         let commits = 0;
         const screen = await renderScreen(<React.Profiler id="orchestrator" onRender={() => { commits += 1; }}>
@@ -172,7 +224,7 @@ describe('Settings › Roles detail', () => {
         shared.rolesV1 = { overrides: { orchestrator: { roleId: 'orchestrator', secondOpinion: 'encouraged' } } };
         storage.getState().applySettingsLocal({ workDepthLimit: 4 });
         applyPromptLibraryCatalogSnapshot({ serverId: 'server-1', accountId: 'account-1' }, {
-            catalog: { status: 'ready', rows: [{ record: { key: 'role-overrides', value: { v: 1, ...shared.rolesV1 } }, revision: 1 }],
+            catalog: { status: 'ready', rows: [{ record: { key: 'role-overrides', value: RoleOverrideRecordV1Schema.parse({ v: 1, ...shared.rolesV1 }) }, revision: 1 }],
                 tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0,
         }, true);
         invalidateRoleCatalog();
@@ -243,7 +295,14 @@ describe('Settings › Roles detail', () => {
         const revision = { headerVersion: 2, bodyVersion: 5 };
         shared.items.push({ roleId, role, revision, shared: sharedRole, viewOnly, migratedFromV0_2: false });
         shared.rolesV1.overrides[roleId] = { roleId, secondOpinion: 'encouraged' };
-        await act(async () => { invalidateRoleCatalog(); });
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot({ serverId: 'server-1', accountId: 'account-1' }, {
+                catalog: { status: 'ready', rows: [{ record: { key: 'role-overrides',
+                    value: RoleOverrideRecordV1Schema.parse({ v: 1, ...shared.rolesV1 }) }, revision: 2 }],
+                    tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0,
+            }, true);
+            invalidateRoleCatalog();
+        });
         const screen = await renderRole(roleId);
         const input = () => screen.findByTestId('settings.roles.detail.instructions')!;
         expect(input().props.editable).not.toBe(false);
@@ -284,8 +343,8 @@ describe('Settings › Roles detail', () => {
     }
 
     /** The visible Share action beside the ⋯ menu (lab `settings-R`). */
-    function shareButton(screen: Awaited<ReturnType<typeof renderRole>>): { props: { onPress: () => unknown } } | undefined {
-        return screen.findAll((node: any) => node.props?.testID === 'settings.roles.detail.share' && typeof node.props.onPress === 'function')[0];
+    function shareButton(screen: Awaited<ReturnType<typeof renderRole>>) {
+        return screen.findAll(node => node.props?.testID === 'settings.roles.detail.share' && typeof node.props.onPress === 'function')[0];
     }
 
     it('offers Share for role Artifacts, Duplicate for every role, and keeps Reset and Delete scoped to their permissions', async () => {
