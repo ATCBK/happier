@@ -76,7 +76,11 @@ export type ApprovalActionReference =
   | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string }>
   | Readonly<{ kind: 'providerContribution'; id: string }>
   | Readonly<{ kind: 'skill' | 'mcpServer' | 'project' | 'agent' | 'registrySource'; id: string }>
-  | Readonly<{ kind: 'machine'; id: string; workspaceRoot?: string }>;
+  | Readonly<{ kind: 'machine'; id: string; workspaceRoot?: string }>
+  /** A workspace the app already knows (a ref id): read by its folder name and its machine. */
+  | Readonly<{ kind: 'workspace'; id: string }>
+  /** A persisted workspace-sync link: read by the two folders it joins and their machines. */
+  | Readonly<{ kind: 'workspaceSyncRelationship'; id: string }>;
 
 // These are declared Action field keys, not a guess from an opaque value or suffix.
 const SESSION_REFERENCE_KEYS = new Set([
@@ -121,6 +125,11 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
   if (actionId === 'mcp.rules.set' && field.path === 'items.[].serverId') return { kind: 'mcpServer', id: value };
   if (actionId.startsWith('mcp.') && field.path === 'serverId') return { kind: 'mcpServer', id: value };
   if (actionId.startsWith('skills.') && field.path === 'skillId') return { kind: 'skill', id: value };
+  if (actionId.startsWith('workspace.sync.')) {
+    if (field.path === 'controllerMachineId' || field.path === 'targetMachineId') return { kind: 'machine', id: value };
+    if (field.path === 'relationshipId') return { kind: 'workspaceSyncRelationship', id: value };
+    if (field.path === 'sourceWorkspaceRefId') return { kind: 'workspace', id: value };
+  }
   if (field.path === 'machineId' && (actionId.startsWith('mcp.') || actionId.startsWith('skills.') || actionId.startsWith('machines.terminal.'))) return { kind: 'machine', id: value };
   if ((actionId === 'skills.rules.set' || actionId === 'mcp.rules.set') && field.path === 'change.write.agentId') return { kind: 'agent', id: value };
   if (actionId.startsWith('registries.sources.') && field.path === 'sourceId') return { kind: 'registrySource', id: value };

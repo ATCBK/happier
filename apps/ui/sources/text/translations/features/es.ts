@@ -15159,7 +15159,7 @@ const es = completeWorkspaceSyncTranslation({
     attention: workspaceSyncSetAttentionTranslations["es"],
 }, {
     title: 'Sincronización del espacio de trabajo',
-    footer: 'El estado procede del equipo que gestiona esta relación. Los cambios aparecen solo después de que ese equipo los confirme.',
+    footer: 'El estado procede del equipo que gestiona cada vínculo. Los cambios aparecen solo después de que ese equipo los confirme.',
     legacyRecovery: {
         title: 'Datos de sincronización retirados',
         footer: 'Happier solo inspecciona y pone en cuarentena estos datos retirados. Nunca los elimina desde la aplicación.',
@@ -15175,7 +15175,8 @@ const es = completeWorkspaceSyncTranslation({
         unknown: ({ path, reason }) => `Happier no pudo clasificar de forma segura el estado antiguo en ${path} (${reason}). La sincronización sigue desactivada. Inspecciona esta ruta manualmente; no la elimines desde la aplicación.`,
         reinspect: 'Volver a inspeccionar',
     },
-    none: 'No hay ninguna relación de sincronización',
+    none: 'Aún no se sincroniza con otro equipo',
+    emptyDescription: 'Mantiene al día los archivos de esta carpeta en otro equipo, para que los agentes de allí trabajen con los mismos archivos.',
     conflictsTitle: 'Conflictos del espacio de trabajo',
     openConflicts: ({ count }) => `Revisar la sincronización en ${count} enlaces`,
     noConflicts: 'No hay conflictos',
@@ -15194,7 +15195,7 @@ const es = completeWorkspaceSyncTranslation({
         destinationNeedsPreparation: 'La carpeta de destino debe prepararse antes de iniciar la sincronización.',
         gitPreparationFailed: 'Happier no pudo preparar este espacio de trabajo de Git. Revisa el destino y vuelve a intentarlo.',
         authorizationExpired: 'La autorización del espacio de trabajo ha caducado. Inicia de nuevo la operación.',
-        rootNoLongerAuthorized: 'La carpeta del espacio de trabajo cambió y ya no está autorizada. Revisa la relación antes de volver a intentarlo.',
+        rootNoLongerAuthorized: 'La carpeta del espacio de trabajo cambió y ya no está autorizada. Revisa el vínculo antes de volver a intentarlo.',
         conflictNeedsAttention: 'Este conflicto cambió. Actualízalo antes de elegir una versión.',
         needsAttention: 'La sincronización del espacio de trabajo necesita atención. Actualiza su estado y vuelve a intentarlo.',
     },
@@ -15208,7 +15209,7 @@ const es = completeWorkspaceSyncTranslation({
     } },
     engine: { checking: 'Comprobando la sincronización en este equipo…' },
     actions: { refresh: 'Actualizar estado', syncNow: 'Sincronizar ahora', more: 'Acciones de sincronización', pause: 'Pausar', resume: 'Reanudar', terminate: 'Detener sincronización', openOnMachine: ({ machine }) => `Abrir en ${machine}`, openFolder: ({ label }) => `Abrir la carpeta ${label}`, keepLocal: 'Conservar la versión local', keepRemote: 'Conservar la versión remota', keepNamed: ({ side }) => `Conservar la versión de ${side}` },
-    terminate: { title: '¿Eliminar la sincronización del espacio de trabajo?', body: 'La sincronización se detendrá y se eliminará su relación. Los archivos permanecerán en ambos espacios de trabajo.' },
+    terminate: { title: '¿Eliminar la sincronización del espacio de trabajo?', body: 'La sincronización se detendrá y se quitará el vínculo entre las carpetas. Los archivos permanecerán en ambos espacios de trabajo.' },
     resolve: {
         changedTitle: 'El conflicto cambió',
         changedBody: 'Este conflicto cambió desde que se abrió. La lista se ha actualizado. Revisa las versiones más recientes antes de volver a elegir.',

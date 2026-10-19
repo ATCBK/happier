@@ -106,9 +106,9 @@ describe('Script output before a terminal exists', () => {
         enabled: true, createdAtMs: 1, updatedAtMs: 1,
         provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: workspace.workspaceId, targetWorkspaceRefId: 'worker-copy' } },
       alpha: { workspaceRefId: workspace.workspaceId, workspaceRef: { id: workspace.workspaceId, serverId: workspace.serverId,
-        machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 }, label: 'Source', machineName: 'Source' },
+        machineId: workspace.machineId, rootPath: workspace.rootPath, createdAtMs: 1 }, label: 'Source', name: 'Source', machineName: 'Source' },
       beta: { workspaceRefId: 'worker-copy', workspaceRef: { id: 'worker-copy', serverId: workspace.serverId,
-        machineId: 'worker-machine', rootPath: '/worker', createdAtMs: 1 }, label: 'Worker', machineName: 'Worker' },
+        machineId: 'worker-machine', rootPath: '/worker', createdAtMs: 1 }, label: 'Worker', name: 'Worker', machineName: 'Worker' },
     };
     const firstModal = modal.show.mock.calls[0]?.[0];
     if (!firstModal?.props) throw new Error('Expected worker-copy modal props');

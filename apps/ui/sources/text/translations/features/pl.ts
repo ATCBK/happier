@@ -15124,7 +15124,7 @@ const pl = completeWorkspaceSyncTranslation({
     attention: workspaceSyncSetAttentionTranslations["pl"],
 }, {
     title: 'Synchronizacja obszaru roboczego',
-    footer: 'Stan pochodzi z maszyny zarządzającej tą relacją. Zmiany pojawiają się dopiero po potwierdzeniu ich przez tę maszynę.',
+    footer: 'Stan pochodzi z maszyny zarządzającej każdym łączem. Zmiany pojawiają się dopiero po potwierdzeniu ich przez tę maszynę.',
     legacyRecovery: {
         title: 'Dane wycofanej synchronizacji',
         footer: 'Happier jedynie sprawdza i przenosi te wycofane dane do kwarantanny. Nigdy nie usuwa ich w aplikacji.',
@@ -15140,7 +15140,8 @@ const pl = completeWorkspaceSyncTranslation({
         unknown: ({ path, reason }) => `Happier nie mógł bezpiecznie sklasyfikować starego stanu w ${path} (${reason}). Synchronizacja pozostaje wyłączona. Sprawdź tę ścieżkę ręcznie; nie usuwaj jej w aplikacji.`,
         reinspect: 'Sprawdź ponownie',
     },
-    none: 'Brak relacji synchronizacji',
+    none: 'Jeszcze niesynchronizowane z inną maszyną',
+    emptyDescription: 'Utrzymuje pliki tego folderu aktualne na innej maszynie, aby agenci tam pracowali na tych samych plikach.',
     conflictsTitle: 'Konflikty obszaru roboczego',
     openConflicts: ({ count }) => `Sprawdź synchronizację na ${count} połączeniach`,
     noConflicts: 'Brak konfliktów',
@@ -15159,7 +15160,7 @@ const pl = completeWorkspaceSyncTranslation({
         destinationNeedsPreparation: 'Folder docelowy wymaga przygotowania przed rozpoczęciem synchronizacji.',
         gitPreparationFailed: 'Happier nie mógł przygotować tego obszaru roboczego Git. Sprawdź cel i spróbuj ponownie.',
         authorizationExpired: 'Autoryzacja obszaru roboczego wygasła. Uruchom operację ponownie.',
-        rootNoLongerAuthorized: 'Folder obszaru roboczego zmienił się i nie jest już autoryzowany. Sprawdź relację przed ponowną próbą.',
+        rootNoLongerAuthorized: 'Folder obszaru roboczego zmienił się i nie jest już autoryzowany. Sprawdź łącze przed ponowną próbą.',
         conflictNeedsAttention: 'Ten konflikt zmienił się. Odśwież go przed wybraniem wersji.',
         needsAttention: 'Synchronizacja obszaru roboczego wymaga uwagi. Odśwież jej stan i spróbuj ponownie.',
     },
@@ -15173,7 +15174,7 @@ const pl = completeWorkspaceSyncTranslation({
     } },
     engine: { checking: 'Sprawdzanie synchronizacji na tym komputerze…' },
     actions: { refresh: 'Odśwież stan', syncNow: 'Synchronizuj teraz', more: 'Działania synchronizacji', pause: 'Wstrzymaj', resume: 'Wznów', terminate: 'Zatrzymaj synchronizację', openOnMachine: ({ machine }) => `Otwórz na ${machine}`, openFolder: ({ label }) => `Otwórz folder ${label}`, keepLocal: 'Zachowaj wersję lokalną', keepRemote: 'Zachowaj wersję zdalną', keepNamed: ({ side }) => `Zachowaj wersję od ${side}` },
-    terminate: { title: 'Usunąć synchronizację obszaru roboczego?', body: 'Synchronizacja zostanie zatrzymana, a jej relacja usunięta. Pliki pozostaną w obu obszarach roboczych.' },
+    terminate: { title: 'Usunąć synchronizację obszaru roboczego?', body: 'Synchronizacja zostanie zatrzymana, a łącze między folderami usunięte. Pliki pozostaną w obu obszarach roboczych.' },
     resolve: {
         changedTitle: 'Konflikt uległ zmianie',
         changedBody: 'Ten konflikt zmienił się od czasu otwarcia. Lista została odświeżona. Sprawdź najnowsze wersje przed ponownym wyborem.',

@@ -8,6 +8,7 @@ import {
     type WorkspaceScopeBase,
 } from '@/sync/domains/workspaces/workspaceScope';
 import { resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
+import { leafFolderName } from '@/utils/path/pathUtils';
 import { resolveWorkspaceRefById, workspaceRefResolutionContextV1 } from '@/sync/domains/workspaces/workspaceRefs';
 
 export type WorkspaceSyncRelationshipModel = Readonly<{
@@ -21,6 +22,7 @@ export type WorkspaceSyncRelationshipEndpoint = Readonly<{
     workspaceRefId: string;
     workspaceRef: WorkspaceRefV1 | null;
     label: string;
+    name: string;
     machineName: string | null;
 }>;
 
@@ -82,7 +84,7 @@ export function projectWorkspaceSyncRelationships(raw: unknown): WorkspaceSyncRe
     };
 }
 
-function endpointFor(
+export function endpointFor(
     workspaceRefId: string,
     workspaceRefs: readonly WorkspaceRefV1[],
     machineNamesById: Readonly<Record<string, string>>,
@@ -96,6 +98,8 @@ function endpointFor(
         workspaceRefId,
         workspaceRef,
         label: workspaceRef?.label?.trim() || workspaceRef?.rootPath || workspaceRefId,
+        // Titles name a folder by its own name; its machine tells same-named folders apart. A destructive choice keeps the full `label`.
+        name: workspaceRef?.label?.trim() || leafFolderName(workspaceRef?.rootPath) || workspaceRefId,
         machineName,
     };
 }

@@ -25,8 +25,8 @@ describe('openWorkspaceSyncRelationshipDetails', () => {
                 createdAtMs: 1,
                 updatedAtMs: 1,
             },
-            alpha: { workspaceRefId: 'workspace-a', workspaceRef: null, label: 'A', machineName: 'Machine A' },
-            beta: { workspaceRefId: 'workspace-b', workspaceRef: null, label: 'B', machineName: 'Machine B' },
+            alpha: { workspaceRefId: 'workspace-a', workspaceRef: null, label: 'A', name: 'A', machineName: 'Machine A' },
+            beta: { workspaceRefId: 'workspace-b', workspaceRef: null, label: 'B', name: 'B', machineName: 'Machine B' },
             status: null,
         });
 

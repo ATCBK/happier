@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { t } from '@/text';
 
-import { describeMachineLockedReason, getMachineDisplayName, readMachineName, resolveMachineDisplayNames } from './machineDisplayNames';
+import { describeMachineLockedReason, getMachineDisplayName, getSessionMachineLabel, readMachineName, resolveMachineDisplayNames } from './machineDisplayNames';
 
 const m = (id: string, displayName?: string, host?: string) => ({ id, metadata: { displayName, host } });
 
@@ -132,5 +132,36 @@ describe('describeMachineLockedReason', () => {
 
     it('has no reason for a readable machine', () => {
         expect(describeMachineLockedReason(m('a-1', 'Studio'))).toBeNull();
+    });
+});
+
+describe('getSessionMachineLabel', () => {
+    const SESSION_MACHINE = '58f6e63a-cd69-4302-83f1-325d10da7ec3';
+
+    it('names the machine from the inventory when it is listed', () => {
+        expect(getSessionMachineLabel({
+            machineId: SESSION_MACHINE, machine: m(SESSION_MACHINE, 'Studio', 'studio.local'),
+            session: { machineId: SESSION_MACHINE, host: 'NLDW3' },
+        })).toBe('Studio');
+    });
+
+    it('reads the session\'s own host when its machine is not in the inventory, never the raw id', () => {
+        const label = getSessionMachineLabel({
+            machineId: SESSION_MACHINE, machine: null, session: { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' },
+        });
+        expect(label).toBe('NLDW3-5-36-33');
+    });
+
+    it('does not borrow the session host for a different machine the session reaches', () => {
+        const label = getSessionMachineLabel({
+            machineId: 'other-machine', machine: null, session: { machineId: SESSION_MACHINE, host: 'NLDW3-5-36-33' },
+        });
+        expect(label).toBe(t('machine.unlistedMachine'));
+        expect(label).not.toContain('other-machine');
+    });
+
+    it('calls an unlisted machine with no known host by what it is, not by its id', () => {
+        expect(getSessionMachineLabel({ machineId: SESSION_MACHINE, machine: null, session: { machineId: SESSION_MACHINE, host: ' ' } }))
+            .toBe(t('machine.unlistedMachine'));
     });
 });

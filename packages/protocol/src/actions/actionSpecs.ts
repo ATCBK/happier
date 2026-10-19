@@ -7531,7 +7531,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       title: 'Add a machine to this workspace',
       description: 'Links the selected Workspace to a folder on another machine.',
       fields: [
-        { path: 'sourceWorkspaceRefId', title: 'Source workspace ref id', widget: 'text', required: true },
+        { path: 'sourceWorkspaceRefId', title: 'Source workspace id', widget: 'text', required: true },
         { path: 'targetMachineId', title: 'Target machine id', widget: 'text', required: true },
         { path: 'targetPath', title: 'Target folder', widget: 'text', required: true },
         { path: 'mode', title: 'Sync mode', widget: 'select', options: [
@@ -7579,12 +7579,12 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   {
     id: 'workspace.sync.relationship.disable', approval: { result: 'required', flow: 'deferred' },
     approvalPolicy: { uiConfirmation: 'direct' }, workspaceWrite: true,
-    title: 'Pause workspace sync', description: 'Pause automatic syncing for one linked workspace relationship.',
+    title: 'Pause workspace sync', description: 'Pause automatic syncing between two linked folders.',
     safety: 'danger', placements: [], bindings: { mcpToolName: 'workspace_sync_relationship_disable' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
-    inputHints: { description: 'Pause automatic syncing until the relationship is resumed.', fields: [
+    inputHints: { description: 'Pause automatic syncing until it is resumed.', fields: [
       { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
-      { path: 'relationshipId', title: 'Relationship id', widget: 'text', required: true },
+      { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
     ] },
     outputSchema: WorkspaceSyncRelationshipDisableActionOutputV1Schema,
     inputSchema: WorkspaceSyncRelationshipDisableActionInputV1Schema,
@@ -7592,12 +7592,12 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   {
     id: 'workspace.sync.relationship.enable', approval: { result: 'required', flow: 'deferred' },
     approvalPolicy: { uiConfirmation: 'direct' }, workspaceWrite: true,
-    title: 'Resume workspace sync', description: 'Resume automatic syncing for one linked workspace relationship.',
+    title: 'Resume workspace sync', description: 'Resume automatic syncing between two linked folders.',
     safety: 'danger', placements: [], bindings: { mcpToolName: 'workspace_sync_relationship_enable' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
-    inputHints: { description: 'Resume automatic syncing for this relationship.', fields: [
+    inputHints: { description: 'Resume automatic syncing between these linked folders.', fields: [
       { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
-      { path: 'relationshipId', title: 'Relationship id', widget: 'text', required: true },
+      { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
     ] },
     outputSchema: WorkspaceSyncRelationshipEnableActionOutputV1Schema,
     inputSchema: WorkspaceSyncRelationshipEnableActionInputV1Schema,
@@ -7605,12 +7605,12 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   {
     id: 'workspace.sync.relationship.flush', approval: { result: 'required', flow: 'deferred' },
     approvalPolicy: { uiConfirmation: 'direct' }, workspaceWrite: true,
-    title: 'Sync workspace now', description: 'Run one synchronization cycle for a linked workspace relationship.',
+    title: 'Sync workspace now', description: 'Run one synchronization cycle between two linked folders.',
     safety: 'danger', placements: [], bindings: { mcpToolName: 'workspace_sync_relationship_flush' },
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
-    inputHints: { description: 'Synchronize this linked workspace relationship now.', fields: [
+    inputHints: { description: 'Synchronize these linked folders now.', fields: [
       { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
-      { path: 'relationshipId', title: 'Relationship id', widget: 'text', required: true },
+      { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
     ] },
     outputSchema: WorkspaceSyncRelationshipFlushActionOutputV1Schema,
     inputSchema: WorkspaceSyncRelationshipFlushActionInputV1Schema,
@@ -7620,7 +7620,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     approvalPolicy: { uiConfirmation: 'policy' },
     workspaceWrite: true,
     title: 'Stop workspace sync',
-    description: 'Permanently stop one linked workspace relationship without deleting either folder.',
+    description: 'Permanently stop syncing two linked folders without deleting either one.',
     safety: 'danger',
     placements: [],
     bindings: { mcpToolName: 'workspace_sync_relationship_terminate' },
@@ -7634,10 +7634,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     },
     inputHints: {
       title: 'Stop workspace sync',
-      description: 'Sync will stop and its relationship will be removed. Files in both workspaces stay in place.',
+      description: 'Sync will stop and the link between these folders will be removed. Files in both workspaces stay in place.',
       fields: [
         { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
-        { path: 'relationshipId', title: 'Relationship id', widget: 'text', required: true },
+        { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
       ],
     },
     outputSchema: WorkspaceSyncRelationshipTerminateActionOutputV1Schema,
@@ -7695,7 +7695,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
       title: 'List workspace sync conflicts',
       fields: [
         { path: 'controllerMachineId', title: 'Controller machine id', widget: 'text', required: true },
-        { path: 'relationshipId', title: 'Relationship id', widget: 'text', required: true },
+        { path: 'relationshipId', title: 'Linked folders id', widget: 'text', required: true },
         { path: 'limit', title: 'Limit', widget: 'text' },
       ],
     },

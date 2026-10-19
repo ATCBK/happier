@@ -15109,7 +15109,7 @@ const it = completeWorkspaceSyncTranslation({
     attention: workspaceSyncSetAttentionTranslations["it"],
 }, {
     title: 'Sincronizzazione dell’area di lavoro',
-    footer: 'Lo stato proviene dalla macchina che gestisce questa relazione. Le modifiche vengono mostrate solo dopo la conferma di quella macchina.',
+    footer: 'Lo stato proviene dalla macchina che gestisce ogni collegamento. Le modifiche vengono mostrate solo dopo la conferma di quella macchina.',
     legacyRecovery: {
         title: 'Dati della sincronizzazione ritirata',
         footer: 'Happier si limita a ispezionare e mettere in quarantena questi dati ritirati. Non li elimina mai dall’app.',
@@ -15125,7 +15125,8 @@ const it = completeWorkspaceSyncTranslation({
         unknown: ({ path, reason }) => `Happier non ha potuto classificare in sicurezza lo stato precedente in ${path} (${reason}). La sincronizzazione resta disattivata. Controlla manualmente il percorso; non eliminarlo dall’app.`,
         reinspect: 'Controlla di nuovo',
     },
-    none: 'Nessuna relazione di sincronizzazione',
+    none: 'Non ancora sincronizzata con un’altra macchina',
+    emptyDescription: 'Mantiene aggiornati i file di questa cartella su un’altra macchina, così gli agenti lì lavorano sugli stessi file.',
     conflictsTitle: 'Conflitti dell’area di lavoro',
     openConflicts: ({ count }) => `Controlla la sincronizzazione su ${count} collegamenti`,
     noConflicts: 'Nessun conflitto',
@@ -15144,7 +15145,7 @@ const it = completeWorkspaceSyncTranslation({
         destinationNeedsPreparation: 'La cartella di destinazione deve essere preparata prima di avviare la sincronizzazione.',
         gitPreparationFailed: 'Happier non ha potuto preparare questa area di lavoro Git. Controlla la destinazione e riprova.',
         authorizationExpired: 'L’autorizzazione dell’area di lavoro è scaduta. Avvia di nuovo l’operazione.',
-        rootNoLongerAuthorized: 'La cartella dell’area di lavoro è cambiata e non è più autorizzata. Controlla la relazione prima di riprovare.',
+        rootNoLongerAuthorized: 'La cartella dell’area di lavoro è cambiata e non è più autorizzata. Controlla il collegamento prima di riprovare.',
         conflictNeedsAttention: 'Questo conflitto è cambiato. Aggiornalo prima di scegliere una versione.',
         needsAttention: 'La sincronizzazione dell’area di lavoro richiede attenzione. Aggiorna lo stato e riprova.',
     },
@@ -15158,7 +15159,7 @@ const it = completeWorkspaceSyncTranslation({
     } },
     engine: { checking: 'Controllo della sincronizzazione su questo computer…' },
     actions: { refresh: 'Aggiorna stato', syncNow: 'Sincronizza ora', more: 'Azioni di sincronizzazione', pause: 'Metti in pausa', resume: 'Riprendi', terminate: 'Interrompi sincronizzazione', openOnMachine: ({ machine }) => `Apri su ${machine}`, openFolder: ({ label }) => `Apri la cartella ${label}`, keepLocal: 'Mantieni la versione locale', keepRemote: 'Mantieni la versione remota', keepNamed: ({ side }) => `Mantieni la versione di ${side}` },
-    terminate: { title: 'Rimuovere la sincronizzazione dell’area di lavoro?', body: 'La sincronizzazione verrà interrotta e la relazione rimossa. I file resteranno in entrambe le aree di lavoro.' },
+    terminate: { title: 'Rimuovere la sincronizzazione dell’area di lavoro?', body: 'La sincronizzazione verrà interrotta e il collegamento tra le cartelle rimosso. I file resteranno in entrambe le aree di lavoro.' },
     resolve: {
         changedTitle: 'Il conflitto è cambiato',
         changedBody: 'Questo conflitto è cambiato da quando è stato aperto. L’elenco è stato aggiornato. Controlla le versioni più recenti prima di scegliere di nuovo.',

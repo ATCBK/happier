@@ -14,6 +14,7 @@ import { builtInSettingUiDeclaration } from '@/components/settings/catalog/setti
 import { t } from '@/text';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActionSpec } from '@happier-dev/protocol/actions';
+import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { settleApprovalRequestActionArgs } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
@@ -96,6 +97,39 @@ it('names reviewed skills and the exact Home machine, keeping their ids in Techn
     await act(async () => { details?.props.onExpandedChange(true); });
     expect(screen.getTextContent()).toContain(skillId);
     expect(screen.getTextContent()).toContain(machineId);
+});
+
+it('reads a workspace-sync request by its machine and the two folders it links, keeping the ids in Technical details', async () => {
+    const home = await upsertServerProfile({ name: 'Personal', serverUrl: 'https://workspace-sync-approval.test' });
+    profiles.push(home.id);
+    const scope = { serverId: home.id, accountId: 'sync-account' };
+    const policyFields = { v: 1 as const, selection: 'git_worktree' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const machines = [['machine-studio', 'Studio'], ['machine-laptop', 'Laptop']] as const;
+    await act(async () => {
+        storage.setState({ settingsScope: scope, profileScope: scope,
+            machineListByServerId: { [home.id]: machines.map(([id, displayName]) => createMachineFixture({
+                id, metadata: { ...createMachineFixture().metadata!, displayName } })) },
+            machineDisplayById: Object.fromEntries(machines.map(([id, displayName]) => [id, { id, metadata: { displayName } }])) as never,
+            projectAccountRows: { scope, status: 'ready', coverage: 'complete', organizations: [], revisionsByPhysicalKey: {},
+                workspaceRefs: [
+                    { id: 'ref-studio', serverId: home.id, machineId: 'machine-studio', rootPath: '/home/me/payments', label: null, createdAtMs: 1 },
+                    { id: 'ref-laptop', serverId: home.id, machineId: 'machine-laptop', rootPath: '/Users/me/payments-copy', label: null, createdAtMs: 1 },
+                ],
+                relationships: [{ v: 1, relationshipId: 'relationship_9f2c', controllerMachineId: 'machine-studio',
+                    alphaWorkspaceRefId: 'ref-studio', betaWorkspaceRefId: 'ref-laptop', mode: 'keep_synced',
+                    contentPolicy: { ...policyFields, policyDigest: computeWorkspaceSyncPolicyDigest(policyFields) },
+                    enabled: true, createdAtMs: 1, updatedAtMs: 1 }] } });
+    });
+    const screen = await renderScreen(<ActionApprovalFieldsCard anatomy="page" serverId={home.id}
+        presentation={describeApprovalActionFields({ actionId: 'workspace.sync.relationship.flush',
+            actionArgs: { controllerMachineId: 'machine-studio', relationshipId: 'relationship_9f2c' } })} />);
+    const text = screen.getTextContent();
+    for (const value of ['Controller machine', 'Studio', 'Linked folders', 'payments · Studio', 'payments-copy · Laptop']) expect(text).toContain(value);
+    for (const id of ['machine-studio', 'relationship_9f2c', '/home/me']) expect(text).not.toContain(id);
+    const details = screen.findAllByTestId('approvals.technical-details').find(node => typeof node.props.onExpandedChange === 'function');
+    await act(async () => { details?.props.onExpandedChange(true); });
+    expect(screen.getTextContent()).toContain('machine-studio');
+    expect(screen.getTextContent()).toContain('relationship_9f2c');
 });
 
 it('shows a declared confidential input as supplied under its declared title, beside the exact public JSON, in both anatomies', async () => {

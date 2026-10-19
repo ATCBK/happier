@@ -28,15 +28,13 @@ function scopeFor(summary: WorkspaceSyncRelationshipSummary): WorkspaceSyncStatu
     };
 }
 
-export function useWorkspaceSyncRelationshipSummaries(
-    workspaceRefId?: string | null,
-    serverId?: string,
-): readonly WorkspaceSyncRelationshipSummary[] {
+/** Relationship definitions with their endpoints named, before any daemon status: the one projection every reader shares. */
+function useWorkspaceSyncBaseSummaries(serverId?: string, enabled = true): readonly WorkspaceSyncRelationshipSummary[] {
     const rawRelationships = useWorkspaceSyncRelationships();
     const workspaceRefs = useWorkspaceRefs();
     const relationshipModel = React.useMemo(
-        () => projectWorkspaceSyncRelationships(rawRelationships),
-        [rawRelationships],
+        () => projectWorkspaceSyncRelationships(enabled ? rawRelationships : null),
+        [enabled, rawRelationships],
     );
     const machineIds = React.useMemo(() => {
         return relationshipModel.all.flatMap((relationship) => [relationship.alphaWorkspaceRefId, relationship.betaWorkspaceRefId]
@@ -44,10 +42,29 @@ export function useWorkspaceSyncRelationshipSummaries(
                 return result.kind === 'resolved' ? [result.ref.machineId] : []; }));
     }, [relationshipModel, serverId, workspaceRefs]);
     const machineNamesById = useMachineDisplayNamesById(machineIds);
-    const baseSummaries = React.useMemo(
+    return React.useMemo(
         () => projectWorkspaceSyncRelationshipSummaries({ relationships: relationshipModel, workspaceRefs, statuses: [], machineNamesById, serverId }),
         [machineNamesById, relationshipModel, serverId, workspaceRefs],
     );
+}
+
+/**
+ * One persisted link as the app names it, without subscribing to its status: for readers that only
+ * name the folders and machines (an approval for a link), never watch it.
+ */
+export function useWorkspaceSyncRelationshipSummary(
+    relationshipId: string | null,
+    serverId?: string,
+): WorkspaceSyncRelationshipSummary | null {
+    const baseSummaries = useWorkspaceSyncBaseSummaries(serverId, relationshipId !== null);
+    return relationshipId ? baseSummaries.find((summary) => summary.relationshipId === relationshipId) ?? null : null;
+}
+
+export function useWorkspaceSyncRelationshipSummaries(
+    workspaceRefId?: string | null,
+    serverId?: string,
+): readonly WorkspaceSyncRelationshipSummary[] {
+    const baseSummaries = useWorkspaceSyncBaseSummaries(serverId);
     const scopedBaseSummaries = React.useMemo(
         () => workspaceRefId === undefined
             ? baseSummaries

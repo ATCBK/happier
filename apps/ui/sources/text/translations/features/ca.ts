@@ -15132,7 +15132,7 @@ const ca = completeWorkspaceSyncTranslation({
     attention: workspaceSyncSetAttentionTranslations["ca"],
 }, {
     title: 'Sincronització de l’espai de treball',
-    footer: 'L’estat prové de la màquina que gestiona aquesta relació. Els canvis només apareixen després que aquesta màquina els confirmi.',
+    footer: 'L’estat prové de la màquina que gestiona cada enllaç. Els canvis només apareixen després que aquesta màquina els confirmi.',
     legacyRecovery: {
         title: 'Dades de sincronització retirades',
         footer: 'Happier només inspecciona i posa en quarantena aquestes dades retirades. No les elimina mai des de l’aplicació.',
@@ -15148,7 +15148,8 @@ const ca = completeWorkspaceSyncTranslation({
         unknown: ({ path, reason }) => `Happier no ha pogut classificar amb seguretat l’estat antic a ${path} (${reason}). La sincronització continua desactivada. Inspecciona aquest camí manualment; no l’eliminis des de l’aplicació.`,
         reinspect: 'Torna a inspeccionar',
     },
-    none: 'No hi ha cap relació de sincronització',
+    none: 'Encara no se sincronitza amb cap altra màquina',
+    emptyDescription: 'Manté al dia els fitxers d’aquesta carpeta en una altra màquina, perquè els agents hi treballin amb els mateixos fitxers.',
     conflictsTitle: 'Conflictes de l’espai de treball',
     openConflicts: ({ count }) => `Revisa la sincronització en ${count} enllaços`,
     noConflicts: 'Cap conflicte',
@@ -15167,7 +15168,7 @@ const ca = completeWorkspaceSyncTranslation({
         destinationNeedsPreparation: 'Cal preparar la carpeta de destinació abans d’iniciar la sincronització.',
         gitPreparationFailed: 'Happier no ha pogut preparar aquest espai de treball Git. Revisa la destinació i torna-ho a provar.',
         authorizationExpired: 'L’autorització de l’espai de treball ha caducat. Torna a iniciar l’operació.',
-        rootNoLongerAuthorized: 'La carpeta de l’espai de treball ha canviat i ja no està autoritzada. Revisa la relació abans de tornar-ho a provar.',
+        rootNoLongerAuthorized: 'La carpeta de l’espai de treball ha canviat i ja no està autoritzada. Revisa l’enllaç abans de tornar-ho a provar.',
         conflictNeedsAttention: 'Aquest conflicte ha canviat. Actualitza’l abans de triar una versió.',
         needsAttention: 'La sincronització de l’espai de treball necessita atenció. Actualitza’n l’estat i torna-ho a provar.',
     },
@@ -15181,7 +15182,7 @@ const ca = completeWorkspaceSyncTranslation({
     } },
     engine: { checking: 'S’està comprovant la sincronització en aquest ordinador…' },
     actions: { refresh: 'Actualitza l’estat', syncNow: 'Sincronitza ara', more: 'Accions de sincronització', pause: 'Posa en pausa', resume: 'Reprèn', terminate: 'Atura la sincronització', openOnMachine: ({ machine }) => `Obre a ${machine}`, openFolder: ({ label }) => `Obre la carpeta ${label}`, keepLocal: 'Conserva la versió local', keepRemote: 'Conserva la versió remota', keepNamed: ({ side }) => `Conserva la versió de ${side}` },
-    terminate: { title: 'Vols eliminar la sincronització de l’espai de treball?', body: 'La sincronització s’aturarà i se n’eliminarà la relació. Els fitxers es mantindran als dos espais de treball.' },
+    terminate: { title: 'Vols eliminar la sincronització de l’espai de treball?', body: 'La sincronització s’aturarà i se n’eliminarà l’enllaç entre les carpetes. Els fitxers es mantindran als dos espais de treball.' },
     resolve: {
         changedTitle: 'El conflicte ha canviat',
         changedBody: 'Aquest conflicte ha canviat des que es va obrir. La llista s’ha actualitzat. Revisa les versions més recents abans de tornar a triar.',

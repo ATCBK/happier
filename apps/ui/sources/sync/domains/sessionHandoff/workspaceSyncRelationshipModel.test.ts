@@ -192,7 +192,7 @@ describe('projectWorkspaceSyncRelationships', () => {
             workspaceRefs: [
                 { id: 'workspace-alpha', serverId: 'server-1', machineId: 'machine-alpha', rootPath: '/alpha', label: 'Alpha', createdAtMs: 1 },
                 { id: 'workspace-beta', serverId: 'server-1', machineId: 'machine-beta', rootPath: '/beta', label: 'Beta', createdAtMs: 1 },
-                { id: 'workspace-gamma', serverId: 'server-1', machineId: 'machine-gamma', rootPath: '/gamma', label: null, createdAtMs: 1 },
+                { id: 'workspace-gamma', serverId: 'server-1', machineId: 'machine-gamma', rootPath: '/home/me/gamma/', label: null, createdAtMs: 1 },
             ],
             statuses: [
                 { relationshipId: 'relationship-1', controllerMachineId: 'machine-alpha', state: 'conflicted', alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_both_in_sync', endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 }, beta: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 } }, conflictCount: 3, lastCycleObservedAtMs: 4 },
@@ -207,8 +207,10 @@ describe('projectWorkspaceSyncRelationships', () => {
 
         expect(summaries.map((summary) => [summary.relationshipId, summary.alpha.label, summary.beta.label])).toEqual([
             ['relationship-1', 'Alpha', 'Beta'],
-            ['relationship-2', 'Alpha', '/gamma'],
+            ['relationship-2', 'Alpha', '/home/me/gamma/'],
         ]);
+        // A title names the folder by its own name; the full path stays on `label` for destructive choices.
+        expect(summaries[1]?.beta.name).toBe('gamma');
         expect(summaries[0]).toMatchObject({
             alpha: { machineName: 'Alpha Mac' },
             beta: { machineName: 'Beta workstation' },

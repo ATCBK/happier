@@ -15109,7 +15109,7 @@ const pt = completeWorkspaceSyncTranslation({
     attention: workspaceSyncSetAttentionTranslations["pt"],
 }, {
     title: 'Sincronização do espaço de trabalho',
-    footer: 'O estado vem da máquina que gere esta relação. As alterações só aparecem depois de essa máquina as confirmar.',
+    footer: 'O estado vem da máquina que gere cada ligação. As alterações só aparecem depois de essa máquina as confirmar.',
     legacyRecovery: {
         title: 'Dados de sincronização descontinuados',
         footer: 'O Happier apenas inspeciona e coloca em quarentena estes dados descontinuados. Nunca os elimina na aplicação.',
@@ -15125,7 +15125,8 @@ const pt = completeWorkspaceSyncTranslation({
         unknown: ({ path, reason }) => `O Happier não conseguiu classificar com segurança o estado antigo em ${path} (${reason}). A sincronização continua desativada. Inspeciona este caminho manualmente; não o elimines na aplicação.`,
         reinspect: 'Inspecionar novamente',
     },
-    none: 'Nenhuma relação de sincronização',
+    none: 'Ainda não sincronizada com outra máquina',
+    emptyDescription: 'Mantém os ficheiros desta pasta atualizados noutra máquina, para que os agentes aí trabalhem nos mesmos ficheiros.',
     conflictsTitle: 'Conflitos do espaço de trabalho',
     openConflicts: ({ count }) => `Rever sincronização em ${count} ligações`,
     noConflicts: 'Nenhum conflito',
@@ -15144,7 +15145,7 @@ const pt = completeWorkspaceSyncTranslation({
         destinationNeedsPreparation: 'A pasta de destino precisa de ser preparada antes de iniciar a sincronização.',
         gitPreparationFailed: 'O Happier não conseguiu preparar este espaço de trabalho Git. Revê o destino e tenta novamente.',
         authorizationExpired: 'A autorização do espaço de trabalho expirou. Inicia novamente a operação.',
-        rootNoLongerAuthorized: 'A pasta do espaço de trabalho mudou e deixou de estar autorizada. Revê a relação antes de tentar novamente.',
+        rootNoLongerAuthorized: 'A pasta do espaço de trabalho mudou e deixou de estar autorizada. Revê a ligação antes de tentar novamente.',
         conflictNeedsAttention: 'Este conflito mudou. Atualiza-o antes de escolher uma versão.',
         needsAttention: 'A sincronização do espaço de trabalho requer atenção. Atualiza o estado e tenta novamente.',
     },
@@ -15158,7 +15159,7 @@ const pt = completeWorkspaceSyncTranslation({
     } },
     engine: { checking: 'A verificar a sincronização neste computador…' },
     actions: { refresh: 'Atualizar estado', syncNow: 'Sincronizar agora', more: 'Ações de sincronização', pause: 'Pausar', resume: 'Retomar', terminate: 'Parar sincronização', openOnMachine: ({ machine }) => `Abrir em ${machine}`, openFolder: ({ label }) => `Abrir a pasta ${label}`, keepLocal: 'Manter a versão local', keepRemote: 'Manter a versão remota', keepNamed: ({ side }) => `Manter a versão de ${side}` },
-    terminate: { title: 'Remover a sincronização do espaço de trabalho?', body: 'A sincronização será interrompida e a relação removida. Os ficheiros permanecem nos dois espaços de trabalho.' },
+    terminate: { title: 'Remover a sincronização do espaço de trabalho?', body: 'A sincronização será interrompida e a ligação entre as pastas removida. Os ficheiros permanecem nos dois espaços de trabalho.' },
     resolve: {
         changedTitle: 'O conflito mudou',
         changedBody: 'Este conflito mudou desde que foi aberto. A lista foi atualizada. Revê as versões mais recentes antes de escolher novamente.',

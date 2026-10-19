@@ -13376,7 +13376,7 @@ const enWorkspaceSync = {
       'Changes on linked machines can become visible to agents on the others. Conflicting versions need review; use separate worktrees when you want isolation.',
   },
   footer:
-    'Status comes from the machine managing this relationship. Changes appear only after that machine confirms them.',
+    'Status comes from the machine managing each link. Changes appear only after that machine confirms them.',
   legacyRecovery: {
     title: 'Retired workspace sync data',
     footer:
@@ -13399,7 +13399,9 @@ const enWorkspaceSync = {
       `Happier could not safely classify legacy state at ${path} (${reason}). Workspace sync remains disabled. Inspect this path manually; do not delete it from the app.`,
     reinspect: 'Reinspect',
   },
-  none: 'No workspace sync relationship',
+  none: 'Not synced to another machine yet',
+  emptyDescription:
+    'Keeps this folder’s files up to date on another machine, so agents there work on the same files.',
   conflictsTitle: 'Workspace conflicts',
   openConflicts: ({ count }: { count: number }) =>
     `Review workspace sync on ${count} ${count === 1 ? 'link' : 'links'}`,
@@ -13474,7 +13476,7 @@ const enWorkspaceSync = {
     authorizationExpired:
       'Workspace authorization expired. Start the operation again.',
     rootNoLongerAuthorized:
-      'The workspace folder changed and is no longer authorized. Review the relationship before retrying.',
+      'The workspace folder changed and is no longer authorized. Review the link before retrying.',
     conflictNeedsAttention:
       'This conflict changed. Refresh it before choosing a version.',
     updateRequired:
@@ -13499,7 +13501,7 @@ const enWorkspaceSync = {
     checking: 'Checking workspace sync on this computer…',
   },
   actions: {
-    refresh: 'Refresh Status',
+    refresh: 'Refresh status',
     syncNow: 'Sync now',
     more: 'Workspace Sync Actions',
     pause: 'Pause',
@@ -13513,7 +13515,7 @@ const enWorkspaceSync = {
   },
   terminate: {
     title: 'Remove workspace sync?',
-    body: 'Sync will stop and its relationship will be removed. Files in both workspaces stay in place.',
+    body: 'Sync will stop and the link between these folders will be removed. Files in both workspaces stay in place.',
   },
   resolve: {
     title: 'Resolve workspace conflict?',

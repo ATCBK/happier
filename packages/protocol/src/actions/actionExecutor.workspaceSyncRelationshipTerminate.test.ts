@@ -22,7 +22,7 @@ describe('workspace.sync.relationship.terminate Action', () => {
     const spec = getActionSpec(actionId);
     expect(spec).toMatchObject({ safety: 'danger', surfaces: { ui: true, agent: true, mcp: true } });
     expect(buildApprovalPreviewSummary(spec, input)).toBe(
-      'Sync will stop and its relationship will be removed. Files in both workspaces stay in place.',
+      'Sync will stop and the link between these folders will be removed. Files in both workspaces stay in place.',
     );
     expect(spec.inputSchema.safeParse({ ...input, extra: true }).success).toBe(false);
     expect(spec.outputSchema?.safeParse({ ...result, extra: true }).success).toBe(false);

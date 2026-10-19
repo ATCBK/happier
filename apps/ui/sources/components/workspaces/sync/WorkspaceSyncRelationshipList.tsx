@@ -38,6 +38,8 @@ import { openWorkspaceSyncRelationshipDetails } from './openWorkspaceSyncRelatio
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 export type WorkspaceSyncRelationshipListProps = Readonly<{
+    /** The section heading; "Workspace sync" unless the host names this list by what it answers (Project availability). */
+    title?: string;
     serverId?: string;
     workspaceRefId?: string | null;
     onAddMachine?: () => void;
@@ -129,10 +131,10 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
                 ? []
                 : [{ id: 'sync', title: t('workspaceSync.actions.syncNow') }]),
             toggleAction,
-            ...(props.summary.alpha.workspaceRef ? [{ id: 'open-alpha', title: t('workspaceSync.actions.openOnMachine', { machine: props.summary.alpha.machineName ?? props.summary.alpha.label }) }] : []),
-            ...(props.summary.beta.workspaceRef ? [{ id: 'open-beta', title: t('workspaceSync.actions.openOnMachine', { machine: props.summary.beta.machineName ?? props.summary.beta.label }) }] : []),
-            ...(revealableEndpoint(props.summary.alpha) ? [{ id: 'reveal-alpha', title: t('workspaceSync.actions.openFolder', { label: props.summary.alpha.machineName ?? props.summary.alpha.label }) }] : []),
-            ...(revealableEndpoint(props.summary.beta) ? [{ id: 'reveal-beta', title: t('workspaceSync.actions.openFolder', { label: props.summary.beta.machineName ?? props.summary.beta.label }) }] : []),
+            ...(props.summary.alpha.workspaceRef ? [{ id: 'open-alpha', title: t('workspaceSync.actions.openOnMachine', { machine: props.summary.alpha.machineName ?? props.summary.alpha.name }) }] : []),
+            ...(props.summary.beta.workspaceRef ? [{ id: 'open-beta', title: t('workspaceSync.actions.openOnMachine', { machine: props.summary.beta.machineName ?? props.summary.beta.name }) }] : []),
+            ...(revealableEndpoint(props.summary.alpha) ? [{ id: 'reveal-alpha', title: t('workspaceSync.actions.openFolder', { label: props.summary.alpha.machineName ?? props.summary.alpha.name }) }] : []),
+            ...(revealableEndpoint(props.summary.beta) ? [{ id: 'reveal-beta', title: t('workspaceSync.actions.openFolder', { label: props.summary.beta.machineName ?? props.summary.beta.name }) }] : []),
             { id: 'terminate', title: t('workspaceSync.actions.terminate') },
         ];
     }, [props.summary.alpha, props.summary.beta, props.summary.relationship.enabled, revealableEndpoint]);
@@ -165,8 +167,8 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
         });
     const machineDirectionLabel = props.summary.alpha.machineName || props.summary.beta.machineName
         ? formatWorkspaceSyncRelationshipTitle({
-            alphaLabel: props.summary.alpha.machineName ?? props.summary.alpha.label,
-            betaLabel: props.summary.beta.machineName ?? props.summary.beta.label,
+            alphaLabel: props.summary.alpha.machineName ?? props.summary.alpha.name,
+            betaLabel: props.summary.beta.machineName ?? props.summary.beta.name,
             mode: props.summary.relationship.mode,
         })
         : null;
@@ -201,8 +203,8 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
         <Item
             testID={`workspace-sync-relationship-${props.summary.relationshipId}`}
             title={formatWorkspaceSyncRelationshipTitle({
-                alphaLabel: props.summary.alpha.label,
-                betaLabel: props.summary.beta.label,
+                alphaLabel: props.summary.alpha.name,
+                betaLabel: props.summary.beta.name,
                 mode: props.summary.relationship.mode,
             })}
             subtitle={subtitle}
@@ -258,9 +260,13 @@ export const WorkspaceSyncRelationshipList = React.memo(function WorkspaceSyncRe
     const summaries = useWorkspaceSyncRelationshipSummaries(props.workspaceRefId, props.serverId);
     const localMachineId = useLocalDaemonControl().status?.machineId ?? null;
     return (
-        <ItemGroup title={t(props.onAddMachine ? 'workspaceSync.availableOn' : 'workspaceSync.title')} description={t('workspaceSync.footer')}>
+        <ItemGroup
+            title={props.title ?? t('workspaceSync.title')}
+            description={t(summaries.length === 0 ? 'workspaceSync.emptyDescription' : 'workspaceSync.footer')}
+        >
             {summaries.length === 0 ? (
-                <Item title={t('workspaceSync.none')} mode="info" />
+                // The action is the empty state; a host that cannot offer it keeps one quiet line.
+                props.onAddMachine ? null : <Item testID="workspace-sync-none" title={t('workspaceSync.none')} mode="info" />
             ) : summaries.map((summary) => (
                 <WorkspaceSyncRelationshipRow
                     key={summary.relationshipId}

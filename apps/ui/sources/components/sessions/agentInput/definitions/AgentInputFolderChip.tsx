@@ -331,7 +331,8 @@ const FolderChipRemoveButton = React.memo(function FolderChipRemoveButton(props:
     );
 });
 
-const REMOVE_SLOT_STYLE = { alignSelf: 'stretch', marginRight: 4 } as const;
+// The reserved × slot is the only extra space after the chip; the row's own gap already separates it from its neighbour.
+const REMOVE_SLOT_STYLE = { alignSelf: 'stretch' } as const;
 const REMOVE_TARGET_STYLE = {
     width: AGENT_INPUT_CHIP_REMOVE_TARGET_WIDTH_PX,
     flex: 1,

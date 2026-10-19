@@ -1,5 +1,5 @@
 import { t } from '@/text';
-import { storage, useArtifact, useProjectAccountRows, useServerScopedMachine } from '@/sync/domains/state/storage';
+import { storage, useArtifact, useMachineDisplayNamesById, useProjectAccountRows, useServerScopedMachine, useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
@@ -25,6 +25,9 @@ import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalo
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { readCurrentProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
 import { useApprovalSessionReading } from './useApprovalSessionReading';
+import { useWorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/useWorkspaceSyncRelationshipSummaries';
+import { endpointFor, type WorkspaceSyncRelationshipEndpoint, type WorkspaceSyncRelationshipSummary } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
+import { formatWorkspaceSyncRelationshipTitle } from '@/sync/domains/sessionHandoff/workspaceSyncPresentation';
 type ApprovalReference = ApprovalActionReference;
 
 export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean }>;
@@ -81,7 +84,14 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
         serverId: reference?.kind === 'agent' ? approvalServerId : null });
     const providerCatalog = useProviderCatalogForServer(reference?.kind === 'providerConnection' ? approvalServerId : null);
     const declarations = readAccountProviderDeclarations();
-    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations });
+    const syncLink = useWorkspaceSyncRelationshipSummary(reference?.kind === 'workspaceSyncRelationship' ? reference.id : null, approvalServerId ?? undefined);
+    const workspaceRefs = useWorkspaceRefs();
+    const workspaceRefId = reference?.kind === 'workspace' ? reference.id : null;
+    const workspaceMachineId = workspaceRefId ? workspaceRefs.find((ref) => ref.id === workspaceRefId)?.machineId ?? '' : '';
+    const workspaceMachineNames = useMachineDisplayNamesById(workspaceMachineId ? [workspaceMachineId] : []);
+    const workspace = workspaceRefId ? endpointFor(workspaceRefId, workspaceRefs, workspaceMachineNames, approvalServerId ?? undefined) : null;
+    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
+        syncLink, workspace });
 }
 
 type ApprovalReferenceSources = {
@@ -98,6 +108,8 @@ type ApprovalReferenceSources = {
     agents?: ReturnType<typeof useAgentCatalogIdentities>;
     providerCatalog?: ReturnType<typeof useProviderCatalogForServer>;
     declarations: ReturnType<typeof readAccountProviderDeclarations>;
+    syncLink?: WorkspaceSyncRelationshipSummary | null;
+    workspace?: WorkspaceSyncRelationshipEndpoint | null;
 };
 
 function resolveApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null, sources: ApprovalReferenceSources): ApprovalReferenceReading {
@@ -107,6 +119,17 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
         const title = getMachineDisplayName(machine) ?? reference.id;
         // The row's own label already names the kind ("Machine"); the value is just its name.
         return { text: reference.workspaceRoot ? `${formatPathRelativeToHome(reference.workspaceRoot)} · ${title}` : title, named: Boolean(machine) };
+    }
+    if (reference?.kind === 'workspaceSyncRelationship') {
+        const link = sources.syncLink;
+        // The link reads as the two folders it joins, each with its machine: "repo · Studio → repo-copy · Laptop".
+        return link ? { text: formatWorkspaceSyncRelationshipTitle({
+            alphaLabel: describeApprovalWorkspaceEndpoint(link.alpha), betaLabel: describeApprovalWorkspaceEndpoint(link.beta),
+            mode: link.relationship.mode }), named: true } : { text: literal, named: false };
+    }
+    if (reference?.kind === 'workspace') {
+        const endpoint = sources.workspace;
+        return endpoint?.workspaceRef ? { text: describeApprovalWorkspaceEndpoint(endpoint), named: true } : { text: literal, named: false };
     }
     if (reference?.kind === 'mcpServer') {
         const server = mcp?.value?.servers.find(row => row.id === reference.id);
@@ -167,6 +190,10 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
         return own ? { text: t('accountDisplay.yours'), named: true } : { text: literal, named: false };
     }
     return { text: literal, named: false };
+}
+
+function describeApprovalWorkspaceEndpoint(endpoint: WorkspaceSyncRelationshipEndpoint): string {
+    return endpoint.machineName ? `${endpoint.name} · ${endpoint.machineName}` : endpoint.name;
 }
 
 /**

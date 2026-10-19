@@ -725,7 +725,7 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                     const mode = resolveWorkspaceSyncModeTranslationKey(summary.relationship.mode);
                     const error = summary.status?.errorCode ? resolveWorkspaceSyncErrorTranslationKey(summary.status.errorCode) : null;
                     return <Item key={summary.relationshipId}
-                        title={`${summary.alpha.label} · ${summary.beta.label}`}
+                        title={`${summary.alpha.name} · ${summary.beta.name}`}
                         subtitle={[summary.relationshipId === props.resource.initialRelationshipId ? t('workspaceSync.error.needsAttention') : null,
                             mode ? t(mode) : t('workspaceSync.unknownMode'), t(resolveWorkspaceSyncRelationshipStateLabel({
                             enabled: summary.relationship.enabled,

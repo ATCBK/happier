@@ -45,6 +45,18 @@ function inCheckout(rootPath: string | null): string {
   return name ? ` in ${name}` : '';
 }
 
+/**
+ * What a summary calls the path it acts on, and where. The checkout folder itself reads by its own
+ * name ("Write mqa2-checkout"), never as a lone "." inside the sentence, and is not "in" itself.
+ */
+function summaryTarget(rootPath: string | null, path: string | null): Readonly<{ path: string; where: string }> | null {
+  const relative = describeWorkspaceRelativePath(rootPath, path);
+  if (!relative) return null;
+  return relative === '.' && checkoutName(rootPath)
+    ? { path: checkoutName(rootPath) as string, where: '' }
+    : { path: relative, where: inCheckout(rootPath) };
+}
+
 /** The decoded size of base64 content, in words: "Empty file", "12 bytes", "3.4 KB". */
 export function describeBase64ContentSize(content: unknown): string | null {
   if (typeof content !== 'string') return null;
@@ -63,9 +75,9 @@ export function describeBase64ContentSize(content: unknown): string | null {
 export function describeWriteFileApprovalSummary(input: unknown): string | null {
   const value = readRecord(input);
   const root = readText(value.rootPath);
-  const path = describeWorkspaceRelativePath(root, readText(value.path));
-  if (!path) return null;
-  return `${readText(value.expectedHash) ? 'Save changes to' : 'Write'} ${path}${inCheckout(root)}`;
+  const target = summaryTarget(root, readText(value.path));
+  if (!target) return null;
+  return `${readText(value.expectedHash) ? 'Save changes to' : 'Write'} ${target.path}${target.where}`;
 }
 
 /** The reviewed operands of a write: the checkout, the file as the checkout names it, and the content's size. */
@@ -82,8 +94,8 @@ export function projectWriteFileApprovalInput(input: unknown): unknown {
 export function describeCreateDirectoryApprovalSummary(input: unknown): string | null {
   const value = readRecord(input);
   const root = readText(value.rootPath);
-  const path = describeWorkspaceRelativePath(root, readText(value.path));
-  return path ? `Create the folder ${path}${inCheckout(root)}` : null;
+  const target = summaryTarget(root, readText(value.path));
+  return target ? `Create the folder ${target.path}${target.where}` : null;
 }
 
 export function describeRenameApprovalSummary(input: unknown): string | null {
@@ -97,9 +109,8 @@ export function describeRenameApprovalSummary(input: unknown): string | null {
 export function describeDeleteApprovalSummary(input: unknown): string | null {
   const value = readRecord(input);
   const root = readText(value.rootPath);
-  const path = describeWorkspaceRelativePath(root, readText(value.path));
-  if (!path) return null;
-  const name = checkoutName(root);
-  const from = name ? ` from ${name}` : '';
-  return value.recursive === true ? `Delete ${path} and everything in it${from}` : `Delete ${path}${from}`;
+  const target = summaryTarget(root, readText(value.path));
+  if (!target) return null;
+  const from = target.where.replace(/^ in /u, ' from ');
+  return value.recursive === true ? `Delete ${target.path} and everything in it${from}` : `Delete ${target.path}${from}`;
 }

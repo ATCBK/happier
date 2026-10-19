@@ -292,7 +292,8 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
                 edges={{ left: showFadeLeft, right: showFadeRight }}
                 color={props.indicatorColor}
                 size={14}
-                opacity={0.28}
+                // The only sign that more chips wait beyond the edge, so it reads as a control, not a watermark.
+                opacity={0.6}
                 leftStyle={props.fadeLeftStyle}
                 rightStyle={props.fadeRightStyle}
             />

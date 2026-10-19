@@ -117,12 +117,14 @@ function createSummary(
             workspaceRefId: 'workspace-alpha',
             workspaceRef: { id: 'workspace-alpha', serverId: 'server-1', machineId: 'machine-alpha', rootPath: '/alpha', label: 'Alpha', createdAtMs: 1 },
             label: 'Alpha',
+            name: 'Alpha',
             machineName: 'Alpha Mac',
         },
         beta: {
             workspaceRefId: 'workspace-beta',
             workspaceRef: { id: 'workspace-beta', serverId: 'server-1', machineId: 'machine-beta', rootPath: '/beta', label: 'Beta', createdAtMs: 1 },
             label: 'Beta',
+            name: 'Beta',
             machineName: 'Beta workstation',
         },
         status: {
@@ -277,5 +279,27 @@ describe('WorkspaceSyncRelationshipList', () => {
 
         await screen.pressByTestIdAsync('workspace-sync-add-machine');
         expect(onAddMachine).toHaveBeenCalledOnce();
+    });
+
+    it('says what sync does and offers only its action when nothing is linked yet', async () => {
+        const { WorkspaceSyncRelationshipList } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(
+            <WorkspaceSyncRelationshipList workspaceRefId="workspace-alpha" onAddMachine={vi.fn()} />,
+        );
+
+        const text = screen.getTextContent();
+        expect(text).toContain('workspaceSync.title');
+        expect(text).toContain('workspaceSync.emptyDescription');
+        expect(screen.findByTestId('workspace-sync-add-machine')).toBeTruthy();
+        // No dead row beside the action, and no mechanism text under it.
+        expect(screen.findByTestId('workspace-sync-none')).toBeNull();
+        expect(text).not.toContain('workspaceSync.footer');
+    });
+
+    it('keeps a quiet empty line where no action can be offered', async () => {
+        const { WorkspaceSyncRelationshipList } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipList />);
+
+        expect(screen.findByTestId('workspace-sync-none')).toBeTruthy();
     });
 });

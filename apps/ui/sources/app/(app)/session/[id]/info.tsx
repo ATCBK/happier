@@ -139,8 +139,11 @@ import { PluginInlineSurfaceHost } from '@/components/plugins/surfaces';
 import { evaluatePluginUiPolicy } from '@/sync/domains/plugins/ui/policy';
 import { usePluginUiSessionPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
 import { WorkspaceSyncRelationshipList } from '@/components/workspaces/sync/WorkspaceSyncRelationshipList';
+import { openWorkspaceSyncAddMachine } from '@/components/workspaces/sync/openWorkspaceSyncAddMachine';
+import { openWorkspaceSyncRelationshipDetails } from '@/components/workspaces/sync/openWorkspaceSyncRelationshipDetails';
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getSessionMachineLabel } from '@/utils/sessions/machineDisplayNames';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 type RawJsonSectionId = 'agentState' | 'metadata' | 'sessionStatus' | 'session';
@@ -417,7 +420,11 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
             .find((machine) => machine.id === currentExecutionMachineId)
         : null;
     const currentExecutionMachineLabel = currentExecutionMachineId
-        ? getMachineDisplayName(currentExecutionMachine) ?? currentExecutionMachineId
+        ? getSessionMachineLabel({
+            machineId: currentExecutionMachineId,
+            machine: currentExecutionMachine,
+            session: { machineId: metadata?.machineId, host: metadata?.host },
+        })
         : null;
     const handoffAvailability = resolveSessionHandoffUiAvailability({
         sessionId: session.id,
@@ -435,6 +442,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const newSessionSeedDirectory = readSessionDirectoryKind(metadata) === 'managed'
         ? null
         : reachableMachineTarget?.basePath ?? metadata?.path ?? null;
+
+    // The empty Workspace sync section offers the one thing sync starts with: another machine for this folder.
+    const workspaceSyncSource = workspaceDisplay.workspaceScope;
+    const workspaceSyncRefId = workspaceDisplay.workspaceRefId;
+    const addMachineToWorkspace = React.useMemo(() => workspaceSyncSource
+        ? () => openWorkspaceSyncAddMachine(
+            { ...workspaceSyncSource, ...(workspaceSyncRefId ? { id: workspaceSyncRefId } : {}) },
+            (summary) => openWorkspaceSyncRelationshipDetails(summary, workspaceSyncRefId),
+        )
+        : undefined, [workspaceSyncRefId, workspaceSyncSource]);
 
     const vendorResumeLabelKey = core?.resume.uiVendorResumeIdLabelKey ?? null;
     const vendorResumeCopiedKey = core?.resume.uiVendorResumeIdCopiedKey ?? null;
@@ -1227,7 +1244,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                     />
                 </ItemGroup> : null}
 
-                {!contentUnavailable ? <WorkspaceSyncRelationshipList workspaceRefId={workspaceDisplay.workspaceRefId} /> : null}
+                {!contentUnavailable ? <WorkspaceSyncRelationshipList workspaceRefId={workspaceDisplay.workspaceRefId} onAddMachine={addMachineToWorkspace} /> : null}
 
                 {/* Environment: the machine, folder and agent this session runs with. */}
                 {metadata && (

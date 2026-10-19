@@ -17,6 +17,7 @@ import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionAp
 import { TriageStartEntrySessionInputV1Schema } from '../../../plugins/triage/src/actions/entrySessionProtocol.js';
 import { createTriageSelectedPrStartApprovalInput } from '../../../plugins/triage/src/sessions/testkit/entrySessionTestkit.test-support.js';
 import { SharedSavedSecretRefV1Schema } from '../machines/managed/providerFactsV1.js';
+import { computeWorkspaceSyncPolicyDigest } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
 describe('approval field presentation', () => {
   it('projects document references for every Artifact operation with an artifactId', () => {
@@ -1139,5 +1140,33 @@ describe('plugin development confirmation summary', () => {
       expect(summary, actionId).toContain(subject);
       expect(summary.replace(/\.$/u, ''), actionId).not.toBe(spec.title);
     }
+  });
+});
+
+describe('workspace sync approval operands', () => {
+  it.each([
+    'workspace.sync.relationship.disable',
+    'workspace.sync.relationship.enable',
+    'workspace.sync.relationship.flush',
+    'workspace.sync.relationship.terminate',
+  ] as const)('reads the controller machine and the linked folders of %s by reference, not as bare ids', (actionId) => {
+    const presentation = describeApprovalActionFields({ actionId,
+      actionArgs: { controllerMachineId: 'machine-1', relationshipId: 'relationship_abc' } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'controllerMachineId', reference: { kind: 'machine', id: 'machine-1' } }),
+      expect.objectContaining({ path: 'relationshipId', reference: { kind: 'workspaceSyncRelationship', id: 'relationship_abc' } }),
+    ]));
+  });
+
+  it('reads the source folder and target machine of a new link by reference', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'workspace.sync.relationship.create',
+      actionArgs: { v: 1, sourceWorkspaceRefId: 'ref-1', targetMachineId: 'machine-2', targetPath: '/home/me/copy',
+        mode: 'keep_synced', destinationIntent: 'use_existing', contentPolicy: { v: 1, selection: 'git_worktree',
+          extraIgnorePatterns: [], extraIncludePatterns: [], policyDigest: computeWorkspaceSyncPolicyDigest({
+            v: 1, selection: 'git_worktree', extraIgnorePatterns: [], extraIncludePatterns: [] }) } } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'sourceWorkspaceRefId', reference: { kind: 'workspace', id: 'ref-1' } }),
+      expect.objectContaining({ path: 'targetMachineId', reference: { kind: 'machine', id: 'machine-2' } }),
+    ]));
   });
 });

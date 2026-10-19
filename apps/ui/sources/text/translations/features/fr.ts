@@ -15156,7 +15156,7 @@ const fr = completeWorkspaceSyncTranslation({
     attention: workspaceSyncSetAttentionTranslations["fr"],
 }, {
     title: 'Synchronisation de l’espace de travail',
-    footer: 'L’état provient de la machine qui gère cette relation. Les changements apparaissent uniquement après confirmation par cette machine.',
+    footer: 'L’état provient de la machine qui gère chaque lien. Les changements apparaissent uniquement après confirmation par cette machine.',
     legacyRecovery: {
         title: 'Données de synchronisation retirées',
         footer: 'Happier se contente d’inspecter et de mettre en quarantaine ces données retirées. L’application ne les supprime jamais.',
@@ -15172,7 +15172,8 @@ const fr = completeWorkspaceSyncTranslation({
         unknown: ({ path, reason }) => `Happier n’a pas pu classer de façon sûre l’ancien état dans ${path} (${reason}). La synchronisation reste désactivée. Inspecte ce chemin manuellement ; ne le supprime pas depuis l’application.`,
         reinspect: 'Inspecter à nouveau',
     },
-    none: 'Aucune relation de synchronisation',
+    none: 'Pas encore synchronisé avec une autre machine',
+    emptyDescription: 'Garde les fichiers de ce dossier à jour sur une autre machine, pour que les agents qui s’y trouvent travaillent sur les mêmes fichiers.',
     conflictsTitle: 'Conflits de l’espace de travail',
     openConflicts: ({ count }) => `Examiner la synchronisation sur ${count} liens`,
     noConflicts: 'Aucun conflit',
@@ -15191,7 +15192,7 @@ const fr = completeWorkspaceSyncTranslation({
         destinationNeedsPreparation: 'Le dossier de destination doit être préparé avant le début de la synchronisation.',
         gitPreparationFailed: 'Happier n’a pas pu préparer cet espace de travail Git. Vérifie la destination et réessaie.',
         authorizationExpired: 'L’autorisation de l’espace de travail a expiré. Relance l’opération.',
-        rootNoLongerAuthorized: 'Le dossier de l’espace de travail a changé et n’est plus autorisé. Vérifie la relation avant de réessayer.',
+        rootNoLongerAuthorized: 'Le dossier de l’espace de travail a changé et n’est plus autorisé. Vérifie le lien avant de réessayer.',
         conflictNeedsAttention: 'Ce conflit a changé. Actualise-le avant de choisir une version.',
         needsAttention: 'La synchronisation de l’espace de travail nécessite ton attention. Actualise son état, puis réessaie.',
     },
@@ -15205,7 +15206,7 @@ const fr = completeWorkspaceSyncTranslation({
     } },
     engine: { checking: 'Vérification de la synchronisation sur cette machine…' },
     actions: { refresh: 'Actualiser l’état', syncNow: 'Synchroniser maintenant', more: 'Actions de synchronisation', pause: 'Mettre en pause', resume: 'Reprendre', terminate: 'Arrêter la synchronisation', openOnMachine: ({ machine }) => `Ouvrir sur ${machine}`, openFolder: ({ label }) => `Ouvrir le dossier ${label}`, keepLocal: 'Conserver la version locale', keepRemote: 'Conserver la version distante', keepNamed: ({ side }) => `Conserver la version de ${side}` },
-    terminate: { title: 'Supprimer la synchronisation de l’espace de travail ?', body: 'La synchronisation s’arrêtera et sa relation sera supprimée. Les fichiers resteront dans les deux espaces de travail.' },
+    terminate: { title: 'Supprimer la synchronisation de l’espace de travail ?', body: 'La synchronisation s’arrêtera et le lien entre les dossiers sera supprimé. Les fichiers resteront dans les deux espaces de travail.' },
     resolve: {
         changedTitle: 'Le conflit a changé',
         changedBody: 'Ce conflit a changé depuis son ouverture. La liste a été actualisée. Vérifie les dernières versions avant de choisir à nouveau.',

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -9,6 +9,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { t } from '@/text';
 import type { ApprovalActionFieldsPresentation } from './approvalFieldValues';
 
@@ -95,8 +96,9 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
             </View>
     );
     if (props.collapsed) {
+        // Inside the prompt card the arguments wait behind one quiet "Details" line, not a second card.
         return (
-            <View style={styles.card}>
+            <View>
                 <ExpandableItem
                     testID="approvals.details-disclosure"
                     expanded={detailsOpen}
@@ -104,7 +106,7 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
                     showDivider={false}
                     header={({ headerProps, expanded }) => (
                         <Pressable {...headerProps} style={styles.disclosureHeader}>
-                            <Text style={styles.sectionTitle}>{t('approvals.details')}</Text>
+                            <Text style={styles.disclosureTitle}>{t('approvals.details')}</Text>
                             <ExpandableItemCaret expanded={expanded} />
                         </Pressable>
                     )}
@@ -331,11 +333,16 @@ const styles = StyleSheet.create((theme) => ({
     disclosureHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        minHeight: 24,
+        alignSelf: 'flex-start',
+        gap: theme.space.s4,
+        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
+    },
+    disclosureTitle: {
+        ...Typography.variant('meta', 'semiBold'),
+        color: theme.colors.text.secondary,
     },
     disclosureBody: {
-        paddingTop: theme.space.s12,
+        paddingTop: theme.space.s8,
         gap: theme.space.s12,
     },
     sectionTitle: {
