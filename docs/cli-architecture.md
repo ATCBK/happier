@@ -1438,6 +1438,17 @@ attachable. There is no parallel Herdr session synchronization service.
 
 ## Daemon architecture
 
+Startup reattachment and resume of an already-running session reconcile both
+the daemon's session access key and the session's machine routing metadata.
+The recovered-session machine-control owner uses the existing versioned
+metadata update owner, and changes routing only while the recorded host PID
+still matches the locally adopted runner. Matching workspace-location bindings
+follow the daemon identity; provider session ids, paths and unrelated metadata
+remain intact. The runner keeps its existing authenticated publisher connection.
+This recovery does not retire or replace that publisher's old Machine identity;
+replacement must wait until its surviving publishers have finished or migrated.
+A handoff that has published another runner's PID is left untouched.
+
 With no tracked runners remaining, daemon shutdown cleans each idle OpenCode
 server in its existing managed pool, not just the ambient launch profile. The
 same locked termination owner verifies daemon, relay-directory and process

@@ -13,7 +13,7 @@ import {
 import { ApiClient, isMachineContentPublicKeyMismatchError } from '@/api/api';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
-import { ensureSessionMachineAccessKeyBinding } from '@/api/session/ensureSessionMachineAccessKeyBinding';
+import { reconcileRecoveredSessionMachineControl } from './sessions/reconcileRecoveredSessionMachineControl';
 import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
@@ -2670,22 +2670,23 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           }
 
           sessionMachineAccessBindingReconcileInFlight = (async () => {
-            const liveSessionIds = new Set(
-              getCurrentChildren()
-                .map((tracked) => tracked.happySessionId?.trim())
-                .filter((sessionId): sessionId is string => Boolean(sessionId)),
-            );
+            const liveSessionsById = new Map<string, TrackedSession>();
+            for (const tracked of getCurrentChildren()) {
+              const sessionId = tracked.happySessionId?.trim();
+              if (sessionId) liveSessionsById.set(sessionId, tracked);
+            }
             for (const sessionId of pendingSessionMachineAccessBindingIds) {
-              if (!liveSessionIds.has(sessionId)) {
+              const tracked = liveSessionsById.get(sessionId);
+              if (!tracked) {
                 pendingSessionMachineAccessBindingIds.delete(sessionId);
                 continue;
               }
               try {
-                await ensureSessionMachineAccessKeyBinding({
-                  serverUrl: configuration.apiServerUrl,
-                  token: credentials.token,
+                await reconcileRecoveredSessionMachineControl({
+                  credentials,
                   sessionId,
                   machineId,
+                  runnerPid: tracked.sessionRunnerPid ?? tracked.pid,
                 });
                 pendingSessionMachineAccessBindingIds.delete(sessionId);
               } catch (error) {
