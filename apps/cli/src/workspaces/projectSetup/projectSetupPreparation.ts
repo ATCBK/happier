@@ -6,7 +6,7 @@ import type { ProjectCommandSourceV1, ProjectEnvironmentSelectionV1, ProjectMani
 import type { ProjectManifestFileSnapshot } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import { QualifiedProjectTrustProjectV1Schema, type QualifiedProjectTrustProjectV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import type { ProjectSetupSuccessV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectSetupSuccessV1';
-import type { ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import type { ProjectSetupReadinessV1, ProjectDefinitionInspectOutput } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { ProjectSetupReviewV1Schema, type ProjectSetupReviewV1 } from '@happier-dev/protocol/actions/projectSetupConsentFailure';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
@@ -31,9 +31,11 @@ import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspac
 import { readProjectDefinitionFile, readProjectDefinitionFileBytes } from './nativeDefinitionFiles';
 import { createProjectSetupTrustClient, type ProjectSetupTrustClientInput } from './projectSetupTrust';
 import { createProjectSetupSuccessStore } from './projectSetupSuccess';
-import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { performance } from 'node:perf_hooks';
+import { logger } from '@/utils/logger';
 
 export type PreparedProjectSetupCommand = Readonly<
     { kind: 'literal'; source: Extract<ProjectCommandSourceV1, { kind: 'command' }>; cwd: string }
@@ -182,8 +184,24 @@ async function readReviewProvenance(input: ProjectSetupPreparationInput, root: s
     }
 }
 
+/** One namespace decision for passive cold preflight and complete setup review. */
+export async function readProjectSetupNamespaceRefusal(input: Pick<ProjectSetupPreparationInput, 'workspace' | 'requester' | 'signal'>,
+    manifest: ProjectManifestV1 | null): Promise<ProjectSetupPreparationRefusal | null> {
+    if (!manifest?.devcontainer) return null;
+    const children = await readWorkspaceSyncChildMachineFacts({ serverId: input.workspace.serverId,
+        purpose: 'child_namespace', ...input.requester, credentials: input.requester.credentials,
+        machineIds: [input.workspace.machineId], signal: input.signal });
+    const child = children[0];
+    return children.length !== 1 || !child || !isManagedDevcontainerChildProjectionCurrentV1({ homeId: input.workspace.serverId,
+        machineId: input.workspace.machineId, projection: child.projection, managedMachine: child.managedMachine })
+        || resolveWorkspaceRefV1([input.workspace], { serverId: input.workspace.serverId,
+            machineId: input.workspace.machineId, rootPath: child.projection.observation.workspaceFolder }).kind !== 'resolved'
+        ? refuse('child_required') : null;
+}
+
 /** Current-byte review with registered read-only SCM metadata; no environment evaluation, native effects, installation or grant. */
-export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInput): Promise<ProjectSetupPreparationRefusal | Readonly<{ kind: 'reviewed'; plan: PreparedProjectSetupPlan }>> {
+export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInput,
+    presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>): Promise<ProjectSetupPreparationRefusal | Readonly<{ kind: 'reviewed'; plan: PreparedProjectSetupPlan }>> {
     if (!associationMatches(input)) return refuse('project_workspace_association_mismatch');
     if (input.signal?.aborted) return refuse('project_setup_cancelled');
     const root = resolve(input.workspace.rootPath);
@@ -191,17 +209,8 @@ export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInp
         const snapshot = await readProjectManifest({ root });
         if (snapshot.document?.status === 'invalid') return refuse('invalid_manifest');
         const manifest = snapshot.document?.manifest ?? null;
-        // A selected child is realized/accepted by its owner before child-local preparation.
-        if (manifest?.devcontainer) {
-            const children = await readWorkspaceSyncChildMachineFacts({ serverId: input.workspace.serverId,
-                purpose: 'child_namespace',
-                ...input.requester, credentials: input.requester.credentials, machineIds: [input.workspace.machineId], signal: input.signal });
-            const child = children[0];
-            if (children.length !== 1 || !child || !isManagedDevcontainerChildProjectionCurrentV1({ homeId: input.workspace.serverId,
-                machineId: input.workspace.machineId, projection: child.projection, managedMachine: child.managedMachine })
-                || resolveWorkspaceRefV1([input.workspace], { serverId: input.workspace.serverId,
-                    machineId: input.workspace.machineId, rootPath: child.projection.observation.workspaceFolder }).kind !== 'resolved') return refuse('child_required');
-        }
+        const namespaceRefusal = await readProjectSetupNamespaceRefusal(input, manifest);
+        if (namespaceRefusal) return namespaceRefusal;
         const environmentSelection = manifest?.environment ?? { kind: 'host' as const };
         const selectedEnvironment = await resolveProjectEnvironmentSelection({ root, selection: environmentSelection });
         if (selectedEnvironment.kind === 'refused') return refuse(selectedEnvironment.code);
@@ -347,7 +356,12 @@ export async function reviewProjectSetupEffect(input: ProjectSetupPreparationInp
         const semanticEffect = { v: 1 as const, purpose: input.purpose, commands: reviewedCommands, environment: reviewedEnvironment,
             files: [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([file, digest]) => ({ file, digest })), setupInputs, bindings, configEnvironment };
         const reviewedEffectDigest = digest(semanticEffect);
-        const provenance = await readReviewProvenance(input, root, manifest !== null);
+        // SCM provenance is display context, excluded from the consent digest.
+        // Native-launch checkpoints remeasure effect inputs, not repository UI.
+        const provenanceStartedAt = performance.now();
+        const provenance = presentation?.provenance ?? await readReviewProvenance(input, root, manifest !== null);
+        logger.debug('[ProjectSetup] launch phase', { phase: 'review_provenance', retained: presentation !== undefined,
+            durationMs: Math.round(performance.now() - provenanceStartedAt) });
         if (input.signal?.aborted) return refuse('project_setup_cancelled');
         if (environmentAdapterLease && !environmentAdapterLease.isCurrent()
             || commands.some(command => (command.kind === 'pluginNative' || command.kind === 'pluginNativeReference') && !command.lease.isCurrent())) return refuse('native_adapter_retired');
@@ -371,17 +385,23 @@ export async function inspectProjectSetupReadiness(input: ProjectSetupPreparatio
     return (await inspectProjectSetup(input)).setupReadiness;
 }
 
-export type ProjectSetupInspection = Readonly<{ setupReadiness: ProjectSetupReadinessV1; setupReview?: ProjectSetupReviewV1 }>;
+export type ProjectSetupInspection = Readonly<{ setupReadiness: ProjectSetupReadinessV1; setupReview?: ProjectSetupReviewV1;
+    setupConsent?: ProjectDefinitionInspectOutput['setupConsent'] }>;
 
 /** One passive review supplies readiness and approval facts without producing native effects. */
-export async function inspectProjectSetup(input: ProjectSetupPreparationInput): Promise<ProjectSetupInspection> {
+export async function inspectProjectSetup(input: ProjectSetupPreparationInput, options?: Readonly<{ reviewConsent: true }>): Promise<ProjectSetupInspection> {
     if (input.purpose !== 'setup') return { setupReadiness: { kind: 'unknown', code: 'project_setup_review_unavailable' } };
     const reviewed = await reviewProjectSetupEffect(input);
     if (reviewed.kind === 'refused') return { setupReadiness: { kind: 'needsReview', code: reviewed.code } };
     // reviewedEffect is the canonical non-secret effect, not the private executable plan.
     const setupReview = ProjectSetupReviewV1Schema.parse({ reviewedEffect: projectNativeJsonValueForTransport(reviewed.plan.reviewedEffect),
         reviewedEffectDigest: reviewed.plan.reviewedEffectDigest });
-    return { setupReview, setupReadiness: await readReviewedProjectSetupReadiness(input, reviewed.plan) };
+    if (!options?.reviewConsent) return { setupReview, setupReadiness: await readReviewedProjectSetupReadiness(input, reviewed.plan) };
+    const admission = await admitReviewedProjectSetup(input, reviewed.plan);
+    const setupConsent: ProjectDefinitionInspectOutput['setupConsent'] = admission.kind === 'pendingApproval'
+        ? { kind: 'required', code: admission.code }
+        : admission.kind === 'refused' ? { kind: 'unavailable', code: admission.code } : { kind: 'admitted' };
+    return { setupReview, setupConsent, setupReadiness: await readReviewedProjectSetupReadiness(input, reviewed.plan) };
 }
 
 async function readReviewedProjectSetupReadiness(input: ProjectSetupPreparationInput, plan: PreparedProjectSetupPlan): Promise<ProjectSetupReadinessV1> {
@@ -421,10 +441,21 @@ export function readProjectActionApprovalSettings(input: Pick<ProjectSetupPrepar
 }
 
 /** Produces an execution plan and consent facts. It never launches or records completion. */
-export async function prepareProjectSetup(input: ProjectSetupPreparationInput & Readonly<{ expectedEffectDigest?: string; skipForInvocation?: boolean }>): Promise<ProjectSetupPreparationOutcome> {
-    const reviewed = await reviewProjectSetupEffect(input);
+export async function prepareProjectSetup(input: ProjectSetupPreparationInput & Readonly<{ expectedEffectDigest?: string; skipForInvocation?: boolean }>,
+    presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>): Promise<ProjectSetupPreparationOutcome> {
+    const startedAt = performance.now();
+    const reviewed = await reviewProjectSetupEffect(input, presentation);
+    logger.debug('[ProjectSetup] launch phase', { phase: 'effect_review', durationMs: Math.round(performance.now() - startedAt) });
     if (reviewed.kind === 'refused') return reviewed;
-    const plan = reviewed.plan;
+    const admissionStartedAt = performance.now();
+    const result = await admitReviewedProjectSetup(input, reviewed.plan);
+    logger.debug('[ProjectSetup] launch phase', { phase: 'consent_admission', durationMs: Math.round(performance.now() - admissionStartedAt) });
+    return result;
+}
+
+/** Apply current consent/completion to an effect already read in this checkpoint. */
+export async function admitReviewedProjectSetup(input: ProjectSetupPreparationInput & Readonly<{ expectedEffectDigest?: string; skipForInvocation?: boolean }>,
+    plan: PreparedProjectSetupPlan): Promise<ProjectSetupPreparationOutcome> {
     if (input.expectedEffectDigest !== undefined && input.expectedEffectDigest !== plan.reviewedEffectDigest) {
         return { kind: 'pendingApproval', code: 'project_setup_effect_changed', plan };
     }

@@ -2,6 +2,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { findBuiltinNativeEnvironmentAdapterV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
 import { projectNativeSystemIo } from './projectNativeSystemIo';
 import { createProjectNativeIo } from './projectNativeIo';
 import { produceProjectNativeEnvironment } from '@/workspaces/environment/produceProjectNativeEnvironment';
@@ -104,7 +105,7 @@ describe('installed native tool producer', () => {
             .toMatchObject({ executablePath: process.execPath, version: process.versions.node });
     });
 
-    it.skipIf(process.platform === 'win32')('keeps passive Mise presence separate from admitted version probing, and allows repair after malformed native output', async () => {
+    it.skipIf(process.platform === 'win32')('qualifies Mise version probes for supported hosts, and allows repair after malformed native output', async () => {
         const root = await fixture();
         // The real process supervisor needs its OS tools; only Mise selection is controlled.
         vi.stubEnv('PATH', [join(root, 'bin'), hostPath].join(delimiter));
@@ -115,6 +116,11 @@ describe('installed native tool producer', () => {
         expect(await projectNativeSystemIo.resolveTool('mise', { cwd: root })).toMatchObject({ executablePath: binary });
         await expect(readFile(called)).rejects.toMatchObject({ code: 'ENOENT' });
         const io = createProjectNativeIo();
+        if (process.arch !== 'x64' || !findBuiltinNativeEnvironmentAdapterV1('mise', process.platform)) {
+            expect(await io.environmentIo.resolveTool('mise')).toBeNull();
+            await expect(readFile(called)).rejects.toMatchObject({ code: 'ENOENT' });
+            return;
+        }
         expect(await io.environmentIo.resolveTool('mise')).toMatchObject({ executablePath: binary, args: [], version: '2026.10.4' });
         expect(await readFile(called, 'utf8')).toBe('--version');
         await writeFile(binary, source('unrelated 2026.10.4'));

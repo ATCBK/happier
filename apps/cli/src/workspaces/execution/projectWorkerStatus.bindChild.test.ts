@@ -9,6 +9,7 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { createProjectWorkerAdmission } from './projectWorkerAdmission';
 import { createProjectWorkerAction } from './projectWorkerAction';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import * as machineRpcTransport from '@/session/transport/rpc/machineRpc';
 
 afterEach(() => vi.restoreAllMocks());
@@ -66,7 +67,7 @@ describe('worker status bind-child routing', () => {
     vi.spyOn(machineRpcTransport, 'callMachineRpc').mockRejectedValue(new Error('Timestamp unavailable'));
     const admission = createProjectWorkerAdmission({ machineId: target.machineId, admissionDrain: createDaemonAdmissionDrain(),
       readPolicy: async () => ({ status: 'ready', policy: { accepting: true, runAtMost: 1 }, source: 'stored', metadataVersion: 1 }) });
-    const executor = createActionExecutor({ projectWorkerAction: createProjectWorkerAction({ machineId: target.machineId,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), projectWorkerAction: createProjectWorkerAction({ machineId: target.machineId,
         serverId: homeId, serverHttpBaseUrl: 'https://home.example', credentials, admission,
         isFiniteExecutionLive: () => true, isServiceExecutionLive: () => true }) });
     const input = { workspace: { serverId: homeId, refId: source.id }, destination: { kind: 'machine', machineId: target.machineId }, purpose };

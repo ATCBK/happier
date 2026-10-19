@@ -1,9 +1,11 @@
 import type { ProjectAccountRowsInput } from '@/workspaces/projectAccountRows';
 import { configuration } from '@/configuration';
-import { prepareProjectSetup, readProjectSetupNamespaceRefusal, type ProjectSetupPreparationInput, type ProjectSetupPreparationOutcome } from './projectSetupPreparation';
+import { prepareProjectSetup, readProjectSetupNamespaceRefusal, type ProjectSetupPreparationInput, type ProjectSetupPreparationOutcome, type ProjectSetupReviewPresentation } from './projectSetupPreparation';
 import { resolveProjectSetupAcceptedWorkspace } from './projectSetupAcceptedWorkspace';
 import { projectNativeSystemIo } from './projectNativeSystemIo';
 import { readProjectManifest } from './projectManifestFile';
+import { performance } from 'node:perf_hooks';
+import { logger } from '@/utils/logger';
 
 export type ProjectAgentLaunchPreparationInput = Readonly<{
     cwd: string;
@@ -56,17 +58,22 @@ export async function preflightProjectAgentLaunch(input: Pick<ProjectAgentLaunch
 /** Passive cold admission: exact accepted Account association, then the one setup policy.
  * No filesystem containment, native evaluation or setup execution establishes a Project.
  */
-export async function prepareProjectAgentLaunch(input: ProjectAgentLaunchPreparationInput): Promise<ProjectAgentLaunchPreparation> {
+export async function prepareProjectAgentLaunch(input: ProjectAgentLaunchPreparationInput,
+    presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>): Promise<ProjectAgentLaunchPreparation> {
     try {
         input.signal?.throwIfAborted();
+        const associationStartedAt = performance.now();
         const association = await resolveProjectSetupAcceptedWorkspace({
             ...input.account, serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl,
             address: { serverId: input.serverId, machineId: input.machineId, rootPath: input.cwd,
                 ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}) },
             allowUnassociated: true, ...(input.signal ? { signal: input.signal } : {}),
         });
+        logger.debug('[ProjectSetup] launch phase', { phase: 'association', durationMs: Math.round(performance.now() - associationStartedAt) });
         if (!association) return { kind: 'notAssociated' };
+        const secretsStartedAt = performance.now();
         const secretInputs = input.resolveSecretInputs ? await input.resolveSecretInputs() : input;
+        logger.debug('[ProjectSetup] launch phase', { phase: 'secret_inputs', durationMs: Math.round(performance.now() - secretsStartedAt) });
         const manifest = secretInputs.environmentBindings ? await readProjectManifest({ root: association.workspace.rootPath }) : null;
         const secretNames = new Set(manifest?.document?.status === 'valid'
             ? manifest.document.manifest.environmentVariables?.filter(requirement => requirement.kind === 'secret').map(requirement => requirement.name) : []);
@@ -84,7 +91,7 @@ export async function prepareProjectAgentLaunch(input: ProjectAgentLaunchPrepara
             ...(input.approvalContext ? { approvalContext: input.approvalContext } : {}),
             ...(input.signal ? { signal: input.signal } : {}),
         };
-        const outcome = await prepareProjectSetup(preparation);
+        const outcome = await prepareProjectSetup(preparation, presentation);
         return outcome.kind === 'refused' ? outcome : { kind: 'prepared', preparation, outcome };
     } catch (error) {
         return { kind: 'refused', code: input.signal?.aborted ? 'cancelled'

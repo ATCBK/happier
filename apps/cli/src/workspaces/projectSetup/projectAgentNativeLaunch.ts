@@ -3,10 +3,10 @@ import type { RpcHandlerContext } from '@/api/rpc/types';
 import { projectRuntimeAccountRowsInput } from '@/workspaces/projectAccountRows';
 import type { HostProjectNativeLaunchAdmission } from '@/plugins/runtime/invocation/services/exec';
 import type { ProjectFiniteActionRuntime } from './projectFiniteAction';
-import { prepareProjectAgentLaunch, type ProjectAgentLaunchPreparationInput } from './projectAgentLaunch';
+import { prepareProjectAgentLaunch, type ProjectAgentLaunchPreparation, type ProjectAgentLaunchPreparationInput } from './projectAgentLaunch';
 import { createProjectNativeInvocationCustody, createProjectNativeLaunchAdmission, executeProjectSetup,
     publishProjectFiniteAdmission, type ProjectSetupOperationContext, type ProjectSetupExecutionOutcome } from './projectSetupExecution';
-import { prepareProjectSetup, type ProjectSetupPreparationInput } from './projectSetupPreparation';
+import { admitReviewedProjectSetup, type ProjectSetupPreparationInput, type ProjectSetupReviewPresentation } from './projectSetupPreparation';
 import type { ActionOperationSetupDecision } from '@/daemon/actionOperations/actionOperationTypes';
 import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
@@ -14,7 +14,7 @@ import { ProjectSetupConsentFailureDetailsV1Schema } from '@happier-dev/protocol
 import { validatePath } from '@/rpc/handlers/pathSecurity';
 import { isProjectNativeProcessUncertain } from '@/plugins/runtime/lifecycle/contributions/targetProjectNativeAdapters';
 import { ProjectNativeEnvironmentUncertainError } from '@/workspaces/environment/produceProjectNativeEnvironment';
-import { runWithRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 
 /** An invocation's existing Project IO custody, activated only by an exact native launch. */
 export function createProjectAgentNativeLaunchOwner(input: Readonly<{
@@ -44,7 +44,7 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
             // The host invocation selects the Project. A native child may use a
             // contained cwd, but cannot select another Project by changing cwd.
             if (cwd && !validatePath(cwd.replaceAll('\\', '/'), input.cwd).valid) fail('outside_root');
-            const read = () => prepareProjectAgentLaunch({
+            const read = (presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>) => prepareProjectAgentLaunch({
                 cwd: input.cwd, machineId: runtime.machineId, serverId: runtime.serverId,
                 serverHttpBaseUrl: runtime.serverHttpBaseUrl, account: projectRuntimeAccountRowsInput(runtime),
                 nativeIo: runtime.nativeIo, plugins: runtime.plugins, successHomeDir: runtime.successHomeDir,
@@ -54,12 +54,12 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
                 ...(runtime.secretEnvironment ? { secretEnvironment: runtime.secretEnvironment } : {}),
                 ...(input.resolveSecretInputs ? { resolveSecretInputs: input.resolveSecretInputs } : {}),
                 ...(ingress.localActionContext ? { approvalContext: ingress.localActionContext } : {}), signal,
-            });
+            }, presentation);
             let prepared = await read();
             await assertCurrent(signal);
             if (prepared.kind === 'notAssociated') return undefined;
             if (prepared.kind === 'refused') return fail(prepared.code);
-            const pending = (outcome: Extract<typeof prepared.outcome, { kind: 'pendingApproval' }>) => ProjectSetupConsentFailureDetailsV1Schema.parse({
+            const pending = (outcome: Extract<Extract<ProjectAgentLaunchPreparation, { kind: 'prepared' }>['outcome'], { kind: 'pendingApproval' }>) => ProjectSetupConsentFailureDetailsV1Schema.parse({
                 kind: 'pendingApproval', code: outcome.code, reviewedEffectDigest: outcome.plan.reviewedEffectDigest,
                 reviewedEffect: outcome.plan.reviewedEffect });
             const baseline = prepared.outcome.plan;
@@ -71,15 +71,18 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
                         ...(!decision.skipForInvocation ? { effectDecision: { authority: 'present_user' as const,
                             project: prepared.outcome.plan.project, reviewedEffectDigest: decision.reviewedEffectDigest } } : {}) } : {}) };
             };
-            const refresh = async () => {
-                const current = await read();
+            const refresh = async (presentation?: Pick<ProjectSetupReviewPresentation, 'provenance'>) => {
+                const current = await read(presentation);
                 await assertCurrent(signal);
                 if (current.kind === 'refused') return fail(current.code);
                 if (current.kind !== 'prepared' || current.outcome.plan.workspace.id !== baseline.workspace.id
                     || current.outcome.plan.project.serverId !== baseline.project.serverId
                     || current.outcome.plan.project.projectId !== baseline.project.projectId) return fail('project_workspace_changed');
                 prepared = current;
-                return current.outcome;
+                const outcome = decision ? await admitReviewedProjectSetup(preparation(), current.outcome.plan) : current.outcome;
+                if (outcome.kind === 'refused') return fail(outcome.code);
+                prepared = { ...current, outcome };
+                return outcome;
             };
             const operation = input.operation;
             const needsSetup = prepared.outcome.kind === 'pendingApproval'
@@ -141,16 +144,13 @@ export function createProjectAgentNativeLaunchOwner(input: Readonly<{
                 }
                 await refresh();
             }
-            const final = await prepareProjectSetup(preparation());
-            if (final.kind === 'refused') return fail(final.code);
+            const final = prepared.outcome;
             if (final.kind === 'pendingApproval') return fail(final.code, pending(final));
             const plan = final.plan;
             const verifyCurrent = () => runWithRequesterSessionCurrentnessCheckpoint(async () => {
                 await assertCurrent(signal);
-                await refresh();
-                const current = await prepareProjectSetup(preparation());
+                const current = await refresh({ provenance: plan.reviewedEffect.presentation.provenance });
                 await assertCurrent(signal);
-                if (current.kind === 'refused') return fail(current.code);
                 const currentPlan = current.plan;
                 if (currentPlan.workspace.id !== plan.workspace.id || currentPlan.project.serverId !== plan.project.serverId
                     || currentPlan.project.projectId !== plan.project.projectId) return fail('project_workspace_changed');

@@ -5,13 +5,26 @@ import { readProjectAccountRows, type ProjectAccountRowsInput } from '@/workspac
 import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
 export type ProjectSetupWorkspaceAddress = Readonly<WorkspaceAddressV1>;
+export type ProjectSetupAcceptedAssociation = Readonly<{ workspace: WorkspaceRefV1; project: Readonly<{ serverId: string; projectId: string }> }>;
+type ProjectSetupAcceptedWorkspaceInput = ProjectAccountRowsInput & Readonly<{
+    address: Omit<ProjectSetupWorkspaceAddress, 'workspaceId'> & Readonly<{ workspaceId?: string }>;
+    serverId: string;
+    serverHttpBaseUrl: string;
+    signal?: AbortSignal;
+}>;
 
-export async function resolveProjectSetupAcceptedWorkspace(input: ProjectAccountRowsInput & Readonly<{
+export function resolveProjectSetupAcceptedWorkspace(input: ProjectSetupAcceptedWorkspaceInput & Readonly<{
+    allowUnassociated: true;
+}>): Promise<ProjectSetupAcceptedAssociation | null>;
+export function resolveProjectSetupAcceptedWorkspace(input: ProjectAccountRowsInput & Readonly<{
     address: ProjectSetupWorkspaceAddress;
     serverId: string;
     serverHttpBaseUrl: string;
     signal?: AbortSignal;
-}>): Promise<Readonly<{ workspace: WorkspaceRefV1; project: Readonly<{ serverId: string; projectId: string }> }>> {
+}>): Promise<ProjectSetupAcceptedAssociation>;
+export async function resolveProjectSetupAcceptedWorkspace(input: ProjectSetupAcceptedWorkspaceInput & Readonly<{
+    allowUnassociated?: true;
+}>): Promise<ProjectSetupAcceptedAssociation | null> {
     const fail = (code: string): never => { throw Object.assign(new Error(code), { code }); };
     if (!await isServerProfileHomeIdentity(input.serverId, input.address.serverId)) return fail('server_scope_mismatch');
     let snapshot: Awaited<ReturnType<typeof readProjectAccountRows>>;
@@ -20,15 +33,26 @@ export async function resolveProjectSetupAcceptedWorkspace(input: ProjectAccount
             ...input, serverId: input.serverId,
             ...(input.signal ? { signal: input.signal } : {}),
         }));
-    } catch { return fail(input.signal?.aborted ? 'cancelled' : 'project_workspace_unavailable'); }
+    } catch (error) {
+        if (!input.signal?.aborted && input.allowUnassociated && input.address.workspaceId === undefined
+            && error instanceof Error && 'code' in error && error.code === 'project_account_rows_unsupported') return null;
+        return fail(input.signal?.aborted ? 'cancelled' : 'project_workspace_unavailable');
+    }
     const homeServerId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
     const context = { normalizeServerId: (id: string) => id === input.serverId ? homeServerId : id };
     const resolved = resolveWorkspaceRefV1(snapshot.workspaceRefs, input.address, context);
     if (resolved.kind !== 'resolved') {
+        // Only a cold root lookup may discover an ordinary, unassociated folder.
+        // A known checkout identity becoming unavailable is still a refusal.
+        if (resolved.kind === 'missing' && input.allowUnassociated && input.address.workspaceId === undefined) return null;
+        if (input.address.workspaceId === undefined) return fail(resolved.kind === 'ambiguous' ? 'project_workspace_ambiguous' : 'project_workspace_unavailable');
         const identity = resolveWorkspaceRefV1(snapshot.workspaceRefs, { serverId: input.serverId, id: input.address.workspaceId }, context);
         return fail(identity.kind === 'resolved' && identity.ref.projectKey ? 'project_workspace_changed' : 'project_workspace_unavailable');
     }
     const workspace = resolved.ref;
-    if (!workspace.projectKey) return fail('project_workspace_unavailable');
+    if (!workspace.projectKey) {
+        if (input.allowUnassociated && input.address.workspaceId === undefined) return null;
+        return fail('project_workspace_unavailable');
+    }
     return { workspace, project: { serverId: workspace.serverId, projectId: workspace.projectKey } };
 }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { projectNativeJsonValueForTransport, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { WorkspaceRefV1WriteSchema, type WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -8,11 +8,11 @@ import { assertProjectAccountSnapshotTransition, resolveProjectAccountWorkspaceR
 import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot, resolveCanonicalAbsolutePathComparisonIdentity } from '@/utils/path/expandHomeDirPath';
 import { mutateProjectAccountRows, readProjectAccountRows, type ActiveProjectAccountRowsSnapshot, type ProjectAccountRowsInput } from './projectAccountRows';
 
-const OwnerDataSchema = z.object({
-  v: z.literal(1), scopeKey: z.string().min(1), serverId: z.string().min(1), machineId: z.string().min(1),
-  rootPath: z.string().min(1), dependentWorktreePaths: z.array(z.string().min(1)),
-  refs: z.array(z.object({ revision: z.number().int().nonnegative(), ref: WorkspaceRefV1WriteSchema }).strict()),
-}).strict();
+const OwnerDataSchema = z.strictObject({
+  v: z.literal(1), scopeKey: z.string().check(z.minLength(1)), serverId: z.string().check(z.minLength(1)), machineId: z.string().check(z.minLength(1)),
+  rootPath: z.string().check(z.minLength(1)), dependentWorktreePaths: z.array(z.string().check(z.minLength(1))),
+  refs: z.array(z.strictObject({ revision: z.number().check(z.int(), z.nonnegative()), ref: WorkspaceRefV1WriteSchema })),
+});
 const StoredOwnerDataSchema = createStoredReadSchema(OwnerDataSchema);
 type OwnerData = z.infer<typeof OwnerDataSchema>;
 

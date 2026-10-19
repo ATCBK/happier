@@ -2,6 +2,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { findBuiltinNativeEnvironmentAdapterV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
 
 import { createProjectNativeIo } from './projectNativeIo';
 
@@ -38,7 +39,12 @@ describe('Project native host IO', () => {
         // still wins tool selection. A malformed version proves no provenance.
         vi.stubEnv('PATH', [root, originalPath].filter(Boolean).join(delimiter));
         expect(await environmentIo.resolveTool('mise')).toBeNull();
-        expect(await readFile(marker, 'utf8')).toBe('evaluated');
+        if (process.arch === 'x64' && findBuiltinNativeEnvironmentAdapterV1('mise', process.platform)) {
+            expect(await readFile(marker, 'utf8')).toBe('evaluated');
+        } else {
+            // Presence is still passive on hosts outside the adapter's qualification.
+            await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+        }
     });
 
     it('uses the incumbent finite tuple owner with literal argv, cwd and complete environment', async () => {
@@ -85,7 +91,7 @@ describe('Project native host IO', () => {
             });
             expect(stat === null || stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z ')).toBe(true);
             childPid = undefined;
-            expect(await io.run({ command: process.execPath, args: ['-e', 'process.stdout.write("fresh")'], cwd, env: {} })).toEqual({ exitCode: 0, stdout: 'fresh' });
+            expect(await io.run({ command: process.execPath, args: ['-e', 'process.stdout.write("fresh")'], cwd, env: {} })).toEqual({ exitCode: 0, stdout: 'fresh', stderr: '' });
         } finally {
             controller.abort();
             await settled;

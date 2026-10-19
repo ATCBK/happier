@@ -25,7 +25,7 @@ import { projectNativeSystemIo } from '@/workspaces/projectSetup/projectNativeSy
 import { admitProjectSourceSelectionV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import { createCliProjectSourceActionDeps } from '@/session/actions/projectSourceActionDeps';
 import type { ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
-import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import { logger } from '@/ui/logger';
 import { doesWorkspaceSyncProjectSourceRequestMatchRouting } from '@/api/machine/machineRpcAuthorization';
 
@@ -122,7 +122,7 @@ function admitOpenSource(input: OpenProjectInputV1 & { source: Extract<OpenProje
         effectActionId: 'projects.open', signal: context.signal })
       : { Authorization: `Bearer ${requester.credentials!.token}` },
   });
-  return admitProjectSourceSelectionV1({ serverId: input.serverId, sourceId: input.source.id,
+  return admitProjectSourceSelectionV1({ serverId: runtime.serverId, sourceId: input.source.id,
     captured: input.source, ref: input.ref, subdir: input.subdir, signal: context.signal,
     readSource: async request => {
       if (!await requester.isCurrent() || !await context.verifyMachineAdmissionCurrent!()) {
@@ -141,11 +141,12 @@ export async function openProject(input: OpenProjectInputV1, runtime: ProjectOpe
   // intact rather than synthesizing a local Action invocation to carry the id.
   const outcomeUnknown = (reason: string) => unconfirmedOutcome(reason,
     acceptance?.actionId === 'projects.open' ? acceptance.operationId : undefined);
-  if (input.machineId !== runtime.machineId || !await isServerProfileHomeIdentity(runtime.serverId, input.serverId)) return refused('target_mismatch');
+  const homeId = await resolveServerProfileHomeIdentityId(runtime.serverId);
+  if (!homeId || input.machineId !== runtime.machineId || !await isServerProfileHomeIdentity(runtime.serverId, input.serverId)) return refused('target_mismatch');
   // Requester custody/credentials retain the local profile scope. Workspace and
-  // Source effects use the admitted qualified Home address supplied by the caller.
+  // Source effects use the exact saved Home identity even for a local-profile selector.
   const authorityRuntime = runtime;
-  if (runtime.serverId !== input.serverId) runtime = { ...runtime, serverId: input.serverId };
+  runtime = { ...runtime, serverId: homeId };
   // No local invocation or owner comparison can replace current authenticated ingress admission.
   const admission = context?.machineAdmission;
   if (!admission || admission.machineId !== runtime.machineId || !context?.verifyMachineAdmissionCurrent) return refused('machine_admission_unavailable');
@@ -183,7 +184,8 @@ export async function openProject(input: OpenProjectInputV1, runtime: ProjectOpe
         const selected = input.source.kind === 'workspace' ? input.source.checkout ?? { serverId: runtime.serverId, id: input.source.workspaceId }
           : input.source.checkout;
         if (!selected) return refused('workspace_unavailable');
-        const source = resolveWorkspaceRefV1(snapshot.workspaceRefs, selected);
+        const source = resolveWorkspaceRefV1(snapshot.workspaceRefs, selected.serverId === authorityRuntime.serverId
+          ? { ...selected, serverId: runtime.serverId } : selected);
         if (source.kind === 'ambiguous') return { kind: 'ambiguous', candidates: [...source.candidates] };
         if (source.kind !== 'resolved') return refused('workspace_unavailable');
         if (input.materialization.kind !== 'sync' && source.ref.machineId !== runtime.machineId) return refused('source_machine_mismatch');
@@ -395,11 +397,12 @@ export async function openProject(input: OpenProjectInputV1, runtime: ProjectOpe
 
 /** Thin source-host route for the incumbent source-controller-only copy/create operations. */
 export async function materializeProjectSyncOnSource(input: OpenProjectInputV1, runtime: ProjectOpenRuntime, context?: RpcHandlerContext): Promise<ProjectOpenSyncMaterializationResultV1> {
-  if (!await isServerProfileHomeIdentity(runtime.serverId, input.serverId)) return refused('target_mismatch');
+  const homeId = await resolveServerProfileHomeIdentityId(runtime.serverId);
+  if (!homeId || !await isServerProfileHomeIdentity(runtime.serverId, input.serverId)) return refused('target_mismatch');
   if ((input.source.kind !== 'workspace' && input.source.kind !== 'source')
     || input.materialization.kind !== 'sync') return refused('invalid_materialization');
   const authorityRuntime = runtime;
-  if (runtime.serverId !== input.serverId) runtime = { ...runtime, serverId: input.serverId };
+  runtime = { ...runtime, serverId: homeId };
   const admission = context?.machineAdmission;
   const routing = context?.workspaceSyncSourceRouting;
   const originalRoot = context?.callerInputAuthorization;
@@ -420,7 +423,7 @@ export async function materializeProjectSyncOnSource(input: OpenProjectInputV1, 
       const selected = input.source.checkout;
       issued = true;
       await materializeWorkspaceSyncForOpen(runtime.workspaceSyncAdapter, { operationId: routing.operationId,
-        accountServerId: input.serverId, action: input.materialization.workspaceAction,
+        accountServerId: runtime.serverId, action: input.materialization.workspaceAction,
         sourceMachineId: routing.sourceMachineId, sourceRootPath: routing.sourceRootPath,
         ...(selected ? { sourceWorkspaceRefId: selected.workspaceId } : {}), targetMachineId: input.machineId,
         targetRootPath: input.materialization.targetPath, signal: context.signal,
@@ -454,7 +457,8 @@ export async function materializeProjectSyncOnSource(input: OpenProjectInputV1, 
         ? input.source.checkout ?? { serverId: runtime.serverId, id: input.source.workspaceId }
         : input.source.kind === 'source' ? input.source.checkout : undefined;
       if (!selected) return refused('workspace_unavailable');
-      const source = resolveWorkspaceRefV1(snapshot.workspaceRefs, selected);
+      const source = resolveWorkspaceRefV1(snapshot.workspaceRefs, selected.serverId === authorityRuntime.serverId
+        ? { ...selected, serverId: runtime.serverId } : selected);
       if (source.kind !== 'resolved') return refused('source_machine_mismatch');
       const target = resolveWorkspaceRefForMachineRoot(snapshot.workspaceRefs, {
         serverId: runtime.serverId, machineId: input.machineId, rootPath: input.materialization.kind === 'sync' ? input.materialization.targetPath : '',

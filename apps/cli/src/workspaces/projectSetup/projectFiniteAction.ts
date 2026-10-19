@@ -1,4 +1,5 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import type { createWorkspaceExecutionConfigClientV1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigClientV1';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { HostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
@@ -16,6 +17,7 @@ import { FiniteAdmissionV1Schema } from '@happier-dev/protocol/workspaces/projec
 import { createHash } from 'node:crypto';
 import { isAbsolute, relative } from 'node:path';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1, ProjectWorkerNoAcceptanceFailureDetailsV1Schema,
     readProjectSetupConsentFailureV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { resolveProjectExecutionChoiceV1, projectExecutionChoicesEqualV1, type ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -32,7 +34,10 @@ import { getPathRemainderWithinBase, resolveSessionHandoffWorkspaceSessionPath }
 import { resolveProjectSetupAcceptedWorkspace } from './projectSetupAcceptedWorkspace';
 import { RequesterWorkAttributionV1Schema } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
-import { readRequesterAccountActionContext, resolveAdmittedRequesterAccountReadRuntime } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { resolveAdmittedRequesterAccountReadRuntime } from "@/daemon/sessionEncryption/requesterAccountActionProjection";
+import { projectActionOperationFailure } from '@/daemon/actionOperations/actionOperationFailure';
+import { runTracedExternalActionStage, traceExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { resolveProjectRequesterSecretEnvironment } from './projectSetupRequesterInputs';
 import { resolveProjectEnvironmentSelection, inspectProjectNativeCommand, resolveProjectNativeCommand, readProjectExecutionInputs } from './projectNativeResolution';
 import { inspectProjectDefinitionExecutionFacts } from './projectDefinitionInspection';
@@ -49,7 +54,11 @@ export type ProjectFiniteActionRuntime = ProjectRuntimeAccountAccess & Readonly<
     serverHttpBaseUrl: string;
     /** Exact Account custody lifetime supplied by the installed host constructor. */
     isCurrent?: () => Promise<boolean>;
-    operationRuntime: Pick<HostActionOperationRuntime, 'observeExecution'>;
+    /** Fresh Machine/root admission at native effects; isCurrent owns local custody. */
+    verifyCurrent?: () => Promise<boolean>;
+    operationRuntime: Pick<HostActionOperationRuntime, 'observeExecution' | 'decideSetupReview'>
+        & Readonly<{ store: Pick<HostActionOperationRuntime['store'], 'get'> }>
+        & Partial<Pick<HostActionOperationRuntime, 'attachOwner'>>;
     workerAdmission: ProjectWorkerAdmission;
     /** Captures the actual requester Action and credential lifetime in B6's Account/Home carrier. */
     resolveWorkspaceExecutionConfig: (context: Parameters<NonNullable<ActionExecutorDeps['projectAction']>>[0]['context'], ingress: RpcHandlerContext,
@@ -60,7 +69,7 @@ export type ProjectFiniteActionRuntime = ProjectRuntimeAccountAccess & Readonly<
     terminalSessions: ProjectSetupExecutionInput['terminalSessions'];
     platform?: NodeJS.Platform;
     arch?: string;
-    hostEnvironment?: NodeJS.ProcessEnv;
+    hostEnvironment?: ProcessEnvInput;
     successHomeDir?: string;
     secretEnvironment?: ProjectSetupPreparationInput['secretEnvironment'];
     configEnvironment?: ProjectSetupPreparationInput['configEnvironment'];
@@ -73,12 +82,16 @@ export type ProjectFiniteActionRuntime = ProjectRuntimeAccountAccess & Readonly<
     prepareDequeue?: (input: Readonly<{ workspace: WorkspaceRefV1; choice: ProjectExecutionChoiceV1; basis?: WorkspaceSyncWorkerTargetBasis; signal: AbortSignal }>) => Promise<Extract<WorkspaceSyncPrepareBetweenResultV1, { ok: true }> | void>;
 }>;
 
-const failure = (errorCode: string, details?: unknown): ActionExecuteResult => ({ ok: false, errorCode, error: errorCode,
+const failure = (errorCode: string, details?: unknown): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode,
     ...(details === undefined ? {} : { details }) });
 const coded = (errorCode: string, details?: unknown): Error & { code: string; details?: unknown } => Object.assign(new Error(errorCode), { code: errorCode,
     ...(details === undefined ? {} : { details }) });
-const codeOf = (error: unknown) => error instanceof Error && 'code' in error && typeof error.code === 'string'
-    ? error.code : 'project_finite_execution_unavailable';
+const codeOf = (error: unknown, fallback = 'project_finite_execution_unavailable') => readRpcErrorCode(error)
+    ?? (error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : fallback);
+const failureFromError = async (error: unknown, details?: unknown): Promise<ActionExecuteFailure> => {
+    return { ...await projectActionOperationFailure(error, 'project_finite_execution_unavailable'),
+        ...(details === undefined ? {} : { details }) };
+};
 const digest = (value: unknown) => createHash('sha256').update(createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(value))).digest('hex');
 
 /** Wire-only or constrained callers without admitted private Account ports stay fail-closed. */
@@ -116,8 +129,8 @@ export async function readProjectRuntimeCurrentnessRefusal(runtime: ProjectFinit
 
 type FiniteRequest =
     | Readonly<{ actionId: 'projects.prepare'; input: import('@happier-dev/protocol/actions/projectActionFamily').ProjectPrepareInputV1 }>
-    | Readonly<{ actionId: 'projects.script.run'; input: import('zod').infer<typeof PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run']> }>
-    | Readonly<{ actionId: 'projects.compute.exec'; input: import('zod').infer<typeof PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.compute.exec']> }>;
+    | Readonly<{ actionId: 'projects.script.run'; input: import('zod/mini').infer<typeof PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run']> }>
+    | Readonly<{ actionId: 'projects.compute.exec'; input: import('zod/mini').infer<typeof PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.compute.exec']> }>;
 type Invocation = Readonly<{
     plan: PreparedProjectSetupPlan;
     command?: PreparedProjectSetupCommand;
@@ -133,6 +146,9 @@ type Review = Readonly<{ kind: 'reviewed'; invocation: Invocation }> | Readonly<
 export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, ingress: RpcHandlerContext): NonNullable<ActionExecutorDeps['projectAction']> {
     const authorityRuntime = runtime;
     return async args => {
+        const rootRequestId = args.context.actionRequestId ?? ingress.transportRequestId;
+        const stage = <T>(name: string, operation: () => T | Promise<T>) =>
+            runTracedExternalActionStage(args.actionId, rootRequestId, name, operation);
         // Requester custody retains its installed profile; Project refs use the
         // qualified Home admitted independently for this invocation.
         let runtime = authorityRuntime;
@@ -186,12 +202,19 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
         const assertCurrent = async () => {
             const requester = await readProjectRuntimeCurrentnessRefusal(runtime, signal);
             if (requester) throw coded(requester.errorCode);
-            if (!await ingress.verifyMachineAdmissionCurrent!()) throw coded('machine_admission_changed');
+            // An installed runtime carries the already-verified ingress through
+            // local preparation. Fresh Home proof belongs to the effect below.
+            if (!runtime.verifyCurrent && !await ingress.verifyMachineAdmissionCurrent!()) throw coded('machine_admission_changed');
             const fresh = await readProjectRuntimeCurrentnessRefusal(runtime, signal);
             if (fresh) throw coded(fresh.errorCode);
         };
+        const assertEffectCurrent = async () => {
+            await assertCurrent();
+            if (runtime.verifyCurrent && !await runtime.verifyCurrent()) throw coded('machine_admission_changed');
+            await assertCurrent();
+        };
         let workerBasis: WorkspaceSyncWorkerTargetBasis | undefined;
-        const resolveAccepted = async () => {
+        const resolveAccepted = () => stage('project.workspace.resolve', async () => {
             await assertCurrent();
             const association = await resolveProjectSetupAcceptedWorkspace({ address: request.input.workspace,
                 ...projectRuntimeAccountRowsInput(runtime), serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
@@ -205,9 +228,19 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             await assertCurrent();
             if (target.workspace.machineId !== runtime.machineId || target.workspace.projectKey !== association.workspace.projectKey) throw coded('project_workspace_changed');
             return target;
-        };
+        });
         let association: Awaited<ReturnType<typeof resolveAccepted>>;
         try { association = await resolveAccepted(); } catch (error) { return failure(codeOf(error)); }
+        if (request.actionId === 'projects.prepare' && request.input.heldOperationId) {
+            if (args.context.authority !== 'present_user') return failure('project_setup_consent_invalid');
+            await assertEffectCurrent();
+            const operation = await runtime.operationRuntime.decideSetupReview({ accountId: runtime.accountId, machineId: runtime.machineId },
+                request.input.heldOperationId, request.input.workspace, request.input.phase, {
+                    reviewedEffectDigest: request.input.expectedEffectDigest!, skipForInvocation: request.input.skipForInvocation === true,
+                });
+            await assertCurrent();
+            return operation ? { operation } : failure('project_setup_review_unavailable');
+        }
         const sourceAssociation = association;
         const assertReceivingPlacement = async (choice: ProjectExecutionChoiceV1) => {
             await assertProjectReceivingPlacement({ choice, sourceMachineId: sourceAssociation.workspace.machineId,
@@ -241,7 +274,16 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
         const scriptChangedDetails = (reviewedEffect: unknown) => ({ kind: 'pendingApproval' as const,
             code: 'project_script_effect_changed' as const, reviewedEffect: projectNativeJsonValueForTransport(reviewedEffect),
             reviewedEffectDigest: digest(reviewedEffect) });
-        const reviewSourcePlacement = async () => {
+        const readExecutionPolicy = async () => {
+            if (request.actionId === 'projects.prepare') throw coded('unsupported_action');
+            const config = await runtime.resolveWorkspaceExecutionConfig(args.context, ingress, request.actionId);
+            await assertCurrent();
+            if (!config) throw coded('preferences_unavailable');
+            const policy = await config.get({ workspace: { serverId: sourceAssociation.workspace.serverId, refId: sourceAssociation.workspace.id } });
+            await assertCurrent();
+            return policy;
+        };
+        const reviewSourcePlacement = () => stage('project.placement.review', async () => {
             if (sourceAssociation.workspace.machineId !== runtime.machineId && !runtime.inspectSourceProjectManifest) {
                 throw coded('project_source_declaration_unavailable');
             }
@@ -267,11 +309,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             if (request.actionId === 'projects.script.run' && request.input.selection.kind === 'named' && !named) throw coded('project_script_not_found');
             const execution = request.actionId === 'projects.compute.exec' ? 'portable'
                 : named?.execution ?? 'primary';
-            const config = await runtime.resolveWorkspaceExecutionConfig(args.context, ingress, request.actionId);
-            await assertCurrent();
-            if (!config) throw coded('preferences_unavailable');
-            const policy = await config.get({ workspace: { serverId: sourceAssociation.workspace.serverId, refId: sourceAssociation.workspace.id } });
-            await assertCurrent();
+            const policy = await readExecutionPolicy();
             const placement = resolveProjectExecutionChoiceV1({ execution, sourceMachineId: sourceAssociation.workspace.machineId,
                 adHoc: request.actionId === 'projects.compute.exec',
                 ...(args.context.executionRunTargetMachineId ? { acceptedMachineId: args.context.executionRunTargetMachineId } : {}),
@@ -281,9 +319,9 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             await assertReceivingPlacement(placement.choice);
             const script = request.actionId === 'projects.script.run' && request.input.selection.kind === 'named' && named
                 ? { name: request.input.selection.name, source: named.source } : acceptedScript;
-            return { choice: placement.choice, script, sourceDefinition, unavailable: policy.status === 'ready' ? policy.preference.unavailable : undefined,
+            return { choice: placement.choice, script, sourceDefinition, policy, unavailable: policy.status === 'ready' ? policy.preference.unavailable : undefined,
                 memoryDemand: maximumDemand(request.input.memoryDemand, named?.memoryDemand, sourceManifest?.workspace?.memoryDemand) };
-        };
+        });
         let workerUnavailable: 'ask' | 'primary' | 'fail' | undefined;
         let acceptedDeclaration: ReturnType<typeof selectedExecutionDeclaration> | undefined;
         let initialSourceDefinition: Awaited<ReturnType<typeof reviewSourcePlacement>>['sourceDefinition'];
@@ -376,6 +414,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                 targetRoot: association.workspace.rootPath, sessionRelativeCwd: workerRelativeCwd,
             }) : association.workspace.rootPath;
         let secretEnvironment = runtime.secretEnvironment;
+        let setupDecision: import('@/daemon/actionOperations/actionOperationTypes').ActionOperationSetupDecision | undefined;
         const preparation = (): Parameters<typeof prepareProjectSetup>[0] => ({ workspace: association.workspace, projectAssociation: association,
             approvalContext: args.context,
             requester: { ...projectRuntimeAccountRowsInput(runtime), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
@@ -393,6 +432,11 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                 && request.input.expectedEffectDigest && args.context.authority === 'present_user'
                 ? { effectDecision: { authority: args.context.authority, project: association.project,
                     reviewedEffectDigest: request.input.expectedEffectDigest } } : {}),
+            ...(setupDecision ? { expectedEffectDigest: setupDecision.reviewedEffectDigest,
+                skipForInvocation: setupDecision.skipForInvocation,
+                ...(!setupDecision.skipForInvocation ? { effectDecision: { authority: 'present_user' as const,
+                    project: association.project, reviewedEffectDigest: setupDecision.reviewedEffectDigest } } : {}),
+            } : {}),
         });
         const reviewPath = (value: string) => {
             const root = association.workspace.rootPath;
@@ -402,7 +446,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
         };
         // Primary admission can retain reviewed bytes without giving a selected
         // plugin an invocation/Exec context before the finite reservation.
-        async function readPrimaryAdmissionBasis(): Promise<string> {
+        const readPrimaryAdmissionBasis = () => stage('project.primary.review', async (): Promise<string> => {
             const snapshot = await readProjectManifest({ root: association.workspace.rootPath });
             await assertCurrent();
             if (snapshot.document?.status === 'invalid') throw coded('invalid_manifest');
@@ -475,16 +519,16 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             return digest({ environment: environment.selection, environmentProvenance, configEnvironment: config.environment,
                 command,
                 files: [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0) });
-        }
+        });
         let acceptedPrimaryBasis: string | undefined;
         if (!workerBasis) {
             try { acceptedPrimaryBasis = await readPrimaryAdmissionBasis(); }
             catch (error) { preserveUnconfirmedNativeProcess(error); return failure(codeOf(error)); }
         }
-        async function review(): Promise<Review> {
-            secretEnvironment = await resolveProjectRequesterSecretEnvironment(runtime,
-                request.actionId === 'projects.compute.exec' ? request.input.environmentBindings : undefined, nativeExecutionSignal());
-            const prepared = await prepareProjectSetup(preparation());
+        const review = (sourceReview?: Awaited<ReturnType<typeof reviewSourcePlacement>>) => stage('project.command.review', async (): Promise<Review> => {
+            secretEnvironment = await stage('project.secret_environment.resolve', () => resolveProjectRequesterSecretEnvironment(runtime,
+                request.actionId === 'projects.compute.exec' ? request.input.environmentBindings : undefined, nativeExecutionSignal()));
+            const prepared = await stage('project.setup.review', () => prepareProjectSetup(preparation()));
             await assertCurrent();
             if (prepared.kind === 'refused') return { kind: 'failed', result: failure(prepared.code) };
             if (prepared.kind === 'pendingApproval') return { kind: 'failed', result: withRequestedConsentScope(failure(prepared.code, {
@@ -495,11 +539,10 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                 reviewedEffectDigest: plan.reviewedEffectDigest, executionEffectDigest: plan.reviewedEffectDigest,
                 choice: { kind: 'primary' }, memoryDemand: plan.manifest?.workspace?.memoryDemand,
             } };
-            const config = await runtime.resolveWorkspaceExecutionConfig(args.context, ingress, request.actionId);
-            await assertCurrent();
-            if (!config) return { kind: 'failed', result: failure('preferences_unavailable') };
-            const policy = await config.get({ workspace: { serverId: sourceAssociation.workspace.serverId, refId: sourceAssociation.workspace.id } });
-            await assertCurrent();
+            // SOURCE placement and command preparation are one dequeue decision.
+            // Final native admission and a consent wake still read fresh policy.
+            const policy = sourceReview && 'policy' in sourceReview && sourceReview.policy
+                ? sourceReview.policy : await readExecutionPolicy();
             let command: PreparedProjectSetupCommand | undefined;
             let source: ProjectCommandSourceV1 | undefined;
             let execution: 'primary' | 'portable' = 'primary';
@@ -589,7 +632,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             }
             return { kind: 'reviewed', invocation: { plan, command, reviewedEffect, reviewedEffectDigest, executionEffectDigest,
                 choice: placement.choice, ...(memoryDemand ? { memoryDemand } : {}) } };
-        }
+        });
         let baseline: Invocation | undefined;
         // Selected SOURCE stays independent of the copied execution target and
         // the temporary setup purpose; neither can rewrite the accepted Script.
@@ -611,17 +654,31 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             if (!operationId) return failure('project_finite_operation_unavailable');
             const operationSignal = AbortSignal.any([signal, operation.signal]);
             let lastCleanSyncAtMs: ProjectSetupExecutionInput['lastCleanSyncAtMs'];
-            const prepareDequeue = async () => {
-                const prepared = await runtime.prepareDequeue?.({ workspace: workerBasis?.source ?? association.workspace, choice: acceptedChoice!,
-                    ...(workerBasis ? { basis: workerBasis } : {}), signal: operationSignal });
-                association = await resolveAccepted();
-                await assertCopiedExecutionCurrent();
-                lastCleanSyncAtMs = prepared ? prepared.traversed.at(-1)?.status.lastCleanSyncAtMs : undefined;
-                if (lastCleanSyncAtMs !== undefined) publishProjectFiniteAdmission({ workspace: association.workspace, purpose,
-                    requesterAccountId: runtime.accountId, operation, ...commandIdentity, lastCleanSyncAtMs,
-                    ...(originRun ? { originRun } : {}) });
-            };
+            const prepareDequeue = () => stage('project.sync.prepare', async () => {
+                try {
+                    if (workerBasis) await assertEffectCurrent();
+                    const prepared = await runtime.prepareDequeue?.({ workspace: workerBasis?.source ?? association.workspace, choice: acceptedChoice!,
+                        ...(workerBasis ? { basis: workerBasis } : {}), signal: operationSignal });
+                    // Primary preparation performs no copy. Keep its accepted root
+                    // until an actual setup/native effect needs fresh association.
+                    if (workerBasis) association = await resolveAccepted();
+                    await assertCopiedExecutionCurrent();
+                    lastCleanSyncAtMs = prepared ? prepared.traversed.at(-1)?.status.lastCleanSyncAtMs : undefined;
+                    if (lastCleanSyncAtMs !== undefined) publishProjectFiniteAdmission({ workspace: association.workspace, purpose,
+                        requesterAccountId: runtime.accountId, operation, ...commandIdentity, lastCleanSyncAtMs,
+                        ...(originRun ? { originRun } : {}) });
+                } catch (error) {
+                    // Sync preparation has not launched the command. Keep its
+                    // typed refusal (including RPC codes) and only the reason,
+                    // never HTTP configuration, credentials or response bodies.
+                    throw Object.assign(new Error(error instanceof Error && error.message.trim()
+                        ? error.message : 'Workspace preparation failed'), { code: codeOf(error, 'workspace_sync_prepare_failed'),
+                        ...(error instanceof Error && 'details' in error ? { details: error.details } : {}) });
+                }
+            });
             const executionInput = (): ProjectSetupExecutionInput => ({ preparation: { ...preparation(), signal: operationSignal }, operation,
+                deferEnvironmentToLaunch: request.actionId !== 'projects.prepare',
+                beforeNativeEffect: assertEffectCurrent,
                 ...commandIdentity,
                 ...(lastCleanSyncAtMs !== undefined ? { lastCleanSyncAtMs } : {}),
                 requesterAccountId: runtime.accountId, terminalSessions: runtime.terminalSessions, environmentIo: runtime.environmentIo,
@@ -641,8 +698,14 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                 ]) } : {}),
                 accept(handle) { publishProjectFiniteAdmission({ workspace: association.workspace, purpose, requesterAccountId: runtime.accountId, operation,
                     ...commandIdentity, ...(originRun ? { originRun } : {}) }); operation.operationAcceptance?.accept(handle); },
-                onQueue: ahead => operation.operationProgress.update({ phase: 'queued', queueAhead: ahead, label: `Queued — ${ahead} ahead` }),
-                onReserved: () => operation.operationProgress.update({ phase: 'preparing', label: 'Preparing workspace' }),
+                onQueue: ahead => {
+                    traceExternalActionStage(args.actionId, rootRequestId, 'project.reservation.queued');
+                    operation.operationProgress.update({ phase: 'queued', queueAhead: ahead, label: `Queued — ${ahead} ahead` });
+                },
+                onReserved: () => {
+                    traceExternalActionStage(args.actionId, rootRequestId, 'project.reservation.ready');
+                    operation.operationProgress.update({ phase: 'preparing', label: 'Preparing workspace' });
+                },
                 onUnknown: error => { nativeUncertain = true; operation.operationOwnerUpdate.update({ observation: {
                     kind: codeOf(error) === 'stop_unconfirmed' ? 'stop_unconfirmed' : 'outcome_uncertain', code: codeOf(error),
                 } }); },
@@ -658,7 +721,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                         const pending = readProjectSetupConsentFailureV1(withRequestedConsentScope(result));
                         if (kind !== 'no_launch' || !pending || !operation.operationReview) return false;
                         preparationPhase('setup');
-                        await operation.operationReview.waitForResume(pending.details, { review: async () => {
+                        await operation.operationReview.waitForResume(pending.details, { review: async decision => {
                             await assertCurrent();
                             association = await resolveAccepted();
                             const source = await reviewSourcePlacement();
@@ -678,8 +741,15 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                             await assertCurrent();
                             if (refreshed.kind === 'refused') throw coded(refreshed.code);
                             if (refreshed.kind !== 'pendingApproval') return null;
-                            const reviewed = readProjectSetupConsentFailureV1(withRequestedConsentScope(failure(refreshed.code, {
-                                kind: 'pendingApproval', code: refreshed.code, reviewedEffect: refreshed.plan.reviewedEffect,
+                            if (decision && decision.reviewedEffectDigest === refreshed.plan.reviewedEffectDigest) {
+                                // The retained producer, after current SOURCE/copy/target review,
+                                // admits this choice only for its original invocation.
+                                setupDecision = decision;
+                                return null;
+                            }
+                            const code = decision ? 'project_setup_effect_changed' : refreshed.code;
+                            const reviewed = readProjectSetupConsentFailureV1(withRequestedConsentScope(failure(code, {
+                                kind: 'pendingApproval', code, reviewedEffect: refreshed.plan.reviewedEffect,
                                 reviewedEffectDigest: refreshed.plan.reviewedEffectDigest,
                             })));
                             if (!reviewed) throw coded('project_setup_effect_unavailable');
@@ -696,9 +766,10 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                         await prepareDequeue();
                         return true;
                     };
-                    const reviewBeforeEffects = async (): Promise<Review> => {
+                    const reviewBeforeEffects = async (sourceReview?: Awaited<ReturnType<typeof reviewSourcePlacement>>): Promise<Review> => {
                         while (true) {
-                            const current = await review();
+                            const current = await review(sourceReview);
+                            sourceReview = undefined;
                             if (current.kind === 'failed' && await resumeSetupReview(current.result)) continue;
                             return current;
                         }
@@ -715,7 +786,8 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                         if (acceptedPrimaryBasis !== undefined && await readPrimaryAdmissionBasis() !== acceptedPrimaryBasis) return finish(failure('project_script_effect_changed'));
                         preparationPhase('copying');
                         await prepareDequeue();
-                        const current = await reviewBeforeEffects();
+                        // A real Sync copy may await remote work and change policy.
+                        const current = await reviewBeforeEffects(workerBasis ? undefined : source);
                         if (current.kind === 'failed') return finish(current.result);
                         if (!baseline) {
                             if (!projectExecutionChoicesEqualV1(current.invocation.choice, acceptedChoice!)
@@ -728,8 +800,15 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                             kind: 'pendingApproval', code: 'project_script_effect_changed', reviewedEffectDigest: current.invocation.reviewedEffectDigest, reviewedEffect: current.invocation.reviewedEffect,
                         }));
                         preparationPhase('setup');
-                        let setup = await executeProjectSetup({ ...executionInput(), preparation: { ...executionInput().preparation,
-                            expectedEffectDigest: current.invocation.plan.reviewedEffectDigest } });
+                        const beforeSetupEffect = async () => {
+                            // A primary no-op Sync no longer spends a row read;
+                            // real setup effects retain current association admission.
+                            if (!workerBasis) association = await resolveAccepted();
+                            await assertEffectCurrent();
+                        };
+                        let setupReview = current;
+                        let setup = await stage('project.setup.execute', () => executeProjectSetup({ ...executionInput(), preparation: { ...executionInput().preparation,
+                            expectedEffectDigest: current.invocation.plan.reviewedEffectDigest }, beforeNativeEffect: beforeSetupEffect }));
                         while (setup.kind === 'no_launch' && await resumeSetupReview(setup.result)) {
                             const rechecked = await reviewBeforeEffects();
                             if (rechecked.kind === 'failed') return finish(rechecked.result);
@@ -737,13 +816,16 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                                 kind: 'pendingApproval', code: 'project_script_effect_changed', reviewedEffectDigest: rechecked.invocation.reviewedEffectDigest, reviewedEffect: rechecked.invocation.reviewedEffect,
                             }));
                             preparationPhase('setup');
-                            setup = await executeProjectSetup({ ...executionInput(), preparation: { ...executionInput().preparation,
-                                expectedEffectDigest: rechecked.invocation.plan.reviewedEffectDigest } });
+                            setupReview = rechecked;
+                            setup = await stage('project.setup.execute', () => executeProjectSetup({ ...executionInput(), preparation: { ...executionInput().preparation,
+                                expectedEffectDigest: rechecked.invocation.plan.reviewedEffectDigest }, beforeNativeEffect: beforeSetupEffect }));
                         }
                         kind = setup.kind;
                         if (setup.kind === 'outcome_uncertain') throw coded(setup.result.ok ? 'outcome_uncertain' : setup.result.errorCode);
                         if (!setup.result.ok || request.actionId === 'projects.prepare') return finish(setup.result);
-                        const afterSetup = await review();
+                        // No setup process or environment effect ran. The final
+                        // post-authorization review still checks current bytes.
+                        const afterSetup = setup.kind === 'no_launch' ? setupReview : await review();
                         if (afterSetup.kind === 'failed') return finish(afterSetup.result);
                         if (!unchanged(afterSetup.invocation)) return finish(failure('project_script_effect_changed', {
                             kind: 'pendingApproval', code: 'project_script_effect_changed', reviewedEffectDigest: afterSetup.invocation.reviewedEffectDigest, reviewedEffect: afterSetup.invocation.reviewedEffect,
@@ -753,8 +835,11 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                         const assertSynchronousCurrent = () => { if (operationSignal.aborted) throw coded('cancelled'); };
                         await assertCurrent();
                         let launch: Awaited<ReturnType<typeof authorizePreparedProjectCommand>>;
-                        if (invocation.command) launch = await authorizePreparedProjectCommand(input, invocation.plan, invocation.command, operationSignal);
+                        const command = invocation.command;
+                        if (command) launch = await stage('project.native.authorize', () =>
+                            authorizePreparedProjectCommand(input, invocation.plan, command, operationSignal));
                         else if (request.actionId === 'projects.compute.exec') {
+                            await assertEffectCurrent();
                             const env: Record<string, string> = {};
                             for (const [key, value] of Object.entries(runtime.hostEnvironment ?? process.env)) if (value !== undefined) env[key] = value;
                             Object.assign(env, invocation.plan.configEnvironment);
@@ -772,10 +857,11 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                             if (!unchanged(final.invocation)) return finish(failure('project_script_effect_changed', {
                                 kind: 'pendingApproval', code: 'project_script_effect_changed', reviewedEffectDigest: final.invocation.reviewedEffectDigest, reviewedEffect: final.invocation.reviewedEffect,
                             }));
-                            await assertCurrent();
+                            await assertEffectCurrent();
                             if (invocation.plan.environmentAdapterLease && !invocation.plan.environmentAdapterLease.isCurrent()
                                 || invocation.command?.kind === 'pluginNative' && !invocation.command.lease.isCurrent()) throw coded('native_adapter_retired');
                             reservation.phase('running');
+                            traceExternalActionStage(args.actionId, rootRequestId, 'project.native.launch');
                             const outcome = await executeProjectFiniteProcess({ workspace: association.workspace, purpose, requesterAccountId: runtime.accountId,
                                 ...commandIdentity,
                                 ...(lastCleanSyncAtMs !== undefined ? { lastCleanSyncAtMs } : {}),
@@ -789,10 +875,19 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                             throw error;
                         } finally { if (kind !== 'outcome_uncertain') launch.release(); }
                     } catch (error) {
+                        const cancelledBuiltinEnvironment = operationSignal.aborted
+                            && baseline?.plan.environment.kind === 'toolchain' && nativeInvocations.size > 0;
+                        if (error instanceof ProjectNativeEnvironmentUncertainError
+                            || cancelledBuiltinEnvironment && isProjectNativeProcessUncertain(error)) {
+                            // Keep the reservation and Stop listener until the
+                            // native owner proves settlement, then settle the
+                            // operation instead of rethrowing the stale unknown.
+                            await releaseNativeInvocations();
+                            return { kind: 'process_settled', result: failure(operationSignal.aborted ? 'cancelled' : codeOf(error)) };
+                        }
                         preserveUnconfirmedNativeProcess(error);
-                        if (error instanceof ProjectNativeEnvironmentUncertainError) throw error;
                         if (kind === 'outcome_uncertain') throw error;
-                        return { kind, result: failure(operationSignal.aborted ? 'cancelled' : codeOf(error),
+                        return { kind, result: operationSignal.aborted ? failure('cancelled') : await failureFromError(error,
                             !operationSignal.aborted && codeOf(error) === 'project_script_effect_changed' && error instanceof Error && 'details' in error
                                 ? error.details : undefined) };
                     } finally {
@@ -832,6 +927,15 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
                 ...(local.operationCancellation ? { operationCancellation: local.operationCancellation } : {}),
                 ...(ingressReview ? { operationReview: ingressReview } : {}),
                 operationProgress: local.operationProgress ?? { update() {} } });
+            if (result.ok && request.actionId !== 'projects.prepare') {
+                // The containing runner already owns this invocation. Return its
+                // canonical handle, just as observeExecution does for a new one;
+                // the PTY success marker is not a public Project Action output.
+                const current = runtime.operationRuntime.store.get({ accountId: runtime.accountId, machineId: runtime.machineId }, local.operationAcceptance.operationId);
+                result = current?.actionId === request.actionId
+                    ? { ok: true, result: { operation: current } }
+                    : failure('project_finite_operation_unavailable');
+            }
         } else result = await runtime.operationRuntime.observeExecution({ actionId: request.actionId, input: request.input,
             rpcContext: ingress,
             actionRequestId: args.context.actionRequestId ?? ingress.transportRequestId,
