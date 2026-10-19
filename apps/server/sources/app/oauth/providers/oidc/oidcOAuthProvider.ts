@@ -7,6 +7,7 @@ import {
     normalizeOidcIdentityClaims,
 } from "@/app/auth/providers/oidc/normalizeOidcIdentityClaims";
 import { discoverOidcConfiguration } from "./oidcDiscovery";
+import { createOidcExternalAccessTokenVerifier } from "./oidcExternalAccessTokenVerifier";
 import type { OutboundIdentityNetworkPolicy } from "@/app/net/outboundIdentityNetworkPolicy";
 import { evaluateOidcIdentityEligibility } from "@/app/auth/providers/oidc/oidcEligibility";
 import type { OidcTeamIdentityConnection } from "@/app/auth/providers/oidc/oidcIdentityProvider";
@@ -110,6 +111,9 @@ export function createOidcOAuthProvider(
             const result = normalizeOidcIdentityClaims({ idTokenClaims: profile, claims: instance.claims });
             return result.ok ? result.value.subject : null;
         },
+        ...(instance.tokenExchange ? {
+            verifyExternalAccessToken: createOidcExternalAccessTokenVerifier(instance, instance.tokenExchange, runtimeFingerprint, networkPolicy),
+        } : {}),
         describeIdentityTest: async ({ profile }) => {
             const normalized = normalizeOidcIdentityClaims({ idTokenClaims: profile, claims: instance.claims });
             if (!normalized.ok) throw new Error(normalized.error);

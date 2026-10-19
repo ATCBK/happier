@@ -14,6 +14,10 @@ export type OAuthTokenExchangeResult = Readonly<{
     refreshToken?: string;
 }>;
 
+export type ExternalAccessTokenVerification =
+    | Readonly<{ ok: true; profile: unknown }>
+    | Readonly<{ ok: false; error: "invalid-token" | "client-not-allowed" | "upstream_error" }>;
+
 export type OAuthFlowProvider = Readonly<{
     id: string;
     /**
@@ -64,6 +68,8 @@ export type OAuthFlowProvider = Readonly<{
     }) => Promise<unknown>;
     getLogin: (profile: unknown) => string | null;
     getProviderUserId: (profile: unknown) => string | null;
+    /** Present only when external bearer exchange was explicitly configured. */
+    verifyExternalAccessToken?: (params: { accessToken: string }) => Promise<ExternalAccessTokenVerification>;
     /** Exact directory correlation shared with this provider's identity binder. */
     getDirectoryIdentityMatch?: (profile: unknown) => DirectoryProvisionedIdentityMatch | null;
     /**

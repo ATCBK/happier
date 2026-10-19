@@ -6,6 +6,7 @@ import * as privacyKit from "privacy-kit";
 
 import { db } from "@/storage/db";
 import { connectRoutes } from "./connectRoutes";
+import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
 import { auth } from "@/app/auth/auth";
 import { decryptString, initEncrypt } from "@/modules/encrypt";
 import { createAppCloseTracker } from "../../testkit/appLifecycle";
@@ -21,6 +22,7 @@ function createTestApp() {
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     const typed = app.withTypeProvider<ZodTypeProvider>() as any;
+    enableAuthentication(typed);
     return trackApp(typed);
 }
 

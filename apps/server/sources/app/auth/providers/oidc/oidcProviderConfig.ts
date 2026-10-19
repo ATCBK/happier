@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { readHomeConfigValueSource } from "@/app/home/settings/homeConfigProvenance";
 import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 
 export type OidcAuthProviderInstanceConfig = Readonly<{
@@ -26,10 +27,18 @@ export type OidcAuthProviderInstanceConfig = Readonly<{
     }>;
     fetchUserInfo: boolean;
     storeRefreshToken: boolean;
+    /** External bearer exchange is opt-in; managed providers omit this setting. */
+    tokenExchange?: OidcTokenExchangeConfig | null;
     ui: Readonly<{
         buttonColor: string | null;
         iconHint: string | null;
     }>;
+}>;
+
+export type OidcTokenExchangeConfig = Readonly<{
+    allowedClientIds: readonly string[];
+    clientIdClaim: string | null;
+    subjectClaim: string;
 }>;
 
 export type ResolveAuthProviderInstancesResult = Readonly<{
@@ -56,6 +65,40 @@ function normalizeProviderId(input: unknown): string | null {
 function expectString(value: unknown, field: string, errors: string[]): string | null {
     if (typeof value !== "string" || value.trim() === "") {
         errors.push(`Invalid ${field}: expected non-empty string`);
+        return null;
+    }
+    return value;
+}
+
+/**
+ * A literal `clientSecret` wins. Otherwise `clientSecretEnv` names the environment variable that holds the
+ * secret, so provider config can live in non-secret deployment values while the secret comes from a secret store.
+ * An unset or empty variable is a config error, like a missing literal secret.
+ */
+function resolveClientSecret(
+    record: Record<string, unknown>,
+    env: NodeJS.ProcessEnv,
+    providerId: string,
+    errors: string[],
+): string | null {
+    if (record.clientSecret !== undefined || record.clientSecretEnv === undefined) {
+        return expectString(record.clientSecret, `clientSecret for ${providerId}`, errors);
+    }
+
+    const envName = expectString(record.clientSecretEnv, `clientSecretEnv for ${providerId}`, errors)?.trim();
+    if (!envName) return null;
+
+    const configKey = (env.AUTH_PROVIDERS_CONFIG_PATH ?? "").trim()
+        ? "AUTH_PROVIDERS_CONFIG_PATH"
+        : "AUTH_PROVIDERS_CONFIG_JSON";
+    if (readHomeConfigValueSource(env, configKey) !== "deployment") {
+        errors.push(`Invalid clientSecretEnv for ${providerId}: environment references require deployment-authored provider configuration`);
+        return null;
+    }
+
+    const value = env[envName];
+    if (typeof value !== "string" || value.trim() === "") {
+        errors.push(`Invalid clientSecretEnv for ${providerId}: environment variable ${envName} is unset or empty`);
         return null;
     }
     return value;
@@ -143,13 +186,13 @@ function parseStringList(
 ): string[] | null {
     if (raw === undefined) return [];
     if (!Array.isArray(raw)) {
-        errors.push(`Invalid allow.${field} for ${providerId}: expected an array of strings`);
+        errors.push(`Invalid ${field} for ${providerId}: expected an array of strings`);
         return null;
     }
     const out: string[] = [];
     for (const value of raw) {
         if (typeof value !== "string") {
-            errors.push(`Invalid allow.${field} for ${providerId}: expected an array of strings`);
+            errors.push(`Invalid ${field} for ${providerId}: expected an array of strings`);
             return null;
         }
         const trimmed = value.trim();
@@ -182,10 +225,10 @@ function parseAllow(
         return null;
     }
     const record = (raw ?? {}) as Record<string, unknown>;
-    const usersAllowlist = parseStringList(record.usersAllowlist, "usersAllowlist", providerId, errors);
-    const emailDomains = parseStringList(record.emailDomains, "emailDomains", providerId, errors);
-    const groupsAny = parseStringList(record.groupsAny, "groupsAny", providerId, errors);
-    const groupsAll = parseStringList(record.groupsAll, "groupsAll", providerId, errors);
+    const usersAllowlist = parseStringList(record.usersAllowlist, "allow.usersAllowlist", providerId, errors);
+    const emailDomains = parseStringList(record.emailDomains, "allow.emailDomains", providerId, errors);
+    const groupsAny = parseStringList(record.groupsAny, "allow.groupsAny", providerId, errors);
+    const groupsAll = parseStringList(record.groupsAll, "allow.groupsAll", providerId, errors);
     if (!usersAllowlist || !emailDomains || !groupsAny || !groupsAll) return null;
     const normalized = normalizeOidcAllowRules({ usersAllowlist, emailDomains, groupsAny, groupsAll });
     return Object.freeze({
@@ -193,6 +236,19 @@ function parseAllow(
         emailDomains: Object.freeze(normalized.emailDomains),
         groupsAny: Object.freeze(normalized.groupsAny),
         groupsAll: Object.freeze(normalized.groupsAll),
+    });
+}
+
+function parseTokenExchange(raw: unknown, providerId: string): OidcTokenExchangeConfig | null {
+    const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+    // A malformed opt-in disables exchange without disabling ordinary provider login.
+    const allowedClientIds = parseStringList(record.allowedClientIds, "tokenExchange.allowedClientIds", providerId, []);
+    if (!allowedClientIds || allowedClientIds.length === 0) return null;
+    return Object.freeze({
+        allowedClientIds: Object.freeze(allowedClientIds),
+        clientIdClaim: typeof record.clientIdClaim === "string" && record.clientIdClaim.trim()
+            ? record.clientIdClaim.trim() : null,
+        subjectClaim: parseClaimName(record.subjectClaim, "sub"),
     });
 }
 
@@ -285,7 +341,7 @@ export function resolveAuthProviderInstancesFromEnv(env: NodeJS.ProcessEnv): Res
         const displayName = expectString(record.displayName, `displayName for ${normalizedId}`, entryErrors);
         const issuer = expectString(record.issuer, `issuer for ${normalizedId}`, entryErrors);
         const clientId = expectString(record.clientId, `clientId for ${normalizedId}`, entryErrors);
-        const clientSecret = expectString(record.clientSecret, `clientSecret for ${normalizedId}`, entryErrors);
+        const clientSecret = resolveClientSecret(record, env, normalizedId, entryErrors);
         const redirectUrl = expectString(record.redirectUrl, `redirectUrl for ${normalizedId}`, entryErrors);
 
         if (!displayName || !issuer || !clientId || !clientSecret || !redirectUrl) {
@@ -317,6 +373,7 @@ export function resolveAuthProviderInstancesFromEnv(env: NodeJS.ProcessEnv): Res
         }
         const fetchUserInfo = parseBoolean(record.fetchUserInfo, false);
         const storeRefreshToken = parseBoolean(record.storeRefreshToken, false);
+        const tokenExchange = parseTokenExchange(record.tokenExchange, normalizedId);
         const ui = parseUi(record.ui);
 
         instances.push({
@@ -334,6 +391,7 @@ export function resolveAuthProviderInstancesFromEnv(env: NodeJS.ProcessEnv): Res
             allow,
             fetchUserInfo,
             storeRefreshToken,
+            tokenExchange,
             ui,
         });
     }
