@@ -118,6 +118,7 @@ export interface WorkspaceSyncHandoffAdapter {
   prepareBetween(
     request: Readonly<{ sourceWorkspaceRefId: string; targetWorkspaceRefId: string }>,
     signal?: AbortSignal,
+    context?: RpcHandlerContext,
   ): Promise<WorkspaceSyncPrepareBetweenResultV1>;
   prepare(input: PrepareWorkspaceSyncHandoffInput, authority?: WorkspaceSyncHandoffSourcePhaseAuthority,
     context?: RpcHandlerContext): Promise<WorkspaceSyncHandoffPrepared>;
@@ -291,12 +292,12 @@ export function createWorkspaceSyncHandoffAdapter(deps: WorkspaceSyncHandoffAdap
       if (request.phase === 'finalize') return { v: 1, phase: 'finalized', result: await adapter.finalize(phaseInput) };
       return { v: 1, phase: 'committed', result: await adapter.commit(phaseInput) };
     },
-    async prepareBetween(request, signal) {
+    async prepareBetween(request, signal, context) {
       if (!deps.prepareBetween) {
         throw Object.assign(new Error('Linked workspace preparation is unavailable'), { code: 'workspace_sync_unavailable' });
       }
       signal?.throwIfAborted();
-      return await deps.prepareBetween(request, signal);
+      return await deps.prepareBetween(request, signal, context);
     },
     async prepare(input: PrepareWorkspaceSyncHandoffInput, authority?: WorkspaceSyncHandoffSourcePhaseAuthority,
       context?: RpcHandlerContext): Promise<WorkspaceSyncHandoffPrepared> {

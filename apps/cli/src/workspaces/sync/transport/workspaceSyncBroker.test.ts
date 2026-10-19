@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { listenWorkspaceSyncBroker, createWorkspaceSyncBrokerEndpoint, type WorkspaceSyncBroker } from './workspaceSyncBroker';
 import { WorkspaceSyncBrokerClient } from './workspaceSyncBrokerClient.testkit';
+import { logger } from '@/ui/logger';
+import { withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 import {
   BrokerControlFrameDecoder,
   BrokerProtocolError,
@@ -277,8 +279,10 @@ describe('workspace sync broker authentication and attach rules', () => {
 
   it('rolls back the listener and endpoint when post-bind ACL hardening fails', async () => {
     if (process.platform === 'win32') return;
-    const directory = await mkdtemp(join(tmpdir(), 'wsbroker-bind-rollback-'));
-    const socketPath = join(directory, 'broker.sock');
+    // Match the regular fixture's short endpoint so Unix socket path limits do
+    // not prevent the listener from reaching post-bind ACL hardening.
+    const directory = await mkdtemp(join(tmpdir(), 'wsbroker-'));
+    const socketPath = join(directory, 'b.sock');
     const native = createWorkspaceSyncBrokerEndpoint({ endpointPath: socketPath });
     const remove = vi.fn(async (path?: string) => await native.remove(path));
 
@@ -509,6 +513,55 @@ describe('workspace sync broker authentication and attach rules', () => {
       releaseFirstListen();
       socket.destroy();
     }
+  });
+
+  it('refuses a peer retired before data attachment and admits its replacement stream', async () => {
+    const fixture = await useFixture(await startBroker({ maxStreams: 1 }));
+    const { socket, wire } = await openAuthenticatedRawControl(fixture);
+    const endpointId = deriveWorkspaceSyncEndpointId('rel-peer-restart', 'beta');
+    const open = async (requestId: string) => {
+      socket.write(encodeBrokerControlFrame({
+        t: 'open_data', requestId, endpointId, expiresAtMs: Date.now() + OPEN_REMOTE_DEADLINE_MS,
+      }));
+      const ready = await wire.waitFor(frame => frame.t === 'data_ready' && frame.requestId === requestId, 'peer data readiness');
+      if (ready.t !== 'data_ready') throw new Error('unreachable');
+      const data = createWorkspaceSyncBrokerEndpoint({ endpointPath: ready.dataEndpoint }).connect();
+      await once(data, 'connect');
+      return { ready, data };
+    };
+    const retired = await open('req-retired-peer');
+    const peer = fixture.externalStreams[0]!;
+    const closed = once(peer, 'close');
+    peer.destroy();
+    await closed;
+    socket.write(encodeBrokerControlFrame({ t: 'attach_data', streamId: retired.ready.streamId, attachNonce: retired.ready.attachNonce }));
+    const outcome = await wire.waitFor(frame => frame.t === 'error' && frame.requestId === 'req-retired-peer'
+      || frame.t === 'data_ok' && frame.streamId === retired.ready.streamId, 'retired peer terminal response');
+    expect(outcome).toMatchObject({ t: 'error', code: 'peer_unavailable' });
+    await waitFor(() => retired.data.destroyed, 'retired peer data cleanup');
+
+    const replacement = await open('req-replacement-peer');
+    socket.write(encodeBrokerControlFrame({ t: 'attach_data', streamId: replacement.ready.streamId, attachNonce: replacement.ready.attachNonce }));
+    await wire.waitFor(frame => frame.t === 'data_ok' && frame.streamId === replacement.ready.streamId, 'replacement data attachment');
+    replacement.data.write('replacement bytes');
+    await waitFor(() => concat(fixture.externalStreams[1]!.received).toString() === 'replacement bytes', 'replacement peer bytes');
+    replacement.data.destroy();
+    socket.destroy();
+  });
+
+  it('refuses an external stream that closed before its acquisition completed', async () => {
+    const fixture = await useFixture(await startBroker({ openExternalStream: async () => {
+      const peer = new PeerStream();
+      const closed = once(peer, 'close');
+      peer.destroy();
+      await closed;
+      return peer;
+    } }));
+    const client = await connectClient(fixture);
+    try {
+      await expect(client.openStream(deriveWorkspaceSyncEndpointId('rel-retired-during-open', 'beta')))
+        .rejects.toMatchObject({ code: 'peer_unavailable' });
+    } finally { await client.close(); }
   });
 
   it('closes an attached external stream without sending a second terminal control response', async () => {
@@ -1111,6 +1164,28 @@ describe('workspace sync broker authentication and attach rules', () => {
       await expect(fixture.broker.command({ t: 'resume', requestId: 'retry', sessionIdentifier: 'session' },
         { operationId: 'carrier-operation' })).rejects.toMatchObject({ code: 'engine_unavailable' });
     } finally { await client.close(); }
+  });
+
+  it('joins native carrier opens to the pending command root across socket callbacks', async () => {
+    vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+    const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+    const fixture = await useFixture(await startBroker());
+    const client = await connectClient(fixture);
+    const rootId = '23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+    client.onCommand(async () => {
+      const carrier = await client.openStream(deriveWorkspaceSyncEndpointId('trace-operation', 'beta'));
+      await carrier.close();
+      return { flushed: true };
+    });
+    try {
+      await expect(withWebLatencyTrace(rootId, () => fixture.broker.command({
+        t: 'flush', requestId: 'trace-command', sessionIdentifier: 'trace-session',
+      }, { operationId: 'trace-operation' }))).resolves.toEqual({ flushed: true });
+      for (const phase of ['workspaceSync.broker.command.flush', 'workspaceSync.carrier.openExternalStream']) {
+        expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({ phase, requestId: rootId, status: 'started' }));
+        expect(sink).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({ phase, requestId: rootId, status: 'completed' }));
+      }
+    } finally { await client.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); }
   });
 
   it('reports a dispatched command as indeterminate when the sidecar control connection drops', async () => {

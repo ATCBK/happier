@@ -11,6 +11,7 @@ import { createWorkspaceSyncRelationshipOwner } from './workspaceSyncRelationshi
 import { createWorkspaceRootOwnershipManager } from './workspaceSyncRootOwnership';
 import { workspaceSyncTargetBootstrap } from './workspaceSyncTargetBootstrap';
 import { prepareWorkspaceSyncBetween } from './workspaceSyncPreparation';
+import type { RpcHandlerContext } from '@/api/rpc/types';
 
 const relationshipStatus: WorkspaceSyncStatusV1 = {
   relationshipId: 'rel-1', controllerMachineId: 'machine-a', state: 'watching',
@@ -397,12 +398,19 @@ describe('WorkspaceSyncHandoffAdapter', () => {
     const bootstrap = vi.fn(async () => ({ release: vi.fn(async () => undefined) }));
     const settings = linkedSettings();
     const flush = vi.fn(async (relationshipId: string) => ({ ...relationshipStatus, relationshipId }));
+    let requesterRequired = false;
     const prepareBetween = vi.fn(async (
       request: { sourceWorkspaceRefId: string; targetWorkspaceRefId: string },
       signal?: AbortSignal,
+      context?: RpcHandlerContext,
     ) => await prepareWorkspaceSyncBetween({
       ...request,
-      readCurrent: async () => ({ workspaceRefs: settings.workspaceRefsV1, relationships: settings.workspaceSyncRelationshipsV1 }),
+      readCurrent: async () => {
+        if (requesterRequired && !await context?.verifyMachineAdmissionCurrent?.()) {
+          throw Object.assign(new Error('Requester retired'), { code: 'project_requester_credentials_unavailable' });
+        }
+        return settings;
+      },
       flush,
       signal,
     }));
@@ -430,6 +438,15 @@ describe('WorkspaceSyncHandoffAdapter', () => {
     });
     await expect(adapter.prepareBetween({ sourceWorkspaceRefId: 'workspace-c', targetWorkspaceRefId: 'workspace-b' }))
       .resolves.toMatchObject({ ok: true, traversed: [{ relationshipId: 'source-hub' }, { relationshipId: 'hub-target' }] });
+    requesterRequired = true;
+    let current = true;
+    const context = { signal: new AbortController().signal, verifyMachineAdmissionCurrent: async () => current };
+    const request = { sourceWorkspaceRefId: 'workspace-c', targetWorkspaceRefId: 'workspace-b' };
+    await expect(adapter.prepareBetween(request, context.signal, context))
+      .resolves.toMatchObject({ ok: true, traversed: [{ relationshipId: 'source-hub' }, { relationshipId: 'hub-target' }] });
+    current = false;
+    await expect(adapter.prepareBetween(request, context.signal, context))
+      .rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
   });
 
   it('reports the completed upstream link when the final linked route is blocked', async () => {
@@ -449,7 +466,7 @@ describe('WorkspaceSyncHandoffAdapter', () => {
       signal?: AbortSignal,
     ) => await prepareWorkspaceSyncBetween({
       ...request,
-      readCurrent: async () => ({ workspaceRefs: settings.workspaceRefsV1, relationships: settings.workspaceSyncRelationshipsV1 }),
+      readCurrent: async () => settings,
       flush,
       signal,
     });
@@ -702,13 +719,13 @@ function allFilesPolicy() {
 }
 
 function linkedSettings() {
-  return accountSettingsParse({
-    workspaceRefsV1: [
+  return parseProjectAccountSnapshotV1({
+    workspaceRefs: [
       { id: 'workspace-c', serverId: 'server-a', machineId: 'machine-c', rootPath: '/c', createdAtMs: 1 },
       { id: 'workspace-a', serverId: 'server-a', machineId: 'machine-a', rootPath: '/a', createdAtMs: 1 },
       { id: 'workspace-b', serverId: 'server-a', machineId: 'machine-b', rootPath: '/b', createdAtMs: 1 },
     ],
-    workspaceSyncRelationshipsV1: [
+    relationships: [
       { v: 1, relationshipId: 'source-hub', controllerMachineId: 'machine-a', alphaWorkspaceRefId: 'workspace-a', betaWorkspaceRefId: 'workspace-c', mode: 'keep_both_in_sync', contentPolicy: allFilesPolicy(), enabled: true, createdAtMs: 1, updatedAtMs: 1 },
       { v: 1, relationshipId: 'hub-target', controllerMachineId: 'machine-a', alphaWorkspaceRefId: 'workspace-a', betaWorkspaceRefId: 'workspace-b', mode: 'keep_synced', contentPolicy: allFilesPolicy(), enabled: true, createdAtMs: 1, updatedAtMs: 1 },
     ],

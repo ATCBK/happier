@@ -14,6 +14,7 @@ import { readWorkspaceSyncChildMachineFacts } from './workspaceSyncTargetAuthori
 import { managedDevcontainerChildProjectionsEqualV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { readWebLatencyTracePoint, timeWebLatencyPhase, withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 
 export { assertWorkspaceSyncRequesterBootstrapSupported, WorkspaceSyncInitialPreparationRefusal } from './workspaceSyncBootstrapAdmission';
 
@@ -32,10 +33,13 @@ export async function readWorkspaceSyncWorkerTargetSnapshot(input: Readonly<{
   targetMachineId: string;
   sourceWorkspaceRefId: string;
   credentials: StoredCredentials;
+  authorization?: ExternalActionExecutionAuthorizationV1;
   signal?: AbortSignal;
 }>): Promise<ActiveProjectAccountRowsSnapshot & Readonly<{ childMachines: readonly WorkspaceSyncChildMachineFacts[] }>> {
   return await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async () => {
-    const snapshot = await readProjectAccountRows({ credentials: input.credentials, serverId: input.serverId, signal: input.signal });
+    const snapshot = await readProjectAccountRows({ serverId: input.serverId, signal: input.signal,
+      ...(input.authorization ? { authorization: input.authorization, effectActionId: input.authorization.binding.actionId }
+        : { credentials: input.credentials }) });
     const childMachines = await readWorkspaceSyncChildMachineFacts({ ...input,
       machineIds: snapshot.workspaceRefs.filter(ref => ref.serverId === input.serverId
         && (ref.id === input.sourceWorkspaceRefId || ref.machineId === input.targetMachineId)).map(ref => ref.machineId) });
@@ -49,6 +53,7 @@ export function createWorkspaceSyncWorkerPreparation(input: Readonly<{
   serverHttpBaseUrl: string;
   targetMachineId: string;
   credentials: StoredCredentials;
+  authorization?: ExternalActionExecutionAuthorizationV1;
   isCurrent(): Promise<boolean>;
   prepareBetween(request: Readonly<{ sourceWorkspaceRefId: string; targetWorkspaceRefId: string }>, signal: AbortSignal): Promise<WorkspaceSyncPrepareBetweenResultV1>;
 }>) {
@@ -73,18 +78,20 @@ export function createWorkspaceSyncWorkerPreparation(input: Readonly<{
     },
     prepareDequeue: async ({ choice, basis, signal }: Readonly<{
       workspace: WorkspaceRefV1; choice: ProjectExecutionChoiceV1; basis?: WorkspaceSyncWorkerTargetBasis; signal: AbortSignal;
-    }>): Promise<Extract<WorkspaceSyncPrepareBetweenResultV1, { ok: true }> | void> => {
-      if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
-      if (choice.kind !== 'workers') return;
-      if (!basis) return fail('workspace_sync_source_unavailable');
-      assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source), serverId: basis.source.serverId });
-      await readWorkspaceSyncRootObjectIdentity(basis.target.rootPath);
-      const prepared = await input.prepareBetween({ sourceWorkspaceRefId: basis.source.id, targetWorkspaceRefId: basis.target.id }, signal);
-      if (!prepared.ok) return fail(prepared.errorCode);
-      assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source), serverId: basis.source.serverId });
-      if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
-      return prepared;
-    },
+    }>): Promise<Extract<WorkspaceSyncPrepareBetweenResultV1, { ok: true }> | void> => withWebLatencyTrace(
+      readWebLatencyTracePoint()?.requestId ?? input.authorization?.binding.requestId,
+      () => timeWebLatencyPhase('workspaceSync.worker.prepareDequeue', async () => {
+        if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
+        if (choice.kind !== 'workers') return;
+        if (!basis) return fail('workspace_sync_source_unavailable');
+        assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source), serverId: basis.source.serverId });
+        await readWorkspaceSyncRootObjectIdentity(basis.target.rootPath);
+        const prepared = await input.prepareBetween({ sourceWorkspaceRefId: basis.source.id, targetWorkspaceRefId: basis.target.id }, signal);
+        if (!prepared.ok) return fail(prepared.errorCode);
+        assertWorkspaceSyncWorkerTargetCurrent(basis, { ...await readCurrent(signal, basis.source), serverId: basis.source.serverId });
+        if (!await input.isCurrent()) fail('project_requester_credentials_unavailable');
+        return prepared;
+      })),
   };
 }
 

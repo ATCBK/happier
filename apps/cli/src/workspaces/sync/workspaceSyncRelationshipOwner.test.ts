@@ -234,7 +234,7 @@ describe('WorkspaceSyncRelationshipOwner', () => {
       if (scenario === 'replaced_after_stop') {
         // Replace the physical object at the OS boundary after the graph write,
         // while the canonical owner waits for runtime reconciliation.
-        harness.waitForProjectReconciliation.mockImplementationOnce(replaceRoot);
+        harness.waitForProjectReconciliation.mockImplementationOnce(async () => { await replaceRoot(); return undefined; });
       }
       const stopped = harness.owner.stop('relationship_1', undefined, { expectedRelationship,
         ...(removeBytes ? { removeTargetCopy, approval: { actionReceiptId: 'approved-retirement', actionInput: {

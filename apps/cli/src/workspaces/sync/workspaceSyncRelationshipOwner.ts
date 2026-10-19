@@ -89,7 +89,8 @@ export type WorkspaceSyncRelationshipOwnerOptions = Readonly<{
   commitRelationshipTarget(relationship: WorkspaceSyncRelationshipV1): Promise<void>;
   terminateRelationshipRuntime(relationship: WorkspaceSyncRelationshipV1): Promise<void>;
   waitForProjectReconciliation(settingsVersion: number, signal?: AbortSignal): Promise<void>;
-  readRelationshipDependencies?(relationship: WorkspaceSyncRelationshipV1, snapshot: ProjectAccountSnapshotV1): Promise<readonly ProjectWorkerDependency[]>;
+  readRelationshipDependencies?(relationship: WorkspaceSyncRelationshipV1, snapshot: ProjectAccountSnapshotV1,
+    removal?: NonNullable<WorkspaceSyncRelationshipRetirement['removeTargetCopy']>): Promise<readonly ProjectWorkerDependency[]>;
   inspectCommittedRelationshipTarget?(relationship: WorkspaceSyncRelationshipV1, removal: NonNullable<WorkspaceSyncRelationshipRetirement['removeTargetCopy']>, signal?: AbortSignal, approval?: WorkspaceSyncCommittedCopyTargetV1): Promise<void>;
   removeCommittedRelationshipTarget?(relationship: WorkspaceSyncRelationshipV1, removal: NonNullable<WorkspaceSyncRelationshipRetirement['removeTargetCopy']>, signal?: AbortSignal, approval?: WorkspaceSyncCommittedCopyTargetV1): Promise<void>;
   createId?: () => string;
@@ -536,7 +537,7 @@ export function createWorkspaceSyncRelationshipOwner(
         if (retirement && !options.readRelationshipDependencies) {
           throw ownerError('workspace_sync_dependencies_unavailable', 'Workspace relationship dependencies are unavailable');
         }
-        const dependencies = await options.readRelationshipDependencies?.(terminated, settings) ?? [];
+        const dependencies = await options.readRelationshipDependencies?.(terminated, settings, retirement?.removeTargetCopy) ?? [];
         if (dependencies.length > 0) {
           throw Object.assign(ownerError('workspace_sync_relationship_in_use', 'Workspace relationship has dependent work'), { dependencies });
         }

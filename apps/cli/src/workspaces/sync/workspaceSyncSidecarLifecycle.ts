@@ -5,6 +5,7 @@ import type { WorkspaceSyncRuntimeReadinessV1 } from '@happier-dev/protocol';
 import type { MutagenControlCommandV1 } from './transport/workspaceSyncBrokerProtocol';
 import type { WorkspaceSyncBrokerOpenContext } from './transport/workspaceSyncBroker';
 import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 export type WorkspaceSyncVerifiedRuntime = Readonly<{
   managerPath: string;
@@ -145,20 +146,22 @@ export class WorkspaceSyncSidecarLifecycle {
   }
 
   async start(): Promise<void> {
-    if (this.stopping) throw engineUnavailable(new Error('sidecar lifecycle is stopping'));
-    if (this.reconciliationContext.getStore() === true) {
-      if (this.authenticated && this.activeProcess) return;
-      if (!this.currentAuthenticatedReadiness) this.currentAuthenticatedReadiness = readiness();
-      const pending = this.currentAuthenticatedReadiness.promise;
+    return await timeWebLatencyPhase('workspaceSync.lifecycle.start', async () => {
+      if (this.stopping) throw engineUnavailable(new Error('sidecar lifecycle is stopping'));
+      if (this.reconciliationContext.getStore() === true) {
+        if (this.authenticated && this.activeProcess) return;
+        if (!this.currentAuthenticatedReadiness) this.currentAuthenticatedReadiness = readiness();
+        const pending = this.currentAuthenticatedReadiness.promise;
+        this.supervisor.start();
+        await pending;
+        return;
+      }
+      if (this.ready && this.activeProcess) return;
+      if (!this.currentReadiness) this.currentReadiness = readiness();
+      const pending = this.currentReadiness.promise;
       this.supervisor.start();
       await pending;
-      return;
-    }
-    if (this.ready && this.activeProcess) return;
-    if (!this.currentReadiness) this.currentReadiness = readiness();
-    const pending = this.currentReadiness.promise;
-    this.supervisor.start();
-    await pending;
+    });
   }
 
   async runReconciliation<T>(action: () => Promise<T>): Promise<T> {
