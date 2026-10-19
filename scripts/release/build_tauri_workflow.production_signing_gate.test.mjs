@@ -398,6 +398,14 @@ test('Tauri build and trusted finalizer share the complete Linux bundling depend
   assert.doesNotMatch(installScript, /apt-cache\s+show/, 'the action must not probe stale apt metadata itself');
   assert.doesNotMatch(installScript, /sudo apt-get\s+(?:update|install)/, 'the action must not bypass the bounded apt owner');
 
+  // Installed @tauri-apps/cli 2.12.1: tauri-bundler prepare_tools caches this
+  // exact basename. A different basename leaves the verified upstream tool unused.
+  assert.match(
+    installScript,
+    /linuxdeploy_path="\$\{linuxdeploy_dir\}\/linuxdeploy-07333c6-x86_64\.AppImage"/,
+    "the verified linuxdeploy must occupy the installed Tauri CLI cache entry",
+  );
+
   const curlCommand = installScript.match(/curl[\s\S]*?linuxdeploy-x86_64\.AppImage" \\\n\s+-o "\$\{linuxdeploy_path\}"/)?.[0] ?? '';
   assert.match(curlCommand, /--connect-timeout\s+\d+/, 'linuxdeploy download should bound connection establishment');
   assert.match(curlCommand, /--max-time\s+\d+/, 'linuxdeploy download should have a total transfer bound');
