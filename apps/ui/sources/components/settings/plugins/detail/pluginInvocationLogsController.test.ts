@@ -68,6 +68,24 @@ function availablePage(params?: Readonly<{
 }
 
 describe('usePluginInvocationLogsController', () => {
+    it('cancels manual reads when their owner unmounts, even with automatic loading disabled', async () => {
+        let requestSignal: AbortSignal | undefined;
+        const read = vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<DaemonPluginInvocationLogReadResponseV1>((_resolve, reject) => {
+            requestSignal = signal;
+            signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })), { once: true });
+        }));
+        const { usePluginInvocationLogsController } = await import('./pluginInvocationLogsController');
+        const hook = await renderHook(() => usePluginInvocationLogsController({
+            pluginId: 'example.plugin', targetKey: 'machine-2', resolveTarget: () => target, read, autoLoad: false,
+        }));
+        let refresh!: Promise<void>;
+        act(() => { refresh = hook.getCurrent().refresh(); });
+        expect(hook.getCurrent().state.phase).toBe('loading');
+        await hook.unmount();
+        expect(requestSignal?.aborted).toBe(true);
+        await refresh;
+    });
+
     it('passes a trimmed correlation ID to the daemon query instead of locally filtering records', async () => {
         const read = vi.fn(async () => availablePage());
         const { usePluginInvocationLogsController } = await import('./pluginInvocationLogsController');
