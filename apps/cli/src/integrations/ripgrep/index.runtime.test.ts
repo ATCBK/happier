@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,6 +24,12 @@ vi.mock('@/processes/terminate/terminateProcessTree', () => ({
   terminateProcessTree: (proc: unknown, opts?: unknown) => terminateProcessTreeMock(proc, opts),
 }));
 
+function mockSpawn(child: EventEmitter) {
+  const stdin = new PassThrough();
+  spawnMock.mockReturnValue(Object.assign(child, { stdin }));
+  return stdin;
+}
+
 describe('ripgrep runtime resolution', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -41,7 +48,7 @@ describe('ripgrep runtime resolution', () => {
     child.stdout = stdout;
     child.stderr = stderr;
 
-    spawnMock.mockReturnValue(child);
+    const stdin = mockSpawn(child);
     requireJavaScriptRuntimeExecutableMock.mockResolvedValue('/managed/js-runtime');
 
     const { run } = await import('./index');
@@ -62,12 +69,13 @@ describe('ripgrep runtime resolution', () => {
 
     expect(spawnMock).toHaveBeenCalledWith(
       '/managed/js-runtime',
-      expect.arrayContaining([expect.stringContaining('ripgrep_launcher.cjs'), JSON.stringify(['describe', 'needle'])]),
+      [expect.stringContaining('ripgrep_launcher.cjs'), '--stdin'],
       expect.objectContaining({
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       }),
     );
+    expect(JSON.parse(stdin.read().toString())).toEqual({ args: ['describe', 'needle'] });
   });
 
   it('fails closed when no JavaScript runtime is available', async () => {
@@ -90,7 +98,7 @@ describe('ripgrep runtime resolution', () => {
     child.pid = 4242;
     child.stdout = stdout;
     child.stderr = stderr;
-    spawnMock.mockReturnValue(child);
+    mockSpawn(child);
     const controller = new AbortController();
 
     const { run } = await import('./index');
@@ -127,7 +135,7 @@ describe('ripgrep runtime resolution', () => {
     child.pid = 4243;
     child.stdout = stdout;
     child.stderr = stderr;
-    spawnMock.mockReturnValue(child);
+    mockSpawn(child);
 
     const { run } = await import('./index');
     const pending = run(['--files'], {
@@ -155,7 +163,7 @@ describe('ripgrep runtime resolution', () => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 4244,
     });
-    spawnMock.mockReturnValue(child);
+    mockSpawn(child);
     const records: string[] = [];
     const { run } = await import('./index');
     const pending = run(['--json'], {
@@ -176,7 +184,7 @@ describe('ripgrep runtime resolution', () => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 4246,
     });
-    spawnMock.mockReturnValue(child);
+    mockSpawn(child);
     const { run } = await import('./index');
     const pending = run(['--files', '--line-buffered'], {
       deadlineAtMs: Date.now() + 100,

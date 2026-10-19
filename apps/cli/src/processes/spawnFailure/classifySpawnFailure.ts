@@ -1,5 +1,17 @@
 import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 import type { SpawnFailureV1 } from '@happier-dev/protocol';
+import { statSync } from 'node:fs';
+
+/** Only called after spawn fails: ENOENT alone cannot distinguish cwd from executable absence. */
+export function isSpawnWorkingDirectoryMissing(cwd: string | undefined): boolean {
+    if (cwd === undefined) return false;
+    try {
+        return !statSync(cwd).isDirectory();
+    } catch (error) {
+        return error !== null && typeof error === 'object' && 'code' in error
+            && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+    }
+}
 
 export type SpawnFailure = Readonly<SpawnFailureV1>;
 export type SpawnFailureLimitsReader = () => MachineVitalsSampleV1['limits'];
