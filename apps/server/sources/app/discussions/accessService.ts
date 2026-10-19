@@ -62,7 +62,7 @@ export async function validateInitialDiscussionGrantsInTx(tx: Tx, input: Readonl
     if (!owner) return discussionFailure("discussion_not_found");
     const mode = resolveEffectiveAccountEncryptionModeFromAccountRow(owner);
     if (mode.status !== "ready") return discussionFailure("discussion_encryption_mode_mismatch");
-    const participantAccountIds = (input.request.participants ?? []).map(participant => participant.accountId);
+    const participantAccountIds = (input.request.participants ?? []).flatMap(participant => participant.kind === 'account' ? [participant.accountId] : []);
     if (new Set(participantAccountIds).size !== participantAccountIds.length) return discussionFailure("discussion_subject_ineligible");
     for (const accountId of participantAccountIds) {
         const error = await validateResourceGrantPrincipalInTx(tx, input.actorAccountId, { kind: "account", accountId });

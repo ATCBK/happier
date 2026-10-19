@@ -61,6 +61,11 @@ export const ActionResolvedSessionTargetsV1Schema = lazyZodSchema(() => z.strict
   targets: z.array(ActionSessionAddressV1Schema).check(z.minLength(1)),
   /** Group result projection: self/manager keep a single result, workers/siblings fan out. */
   selector: z.boolean(),
+  /** Independently-one collection operands retain their reviewed slot, never a second enumeration. */
+  operands: z.optional(z.array(z.strictObject({
+    field: z.string().check(z.minLength(1)),
+    target: ActionSessionAddressV1Schema,
+  })).check(z.minLength(1))),
 }));
 export type ActionResolvedSessionTargetsV1 = z.infer<typeof ActionResolvedSessionTargetsV1Schema>;
 

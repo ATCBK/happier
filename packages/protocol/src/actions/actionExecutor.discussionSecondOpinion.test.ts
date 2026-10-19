@@ -314,19 +314,21 @@ describe('Second opinion canonical Action composition', () => {
     const artifact = ArtifactDocumentV1Schema.parse({ artifactId: 'doc', ownerAccountId: 'alice', access: 'owner',
       header: { title: 'Notes', kind: 'markdown' }, body: '# Notes\n\nRead this.', revision,
       publicAudience: 'none', seq: 1, createdAt: 1, updatedAt: 1 });
-    const effects: string[] = [];
     const f = fixture();
     const executor = createActionExecutor({
       discussionAction: async ({ actionId }) => {
-        effects.push(actionId);
+        // Doc reads also project current readable passage-thread counts.
+        if (actionId === 'discussion.list') return { v: 1, serverId: 'home', discussions: [], nextCursor: null, incomplete: false };
         if (actionId !== 'discussion.second_opinion.start') throw new Error('Preview must not write');
         return { ok: true, value: { ...f.preview(), source: { kind: 'doc_passage', doc: { ref, revision } } } };
       },
-      artifactAction: async ({ actionId }) => { effects.push(actionId); return { artifact }; },
+      artifactAction: async ({ actionId }) => {
+        if (actionId !== 'artifact.get') throw new Error('Preview must not write');
+        return { artifact };
+      },
     });
     expect(await executor.execute('discussion.second_opinion.start', { ...request, source }, f.context)).toMatchObject({ ok: true,
       result: { status: 'preview', sourceText: 'Read this' } });
-    expect(effects).toEqual(['discussion.second_opinion.start', 'artifact.get']);
     expect(await executor.execute('discussion.second_opinion.start', { ...request,
       source: { ...source, passage: { ...source.passage, quote: 'Invented!' } } }, f.context)).toMatchObject({ ok: false,
       errorCode: 'discussion_content_unavailable' });

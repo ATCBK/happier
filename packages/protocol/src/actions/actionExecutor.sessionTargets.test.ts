@@ -126,7 +126,8 @@ describe('SessionTarget at the Actions front door', () => {
 
   it('uses admitted Discussion participants and only already-bound model Sessions', async () => {
     const h = harness();
-    const modelLaunch = { executionTarget: { serverId: 'home', machineId: 'machine' },
+    // The authoritative roster was read on this Home; its saved launch alias belongs to its creator's device.
+    const modelLaunch = { executionTarget: { serverId: 'creator-device-home', machineId: 'machine' },
       directory: { kind: 'path', path: '/repo' }, agentTarget: { kind: 'agent',
         identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
     const executor = createActionExecutor({ ...h.deps,

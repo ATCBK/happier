@@ -10,7 +10,7 @@ import {
   type DiscussionTitleV1,
 } from './content.js';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from './replyTargets.js';
-import { DiscussionInitialParticipantsV1Schema, type DiscussionAccountParticipantRefV1 } from './participants.js';
+import { DiscussionInitialParticipantsV1Schema, type DiscussionInitialParticipantV1 } from './participants.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 
 export { DISCUSSION_MUTATION_EQUALITY_HKDF_LABEL_V1 };
@@ -43,7 +43,7 @@ export type DiscussionCreateEqualityIntentV1 = Readonly<{
   title: DiscussionTitleV1;
   firstMessage: DiscussionPostEqualityIntentV1 & Readonly<{ localId: string }>;
   anchor?: DiscussionAnchorV1;
-  participants?: readonly DiscussionAccountParticipantRefV1[];
+  participants?: readonly DiscussionInitialParticipantV1[];
 }>;
 
 function normalizeMentionedIds(ids: readonly string[]): string[] {
@@ -67,8 +67,10 @@ export function serializeDiscussionMutationEqualityIntentV1(
   if (params.kind === 'create') {
     const title = DiscussionTitleV1Schema.parse(params.title);
     const content = DiscussionMessageContentV1Schema.parse(params.firstMessage.content);
+    const key = (participant: DiscussionInitialParticipantV1) => participant.kind === 'account'
+      ? participant.accountId : `session:${participant.sessionId}`;
     const participants = DiscussionInitialParticipantsV1Schema.parse([...(params.participants ?? [])])
-      .sort((left, right) => left.accountId < right.accountId ? -1 : left.accountId > right.accountId ? 1 : 0);
+      .sort((left, right) => key(left) < key(right) ? -1 : key(left) > key(right) ? 1 : 0);
     const anchor = params.anchor === undefined ? undefined : DiscussionAnchorV1Schema.parse(params.anchor);
     const replyTarget = params.firstMessage.replyTarget === undefined ? undefined : DiscussionReplyTargetV1Schema.parse(params.firstMessage.replyTarget);
     // A Doc root already binds this exact identity/revision in its first message.

@@ -4,7 +4,7 @@ import { SessionInputSourceSessionV1Schema } from '../sessions/messages/sessionI
 import { SessionDataKeyEnvelopeBytesV1Schema } from '../sessions/encryption/sessionDataKeyEnvelopes.js';
 import { ContentPublicKeyFingerprintSchema } from '../machines/identity/contentPublicKeyFingerprint.js';
 import { ResourceRecipientKeyEnvelopesV1Schema, type ResourceRecipientKeyEnvelopeInputV1 } from '../teams/resourceGrantAccessV1.js';
-import { DiscussionInitialParticipantsV1Schema, DiscussionOwnedSessionV1Schema, DiscussionSessionParticipantRefV1Schema, type DiscussionAccountParticipantRefV1 } from './participants.js';
+import { DiscussionInitialParticipantsV1Schema, DiscussionOwnedSessionV1Schema, DiscussionSessionParticipantRefV1Schema, type DiscussionInitialParticipantV1 } from './participants.js';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from './replyTargets.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
 
@@ -316,7 +316,7 @@ export type DiscussionCreateMutationRequestBodyInputV1 = Readonly<{
   creationEqualityEvidenceV1?: DiscussionE2eeEqualityEvidenceV1;
   titleContent: StrictSessionStoredMessageContentEnvelope;
   anchor?: DiscussionAnchorV1;
-  participants?: readonly DiscussionAccountParticipantRefV1[];
+  participants?: readonly DiscussionInitialParticipantV1[];
   dataEncryptionKey?: string;
   expectedOwnerContentPublicKeyFingerprint?: string;
   recipientKeyEnvelopes?: readonly ResourceRecipientKeyEnvelopeInputV1[];

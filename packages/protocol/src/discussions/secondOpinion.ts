@@ -4,7 +4,7 @@ import { SessionMessageRefV1Schema } from '../sessions/messages/sessionMessageRe
 import { DocPassageRefV1Schema } from '../artifacts/artifactCollaborationV1.js';
 import { ExecutableParticipantSelectionV1Schema } from './executableParticipants.js';
 import { DiscussionIdSchema, DiscussionSessionParticipantRefV1Schema } from './references.js';
-import { DiscussionInitialParticipantsV1Schema } from './participants.js';
+import { DiscussionInitialAccountParticipantsV1Schema } from './participants.js';
 import { DiscussionDocPassageReplyTargetV1Schema } from './replyTargets.js';
 import { DiscussionErrorCodeV1Schema } from './api.js';
 
@@ -36,7 +36,7 @@ export type DiscussionSecondOpinionReviewerV1 = z.infer<typeof DiscussionSecondO
 export const DiscussionSecondOpinionPreviewInputV1Schema = lazyZodSchema(() => z.strictObject({
   source: DiscussionSecondOpinionPreviewSourceV1Schema,
   reviewers: z.array(DiscussionSecondOpinionReviewerV1Schema),
-  participants: z.optional(DiscussionInitialParticipantsV1Schema),
+  participants: z.optional(DiscussionInitialAccountParticipantsV1Schema),
   publisherSessionId: z.optional(DiscussionSessionParticipantRefV1Schema.shape.sessionId),
 }));
 export type DiscussionSecondOpinionPreviewInputV1 = z.infer<typeof DiscussionSecondOpinionPreviewInputV1Schema>;

@@ -9318,6 +9318,7 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
   },
   {
     id: 'discussion.create', approvalPolicy: { uiConfirmation: 'direct' }, approval: {result: 'optional',flow: 'deferred'},
+    sessionTarget: { field: 'participants.*.sessionId', cardinality: 'one' },
     originalExecution: { accountRoot: 'allowed' },
     requiredAuthority: 'present_user',
     title: 'Start a Discussion',
@@ -9510,6 +9511,7 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
   },
   {
     id: 'discussion.invite', approvalPolicy: { uiConfirmation: 'direct' }, approval: { result: 'optional', flow: 'deferred' },
+    sessionTarget: { field: 'participant.sessionId', cardinality: 'one' },
     originalExecution: { accountRoot: 'allowed' },
     title: 'Invite a participant to a discussion',
     description: 'Invite a person, bind an existing Session, or reserve a model slot and start its ordinary Session without an initial prompt. Retain the same slot on an uncertain start. This grants no access to an anchored source.',
