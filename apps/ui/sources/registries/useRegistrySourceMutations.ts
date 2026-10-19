@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { REGISTRY_ACTION_INPUT_SCHEMAS_V1, REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';

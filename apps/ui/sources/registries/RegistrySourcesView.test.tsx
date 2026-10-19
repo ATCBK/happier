@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it, onTestFailed, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { collectUnexpectedRawTextNodes, renderScreen } from '@/dev/testkit';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import type { IModal } from '@/modal';
 import { installPromptRegistriesCommonModuleMocks } from '@/components/settings/prompts/registries/promptRegistriesScreenTestHelpers';
@@ -25,6 +25,7 @@ describe('RegistrySourcesView through real registry Actions', () => {
         const { home, sourceId } = await createRegistrySourcesUiHome('undo-source');
         const screen = await renderScreen(<RegistrySourcesView kind="skill" testID="registries" />);
         await waitForHomeGovernance(() => expect(screen.findByTestId('registries:detail:enabled')).not.toBeNull());
+        expect(collectUnexpectedRawTextNodes(screen.tree.toJSON())).toEqual([]);
         retirePresentationNotice();
         await React.act(async () => { screen.findByTestId('registries:detail:enabled')!.props.onValueChange(false); });
         await waitForHomeGovernance(() => expect(home.read().record.value).toMatchObject({ sources: [expect.objectContaining({ id: sourceId, enabled: false })] }));
@@ -76,5 +77,25 @@ describe('RegistrySourcesView through real registry Actions', () => {
         await waitForHomeGovernance(() => expect(home.read().record.value).toMatchObject({
             sources: [expect.objectContaining({ id: sourceId, token: previous })],
         }));
+    });
+    it('asks for a token when a registry needs one, names where it goes, and offers Add only once one is chosen', async () => {
+        const { home } = await createRegistrySourcesUiHome('needs-token', { savedSecretResourceIds: ['acme-token'],
+            external: async url => url === 'https://registry.acme.test/.claude-plugin/marketplace.json'
+                ? new Response(null, { status: 401 }) : null });
+        const screen = await renderScreen(<RegistrySourcesView kind="skill" initialIntent="add" testID="registries" />);
+        vi.useFakeTimers();
+        try {
+            await React.act(async () => { screen.changeTextByTestId('registries:add:link', 'https://registry.acme.test/.claude-plugin/marketplace.json'); });
+            await React.act(async () => { await vi.runOnlyPendingTimersAsync(); });
+        } finally { vi.useRealTimers(); }
+        await waitForHomeGovernance(() => expect(screen.findByTestId('registries:add:token')).not.toBeNull());
+        expect(screen.getTextContent()).toContain('host=registry.acme.test');
+        expect(screen.findByTestId('registries:add:submit')!.props.disabled).toBe(true);
+        modal.show.mockClear();
+        await screen.pressByTestIdAsync('registries:add:token:choose');
+        const props = modal.show.mock.calls.at(-1)![0].props as import('@/components/ui/forms/valueRefs/SavedSecretPickerModal').SavedSecretPickerModalProps;
+        await React.act(async () => { props.onSelectId('happier:shared-secret:v1:acme-token'); });
+        await waitForHomeGovernance(() => expect(screen.findByTestId('registries:add:submit')!.props.disabled).toBe(false));
+        expect(home.read().record.value).toMatchObject({ sources: [expect.objectContaining({ title: 'Review skills' })] });
     });
 });

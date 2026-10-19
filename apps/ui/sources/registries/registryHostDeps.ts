@@ -6,10 +6,11 @@ import { readPromptLibraryCatalogRecordV1, updatePromptLibraryRegistrySourcesV1,
     type PromptLibraryStackActionPortV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
-import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createUiRegistryHttpV1 } from './registryHttpV1';
 import { projectPluginRegistrySources } from './pluginRegistrySources';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
+import { invalidatePromptLibraryCatalogAfterAcknowledgedMutation } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 
 type RegistrySessionMemo = { values: Map<string, unknown>; pending: Map<string, Readonly<{ account: LazyActionAccountContext; signal?: AbortSignal; promise: Promise<unknown> }>>;
     refreshReads: Set<string>; rateLimitedUntil: Map<string, number>; sourceSignature: string | null };
@@ -94,7 +95,10 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
             if(!machine)throw new RegistryFetchErrorV1({state:'needs_machine'});
             const result=await executeOnMachine(machine.id,'registries.sources.create',input);
             if(!result.ok)throw Object.assign(new Error(result.error),{code:result.errorCode,details:result.details});
-            return REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.sources.create'].parse(result.result);
+            const created=REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.sources.create'].parse(result.result);
+            // The daemon wrote the Account row; a write from this client revalidates its own copy, this one must too.
+            await invalidatePromptLibraryCatalogAfterAcknowledgedMutation({serverId:account.serverId,accountId:account.accountId},()=>account.assertCurrent());
+            return created;
         },
         daemonFetch: async request => {
             account.assertCurrent(); context.signal?.throwIfAborted();
@@ -131,10 +135,10 @@ export async function createUiRegistryHostV1(account: LazyActionAccountContext, 
                 return { op: 'files', files: downloaded.payload };
             }
             const payload: RegistryFetchRequestV1 = RegistryFetchRequestV1Schema.parse(request);
-            const response = await machineRpcWithServerScope<unknown, RegistryFetchRequestV1>({ machineId: machine.id,
+            const response = await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope<unknown, RegistryFetchRequestV1>({ machineId: machine.id,
                 serverId: account.serverId, accountId: account.accountId, preferScoped: true, method: 'daemon.registries.fetch', payload,
-                authorization: context.rpcSessionAuthorization, signal: context.signal, operationTimeoutMs: null,
-                requestId: context.actionRequestId ?? undefined, onDispatched: account.assertCurrent });
+                authorization: context.rpcSessionAuthorization, signal, operationTimeoutMs: null,
+                requestId: context.actionRequestId ?? undefined, onDispatched: account.assertCurrent }));
             account.assertCurrent(); context.signal?.throwIfAborted();
             const parsed = RegistryFetchResponseV1Schema.parse(response);
             return parsed.op === 'list' ? { ...parsed, page: { ...parsed.page, machineId: machine.id } } : parsed;

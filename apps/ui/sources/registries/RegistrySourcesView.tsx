@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import {
   Collection,
   useHappierCollection,
@@ -12,7 +13,7 @@ import {
   type RegistryKindV1,
   type RegistrySourceDescriptorV1,
 } from '@happier-dev/protocol/registries';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { RegistryDetectedSourceV1Schema } from '@happier-dev/protocol/registries';
 
 import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
@@ -21,6 +22,8 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { NavigationBackChromeProvider } from '@/components/ui/layout/NavigationBackChrome';
+import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigationTitleChrome';
 import { PageLeaveActions } from '@/components/ui/layout/PageLeaveActions';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -37,13 +40,12 @@ import {
   registryFormatLabel,
   registryItemCountLabel,
   registrySourceKindLabel,
-  registrySourceHost,
   registrySourceLocation,
+  registryTokenHost,
 } from './registrySourcePresentation';
+import { useRegistryTokenPicker } from './useRegistryTokenPicker';
+import { readRegistryFailureStatus } from './describeRegistrySourceStatus';
 import { useRegistryItems } from './useRegistryItems';
-import { SavedSecretPickerModal } from '@/components/ui/forms/valueRefs/SavedSecretPickerModal';
-import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
-import { Modal } from '@/modal';
 import { useRegistrySourceMutations } from './useRegistrySourceMutations';
 import { useRegistrySources } from './useRegistrySources';
 import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
@@ -176,6 +178,7 @@ export function RegistrySourcesView(
         key={source.id}
         kind={props.kind}
         source={source}
+        pushed={context.pushed}
         itemsFromSource={props.itemsFromSource?.(source.id) ?? []}
         onRemoved={() => setOpenKey(null)}
         testID={`${props.testID}:detail`}
@@ -185,7 +188,7 @@ export function RegistrySourcesView(
 
   return (
     <CoreCollectionScope>
-      <View style={styles.fill} testID={props.testID}>
+      <View style={[styles.fill, phone || openKey === null ? styles.restingGutter : null]} testID={props.testID}>
         <Collection<Row>
           model={model}
           anatomy={anatomy}
@@ -214,15 +217,13 @@ function RegistrySourceTokenRow(props: Readonly<{ source: RegistrySourceDescript
   const { theme } = useUnistyles();
   const { source } = props;
   const mutations = useRegistrySourceMutations();
-  const catalog = useSavedSecretCatalog();
+  const picker = useRegistryTokenPicker();
   const [busy, setBusy] = React.useState(false);
   const [last, setLast] = React.useState<Readonly<{ added: boolean; previous: RegistrySourceDescriptorV1['token'] | null }> | null>(null);
   const [failed, setFailed] = React.useState(false);
-  const host = isGitHubSource(source) ? t('capabilities.registries.detail.tokenGitHubHost') : registrySourceHost(source.url);
+  const host = registryTokenHost(source.url);
   const currentRef = source.token?.secretRef ?? null;
-  const currentName = currentRef === null ? null
-    : catalog.picker.personalSecrets.find((secret) => secret.id === currentRef)?.name
-      ?? catalog.picker.sharedEntries.find((entry) => entry.ref === currentRef)?.name ?? null;
+  const currentName = picker.nameOf(currentRef);
   const apply = React.useCallback((token: RegistrySourceDescriptorV1['token'] | null, undo: boolean) => {
     const previous = source.token ?? null;
     setBusy(true);
@@ -232,21 +233,14 @@ function RegistrySourceTokenRow(props: Readonly<{ source: RegistrySourceDescript
       .catch(() => setFailed(true))
       .finally(() => setBusy(false));
   }, [mutations, source.id, source.token]);
-  const choose = React.useCallback(() => {
-    Modal.show({
-      component: SavedSecretPickerModal,
-      props: {
-        selectedId: currentRef,
-        includeNoneRow: currentRef !== null,
-        onSelectId: (secretRef: string | null) => {
-          if (secretRef === currentRef) return;
-          apply(secretRef === null ? null : { secretRef }, false);
-        },
-      },
-      chrome: { kind: 'card', title: t('capabilities.registries.detail.tokenPickTitle'), dimensions: { size: 'lg' } },
-      closeOnBackdrop: true,
-    });
-  }, [apply, currentRef]);
+  const choose = React.useCallback(() => picker.pick({
+    selectedId: currentRef,
+    includeNoneRow: currentRef !== null,
+    onSelectId: (secretRef) => {
+      if (secretRef === currentRef) return;
+      apply(secretRef === null ? null : { secretRef }, false);
+    },
+  }), [apply, currentRef, picker]);
   const subtitle = failed ? t('capabilities.registries.detail.updateFailed')
     : last ? (last.added ? t('capabilities.registries.detail.tokenAdded') : t('capabilities.registries.detail.tokenRemoved'))
     : currentRef !== null ? t('capabilities.registries.detail.tokenSet', { name: currentName ?? t('capabilities.registries.detail.tokenTitle'), host })
@@ -273,11 +267,11 @@ function RegistrySourceTokenRow(props: Readonly<{ source: RegistrySourceDescript
   );
 }
 
-function isGitHubSource(source: Pick<RegistrySourceDescriptorV1, 'url'>): boolean {
-  try { return new URL(source.url).host === 'github.com'; } catch { return false; }
-}
-
-/** One details column: the body scrolls, the footer (its one primary, or the way out) stays. */
+/**
+ * One details column: the body scrolls, the footer (its one primary, or the way out) stays. It is a pane, not a
+ * page, so its header draws its own title and never takes the settings page's back control or navigation title
+ * (the page header above already carries both).
+ */
 function DetailFrame(
   props: Readonly<{
     children: React.ReactNode;
@@ -286,18 +280,22 @@ function DetailFrame(
   }>,
 ) {
   return (
-    <View style={styles.fill}>
-      <ScrollView
-        style={styles.fill}
-        contentContainerStyle={[
-          styles.body,
-          props.pushed ? styles.bodyPushed : null,
-        ]}
-      >
-        {props.children}
-      </ScrollView>
-      {props.footer ? <View style={styles.footer}>{props.footer}</View> : null}
-    </View>
+    <NavigationTitleChromeProvider showsTitle={false}>
+    <NavigationBackChromeProvider control={null}>
+      <View style={styles.fill}>
+        <ScrollView
+          style={styles.fill}
+          contentContainerStyle={[
+            styles.body,
+            props.pushed ? styles.bodyPushed : null,
+          ]}
+        >
+          {props.children}
+        </ScrollView>
+        {props.footer ? <View style={[styles.footer, props.pushed ? styles.footerPushed : null]}>{props.footer}</View> : null}
+      </View>
+    </NavigationBackChromeProvider>
+    </NavigationTitleChromeProvider>
   );
 }
 
@@ -312,6 +310,7 @@ function RegistrySourceDetail(
   props: Readonly<{
     kind: RegistryKindV1;
     source: RegistrySourceDescriptorV1;
+    pushed: boolean;
     itemsFromSource: readonly RegistrySourcesViewItemFromSource[];
     onRemoved: () => void;
     testID: string;
@@ -420,6 +419,7 @@ function RegistrySourceDetail(
 
   return (
     <DetailFrame
+      pushed={props.pushed}
       footer={
         editable ? (
           <PageLeaveActions
@@ -626,8 +626,6 @@ function unsupportedCopy(
   switch (reason) {
     case 'organisation':
       return t('capabilities.registries.add.organisation');
-    case 'needs_token':
-      return t('capabilities.registries.add.needsToken');
     case 'unreachable':
       return t('capabilities.registries.add.unreachable');
     default:
@@ -663,6 +661,8 @@ function RegistryAddForm(
   >({ state: 'idle' });
   const [adding, setAdding] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [token, setToken] = React.useState<string | null>(null);
+  const picker = useRegistryTokenPicker();
 
   React.useEffect(() => {
     const url = link.trim();
@@ -700,17 +700,23 @@ function RegistryAddForm(
     detected.kinds.includes(props.kind)
       ? detected
       : null;
+  // A registry that asks for a token is not an error: the token row asks for it, and the add detects again with it.
+  const needsToken =
+    detected !== null &&
+    'unsupported' in detected &&
+    detected.unsupported === 'needs_token';
   const fieldError =
     detection.state === 'failed'
       ? t('capabilities.registries.add.unreachable')
-      : detected !== null && 'unsupported' in detected
+      : detected !== null && 'unsupported' in detected && !needsToken
         ? unsupportedCopy(detected.unsupported)
-        : detected !== null && supported === null
+        : detected !== null && supported === null && !needsToken
           ? t('capabilities.registries.add.unknownFormat')
           : null;
+  const canAdd = supported !== null || (needsToken && token !== null);
 
   const submit = React.useCallback(async () => {
-    if (supported === null) return;
+    if (!canAdd) return;
     setAdding(true);
     setError(null);
     try {
@@ -718,14 +724,17 @@ function RegistryAddForm(
         url: link.trim(),
         ...(name.trim() ? { title: name.trim() } : {}),
         kinds: [props.kind],
+        ...(needsToken && token !== null ? { token: { secretRef: token } } : {}),
       });
       props.onAdded(result.source.id);
-    } catch {
-      setError(t('capabilities.registries.add.failed'));
+    } catch (failure) {
+      const rejected =
+        readRegistryFailureStatus((failure as { result?: { details?: unknown } } | null)?.result?.details)?.state === 'auth_failed';
+      setError(t(rejected ? 'capabilities.registries.add.tokenRejected' : 'capabilities.registries.add.failed'));
     } finally {
       setAdding(false);
     }
-  }, [link, mutations, name, props, supported]);
+  }, [canAdd, link, mutations, name, needsToken, props, token]);
 
   return (
     <DetailFrame
@@ -753,7 +762,7 @@ function RegistryAddForm(
             size="normal"
             title={t('capabilities.registries.add.submit')}
             loading={adding}
-            disabled={supported === null}
+            disabled={!canAdd}
             onPress={() => void submit()}
             testID={`${props.testID}:submit`}
           />
@@ -761,7 +770,7 @@ function RegistryAddForm(
       }
     >
       <View style={styles.formHead}>
-        <Text variant="title" emphasis="strong">
+        <Text variant="title" emphasis="semiBold">
           {t('capabilities.registries.add.title')}
         </Text>
         <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
@@ -798,6 +807,32 @@ function RegistryAddForm(
             </View>
           }
         />
+        {needsToken ? (
+          <Item
+            testID={`${props.testID}:token`}
+            title={t('capabilities.registries.detail.tokenTitle')}
+            subtitle={
+              token === null
+                ? t('capabilities.registries.add.needsToken', { host: registryTokenHost(link.trim()) })
+                : t('capabilities.registries.detail.tokenSet', {
+                    name: picker.nameOf(token) ?? t('capabilities.registries.detail.tokenTitle'),
+                    host: registryTokenHost(link.trim()),
+                  })
+            }
+            subtitleLines={0}
+            rightElement={
+              <RoundButton
+                size="small"
+                display="secondary"
+                title={token === null ? t('capabilities.registries.detail.tokenAdd') : t('capabilities.registries.detail.tokenChange')}
+                onPress={() =>
+                  picker.pick({ selectedId: token, includeNoneRow: false, onSelectId: (secretRef) => setToken(secretRef) })
+                }
+                testID={`${props.testID}:token:choose`}
+              />
+            }
+          />
+        ) : null}
         {supported !== null ? (
           <Item
             testID={`${props.testID}:detected`}
@@ -880,10 +915,15 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.space.s24,
     gap: theme.space.s8,
   },
+  // The resting list (a phone, or no detail open) sits on the page edges, so the page gives it its gutter; a
+  // phone's pushed detail inside takes the same one.
+  restingGutter: { paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx },
   bodyPushed: {
-    paddingHorizontal: theme.space.s20,
+    paddingHorizontal: 0,
     paddingTop: theme.space.s8,
   },
+  // On a phone the footer's content sits on the sheets' edge above it.
+  footerPushed: { paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx },
   footer: {
     paddingHorizontal: theme.space.s24,
     paddingVertical: theme.space.s12,

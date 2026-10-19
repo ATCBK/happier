@@ -93,3 +93,10 @@ export function registrySourceHost(url: string): string {
     return url;
   }
 }
+
+/** Where a token for this link is sent, in words: GitHub says "GitHub, for this repository", any other link its host. */
+export function registryTokenHost(url: string): string {
+  return registrySourceHost(url) === 'github.com'
+    ? t('capabilities.registries.detail.tokenGitHubHost')
+    : registrySourceHost(url);
+}
