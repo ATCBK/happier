@@ -37,6 +37,7 @@ export async function fetchLocalServiceInventorySnapshotViaMachineRpc(
                 ? RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH
                 : RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable', reasonCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };

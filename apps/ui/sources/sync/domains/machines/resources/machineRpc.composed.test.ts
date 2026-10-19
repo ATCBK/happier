@@ -16,7 +16,7 @@ import { createMachineGuardViewFixture } from '../guard/guardViewFixtures';
 import { MachineGuardActivityListV1Schema } from '@happier-dev/protocol/machines/guard/activityV1';
 import { HappierStorageSummaryV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 // HTTP/auth are the Home boundary; the Action, route, codec and Socket.IO path stay real.
 const homes = createHomeGovernanceHarness();
@@ -37,6 +37,9 @@ const { useMachineProcesses } = await import('../processes/useMachineProcesses')
 const { machineProcessesStore } = await import('../processes/machineProcessesStore');
 const { useMachineGuardView, useMachineGuardActivity, useMachinesGuardActivity } = await import('../guard/useMachineGuardView');
 const { machineGuardStore } = await import('../guard/machineGuardStore');
+const { subscribeLocalServiceInventoryStore, getLocalServiceInventoryState, resetLocalServiceInventoryStoreForTests } = await import('@/sync/domains/local/services/inventory/sharedStore');
+const { DEFAULT_BROWSER_CAPABILITIES } = await import('@happier-dev/protocol/features/payload/capabilities/browserCapabilities');
+const { useLocalServiceInventoryState } = await import('@/sync/domains/local/services/inventory/useLocalServiceInventoryState');
 
 type MachineCall = Readonly<{ method: string; requestId: string; params: unknown; reply(value: unknown): Promise<void> }>;
 
@@ -117,11 +120,136 @@ function OtherResourcesProbe({ serverId }: { serverId: string }) {
 }
 
 afterEach(async () => {
+    resetLocalServiceInventoryStoreForTests();
     machineResourceStore.reset();
     machineStorageStore.reset(); machineProcessesStore.reset(); machineGuardStore.reset();
     await serverScopedRpcSocketPool.stopAll();
     resetScopedMachineTransportCacheForTests();
     await homes.reset();
+});
+
+it('cancels a parked inventory snapshot at last unsubscribe and loads again on new demand', async () => {
+    await withMachineHome(async home => {
+        const key = { machineId: 'shared-machine', serverId: home.serverId };
+        const unsubscribe = subscribeLocalServiceInventoryStore(key, () => {});
+        await vi.waitFor(() => expect(home.calls.some(call => call.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH)).toBe(true));
+        const parked = home.calls.find(call => call.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH)!;
+        unsubscribe();
+        await vi.waitFor(() => expect(home.cancellations).toContain(parked.requestId));
+        home.setAnswer(async call => {
+            if (call.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH) await call.reply({ protocolVersion: 1, snapshot: {
+                v: 1, machineId: key.machineId, generatedAt: 1000, refreshState: 'idle', entries: [], diagnostics: [],
+            } });
+        });
+        const stop = subscribeLocalServiceInventoryStore(key, () => {});
+        try { await vi.waitFor(() => expect(getLocalServiceInventoryState(key).generatedAt).toBe(1000)); }
+        finally { stop(); }
+    });
+});
+
+it('releases a parked inventory read when its retained destination is hidden', async () => {
+    await withMachineHome(async home => {
+        function Probe() {
+            useLocalServiceInventoryState({ machineId: 'shared-machine', serverId: home.serverId });
+            return React.createElement('InventoryProbe');
+        }
+        const content = (visible: boolean) => React.createElement(DestinationInstanceHost, {
+            tabId: 'retained-inventory', ref: { kind: 'settings', params: {} }, pathname: '/settings', visible, focused: visible,
+            children: React.createElement(Probe),
+        });
+        const screen = await renderScreen(content(true));
+        try {
+            await vi.waitFor(() => expect(home.calls.some(call => call.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH)).toBe(true));
+            const parked = home.calls.find(call => call.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH)!;
+            await screen.update(content(false));
+            await vi.waitFor(() => expect(home.cancellations).toContain(parked.requestId));
+            await screen.update(content(true));
+            await vi.waitFor(() => expect(home.calls.filter(call => call.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH)).toHaveLength(2));
+        } finally { await screen.unmount(); }
+    });
+});
+
+it('retires shared install-job discovery only after its last reader leaves and retries fresh', async () => {
+    const { ensureMachineAgentInstallJobs } = await import('@/agents/machineAgents/installJobs/installJobStore');
+    await withMachineHome(async home => {
+        const target = { machineId: 'shared-machine', serverId: home.serverId, accountId: 'owner' };
+        const firstController = new AbortController();
+        const secondController = new AbortController();
+        let firstState = 'pending';
+        let secondState = 'pending';
+        const first = ensureMachineAgentInstallJobs(target, { signal: firstController.signal }).then(() => { firstState = 'ready'; }, () => { firstState = 'cancelled'; });
+        const second = ensureMachineAgentInstallJobs(target, { signal: secondController.signal }).then(() => { secondState = 'ready'; }, () => { secondState = 'cancelled'; });
+        await vi.waitFor(() => expect(home.calls.some(call => call.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST)).toBe(true));
+        const parked = home.calls.find(call => call.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST)!;
+        expect(home.calls.filter(call => call.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST)).toHaveLength(1);
+        firstController.abort();
+        await vi.waitFor(() => expect(firstState).toBe('cancelled'));
+        expect(secondState).toBe('pending');
+        expect(home.cancellations).not.toContain(parked.requestId);
+        secondController.abort();
+        await Promise.all([first, second]);
+        await vi.waitFor(() => expect(home.cancellations).toContain(parked.requestId));
+        home.setAnswer(async call => { if (call.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST) await call.reply({ ok: true, jobs: [] }); });
+        await ensureMachineAgentInstallJobs(target, { signal: new AbortController().signal });
+        expect(home.calls.filter(call => call.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST)).toHaveLength(2);
+        expect(home.calls.some(call => call.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL)).toBe(false);
+    });
+});
+
+it.each(['preview', 'publicPreview', 'diagnostics', 'simulator'] as const)('releases a parked %s snapshot when its effect signal retires', async family => {
+    await withMachineHome(async home => {
+        const controller = new AbortController();
+        const request = { machineId: 'shared-machine', serverId: home.serverId, signal: controller.signal };
+        const call = family === 'preview'
+            ? () => import('@/sync/domains/local/services/preview/machineRpc').then(module => module.fetchLocalServicePreviewSnapshotViaMachineRpc(request))
+            : family === 'publicPreview'
+                ? () => import('@/sync/domains/local/services/publicPreview/machineRpc').then(module => module.fetchLocalServicePublicPreviewStatusViaMachineRpc({ ...request, request: { machineId: request.machineId } }))
+                : family === 'diagnostics'
+                    ? () => import('@/sync/domains/browser/diagnostics/machineRpc').then(module => module.fetchBrowserDiagnosticsSnapshotViaMachineRpc(request))
+                    : () => import('@/sync/domains/devices/simulator/machineRpc').then(module => module.fetchSimulatorPreviewSnapshotViaMachineRpc(request));
+        const pending = call();
+        await vi.waitFor(() => expect(home.calls).toHaveLength(1));
+        controller.abort();
+        await vi.waitFor(() => expect(home.cancellations).toContain(home.calls[0].requestId));
+        expect(await pending).toMatchObject({ ok: false, reason: 'request_failed' });
+    });
+});
+
+it('releases a recording request on session replacement and permits the next start', async () => {
+    const { useSessionBrowserRecordingRuntime } = await import('@/components/sessions/browser/sessionBrowserRecordingRuntime');
+    const { registerDesktopBrowserRecordingReverseCaptureHandler } = await import('@/sync/domains/browser/recording/reverseCaptureAvailability');
+    await withMachineHome(async home => {
+        const unregister = registerDesktopBrowserRecordingReverseCaptureHandler('shared-machine');
+        function Probe({ sessionId }: { sessionId: string }) {
+            const runtime = useSessionBrowserRecordingRuntime({ enabled: true, sessionId, scopeKey: sessionId,
+                machineId: 'shared-machine', serverId: home.serverId, recordingCapabilities: {
+                    ...DEFAULT_BROWSER_CAPABILITIES.recording, enabled: true, available: true,
+                    supportedCaptureKinds: ['nativeViewCapture'], supportedMimeTypes: ['image/png'],
+                    supportedAdapterKinds: ['externalUrl'], supportedRetentionClasses: ['preSend'],
+                    maxDurationMs: 30_000, maxBytes: 16_000_000, maxFps: 12,
+                } });
+            return React.createElement('RecordingProbe', { runtime });
+        }
+        const request = { browserSessionId: 'browser-1', viewId: 'view-1', profileId: 'profile-1',
+            target: { kind: 'externalUrl', targetId: 'external-1', url: 'https://example.com' },
+            targetKind: 'externalUrl', adapterKind: 'externalUrl', renderEngineKind: 'desktopWebView',
+            captureKind: 'nativeViewCapture', fidelity: 'nativeCallback', navigationGeneration: 2,
+            mimeType: 'image/png', retentionClass: 'preSend', policyState: 'allowed' } as const;
+        const screen = await renderScreen(React.createElement(Probe, { sessionId: 'session-1' }));
+        try {
+            const start = () => screen.findByType('RecordingProbe').props.runtime.browserShellRecording.onStartRecording(request);
+            let pending: Promise<void>;
+            await act(async () => { pending = start(); });
+            await vi.waitFor(() => expect(home.calls.some(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)).toBe(true));
+            const parked = home.calls.find(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)!;
+            await screen.update(React.createElement(Probe, { sessionId: 'session-2' }));
+            await vi.waitFor(() => expect(home.cancellations).toContain(parked.requestId));
+            await pending!;
+            home.setAnswer(async call => { await call.reply({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' }); });
+            await act(async () => { await start(); });
+            expect(home.calls.filter(call => call.method === RPC_METHODS.DAEMON_BROWSER_RECORDING_START)).toHaveLength(2);
+        } finally { await screen.unmount(); unregister(); }
+    });
 });
 
 it('suspends Storage, Processes, Guard and Activity through their retained destination and real Action doors', async () => {

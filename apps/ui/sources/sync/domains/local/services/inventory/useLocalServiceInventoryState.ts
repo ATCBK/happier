@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 
@@ -57,7 +58,8 @@ function normalizeId(value: unknown): string | null {
 export function useLocalServiceInventoryStateController(
     input: UseLocalServiceInventoryStateInput,
 ): LocalServiceInventoryStateController {
-    const enabled = input.enabled ?? true;
+    const presented = useLayoutPresentationActive();
+    const enabled = (input.enabled ?? true) && presented;
     const machineId = normalizeId(input.machineId);
     const serverId = normalizeId(input.serverId);
     const sessionId = normalizeId(input.sessionId);

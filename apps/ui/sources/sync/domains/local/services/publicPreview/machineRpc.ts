@@ -71,6 +71,7 @@ export async function fetchLocalServicePublicPreviewStatusViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_STATUS,
             payload,
+            signal: input.signal,
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -97,6 +98,7 @@ export async function createLocalServicePublicPreviewExposureViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_CREATE,
             payload,
+            signal: input.signal,
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -126,6 +128,7 @@ export async function revokeLocalServicePublicPreviewExposureViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_REVOKE,
             payload,
+            signal: input.signal,
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -155,6 +158,7 @@ export async function copyLocalServicePublicPreviewUrlViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_PUBLIC_PREVIEW_COPY_URL,
             payload,
+            signal: input.signal,
         });
         if (isRpcUnavailableResult(raw)) {
             return { ok: false, reason: 'unavailable' };

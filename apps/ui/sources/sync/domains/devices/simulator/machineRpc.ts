@@ -25,6 +25,7 @@ export type SimulatorPreviewActionClientInput = Readonly<{
     machineId: string;
     serverId?: string | null;
     event: SimulatorPreviewActionV1;
+    signal?: AbortSignal;
 }>;
 
 export type SimulatorPreviewActionClientResult =
@@ -54,6 +55,7 @@ export async function fetchSimulatorPreviewSnapshotViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_SNAPSHOT,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -82,6 +84,7 @@ export async function dispatchSimulatorPreviewActionViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_SIMULATOR_PREVIEW_ACTION,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };
