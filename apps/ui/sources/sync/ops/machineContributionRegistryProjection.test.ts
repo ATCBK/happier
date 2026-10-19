@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@happier-dev/protocol';
 
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
@@ -63,13 +63,13 @@ function automationEligibleEventsSnapshot() {
     }] as const;
 }
 
+// Install the external boundary before loading the real Sync graph. Module
+// preparation belongs to collection, outside per-case lifecycle deadlines.
+vi.resetModules();
+network = await installSessionOpsNetworkBoundary();
+await import('./machineContributionRegistryProjection');
+
 describe('machine contribution registry projection ops', () => {
-    beforeAll(async () => {
-        // Retire the setup file's cold module graph once, before installing
-        // this describe's external Socket port and loading its runtime.
-        vi.resetModules();
-        network = await installSessionOpsNetworkBoundary();
-    });
     async function configureNetworkForCase() {
         network.resetRequests();
         const homes = await Promise.all([
@@ -117,7 +117,6 @@ describe('machine contribution registry projection ops', () => {
             const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
             await serverScopedRpcSocketPool.stopAll();
             resetScopedMachineTransportCacheForTests();
-            await network.dispose();
         } finally {
             restoreBrowserRuntime?.();
             restoreBrowserRuntime = undefined;
@@ -363,6 +362,36 @@ describe('machine contribution registry projection ops', () => {
             throw new Error('The issued Action must carry its correlated request identity');
         }
         expect(cancellations).toEqual([[SOCKET_RPC_EVENTS.CANCEL, { requestId: issued.requestId }]]);
+    });
+
+    it('retires the last shared reader and permits an immediate retry of unanswered projection and schema requests', async () => {
+        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+        for (const kind of ['describe', 'targeted', 'schemas'] as const) {
+            const answers: Array<(response: unknown) => void> = [];
+            network.setRpcAckResponder(async () => ({ ok: true, result: await new Promise((resolve) => { answers.push(resolve); }) }));
+            const mod = await import('./machineContributionRegistryProjection');
+            const read = (signal: AbortSignal) => kind === 'describe'
+                ? mod.machineContributionRegistryProjectionDescribe('machine-1', { serverId: serverAId, signal })
+                : kind === 'targeted'
+                    ? mod.machinePluginUiTargetedContributionsRead('machine-1', { serverId: serverAId, pluginId: 'acme.preview', signal })
+                    : mod.machinePluginActionSchemasRead('machine-1', { serverId: serverAId, expectedOccurrenceId: 'occurrence-a', qualifiedActionId: 'acme.preview/refresh', signal });
+            const firstOwner = new AbortController();
+            const first = read(firstOwner.signal);
+            await vi.waitFor(() => expect(answers).toHaveLength(1));
+            const issued = network.socketBoundaries.flatMap(({ socket }) => socket.emitWithAck.mock.calls)
+                .filter(([event]) => event === SOCKET_RPC_EVENTS.CALL).at(-1)?.[1];
+            if (!issued || typeof issued !== 'object' || !('requestId' in issued)) throw new Error('Missing issued request identity');
+            firstOwner.abort();
+            await expect(first).resolves.toEqual({ supported: false, reason: 'aborted' });
+            const retryOwner = new AbortController();
+            const retry = read(retryOwner.signal);
+            await vi.waitFor(() => expect(answers).toHaveLength(2));
+            expect(network.socketBoundaries.flatMap(({ socket }) => socket.emit.mock.calls)
+                .filter(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))
+                .toContainEqual([SOCKET_RPC_EVENTS.CANCEL, { requestId: issued.requestId }]);
+            retryOwner.abort();
+            await expect(retry).resolves.toEqual({ supported: false, reason: 'aborted' });
+        }
     });
 
     it('allows one shared schema reader to cancel while another receives the late answer', async () => {

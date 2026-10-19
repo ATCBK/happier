@@ -8,6 +8,7 @@ import type { AgentPluginSettingsSnapshot } from '@/agents/registry/registryUiBe
 import type { Settings } from '@/sync/domains/settings/settings';
 import { resolveInstallablePolicy } from '@happier-dev/protocol/installablesPolicy';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import { getInstallablesRegistryEntries } from './installablesRegistry';
 import { planInstallablesBackgroundActions } from './installablesBackgroundPlan';
@@ -89,15 +90,36 @@ export function buildInstallablesBackgroundActionKey(params: Readonly<{
     ]);
 }
 
+type AgentInstallablesBackgroundOptions = Readonly<{
+    agentId: string;
+    machineId: string;
+    serverId?: string | null;
+    settings: Settings;
+    pluginSettings?: AgentPluginSettingsSnapshot | null;
+    resumeSessionId: string | null;
+    signal?: AbortSignal;
+    accountLifetime?: ServerAccountScopeLifetime;
+}>;
+
 export async function ensureAgentInstallablesBackground(
-    opts: Readonly<{
-        agentId: string;
-        machineId: string;
-        serverId?: string | null;
-        settings: Settings;
-        pluginSettings?: AgentPluginSettingsSnapshot | null;
-        resumeSessionId: string | null;
-    }>,
+    opts: AgentInstallablesBackgroundOptions,
+    depsOverrides: Partial<Deps> = {},
+): Promise<void> {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    opts.signal?.addEventListener('abort', abort, { once: true });
+    const retirement = opts.accountLifetime?.onRetire(abort);
+    try {
+        if (opts.signal?.aborted || (opts.accountLifetime && !opts.accountLifetime.isCurrent())) return;
+        await collectAgentInstallables({ ...opts, signal: controller.signal }, depsOverrides);
+    } finally {
+        opts.signal?.removeEventListener('abort', abort);
+        retirement?.dispose();
+    }
+}
+
+async function collectAgentInstallables(
+    opts: AgentInstallablesBackgroundOptions & Readonly<{ signal: AbortSignal }>,
     depsOverrides: Partial<Deps> = {},
 ): Promise<void> {
     const deps: Deps = {
@@ -128,6 +150,8 @@ export async function ensureAgentInstallablesBackground(
             const projectionInputs = await deps.loadDaemonMergedProjectionInputs({
                 machineId: opts.machineId,
                 serverId: opts.serverId,
+                signal: opts.signal,
+                accountLifetime: opts.accountLifetime,
             });
             if (projectionInputs?.pluginProjectionV2) {
                 entries = getInstallablesRegistryEntries({
@@ -138,6 +162,7 @@ export async function ensureAgentInstallablesBackground(
             // Best-effort compatibility with older daemons or temporarily unavailable projections.
         }
     }
+    if (opts.signal.aborted) return;
     if (entries.length === 0) return;
 
     const readResults = () => readResultsFromSnapshot(deps.getMachineCapabilitiesSnapshot(opts.machineId, opts.serverId));
@@ -152,6 +177,7 @@ export async function ensureAgentInstallablesBackground(
                 serverId: opts.serverId,
                 request: buildDetectRequestsForInstallables(missingBase.map((e) => e.capabilityId)),
                 timeoutMs: 12_000,
+                signal: opts.signal,
             });
         } catch {
             // Best-effort: if base dep status cannot be fetched, skip planning installs/upgrades.
@@ -159,6 +185,7 @@ export async function ensureAgentInstallablesBackground(
         }
         results = readResults();
     }
+    if (opts.signal.aborted) return;
 
     // 2) Prefetch latest-version details when stale/missing (used for update decisions).
     const latestVersionRequests: CapabilityDetectRequest[] = entries
@@ -178,12 +205,14 @@ export async function ensureAgentInstallablesBackground(
                 serverId: opts.serverId,
                 request: { requests: latestVersionRequests },
                 timeoutMs: 12_000,
+                signal: opts.signal,
             });
         } catch {
             // Best-effort: updates will be skipped if latest-version data is unavailable.
         }
         results = readResults();
     }
+    if (opts.signal.aborted) return;
 
     // 3) Plan and invoke installs/upgrades (best-effort, non-blocking for callers).
     const planned = planInstallablesBackgroundActions({
@@ -200,6 +229,7 @@ export async function ensureAgentInstallablesBackground(
     });
 
     for (const action of planned) {
+        if (opts.signal.aborted) return;
         const nowMs = Date.now();
         const actionKey = buildInstallablesBackgroundActionKey({
             machineId: opts.machineId,
@@ -213,7 +243,10 @@ export async function ensureAgentInstallablesBackground(
 
         let invokeResult: Awaited<ReturnType<typeof deps.machineCapabilitiesInvoke>> | null = null;
         try {
-            invokeResult = await deps.machineCapabilitiesInvoke(opts.machineId, action.request, { serverId: opts.serverId, timeoutMs: 5 * 60_000 });
+            invokeResult = await deps.machineCapabilitiesInvoke(opts.machineId, action.request, {
+                serverId: opts.serverId, timeoutMs: 5 * 60_000, signal: opts.signal,
+                ...(opts.accountLifetime ? { accountId: opts.accountLifetime.scope.accountId } : {}),
+            });
         } catch {
             // Best-effort: avoid surfacing errors for background installs/updates.
             // Important: if the invoke failed, do not permanently suppress retries.
@@ -235,12 +268,14 @@ export async function ensureAgentInstallablesBackground(
 
         blockedActionUntilMsByKey.set(actionKey, Date.now() + BACKGROUND_INVOKE_SUCCESS_COOLDOWN_MS);
 
+        if (opts.signal.aborted) return;
         try {
             await deps.prefetchMachineCapabilities({
                 machineId: opts.machineId,
                 serverId: opts.serverId,
                 request: buildDetectRequestsForInstallables([action.request.id]),
                 timeoutMs: 12_000,
+                signal: opts.signal,
             });
         } catch {
             // Best-effort: capabilities refresh can fail without breaking the flow.
@@ -256,9 +291,10 @@ export async function ensureAgentInstallablesBackground(
  * The Updates surface asks through here too, so there is one collector.
  */
 export async function ensureMachineUpdateFactsBackground(
-    opts: Readonly<{ machineIds: readonly string[]; serverId?: string | null }>,
+    opts: Readonly<{ machineIds: readonly string[]; serverId?: string | null; signal?: AbortSignal }>,
     depsOverrides: Partial<Readonly<{ prefetchMachineCapabilitiesIfStale: typeof prefetchMachineCapabilitiesIfStale }>> = {},
 ): Promise<void> {
+    if (opts.signal?.aborted) return;
     const prefetch = depsOverrides.prefetchMachineCapabilitiesIfStale ?? prefetchMachineCapabilitiesIfStale;
     const request = buildMachineUpdateFactsRequest();
     await Promise.all(opts.machineIds.map((machineId) => prefetch({
@@ -266,6 +302,7 @@ export async function ensureMachineUpdateFactsBackground(
         serverId: opts.serverId,
         staleMs: LATEST_VERSION_CHECK_FRESH_MS,
         request,
+        signal: opts.signal,
     }).catch((error: unknown) => {
         // Best-effort like every background step here: the row keeps its last answer, and the
         // summary says "not checked" for a machine that has none.

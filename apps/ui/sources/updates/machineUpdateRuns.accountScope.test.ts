@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseCapabilityId } from '@happier-dev/protocol/capabilities';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -15,6 +15,12 @@ let runUpdateBatch: typeof import('./machineUpdateRuns').runUpdateBatch;
 let runMachineItemUpdate: typeof import('./machineUpdateRuns').runMachineItemUpdate;
 let readMachineUpdateRuns: typeof import('./machineUpdateRuns').readMachineUpdateRuns;
 let observeMachineUpdateRun: typeof import('./machineUpdateRuns').observeMachineUpdateRun;
+
+// Install the network before warming the real Sync graph; each case retains
+// the same transport delegates instead of reloading them under a fake clock.
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+afterAll(async () => { await network.dispose(); });
 
 // Validate the untyped daemon-network payload without replacing the capability or scope owners.
 function isInvokeRequest(value: unknown): value is CapabilitiesInvokeRequest {
@@ -33,13 +39,13 @@ function item(id: string, subject: UpdateItem['subject']): UpdateItem {
 }
 
 describe('machine update account scope at the real RPC credential boundary', () => {
-    const homeUrl = 'https://updates-account-scope.example.test';
-    let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
+    let homeUrl: string;
+    let homeNumber = 0;
     let scope: { serverId: string; accountId: string };
     beforeEach(async () => {
-        vi.resetModules();
         boundary.invoke.mockReset();
-        network = await installSessionOpsNetworkBoundary();
+        network.resetRequests();
+        homeUrl = `https://updates-account-scope-${++homeNumber}.example.test`;
         const home = await network.addHome(homeUrl, 'account-a');
         scope = { serverId: home.id, accountId: home.accountId };
         network.setRpcResponder(async (request) => {
@@ -57,7 +63,6 @@ describe('machine update account scope at the real RPC credential boundary', () 
         await upsertAndActivateServer({ serverUrl: home.serverUrl });
         await restoreConnectionToActiveServer({ token: home.token });
         ({ runUpdateBatch, runMachineItemUpdate, readMachineUpdateRuns, observeMachineUpdateRun } = await import('./machineUpdateRuns'));
-        vi.useFakeTimers();
     });
     afterEach(async () => {
         const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
@@ -66,9 +71,21 @@ describe('machine update account scope at the real RPC credential boundary', () 
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
-        await network.dispose();
-        vi.clearAllTimers();
-        vi.useRealTimers();
+    });
+
+    it('releases a detached facts refresh when its owning Account retires', async () => {
+        const { refreshMachineUpdateFacts } = await import('./machineUpdateRuns');
+        const { getMachineCapabilitiesCacheState } = await import('@/hooks/server/useMachineCapabilitiesCache');
+        network.setRpcResponder(async (request) => {
+            expect(request.method).toBe(RPC_METHODS.CAPABILITIES_DETECT);
+            return await new Promise(() => {});
+        });
+        refreshMachineUpdateFacts(scope.serverId, 'studio', { accountScope: scope });
+        await vi.waitFor(() => expect(network.requests.some(request => request.method === RPC_METHODS.CAPABILITIES_DETECT)).toBe(true));
+        expect(getMachineCapabilitiesCacheState('studio', scope.serverId)?.status).toBe('loading');
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
+        await vi.waitFor(() => expect(getMachineCapabilitiesCacheState('studio', scope.serverId)?.status).toBe('idle'));
     });
 
     it.each(['happier-cli', 'installable'] as const)('rejects a queued %s update after same-server account replacement', async (kind) => {
