@@ -172,10 +172,10 @@ export function createMachineVitalsSampler(input: MachineVitalsSamplerOptions): 
             let result: MachineVitalsReaderResult;
             try {
                 const policy = input.readPolicy?.();
-                // Enabled scheduled scans retain minute AC edges even when a due
-                // scan is waiting for power. The maintenance owner still decides due time.
+                // Whole-disk scans consume AC for worker sizing as well as scheduled
+                // admission. Maintenance remains the sole owner of due times.
                 const power = overviews > 0 || policy?.guard.keepAwake === 'on_power'
-                    || Boolean(policy?.storage.wholeDiskEnabled && policy.storage.scheduledScan);
+                    || policy?.storage.wholeDiskEnabled === true;
                 result = await input.readers.read({ sampledAt, monotonicMs: monotonicMs(), intervalMs, overview: overviews > 0, power, overviewExtras: readExtras });
             } catch (error) {
                 onError(error);

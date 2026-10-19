@@ -4567,7 +4567,8 @@ alignment at 60 seconds without a viewer, 15 seconds for summary demand, and
 2 seconds for live or Overview demand. In-process live demand does not request
 Overview extras. GPU, thermal and battery detail are Overview-only, cached for
 15 seconds. The base power fact serves keep-awake **On power** and enabled
-scheduled scans without a viewer. The sampler reads their demand from the
+whole-disk scanning without a viewer: manual scans use it for worker sizing,
+and scheduled scans use it for admission and AC edges. The sampler reads their demand from the
 canonical resources policy; **On** and **Off** keep-awake modes need no AC facts.
 On macOS, the one Darwin reader runs `pmset -g batt` once per wall-clock minute
 while a power-dependent policy needs it, reusing that result across summary/live

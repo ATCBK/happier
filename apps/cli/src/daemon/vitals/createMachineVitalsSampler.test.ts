@@ -150,7 +150,7 @@ describe('createMachineVitalsSampler', () => {
         expect(sampler.latest()?.sampledAt).toBe(initialTime + 60_000);
     });
 
-    it.each(['idle', 'summary', 'processes', 'guard', 'overview', 'on_power', 'scheduled_scan', 'scan_disabled'] as const)('enforces the Darwin %s tool spawn budget', async (view) => {
+    it.each(['idle', 'summary', 'processes', 'guard', 'overview', 'on_power', 'scheduled_scan', 'manual_scan', 'scan_disabled'] as const)('enforces the Darwin %s tool spawn budget', async (view) => {
         let usedBytes = 80_000;
         let wiredPages = 1;
         const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => ({ stdout: command === '/helper'
@@ -166,9 +166,9 @@ describe('createMachineVitalsSampler', () => {
         const at = new Date(initialTime);
         const scheduledTime = [at.getHours(), at.getMinutes()].map(value => String(value).padStart(2, '0')).join(':');
         let policy = MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { keepAwake: view === 'on_power' ? 'on_power' : 'off' },
-            storage: { wholeDiskEnabled: view === 'scheduled_scan', scheduledScan: view === 'scheduled_scan' || view === 'scan_disabled'
+            storage: { wholeDiskEnabled: view === 'scheduled_scan' || view === 'manual_scan', scheduledScan: view === 'scheduled_scan' || view === 'scan_disabled'
                 ? { weekday: at.getDay(), time: scheduledTime, onlyOnPower: true } : null } });
-        const needsPolicyPower = view === 'on_power' || view === 'scheduled_scan';
+        const needsPolicyPower = view === 'on_power' || view === 'scheduled_scan' || view === 'manual_scan';
         const sampler = createMachineVitalsSampler({ readers, historyStore, monotonicMs: () => Date.now() - initialTime, readPolicy: () => policy });
         const count = (command: string, arg?: string) => execFile.mock.calls.filter(([name, args]) => name === command && (arg === undefined || args[1] === arg)).length;
         await sampler.start();
