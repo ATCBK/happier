@@ -338,14 +338,18 @@ export function InstalledWidgetSurface(props: InstalledWidgetSurfaceProps): Reac
 }
 
 /** Consumes the canonical binder's admitted exact target; refusal never mounts ambient data. */
-export function ConfiguredInstalledWidgetSurface(props: Omit<InstalledWidgetSurfaceProps, 'target' | 'runtime' | 'input'> & Readonly<{
+export function ConfiguredInstalledWidgetSurface(props: Omit<InstalledWidgetSurfaceProps, 'target' | 'runtime' | 'input' | 'recordRevision'> & Readonly<{
     resolution: ConfiguredWidgetTargetResolution;
     onRepairInputs?: (outcome: WidgetInputRepairOutcome) => void;
 }>): React.ReactElement {
     const { resolution, onRepairInputs, ...mounted } = props;
     if (resolution.status !== 'ready') return <ConfiguredWidgetRefusal resolution={resolution} testID={props.testID} onRepairInputs={onRepairInputs} onManagePlugin={props.onManagePlugin} />;
     if (resolution.target.kind === 'workspace') return <UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: 'widget_type_unavailable' }} testID={props.testID} />;
-    return <InstalledWidgetSurface {...mounted} target={resolution.target} runtime={resolution.runtime} input={resolution.input} />;
+    // A layout revision or display-name edit does not replace the executable.
+    // Every configured host uses the admitted source and normalized input here;
+    // the installed mount adds its target, occurrence and network authority.
+    return <InstalledWidgetSurface {...mounted} recordRevision={stableJsonStringify([props.source, resolution.input])}
+        target={resolution.target} runtime={resolution.runtime} input={resolution.input} />;
 }
 
 /** All widget definitions retain the same factual inputs-repair presentation. */

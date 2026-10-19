@@ -67,7 +67,6 @@ function InstalledInstanceBody(props: WidgetSurfaceProps & Readonly<{ descriptor
         isCurrent={props.isCurrent}
         source={{ kind: 'installedSurface', surface: definition.surface }}
         guestNetworkOverride={props.instance.networkOverride}
-        recordRevision={props.recordRevision}
         presentation={props.presentation}
         onManagePlugin={props.onManagePlugin}
         onRepairInputs={props.onRepairInputs}
@@ -102,7 +101,7 @@ function AuthoredReadyBody(props: WidgetSurfaceProps & Readonly<{ descriptor: Wi
         case 'html': return <AuthoredHtmlBody {...props} definition={definition} body={definition.body} resolution={resolution} isCurrent={isCurrent} />;
         case 'installed': return <ConfiguredInstalledWidgetSurface resolution={resolution} isCurrent={isCurrent} source={{ kind: 'installedSurface', surface: definition.body.surface }}
             guestNetworkOverride={props.instance.networkOverride ?? readWidgetDefinitionNetworkOverrideV1(definition)}
-            recordRevision={props.recordRevision} presentation={props.presentation} onManagePlugin={props.onManagePlugin}
+            presentation={props.presentation} onManagePlugin={props.onManagePlugin}
             onRepairInputs={props.onRepairInputs} onIntrinsicHeightChange={props.onIntrinsicHeightChange} reference={props.reference} testID={props.testID} />;
     }
 }
