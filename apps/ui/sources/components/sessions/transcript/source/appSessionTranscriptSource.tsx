@@ -13,7 +13,6 @@ import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { areSessionValuesDeepEqual } from '@/sync/store/domains/areStoredSessionsEqual';
 import { getForkedTranscriptSnapshotCached } from '@/sync/domains/sessionFork/forkedTranscriptSnapshot';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { sync } from '@/sync/sync';
 import {
     getStorage, storage, useForkedTranscriptSnapshot, useMessagesByRefs,
@@ -63,9 +62,7 @@ export function createAppSidechainHistoryLoader(sessionId: string, sidechainId: 
 }
 
 function readScopedSession(state: StorageState, sessionId: string, serverId: string | null, activeServerId: string): Session | null {
-    const session = state.sessions[sessionId] ?? null;
-    if (!session || !serverId) return session;
-    return areServerProfileIdentifiersEquivalent(session.serverId ?? state.sessionLocalStateScope?.serverId ?? activeServerId, serverId) ? session : null;
+    return selectHomeQualifiedSession(state, sessionId, serverId ?? undefined, activeServerId);
 }
 
 type TranscriptIntentionalRestartEvent = Readonly<{ event: AgentEvent; createdAtMs: number }>;

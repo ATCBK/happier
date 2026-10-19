@@ -9,7 +9,9 @@ import {
     renderHook, renderScreen, standardCleanup,
 } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
+import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { listPendingRequestListsFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -51,6 +53,44 @@ beforeEach(async () => {
 });
 
 describe('app transcript source', () => {
+    it.each([false, true])('withdraws legacy live fields and messages when another Home is staged (retained=%s)', async (retained) => {
+        const previous = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        const session = createSessionFixture({ id: 'source-legacy-home', serverId: undefined, active: true,
+            agentState: { requests: { permission: { tool: 'Bash', arguments: { command: 'pwd' }, createdAt: 1 } } } });
+        const message = createToolCallMessageFixture({ id: 'legacy-message' });
+        const transcript = createSessionMessagesFixture({ messageIdsOldestFirst: [message.id], messagesById: { [message.id]: message }, isLoaded: true });
+        const ids = [message.id];
+        try {
+            storage.setState({ sessions: { [session.id]: session }, sessionLocalStateScope: { serverId, accountId: 'source-account' },
+                sessionMessages: { [session.id]: transcript } });
+            const hook = await renderHook(() => {
+                const source = useSessionTranscriptSource();
+                return { metadata: source.useMetadata(), agentState: source.useAgentState(),
+                    ids: source.useMessageIdsOldestFirst(), byId: source.useMessagesById(),
+                    message: source.useMessage(message.id), messages: source.useMessagesByIds(ids),
+                    pending: source.usePendingRequests() };
+            }, { wrapper: props => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={serverId}>{props.children}</AppSessionTranscriptSourceProvider> });
+            expect(hook.getCurrent()).toMatchObject({ metadata: session.metadata, agentState: session.agentState,
+                ids, byId: { [message.id]: message }, message, messages: [message] });
+            expect(hook.getCurrent().pending.permissionRequests).toHaveLength(1);
+            if (retained) {
+                await act(async () => { storage.setState({ sessionMessages: { [session.id]: {
+                    ...transcript, messageIdsOldestFirst: [], messagesById: {}, messagesVersion: 1, isLoaded: false,
+                } } }); });
+                expect(hook.getCurrent()).toMatchObject({ ids, byId: { [message.id]: message }, message, messages: [message] });
+            }
+            await act(async () => {
+                const nextHome = await upsertServerProfile({ serverUrl: 'https://source-staged-home.example.test' });
+                await setActiveServer({ serverId: nextHome.id, scope: 'device' });
+            });
+            expect(selectHomeQualifiedSession(storage.getState(), session.id, serverId, getActiveServerSnapshot().serverId)).toBeNull();
+            expect(hook.getCurrent()).toEqual({ metadata: null, agentState: null, ids: [], byId: {},
+                message: null, messages: [], pending: { permissionRequests: [], userActionRequests: [] } });
+            await hook.unmount();
+        } finally { storage.setState(previous); }
+    });
+
     it('projects both active target-window frontiers through source history and observes window-only changes', async () => {
         const { sync } = await import('@/sync/syncEngine');
         const { activateSessionMessagesWindow, createInactiveSessionMessagesWindowState } = await import('@/sync/runtime/sessionMessagesWindowState');
