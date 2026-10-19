@@ -122,7 +122,7 @@ async function mount(mode: 'load' | 'cached', machineId: string | null, retiredP
     const value: AppShellPluginUiProjectionValue = { pluginUiProjection: null, pluginBrowserProjection: null,
         phase: 'unavailable', interactionEnabled: false, machineId, serverId: projectionServerId, platform: 'web',
         accountLifetime: lifetime, reloadConnectedAccountProjection() {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {} };
-    const Wrapper = ({ children }: { children: React.ReactNode }) => <runtime.Wrapper>
+    const Wrapper = ({ children }: React.PropsWithChildren) => <runtime.Wrapper>
         <AppShellPluginUiProjectionValueProvider value={value}>{children}</AppShellPluginUiProjectionValueProvider>
     </runtime.Wrapper>;
     return renderHook(() => useConnectedServicesIndex({ agents: mode, gateways }), { wrapper: Wrapper });

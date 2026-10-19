@@ -44,6 +44,18 @@ describe('UsageMeterRow (lab csvc MT, the one meter)', () => {
         expect(texts(wide)).toContain(`in 2h 15m · ${at}`);
     });
 
+    it('says a reset that has already passed as the bare word, never "in Outdated"', async () => {
+        const row = await renderScreen(
+            <UsageMeterRow label="5-hour" remainingPct={100} resetsAt={NOW - 5 * MIN} tone="neutral" now={NOW} />,
+        );
+        expect(texts(row)).toContain('Outdated');
+        expect(texts(row)).not.toMatch(/\bin Outdated/);
+        const pool = await renderScreen(
+            <UsageMeterRow label="5-hour" remainingPct={100} resetsAt={NOW - 5 * MIN} tone="neutral" now={NOW} resetPrefix="next" />,
+        );
+        expect(texts(pool)).not.toMatch(/\bin Outdated/);
+    });
+
     it('reads a pool aggregate as the next reset, and lets a window without a countdown name its period', async () => {
         const pool = await renderScreen(
             <UsageMeterRow label="5-hour" remainingPct={48} resetsAt={NOW + 23 * MIN} tone="neutral" now={NOW} resetPrefix="next" />,

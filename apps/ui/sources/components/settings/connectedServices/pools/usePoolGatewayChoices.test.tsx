@@ -204,3 +204,78 @@ describe('pool gateway Action wiring', () => {
     });
 
 });
+
+describe('pool gateway recovery', () => {
+    const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
+        source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+        role: 'named', displayName: 'Subscriptions', displayNameMode: 'custom', deployment: { kind: 'managedLocal' },
+        purposeBindingDefaults: { 'openai-upstream': { ...target, groupId: 'pool-b' } }, revision: 3, createdAt: 1, updatedAt: 1 });
+    function PoolGatewayScreen() {
+        const providerTarget = useProviderSettingsTarget();
+        const usage = usePoolGatewayChoices({ target, enabled: true, resolveTarget: providerTarget.resolveCurrentTarget,
+            accountServerId: providerTarget.accountServerId, accountAddressAvailable: providerTarget.accountAddressAvailable });
+        return <PoolGatewaySection testID="pool-gateway" usage={usage} poolTitle="Work pool" serviceLabel="Codex" nativeAgentTitles={[]} />;
+    }
+    const slot = () => account.readCatalogRow()?.content && 'v' in account.readCatalogRow()!.content!
+        ? (account.readCatalogRow()!.content as { v: { connections: typeof gateway[] } }).v.connections[0]?.purposeBindingDefaults?.['openai-upstream']
+        : undefined;
+    const toggle = async (screen: Awaited<ReturnType<typeof renderScreen>>, value: boolean) => {
+        await act(async () => { screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.onValueChange(value); });
+    };
+
+    it('offers Retry after a proven rollback and admits exactly one more update when it is pressed', async () => {
+        await account.restore({ serverIdentityId: 'srv_pool_retry', catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] },
+            machines: [], waivedActions: ['providers.connections.update'] });
+        let rollbacks = 1;
+        account.interceptCatalogMutation((_input, next) => rollbacks-- > 0
+            ? { status: 503, body: { error: 'database_transaction_conflict_exhausted' } } : next());
+        const screen = await renderScreen(<PoolGatewayScreen />);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+        await toggle(screen, true);
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeTruthy());
+        expect(account.catalogMutations).toHaveLength(1);
+        expect(slot()).toEqual({ ...target, groupId: 'pool-b' });
+        await act(async () => { await screen.pressByTestIdAsync('provider-error-action:provider_catalog_unavailable'); });
+        await vi.waitFor(() => expect(slot()).toEqual(target));
+        expect(account.catalogMutations).toHaveLength(2);
+        expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeNull();
+    });
+
+    it('reviews current state after an unknown write without repeating the mutation, and keeps asking while the read fails', async () => {
+        await account.restore({ serverIdentityId: 'srv_pool_unknown', catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] },
+            machines: [], waivedActions: ['providers.connections.update'] });
+        let readsFail = false;
+        account.home.answer(account.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { select: () => readsFail
+            ? { status: 503, body: { error: 'unavailable' } }
+            : { body: { status: 'present', revision: account.readCatalogRow()!.revision, content: account.readCatalogRow()!.content } } });
+        account.interceptCatalogMutation(() => { readsFail = true; return { dispatchThenFail: true }; });
+        const screen = await renderScreen(<PoolGatewayScreen />);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+        await toggle(screen, true);
+        const action = 'provider-error-action:provider_rpc_mutation_outcome_unknown';
+        await vi.waitFor(() => expect(screen.findByTestId(action)).toBeTruthy());
+        expect(account.catalogMutations).toHaveLength(1);
+        await act(async () => { await screen.pressByTestIdAsync(action); });
+        expect(screen.findByTestId(action)).toBeTruthy(); // the read failed again: still unresolved
+        readsFail = false;
+        await act(async () => { await screen.pressByTestIdAsync(action); });
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error:provider_rpc_mutation_outcome_unknown')).toBeNull());
+        expect(account.catalogMutations).toHaveLength(1);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+    });
+
+    it('drops the recovery when the Account that authored the failed write is no longer selected', async () => {
+        await account.restore({ serverIdentityId: 'srv_pool_retired', catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] },
+            machines: [], waivedActions: ['providers.connections.update'] });
+        account.interceptCatalogMutation(() => ({ status: 503, body: { error: 'database_transaction_conflict_exhausted' } }));
+        const screen = await renderScreen(<PoolGatewayScreen />);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+        await toggle(screen, true);
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error-action:provider_catalog_unavailable')).toBeTruthy());
+        const peerServerId = await account.addHome({ name: 'Foreign pool Home', serverUrl: 'https://foreign-pool.test',
+            serverIdentityId: 'srv_pool_foreign_retry', accountId: 'peer-account', active: false });
+        await act(async () => { await account.selectMachine(peerServerId, 'missing-peer-machine'); });
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error-action:provider_catalog_unavailable')).toBeNull());
+        expect(account.catalogMutations).toHaveLength(1);
+    });
+});

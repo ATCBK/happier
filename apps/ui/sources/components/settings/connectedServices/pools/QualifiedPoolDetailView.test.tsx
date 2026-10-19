@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 
 import { renderScreen } from '@/dev/testkit';
 import { presentConnectedAccountIdentity } from '@/sync/domains/connectedServices/maskAccountEmail';
@@ -206,6 +206,7 @@ it('keeps compact defaults in the identity line and retains sharing without desk
     act(() => screen.findHostByTestId('connected-services-pool-detail')?.props.onLayout?.({ nativeEvent: { layout: { width: 390, height: 800, x: 0, y: 0 } } }));
     expect(screen.findHostByTestId('connected-services-pool-detail:more')).toBeNull();
     await screen.pressByTestIdAsync('connected-services-pool-detail:default-for');
+    await act(async () => reportPopoverContentLayout(screen, { width: 280, height: 180 }));
     await screen.pressByTestIdAsync('connected-services-pool-detail:default-for:agent:codex');
     expect(setDefault).toHaveBeenCalledWith('codex', false);
     await screen.pressByTestIdAsync('connected-services-pool-detail:share');
@@ -581,9 +582,6 @@ describe('QualifiedPoolDetailView', () => {
 
     it('names a member by its personal label, native name or email, never the raw account id', async () => {
         const { screen } = await renderPoolDetail({}, {
-            accounts: ACCOUNTS.map((account) => account.ref.accountId === 'work'
-                ? { ...account, displayName: undefined }
-                : account),
             memberQuotaByAccountId: quota({ work: snapshot('work', [{ id: '5h', label: '5-hour', left: 40, resetsInMs: 60 * MIN }]) }),
         });
         // A real native name wins over email; the distinct email remains beside it.

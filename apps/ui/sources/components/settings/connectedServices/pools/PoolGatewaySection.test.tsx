@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { renderScreen } from '@/dev/testkit';
 
 import { PoolGatewaySection, type PoolGatewaySectionProps } from './PoolGatewaySection';
@@ -99,5 +100,11 @@ describe('PoolGatewaySection (lab rgateway PL1/PL2)', () => {
         const { screen } = await render([]);
         expect(screen.findByTestId(ROW)).toBeNull();
         expect(screen.getTextContent()).toBe('');
+    });
+    it('keeps the failure and its Retry on screen when the choice list has gone empty', async () => {
+        const retry = vi.fn(async () => undefined);
+        const { screen } = await render([], { error: createProviderErrorV1('provider_catalog_unavailable'), retry } as never);
+        await act(async () => { await screen.pressByTestIdAsync('provider-error-action:provider_catalog_unavailable'); });
+        expect(retry).toHaveBeenCalledTimes(1);
     });
 });

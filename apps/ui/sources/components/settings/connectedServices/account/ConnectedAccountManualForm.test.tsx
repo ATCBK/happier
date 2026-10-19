@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -23,7 +24,7 @@ vi.mock('react-native-unistyles', async () => {
 
 vi.mock('@/text', () => ({ t: (key: string) => key }));
 
-const fields = PluginSettingFieldV2Schema.array().parse([
+const fields = z.array(PluginSettingFieldV2Schema).parse([
     {
         id: 'identity',
         title: 'Email or username',
@@ -35,7 +36,7 @@ const fields = PluginSettingFieldV2Schema.array().parse([
         schema: { type: 'string', minLength: 1 },
         secret: true,
     },
-]);
+]).map(field => ({ ...field, secret: Boolean(field.secret) }));
 
 describe('ConnectedAccountManualForm', () => {
     afterEach(async () => {

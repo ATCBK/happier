@@ -45,7 +45,9 @@ function captureDefaultAuthWrites() {
     const setDefaultAuthSettings = async (intent: ConnectedAccountPurposeDefaultsIntent) => {
         if (intent.kind !== 'service') throw new Error('unexpected_default_intent');
         const result = await executeConnectedServiceConfigurationActionV1(host, 'connectedServices.accounts.purposeDefault.set', intent.input);
-        if ('ok' in result && !result.ok) throw new Error(result.error);
+        if (result && typeof result === 'object' && 'ok' in result && !result.ok && 'error' in result) {
+            throw new Error(String(result.error));
+        }
     };
     return { setDefaultAuthSettings, writtenDefaults };
 }
@@ -437,10 +439,10 @@ describe('ConnectedServicesDefaultAuthRow', () => {
             purposeBindingsWritable={false}
             settings={{ connectedServicesDefaultProfileByServiceId: {} }}
             setDefaultAuthSettings={vi.fn(async () => {})} onOpenConnectedServicesSettings={vi.fn()} />;
-        const { tree } = await renderScreen(row);
+        const { tree, update } = await renderScreen(row);
         const accept = tree.root.findByProps({ testID: `settings-connected-services-pool-adoption-suggestion-codex-${CODEX_SERVICE_KEY}-accept` });
         expect(accept.props.disabled).toBe(true);
-        await act(async () => tree.update(React.cloneElement(row, { purposeBindings: null })));
+        await update(React.cloneElement(row, { purposeBindings: null }));
         expect(hasPoolSuggestion(tree, 'codex', CODEX_SERVICE_KEY)).toBe(false);
     });
 
@@ -494,23 +496,23 @@ describe('ConnectedServicesDefaultAuthRow', () => {
             purposeBindings={{ v: 1, bindings: [] }}
             settings={{ connectedServicesDefaultProfileByServiceId: {} }}
             setDefaultAuthSettings={() => write.promise} onOpenConnectedServicesSettings={vi.fn()} />;
-        const { tree } = await renderScreen(row);
+        const { tree, update } = await renderScreen(row);
         const picker = await openPickerModal(tree, 'claude');
         await act(async () => findSelectionOption(picker, `connected-service:${ENCODED_CLAUDE_SERVICE_KEY}:profile:work`).onSelect());
-        await act(async () => tree.update(React.cloneElement(row, { purposeBindings: { v: 1, bindings: [] } })));
+        await update(React.cloneElement(row, { purposeBindings: { v: 1, bindings: [] } }));
         const pendingPicker = await openPickerModal(tree, 'claude', 1);
         expect(findSelectionListProps(pendingPicker).selectedOptionId)
             .toBe(`connected-service:${ENCODED_CLAUDE_SERVICE_KEY}:profile:work`);
         await act(async () => outcome === 'refused'
             ? write.reject(new Error('source-version-conflict'))
             : write.resolve());
-        await act(async () => tree.update(React.cloneElement(row, { purposeBindings: { v: 1, bindings: [] } })));
+        await update(React.cloneElement(row, { purposeBindings: { v: 1, bindings: [] } }));
         const retryPicker = await openPickerModal(tree, 'claude', 2);
         expect(findSelectionListProps(retryPicker).selectedOptionId)
             .toBe(`connected-service:${ENCODED_CLAUDE_SERVICE_KEY}:${outcome === 'refused' ? 'profile:work' : 'native'}`);
-        await act(async () => tree.update(React.cloneElement(row, { purposeBindings: null, purposeBindingsWritable: false })));
+        await update(React.cloneElement(row, { purposeBindings: null, purposeBindingsWritable: false }));
         expect(findDefaultAuthTrigger(tree, 'claude').detail).toBe('common.unavailable');
-        await act(async () => tree.update(React.cloneElement(row, { purposeBindings: { v: 1, bindings: [] } })));
+        await update(React.cloneElement(row, { purposeBindings: { v: 1, bindings: [] } }));
         const restoredPicker = await openPickerModal(tree, 'claude', 3);
         expect(findSelectionListProps(restoredPicker).selectedOptionId)
             .toBe(`connected-service:${ENCODED_CLAUDE_SERVICE_KEY}:native`);
@@ -791,7 +793,7 @@ describe('ConnectedServicesDefaultAuthRow', () => {
                 onDismissPoolAdoptionSuggestion={onDismiss}
             />
         );
-        const { tree } = await renderScreen(row);
+        const { tree, update } = await renderScreen(row);
 
         expect(hasPoolSuggestion(tree, 'codex', CODEX_SERVICE_KEY)).toBe(true);
         const dismiss = tree.root.findByProps({ testID: `settings-connected-services-pool-adoption-suggestion-codex-${CODEX_SERVICE_KEY}-dismiss` });
@@ -803,9 +805,9 @@ describe('ConnectedServicesDefaultAuthRow', () => {
         await act(async () => { dismiss.props.onPress(); });
         const key = connectedAcknowledgementSubjectKeyV1({ kind: 'adoption',
             agentTargetKey: 'agent:happier.agent.codex/codex', service: CODEX_ACCOUNT_PURPOSES[0]!.service, groupId: CODEX_V4_GROUP.ref.groupId });
-        await act(async () => tree.update(React.cloneElement(row, { dismissedPoolAdoptionSuggestionKeys: { [key]: true } })));
+        await update(React.cloneElement(row, { dismissedPoolAdoptionSuggestionKeys: { [key]: true } }));
         expect(hasPoolSuggestion(tree, 'codex', CODEX_SERVICE_KEY)).toBe(false);
-        await act(async () => tree.update(React.cloneElement(row, { dismissedPoolAdoptionSuggestionKeys: {} })));
+        await update(React.cloneElement(row, { dismissedPoolAdoptionSuggestionKeys: {} }));
         expect(hasPoolSuggestion(tree, 'codex', CODEX_SERVICE_KEY)).toBe(true);
     });
 

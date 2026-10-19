@@ -10,8 +10,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { getPreferredLanguage, t } from '@/text';
 import { useSetting } from '@/sync/store/hooks';
-import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
-import { Modal } from '@/modal';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import {
     ConnectedServicesProviderStateSharingSettingsV1Schema,
     type ConnectedServicesProviderConfigSharingModeV1,
@@ -44,7 +43,7 @@ export function ConnectedServicesProviderStateSharingDisclosure(props: Readonly<
     agentIds?: readonly AgentId[];
     showDivider?: boolean;
 }>) {
-    const writeSetting = useSettingActionWriter();
+    const { setSetting } = useSettingActionFeedback();
     const agentIds = props.agentIds ?? resolveProviderStateSharingAgentIds();
     const [expanded, setExpanded] = React.useState(false);
     const locale = getPreferredLanguage();
@@ -52,17 +51,12 @@ export function ConnectedServicesProviderStateSharingDisclosure(props: Readonly<
     const stateShared = props.settings.defaults.stateMode === 'shared';
 
     const setProviderConfigMode = React.useCallback((configMode: ProviderConfigMode) => {
-        void writeSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingConfig, configMode)
-            .then(result => { if (!result.ok) Modal.alert(t('common.error'), t('common.unavailable')); })
-            .catch(() => Modal.alert(t('common.error'), t('common.unavailable')));
-    }, [writeSetting]);
+        void setSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingConfig, configMode);
+    }, [setSetting]);
 
     const setProviderStateShared = React.useCallback(async (shared: boolean) => {
-        try {
-            const result = await writeSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingState, shared);
-            if (!result.ok) await Modal.alert(t('common.error'), t('common.unavailable'));
-        } catch { await Modal.alert(t('common.error'), t('common.unavailable')); }
-    }, [writeSetting]);
+        await setSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingState, shared);
+    }, [setSetting]);
 
     const summary = t('connectedServicesSettings.sharingSummary', {
         config: resolveConfigModeShortLabel(props.settings.defaults.configMode),

@@ -29,7 +29,7 @@ import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServ
 import { ConnectedAccountActionApprovalNotice } from './ConnectedAccountActionApprovalNotice';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
@@ -142,7 +142,7 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   const nowMs = useMachinePresenceNowMs(machines);
   const onlineMachineName = React.useMemo(() => {
     const online = machines.find((machine) => isMachineSelectableForFleet(activeAccountScope, machine, nowMs));
-    return online ? getMachineDisplayName(online) : null;
+    return online ? getMachineSentenceName(online) : null;
   }, [machines, activeAccountScope, reachabilityRevision, nowMs]);
 
   const accountCount = indexModel.sheets.reduce((total, sheet) => total + sheet.accounts.length, 0);

@@ -12,7 +12,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { presentProviderError } from '@/providers/connection/errorPresentation';
+import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
 import { t } from '@/text';
 import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 
@@ -61,13 +61,11 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
     void createFirstGateway().catch(() => undefined);
   }, [createFirstGateway]);
 
-  if (usage.choices.length === 0 && !usage.firstGateway) return null;
+  // A failed write keeps its recovery on screen even when the choice list has gone empty meanwhile.
+  if (usage.choices.length === 0 && !usage.firstGateway && !usage.error) return null;
   const firstGatewayTitle = t('settingsProvidersCollection.gateway.mainGatewayName');
 
   const native = joinList(props.nativeAgentTitles);
-  const errorDescription = usage.error
-    ? t(presentProviderError(usage.error).descriptionKey)
-    : null;
 
   return (
     <ItemGroup
@@ -199,13 +197,12 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
           </React.Fragment>
         );
       })}
-      {errorDescription ? (
-        <Item
-          testID={`${props.testID}:error`}
-          mode="info"
-          title={errorDescription}
-          titleStyle={{ color: theme.colors.state.danger.foreground }}
-          showChevron={false}
+      {usage.error ? (
+        <ProviderErrorItems
+          error={usage.error}
+          layout="inline"
+          retry={usage.retry}
+          reviewCurrentState={usage.reviewCurrentState}
         />
       ) : null}
     </ItemGroup>

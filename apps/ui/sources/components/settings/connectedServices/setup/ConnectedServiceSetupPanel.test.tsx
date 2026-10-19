@@ -67,6 +67,17 @@ function staleServiceModel(withAccount = false) {
 }
 
 describe('ConnectedServiceSetupPanel tools disclosure', () => {
+    it('labels the locked setup page cancel action and lets the person close it', async () => {
+        const close = vi.fn();
+        const screen = await renderScreen(<ConnectedServiceSetupPanel
+            target={{ kind: 'catalog' }} catalog={[]} onTargetChange={() => {}} onClose={close}
+            chrome="page" targetLocked renderServiceFlow={() => null}
+        />);
+        expect(screen.findHostByTestId('connected-service-setup:close')?.props.accessibilityLabel).toBe('common.cancel');
+        await screen.pressByTestIdAsync('connected-service-setup:close');
+        expect(close).toHaveBeenCalledOnce();
+    });
+
     it.each(['list', 'grid'] as const)('expands compact service accounts in place for the %s preference while keeping attention visible when closed', async (presentation) => {
         const element = <ConnectedServicesIndexView
             model={staleServiceModel(true)} labelsByKey={{}} present={(input) => presentConnectedAccountIdentity({

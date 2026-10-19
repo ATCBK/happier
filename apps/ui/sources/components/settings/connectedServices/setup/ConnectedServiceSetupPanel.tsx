@@ -294,7 +294,7 @@ export const ConnectedServiceSetupPanel = React.memo(function ConnectedServiceSe
             accessibilityLabel={title}
         >
             {props.chrome === 'page' ? <PageHeader title={title} description={purpose} alwaysShowTitle
-                cancelAction={props.targetLocked ? { label: t('common.cancel'), onPress: onClose, testID: 'connected-service-setup:close' } : undefined}
+                cancelAction={props.targetLocked ? { title: t('common.cancel'), onPress: onClose, testID: 'connected-service-setup:close' } : undefined}
                 leading={selected ? <ConnectedServiceMark legacyServiceId={selected.legacyServiceId} size="row" /> : <Icon name="plug" size={24} />}
                 actions={<MachineAdministrationTargetSelector selection={targetSelection} disabled={props.targetLocked} presentation="chip" testIDPrefix="connected-service-setup-target" />} /> : head}
             <View style={styles.body}>

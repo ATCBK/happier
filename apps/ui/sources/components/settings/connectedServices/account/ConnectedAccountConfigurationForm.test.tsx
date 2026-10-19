@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +23,7 @@ vi.mock('react-native-unistyles', async () => {
 
 vi.mock('@/text', () => ({ t: (key: string) => key }));
 
-const fields = PluginConfigurationSettingFieldV2Schema.array().parse([
+const fields = z.array(PluginConfigurationSettingFieldV2Schema).parse([
     {
         id: 'endpoint',
         title: 'Endpoint',
@@ -103,7 +104,7 @@ describe('ConnectedAccountConfigurationForm', () => {
     });
 
     it('renders schema-only scalar and array enum choices without duplicate presentation metadata', async () => {
-        const schemaOnlyFields = PluginConfigurationSettingFieldV2Schema.array().parse([
+        const schemaOnlyFields = z.array(PluginConfigurationSettingFieldV2Schema).parse([
             {
                 id: 'tier',
                 title: 'Tier',

@@ -40,6 +40,7 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
+import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
 import {
     ConnectedAccountAuthenticationCommandRequestSchema,
     ConnectedAccountControlCommandRequestSchema,
@@ -208,6 +209,16 @@ describe('ConnectedAccountSetupController real ownership', () => {
     async function focusedScreen(withAccountCredentials = false) {
         platform.params = { ...description.service, accountId: 'account-1' };
         return renderScreen(<InjectedAuthProvider credentials={withAccountCredentials ? account.credentials : null}><ConnectedAccountServiceView /></InjectedAuthProvider>);
+    }
+
+    function leaveMachineChoiceUnselected() {
+        // A sole online candidate is selected by the real administration owner.
+        // Two current candidates model an Account whose user has made no choice.
+        const other = createMachineFixture({ id: 'machine-other', activeAt: Date.now() });
+        machineRows.push(createPlainMachineRowFixture({ id: other.id, accountId: 'account-a' }));
+        storage.getState().applyMachines([...Object.values(storage.getState().machines), other], true,
+            { sourceServerId: getActiveServerSnapshot().serverId });
+        storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: {} });
     }
 
     function waiveConfigurationConfirmation() {
@@ -399,9 +410,11 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(account.home.serverIdentityId).toBe('srv_connected_account_setup');
         const target = { serverIdentityId: account.home.serverIdentityId!, machineId: machine.id };
         storage.getState().applyProfile({ ...profileDefaults, id: 'account-a' });
-        storage.getState().applySettings({ ...settingsDefaults,
+        // Seed a fresh Account snapshot; the versioned echo writer correctly
+        // refuses version 1 after a preceding case persisted a later revision.
+        storage.setState({ settings: { ...settingsDefaults,
             machineAdministrationTargetsLocalV1: { [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts]: target },
-        }, 1);
+        }, settingsVersion: 1 });
         storage.getState().applyMachines([machine], true, { sourceServerId: active.serverId });
         storage.setState({ isDataReady: true });
         const candidate = {
@@ -598,9 +611,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
             revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [],
         };
         const boundary = installAccountLabelBoundary(targetAccount);
-        if (machineState === 'unselected') storage.getState().applySettings({ ...storage.getState().settings,
-            machineAdministrationTargetsLocalV1: {},
-        }, 2);
+        if (machineState === 'unselected') leaveMachineChoiceUnselected();
         else if (machineState === 'offline') {
             const machine = createMachineFixture({ id: selection.selectedTarget!.machineId, active: false, activeAt: 0 });
             const serverId = getActiveServerSnapshot().serverId;
@@ -653,7 +664,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
             configurationReady: false, configurationRevision: null, scopes: [],
         });
         const boundary = installAccountLabelBoundary(targetAccount);
-        storage.getState().applySettings({ ...storage.getState().settings, machineAdministrationTargetsLocalV1: {} }, 2);
+        leaveMachineChoiceUnselected();
         const screen = await focusedScreen(true);
         expect(screen.findHostByTestId('qualified-account-detail')).not.toBeNull();
         await screen.pressByTestIdAsync('qualified-account-detail:action:edit-label');
@@ -737,7 +748,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
 
     it('does not promote a persisted machine choice with no fresh inventory into execution authority', async () => {
         // A warm row remains cached while this Home has not returned its current inventory.
-        storage.setState({ isDataReady: false });
+        storage.setState({ isDataReady: false, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} });
         const screen = await focusedScreen();
         // One quiet machine line (the canonical machine section) and no second chooser in the header.
         expect(screen.findHostByTestId('connected-account-target.state'), JSON.stringify(screen.tree.toJSON())).not.toBeNull();
@@ -1132,6 +1143,76 @@ describe('ConnectedAccountSetupController real ownership', () => {
             expectedRevision: 'config-1', values: { endpoint: 'https://new.example' }, secretValues: {} });
     });
 
+    it.each(['add', 'reconnect'] as const)('keeps an account configuration draft while the same selected machine is temporarily unresolved (%s)', async (intent) => {
+        waiveConfigurationConfirmation();
+        const mode: PluginConnectedAccountAuthenticationModeV2 = {
+            ...authentication.modes[0]!, configuration: configuredMode.configuration,
+        };
+        const ref = { service, accountId: 'account-1' };
+        installDescription({ ...described, accounts: intent === 'reconnect' ? [{ ref, status: 'needs_reauth', authenticationModeId: mode.id,
+            revisionSemantics: 'revisioned', credentialRevision, configurationReady: false, configurationRevision: 'config-1', scopes: [] }] : [], descriptor: { ...described.descriptor,
+            authentication: { defaultModeId: mode.id, modes: [mode] } } });
+        const target = intent === 'reconnect' ? { kind: 'account' as const, account: ref, modeId: mode.id }
+            : { ...configurationTarget, modeId: mode.id };
+        const reply = { ...configurationReply, target, mode };
+        handleControl = command => command.operation === 'listPendingAttempts'
+            ? { status: 'pendingAttempts', attempts: [] }
+            : command.operation === 'readConfiguration' ? reply
+                : command.operation === 'replaceConfiguration' ? { ...reply, status: 'configurationCommitted',
+                    configuration: { ...reply.configuration, status: 'ready', revision: 'config-2' } }
+                    : description;
+        handleAuthentication = command => command.operation === 'continueConnect'
+            ? { status: 'awaitingManual', attemptId: 'attempt-1' }
+            : { status: 'configurationRequired', attemptId: 'attempt-1', target, missingFieldIds: [] };
+        const selected = { ...selection, resolveExecutionTarget: () => resolveFreshMachineAdministrationExecutionTarget(selection.selectedTarget) };
+        const setup = () => <InjectedAuthProvider credentials={null}>
+            <ConnectedAccountSetupController service={service} targetSelection={selected}
+                panel={{ intent: intent === 'reconnect' ? { kind: 'reconnect', accountId: ref.accountId } : { kind: 'add' }, onConnected, onCancel }} />
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(setup());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-configuration:endpoint')).not.toBeNull());
+        await act(async () => screen.changeTextByTestId('connected-account-configuration:endpoint', 'https://unsaved.example'));
+        const state = storage.getState();
+        const inventory = { isDataReady: state.isDataReady, machines: state.machines,
+            machineListByServerId: state.machineListByServerId, machineListStatusByServerId: state.machineListStatusByServerId };
+        await act(async () => storage.setState({ isDataReady: false, machines: {}, machineListByServerId: {}, machineListStatusByServerId: {} }));
+        expect(selected.resolveExecutionTarget()).toBeNull();
+        await screen.update(setup());
+        expect(screen.findHostByTestId('connected-account-configuration:endpoint')?.props.value).toBe('https://unsaved.example');
+        // No fresh execution target: retaining a form cannot authorize a write.
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        expect(controlCommands.some(command => command.operation === 'replaceConfiguration')).toBe(false);
+        await act(async () => storage.setState(inventory));
+        await screen.update(setup());
+        expect(screen.findHostByTestId('connected-account-configuration:endpoint')?.props.value).toBe('https://unsaved.example');
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:token')).not.toBeNull());
+        expect(controlCommands).toContainEqual({ operation: 'replaceConfiguration', target: intent === 'reconnect'
+            ? { kind: 'account', account: ref } : { kind: 'attempt', attemptId: 'attempt-1' },
+            expectedRevision: 'config-1', values: { endpoint: 'https://unsaved.example' }, secretValues: {} });
+        expect(authenticationCommands).toEqual([
+            intent === 'reconnect' ? { operation: 'beginReconnect', account: ref }
+                : { operation: 'beginConnect', service, modeId: mode.id },
+            { operation: 'continueConnect', attemptId: 'attempt-1', expectedConfigurationRevision: 'config-2' },
+        ]);
+    });
+
+    it.each(['machine', 'home'] as const)('refuses a setup resolver mis-bound to another %s', async (mismatch) => {
+        const fresh = selection.resolveExecutionTarget()!;
+        const misbound = { ...selection, resolveExecutionTarget: () => ({ ...fresh,
+            target: { ...fresh.target, ...(mismatch === 'machine' ? { machineId: 'machine-other' } : { serverIdentityId: 'srv_other' }) },
+            ...(mismatch === 'machine' ? { machine: createMachineFixture({ id: 'machine-other', activeAt: Date.now() }) } : {}),
+        }) };
+        const screen = await renderScreen(element(misbound));
+        expect(screen.findHostByTestId('connected-account-manual:token')).toBeNull();
+        expect(authenticationCommands).toEqual([]);
+        expect(controlCommands).toEqual([]);
+        // Restore the binding: the same controller can now reach the real manual form.
+        await screen.update(element());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:token')).not.toBeNull());
+        expect(authenticationCommands).toEqual([{ operation: 'beginConnect', service, modeId: 'manual' }]);
+    });
+
     it.each(['account'] as const)('edits established %s configuration without inferring reconnect or revealing configured secrets', async (scope) => {
         waiveConfigurationConfirmation();
         const ref = { service, accountId: 'account-1' };
@@ -1317,11 +1398,14 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(controlCommands.filter((command) => command.operation === 'revokeAccount')).toEqual([]);
     });
 
-    it('retains connected-account custody until the canonical default Ask is approved', async () => {
+    it('retains connected-account custody until the configured Ask is approved', async () => {
         const targetAccount: QualifiedConnectedAccountProfileV4 = {
             ref: { service, accountId: 'account-1' }, status: 'connected', authenticationModeId: 'manual',
             revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [],
         };
+        storage.getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            actions: { 'connectedServices.accounts.revoke': { approvalRequiredSurfaces: ['ui'] } },
+        }) });
         const bindings = await seedPurposeDefaults({ kind: 'account', account: targetAccount.ref });
         installDescription({ ...described, accounts: [targetAccount] });
         const approvals = installApprovalBoundary();

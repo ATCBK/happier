@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 
@@ -10,6 +10,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -476,7 +477,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 14,
+        columnGap: theme.space.s12,
         rowGap: theme.space.s2,
     },
     fact: {
@@ -486,13 +487,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     factText: {
-        fontSize: 13.5,
-        lineHeight: 19,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     mono: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'ui-monospace, SFMono-Regular, Menlo, monospace' }),
-        fontSize: 12.5,
+        // An id beside body facts: the meta role in the one mono face.
+        ...Typography.variant('meta'),
+        ...Typography.mono(),
     },
     dangerRow: {
         flexDirection: 'row',
@@ -502,8 +503,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     dangerNote: {
         marginTop: theme.space.s8,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
         textAlign: 'right',
     },
