@@ -5,19 +5,20 @@ import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
 import { applyActionSettingsTargetControlState, resolveActionSettingsTargetControlState } from './resolveActionSettingsControlState';
 import { ActionSettingsTargetModeControl } from './ActionSettingsTargetModeControl';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 installNavigationCommonModuleMocks();
 afterEach(standardCleanup);
 
 function ControlHarness(props: Readonly<{
     actionId: ActionId;
-    targetId: 'agent' | 'contextual_ui';
+    targetId: 'agent' | 'cli' | 'contextual_ui';
     Control: typeof import('./ActionSettingsTargetModeControl').ActionSettingsTargetModeControl;
 }>) {
     const [settings, setSettings] = React.useState(() => setActionApprovalOverride({
         settings: DEFAULT_ACTIONS_SETTINGS_V1,
         actionId: props.actionId,
-        surface: props.targetId === 'agent' ? 'agent' : 'ui',
+        surface: props.targetId === 'contextual_ui' ? 'ui' : props.targetId,
         approvalRequired: false,
     }));
     return <props.Control
@@ -30,26 +31,56 @@ function ControlHarness(props: Readonly<{
 
 describe('ActionSettingsTargetModeControl', () => {
     it('offers only Off and Ask first for a mandatory Agent action and preserves both transitions', async () => {
-        const screen = await renderScreen(<ControlHarness Control={ActionSettingsTargetModeControl} actionId="workflow.trigger.add" targetId="agent" />);
-        expect(screen.findByTestId('confirmation:mode:allowed')).toBeNull();
-        expect(screen.findByTestId('confirmation:mode:default')).toBeNull();
-        expect(screen.findByTestId('confirmation:mode:ask_first')?.props.accessibilityState.checked).toBe(true);
-        await screen.pressByTestIdAsync('confirmation:mode:off');
-        expect(screen.findByTestId('confirmation:mode:off')?.props.accessibilityState.checked).toBe(true);
-        await screen.pressByTestIdAsync('confirmation:mode:ask_first');
-        expect(screen.findByTestId('confirmation:mode:ask_first')?.props.accessibilityState.checked).toBe(true);
+        const spec = getActionSpec('workflow.trigger.add');
+        const descriptor = Object.getOwnPropertyDescriptor(spec, 'approvalPolicy')!;
+        // Workflow triggers are configurable in production. This case exercises
+        // a host-declared mandatory policy, not the retired trigger-id override.
+        Object.defineProperty(spec, 'approvalPolicy', { ...descriptor, value: { ...spec.approvalPolicy, nonWaivable: true } });
+        try {
+            const screen = await renderScreen(<ControlHarness Control={ActionSettingsTargetModeControl} actionId="workflow.trigger.add" targetId="agent" />);
+            expect(screen.findByTestId('confirmation:mode:allowed')).toBeNull();
+            expect(screen.findByTestId('confirmation:mode:default')).toBeNull();
+            expect(screen.findByTestId('confirmation:mode:ask_first')?.props.accessibilityState.checked).toBe(true);
+            await screen.pressByTestIdAsync('confirmation:mode:off');
+            expect(screen.findByTestId('confirmation:mode:off')?.props.accessibilityState.checked).toBe(true);
+            await screen.pressByTestIdAsync('confirmation:mode:ask_first');
+            expect(screen.findByTestId('confirmation:mode:ask_first')?.props.accessibilityState.checked).toBe(true);
+        } finally { Object.defineProperty(spec, 'approvalPolicy', descriptor); }
     });
 
-    it('keeps four choices and an effective waiver for an ordinary present-user Action', async () => {
-        const screen = await renderScreen(<ControlHarness Control={ActionSettingsTargetModeControl} actionId="session.responsibility.set" targetId="contextual_ui" />);
-        for (const choice of ['off', 'default', 'ask_first', 'allowed']) {
+    it('offers Off, Ask first and Allowed, and returns an override to the inherited default', async () => {
+        const screen = await renderScreen(<ControlHarness Control={ActionSettingsTargetModeControl} actionId="mcp.servers.signIn.start" targetId="cli" />);
+        for (const choice of ['off', 'ask_first', 'allowed']) {
             expect(screen.findByTestId(`confirmation:mode:${choice}`)).not.toBeNull();
         }
+        // The inherited default is a way the value is held, not a fourth choice.
+        expect(screen.findByTestId('confirmation:mode:default')).toBeNull();
         expect(screen.findByTestId('confirmation:mode:allowed')?.props.accessibilityState.checked).toBe(true);
         await screen.pressByTestIdAsync('confirmation:mode:ask_first');
         expect(screen.findByTestId('confirmation:mode:ask_first')?.props.accessibilityState.checked).toBe(true);
-        await screen.pressByTestIdAsync('confirmation:mode:allowed');
-        expect(screen.findByTestId('confirmation:mode:allowed')?.props.accessibilityState.checked).toBe(true);
+        // Choosing the inherited answer restores the default without a second reset press.
+        expect(screen.findByTestId('confirmation:mode:useDefault')).toBeNull();
+        const inherited = ['ask_first', 'allowed'].map((id) => screen.findByTestId(`confirmation:mode:${id}`)).find((node) => node?.props.accessibilityState.checked);
+        expect(inherited?.props.accessibilityLabel).toContain('capabilities.detail.inheritedValue');
+    });
+
+    it('chooses what the inherited default resolves to and says once that it is the default', async () => {
+        const { DEFAULT_ACTIONS_SETTINGS_V1: settings } = await import('@happier-dev/protocol');
+        const controlState = resolveActionSettingsTargetControlState({ settings, actionId: 'machines.storage.trash.move', targetId: 'agent' });
+        const screen = await renderScreen(<ActionSettingsTargetModeControl
+            testIDPrefix="confirmation"
+            accessibilityLabel="Action availability"
+            controlState={controlState}
+            onChange={() => {}}
+        />);
+        expect(screen.findByTestId('confirmation:mode:default')).toBeNull();
+        expect(screen.findByTestId('confirmation:mode:useDefault')).toBeNull();
+        const effective = controlState.kind === 'approval' && controlState.approvalRequiredByPolicy ? 'ask_first' : 'allowed';
+        const chosen = screen.findByTestId(`confirmation:mode:${effective}`);
+        expect(chosen?.props.accessibilityState.checked).toBe(true);
+        expect(chosen?.props.accessibilityLabel).toContain('capabilities.detail.inheritedValue');
+        // "Ask first" is said once: no segment repeats another segment's words.
+        expect(screen.getTextContent()).not.toMatch(/common\.default/);
     });
 
     it.each(['machines.resources.policy.set', 'machines.storage.trash.move'] as const)(
@@ -57,7 +88,7 @@ describe('ActionSettingsTargetModeControl', () => {
         async (actionId) => {
             const screen = await renderScreen(<ControlHarness Control={ActionSettingsTargetModeControl} actionId={actionId} targetId="agent" />);
             expect(screen.findByTestId('confirmation:mode:allowed')?.props.accessibilityState.checked).toBe(true);
-            expect(screen.findByTestId('confirmation:mode:default')).not.toBeNull();
+            expect(screen.findByTestId('confirmation:mode:useDefault')).not.toBeNull();
         },
     );
 });

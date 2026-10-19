@@ -1,5 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { act } from 'react-test-renderer';
 import { standardCleanup } from '@/dev/testkit';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';

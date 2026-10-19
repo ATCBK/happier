@@ -43,6 +43,7 @@ export function resolveActionSettingsEntryStatusSummary(params: Readonly<{
     settings: ActionsSettingsV1;
     actionId: ActionSettingsActionId;
     targets: readonly ActionSettingsEntryStatusTarget[];
+    scmRemoteConfirmPolicy?: unknown;
 }>): ActionSettingsEntryStatusSummary {
     const summary = {
         allowedCount: 0,
@@ -68,6 +69,7 @@ export function resolveActionSettingsEntryStatusSummary(params: Readonly<{
             targetId: target.id,
             target: target.definition,
             available: true,
+            scmRemoteConfirmPolicy: params.scmRemoteConfirmPolicy,
         });
         const audience: ActionSettingsAudience = target.id === 'agent' || target.id === 'voice' || target.id === 'voice_panel'
             ? 'agent' : target.definition.kind === 'placement' || target.id === 'contextual_ui' || target.id === 'slash_command'
@@ -77,7 +79,7 @@ export function resolveActionSettingsEntryStatusSummary(params: Readonly<{
         const approvalRequired = controlState.kind === 'approval' ? controlState.approvalRequiredByPolicy
             : getActionTargetApprovalPolicy({
                 settings: params.settings, actionId: params.actionId, targetId: target.id,
-                target: target.definition,
+                target: target.definition, scmRemoteConfirmPolicy: params.scmRemoteConfirmPolicy,
             }).approvalRequiredByPolicy;
         const key = params.settings.actions[params.actionId]?.enabled === false || controlState.value === 'off'
             ? 'offCount' : approvalRequired ? 'askFirstCount' : 'allowedCount';

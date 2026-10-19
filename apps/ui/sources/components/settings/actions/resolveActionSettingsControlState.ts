@@ -3,6 +3,7 @@ import {
     type ActionSurfaces,
     type ActionsSettingsV1,
 } from '@happier-dev/protocol';
+import { setActionAudiencePolicy } from '@happier-dev/protocol/actions';
 
 import { getActionSettingsTargetPreferenceSelected, setActionTargetSelected } from './actionSettingsTargetSelection';
 import {
@@ -12,7 +13,7 @@ import {
     resolveActionSettingsApprovalSurface,
     setActionTargetApprovalRequired,
 } from './actionSettingsTargetApproval';
-import type { ActionSettingsTargetDefinition, ActionSettingsTargetId } from './actionSettingsTargetDefinitions';
+import { resolveActionSettingsTargetDefinition, type ActionSettingsTargetDefinition, type ActionSettingsTargetId } from './actionSettingsTargetDefinitions';
 
 export type ActionSettingsApprovalControlValue = 'off' | 'default' | 'ask_first' | 'allowed';
 export type ActionSettingsBooleanControlValue = 'off' | 'on';
@@ -34,6 +35,11 @@ export type ActionSettingsTargetControlState =
         approvalRequiredByPolicy: boolean;
         /** Whether an explicit waiver actually suppresses confirmation on this surface. */
         approvalWaivable: boolean;
+        /**
+         * The inherited default asks only because the Source Control preference does (remote pull and push);
+         * the row names that so `Default` is not read as "does not ask".
+         */
+        approvalAskedBySourceControl: boolean;
     }>
     | Readonly<{
         kind: 'switch';
@@ -50,6 +56,8 @@ type ResolveActionSettingsTargetControlStateParams = Readonly<{
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
     available?: boolean;
+    /** The Source Control preference, which is the UI default of the remote pull and push Actions. */
+    scmRemoteConfirmPolicy?: unknown;
 }>;
 
 type ApplyActionSettingsTargetControlStateParams = Readonly<{
@@ -58,6 +66,7 @@ type ApplyActionSettingsTargetControlStateParams = Readonly<{
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
     value: ActionSettingsApprovalControlValue | ActionSettingsBooleanControlValue;
+    scmRemoteConfirmPolicy?: unknown;
 }>;
 
 function resolveApprovalControlSurface(params: Readonly<{
@@ -105,6 +114,7 @@ export function resolveActionSettingsTargetControlState(
         actionId: params.actionId,
         targetId: params.targetId,
         ...(params.target ? { target: params.target } : {}),
+        scmRemoteConfirmPolicy: params.scmRemoteConfirmPolicy,
     });
 
     if (!selected) {
@@ -133,7 +143,19 @@ export function resolveActionSettingsTargetControlState(
 }
 
 export function applyActionSettingsTargetControlState(params: ApplyActionSettingsTargetControlStateParams): ActionsSettingsV1 {
-    if (params.value === 'off') {
+    let value = params.value;
+    if (value === 'ask_first' || value === 'allowed') {
+        const inheritedSettings = setActionTargetApprovalRequired({ ...params, approvalRequired: null });
+        const inheritedPolicy = getActionTargetApprovalPolicy({ ...params, settings: inheritedSettings });
+        // Choosing the inherited answer restores inheritance, including after a waiver.
+        if ((value === 'ask_first') === inheritedPolicy.approvalRequiredByPolicy) value = 'default';
+    }
+    const target = resolveActionSettingsTargetDefinition(params);
+    if (target.kind === 'surface' && value !== 'on') {
+        const mode = value === 'allowed' && !getActionTargetApprovalPolicy(params).approvalWaivable ? 'default' : value;
+        return setActionAudiencePolicy(params.settings, params.actionId, target.surface, mode);
+    }
+    if (value === 'off') {
         const next = setActionTargetSelected({
             settings: params.settings,
             actionId: params.actionId,
@@ -150,7 +172,7 @@ export function applyActionSettingsTargetControlState(params: ApplyActionSetting
         });
     }
 
-    if (params.value === 'ask_first') {
+    if (value === 'ask_first') {
         const selected = setActionTargetSelected({
             settings: params.settings,
             actionId: params.actionId,
@@ -174,7 +196,7 @@ export function applyActionSettingsTargetControlState(params: ApplyActionSetting
         });
     }
 
-    if (params.value === 'default') {
+    if (value === 'default') {
         const selected = setActionTargetSelected({
             settings: params.settings,
             actionId: params.actionId,
@@ -191,7 +213,7 @@ export function applyActionSettingsTargetControlState(params: ApplyActionSetting
         });
     }
 
-    if (params.value === 'allowed') {
+    if (value === 'allowed') {
         const selected = setActionTargetSelected({
             settings: params.settings,
             actionId: params.actionId,

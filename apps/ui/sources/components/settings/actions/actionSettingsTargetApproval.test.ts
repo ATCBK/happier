@@ -41,11 +41,28 @@ describe('actionSettingsTargetApproval', () => {
  * The settings screen must report the confirmation the runtime actually applies.
  * Every `ui` target here is an in-app surface the app's own Action executor admits
  * with `authority: 'present_user'` (`sync/api/session/sessionAccessApi.ts`). The
- * canonical policy suppresses its dangerous-Action floor for that pair only where
- * the app hosts its own confirmation; assignment has none, so its confirmation is
- * the policy default (teams-lane-04/11-responsible-assignment.md §7.1).
+ * canonical policy admits reversible present-user assignment directly, while
+ * retaining explicit Ask-first and the confirmation floor on automation surfaces.
  */
 describe('getActionTargetApprovalRequired', () => {
+    it('honors authored UI confirmation defaults in settings while retaining other surfaces and explicit Ask', () => {
+        const actionId = 'qa.collection-detail/actions/set-complete' as const;
+        const targets = listActionSettingsTargetDefinitions({
+            surfaces: { ui: true, agent: true, mcp: true }, placements: [],
+            contributedAction: { dangerLevel: 'writesLocal', confirmationWhen: { presentUserUi: false } },
+        });
+        for (const targetId of ['contextual_ui', 'agent', 'mcp'] as const) {
+            const target = targets.find(entry => entry.id === targetId);
+            expect(target).toBeDefined();
+            expect(getActionTargetApprovalRequired({ settings: DEFAULT_ACTIONS_SETTINGS_V1, actionId, targetId, target }))
+                .toBe(targetId !== 'contextual_ui');
+            expect(getActionTargetApprovalRequired({
+                settings: normalizeActionsSettings({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+                actionId, targetId, target,
+            })).toBe(true);
+        }
+    });
+
     it('reports execution approval for a visible contributed placement without turning its visibility into an approval control', () => {
         const actionId = 'acme.forge/actions/delete' as const;
         const target = listActionSettingsTargetDefinitions({
@@ -59,12 +76,12 @@ describe('getActionTargetApprovalRequired', () => {
             actionId, targetId: target.id, target,
         })).toBe(false);
     });
-    it('reports assignment confirmation as required by default on the app, and a ui waiver as not', () => {
+    it('reports present-user assignment as direct by default, with or without a ui waiver', () => {
         expect(getActionTargetApprovalRequired({
             settings: DEFAULT_ACTIONS_SETTINGS_V1,
             actionId: 'session.responsibility.set',
             targetId: 'contextual_ui',
-        })).toBe(true);
+        })).toBe(false);
         expect(getActionTargetApprovalRequired({
             settings: normalizeActionsSettings({
                 v: 1,

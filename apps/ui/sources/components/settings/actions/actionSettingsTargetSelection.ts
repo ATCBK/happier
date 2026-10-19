@@ -1,4 +1,5 @@
 import { ACTION_TOOL_EXPOSURE_SURFACES } from '@happier-dev/protocol/actions/actionToolExposure';
+import { setActionAudienceEnabled } from '@happier-dev/protocol/actions';
 import { isActionSettingsOptInPlacement, type ActionSettingsActionId, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import type { ActionSurfaces, ActionToolExposureMode, ActionToolExposureSurface } from '@happier-dev/protocol/actions/metadata';
 import type { ActionUiPlacement } from '@happier-dev/protocol/actions/actionUiPlacements';
@@ -167,9 +168,5 @@ export function setActionTargetSelected(params: Readonly<{
         return writeActionSettingsEntry(normalizedSettings, params.actionId, entry);
     }
 
-    entry.disabledSurfaces = params.selected
-        ? entry.disabledSurfaces.filter((surface) => surface !== target.surface)
-        : sortUniqueActionSettingsValues([...entry.disabledSurfaces, target.surface]);
-
-    return writeActionSettingsEntry(normalizedSettings, params.actionId, entry);
+    return setActionAudienceEnabled(normalizedSettings, params.actionId, target.surface, params.selected);
 }

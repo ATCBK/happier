@@ -56,7 +56,8 @@ describe('buildActionSettingsEntries', () => {
                 });
                 const waived = applyActionSettingsTargetControlState({ ...input, settings, value: 'allowed' });
                 expect(resolveActionSettingsTargetControlState({ ...input, settings: waived })).toMatchObject({
-                    value: 'allowed', approvalRequiredByPolicy: false,
+                    // Choosing the inherited answer restores Default rather than storing a redundant override.
+                    value: required ? 'allowed' : 'default', approvalRequiredByPolicy: false,
                 });
                 const reset = applyActionSettingsTargetControlState({ ...input, settings: waived, value: 'default' });
                 expect(resolveActionSettingsTargetControlState({ ...input, settings: reset })).toMatchObject({

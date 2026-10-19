@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedTabBar, type SegmentedTab } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
@@ -14,21 +15,31 @@ import type {
 } from './actionSettingsTargets';
 
 const stylesheet = StyleSheet.create((theme) => ({
-    segmentedContainer: {
-        width: Platform.select({ ios: 288, default: 312 }),
+    // The control hugs its words: three short choices never stretch across a row or wrap a label.
+    control: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        columnGap: theme.space.s12,
+        rowGap: theme.space.s6,
         maxWidth: '100%',
-        opacity: 1,
     },
-    segmentedContainerStacked: {
-        width: '100%',
-        marginTop: Platform.select({ ios: 8, default: 8 }),
+    // Beneath its row's words (a narrow pane or a phone), the control starts where they start.
+    controlStacked: {
+        justifyContent: 'flex-start',
+        alignSelf: 'flex-start',
+        marginTop: theme.space.s8,
+    },
+    // The link starts its own line box at the top; centred on the segments it reads as their caption.
+    useDefault: {
+        alignSelf: 'center',
     },
     unavailable: {
         color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 13, default: 13 }),
         lineHeight: 18,
     },
-
 }));
 
 export type ActionSettingsTargetModeControlProps = Readonly<{
@@ -63,10 +74,11 @@ export const ActionSettingsTargetModeControl = React.memo(function ActionSetting
             />
         );
     }
-    const approvalTabs: readonly SegmentedTab<ActionSettingsApprovalControlValue>[] = props.controlState.approvalWaivable
+    const state = props.controlState;
+    const stacked = props.layout === 'stacked';
+    const approvalTabs: readonly SegmentedTab<ActionSettingsApprovalControlValue>[] = state.approvalWaivable
         ? [
             { id: 'off', label: t('settingsActions.modes.off') },
-            { id: 'default', label: t('common.default') },
             { id: 'ask_first', label: t('settingsActions.modes.askFirst') },
             { id: 'allowed', label: t('settingsActions.modes.allowed') },
         ]
@@ -74,24 +86,47 @@ export const ActionSettingsTargetModeControl = React.memo(function ActionSetting
             { id: 'off', label: t('settingsActions.modes.off') },
             { id: 'ask_first', label: t('settingsActions.modes.askFirst') },
         ];
+    // Inheriting is how the value is held, not a fourth choice: the segment it resolves to is chosen on the
+    // outlined (default) thumb, which announces "default". The settings writer restores inheritance when that answer is chosen.
+    const inheriting = state.value === 'default';
+    const activeTabId: ActionSettingsApprovalControlValue = inheriting
+        ? (state.approvalRequiredByPolicy ? 'ask_first' : 'allowed')
+        : state.value;
+    const segments = (
+        <SegmentedTabBar
+            key="segments"
+            role="radiogroup"
+            accessibilityLabel={props.accessibilityLabel}
+            disabled={props.disabled}
+            testIDPrefix={`${props.testIDPrefix}:mode`}
+            tabs={approvalTabs}
+            activeTabId={activeTabId}
+            valueSource={inheriting ? 'inherited' : 'set'}
+            segmentSizing="content"
+            targetSize="platform"
+            onSelectTab={props.onChange}
+        />
+    );
+    // An explicit reset while the value is the person's own. It sits on the side away from
+    // the segments' anchor, so appearing never moves the segment that was just pressed.
+    const useDefault = state.approvalWaivable && state.value !== 'off' && !inheriting ? (
+        <View key="useDefault" style={styles.useDefault}>
+            <TextLinkButton
+                testID={`${props.testIDPrefix}:mode:useDefault`}
+                label={t('settingsActions.modes.useDefault')}
+                tone="quiet"
+                disabled={props.disabled}
+                onPress={() => props.onChange('default')}
+            />
+        </View>
+    ) : null;
     return (
         <View
             testID={`${props.testIDPrefix}:mode`}
-            style={[
-                styles.segmentedContainer,
-                props.layout === 'stacked' ? styles.segmentedContainerStacked : null,
-            ]}
+            style={[styles.control, stacked ? styles.controlStacked : null]}
         >
-            <SegmentedTabBar
-                role="radiogroup"
-                accessibilityLabel={props.accessibilityLabel}
-                disabled={props.disabled}
-                testIDPrefix={`${props.testIDPrefix}:mode`}
-                tabs={approvalTabs}
-                activeTabId={props.controlState.value}
-                targetSize="platform"
-                onSelectTab={props.onChange}
-            />
+            {stacked ? segments : useDefault}
+            {stacked ? useDefault : segments}
         </View>
     );
 });
