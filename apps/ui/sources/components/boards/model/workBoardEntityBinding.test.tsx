@@ -85,7 +85,9 @@ async function mountAccount(name: string, boards: readonly WorkBoardV1[], enable
         if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
         if (path.startsWith('/v1/artifacts') && init?.method !== 'POST' && init?.method !== 'DELETE' && blockArtifactReads) throw new Error('Read-back unavailable');
-        if (path === '/v1/artifacts' && init?.method !== 'POST') return json([...rows.values()]);
+        // The Artifact server selects by coarse kind and reports completeness; every row here is classified.
+        if (path === '/v1/artifacts' && init?.method !== 'POST') return json(new URL(String(url)).searchParams.has('kind')
+            ? { items: [...rows.values()], hasUnclassified: false } : [...rows.values()]);
         const id = path.split('/')[3];
         const row = rows.get(id!);
         if (path.endsWith('/access/grants') && row) return json({ artifactId: row.id, ownerAccountId: row.ownerAccountId, access: row.access, grants: [] });
@@ -389,7 +391,7 @@ describe('mounted WorkBoard Action settlement', () => {
                 declarationTransport: 'http-header-and-socket-auth-v1' } } });
             if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
-            if (path === '/v1/artifacts') return json([row]);
+            if (path === '/v1/artifacts') return json(new URL(String(url)).searchParams.has('kind') ? { items: [row], hasUnclassified: false } : [row]);
             if (path === `/v1/artifacts/${board.id}/access/grants`) return json({ artifactId: row.id, ownerAccountId: row.ownerAccountId, access: row.access, grants: [] });
             if (path === `/v1/artifacts/${board.id}` && init?.method === 'POST') {
                 if (disposition === 'unknown') throw new Error('Connection lost after dispatch');

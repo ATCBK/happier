@@ -10,6 +10,7 @@ import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { CoordinationMessageRefV1Schema, type CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { ChangesResponseSchema, CurrentCursorResponseSchema, CursorGoneErrorSchema, type ChangeEntry } from '@happier-dev/protocol/changes';
 
 /**
  * A Home's Artifact rows and explicitly seeded Account grants, answered over HTTP.
@@ -82,6 +83,18 @@ export function createArtifactStoreBoundary(params: Readonly<{
 }>): ArtifactStoreBoundary {
     const rows = new Map<string, Artifact>();
     const accountGrants = new Map<string, Map<string, ArtifactAccessGrantRowV1>>();
+    // Mirror Account.seq and the Home's coalesced (Account, kind, entityId) ledger.
+    // Keep publication at this boundary so HTTP writes and externally seeded
+    // commits are equally visible to the real warm-inventory reader.
+    const accountChanges = new Map<string, { cursor: number; entries: Map<string, ChangeEntry> }>();
+    const publish = (row: Artifact, accountIds = [row.ownerAccountId, ...(accountGrants.get(row.id)?.keys() ?? [])]) => {
+        for (const accountId of new Set(accountIds)) {
+            const ledger = accountChanges.get(accountId) ?? { cursor: 0, entries: new Map<string, ChangeEntry>() };
+            ledger.entries.set(row.id, { cursor: ++ledger.cursor, kind: 'artifact', entityId: row.id,
+                changedAt: Date.now(), hint: null });
+            accountChanges.set(accountId, ledger);
+        }
+    };
     let pendingBeforeUpdate: (() => Promise<void>) | null = null;
     let pendingAfterCreate: (() => Promise<void>) | null = null;
     const storedKind = (header: string, supplied: unknown) => {
@@ -141,6 +154,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             kind: storedKind(header, input?.kind),
         };
         rows.set(id, row);
+        publish(row);
         return json(row);
     };
 
@@ -180,6 +194,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             updatedAt: Math.max(Date.now(), current.updatedAt + 1),
         };
         rows.set(artifactId, next);
+        publish(next);
         return json({
             success: true,
             ...(headerChange ? { headerVersion: next.headerVersion } : {}),
@@ -191,11 +206,29 @@ export function createArtifactStoreBoundary(params: Readonly<{
         handle(path: string, init?: RequestInit): Promise<Response> | null {
             const method = (init?.method ?? 'GET').toUpperCase();
             const url = new URL(path, 'https://artifact-boundary.example');
-            if (url.pathname !== ARTIFACTS_PATH && !url.pathname.startsWith(`${ARTIFACTS_PATH}/`)) return null;
+            const changesRoute = url.pathname === '/v2/cursor' || url.pathname === '/v2/changes';
+            if (!changesRoute && url.pathname !== ARTIFACTS_PATH && !url.pathname.startsWith(`${ARTIFACTS_PATH}/`)) return null;
             // Mirror the Home preHandler: capture this request's authenticated
             // Account once, before any row access or acknowledgement hook.
             const callerAccountId = params.ownerAccountId();
             if (!callerAccountId) return Promise.resolve(json({ error: 'Missing authorization header' }, 401));
+            if (changesRoute) {
+                if (method !== 'GET') return null;
+                const ledger = accountChanges.get(callerAccountId);
+                const currentCursor = ledger?.cursor ?? 0;
+                if (url.pathname === '/v2/cursor') return Promise.resolve(json(CurrentCursorResponseSchema.parse({ cursor: currentCursor, changesFloor: 0 })));
+                const after = Number(url.searchParams.get('after') ?? 0);
+                const limit = Number(url.searchParams.get('limit') ?? 200);
+                if (!Number.isInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+                    return Promise.resolve(json({ error: 'invalid_params' }, 400));
+                }
+                if (after > currentCursor) return Promise.resolve(json(CursorGoneErrorSchema.parse({ error: 'cursor-gone', currentCursor }), 410));
+                const page = [...(ledger?.entries.values() ?? [])].filter(entry => entry.cursor > after)
+                    .sort((left, right) => left.cursor - right.cursor).slice(0, limit);
+                const nextCursor = page.at(-1)?.cursor ?? after;
+                const changes = url.searchParams.has('sessionId') ? [] : page;
+                return Promise.resolve(json(ChangesResponseSchema.parse({ changes, nextCursor })));
+            }
             if (url.pathname === `${ARTIFACTS_PATH}/read` && method === 'POST') {
                 const input = ArtifactReadBatchInputV1Schema.safeParse(parseBody(init));
                 if (!input.success) return Promise.resolve(json({ error: 'Invalid parameters' }, 400));
@@ -297,6 +330,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                     return Promise.resolve(json({ error: 'version-mismatch' }, 409));
                 }
                 rows.delete(artifactId);
+                publish(row);
                 accountGrants.delete(artifactId);
                 return Promise.resolve(json({ success: true }));
             }
@@ -316,7 +350,11 @@ export function createArtifactStoreBoundary(params: Readonly<{
             return row ? { ...row } : null;
         },
         replaceStoredRow(artifact: Artifact): void {
-            rows.set(artifact.id, { ...artifact });
+            // Omitted hints model a current producer; explicit null still models
+            // a retained pre-backfill row for inventory compatibility tests.
+            const row = { ...artifact, kind: artifact.kind === undefined ? storedKind(artifact.header, undefined) : artifact.kind };
+            rows.set(artifact.id, row);
+            publish(row);
         },
         seedAccountGrant(artifactId: string, accountId: string, accessLevel: ArtifactAccessLevelV1): void {
             const row = rows.get(artifactId);
@@ -326,6 +364,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
                 createdByAccountId: row.ownerAccountId, createdAt: grants.get(accountId)?.createdAt ?? Date.now(),
                 display: { name: null, username: null } });
             accountGrants.set(artifactId, grants);
+            publish(row, [accountId]);
         },
         list(): Artifact[] {
             return [...rows.values()].map((row) => ({ ...row }));
@@ -345,6 +384,7 @@ export function createArtifactStoreBoundary(params: Readonly<{
             pendingAfterCreate = hook;
         },
         clear(): void {
+            for (const row of rows.values()) publish(row);
             rows.clear();
             accountGrants.clear();
             pendingBeforeUpdate = null;

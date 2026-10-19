@@ -1,9 +1,62 @@
 import { afterEach, expect, it } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from './homeGovernanceHarness';
 import { initializeRealAppRuntimeForTests } from './realAppRuntimeHarness';
+import { ChangesResponseSchema, CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 
 const homes = createHomeGovernanceHarness();
 afterEach(async () => { await homes.reset(); });
+
+it('publishes committed Artifact changes to the same Account cursor used by warm inventories', async () => {
+    installHomeGovernanceBoundaries(homes);
+    const serverUrl = 'https://governance-artifacts.test';
+    const id = await homes.addHome({ name: 'Artifacts', serverUrl, accountId: 'owner' });
+    const request = (path: string, init?: RequestInit) => homes.request(`${serverUrl}${path}`, init);
+    const cursor = async () => CurrentCursorResponseSchema.parse(await (await request('/v2/cursor')).json()).cursor;
+    const changes = async (after: number, limit = 200) => ChangesResponseSchema.parse(
+        await (await request(`/v2/changes?after=${after}&limit=${limit}`)).json());
+    expect(await cursor()).toBe(0);
+    const input = { id: 'first', header: encodePlainArtifactStoredContent({ title: 'First', kind: 'approval_request.v1' }),
+        body: encodePlainArtifactStoredContent({ body: 'first' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER };
+    await request('/v1/artifacts', { method: 'POST', body: JSON.stringify(input) });
+    const created = await cursor();
+    expect(created).toBeGreaterThan(0);
+    expect((await changes(0)).changes).toMatchObject([{ cursor: created, kind: 'artifact', entityId: 'first' }]);
+    // Idempotent creates and failed CAS attempts publish no committed change.
+    await request('/v1/artifacts', { method: 'POST', body: JSON.stringify(input) });
+    await request('/v1/artifacts/first', { method: 'POST', body: JSON.stringify({ body: input.body, expectedBodyVersion: 0 }) });
+    expect(await cursor()).toBe(created);
+    await request('/v1/artifacts/first', { method: 'POST', body: JSON.stringify({ body: input.body, expectedBodyVersion: 1 }) });
+    const updated = await cursor();
+    expect(updated).toBeGreaterThan(created);
+    const store = homes.artifacts(id);
+    const first = store.read('first')!;
+    store.replaceStoredRow({ ...first, id: 'second', kind: undefined });
+    expect(store.read('second')?.kind).toBe('other');
+    const page = await changes(created, 1);
+    expect(page.changes).toMatchObject([{ cursor: updated, entityId: 'first' }]);
+    expect((await changes(page.nextCursor)).changes).toMatchObject([{ entityId: 'second' }]);
+    store.replaceStoredRow({ ...first, id: 'legacy', kind: null });
+    expect(store.read('legacy')?.kind).toBeNull();
+    store.seedAccountGrant('second', 'recipient', 'view');
+    const beforeDelete = await cursor();
+    await request('/v1/artifacts/first', { method: 'DELETE' });
+    expect((await changes(beforeDelete)).changes).toMatchObject([{ entityId: 'first' }]);
+    expect((await request(`/v2/changes?after=${(await cursor()) + 1}`)).status).toBe(410);
+    expect((await changes(await cursor())).changes).toEqual([]);
+    await homes.switchAccount(id, 'unrelated');
+    expect(await cursor()).toBe(0);
+    expect((await changes(0)).changes).toEqual([]);
+    await homes.switchAccount(id, 'recipient');
+    expect((await changes(0)).changes).toMatchObject([{ entityId: 'second' }]);
+    const beforeClear = await cursor();
+    store.clear();
+    expect((await changes(beforeClear)).changes).toMatchObject([{ entityId: 'second' }]);
+    const deleted = await (await request('/v1/artifacts/read', {
+        method: 'POST', body: JSON.stringify({ artifactIds: ['second'] }),
+    })).json();
+    expect(deleted).toMatchObject({ items: [{ artifactId: 'second', ok: false, error: 'artifact_not_found' }] });
+});
 
 it('switches the applied Account when the app entry has not loaded Sync', async () => {
     installHomeGovernanceBoundaries(homes);
