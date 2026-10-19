@@ -132,19 +132,22 @@ export type ExecutionRunTargetRegistration = Readonly<{
 export async function registerExecutionRunConnectedServicesTarget(input: Readonly<{
     registry: ConnectedServiceRuntimeRegistry;
     registration: ExecutionRunTargetRegistration;
-    withSessionAccountContext: <T>(sessionId: string | null, operation: (context: RequesterSessionRuntimeContext | null) => Promise<T>) => Promise<T>;
-    assertSessionAccountCurrent: (sessionId: string | null, context: RequesterSessionRuntimeContext | null) => Promise<void>;
+    signal?: AbortSignal;
+    withSessionAccountContext: <T>(sessionId: string | null, operation: (context: RequesterSessionRuntimeContext | null) => Promise<T>,
+        attribution?: RequesterSessionRuntimeContext['bootstrap']['attribution'], signal?: AbortSignal) => Promise<T>;
+    assertSessionAccountCurrent: (sessionId: string | null, context: RequesterSessionRuntimeContext | null,
+        attribution?: RequesterSessionRuntimeContext['bootstrap']['attribution'], signal?: AbortSignal) => Promise<void>;
 }>): Promise<void> {
     const registration = input.registration;
     await input.withSessionAccountContext(registration.sessionId, async context => {
-        await input.assertSessionAccountCurrent(registration.sessionId, context);
+        await input.assertSessionAccountCurrent(registration.sessionId, context, undefined, input.signal);
         input.registry.registerRunTarget({ runKey: registration.runKey, pid: registration.runnerPid, agentId: registration.agentId,
             materializationKey: registration.materializationKey, connectedServicesBindingsRaw: registration.connectedServicesBindingsRaw,
             connectedServiceSelectionsEnv: registration.connectedServiceSelectionsEnv,
             exactPurposeBindingSubjectId: registration.exactPurposeBindingSubjectId, sessionId: registration.sessionId,
             sessionDirectory: registration.sessionDirectory,
             ...(context ? { requesterWorkAttributionV1: context.bootstrap.attribution } : {}) });
-    });
+    }, undefined, input.signal);
 }
 
 export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
@@ -167,7 +170,7 @@ export type CreateExecutionRunConnectedServicesBridgeDeps = Readonly<{
         isCurrent(): boolean;
     }>) => ReturnType<ConnectedServiceAuthGroupSwitchCoordinator<QualifiedConnectedAccountServiceRef>['switchAfterClassifiedFailure']>;
     resolveAuthForSpawn: ResolveAuthForSpawn;
-    registerRunTargets: (registration: ExecutionRunTargetRegistration) => void | Promise<void>;
+    registerRunTargets: (registration: ExecutionRunTargetRegistration, signal?: AbortSignal) => void | Promise<void>;
     unregisterRunTargets: (runKey: string) => void | Promise<void>;
     /** Run lifetime ends independently from an activation's target retirement. */
     finishRunRecovery?: (runKey: string) => Promise<void>;
@@ -1186,7 +1189,7 @@ export function createExecutionRunConnectedServicesBridge(
                         ...(entry.purposeBindingLease ? { exactPurposeBindingSubjectId: entry.purposeBindingLease.subjectId } : {}),
                         sessionId: runner.parentSessionId,
                         sessionDirectory: input.cwd,
-                    });
+                    }, signal);
                     signal?.throwIfAborted();
                     if (!entry.isCurrent()) throw new Error('execution_run_runner_retired');
 
