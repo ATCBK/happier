@@ -83,7 +83,8 @@ function WelcomeHome(props: Case) {
     return (
         <div data-theme={props.theme} style={{ position: 'relative', width: props.width, height: props.height, overflow: 'hidden', background: PAGE[props.theme] }}>
             <HomePlanet {...look} hidden={!landed} arrive="instant" leave="fade" reducedMotion={false} />
-            {!landed && options ? <WelcomePlanet pane={pane} options={options} onLanded={onLanded} /> : null}
+            {!landed && options ? <WelcomePlanet pane={pane} options={options} visible writing={false}
+                reducedMotion={props.reducedMotion ?? false} onLanded={onLanded} /> : null}
             <HomeContent theme={props.theme} width={props.width} height={props.height} />
         </div>
     );
