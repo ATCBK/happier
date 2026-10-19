@@ -20,7 +20,7 @@ export function formatMachineAgentStatus(status: MachineAgentStatus): string {
             return status.sizeBytes
                 ? `${t('machineAgents.notInstalled')} · ${t('machineAgents.downloadSize', { size: formatHappierDataBytes(status.sizeBytes, { kind: 'storage' }) })}`
                 : t('machineAgents.notInstalled');
-        case 'unsupported': return status.reason === 'arch' ? t('machineAgents.unsupportedArch') : t('machineAgents.unsupportedOs');
+        case 'unsupported': return t('machineAgents.unsupported');
         case 'installing': {
             const step = status.stepLabel ?? t('machineAgents.installing');
             if (status.bytesDone !== null && status.bytesTotal) {

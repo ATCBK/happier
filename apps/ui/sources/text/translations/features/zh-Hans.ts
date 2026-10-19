@@ -5443,6 +5443,7 @@ const zhHans: MachineAgentsTranslation = {
     unsupportedOs: '无法在此系统上运行',
     unsupportedArch: '没有适用于此处理器的版本',
     installing: '正在安装…',
+    unsupported: '无法在此运行',
     progress: ({ done, total }) => `${done} / ${total}`,
     checking: '正在检查…',
     offlineSignedIn: '上次已登录 · 机器离线',

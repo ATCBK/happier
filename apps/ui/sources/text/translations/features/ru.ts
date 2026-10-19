@@ -5480,6 +5480,7 @@ const ru: MachineAgentsTranslation = {
     unsupportedOs: 'Не работает на этой системе',
     unsupportedArch: 'Нет сборки для этого процессора',
     installing: 'Установка…',
+    unsupported: 'Здесь не запускается',
     progress: ({ done, total }) => `${done} из ${total}`,
     checking: 'Проверка…',
     offlineSignedIn: 'Последний раз: вход выполнен · машина офлайн',

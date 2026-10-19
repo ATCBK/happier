@@ -5448,6 +5448,7 @@ const ja: MachineAgentsTranslation = {
     unsupportedOs: 'このシステムでは動作しません',
     unsupportedArch: 'このプロセッサ向けのビルドがありません',
     installing: 'インストール中…',
+    unsupported: 'ここでは実行できません',
     progress: ({ done, total }) => `${done} / ${total}`,
     checking: '確認中…',
     offlineSignedIn: '前回はサインイン済み · マシンはオフライン',

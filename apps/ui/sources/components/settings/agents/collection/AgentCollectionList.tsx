@@ -65,7 +65,7 @@ function resolveRowStatusLabel(row: AgentCollectionRow): string | undefined {
         }
         case 'installing': return t('machineAgents.installing');
         case 'failed': return t('agentInstallJob.failed');
-        case 'unsupported': return t('machineAgents.unsupportedOs');
+        case 'unsupported': return t('machineAgents.unsupported');
         case 'checking': return t('machineAgents.checking');
         case 'installsOnFirstUse': return t('capabilities.agentAdd.adding.firstUse');
         case 'unknown': return undefined;

@@ -5453,6 +5453,7 @@ const it: MachineAgentsTranslation = {
     unsupportedOs: 'Non funziona su questo sistema',
     unsupportedArch: 'Nessuna build per questo processore',
     installing: 'Installazione…',
+    unsupported: 'Non può funzionare qui',
     progress: ({ done, total }) => `${done} di ${total}`,
     checking: 'Verifica…',
     offlineSignedIn: 'Ultimo stato: accesso eseguito · macchina offline',

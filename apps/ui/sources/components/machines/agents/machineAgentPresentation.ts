@@ -47,7 +47,7 @@ export type MachineAgentStatus =
     | Readonly<{ kind: 'needsSignIn'; tone: 'warn' }>
     | Readonly<{ kind: 'waitingForSignIn'; tone: 'quiet' }>
     | Readonly<{ kind: 'notInstalled'; tone: 'quiet'; sizeBytes: number | null; manual: boolean }>
-    | Readonly<{ kind: 'unsupported'; tone: 'quiet'; reason: 'os' | 'arch' }>
+    | Readonly<{ kind: 'unsupported'; tone: 'warn'; reason: 'os' | 'arch' }>
     | Readonly<{ kind: 'installing'; tone: 'quiet'; stepLabel: string | null; bytesDone: number | null; bytesTotal: number | null }>
     | Readonly<{ kind: 'failed'; tone: 'bad'; failure: MachineAgentJobFailure }>
     | Readonly<{ kind: 'checking'; tone: 'quiet' }>
@@ -158,7 +158,7 @@ export function resolveMachineAgentStatus(
         case 'installFailed':
             return { kind: 'failed', tone: 'bad', failure: jobFailure(agent) ?? UNKNOWN_FAILURE };
         case 'unsupported':
-            return { kind: 'unsupported', tone: 'quiet', reason: agent.platform.supported ? 'os' : agent.platform.reason };
+            return { kind: 'unsupported', tone: 'warn', reason: agent.platform.supported ? 'os' : agent.platform.reason };
         case 'install':
         case 'manualInstall':
             return { kind: 'notInstalled', tone: 'quiet', sizeBytes: agent.install.sizeBytes, manual: phase === 'manualInstall' };
