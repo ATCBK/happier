@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createPlainSessionByIdResponseFixture, createSessionFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { ExecutionRunGetResponseSchema, ReviewFindingsV2Schema } from '@happier-dev/protocol';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ReviewWalkthroughResponseSchema } from '@happier-dev/protocol/reviews/reviewNarration';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 
@@ -12,25 +13,38 @@ await prepareSessionFilesViewTestkit();
 const { StartReviewDialog } = await import('./StartReviewDialog');
 const { requestFinishedReviewWalkthrough, requestExplainReviewFindings } = await import('@/sync/ops/reviews/reviewWalkthrough');
 const { useWalkthroughReview } = await import('./useWalkthroughReview');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
-afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
+afterEach(async () => { vi.useRealTimers(); standardCleanup(); await fixture?.dispose(); });
 
 const comparison = ScmComparisonSchema.parse({ id: 'detached-comparison', source: { kind: 'workingTree' },
     repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
 
-async function setup() {
+async function setup(detached = true, actionError?: Error, beforeActionReply?: Promise<void>) {
     fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
+        if (request.method === RPC_METHODS.CAPABILITIES_DESCRIBE) return (async () => {
+            await beforeActionReply;
+            return { protocolVersion: 1, capabilities: [], checklists: {} };
+        })();
+        if (request.method === SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST || request.method === RPC_METHODS.DAEMON_SESSION_SKILL_CATALOG_LIST) {
+            return (async () => { await beforeActionReply; return { skills: [] }; })();
+        }
+        if (request.method === RPC_METHODS.WORKSPACE_ANCHORS_RESOLVE) {
+            return (async () => { await beforeActionReply; return { success: true, resolutions: [] }; })();
+        }
         if (request.method === 'capabilities.detect') return { protocolVersion: 1, results: { 'tool.executionRuns': {
             ok: true, checkedAt: 1, data: { protocolVersion: 2, backends: { claude: { available: true, intents: ['review'] } },
                 features: { detachedScope: true, startAndWait: true, runScopedAgentBindings: true, secretReferenceOverlay: true } } } } };
-        if (request.method === 'execution.run.action') {
+        if (request.method === 'execution.run.action') return (async () => {
+            await beforeActionReply;
+            if (actionError) throw actionError;
             const input = request.payload as { actionId: string };
             return input.actionId === 'review.walkthrough'
                 ? { ok: true, result: ReviewWalkthroughResponseSchema.parse({ runId: 'narrator-1', callId: 'call-1', sidechainId: 'call-1',
                     mode: 'seeded_narrator', state: 'collecting', comparisonId: comparison.id, comparison, reviewRunIds: ['review-1'] }) }
                 : { ok: true, result: { refinement: { actionId: 'scm.diffSummary.refine', input: { cwd: '/repo', resultId: 'result-1',
                     expectedRevision: 2, output: 'walkthrough', stopIds: ['stop-1'], instructions: 'Explain the finding.' } } } };
-        }
+        })();
         if (request.method === 'execution.run.get') return ExecutionRunGetResponseSchema.parse({
             run: { runId: 'review-1', callId: 'call-1', sidechainId: 'call-1', intent: 'review',
                 backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only', retentionPolicy: 'resumable',
@@ -42,14 +56,34 @@ async function setup() {
         });
         if (request.method === 'scm.diffSummary.refine') return { success: false, errorCode: 'revision_conflict', error: 'Saved result changed', latestRevision: 3 };
         return undefined;
-    }, request: async url => new URL(String(url)).pathname === ACP_CATALOG_ROWS_ROUTE_V1
-        ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } }))
-        : Response.json({}, { status: 404 }),
+    }, request: async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v2/sessions/s1') return Response.json(createPlainSessionByIdResponseFixture(createSessionFixture({ id: 's1', active: true })));
+        return path === ACP_CATALOG_ROWS_ROUTE_V1
+            ? Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } } }))
+            : Response.json({}, { status: 404 });
+    },
     });
-    fixture.storage.setState({ sessions: {} });
+    if (detached) fixture.storage.setState({ sessions: {} });
 }
 
-describe('detached review walkthrough', () => {
+describe('review walkthrough transport', () => {
+    it('accepts the finished walkthrough acknowledgement through the attached Session transport', async () => {
+        await setup(false);
+        const result = await requestFinishedReviewWalkthrough({ sessionId: 's1', serverId: fixture.home.id, cwd: '/repo',
+            runId: 'review-1', reviewRunIds: ['review-1'], comparisonId: comparison.id, fallbackComparison: { kind: 'workingTree' } });
+        expect(result, JSON.stringify({ result, requests: fixture.requests }))
+            .toMatchObject({ ok: true, comparisonId: comparison.id });
+    });
+    it('retains an uncoded transport failure instead of reporting invalid walkthrough output', async () => {
+        await setup(false, new Error('operation has timed out'));
+        const result = await requestFinishedReviewWalkthrough({ sessionId: 's1', serverId: fixture.home.id,
+            cwd: '/repo', runId: 'review-1', reviewRunIds: ['review-1'],
+            comparisonId: comparison.id, fallbackComparison: { kind: 'workingTree' } });
+        expect(result, JSON.stringify({ result, requests: fixture.requests }))
+            .toMatchObject({ ok: false, errorCode: 'execution_run_target_unavailable' });
+        expect(fixture.requests.filter(request => request.method === 'execution.run.action')).toHaveLength(1);
+    });
     it('reads original findings through the workspace Run even after narration replaces its current structured output', async () => {
         await setup();
         const hook = await renderHook(() => useWalkthroughReview({ host: { machineId: 'm1' }, cwd: '/repo',

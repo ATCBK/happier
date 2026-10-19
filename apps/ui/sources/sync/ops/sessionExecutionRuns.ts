@@ -432,7 +432,7 @@ export async function sessionExecutionRunAction(
         return {
             ok: false,
             error: error instanceof Error ? error.message : 'Unknown error',
-            errorCode: readRpcErrorCode(error),
+            errorCode: readRpcErrorCode(error) ?? 'execution_run_target_unavailable',
         };
     }
 }
