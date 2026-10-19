@@ -10,6 +10,7 @@ import type { LocalServicePreviewResourceV1, MachineOperationProtocolCapabilitie
 import { createFakeRouteApp, createReplyStub, getRouteEntry, getRouteHandler } from '@/app/api/testkit/routeHarness';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerLocalServicePreviewRoutes } from './registerRoutes';
+import { startSocket } from '@/app/api/socket';
 import { createLocalServicePreviewRuntime } from '@/app/local/services/preview/runtime';
 import { createLocalServicePublicRuntime } from '@/app/local/services/public/runtime';
 import { createLocalServicePublicRateLimitChecker } from '@/app/local/services/public/rateLimits';
@@ -631,6 +632,107 @@ describe('local service preview routes', () => {
             vi.unstubAllEnvs();
         }
     });
+
+    it('releases the relay tunnel when the browser cancels an open private SSE response', async () => {
+        const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'test-master-secret',
+            HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',
+            [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: '5173' };
+        const runtimes = createLocalServiceRouteRuntimes(env);
+        const registered = runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' });
+        if (!registered.ok || !registered.accessUrl) throw new Error('preview registration failed');
+        const url = new URL(registered.accessUrl);
+        let release = () => {};
+        const released = new Promise<void>(resolve => { release = resolve; });
+        // The remote stream never ends by itself; only the tunnel's release lets its reader finish.
+        const openTunnel: OpenLocalServicePreviewTunnel = async () => ({
+            tunnelId: 'tunnel', substreamId: 'sse', write() {}, endWrite() {},
+            async *read() {
+                yield new TextEncoder().encode('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: first\n\n');
+                await released;
+            },
+            abort: release, close: release,
+        });
+        const app = fastify({ logger: false });
+        app.decorate('authenticate', async () => {});
+        registerLocalServiceRoutes(app as unknown as Fastify, { env, runtimes, openTunnel });
+        let socket: ReturnType<typeof connect> | undefined;
+        try {
+            const exchange = await app.inject({ method: 'GET', url: url.pathname + url.search, headers: { host: url.host } });
+            const cookie = String(exchange.headers['set-cookie']).split(';')[0]!;
+            const listener = new URL(await app.listen({ port: 0, host: '127.0.0.1' }));
+            socket = connect(Number(listener.port), '127.0.0.1');
+            const firstBytes = new Promise<void>(resolve => socket!.on('data', chunk => {
+                if (chunk.toString().includes('data: first')) resolve();
+            }));
+            socket.on('connect', () => socket!.write(`GET /sse HTTP/1.1\r\nHost: ${url.host}\r\nCookie: ${cookie}\r\nAccept: text/event-stream\r\n\r\n`));
+            await firstBytes;
+            socket.destroy();
+            await released;
+        } finally {
+            release();
+            socket?.destroy();
+            await app.close();
+        }
+    }, 15_000);
+
+    it('admits a slow relay WebSocket upgrade beside Socket.IO, keeps Socket.IO and closes an unclaimed upgrade', async () => {
+        const env = { ...peerMediationGrantSigningEnv(), HANDY_MASTER_SECRET: 'test-master-secret',
+            HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: 'preview.happier.test',
+            [FEATURE_ENV_KEYS.machinesTunnelServerRoutedEnabled]: '1',
+            [FEATURE_ENV_KEYS.machinesTunnelAllowedPorts]: '5173' };
+        const runtimes = createLocalServiceRouteRuntimes(env);
+        const registered = runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' });
+        if (!registered.ok || !registered.accessUrl) throw new Error('preview registration failed');
+        const url = new URL(registered.accessUrl);
+        const network = tunnelBoundary('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n');
+        // The remote machine takes longer than Socket.IO's default unclaimed-upgrade deadline (1 s) to answer.
+        const slowTunnel: OpenLocalServicePreviewTunnel = async (input) => {
+            await new Promise<void>(resolve => setTimeout(resolve, 1_500));
+            return network.openTunnel(input);
+        };
+        const app = fastify({ logger: false });
+        app.decorate('authenticate', async () => {});
+        try {
+            for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+            vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+            startSocket(app as unknown as Fastify);
+            registerLocalServiceRoutes(app as unknown as Fastify, { runtimes, openTunnel: slowTunnel });
+            const exchange = await app.inject({ method: 'GET', url: url.pathname + url.search, headers: { host: url.host } });
+            const cookie = String(exchange.headers['set-cookie']).split(';')[0]!;
+            const listener = new URL(await app.listen({ port: 0, host: '127.0.0.1' }));
+            const upgrade = async (path: string, host: string) => {
+                const socket = connect(Number(listener.port), '127.0.0.1');
+                let response = '';
+                try {
+                    return await new Promise<{ response: string; closedAfterMs: number | null }>((resolve) => {
+                        const startedAt = Date.now();
+                        socket.on('error', () => resolve({ response, closedAfterMs: Date.now() - startedAt }));
+                        socket.on('close', () => resolve({ response, closedAfterMs: Date.now() - startedAt }));
+                        socket.on('data', chunk => {
+                            response += chunk.toString();
+                            if (response.includes('\r\n\r\n')) resolve({ response, closedAfterMs: null });
+                        });
+                        socket.on('connect', () => socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`));
+                    });
+                } finally { socket.destroy(); }
+            };
+            expect((await upgrade('/socket', url.host)).response).toContain('101 Switching Protocols');
+            // Socket.IO keeps its own path.
+            expect((await upgrade('/v1/updates/?EIO=4&transport=websocket', 'app.happier.test')).response).toContain('101 Switching Protocols');
+            // Nothing claims this upgrade; it must still be closed rather than held open.
+            const unclaimed = await upgrade('/not-a-claimed-route', 'unclaimed.happier.test');
+            expect(unclaimed.response).not.toContain('101 Switching Protocols');
+            expect(unclaimed.closedAfterMs).not.toBeNull();
+        } finally {
+            await app.close();
+            vi.unstubAllEnvs();
+        }
+    }, 15_000);
 
     it('refreshes expired server admission for a shared viewer without native endpoint availability', async () => {
         sessionFindUnique.mockResolvedValue(sharedSession);

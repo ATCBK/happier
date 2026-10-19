@@ -109,6 +109,7 @@ import {
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 
 import { resolveSocketMaxHttpBufferSizeFromEnv } from './socket/transportBudget';
+import { destroyUnclaimedHttpUpgrades } from './utils/httpUpgradeOwnership';
 export { DEFAULT_SOCKET_MAX_HTTP_BUFFER_SIZE, resolveSocketMaxHttpBufferSizeFromEnv } from './socket/transportBudget';
 // Socket.IO adds its event name, acknowledgement id, and packet framing around the
 // serialized command. Keep that reserve beside the one live transport ceiling.
@@ -215,6 +216,8 @@ function classifySocketHandshakeException(error: unknown): SocketAuthHandshakeEx
     return "unknown";
 }
 
+const SOCKET_IO_PATH = '/v1/updates';
+
 export function startSocket(app: Fastify) {
     const sessionPublisherPresence = createSessionPublisherPresence();
     const socketAdapterConfig = readSocketAdapterRuntimeConfigFromEnv(process.env, "memory");
@@ -274,7 +277,10 @@ export function startSocket(app: Fastify) {
         transports: ['websocket', 'polling'],
         pingTimeout: 45000,
         pingInterval: 15000,
-        path: '/v1/updates',
+        path: SOCKET_IO_PATH,
+        // Upgrades that Socket.IO does not own belong to the local service data planes, which can
+        // take longer than its fixed one-second cleanup to answer; unclaimed ones are closed below.
+        destroyUpgrade: false,
         maxHttpBufferSize: socketMaxHttpBufferSize,
         allowUpgrades: true,
         upgradeTimeout: 10000,
@@ -282,6 +288,7 @@ export function startSocket(app: Fastify) {
         serveClient: false // Don't serve the client files
     });
 
+    destroyUnclaimedHttpUpgrades(app.server, SOCKET_IO_PATH);
     app.machineDaemonPresence = io;
     const resolveCurrentSessionMachine = (input: Readonly<{ accountId: string; sessionId: string }>) => resolveCurrentSessionMachineFromServer({
         ...input, io, presence: sessionPublisherPresence,

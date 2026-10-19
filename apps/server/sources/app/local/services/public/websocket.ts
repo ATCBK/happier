@@ -1,4 +1,5 @@
 import type { ApiProxyTrust } from '@/app/api/utils/apiRateLimitPolicy';
+import { claimHttpUpgrade } from '@/app/api/utils/httpUpgradeOwnership';
 import { readOptionalPublicAuthDisposition } from "@/app/api/utils/optionalPublicAuth";
 import proxyAddr from '@fastify/proxy-addr';
 import type { IncomingMessage } from 'node:http';
@@ -184,6 +185,7 @@ export async function handleLocalServicePublicWebSocketUpgrade(
 ): Promise<void> {
     const route = parsePublicUpgradeRoute(request, options);
     if (!route && !upgradeUrl(request)?.pathname.startsWith(PUBLIC_UPGRADE_ROUTE_PREFIX)) return;
+    claimHttpUpgrade(request);
 
     if (options.featureEnabled && !await options.featureEnabled(request)) {
         await sendUpgradeError(socket, 404, "Not Found");

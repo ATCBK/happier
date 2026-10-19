@@ -12,6 +12,7 @@ import { LocalServicePreviewAccessRequestV1Schema, LocalServicePreviewServerAcce
 import type { MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 
 import type { Fastify } from "@/app/api/types";
+import { claimHttpUpgrade } from "@/app/api/utils/httpUpgradeOwnership";
 import {
     proxyLocalServicePreviewHttpRequest,
     type LocalServicePreviewHttpRequest,
@@ -526,9 +527,13 @@ async function handlePreviewWebSocketUpgrade(
     if (!url) return;
     const hostRouteCandidate = parseHostPreviewUpgradeRoute(request, options);
     if (!hostRouteCandidate) {
-        if (url.pathname.startsWith(PREVIEW_UPGRADE_ROUTE_PREFIX)) await sendUpgradeError(socket, 404, 'Not Found');
+        if (url.pathname.startsWith(PREVIEW_UPGRADE_ROUTE_PREFIX)) {
+            claimHttpUpgrade(request);
+            await sendUpgradeError(socket, 404, 'Not Found');
+        }
         return;
     }
+    claimHttpUpgrade(request);
 
     if (options.featureEnabled && !await options.featureEnabled(request)) {
         await sendUpgradeError(socket, 404, "Not Found");
