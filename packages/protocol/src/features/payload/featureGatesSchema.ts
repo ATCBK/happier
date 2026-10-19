@@ -101,6 +101,7 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       drafts: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
       filteredListing: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
       following: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
+      autonomousExchange: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
       conversations: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
       usageLimitRecovery: z._default(z.optional(FeatureGateSchema), DEFAULT_GATE_DISABLED),
     })), {
@@ -113,6 +114,7 @@ export const FeatureGatesSchema = lazyZodSchema(() => z.object({
       drafts: DEFAULT_GATE_DISABLED,
       filteredListing: DEFAULT_GATE_DISABLED,
       following: DEFAULT_GATE_DISABLED,
+      autonomousExchange: DEFAULT_GATE_DISABLED,
       conversations: DEFAULT_GATE_DISABLED,
       usageLimitRecovery: DEFAULT_GATE_DISABLED,
     }),

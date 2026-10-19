@@ -1,6 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
-import { AcceptedPendingSettlementResponseV1Schema } from './acceptedPendingSettlementV1';
+import { AcceptedPendingSettlementRequestV1Schema, AcceptedPendingSettlementResponseV1Schema } from './acceptedPendingSettlementV1';
+
+describe('AcceptedPendingSettlementRequestV1Schema', () => {
+  it('carries a clear host-stamped accepted turn identity beside encrypted delivery content', () => {
+    expect(AcceptedPendingSettlementRequestV1Schema.parse({
+      v: 1, sessionId: 'receiver', localId: 'input-1',
+      acceptedDelivery: { t: 'encrypted', c: 'private-acceptance' },
+      acceptedTurn: { kind: 'followUp', turnId: 'new-turn' },
+    })).toMatchObject({ acceptedTurn: { kind: 'followUp', turnId: 'new-turn' } });
+    expect(AcceptedPendingSettlementRequestV1Schema.safeParse({
+      v: 1, sessionId: 'receiver', localId: 'input-1',
+      acceptedTurn: { kind: 'followUp', turnId: '' },
+    }).success).toBe(false);
+    expect(AcceptedPendingSettlementRequestV1Schema.safeParse({
+      v: 1, sessionId: 'receiver', localId: 'input-1',
+      acceptedDelivery: { t: 'plain', v: { v: 1, acceptedAtMs: 1,
+        delivery: { kind: 'newTurn', turnId: 'other-turn' } } },
+      acceptedTurn: { kind: 'followUp', turnId: 'new-turn' },
+    }).success).toBe(false);
+  });
+});
 
 describe('AcceptedPendingSettlementResponseV1Schema', () => {
   it('accepts only a bounded typed transaction-unavailable retry response', () => {

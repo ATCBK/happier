@@ -40,6 +40,7 @@ export type SessionTurnProviderCheckpointV1 = z.infer<
 
 export const SessionTurnLifecycleStatusV1Schema = lazyZodSchema(() => z.enum([
   'in_progress',
+  'waiting',
   'completed',
   'cancelled',
   'failed',
@@ -69,6 +70,7 @@ export const SessionTurnMutationActionV1Schema = lazyZodSchema(() => z.enum([
   'attach_agent_turn_id',
   'append_transcript_anchors',
   'complete',
+  'wait',
   'fail',
   'cancel',
   'end_session',
@@ -107,6 +109,8 @@ const TurnScopedMutationBaseV1Schema = lazyZodSchema(() => z.extend(SessionTurnM
 const CanonicalSessionTurnMutationV1Schema = lazyZodSchema(() => z.discriminatedUnion('action', [
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TurnScopedMutationBaseV1Schema, {
     action: z.literal('begin'),
+    /** Host-correlated input that caused this exact native turn start. */
+    startingInputId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(SessionIndexedIdentifierMaxLengthV1))),
     initiator: z.optional(SessionTurnInitiatorV1Schema),
     workDepth: z.optional(SessionWorkDepthV1Schema),
     workflowInvocation: z.optional(SessionTurnWorkflowInvocationV1Schema),
@@ -126,6 +130,9 @@ const CanonicalSessionTurnMutationV1Schema = lazyZodSchema(() => z.discriminated
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TurnScopedMutationBaseV1Schema, {
     action: z.literal('complete'),
     transcriptAnchors: z.optional(SessionTurnTranscriptAnchorsV1Schema),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TurnScopedMutationBaseV1Schema, {
+    action: z.literal('wait'),
   })),
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(TurnScopedMutationBaseV1Schema, {
     action: z.literal('fail'),
@@ -162,7 +169,7 @@ const CanonicalSessionTurnMutationV1Schema = lazyZodSchema(() => z.discriminated
   }
 })));
 
-export const SessionTurnMutationV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacySessionTurnAgentIdentity), CanonicalSessionTurnMutationV1Schema));
+export const SessionTurnMutationV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacySessionTurnAgentIdentity), CanonicalSessionTurnMutationV1Schema));
 export type SessionTurnMutationV1 = z.infer<typeof SessionTurnMutationV1Schema>;
 
 export const SessionTurnMutationDecisionV1Schema = lazyZodSchema(() => z.enum([

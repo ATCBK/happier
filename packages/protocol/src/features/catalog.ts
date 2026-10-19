@@ -207,6 +207,12 @@ const FEATURE_CATALOG_DEFINITION = {
     dependencies: ['sessions'],
     representation: 'server',
   },
+  'sessions.autonomousExchange': {
+    description: 'Exact accepted-start custody and Account check-in controls for autonomous Session exchanges.',
+    defaultFailMode: 'fail_closed',
+    dependencies: ['sessions'],
+    representation: 'server',
+  },
   'sessions.conversations': {
     description: 'Human conversations inside a shared Session: discussions, authored messages, mentions and private read cursors.',
     defaultFailMode: 'fail_closed',

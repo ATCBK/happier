@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
-import { SessionMessageAcceptedDeliveryContentV1Schema, SessionMessageDeliveryResolutionV1Schema } from '../messages/sessionMessageDeliveryResolutionV1.js';
+import { SessionMessageAcceptedDeliveryContentV1Schema, SessionMessageAcceptedTurnV1Schema, SessionMessageDeliveryResolutionV1Schema } from '../messages/sessionMessageDeliveryResolutionV1.js';
 import { SessionMessageRoleSchema } from '../messages/sessionMessageRole.js';
 import { PendingLocalIdSchema } from './pendingLocalId.js';
 import { PendingProviderActionSchema } from './pendingProviderAction.js';
@@ -18,7 +18,15 @@ export const AcceptedPendingSettlementRequestV1Schema = lazyZodSchema(() => z.st
   sessionId: SettlementIdentityV1Schema,
   localId: PendingLocalIdSchema,
   acceptedDelivery: z.optional(SessionMessageAcceptedDeliveryContentV1Schema),
-}));
+  /** Clear host-stamped projection; content may remain encrypted for the Account. */
+  acceptedTurn: z.optional(SessionMessageAcceptedTurnV1Schema),
+}).check(z.superRefine((value, context) => {
+  if (value.acceptedDelivery?.t !== 'plain' || value.acceptedTurn === undefined) return;
+  const delivery = value.acceptedDelivery.v.delivery;
+  if (delivery.kind !== value.acceptedTurn.kind || delivery.turnId !== value.acceptedTurn.turnId) {
+    context.addIssue({ code: 'custom', path: ['acceptedTurn'], message: 'Accepted turn differs from plain delivery' });
+  }
+})));
 
 const PendingCountV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
 const SettlementStateV1Schema = {
