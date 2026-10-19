@@ -1665,11 +1665,21 @@ claiming the daemon was unreachable. A confirmed rollback during catalog hydrati
 keeps its typed reason. Re-read the canonical resource before retrying an
 uncertain mutation.
 
+The same transaction owner recovers a native Prisma missing-transaction error
+when it occurs before its callback completes. Under transaction churn, Prisma
+can evict an expired transaction's diagnostic and return `P2028` without the
+expiry message. The callback has not returned, so the owner has not submitted a
+commit; recovery uses the existing attempt budget. A missing-transaction error
+after callback completion remains an unknown outcome and never authorizes replay.
+
 Session metadata tuple writes in current 0.3 source also preserve transaction
 failures through the global HTTP error handler. A confirmed rollback returns
 the same typed 503 response; unexpected failures retain their diagnostic cause
 for server logging. The tuple writer translates only its Team credential-binding
 domain rejection. It does not collapse database failures into an unclassified 500.
+Standalone tuple writes prepare the publication audience before the mutation
+attempt, then acquire and recheck its fence before the canonical CAS body.
+Composing callers acquire the same fence inside their containing transaction.
 Both tuple and legacy `PATCH /v2/sessions/:sessionId` acknowledge the committed
 mutation before starting current-view publication or its post-commit row read.
 A missing row, rejected projection or failed publication read after commit is
