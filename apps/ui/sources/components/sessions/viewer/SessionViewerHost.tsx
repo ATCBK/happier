@@ -166,21 +166,24 @@ function MountedSessionViewerHost(
     });
   }, []);
 
-  const availableRect = React.useMemo<FrameRect | null>(() => {
+  // The frame rests above where the composer band starts. On desktop the workspace frame lifts the
+  // band off the area's bottom edge, so its height alone would put the frame over the composer's
+  // status line; the band's measured top (window space) says where it really begins.
+  const composerStart = React.useMemo(() => {
     if (!size) return null;
-    // The frame rests above where the composer band starts. On desktop the workspace frame lifts the
-    // band off the area's bottom edge, so its height alone would put the frame over the composer's
-    // status line; the band's measured top (window space) says where it really begins.
-    const composerStart = composerTop > 0
+    return composerTop > 0
       ? Math.min(size.height, windowHeight - composerTop - origin.y)
       : size.height - composerHeight;
+  }, [composerHeight, composerTop, origin.y, size, windowHeight]);
+  const availableRect = React.useMemo<FrameRect | null>(() => {
+    if (!size || composerStart === null) return null;
     return {
       x: SESSION_VIEWER_EDGE,
       y: SESSION_VIEWER_EDGE,
       width: Math.max(0, size.width - SESSION_VIEWER_EDGE * 2),
       height: Math.max(0, composerStart - SESSION_VIEWER_EDGE * 2),
     };
-  }, [composerHeight, composerTop, origin.y, size, windowHeight]);
+  }, [composerStart, size]);
   // The floating presences report window-space rects; the frame works in this area's space.
   const avoidRects = React.useMemo(
     () =>
@@ -272,11 +275,11 @@ function MountedSessionViewerHost(
               columnMinWidth: PANE_SIZING_DEFAULTS.mainMinPx,
               rect: settledFloatingRect,
             }),
-            centred: resolveSessionViewerCentredInset({ areaWidth: size.width, rect: settledFloatingRect }),
+            centred: resolveSessionViewerCentredInset({ areaWidth: size.width, contentBottom: composerStart ?? size.height, rect: settledFloatingRect }),
           }
         : NO_SESSION_VIEWER_INSET,
     );
-  }, [setReadingInset, settledFloatingRect, size]);
+  }, [composerStart, setReadingInset, settledFloatingRect, size]);
 
   const onRectChange = React.useCallback(
     (next: FrameRect, change: FloatingFrameRectChange) => {

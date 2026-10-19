@@ -114,18 +114,18 @@ export type SessionViewerController = Readonly<{
 
 /**
  * A settled floating viewer's yield: `left`/`right` for the reading column (bounded by the main
- * minimum), `centred` for centred content such as the empty Session state (always clear).
+ * minimum), `centred` for centred content such as the empty Session state (beside the frame, else above it).
  */
 export type SessionViewerReadingInset = Readonly<{
   left: number;
   right: number;
-  centred: Readonly<{ left: number; right: number }>;
+  centred: Readonly<{ left: number; right: number; bottom: number }>;
 }>;
 
 export const NO_SESSION_VIEWER_INSET: SessionViewerReadingInset = Object.freeze({
   left: 0,
   right: 0,
-  centred: Object.freeze({ left: 0, right: 0 }),
+  centred: Object.freeze({ left: 0, right: 0, bottom: 0 }),
 });
 /** The mounted owner lives in `SessionViewerControllerProvider`; consumers read it through these hooks. */
 export const SessionViewerControllerContext =
