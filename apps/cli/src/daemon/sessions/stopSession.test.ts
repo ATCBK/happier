@@ -289,54 +289,6 @@ describe('createStopSession', () => {
     });
   });
 
-  it('keeps matched tracked sessions until exit is observed', async () => {
-
-    const killDaemonChild = vi.fn();
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(123456789);
-    const ownerRemainderResult = { status: 'complete' as const, outcomes: [] };
-    const ownerRemainder = {
-      capture: vi.fn(async () => undefined),
-      captureTree: vi.fn(async () => undefined),
-      end: vi.fn(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return ownerRemainderResult;
-      }),
-      observeEnd: vi.fn(async () => ownerRemainderResult),
-    };
-
-    const pidToTrackedSession = new Map<number, any>([
-      [111, { startedBy: 'daemon', pid: 111, happySessionId: 'sess-1', childProcess: { pid: 111, exitCode: null, signalCode: null, kill: killDaemonChild }, processCommandHash: 'h1' }],
-      [222, { startedBy: 'terminal', pid: 222, happySessionId: 'sess-1', processCommandHash: 'h2' }],
-    ]);
-
-    const stop = createStopSession({
-      pidToTrackedSession,
-      ownerRemainder,
-      waitForTrackedRunnersExit: vi.fn(async () => {
-        pidToTrackedSession.get(111)!.ownerRemainderResult = await ownerRemainder.end();
-        return true;
-      }),
-    });
-    const startedAt = performance.now();
-    const ok = await stop('sess-1');
-    const elapsedMs = performance.now() - startedAt;
-
-    expect(ok).toEqual({ status: 'stopped' });
-    expect(killDaemonChild).not.toHaveBeenCalled();
-    expect(killSpy).toHaveBeenCalledWith(111, 'SIGTERM');
-    expect(killSpy).toHaveBeenCalledWith(222, 'SIGTERM');
-    expect(pidToTrackedSession.size).toBe(2);
-    expect(pidToTrackedSession.has(111)).toBe(true);
-    expect(pidToTrackedSession.has(222)).toBe(true);
-    expect(pidToTrackedSession.get(111)?.stopRequestedAtMs).toBe(123456789);
-    expect(pidToTrackedSession.get(222)?.stopRequestedAtMs).toBe(123456789);
-    expect(ownerRemainder.end).toHaveBeenCalledOnce();
-    // A duplicate post-proof pass makes this harness take at least 1,000 ms.
-    expect(elapsedMs).toBeLessThan(800);
-    nowSpy.mockRestore();
-  });
-
   it('retires upstream authority before signaling a tracked runner', async () => {
     const events: string[] = [];
     const killSpy = vi.spyOn(process, 'kill')

@@ -594,6 +594,18 @@ export function createStopSession(params: Readonly<{
         }
         if (!isSignalAuthorityCurrent()
           || (session.startedBy === 'daemon' && session.childProcess && !isTrackedChildStillLiveForPid(session, pid))) continue;
+        if (params.ownerRemainder && session.ownerRemainderCapture?.scope !== 'subtree') {
+          // Logical ownership can belong to a child Run or a shared launch fence.
+          // Retain this runner's exact native tree before its ancestry disappears.
+          const tree = await observeStopPhase('runner_tree_capture', () => params.ownerRemainder!.captureTree(remainderOwner, {
+            pid,
+            ...(session.processStartTimeMs === undefined ? {} : { start: { startTimeMs: session.processStartTimeMs } }),
+          }));
+          if (!isSignalAuthorityCurrent()) continue;
+          if (!tree) return incompleteStopSession('runner_signal_incomplete');
+          session.ownerRemainderCapture = tree;
+          delete session.ownerRemainderResult;
+        }
         session.stopRequestedAtMs ??= Date.now();
         // The runner lifecycle owns its established exit wait; one terminator owns every signal.
         const result = await observeStopPhase('signal_request', () => terminateTargets({
