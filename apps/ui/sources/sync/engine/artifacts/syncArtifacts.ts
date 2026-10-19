@@ -1,4 +1,5 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { encodeBase64 } from '@/encryption/base64';
 import { log } from '@/log';
 import { randomUUID } from '@/platform/randomUUID';
@@ -719,6 +720,8 @@ export async function fetchArtifactWithBodyFromApi(params: {
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
     signal?: AbortSignal;
+    /** Signed decision preparation may read current content, never repair its audience. */
+    prepareRecipientKeys?: boolean;
 }): Promise<DecryptedArtifact | null> {
     try {
         params.signal?.throwIfAborted();
@@ -735,12 +738,13 @@ async function openArtifactWithRecipientKeyPreparation(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; signal?: AbortSignal;
     artifact: Artifact; encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache;
     recipientCensus?: ArtifactAccessRecipientCensusResponseV1 | null;
+    prepareRecipientKeys?: boolean;
 }>): Promise<DecryptedArtifact | null> {
     const { artifact, encryption, artifactDataKeys } = params;
     params.signal?.throwIfAborted();
     const opened = await decryptArtifactWithBody({ artifact, encryption, artifactDataKeys });
     params.signal?.throwIfAborted();
-    if (opened?.isDecrypted && opened.storageMode === 'e2ee') {
+    if (opened?.isDecrypted && opened.storageMode === 'e2ee' && params.prepareRecipientKeys !== false) {
         const key = artifactDataKeys.get(artifact.id);
         if (!key || key.envelope !== artifact.dataEncryptionKey) {
             throw Object.assign(new Error('artifact_content_unavailable'), { code: 'artifact_content_unavailable' });
@@ -958,6 +962,7 @@ export async function createArtifactViaApi(params: {
 }
 
 export async function createArtifactWithHeaderViaApi(params: {
+    memoryDecisionSource?: CoordinationMessageRefV1;
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
     serverId?: string;
@@ -1033,6 +1038,7 @@ export async function createArtifactWithHeaderViaApi(params: {
             body: storedBody,
             dataEncryptionKey: storedDataEncryptionKey,
             ...privateMetadata.write,
+            ...(params.memoryDecisionSource ? { memoryDecisionSource: params.memoryDecisionSource } : {}),
         };
         if (params.body !== null && typeof params.body === 'object' && 'bytes' in params.body && typeof body === 'object' && body !== null) {
             request.blob = { blobId: body.blobId, content: await sealArtifactBinaryContent(params.body.bytes, accountMode, artifactEncryption) };
@@ -1101,6 +1107,7 @@ function stableStringifyJsonValue(value: unknown): string {
 }
 
 export async function updateArtifactWithHeaderViaApi(params: {
+    memoryDecisionSource?: CoordinationMessageRefV1;
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
     serverId?: string;
@@ -1229,6 +1236,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
     }
 
     // Send update to server
+    if (params.memoryDecisionSource) updateRequest.memoryDecisionSource = params.memoryDecisionSource;
     params.signal?.throwIfAborted();
     const response = await updateArtifactApi(credentials, artifactId, updateRequest, { request: params.request, signal: params.signal });
 

@@ -2,6 +2,7 @@ import type { ArtifactBodyV1, ArtifactBlobWriteV1, ArtifactBodyEnvelopeV1, Artif
 import type { ArtifactOrganizationHeaderV1 } from '@happier-dev/protocol/artifacts/artifactOrganizationV1';
 import type { ArtifactPublicAudienceV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import type { ArtifactHtmlBundleV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 
 /** Opened private bytes stay separate from the Home's isolated shell location. */
 export type ArtifactHtmlPreview = Readonly<{ url: string; bundle: ArtifactHtmlBundleV1 }>;
@@ -127,6 +128,7 @@ export type DecryptedArtifact =
  * Request to create a new artifact
  */
 export interface ArtifactCreateRequest {
+    memoryDecisionSource?: CoordinationMessageRefV1;
     id: string;  // UUID generated client-side
     header: string;  // Base64 encoded encrypted header
     body: string;  // Base64 encoded encrypted body
@@ -140,6 +142,7 @@ export interface ArtifactCreateRequest {
  * Request to update an existing artifact
  */
 export interface ArtifactUpdateRequest {
+    memoryDecisionSource?: CoordinationMessageRefV1;
     provenance?: string | null;
     provenanceDataEncryptionKey?: string | null;
     /** Explicit null deliberately clears an existing binary head; omission is an ordinary write. */

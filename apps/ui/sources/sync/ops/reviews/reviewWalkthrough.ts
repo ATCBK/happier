@@ -72,6 +72,7 @@ export async function listReviewWalkthroughEngines(params: Readonly<{ sessionId:
             engineId,
             label: typeof record.label === 'string' ? record.label : engineId,
             description: typeof record.description === 'string' ? record.description : null,
+            launchModelId: typeof record.launchModelId === 'string' ? record.launchModelId : null,
             enabled: record.enabled !== false,
             structuredNarration: capabilities.success && capabilities.data.structuredNarration,
         }];

@@ -1,4 +1,5 @@
 import { pick } from 'zod/mini';
+import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
 import { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest, ArtifactUpdateResponse } from '@/sync/domains/artifacts/artifactTypes';
@@ -64,7 +65,8 @@ async function readWriteRefusal(response: Response, fallback: string): Promise<H
     const quota = response.status === 413 ? ArtifactQuotaExceededV1Schema.safeParse(value) : null;
     if (quota?.success) return new ArtifactQuotaExceededError({ budget: quota.data.budget, limitBytes: quota.data.limitBytes, usedBytes: quota.data.usedBytes });
     const message = value && typeof value === 'object' && typeof Reflect.get(value, 'error') === 'string' ? String(Reflect.get(value, 'error')) : fallback;
-    return new HappyError(message, false, { status: response.status });
+    const sourceError = MemoryDecisionSourceErrorCodeV1Schema.safeParse(message);
+    return new HappyError(message, false, { status: response.status, ...(sourceError.success ? { code: sourceError.data } : {}) });
 }
 
 const artifactAuthorityProjectionSchema = pick(ArtifactAccessRecipientCensusResponseV1Schema, {
@@ -368,13 +370,17 @@ export async function createArtifact(
     request: ArtifactCreateRequest,
     opts: ArtifactApiOptions = {},
 ): Promise<Artifact> {
+    opts.signal?.throwIfAborted();
+    if (request.memoryDecisionSource && request.blob)
+        throw new HappyError('memory_decision_source_unsupported', false, { code: 'memory_decision_source_unsupported' });
     const artifactRequest = opts.request ?? (() => {
         const focusedRequest = createServerFetchForActiveServer();
         return ((path, init, options) => focusedRequest(path, init, { includeAuth: false, ...options })) satisfies ServerFetch;
     })();
     const scopedOptions = { ...opts, request: artifactRequest };
     const run = async () => {
-        const path = request.blob ? '/v1/artifacts/content/binary' : '/v1/artifacts';
+        const path = request.memoryDecisionSource ? '/v1/artifacts/memory-decision/create'
+            : request.blob ? '/v1/artifacts/content/binary' : '/v1/artifacts';
         const response = request.blob?.content
             ? await uploadArtifactContent(credentials, { kind: 'create', artifactId: request.id, blobId: request.blob.blobId,
                 header: request.header, body: request.body, dataEncryptionKey: request.dataEncryptionKey,
@@ -390,11 +396,13 @@ export async function createArtifact(
         });
 
         if (!response.ok) {
-            if (response.status === 409) {
-                throw new HappyError('Artifact ID already exists', false, { status: 409, code: 'conflict' });
-            }
             if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                throw await readWriteRefusal(response, 'Failed to create artifact');
+                const refusal = await readWriteRefusal(response, 'Failed to create artifact');
+                if (response.status === 404 && request.memoryDecisionSource && !MemoryDecisionSourceErrorCodeV1Schema.safeParse(refusal.code).success)
+                    throw new HappyError('memory_decision_source_unsupported', false, { status: 404, code: 'memory_decision_source_unsupported' });
+                if (response.status === 409 && !MemoryDecisionSourceErrorCodeV1Schema.safeParse(refusal.code).success)
+                    throw new HappyError('Artifact ID already exists', false, { status: 409, code: 'conflict' });
+                throw refusal;
             }
             throw new HappyError(`Failed to create artifact: ${response.status}`, true, { status: response.status });
         }
@@ -418,13 +426,17 @@ export async function updateArtifact(
     request: ArtifactUpdateRequest,
     opts: ArtifactApiOptions = {},
 ): Promise<ArtifactUpdateResponse> {
+    opts.signal?.throwIfAborted();
+    if (request.memoryDecisionSource && request.blob)
+        throw new HappyError('memory_decision_source_unsupported', false, { code: 'memory_decision_source_unsupported' });
     const artifactRequest = opts.request ?? (() => {
         const focusedRequest = createServerFetchForActiveServer();
         return ((path, init, options) => focusedRequest(path, init, { includeAuth: false, ...options })) satisfies ServerFetch;
     })();
     const scopedOptions = { ...opts, request: artifactRequest };
     const run = async () => {
-        const path = `/v1/artifacts/${encodeURIComponent(artifactId)}${request.blob !== undefined ? '/content/binary' : ''}`;
+        const path = `/v1/artifacts/${encodeURIComponent(artifactId)}${request.memoryDecisionSource ? '/memory-decision'
+            : request.blob !== undefined ? '/content/binary' : ''}`;
         if (request.blob?.content && (request.body === undefined || request.expectedBodyVersion === undefined)) {
             throw new HappyError('Artifact binary update requires its body revision', false, { status: 400 });
         }
@@ -444,11 +456,14 @@ export async function updateArtifact(
         });
 
         if (!response.ok) {
-            if (response.status === 404) {
-                throw new HappyError('Artifact not found', false, { status: 404, code: 'not_found' });
-            }
             if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                throw await readWriteRefusal(response, 'Failed to update artifact');
+                const refusal = await readWriteRefusal(response, 'Failed to update artifact');
+                if (response.status === 404 && request.memoryDecisionSource && refusal.message !== 'Artifact not found'
+                    && !MemoryDecisionSourceErrorCodeV1Schema.safeParse(refusal.code).success)
+                    throw new HappyError('memory_decision_source_unsupported', false, { status: 404, code: 'memory_decision_source_unsupported' });
+                if (response.status === 404 && !MemoryDecisionSourceErrorCodeV1Schema.safeParse(refusal.code).success)
+                    throw new HappyError('Artifact not found', false, { status: 404, code: 'not_found' });
+                throw refusal;
             }
             throw new HappyError(`Failed to update artifact: ${response.status}`, true, { status: response.status });
         }
@@ -470,7 +485,7 @@ export async function updateArtifact(
 export async function deleteArtifact(
     credentials: AuthCredentials,
     artifactId: string,
-    opts: ArtifactApiOptions & Readonly<{ expectedRevision?: Readonly<{ headerVersion: number; bodyVersion: number }> }> = {},
+    opts: ArtifactApiOptions & Readonly<{ expectedRevision?: Readonly<{ headerVersion: number; bodyVersion: number }>; onTransportIssued?: () => void }> = {},
 ): Promise<void> {
     const request = opts.request ?? createServerFetchForActiveServer();
     const run = async () => {
@@ -483,7 +498,9 @@ export async function deleteArtifact(
             headers: {
                 'Authorization': `Bearer ${credentials.token}`
             }
-        }, { includeAuth: false, retry: opts.retry });
+        }, { includeAuth: false, retry: opts.retry,
+            ...(opts.onTransportIssued ? { onIssued: opts.onTransportIssued } : {}),
+        });
 
         if (!response.ok) {
             if (response.status === 409 && revision) {

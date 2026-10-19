@@ -1,4 +1,6 @@
 import { resolveReviewNarratorPolicy } from '@happier-dev/protocol/reviews/reviewEngines';
+import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
+import { isMachineAgentReady } from '@/agents/machineAgents/resolveMachineAgentState';
 
 /**
  * A review engine as the Start review dialog shows it, read from the host's `review.engines.list`
@@ -8,9 +10,16 @@ export type ReviewWalkthroughEngine = Readonly<{
     engineId: string;
     label: string;
     description?: string | null;
+    launchModelId?: string | null;
     enabled: boolean;
     structuredNarration: boolean;
+    /** The canonical Machine inventory's Account-default credential readiness; null while unknown. */
+    machineAgent?: MachineAgent | null;
 }>;
+
+export function isReviewWalkthroughEngineAvailable(engine: ReviewWalkthroughEngine): boolean {
+    return engine.enabled && (engine.machineAgent === undefined || isMachineAgentReady(engine.machineAgent));
+}
 
 export type ReviewWalkthroughNarrator = Readonly<{
     /** several: one model writes from every engine's findings · findings_only: the reviewer writes no prose. */
@@ -35,7 +44,7 @@ export type ReviewWalkthroughPlan = Readonly<{
 }>;
 
 function isNarrationCapable(engine: ReviewWalkthroughEngine): boolean {
-    return engine.enabled && engine.structuredNarration;
+    return isReviewWalkthroughEngineAvailable(engine) && engine.structuredNarration;
 }
 
 /**
@@ -50,7 +59,7 @@ export function resolveReviewWalkthroughPlan(params: Readonly<{
     walkthrough: boolean;
     narratorEngineId: string | null;
 }>): ReviewWalkthroughPlan {
-    const selected = params.engines.filter((engine) => engine.enabled && params.selectedEngineIds.includes(engine.engineId));
+    const selected = params.engines.filter((engine) => isReviewWalkthroughEngineAvailable(engine) && params.selectedEngineIds.includes(engine.engineId));
     if (selected.length === 0) {
         return { selected, walkthrough: params.walkthrough, narrator: null, footer: null, canStart: false, blocked: 'no_engine' };
     }
@@ -61,7 +70,7 @@ export function resolveReviewWalkthroughPlan(params: Readonly<{
         selectedEngineIds: selected.map((engine) => engine.engineId),
         engines: params.engines.map((engine) => ({
             value: engine.engineId,
-            enabled: engine.enabled,
+            enabled: isReviewWalkthroughEngineAvailable(engine),
             capabilities: { structuredNarration: engine.structuredNarration },
         })),
     });

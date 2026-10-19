@@ -85,6 +85,7 @@ describe('review comments UI actions', () => {
         });
         await expect(actions.get({ commentId: 'comment-1' })).resolves.toEqual({ comment: row });
         await actions.transition({
+            projectId: 'project-1',
             commentId: 'comment-1',
             toState: 'resolved',
             expectedState: row.state,
@@ -93,6 +94,7 @@ describe('review comments UI actions', () => {
             clientMutationId: 'mutation-2',
         });
         await actions.edit({
+            projectId: 'project-1',
             commentId: 'comment-1',
             nextBody: 'next body',
             expectedBodyVersion: row.bodyVersion,
@@ -100,30 +102,35 @@ describe('review comments UI actions', () => {
             clientMutationId: 'mutation-3',
         });
         await actions.reply({
+            projectId: 'project-1',
             parentCommentId: 'comment-1',
             expectedParentServerRevision: row.serverRevision,
             body: 'reply',
             clientMutationId: 'mutation-4',
         });
         await actions.redact({
+            projectId: 'project-1',
             commentId: 'comment-1',
             redactBody: true,
             expectedServerRevision: row.serverRevision,
             clientMutationId: 'mutation-5',
         });
         await actions.setDisposition({
+            projectId: 'project-1',
             commentId: 'comment-1',
             disposition: 'working',
             expectedServerRevision: row.serverRevision,
             clientMutationId: 'mutation-6',
         });
         await actions.attachEvidence({
+            projectId: 'project-1',
             commentId: 'comment-1',
             evidence: [{ kind: 'reasoning', message: 'verified' }],
             expectedServerRevision: row.serverRevision,
             clientMutationId: 'mutation-7',
         });
         await actions.bulkTransition({
+            projectId: 'project-1',
             commentIds: ['comment-1'],
             toState: 'dismissed',
             expectedState: row.state,
