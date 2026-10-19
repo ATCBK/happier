@@ -1,6 +1,8 @@
-import type { build, Metafile, Plugin, TransformOptions, TransformResult } from 'esbuild';
+import type { build, BuildOptions, Metafile, Plugin, TransformOptions, TransformResult } from 'esbuild';
 
 export const SOURCE_CONDITION: 'happier-source';
+export const SOURCE_RUNTIME_OUTPUT_OPTIONS: Readonly<Pick<BuildOptions,
+  'charset' | 'minifyWhitespace' | 'legalComments' | 'supported'>>;
 export function initialize(repoDir: string): Promise<void>;
 export const resolve: import('node:module').ResolveHook;
 export function sourceExport(value: unknown, label: string): string;

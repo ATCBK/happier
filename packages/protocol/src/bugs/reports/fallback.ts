@@ -16,7 +16,7 @@ export function normalizeBugReportReproductionSteps(raw: string | string[]): str
   const steps = inputLines
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => line.replace(/^((\d+[.)])|[-*•])\s*/, '').trim())
+    .map((line) => line.replace(/^((\d+[.)])|[-*\u2022])\s*/, '').trim())
     .filter((line) => line.length > 0);
   if (steps.length === 0) return [];
   return steps.slice(0, 20);

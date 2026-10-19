@@ -6,6 +6,16 @@ import { CLI_RUNTIME_SIDECAR_ENTRIES } from './cliRuntimeSidecars.mjs';
 
 export const SOURCE_CONDITION = 'happier-source';
 
+// A single non-Latin-1 comment widens the entire V8 Script source string.
+// Let esbuild remove comments and lower raw templates before ASCII emission;
+// keep legal text beside the executable source and preserve diagnostic names.
+export const SOURCE_RUNTIME_OUTPUT_OPTIONS = Object.freeze({
+  charset: 'ascii',
+  minifyWhitespace: true,
+  legalComments: 'external',
+  supported: Object.freeze({ 'template-literal': false }),
+});
+
 // Node source tools reuse the bundle resolver's authored workspace authority.
 // This adapter maps only bare first-party imports; tsx retains transpilation.
 let nodeWorkspacePackages;
@@ -235,15 +245,17 @@ export async function bundleCliSourceSidecars({repoDir, outputDir, build, worksp
   await visit(outputDir);
   const metafile = {inputs:{},outputs:{}};
   for (const file of codeFiles) {
-    if (!(await readFile(file,'utf8')).includes('@happier-dev/')) continue;
+    const bundlesWorkspaceSource = (await readFile(file,'utf8')).includes('@happier-dev/');
     const result = await build({
       absWorkingDir:repoDir, entryPoints:[join(sourceDir,relative(outputDir,file))], outfile:file,
-      bundle:true, platform:'node', format:file.endsWith('.cjs')?'cjs':'esm', target:'node20',
+      bundle:bundlesWorkspaceSource, platform:'node', format:file.endsWith('.cjs')?'cjs':'esm', target:'node20',
+      ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
       conditions:[SOURCE_CONDITION], metafile:true, logLevel:'silent',
-      plugins:[createWorkspaceSourceResolver({workspacePackages,requireFromProject})],
+      plugins:bundlesWorkspaceSource?[createWorkspaceSourceResolver({workspacePackages,requireFromProject})]:[],
     });
     Object.assign(metafile.inputs,result.metafile.inputs);
     Object.assign(metafile.outputs,result.metafile.outputs);
   }
-  return {codeFiles,metafile};
+  // Legal notices emitted next to sidecars belong to the same retained closure.
+  return {codeFiles:[...new Set([...codeFiles, ...Object.keys(metafile.outputs).map(file => resolve(repoDir, file))])],metafile};
 }
