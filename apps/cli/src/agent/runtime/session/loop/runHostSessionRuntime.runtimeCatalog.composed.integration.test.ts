@@ -7220,20 +7220,13 @@ describe('runHostSessionRuntime', () => {
     const mutations: unknown[] = harness.session.enqueueSessionTurnMutation.mock.calls.map(([mutation]: readonly unknown[]) => mutation);
     const failed = mutations.map(mutation => SessionTurnMutationV1Schema.parse(mutation)).find(mutation => mutation.action === 'fail');
     if (!failed || failed.action !== 'fail') throw new Error('Expected startup lifecycle failure');
-    const recovered = createHarness();
-    const cancellation = new AbortController();
     const resumed = createDeferred<void>();
-    recovered.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
-      let settled = false;
-      params.messageQueue.push({ text: 'RETAINED_METADATA_STARTUP_INPUT', localId: 'metadata-startup-input' }, { permissionMode: 'default' });
-      await runPermissionModePromptLoop({ ...params, getAbortSignal: () => cancellation.signal,
-        shouldExit: () => settled, sendReady: () => { settled = true; } });
-    };
+    const respawnedSessionIds: Array<string | undefined> = [];
     const manager = createSessionRunnerRespawnManager({ enabled: true, maxRestarts: 1, baseDelayMs: 0, maxDelayMs: 0, jitterMs: 0,
       isSessionAlreadyRunning: () => false, readStartupFailure: async () => failed.issue,
       spawnSession: async options => {
-        expect(options.existingSessionId).toBe(harness.session.sessionId);
-        await runHostSessionRuntime(recovered.opts, recovered.config, recovered.deps);
+        // A real respawn starts another process, not another host in this process.
+        respawnedSessionIds.push(options.existingSessionId);
         return { type: 'success' };
       },
       onRespawnSuccess: () => resumed.resolve(),
@@ -7246,10 +7239,10 @@ describe('runHostSessionRuntime', () => {
       expect(manager.handleUnexpectedExit({ startedBy: 'daemon', pid: 111, happySessionId: harness.session.sessionId,
         processStartTimeMs: 0, spawnOptions: { directory: '/tmp' } }, { reason: 'process-exit', code: exitCode, signal: null })).toBe('scheduled');
       await resumed.promise;
-      expect(recovered.runtime.sendPrompt).toHaveBeenCalledOnce();
-      expect(recovered.runtime.sendPrompt.mock.calls[0]?.[0]).toContain('RETAINED_METADATA_STARTUP_INPUT');
+      expect(respawnedSessionIds).toEqual([harness.session.sessionId]);
+      expect(harness.session.getPendingQueueState().pendingCount).toBe(1);
+      expect(harness.session.confirmUserMessageLocallyConsumed).not.toHaveBeenCalled();
     } finally {
-      cancellation.abort();
       manager.markStopRequested(harness.session.sessionId, { reason: 'daemon_stop_session', requestedAtMs: Date.now() });
     }
   });
