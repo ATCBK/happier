@@ -750,6 +750,7 @@ export function createBrowserDiagnosticsInteractionTransport(
         case 'browser.diagnostics.eval': {
           const parsed = BrowserDiagnosticsEvalRequestV1Schema.safeParse(input);
           if (!parsed.success) return invalid;
+          if (parsed.data.tier !== 'cdp') return evalResult(parsed.data, 'blocked', { errorCode: 'adapter_unavailable' });
           const control = inputControl(parsed.data);
           const read = () => runTrackedDispatch(() => runEval(parsed.data));
           return (control ? await control.observeWhile(read) : await read()) ?? evalResult(parsed.data, 'failed', { errorCode: 'collector_unavailable' });
@@ -757,6 +758,7 @@ export function createBrowserDiagnosticsInteractionTransport(
         case 'browser.diagnostics.getProperties': {
           const parsed = BrowserDiagnosticsGetPropertiesRequestV1Schema.safeParse(input);
           if (!parsed.success) return invalid;
+          if (parsed.data.tier !== 'cdp') return propertiesResult(parsed.data, 'blocked', { errorCode: 'adapter_unavailable' });
           const control = inputControl(parsed.data);
           const read = () => runTrackedDispatch(() => runGetProperties(parsed.data));
           return (control ? await control.observeWhile(read) : await read()) ?? propertiesResult(parsed.data, 'failed', { errorCode: 'collector_unavailable' });
@@ -764,17 +766,20 @@ export function createBrowserDiagnosticsInteractionTransport(
         case 'browser.diagnostics.releaseObjectGroup': {
           const parsed = BrowserDiagnosticsReleaseObjectGroupRequestV1Schema.safeParse(input);
           if (!parsed.success) return invalid;
+          if (parsed.data.tier !== 'cdp') return releaseResult(parsed.data, 'blocked', 'adapter_unavailable');
           return await runTrackedDispatch(() => runReleaseObjectGroup(parsed.data));
         }
         case 'browser.diagnostics.elementPicker.start': {
           const parsed = BrowserDiagnosticsElementPickerRequestV1Schema.safeParse(input);
           if (!parsed.success || parsed.data.action !== 'start') return invalid;
+          if (parsed.data.tier !== 'cdp') return pickerResult(parsed.data, 'blocked', { errorCode: 'adapter_unavailable' });
           if (inputControl(parsed.data)?.isObservationHeld()) return pickerResult(parsed.data, 'cancelled');
           return await runTrackedDispatch(() => runElementPickerStart(parsed.data));
         }
         case 'browser.diagnostics.elementPicker.cancel': {
           const parsed = BrowserDiagnosticsElementPickerRequestV1Schema.safeParse(input);
           if (!parsed.success || parsed.data.action !== 'cancel') return invalid;
+          if (parsed.data.tier !== 'cdp') return pickerResult(parsed.data, 'blocked', { errorCode: 'adapter_unavailable' });
           return await runTrackedDispatch(() => runElementPickerCancel(parsed.data));
         }
         default:
