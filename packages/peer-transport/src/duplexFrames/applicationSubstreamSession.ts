@@ -4,8 +4,8 @@ import { peerTcpTunnelBinaryDecodeFailureReason } from './binaryCodec.js';
 import { substreamAbortFrame, isSchedulableTimeoutMs } from './primitives.js';
 import type { PeerTcpTunnelApplicationSubstreamSessionResult } from './types.js';
 
-const DEFAULT_MAX_PENDING_APPLICATION_DISPATCHES = 8;
-const DEFAULT_MAX_PENDING_APPLICATION_DISPATCH_BYTES = 256 * 1024;
+export const DEFAULT_MAX_PENDING_APPLICATION_DISPATCHES = 8;
+export const DEFAULT_MAX_PENDING_APPLICATION_DISPATCH_BYTES = 256 * 1024;
 
 type ActivePeerTcpTunnelApplicationSubstream = {
     bytes: number;
