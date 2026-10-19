@@ -8,7 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from "@/app/teams/teamChanges";
 import {
     isPrismaErrorCode,
 } from "@/storage/prisma";
@@ -735,7 +735,7 @@ export async function createQualifiedConnectedAccountGroup(
         group: params.group,
     });
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const serviceDigest =
             createQualifiedConnectedAccountServiceDigest(parsed.service);
         const groupDigest =
@@ -895,7 +895,7 @@ export async function patchQualifiedConnectedAccountGroup(
         params.patch,
     );
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1077,7 +1077,7 @@ export async function deleteQualifiedConnectedAccountGroup(
     const service =
         QualifiedConnectedAccountServiceRefSchema.parse(params.service);
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service,
@@ -1167,7 +1167,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             params.patch,
         );
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1302,7 +1302,7 @@ async function mutateQualifiedGroupMember(
         );
     try {
         return await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+            await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1594,7 +1594,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
         );
     try {
         return await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+            await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1706,7 +1706,7 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             params.mutation,
         );
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: mutation.group.service,

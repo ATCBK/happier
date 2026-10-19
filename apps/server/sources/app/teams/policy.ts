@@ -122,7 +122,8 @@ export function authorizeTeamPolicyPatch(
 
 export async function setTeamPolicyInTx(tx: Tx, input: SetTeamPolicyInput): Promise<TeamPolicyResult> {
     const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId],
-        ...(input.authenticationPolicy !== undefined ? { membershipChange: { kind: "teamMembership" as const, teamId: input.teamId } } : {}) });
+        ...(input.authenticationPolicy !== undefined ? { intent: "exclusive" as const,
+            membershipChange: { kind: "teamMembership" as const, teamId: input.teamId } } : {}) });
     await acquireTeamMutationLockInTx(tx, input.teamId);
     await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) {
