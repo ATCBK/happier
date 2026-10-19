@@ -2670,7 +2670,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     }
   });
 
-  it.each(['unavailable', 'stale'] as const)(
+  it.each(['unavailable', 'transport-unavailable', 'stale'] as const)(
     'classifies contributed approval origin currentness before execution custody (%s)',
     async scenario => {
     const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
@@ -2735,13 +2735,13 @@ describe('createDaemonExternalActionContributedInvoker', () => {
       const replay = createDaemonExternalActionContributedApprovalReplay({
         credentials: { token: 'daemon-token', encryption: null } as never,
         isApprovalExecutionOriginCurrent: async ({ reportStale }) => {
-          if (scenario === 'unavailable' && !homeAvailable) {
+          if (scenario !== 'stale' && !homeAvailable) {
             throw Object.assign(new Error('project_requester_home_unavailable'), {
-              code: 'project_requester_home_unavailable',
+              code: scenario === 'unavailable' ? 'project_requester_home_unavailable' : 'ECONNRESET',
             });
           }
           if (scenario === 'stale') reportStale?.('origin_not_current');
-          return scenario === 'unavailable';
+          return scenario !== 'stale';
         },
         acquireRuntimeRegistryLease: async () => lease,
         targetActionApprovals,
@@ -2750,8 +2750,8 @@ describe('createDaemonExternalActionContributedInvoker', () => {
 
       await expect(replay({ artifactId: 'approval-api-home-recovery-1', decision: 'approve' }))
         .resolves.toMatchObject({ ok: false, errorCode: scenario === 'unavailable'
-          ? 'project_requester_home_unavailable' : 'approval_stale' });
-      expect(persisted).toMatchObject({ status: scenario === 'unavailable' ? 'approved' : 'failed',
+          ? 'project_requester_home_unavailable' : scenario === 'transport-unavailable' ? 'server_unreachable' : 'approval_stale' });
+      expect(persisted).toMatchObject({ status: scenario === 'stale' ? 'failed' : 'approved',
         decision: { kind: 'approve' } });
       expect(actionInvocations).toBe(0);
 

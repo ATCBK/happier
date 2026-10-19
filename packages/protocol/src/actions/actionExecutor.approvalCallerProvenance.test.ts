@@ -1497,7 +1497,16 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
     expect(sessionStateFieldSet).toHaveBeenCalledOnce();
   });
 
-  it('rejects an obsolete execution-run occurrence after the host origin remains current', async () => {
+  it.each([
+    { scenario: 'changed', firstRead: { run: { runId: 'run-1', inputTurns: { occurrenceId: 'occurrence-replaced' } } },
+      firstErrorCode: 'approval_stale', staleReason: 'run_occurrence_changed' },
+    { scenario: 'not-found', firstRead: { ok: false, code: 'execution_run_not_found', message: 'Execution run not found' },
+      firstErrorCode: 'approval_stale', staleReason: 'currentness_read_failed' },
+    { scenario: 'home-envelope', firstRead: { ok: false, code: 'project_requester_home_unavailable', message: 'Home unavailable' },
+      firstErrorCode: 'project_requester_home_unavailable' },
+  ] as const)('classifies execution-run occurrence currentness reads ($scenario)', async ({
+    firstRead, firstErrorCode, staleReason,
+  }) => {
     let storedRequest: ApprovalRequest = ApprovalRequestV2Schema.parse({
       v: 2,
       status: 'open',
@@ -1525,12 +1534,8 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       storedRequest = request;
       return { ok: true as const };
     });
-    const executionRunGet = vi.fn(async () => ({
-      run: {
-        runId: 'run-1',
-        inputTurns: { occurrenceId: 'occurrence-replaced' },
-      },
-    }));
+    const currentRead = { run: { runId: 'run-1', inputTurns: { occurrenceId: 'occurrence-original' } } };
+    const executionRunGet = vi.fn(async () => executionRunGet.mock.calls.length === 1 ? firstRead : currentRead);
     const executionRunStop = vi.fn(async () => ({ ok: true }));
     const executor = createActionExecutor({
       approvalsGet: async () => storedRequest,
@@ -1540,24 +1545,33 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       executionRunStop,
     } as unknown as ActionExecutorDeps);
 
-    await expect(executor.execute('approval.request.decide', {
+    const decide = () => executor.execute('approval.request.decide', {
       artifactId: 'approval-run-stop-1',
       decision: 'approve',
-    }, { surface: 'ui', authority: 'present_user', serverId: 'server-1' })).resolves.toMatchObject({
-      ok: true,
-      result: { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } },
-    });
+    }, { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'server-1' });
+    const firstDecision = await decide();
+    if (staleReason) {
+      expect(firstDecision).toMatchObject({ ok: true, result: { status: 'failed', execution: {
+        ok: false, errorCode: firstErrorCode, details: { reason: staleReason },
+      } } });
+    } else {
+      expect(firstDecision).toMatchObject({ ok: false, errorCode: firstErrorCode });
+    }
     expect(executionRunGet).toHaveBeenCalledWith(
       'session-1',
       { runId: 'run-1', includeStructured: false },
       {},
     );
-    expect(approvalsUpdate).toHaveBeenCalledTimes(2);
-    expect(storedRequest).toMatchObject({
-      status: 'failed',
-      execution: { ok: false, errorCode: 'approval_stale' },
-    });
-    expect(executionRunStop).not.toHaveBeenCalled();
+    if (staleReason) {
+      expect(approvalsUpdate).toHaveBeenCalledTimes(2);
+      expect(storedRequest).toMatchObject({ status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } });
+      expect(executionRunStop).not.toHaveBeenCalled();
+    } else {
+      expect(storedRequest).toMatchObject({ status: 'approved', decision: { kind: 'approve' } });
+      expect(executionRunStop).not.toHaveBeenCalled();
+      await expect(decide()).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(executionRunStop).toHaveBeenCalledOnce();
+    }
   });
 
   it('keeps legacy PAT approvals readable but refuses replay from descriptive credential IDs alone', async () => {

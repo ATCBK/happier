@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe('finished child approval through the credentialed CLI replay owner', () => {
-  it.each(['unchanged', 'replaced', 'read-refused', 'read-threw'] as const)(
+  it.each(['unchanged', 'replaced', 'read-refused', 'home-unavailable', 'read-threw'] as const)(
     'uses the real Session Run adapter when the occurrence is %s', async scenario => {
       const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_TOKEN',
         'HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE', 'HAPPIER_ACCOUNT_SETTINGS_MODE', 'HAPPIER_ACTIONS_SETTINGS_V1']);
@@ -88,6 +88,8 @@ describe('finished child approval through the credentialed CLI replay owner', ()
             expect(request.sessionId).toBe(sessionId);
             expect(request.method).toBe(`${sessionId}:${SESSION_RPC_METHODS.EXECUTION_RUN_GET}`);
             if (scenario === 'read-threw') throw Object.assign(new Error('Network unavailable'), { code: 'ECONNRESET' });
+            if (scenario === 'home-unavailable') return { ok: false,
+              errorCode: 'project_requester_home_unavailable', error: 'Home unavailable' };
             if (scenario === 'read-refused') return { ok: false, errorCode: 'permission_denied', error: 'Read refused' };
             return run;
           });
@@ -139,12 +141,19 @@ describe('finished child approval through the credentialed CLI replay owner', ()
               .resolves.toMatchObject({ ok: true, result: run });
           }
           const decision = await decide();
-          expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: scenario === 'unchanged'
-            ? { status: 'executed', execution: { ok: true } }
-            : { status: 'failed', execution: { ok: false, effectAttempted: false, errorCode: 'approval_stale', details: {
-              reason: scenario === 'replaced' ? 'run_occurrence_changed' : 'currentness_read_failed',
-            } } } });
+          expect(decision, JSON.stringify(decision)).toMatchObject(scenario === 'unchanged'
+            ? { ok: true, result: { status: 'executed', execution: { ok: true } } }
+            : scenario === 'replaced'
+              ? { ok: true, result: { status: 'failed', execution: { ok: false, effectAttempted: false,
+                  errorCode: 'approval_stale', details: { reason: 'run_occurrence_changed' } } } }
+              : { ok: false, errorCode: scenario === 'read-refused' ? 'permission_denied'
+                  : scenario === 'home-unavailable' ? 'project_requester_home_unavailable' : 'server_unreachable' });
           expect(rpc).toHaveBeenCalled();
+          if (scenario !== 'unchanged' && scenario !== 'replaced') {
+            await expect(executor.execute('approval.request.get', { artifactId: 'approval' }, {
+              surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' },
+            })).resolves.toMatchObject({ ok: true, result: { request: { status: 'approved' } } });
+          }
           expect(comment.body).toBe(scenario === 'unchanged' ? 'Approved edit' : 'Original finding');
           expect(comment.author).toEqual({ kind: 'plugin', pluginId: 'acme.external-review' });
           expect(effects).toBe(scenario === 'unchanged' ? 1 : 0);

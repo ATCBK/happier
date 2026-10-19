@@ -318,6 +318,9 @@ export function createDaemonExternalActionContributedApprovalReplay(input: Reado
     if (currentness.status === 'requester_home_unavailable') {
       return targetActionReplayFailure('project_requester_home_unavailable');
     }
+    if (currentness.status === 'read_failed') {
+      return targetActionReplayFailure(currentness.failure.errorCode, currentness.failure.error);
+    }
     if (currentness.status === 'stale') {
       logger.debug('[RPC] Contributed approval origin is stale', {
         code: 'approval_stale',

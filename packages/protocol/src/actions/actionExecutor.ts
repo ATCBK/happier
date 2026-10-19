@@ -2320,17 +2320,22 @@ export async function classifyApprovalExecutionOriginCurrentness(args: Readonly<
   { status: 'current' }
   | { status: 'stale'; reason: ApprovalStaleReason }
   | { status: 'requester_home_unavailable'; error: unknown }
+  | { status: 'read_failed'; error: unknown; failure: Readonly<{
+      errorCode: string;
+      error: string;
+      details?: unknown;
+    }> }
 >> {
   let reason: ApprovalStaleReason = 'origin_not_current';
   try {
     const current = await args.check(value => { reason = value; });
     return current ? { status: 'current' } : { status: 'stale', reason };
   } catch (error) {
-    if (normalizeActionExecutorThrownError(error).errorCode === 'project_requester_home_unavailable') {
+    const failure = normalizeActionExecutorThrownError(error);
+    if (failure.errorCode === 'project_requester_home_unavailable') {
       return { status: 'requester_home_unavailable', error };
     }
-    reason = 'currentness_read_failed';
-    return { status: 'stale', reason };
+    return { status: 'read_failed', error, failure };
   }
 }
 
@@ -2904,26 +2909,40 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         reportStale,
       }),
     });
-    if (currentness.status === 'requester_home_unavailable') throw currentness.error;
+    if (currentness.status === 'requester_home_unavailable' || currentness.status === 'read_failed') {
+      throw currentness.error;
+    }
     if (currentness.status === 'stale') return stale(currentness.reason);
     if (!origin.data.runId || !origin.data.runOccurrenceId) return true;
-    try {
-      const currentRun = await deps.executionRunGet(
-        origin.data.sessionId ?? null,
-        { runId: origin.data.runId, includeStructured: false },
-        { ...(args.signal ? { signal: args.signal } : {}) },
-      );
-      // The CLI Session adapter returns its service envelope; Machine and app
-      // adapters return the payload. Use the public Run Action's one normalizer.
-      const observed = completeExecutionRunServiceActionResult('execution.run.get', currentRun);
-      if (!observed.ok) return stale('currentness_read_failed');
-      const run = readRecord(readRecord(observed.result).run);
-      const inputTurns = readRecord(run.inputTurns);
-      return normalizeId(run.runId) === origin.data.runId
-        && normalizeId(inputTurns.occurrenceId) === origin.data.runOccurrenceId || stale('run_occurrence_changed');
-    } catch {
-      return stale('currentness_read_failed');
+    const runCurrentness = await classifyApprovalExecutionOriginCurrentness({
+      check: async reportStale => {
+        const currentRun = await deps.executionRunGet(
+          origin.data.sessionId ?? null,
+          { runId: origin.data.runId, includeStructured: false },
+          { ...(args.signal ? { signal: args.signal } : {}) },
+        );
+        // The CLI Session adapter returns its service envelope; Machine and app
+        // adapters return the payload. Use the public Run Action's one normalizer.
+        const observed = completeExecutionRunServiceActionResult('execution.run.get', currentRun);
+        if (!observed.ok) {
+          if (observed.errorCode === 'execution_run_not_found') {
+            reportStale('currentness_read_failed');
+            return false;
+          }
+          throw Object.assign(new Error(observed.error), observed);
+        }
+        const run = readRecord(readRecord(observed.result).run);
+        const inputTurns = readRecord(run.inputTurns);
+        const matches = normalizeId(run.runId) === origin.data.runId
+          && normalizeId(inputTurns.occurrenceId) === origin.data.runOccurrenceId;
+        if (!matches) reportStale('run_occurrence_changed');
+        return matches;
+      },
+    });
+    if (runCurrentness.status === 'requester_home_unavailable' || runCurrentness.status === 'read_failed') {
+      throw runCurrentness.error;
     }
+    return runCurrentness.status === 'current' || stale(runCurrentness.reason);
   }
 
   async function readMatchingApprovalRequestReceipt(args: Readonly<{
