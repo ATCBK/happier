@@ -4,6 +4,7 @@ import {
     type WorkspaceFaviconResolveRequestV1,
 } from '@happier-dev/protocol/workspace/favicon/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ProbedResourceCache } from '@happier-dev/protocol/common/probedResourceCache';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -18,26 +19,31 @@ export type ResolveWorkspaceFaviconInput = Readonly<{
     serverId?: string | null;
     enabled?: boolean;
     timeoutMs?: number | null;
+    signal?: AbortSignal;
 }>;
 
-const faviconCache = new Map<string, Promise<WorkspaceFaviconResult>>();
+// Keep the existing process-lifetime result cache; only pending work belongs to its readers.
+const faviconCache = new ProbedResourceCache<WorkspaceFaviconResult>({
+    staleTimeMs: Number.POSITIVE_INFINITY,
+    errorCooldownMs: 0,
+});
 
 export function clearWorkspaceFaviconCacheForTests(): void {
     faviconCache.clear();
 }
 
-export function resolveWorkspaceFavicon(input: ResolveWorkspaceFaviconInput): Promise<WorkspaceFaviconResult> {
-    if (input.enabled === false) return Promise.resolve({ status: 'disabled' });
+export async function resolveWorkspaceFavicon(input: ResolveWorkspaceFaviconInput): Promise<WorkspaceFaviconResult> {
+    if (input.enabled === false) return { status: 'disabled' };
     const cacheKey = buildWorkspaceFaviconCacheKey(input);
-    const cached = faviconCache.get(cacheKey);
-    if (cached) return cached;
-
-    const promise = resolveWorkspaceFaviconUncached(input).catch((error) => {
-        faviconCache.delete(cacheKey);
-        throw error;
-    });
-    faviconCache.set(cacheKey, promise);
-    return promise;
+    const result = await faviconCache.ensure(cacheKey,
+        (signal) => resolveWorkspaceFaviconUncached({ ...input, signal }),
+        { signal: input.signal });
+    if (input.signal?.aborted) {
+        throw Object.assign(new Error('Workspace favicon request was aborted'), { name: 'AbortError' });
+    }
+    const error = faviconCache.read(cacheKey)?.error;
+    if (result === null && error) throw error;
+    return result ?? { status: 'missing' };
 }
 
 async function resolveWorkspaceFaviconUncached(input: ResolveWorkspaceFaviconInput): Promise<WorkspaceFaviconResult> {
@@ -51,6 +57,7 @@ async function resolveWorkspaceFaviconUncached(input: ResolveWorkspaceFaviconInp
         timeoutMs: input.timeoutMs ?? undefined,
         method: RPC_METHODS.WORKSPACE_FAVICON_RESOLVE,
         payload,
+        signal: input.signal,
     });
 
     const parsed = WorkspaceFaviconResolveResponseV1Schema.safeParse(response);

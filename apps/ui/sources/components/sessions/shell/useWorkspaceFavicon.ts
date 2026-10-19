@@ -14,11 +14,11 @@ export function useWorkspaceFavicon(params: Readonly<{
     const workspacePath = params.workspacePath ?? null;
 
     React.useEffect(() => {
-        let cancelled = false;
+        const controller = new AbortController();
         if (!params.enabled || !machineId || !workspacePath) {
             setFavicon(null);
             return () => {
-                cancelled = true;
+                controller.abort();
             };
         }
 
@@ -28,15 +28,16 @@ export function useWorkspaceFavicon(params: Readonly<{
             serverId,
             machineId,
             workspacePath,
+            signal: controller.signal,
         }).then((result) => {
-            if (cancelled) return;
+            if (controller.signal.aborted) return;
             setFavicon(result.status === 'found' ? result : null);
         }).catch(() => {
-            if (!cancelled) setFavicon(null);
+            if (!controller.signal.aborted) setFavicon(null);
         });
 
         return () => {
-            cancelled = true;
+            controller.abort();
         };
     }, [params.enabled, serverId, machineId, workspacePath]);
 
