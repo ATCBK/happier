@@ -6,10 +6,13 @@ import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 export async function readActionCallerLedSubtreeSessionIds(
   deps: Pick<ActionExecutorDeps, 'sessionList'>,
   context: ActionExecutorContext,
+  requestedRootSessionId?: string,
 ): Promise<ReadonlySet<string> | null> {
-  const root = context.defaultSessionId?.trim();
+  const root = (requestedRootSessionId ?? context.defaultSessionId)?.trim();
   if (!root || context.sessionListAccess === 'unavailable') return null;
-  if (context.sessionListAccess === 'current_session') return new Set([root]);
+  if (context.sessionListAccess === 'current_session') {
+    return root === context.defaultSessionId?.trim() ? new Set([root]) : null;
+  }
   // This is the receiving Session owner's policy observation, not a delegated
   // HTTP effect of the Run. Its Account reader proves current relations; it
   // cannot sign as the original Run executor. Keep the signed caller proof on
@@ -22,6 +25,7 @@ export async function readActionCallerLedSubtreeSessionIds(
   // each partition and require both to complete before admitting membership.
   const partitions = await Promise.all((['active', 'archived'] as const).map(async storage => {
     const ids = new Set<string>();
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
       const query: SessionListQueryV1 = {
@@ -39,13 +43,14 @@ export async function readActionCallerLedSubtreeSessionIds(
       } catch {
         return null;
       }
-      if (!result) return null;
+      if (!result || result.hasNext === undefined) return null;
       for (const session of result.sessions) {
         const id: unknown = 'id' in session ? session.id : 'sessionId' in session ? session.sessionId : undefined;
         if (typeof id === 'string') ids.add(id);
       }
       if (!result.hasNext) break;
-      if (!result.nextCursor || result.nextCursor === cursor) return null;
+      if (!result.nextCursor || seenCursors.has(result.nextCursor)) return null;
+      seenCursors.add(result.nextCursor);
       cursor = result.nextCursor;
     } while (true);
     return ids;

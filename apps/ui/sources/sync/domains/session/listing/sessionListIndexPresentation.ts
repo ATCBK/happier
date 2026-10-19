@@ -67,6 +67,34 @@ export function resolveSessionListQueryPresentation(input: Readonly<{
         loadingMore: boolean;
         loadMoreFailed: boolean;
     }>;
+    /**
+     * The Home is still being reached (right after sign-in or a restart): a query that failed in that gap
+     * has not settled into an error, so it reads as loading and the reconnect reads it again.
+     */
+    homeSettling?: boolean;
+}>): SessionListQueryPresentation {
+    const presentation = resolveSettledSessionListQueryPresentation(input);
+    return input.homeSettling === true && presentation.kind === 'error'
+        ? presentation.retainedRows ? { kind: 'refreshing', retainedRows: true } : { kind: 'initial_loading' }
+        : presentation;
+}
+
+function resolveSettledSessionListQueryPresentation(input: Readonly<{
+    selectedServerIds: readonly string[];
+    statesByServerId: Readonly<Record<string, SessionListQueryHomeState | undefined>>;
+    coverageComplete: boolean;
+    retainedRowCount: number;
+    sessionsEnabled?: boolean;
+    workflowRunUnavailableHomes?: readonly Readonly<{
+        serverId: string;
+        reason: 'not_selected' | 'unsupported';
+    }>[];
+    workflowRunWindow?: Readonly<{
+        status: 'loading' | 'loaded' | 'failed';
+        hasMore: boolean;
+        loadingMore: boolean;
+        loadMoreFailed: boolean;
+    }>;
 }>): SessionListQueryPresentation {
     const window = input.workflowRunWindow;
     if (window?.status === 'failed' || window?.loadMoreFailed) {

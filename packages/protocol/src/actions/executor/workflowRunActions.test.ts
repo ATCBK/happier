@@ -2142,6 +2142,45 @@ describe('shared Account workflow run owner', () => {
     expect(requested).toEqual([{ targetSessionId: 'destination' }, { targetSessionId: 'destination', cursor: 'next-page' }]);
   });
 
+  it('lists Under Runs from complete server subtree membership across Session and Run pages', async () => {
+    const base = runSnapshot();
+    if (!acceptedSnapshotResult.ok) throw new Error('base_fixture_failed');
+    const target = await materializeWorkflowAcceptedSnapshotV1({ definition: { ...definition,
+      defaults: { ...definition.defaults, conversation: { kind: 'existing_session', sessionId: 'leaf', machineId: 'machine-a' } } },
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine-a', executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
+        authorization: { principal: { kind: 'host' } } },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    if (!target.ok) throw new Error('target_fixture_failed');
+    const envelope = (id: string, acceptedSnapshot: WorkflowAcceptedSnapshotV1) => serializeWorkflowStoredContentEnvelopeV1(
+      sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId: id }, acceptedSnapshot }));
+    const originId = '22222222-2222-4222-8222-222222222222';
+    const targetId = '33333333-3333-4333-8333-333333333333';
+    const listSessions = vi.fn(async ({ query }: Parameters<NonNullable<WorkflowAccountRunActionDeps['sessionList']>>[0]) =>
+      markSessionListQueryResultV1({ sessions: query?.cursor ? [{ id: 'leaf', active: false, presence: 'offline', updatedAt: 1 }]
+        : [{ id: 'lead', active: false, presence: 'offline', updatedAt: 1 }],
+      nextCursor: query?.cursor ? null : 'next-session-page', hasNext: !query?.cursor,
+      attentionNextCursor: null, attentionHasNext: false }));
+    const storage = vi.fn(async (operation: Parameters<WorkflowAccountRunActionDeps['storage']['execute']>[0]) => {
+      if (operation.operation !== 'list') throw new Error('unexpected_storage_operation');
+      if (!operation.request?.cursor) return { runs: [base.run], acceptedEnvelopesByRunId: { [runId]: base.acceptedEnvelope },
+        keyCensusByRunId: { [runId]: base.keyCensus }, nextCursor: 'next-run-page' };
+      return { runs: [{ ...base.run, id: originId, origin: { kind: 'direct', originSessionId: 'leaf' } },
+          { ...base.run, id: targetId }],
+        acceptedEnvelopesByRunId: { [originId]: envelope(originId, { ...acceptedSnapshotResult.snapshot, origin: { kind: 'direct', originSessionId: 'leaf' } }),
+          [targetId]: envelope(targetId, target.snapshot) },
+        keyCensusByRunId: { [originId]: { ...base.keyCensus, runId: originId }, [targetId]: { ...base.keyCensus, runId: targetId } } };
+    });
+    const owner = createWorkflowAccountRunActionOwner({ ...ownerDeps({ execute: storage }), sessionList: listSessions });
+    const page = await owner.execute({ actionId: 'workflow.run.list', input: { underSessionId: 'lead' }, context: { serverId: 'home' } });
+    expect(page).toMatchObject({ runs: [{ id: originId }, { id: targetId }] });
+    expect(listSessions).toHaveBeenCalledTimes(4); // active and archived, each through its continuation
+    expect(listSessions.mock.calls.every(([input]) => input.query?.underSessionId === 'lead')).toBe(true);
+    expect(storage.mock.calls.map(([operation]) => operation.request)).toEqual([
+      { underSessionId: 'lead' }, { underSessionId: 'lead', cursor: 'next-run-page' },
+    ]);
+  });
+
   it('opens the same authored progress in direct Run detail and the lean list', async () => {
     const snapshot = runSnapshot();
     const unreadableId = '22222222-2222-4222-8222-222222222222';

@@ -28,6 +28,7 @@ type QueryPresentationResolver = (input: Readonly<{
         serverId: string;
         reason: 'not_selected' | 'unsupported';
     }>[];
+    homeSettling?: boolean;
 }>) => unknown;
 
 function queryState(partial: Partial<SessionListQueryHomeState>): SessionListQueryHomeState {
@@ -291,6 +292,16 @@ describe('resolveSessionListQueryPresentation', () => {
             coverageComplete: false,
             retainedRowCount: 0,
         })).toEqual({ kind: 'error', retainedRows: false });
+    });
+
+    it('reads a failed query as loading while the Home is still being reached, never as a settled error', () => {
+        const failed = { selectedServerIds: ['home-a'], coverageComplete: false,
+            statesByServerId: { 'home-a': queryState({ phase: 'error', failureReason: 'network' }) } } as const;
+        expect(resolve({ ...failed, retainedRowCount: 0, homeSettling: true })).toEqual({ kind: 'initial_loading' });
+        expect(resolve({ ...failed, retainedRowCount: 3, homeSettling: true })).toEqual({ kind: 'refreshing', retainedRows: true });
+        // Settling hides only an error; a ready query keeps its answer.
+        expect(resolve({ selectedServerIds: ['home-a'], coverageComplete: true, retainedRowCount: 0, homeSettling: true,
+            statesByServerId: { 'home-a': queryState({ phase: 'ready', appliedQueryKey: 'query' }) } })).toEqual({ kind: 'ready', complete: true });
     });
 });
 

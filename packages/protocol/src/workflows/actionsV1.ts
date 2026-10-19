@@ -198,6 +198,8 @@ export const WorkflowRunListRequestV1Schema = lazyZodSchema(() => z.strictObject
   attention: z.optional(WorkflowRunAttentionFilterV1Schema),
   originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   targetSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
+  /** Server-proved root and readable descendants of this managed Session. */
+  underSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   automationId: zMini.optional(preservedBoundedNfcString(191, 'Automation ids')),
   machineId: zMini.optional(WorkflowMachineIdV1Schema),
 }));

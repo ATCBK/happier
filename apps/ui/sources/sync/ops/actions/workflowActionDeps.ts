@@ -237,6 +237,12 @@ export function createUiWorkflowAction(params: Readonly<{
         resolveAccountId: async () => { account.assertCurrent(); return account.accountId; },
         resolveEncryption,
         normalizeAbsolutePath: resolveAbsolutePath,
+        sessionList: async (input) => {
+            account.assertCurrent();
+            const result = await listSessionsForVoiceTool({ ...input, serverId: input.serverId ?? account.serverId });
+            account.assertCurrent();
+            return result;
+        },
         randomBytes: getRandomBytes,
     });
     const triggers = createAccountWorkflowTriggerActions({

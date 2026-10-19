@@ -48,6 +48,7 @@ export type WorkflowRunListFilter = Readonly<{
     automationId?: string;
     originSessionId?: string;
     targetSessionId?: string;
+    underSessionId?: string;
     machineId?: string;
 }>;
 
@@ -198,7 +199,7 @@ export async function getWorkflowRunSummary(runId: string, signal?: AbortSignal,
 
 /** Shared read windows; starter membership belongs to SessionListFilterV1. */
 export const WORKFLOW_RUN_LIST_FILTERS = ['all', 'active', 'attention'] as const;
-export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number] | `automation:${string}` | `destination:${string}`;
+export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number] | `automation:${string}` | `destination:${string}` | `under:${string}`;
 
 /**
  * Projects a filter chip onto the canonical request.
@@ -210,6 +211,7 @@ export type WorkflowRunListFilterId = (typeof WORKFLOW_RUN_LIST_FILTERS)[number]
 export function buildWorkflowRunListFilter(id: WorkflowRunListFilterId): WorkflowRunListFilter {
     if (id.startsWith('automation:')) return { automationId: id.slice('automation:'.length) };
     if (id.startsWith('destination:')) return { targetSessionId: id.slice('destination:'.length), ...buildWorkflowRunListFilter('active') };
+    if (id.startsWith('under:')) return { underSessionId: id.slice('under:'.length) };
     switch (id) {
         case 'all':
             return {};

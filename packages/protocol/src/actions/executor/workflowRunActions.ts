@@ -40,6 +40,7 @@ import { WorkflowOperationErrorCodeV1Schema } from '../../workflows/workflowProg
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
 import { prepareWorkflowRunStartV1, resolveWorkflowContextInputsV1, resolveWorkflowRunStartInputsV1 as resolveInputs } from '../../workflows/workflowStartPreparationV1.js';
 import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js';
+import { readActionCallerLedSubtreeSessionIds } from './sessionLedSubtree.js';
 import { areServerProfileIdentifiersEquivalent } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import { FollowPolicyV1Schema, type FollowPolicyV1 } from '../../sessions/follow/sessionFollowPolicyV1.js';
 
@@ -2131,6 +2132,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         throw workflowError('target_unavailable');
       }
       try {
+        const underSessionIds = args.input.underSessionId === undefined ? null
+          : deps.sessionList ? await readActionCallerLedSubtreeSessionIds({ sessionList: deps.sessionList }, args.context, args.input.underSessionId) : null;
+        if (args.input.underSessionId !== undefined && underSessionIds === null) throw workflowError('target_unavailable');
         const projectPage = async (raw: unknown) => {
           const storagePage = record(raw);
           const acceptedEnvelopesByRunId = record(storagePage.acceptedEnvelopesByRunId);
@@ -2148,6 +2152,8 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           for (const run of page.runs) {
             let matchesResource = !(target?.kind === 'machine' && target.project);
             let matchesDestination = args.input.targetSessionId === undefined;
+            let matchesUnder = underSessionIds === null || (run.origin.originSessionId !== undefined
+              && underSessionIds.has(run.origin.originSessionId));
             let projected: WorkflowRunPrivateMetadataV1 | null;
             let where: WorkflowRunSummaryV1['where'] = null;
             let startedBy: WorkflowRunSummaryV1['startedBy'] = null;
@@ -2229,9 +2235,11 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
                     ...(resultProvenance?.[index.id] ? { notificationCondition: resultProvenance[index.id]!.notificationCondition } : {}) });
                 }
               }
-              matchesDestination = args.input.targetSessionId === undefined || (accepted.targetSessionIds
+              const targetSessionIds = accepted.targetSessionIds
                 ?? deriveWorkflowDestinationsV1({ definition: accepted.definition, materializedLeaves: accepted.materializedLeaves,
-                  originSessionId: accepted.origin?.originSessionId }).targetSessionIds).includes(args.input.targetSessionId);
+                  originSessionId: accepted.origin?.originSessionId }).targetSessionIds;
+              matchesDestination = args.input.targetSessionId === undefined || targetSessionIds.includes(args.input.targetSessionId);
+              if (underSessionIds !== null) matchesUnder ||= targetSessionIds.some(id => underSessionIds.has(id));
               startedBy = accepted.startedBy;
               const project = accepted.workspaceTarget.project;
               where = { machineId: project.machineId, directory: project.directory,
@@ -2252,7 +2260,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
               const reason = WorkflowOperationErrorCodeV1Schema.safeParse(code);
               projected = { kind: 'unavailable', reason: reason.success ? reason.data : 'content_unavailable' };
             }
-            if (!matchesResource || !matchesDestination) continue;
+            if (!matchesResource || !matchesDestination || !matchesUnder) continue;
             runs.push({ ...run, where, startedBy, stepProgress, stepProgressCurrentness, heldStep });
             if (projected) metadataByRunId[run.id] = projected;
           }
@@ -2271,7 +2279,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           const page = await projectPage(await deps.storage.execute({ operation: 'list', request,
             pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
           }, args.context.signal ? { signal: args.context.signal } : {}));
-          if ((args.input.targetSessionId === undefined && !(target?.kind === 'machine' && target.project))
+          if ((args.input.targetSessionId === undefined && args.input.underSessionId === undefined && !(target?.kind === 'machine' && target.project))
             || page.runs.length > 0 || !page.nextCursor) return page;
           cursor = page.nextCursor;
         }

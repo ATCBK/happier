@@ -129,6 +129,7 @@ describe('workflow Run list Action client through the Account storage transport'
         expect(active.states).not.toContain('succeeded');
         expect(active.states).not.toContain('cancelled');
         expect(buildWorkflowRunListFilter('all')).toEqual({});
+        expect(buildWorkflowRunListFilter('under:lead')).toEqual({ underSessionId: 'lead' });
     });
 
     it('reports a deleted exact Run as run_not_found so the row can be removed', async () => {

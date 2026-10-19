@@ -221,6 +221,8 @@ describe('workflow Action contracts', () => {
     expect(WorkflowActionInputSchemasV1['workflow.run.list'].parse({ runId: 'run-1', limit: 1 }).runId).toBe('run-1');
     expect(WorkflowActionInputSchemasV1['workflow.run.list'].safeParse({ runId: '' }).success).toBe(false);
     expect(WorkflowActionInputSchemasV1['workflow.run.list'].safeParse({ runId: 'r'.repeat(192) }).success).toBe(false);
+    expect(WorkflowActionInputSchemasV1['workflow.run.list'].parse({ underSessionId: 'lead' }).underSessionId).toBe('lead');
+    expect(WorkflowActionInputSchemasV1['workflow.run.list'].safeParse({ underSessionId: '' }).success).toBe(false);
   });
 
   it('uses canonical identifiers at public Action boundaries', () => {

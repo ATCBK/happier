@@ -323,6 +323,7 @@ describe("workflow Run live state", () => {
         expect([first.input.runId, second.input.runId]).toContain(page.runs[0].id);
         expect(page.nextCursor).toBeDefined();
         await expect(service.listWorkflowRuns({ ...request, sourceArtifactId: randomUUID(), cursor: page.nextCursor })).rejects.toMatchObject({ code: "invalid_input" });
+        await expect(service.listWorkflowRuns({ ...request, underSessionId: "another-root", cursor: page.nextCursor })).rejects.toMatchObject({ code: "invalid_input" });
         await expect(service.listWorkflowRuns({ ...request, accountId: stranger.accountId, cursor: page.nextCursor })).rejects.toMatchObject({ code: "invalid_input" });
         const next = await service.listWorkflowRuns({ ...request, cursor: page.nextCursor });
         expect(new Set([...page.runs, ...next.runs].map((run) => run.id))).toEqual(new Set([first.input.runId, second.input.runId]));
