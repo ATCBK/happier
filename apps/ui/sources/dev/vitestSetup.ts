@@ -446,6 +446,7 @@ vi.mock('@expo/vector-icons', () => ({
 
 // `@shopify/react-native-skia` requires native bindings; stub it for node/Vitest.
 vi.mock('@shopify/react-native-skia', async () => {
+
     const { createReactNativeSkiaMock } = await import('./testkit/mocks/reactNativeSkia');
     return createReactNativeSkiaMock();
 });
@@ -483,6 +484,7 @@ vi.mock('@react-navigation/native', () => createReactNavigationNativeMock());
 // which Node/Vitest cannot resolve via CJS `require("../helpers/systemWeights")`. Provide a minimal
 // stub so components can render without pulling in platform-specific internals.
 vi.mock('react-native-typography', async () => {
+
     const { createReactNativeTypographyMock } = await import('./testkit/mocks/reactNativeTypography');
     return createReactNativeTypographyMock();
 });
@@ -511,6 +513,7 @@ vi.mock('expo-file-system', async () => {
 
 // `expo-updates` is native-oriented and pulls in platform-specific modules that Node/Vitest can't parse.
 vi.mock('expo-updates', async () => {
+
     const { createExpoUpdatesMock } = await import('./testkit/mocks/expoUpdates');
     return createExpoUpdatesMock();
 });

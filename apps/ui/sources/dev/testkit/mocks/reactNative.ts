@@ -34,6 +34,17 @@ export function installReactNativeWebMock(overrides?: TestReactNativeOverrides) 
     return installReactNativeWebRuntime(overrides, loadReactNativeStub);
 }
 
+/** Image decoding/measurement is an OS boundary absent from the host renderer. */
+export function createMeasuredImageMock(size: Readonly<{ width: number; height: number }>) {
+    return Object.assign(function MeasuredImage(props: TestReactNativeHostProps) {
+        return React.createElement('Image', props);
+    }, {
+        getSize: (_uri: string, onSuccess: (width: number, height: number) => void) => {
+            onSuccess(size.width, size.height);
+        },
+    });
+}
+
 export function createReactNativeNativeMock(
     options: Readonly<{ platformOS: TestReactNativeNativeMockPlatformOS }>,
     overrides?: TestReactNativeOverrides,

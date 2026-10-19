@@ -2,7 +2,7 @@
 // This avoids Vite trying to parse the real React Native entrypoint (Flow syntax).
 
 import * as React from 'react';
-import type { AppStateStatus } from 'react-native';
+import type { AppStateStatus, StatusBarProps } from 'react-native';
 
 // Provide basic host components so tests that rely on `react-test-renderer` can render trees
 // without having to mock `react-native` in every file.
@@ -51,6 +51,19 @@ export const Appearance = {
     getColorScheme: (): 'light' | 'dark' | null => 'light',
     addChangeListener: (_listener: (preferences: { colorScheme: 'light' | 'dark' | null }) => void) => ({ remove: () => {} }),
 } as const;
+
+export function useColorScheme() {
+    return Appearance.getColorScheme();
+}
+
+// Like the installed RN-web StatusBar, this native OS surface paints no DOM.
+export const StatusBar = Object.assign(function StatusBar(_props: StatusBarProps) { return null; }, {
+    setBackgroundColor: (_color: string, _animated?: boolean) => {},
+    setBarStyle: (_style: string, _animated?: boolean) => {},
+    setHidden: (_hidden: boolean, _animation?: string) => {},
+    setNetworkActivityIndicatorVisible: (_visible: boolean) => {},
+    setTranslucent: (_translucent: boolean) => {},
+});
 
 export const Dimensions = {
     get: () => ({ width: 800, height: 600, scale: 2, fontScale: 1 }),

@@ -47,6 +47,8 @@ export function createNavigationPropMock(
 export type CreateReactNavigationNativeMockOptions = Readonly<{
     isFocused?: boolean;
     navigation?: Readonly<Record<string, unknown>>;
+    /** Render the initial SDK scene when a composed shell test needs the real screen subtree. */
+    renderInitialNavigatorScreen?: boolean;
     usePreventRemove?: (
         preventRemove: boolean,
         callback: (event: { data: { action: unknown } }) => void,
@@ -68,6 +70,13 @@ export function createReactNavigationNativeMock(options: CreateReactNavigationNa
     };
     const passThrough = ({ children }: React.PropsWithChildren) =>
         React.createElement(React.Fragment, null, children);
+    const Navigator = ({ children, initialRouteName }: React.PropsWithChildren<{ initialRouteName?: string }>) => {
+        const screens = React.Children.toArray(children).filter(React.isValidElement);
+        const initial = screens.find(screen => (screen.props as { name?: string }).name === initialRouteName) ?? screens[0];
+        return React.createElement(React.Fragment, null, initial);
+    };
+    const Screen = ({ children }: Readonly<{ children?: React.ReactNode | ((input: { navigation: typeof navigation }) => React.ReactNode) }>) =>
+        React.createElement(React.Fragment, null, typeof children === 'function' ? children({ navigation }) : children);
     const defaultColors = {
         primary: '#0a84ff',
         background: '#ffffff',
@@ -97,7 +106,9 @@ export function createReactNavigationNativeMock(options: CreateReactNavigationNa
         NavigationIndependentTree: passThrough,
         // Installed SDK's no-config factory returns these three native containers.
         createNavigatorFactory: (_Navigator: unknown) => () => ({
-            Navigator: passThrough, Screen: passThrough, Group: passThrough,
+            Navigator: options.renderInitialNavigatorScreen ? Navigator : passThrough,
+            Screen: options.renderInitialNavigatorScreen ? Screen : passThrough,
+            Group: passThrough,
         }),
         ThemeProvider: ({ children, value }: { children?: React.ReactNode; value: unknown }) =>
             React.createElement(ThemeContext.Provider, { value }, children),

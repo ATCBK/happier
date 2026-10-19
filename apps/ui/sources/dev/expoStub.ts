@@ -6,7 +6,7 @@
 // running any native side effects.
 
 import * as React from 'react';
-import { requireOptionalNativeModule } from './expoModulesCoreStub';
+import { requireOptionalNativeModule , requireNativeModule as requireCoreNativeModule } from './expoModulesCoreStub';
 export { installOptionalNativeModuleForTests, requireOptionalNativeModule } from './expoModulesCoreStub';
 
 /** Expo's native-view bridge is an OS boundary; keep the real SDK view wrappers. */
@@ -70,7 +70,7 @@ export function requireNativeModule<T>(moduleName?: string): T {
         return { EncryptionKey: UnavailableNativeAesObject, SealedData: UnavailableNativeAesObject } as T;
     }
     if (moduleName === 'ExpoWidgets') return widgetsModule as T;
-    return {} as T;
+    return requireCoreNativeModule<T>(moduleName ?? '');
 }
 
 export default {
