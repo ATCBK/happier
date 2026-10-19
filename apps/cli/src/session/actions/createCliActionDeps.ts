@@ -6265,7 +6265,8 @@ export function createCliActionDeps(params: Readonly<{
         }
         const requestDisposition = readMachineRpcRequestDisposition(error);
         if (
-          code === SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT
+          code === 'outcome_unknown'
+          || code === SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT
           || requestDisposition === 'outcomeUnknown'
           || requestDisposition === null && code === 'MACHINE_RPC_TIMEOUT'
         ) {
