@@ -1,11 +1,15 @@
 import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { ExternalActionExecutionResultV1Schema, projectExternalActionExecutionResultV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { handleActionsCommand } from '@/cli/commands/actions';
 import { registerMachineSessionGoalRpcHandlers } from '@/api/machine/rpcHandlers.sessionGoals';
+import { createDaemonControlApp } from '@/daemon/controlServer';
+import { requestDaemonSignedRootActionExecution } from '@/daemon/controlClient';
+import { createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 import * as persistence from '@/persistence';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
@@ -40,6 +44,7 @@ describe('normal CLI early native Goal failure', () => {
   it('preserves the native phase through the target daemon and detects missing registration', async () => {
     const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
       runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+    let app: ReturnType<typeof createDaemonControlApp> | undefined;
     try {
       const sessionId = 'c123456789012345678901234';
       const credentials = { token: 'goal-token', encryption: null };
@@ -61,6 +66,7 @@ describe('normal CLI early native Goal failure', () => {
       } satisfies RpcHandlerRegistrar, deps: { currentMachineId: 'goal-machine',
         stageWorkStateMutation: async () => { throw new Error('A missing native thread must not publish work state'); } } });
       const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null,
+        serverId: 'goal-server', serverHttpBaseUrl: 'http://goal-home.test',
         machineActionDirectTargetTransport: { machineId: 'goal-machine', invoke: async (method, request) => {
           const handler = handlers.get(method);
           return handler ? await handler(request) : { ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE', error: 'RPC method not available' };
@@ -70,6 +76,31 @@ describe('normal CLI early native Goal failure', () => {
       const external = ExternalActionExecutionResultV1Schema.parse(projectExternalActionExecutionResultV1(action));
       expect(external).toMatchObject({ ok: false, errorCode: 'codex_goal_thread_unavailable',
         goalControlFailure: { phase: 'native_effect' } });
+      app = createDaemonControlApp({ getChildren: () => [], machineId: 'goal-machine', controlToken: 'goal-control',
+        stopSession: async () => { throw new Error('Unexpected process stop'); },
+        spawnSession: async () => { throw new Error('Unexpected process spawn'); },
+        requestShutdown: () => { throw new Error('Unexpected process shutdown'); }, onHappySessionWebhook: () => {},
+        externalActionApi: { currentServerId: 'goal-server', executor,
+          verifyPat: async () => { throw new Error('Signed root does not use PAT verification'); },
+          resolveTarget: createDaemonExternalActionTargetResolver({ credentials }),
+        },
+      });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing daemon HTTP address');
+      const produced = await app.inject({ method: 'POST', url: '/actions/root/execute',
+        headers: { 'x-happier-daemon-token': 'goal-control' },
+        payload: { actionId: 'session.goal.get', input: { sessionId }, target: { kind: 'machine', machineId: 'goal-machine' } },
+      });
+      expect(ExternalActionExecutionResultV1Schema.parse(produced.json())).toEqual(external);
+      const cliExecutor = { ...executor,
+        resolveSessionTarget: async (id: string) => ({ ok: true as const, sessionId: id }),
+        execute: async (...[actionId, input, context]: Parameters<typeof executor.execute>) =>
+          requestDaemonSignedRootActionExecution({ actionId: SignedRootActionIdSchema.parse(actionId), input,
+            ...(context?.externalActionTarget ? { target: context.externalActionTarget } : {}),
+            ...(context?.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
+          }, { target: { pid: process.pid, httpPort: address.port, controlToken: 'goal-control' } }),
+      };
       let output = '';
       vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...args) => {
         output += String(chunk);
@@ -77,10 +108,12 @@ describe('normal CLI early native Goal failure', () => {
         if (typeof callback === 'function') callback();
         return true;
       });
-      await handleActionsCommand(['invoke', 'session.goal.get', '--input-json', JSON.stringify({ sessionId }), '--json'], {
+      const invoke = () => handleActionsCommand(['invoke', 'session.goal.get', '--machine-id', 'goal-machine',
+        '--project-directory', '/repo', '--input-json', JSON.stringify({ sessionId }), '--json'], {
         readCredentialsFn: async () => credentials,
-        createExecutorFn: () => ({ ...executor, resolveSessionTarget: async id => ({ ok: true as const, sessionId: id }) }),
+        createExecutorFn: () => cliExecutor,
       });
+      await invoke();
       expect(JSON.parse(output)).toMatchObject({ v: 1, ok: false, kind: 'actions_invoke', error: {
         code: 'codex_goal_thread_unavailable', goalControlFailure: { phase: 'native_effect' },
       } });
@@ -91,7 +124,12 @@ describe('normal CLI early native Goal failure', () => {
       const miswired = await executor.execute('session.goal.get', { sessionId }, { surface: 'cli' });
       expect(miswired).toMatchObject({ ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
       expect(miswired).not.toHaveProperty('goalControlFailure');
+      output = '';
+      await invoke();
+      expect(JSON.parse(output)).toMatchObject({ ok: false, error: { code: 'RPC_METHOD_NOT_AVAILABLE' } });
+      expect(JSON.parse(output).error).not.toHaveProperty('goalControlFailure');
     } finally {
+      await app?.close();
       await runtime.dispose();
     }
   });

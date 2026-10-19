@@ -61,10 +61,12 @@ export function projectUnexpectedActionFailureV1(admissionCommitted: boolean | n
 export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<{
   errorClass: string;
   errorCode: string | null;
+  httpStatus: number | null;
   stackFrames: readonly Readonly<{ file: string; line: number; column: number }>[];
 }> {
   let errorClass = 'UnknownThrownValue';
   let errorCode: string | null = null;
+  let httpStatus: number | null = null;
   const stackFrames: Array<{ file: string; line: number; column: number }> = [];
   try {
     errorClass = error instanceof TypeError ? 'TypeError' : error instanceof RangeError ? 'RangeError'
@@ -72,17 +74,22 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
     if (error && typeof error === 'object') {
       const name = 'name' in error ? error.name : undefined;
       if (typeof name === 'string' && ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ZodError', '$ZodError',
-        'AxiosError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
+        'AxiosError', 'HttpStatusError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
         'PrismaClientValidationError', 'PrismaClientInitializationError', 'TransactionConflictExhaustedError',
         'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError'].includes(name)) errorClass = name;
       const code = 'code' in error ? error.code : undefined;
-      // Only platform/database code vocabularies; arbitrary exception fields may be private content.
+      // Only known platform/database/Session codes; arbitrary fields may be private content.
       if (typeof code === 'string' && (/^P\d{4}$/u.test(code) || [
         'EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'EIO', 'ENOSPC', 'EMFILE', 'ENFILE', 'EBUSY', 'EINVAL',
         'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN',
         'SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_IOERR', 'SQLITE_FULL', 'SQLITE_CONSTRAINT', 'SQLITE_ERROR',
         'SQLITE_CANTOPEN', 'SQLITE_CORRUPT',
+        'session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required',
       ].includes(code))) errorCode = code;
+      const response = 'response' in error ? error.response : undefined;
+      const status = response && typeof response === 'object' && 'status' in response ? response.status
+        : 'status' in error ? error.status : undefined;
+      if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) httpStatus = status;
       const stack = 'stack' in error ? error.stack : undefined;
       const message = 'message' in error ? error.message : undefined;
       // V8 renders the entire (possibly multiline) message before its frames.
@@ -98,7 +105,7 @@ export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<
       }
     }
   } catch { /* Hostile Error accessors cannot replace the original failure. */ }
-  return { errorClass, errorCode, stackFrames };
+  return { errorClass, errorCode, httpStatus, stackFrames };
 }
 
 

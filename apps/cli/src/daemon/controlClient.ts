@@ -13,6 +13,7 @@ import {
 } from '@happier-dev/cli-common/processInstance';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult, ActionExecutorContext } from '@happier-dev/protocol';
+import { projectActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { logger } from '@/ui/logger';
 import {
   clearReplaceableDaemonLock,
@@ -674,12 +675,12 @@ export async function requestDaemonSignedRootActionExecution(
     mutation: sideEffectClass !== 'none' && sideEffectClass !== 'read',
   });
   if (result && typeof result === 'object' && typeof result.error === 'string') {
-    return {
+    return projectActionExecuteFailure({
+      ...result,
       ok: false,
       errorCode: result.errorCode ?? 'daemon_unavailable',
       error: result.error,
-      ...(result.details !== undefined ? { details: result.details } : {}),
-    };
+    });
   }
   return result as ActionExecuteResult;
 }
