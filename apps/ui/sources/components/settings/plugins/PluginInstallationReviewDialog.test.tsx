@@ -442,11 +442,11 @@ describe('PluginInstallationReviewDialog', () => {
         const rendered = screen.getTextContent();
         expect(rendered).not.toContain('\\"targets\\"');
         expect(rendered).not.toContain('\\"kind\\"');
-        expect(rendered).toContain('targets:');
-        expect(rendered).toContain('kind: fixedOrigin');
-        expect(rendered).toContain('origin: https://review.example.test');
-        expect(rendered).toContain('kind: workspace');
-        expect(rendered).toContain('mode: read');
+        // Declared keys and discriminators read as words; a target led by its kind reads as one line.
+        expect(rendered).toContain('Targets:');
+        expect(rendered).toContain('Fixed origin · https://review.example.test');
+        expect(rendered).toContain('Workspace · read');
+        expect(rendered).not.toContain('fixedOrigin');
         expect(rendered).toContain('settingsPlugins.installReviewSections.credentialRequestHeaders');
         expect(rendered).toContain('https://api.example.com');
         expect(rendered).toContain('authorization');
