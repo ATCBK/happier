@@ -121,11 +121,13 @@ export async function openMachineLiveStreamRelayClient(input: MachineLiveStreamR
     if (started.routeKind !== 'server_relay') return { ok: false, reasonCode: 'unexpected_route_kind' };
 
     const startDaemonRelay = input.startDaemonRelay ?? defaultStartDaemonRelay;
+    // Once admission begins, observe its original settlement even if the viewer
+    // retires. Ingestion owes a final Stop for a late success on its original
+    // Account transport; cancelling this RPC would hide that accepted stream.
     const daemonStarted = await startDaemonRelay({
         machineId: input.sourceMachineId,
         serverId: input.serverId,
         startRequest: { ...started.startRequest, ...(input.sourceOccurrenceId ? { sourceOccurrenceId: input.sourceOccurrenceId } : {}) },
-        signal: input.signal,
         ...(typeof input.timeoutMs === 'number' ? { timeoutMs: input.timeoutMs } : {}),
     });
     if (!daemonStarted.ok) return { ok: false, reasonCode: daemonStarted.reasonCode };

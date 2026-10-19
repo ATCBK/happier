@@ -63,4 +63,20 @@ describe('live-stream viewer transport', () => {
         await pending; await new Promise<void>(resolve => setImmediate(resolve));
         expect(deliver).not.toHaveBeenCalled(); expect(emit).not.toHaveBeenCalled();
     });
+
+    it('does not send a late accepted stream cleanup after its Account transport retires', () => {
+        let current = true;
+        const emit = vi.fn();
+        const transport = createMachineLiveStreamSocketTransport({ emit, deliver: vi.fn(), onError: vi.fn(),
+            resolveContent: async () => ({ mode: 'plain' }), isCurrent: () => current });
+        const stop: MachineLiveStreamRelayEnvelopeV1 = { ...frame, message: { kind: 'control', control: {
+            v: 1, streamId: 'stream', kind: 'stop', reasonCode: 'viewer_closed',
+        } } };
+        transport.send(stop);
+        expect(emit).toHaveBeenCalledWith(stop);
+        emit.mockClear();
+        current = false;
+        transport.send(stop);
+        expect(emit).not.toHaveBeenCalled();
+    });
 });
