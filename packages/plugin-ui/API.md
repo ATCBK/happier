@@ -192,7 +192,6 @@ Declaration: `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_LIST_METRICS` from `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_LIST_ROW_STYLE` from `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_LIST_TEXT` from `dist/index.d.ts`
-- value `HAPPIER_COLLECTION_RAIL_WIDTH_PX` from `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_REDUCED_MOTION_TRACKS` from `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_TRANSITION_TIMELINE` from `dist/index.d.ts`
 - value `HAPPIER_COLLECTION_TRANSITION_TRACKS` from `dist/index.d.ts`
@@ -463,6 +462,7 @@ Declaration: `dist/index.d.ts`
 - type `HappierFloatingFrameNativeBindingProps` from `dist/index.d.ts`
 - type `HappierFloatingFramePointerBinding` from `dist/index.d.ts`
 - type `HappierFloatingFrameProps` from `dist/index.d.ts`
+- type `HappierFloatingRole` from `dist/index.d.ts`
 - type `HappierFocusRingPlacement` from `dist/index.d.ts`
 - type `HappierFocusable` from `dist/index.d.ts`
 - value `HappierForm` from `dist/index.d.ts`
@@ -1327,7 +1327,6 @@ Declaration: `dist/index.d.ts`
 - value `resolveHappierRoleGlyph` from `dist/index.d.ts`
 - value `resolveHappierRoleRunsAsPresentation` from `dist/index.d.ts`
 - value `resolveHappierRovingSelection` from `dist/index.d.ts`
-- value `resolveHappierRowTitleMetaPlacement` from `dist/index.d.ts`
 - value `resolveHappierScene` from `dist/index.d.ts`
 - value `resolveHappierSceneArtSize` from `dist/index.d.ts`
 - value `resolveHappierSegmentedChoiceRow` from `dist/index.d.ts`
@@ -1643,7 +1642,6 @@ Declaration: `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_LIST_METRICS` from `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_LIST_ROW_STYLE` from `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_LIST_TEXT` from `dist/components/index.d.ts`
-- value `HAPPIER_COLLECTION_RAIL_WIDTH_PX` from `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_REDUCED_MOTION_TRACKS` from `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_TRANSITION_TIMELINE` from `dist/components/index.d.ts`
 - value `HAPPIER_COLLECTION_TRANSITION_TRACKS` from `dist/components/index.d.ts`
@@ -1914,6 +1912,7 @@ Declaration: `dist/components/index.d.ts`
 - type `HappierFloatingFrameNativeBindingProps` from `dist/components/index.d.ts`
 - type `HappierFloatingFramePointerBinding` from `dist/components/index.d.ts`
 - type `HappierFloatingFrameProps` from `dist/components/index.d.ts`
+- type `HappierFloatingRole` from `dist/components/index.d.ts`
 - type `HappierFocusRingPlacement` from `dist/components/index.d.ts`
 - type `HappierFocusable` from `dist/components/index.d.ts`
 - value `HappierForm` from `dist/components/index.d.ts`
@@ -2748,7 +2747,6 @@ Declaration: `dist/components/index.d.ts`
 - value `resolveHappierRoleGlyph` from `dist/components/index.d.ts`
 - value `resolveHappierRoleRunsAsPresentation` from `dist/components/index.d.ts`
 - value `resolveHappierRovingSelection` from `dist/components/index.d.ts`
-- value `resolveHappierRowTitleMetaPlacement` from `dist/components/index.d.ts`
 - value `resolveHappierScene` from `dist/components/index.d.ts`
 - value `resolveHappierSceneArtSize` from `dist/components/index.d.ts`
 - value `resolveHappierSegmentedChoiceRow` from `dist/components/index.d.ts`
