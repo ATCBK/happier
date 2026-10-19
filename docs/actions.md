@@ -3597,10 +3597,22 @@ After a managed power intent is acknowledged by Home, a later controller HTTP
 failure does not roll it back. In 0.3 development the controller returns
 `action_outcome_unknown` and retains the same operation with an
 `outcome_uncertain` observation. An unreadable admission acknowledgement also
-retains an unconfirmed outcome; Home's typed acquisition/rollback refusals
-remain definite. Explicit unknown native power, delete and rebuild results use
+retains an unconfirmed outcome, including an admit-control 503 with
+`database_connection_unavailable`: that code alone does not prove the intent
+failed to commit. Home's `database_transaction_conflict_exhausted` refusal
+retains its confirmed-rollback meaning. Explicit unknown native power, delete and rebuild results use
 the same unconfirmed result while retaining the exact native submission;
-observation and identical request replay do not issue another native effect.
+observation and identical request replay do not replay that native effect.
+Host preparation refusals and the private dispatcher's proven `notStarted`
+refusals settle the unused submission as definite failures, preserving their
+typed codes; they do not become native uncertainty. The existing Check now
+inspection and reconciliation of a newly admitted intent report fresh native
+truth to Home. A newer definite power observation settles retained power
+custody even when it shows that the older desired power did not happen; unknown,
+unavailable or stale observations keep it unresolved. Home then allows the
+still-current newer intent to submit through normal admission. Delete still
+requires observed absence, and Rebuild requires its bound replacement.
+Reconnect refreshes policy census; it is not a universal native inspection timer.
 Read the managed row before retrying; Stop
 remains available to retract desired Start even while the last observation
 says stopped. Definite native refusals retain their existing failure result.
@@ -3930,7 +3942,10 @@ use their current membership for pruning. Mode switches retain Canvas positions.
 
 Board edits use Account automation authority. The mutation can delete a Board and uses
 the shared Action approval policy; approval results are blocking and required
-so callers receive the mutation outcome. UI create, settings, remove, widget and drag
+so callers receive the mutation outcome. The present user's own UI edits (Board settings, items,
+positions and every widget intent, as for `widgets.item.*`) are reversible and are admitted
+without a confirmation; only `delete` and a widget's network change confirm, and an explicit
+Settings → Actions Ask applies to any of them. Agents and automation keep the approval floor. UI create, settings, remove, widget and drag
 controls enter `boards.apply` before the optimistic queue; Retry re-enters the same
 Action admission under its captured Home and Account. Live UI membership is supplied
 only by the Board adapter, never trusted from agent input. A host without the Board Artifact
