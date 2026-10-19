@@ -19,6 +19,14 @@ source file or client-supplied source list is an authority. An ordinary daemon
 fetch reads its Account snapshot and installed declarations; an admitted Action
 retains its originating Account's captured context.
 
+Finite CLI/daemon catalog reads activate missing destination rows and run the
+existing skill migration, then return after Account currentness admission. They
+do not run retained Settings/history cleanup; Account hydration owns that work.
+Concurrent folder, skill-rule and usage reads in one captured store share only
+the in-flight inventory with the same cancellation lifetime; the next read
+fetches again. Registry multi-source listing uses its admitted inventory for
+every page rather than re-reading the Account catalog for each source.
+
 User sources may retain a `token.secretRef` and, for plugin catalogs, an
 `npmRegistryProfileId`. `registries.sources.token.set` binds or clears these
 metadata fields through the same Account-row CAS owner. Built-in and plugin
@@ -81,6 +89,11 @@ reset times come from upstream headers. `rate_limited.retryAt` is optional:
 without reset evidence the source still reports a rate limit and offers manual
 retry, with no fabricated timestamp or host cooldown. The shared HTTP status
 reader supplies that decision to both platform and daemon transports.
+
+When upstream supplies a reset time, the transport retains an origin-wide
+throttle until that time. At the reset boundary the next request reaches upstream
+again, including after a token change; an HTTP 401/403 can then report the rejected
+token. Changing a token does not clear an upstream-proven origin throttle.
 
 Skill reads return a pinned pointer. Installation re-reads that version and
 verifies Git blob/tree hashes and file modes before writing through `skills.*`.
