@@ -33,6 +33,11 @@ export async function detectSaplingRepo(input: { cwd: string }): Promise<ScmRepo
         args: ['root'],
         timeoutMs: 5000,
     });
+    if (root.workingDirectoryMissing === true) {
+        throw Object.assign(new Error('The workspace folder no longer exists on this machine'), {
+            errorCode: SCM_OPERATION_ERROR_CODES.ROOT_NOT_FOUND,
+        });
+    }
     if (root.executableMissing === true) {
         throw Object.assign(new Error(root.stderr || 'Sapling is not installed'), {
             errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED,

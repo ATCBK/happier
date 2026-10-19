@@ -80,6 +80,11 @@ export async function detectGitRepo(input: { cwd: string; includeRetainedWorktre
         timeoutMs: 5000,
         env: { LC_ALL: 'C', LANGUAGE: 'C' },
     });
+    if (gitRepoCheck.workingDirectoryMissing === true) {
+        throw Object.assign(new Error('The workspace folder no longer exists on this machine'), {
+            errorCode: SCM_OPERATION_ERROR_CODES.ROOT_NOT_FOUND,
+        });
+    }
     if (gitRepoCheck.executableMissing === true) {
         throw Object.assign(new Error(gitRepoCheck.stderr || 'Git is not installed'), {
             errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED,
