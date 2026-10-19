@@ -1,5 +1,5 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
-import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetAreaLayoutArtifactPortV1, createUsageWidgetPresets, USAGE_WIDGET_PRESET_IDS, WidgetAreaMutationErrorV1, type WidgetAreaPresetV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetAreaLayoutArtifactPortV1, resolveHostWidgetAreaPresetsV1, USAGE_WIDGET_PRESET_IDS, WidgetAreaMutationErrorV1, type WidgetAreaPresetV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { selectMountedWidgetAreaLayout } from '@/components/widgets/area/widgetAreaLayoutSelection';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -12,9 +12,7 @@ export function createWidgetAreaActionDepsV1(account: LazyActionAccountContext |
     // Inbox replay and mounted first edits consume the same host layout producer.
     // A mount may localize or seed its defaults; callers never supply preset items.
     const presetsFor = (surface: WidgetSurfaceRefV1) => resolvePresets?.(surface)
-        ?? (surface.owner.kind === 'corePage' && surface.owner.pageId === 'usage' && surface.owner.area === 'main'
-            ? createUsageWidgetPresets(Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, t(`usage.presets.${id}`)])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>)
-            : undefined);
+        ?? resolveHostWidgetAreaPresetsV1(surface, Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, t(`usage.presets.${id}`)])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>);
     const areaPort = (surface: WidgetSurfaceRefV1) => {
         account.assertCurrent();
         if (!areServerProfileIdentifiersEquivalent(surface.serverId, account.serverId) || surface.accountId !== account.accountId && !(surface.owner.kind === 'project' && surface.artifactId)) throw new WidgetAreaMutationErrorV1('widget_area_owner_mismatch');

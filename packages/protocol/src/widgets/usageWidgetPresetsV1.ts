@@ -11,6 +11,10 @@ import type { WidgetSizeV1 } from './widgetPresentationV1.js';
 
 export const USAGE_WIDGET_PRESET_IDS = ['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources'] as const;
 export type UsageWidgetPresetId = typeof USAGE_WIDGET_PRESET_IDS[number];
+const defaultNames: Readonly<Record<UsageWidgetPresetId, string>> = {
+    overview: 'Overview', costs: 'Costs', work: 'Work', usage: 'Usage', plans: 'Plans', coach: 'Coach',
+    'how-you-work': 'How you work', sources: 'Sources',
+};
 
 const scopes = USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow');
 const scopeSchema = (inventoryOnly: boolean) => PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject((inventoryOnly ? UsageSourceInventoryScopeSchema : lazyZodSchema(() => z.pick(UsageQuerySchema, {
@@ -79,7 +83,7 @@ export function createUsageWidgetPresetFragments(names: Readonly<Record<UsageWid
 }
 
 /** Host metadata is localized by the mounted page, never read from a caller's layout input. */
-export function createUsageWidgetPresets(names: Readonly<Record<UsageWidgetPresetId, string>>, options?: Readonly<{ initialMetric?: UsageQuery['metric'] }>): readonly WidgetAreaPresetV1[] {
+export function createUsageWidgetPresets(names: Readonly<Record<UsageWidgetPresetId, string>> = defaultNames, options?: Readonly<{ initialMetric?: UsageQuery['metric'] }>): readonly WidgetAreaPresetV1[] {
     const fragments = createUsageWidgetPresetFragments(names, options);
     return USAGE_WIDGET_PRESET_IDS.map(id => ({ id, name: names[id], items: fragments[id].map((fragment, index) =>
         instantiateWidgetLayoutFragmentGroupV1(fragment.group, { groupId: `${id}:group:${index}`,

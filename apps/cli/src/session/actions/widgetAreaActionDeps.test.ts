@@ -1,9 +1,60 @@
 import { expect, it } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
 import type { HomeHubArtifactTransportV1, HomeHubArtifactV1 } from '@happier-dev/protocol/home';
-import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, admitWidgetActionSurfaceV1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
+import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, admitWidgetActionSurfaceV1, WidgetSurfaceReadV1Schema,
+    WidgetInstanceActionOutputSchemasV1, type WidgetAreaLayoutV1 } from '@happier-dev/protocol/widgets';
 import { createCliWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createWorkBoardArtifactBoundary } from '../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
+
+it.each(['cli', 'mcp'] as const)('discovers and personalizes host presets through the headless %s Action executor without a preset injection', async caller => {
+    const boundary = createWorkBoardArtifactBoundary();
+    const scope = { serverId: 'home', accountId: 'actor' };
+    const transport = { ...boundary.forAccount(scope.accountId), list: boundary.transport.list, delete: boundary.transport.delete };
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+        ...createCliWidgetAreaActionDepsV1({ transport, scope, isCurrent: () => true }), widgetAccountScope: () => scope });
+    const context = { surface: caller, bypassApprovals: true };
+    const surface = { ...scope, owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main' } };
+    const list = async () => {
+        const result = await executor.execute('widgets.area.layout.list', { surface }, context);
+        if (!result.ok) throw new Error(result.errorCode);
+        return WidgetInstanceActionOutputSchemasV1['widgets.area.layout.list'].parse(result.result).layouts;
+    };
+    const presets = await list();
+    expect(presets.map(row => [row.surface.owner.kind === 'corePage' && row.surface.owner.layoutId, row.name, row.isPreset]))
+        .toEqual([['overview', 'Overview', true], ['costs', 'Costs', true], ['work', 'Work', true], ['usage', 'Usage', true],
+            ['plans', 'Plans', true], ['coach', 'Coach', true], ['how-you-work', 'How you work', true], ['sources', 'Sources', true]]);
+    for (const preset of presets) {
+        const read = await executor.execute('widgets.item.list', { surface: preset.surface }, context);
+        if (!read.ok) throw new Error(read.errorCode);
+        const value = WidgetSurfaceReadV1Schema.parse(read.result);
+        expect(value).toMatchObject({ state: 'missing', preset: { isEdited: false } });
+        expect(value.instances.length).toBeGreaterThan(0);
+    }
+    expect(boundary.rows.size).toBe(0);
+    const selected = presets[2]!.surface;
+    const renamed = await executor.execute('widgets.area.layout.rename', { surface: selected, name: 'My work', expectedRevision: null }, context);
+    if (!renamed.ok) throw new Error(renamed.errorCode);
+    const edited = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.rename'].parse(renamed.result);
+    const reset = await executor.execute('widgets.area.layout.reset', { surface: selected, expectedRevision: edited.revision }, context);
+    if (!reset.ok) throw new Error(reset.errorCode);
+    const capture = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.reset'].parse(reset.result).undo;
+    expect(capture).toBeDefined();
+    expect((await list()).find(row => row.artifactId === edited.artifactId)).toMatchObject({ name: 'Work', isPreset: true, isEdited: false });
+    expect(await executor.execute('widgets.area.layout.undo', { capture }, context)).toMatchObject({ ok: true });
+    expect((await list()).find(row => row.artifactId === edited.artifactId)).toMatchObject({ name: 'My work', isPreset: true, isEdited: true });
+    expect(await executor.execute('widgets.area.layout.create', { surface, layoutId: 'my-view', name: 'My view', fromSurface: selected }, context))
+        .toMatchObject({ ok: true, result: { isPreset: false } });
+    const combined = await list();
+    expect(combined.filter(row => row.isPreset)).toHaveLength(8);
+    expect(combined.filter(row => !row.isPreset)).toMatchObject([{ name: 'My view', surface: { owner: { layoutId: 'my-view' } } }]);
+    expect(await executor.execute('widgets.area.layout.delete', { surface: selected, expectedRevision: combined.find(row => row.artifactId === edited.artifactId)!.revision }, context))
+        .toMatchObject({ ok: false, errorCode: 'widget_area_layout_default_protected' });
+    expect(await executor.execute('widgets.area.layout.list', { surface: { ...scope, owner: { kind: 'project', projectId: 'project' } } }, context))
+        .toMatchObject({ ok: true, result: { layouts: [{ name: 'Overview', isPreset: true }] } });
+    expect(await executor.execute('widgets.area.layout.list', { surface: { ...surface, owner: { ...surface.owner, area: 'aside' } } }, context))
+        .toMatchObject({ ok: true, result: { layouts: [] } });
+});
 
 it('edits the exact Source-free Project dashboard and refuses retired or foreign private scopes', async () => {
     const surface = { serverId: 'home', accountId: 'actor', owner: { kind: 'project' as const, projectId: 'stable-project' } };
