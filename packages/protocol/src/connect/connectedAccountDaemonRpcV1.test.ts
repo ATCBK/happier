@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { BuiltInLegacyConnectedAccountOperation } from './generatedBuiltInLegacyConnectedAccountCompatibility.js';
 
 import {
   CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD,
@@ -133,7 +134,7 @@ describe('Connected Account daemon RPC v1', () => {
   });
 
   it('carries daemon-proven account-list transport only when the caller requests admission', () => {
-    expect(ConnectedAccountControlCommandRequestSchema.parse({
+    const admitted = ConnectedAccountControlCommandRequestSchema.parse({
       v: 1,
       machineId: 'machine-1',
       command: {
@@ -144,7 +145,11 @@ describe('Connected Account daemon RPC v1', () => {
         },
         requiredOperation: 'account_list',
       },
-    })).toMatchObject({
+    });
+    if (admitted.command.operation !== 'describeService') throw new Error('Expected describeService command');
+    const operation: BuiltInLegacyConnectedAccountOperation | undefined = admitted.command.requiredOperation;
+    expect(operation).toBe('account_list');
+    expect(admitted).toMatchObject({
       command: {
         operation: 'describeService',
         requiredOperation: 'account_list',

@@ -119,6 +119,22 @@ export const ProviderModelDescriptorV1Schema = z.strictObject({
 
 export type AgentModelDescriptor = ProviderModelDescriptorV1;
 
+/** Display-only lookup over contributed facts; never rewrites a request id or infers an alias. */
+export function resolveModelDisplayName(
+  model: Readonly<{ id: string; name?: string }>,
+  catalog: readonly Pick<ProviderModelDescriptorV1, 'id' | 'name' | 'aliases'>[],
+): string {
+  const supplied = model.name?.trim();
+  if (supplied && supplied !== model.id) return supplied;
+  let name: string | undefined;
+  for (const candidate of catalog) {
+    if (candidate.id !== model.id && !candidate.aliases?.includes(model.id)) continue;
+    if (name !== undefined && name !== candidate.name) return model.id;
+    name = candidate.name;
+  }
+  return name ?? model.id;
+}
+
 /** Catalog membership and the exact Agent's declared JSON contract establish support.
  * A freeform id never borrows that contract; explicit model evidence always wins.
  * This describes JSON publication with host validation/repair, not native schema enforcement.

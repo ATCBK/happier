@@ -15,6 +15,7 @@ import {
   ConnectedServiceCredentialHealthV1Schema,
   ConnectedServiceCredentialRevisionV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
+  isConnectedServiceCredentialHealthStatusUsable,
 } from './connectedServiceSchemas.js';
 import {
   ProviderAccountUsageRecordIdSchema,
@@ -107,6 +108,11 @@ export const QUALIFIED_CONNECTED_ACCOUNT_V4_ROUTES = Object.freeze([
   ['POST', '/v4/connect/qualified/group/active-account'],
   ['GET', '/v4/connect/qualified/provider-account-usage/sources/resolve'],
   ['POST', '/v4/connect/qualified/provider-account-usage'],
+  ['GET', '/v4/connect/qualified/provider-account-usage/history'],
+  ['HEAD', '/v4/connect/qualified/provider-account-usage/history'],
+  ['PUT', '/v4/connect/qualified/provider-account-usage/history'],
+  // Automatic HEAD aliases of GET routes are not census entries.
+  ['GET', '/v4/connect/qualified/provider-account-usage/history/document'],
   ['GET', '/v4/connect/qualified/provider-account-usage/record'],
   ['DELETE', '/v4/connect/qualified/provider-account-usage/record'],
   ['POST', '/v4/connect/qualified/provider-account-usage/record/refresh'],
@@ -486,14 +492,14 @@ export type QualifiedConnectedAccountGroupV4 = z.infer<
 
 /**
  * A V4 account is eligible to authorize a current purpose only while its
- * revision-fenced credential is connected and unexpired.  Direct targets and
+ * revision-fenced credential is usable and unexpired. Direct targets and
  * group targets share this exact policy.
  */
 export function isQualifiedConnectedAccountProfileActiveV4(
   account: QualifiedConnectedAccountProfileV4,
   now: number,
 ): boolean {
-  return account.status === 'connected'
+  return isConnectedServiceCredentialHealthStatusUsable(account.status)
     && account.revisionSemantics === 'revisioned'
     && (typeof account.expiresAt !== 'number' || account.expiresAt > now);
 }
@@ -524,7 +530,7 @@ export function isQualifiedConnectedAccountProfileUsableV4(input: Readonly<{
 /**
  * Resolve the one account that makes a qualified group passively usable.
  * Group runtime status is diagnostic state; authority comes from the active,
- * enabled member and a current connected revisioned account projection.
+ * enabled member and a current usable revisioned account projection.
  */
 export function resolveQualifiedConnectedAccountGroupActiveAccountV4(input: Readonly<{
   group: QualifiedConnectedAccountGroupV4;

@@ -5,6 +5,7 @@ import type { ProviderEndpointRuntimeStateV1, ProviderModelLoadStateV1 } from '.
 import type { ProviderErrorCodeV1 } from '../errors.js';
 import type { ProviderModelPickerSourceKind } from './modelPickerVisibility.js';
 import type { ProviderConnectionId } from '../ids.js';
+import type { QualifiedConnectedAccountPurposeBindingV1 } from '../../connect/connectedAccountPurposeBindings.js';
 
 export type ProviderCatalogCompatibilityPresentation = Readonly<{ result: ProviderBindingCompatibilityV1; compatibilityFingerprint: string }>;
 export type ProviderCatalogObservationPresentation = Readonly<{ stale: boolean; observedAt?: number; staleAt?: number }>;
@@ -19,6 +20,8 @@ export type ProviderConnectionCatalogRow = Readonly<{
   ref: Extract<ProviderBoundModelRef, { providerConnectionId: string }>;
   descriptor: ProviderMergedCatalogRowV1['descriptor']; sources: ProviderMergedCatalogRowV1['sources'];
   confidence: ProviderMergedCatalogRowV1['confidence']; presentation: ProviderCatalogRowPresentation;
+  /** Configured vendor slots serving this model; display facts, never credential-selection authority. */
+  gatewaySlots?: readonly QualifiedConnectedAccountPurposeBindingV1[];
 }>;
 export type ProviderConnectionCatalog = Readonly<{
   agentTargetKey: string; connectionId: ProviderConnectionId; authorization: ProviderCatalogAuthorizationPresentation;

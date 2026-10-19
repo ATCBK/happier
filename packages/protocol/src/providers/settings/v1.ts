@@ -136,7 +136,7 @@ export function isCanonicalProviderSavedSecretIdV1(value: unknown): value is str
 
 const SavedSecretSlotRecordV1Schema = lazyZodSchema(() => z.record(
   ProviderLocalIdSchema,
-  z.string().check(z.refine(isCanonicalProviderSavedSecretIdV1, 'Saved-secret id must be canonical')),
+  z.string().apply((base) => base.check(z.refine<z.output<typeof base>>(isCanonicalProviderSavedSecretIdV1, 'Saved-secret id must be canonical')) as typeof base & z.ZodMiniType<string, z.input<typeof base>>),
 ).check(z.superRefine((value, ctx) => {
   if (Object.keys(value).length > PROVIDER_SETTINGS_LIMITS_V1.credentialSlotsPerScope) {
     ctx.addIssue({ code: 'custom', message: 'Too many credential-slot bindings' });

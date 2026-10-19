@@ -9,6 +9,35 @@ import {
 } from './merge.js';
 
 describe('provider catalog merge', () => {
+  it('names returned snapshot ids from contributed catalogs without importing their availability or model controls', () => {
+    const merged = mergeProviderCatalogV1({
+      staticModels: [], manualModels: [],
+      modelNameCatalog: [{ id: 'acme-fast', name: 'Acme Fast', aliases: ['acme-fast-pinned'], contextWindowTokens: 100_000 }],
+      probeState: {
+        snapshot: { stale: false, observedAt: 1, models: [{ id: 'acme-fast-pinned', name: 'acme-fast-pinned' }, { id: 'unknown-id' }] },
+        staleProbeModels: [{ id: 'acme-fast' }],
+      },
+    });
+    expect(merged.rows.map(row => row.descriptor)).toEqual([
+      { id: 'acme-fast-pinned', name: 'Acme Fast' }, { id: 'unknown-id', name: 'unknown-id' },
+    ]);
+    expect(merged.staleRows[0]?.descriptor).toEqual({ id: 'acme-fast', name: 'Acme Fast' });
+  });
+  it('preserves exact producer slot facts across merge and stale transitions without deriving them from model ids', () => {
+    const purpose = { consumer: { pluginId: 'acme.gateway', localId: 'gateway' }, purpose: 'upstream' };
+    const refresh = { status: 'success' as const, observedAt: 20,
+      models: [{ id: 'opaque-model', connectedAccountPurposes: [purpose] }, { id: 'claude-looking-name' }] };
+    const state = applyProviderCatalogRefreshV1({ snapshot: null, staleProbeModels: [] }, refresh);
+    const merge = (probeState: typeof state) => mergeProviderCatalogV1({ staticModels: [], manualModels: [], probeState });
+    const row = merge(state).rows.find(candidate => candidate.descriptor.id === 'opaque-model')!;
+    expect(row).toMatchObject({ connectedAccountPurposes: [purpose] });
+    expect(Reflect.get(merge(state).rows.find(candidate => candidate.descriptor.id === 'claude-looking-name')!, 'connectedAccountPurposes')).toBeUndefined();
+    const removed = applyProviderCatalogRefreshV1(state, { status: 'success', observedAt: 30, models: [] });
+    expect(merge(removed).staleRows).toEqual(expect.arrayContaining([expect.objectContaining({ connectedAccountPurposes: [purpose] })]));
+    expect(() => applyProviderCatalogRefreshV1({ snapshot: null, staleProbeModels: [] }, {
+      ...refresh, models: [{ id: 'opaque-model', connectedAccountPurposes: [{ ...purpose, secret: 'must-not-cross' }] }],
+    })).toThrow();
+  });
   it('keeps verified static facts, permits only manual name overrides, and orders sources deterministically', () => {
     const state = applyProviderCatalogRefreshV1({ snapshot: null, staleProbeModels: [] }, {
       status: 'success', observedAt: 20,

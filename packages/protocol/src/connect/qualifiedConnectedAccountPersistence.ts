@@ -25,10 +25,14 @@ export const ConnectedAccountServiceIdentityV1Schema = defineProtocolUnion([
 ]);
 
 /** Built-in host callbacks belong to the running host, not an installed plugin. */
-export const ConnectedAccountSourceCustodyV1Schema = asProtocolZod(defineProtocolUnion([
+const ConnectedAccountSourceCustodyV1ProtocolSchema = defineProtocolUnion([
   PluginSourceCustodyV1ProtocolSchema,
   defineProtocolObject({ kind: defineProtocolLiteral('host') }, { policy: 'closed' }),
-]));
+]);
+export const ConnectedAccountSourceCustodyV1Schema: ReturnType<typeof asProtocolZod<
+  Parameters<typeof ConnectedAccountSourceCustodyV1ProtocolSchema.parse>[0],
+  ReturnType<typeof ConnectedAccountSourceCustodyV1ProtocolSchema.parse>
+>> = asProtocolZod(ConnectedAccountSourceCustodyV1ProtocolSchema);
 export type ConnectedAccountSourceCustodyV1 = ReturnType<typeof ConnectedAccountSourceCustodyV1Schema.parse>;
 
 export function connectedAccountSourceCustodyV1Equal(

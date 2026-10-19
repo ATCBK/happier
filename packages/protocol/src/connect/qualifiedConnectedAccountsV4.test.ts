@@ -121,6 +121,15 @@ describe('qualified connected-account V4 wire contract', () => {
     });
 
     expect(isQualifiedConnectedAccountProfileActiveV4(active, 100)).toBe(true);
+    for (const status of ['refreshing', 'refresh_failed_retryable'] as const) {
+      const refreshing = { ...active, status };
+      expect(isQualifiedConnectedAccountProfileActiveV4(refreshing, 100)).toBe(true);
+      expect(resolveQualifiedConnectedAccountGroupActiveAccountV4({
+        group, accounts: [refreshing], authentication, now: 100,
+      })).toEqual(refreshing);
+      expect(isQualifiedConnectedAccountProfileActiveV4({ ...refreshing, expiresAt: 100 }, 100)).toBe(false);
+    }
+    expect(isQualifiedConnectedAccountProfileActiveV4({ ...active, status: 'needs_reauth' }, 100)).toBe(false);
     expect(isQualifiedConnectedAccountProfileActiveV4(legacyUnfenced, 100)).toBe(false);
     expect(resolveQualifiedConnectedAccountGroupActiveAccountV4({
       group,
@@ -1183,6 +1192,10 @@ describe('qualified connected-account V4 wire contract', () => {
       ['POST', '/v4/connect/qualified/group/active-account'],
       ['GET', '/v4/connect/qualified/provider-account-usage/sources/resolve'],
       ['POST', '/v4/connect/qualified/provider-account-usage'],
+      ['GET', '/v4/connect/qualified/provider-account-usage/history'],
+      ['HEAD', '/v4/connect/qualified/provider-account-usage/history'],
+      ['PUT', '/v4/connect/qualified/provider-account-usage/history'],
+      ['GET', '/v4/connect/qualified/provider-account-usage/history/document'],
       ['GET', '/v4/connect/qualified/provider-account-usage/record'],
       ['DELETE', '/v4/connect/qualified/provider-account-usage/record'],
       ['POST', '/v4/connect/qualified/provider-account-usage/record/refresh'],

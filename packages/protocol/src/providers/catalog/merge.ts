@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 import type { ProviderModelDescriptorV1 } from '../../models/descriptor.js';
-import { ProviderModelDescriptorV1Schema } from '../../models/descriptor.js';
+import { ProviderModelDescriptorV1Schema, resolveModelDisplayName } from '../../models/descriptor.js';
 import type { ProviderManualModelV1 } from '../settings/v1.js';
 import { PROVIDER_SETTINGS_LIMITS_V1, ProviderManualModelV1Schema } from '../settings/v1.js';
 import {
@@ -10,6 +10,13 @@ import {
   type ProviderCatalogMembershipPolicyV1,
 } from './descriptorV1.js';
 import { PROVIDER_CATALOG_LIMITS_V1 } from './limits.js';
+import { QualifiedConnectedAccountPurposeV1Schema, type QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
+import { qualifiedPurposeKey } from '../../connect/connectedAccountPurposeBindings.js';
+
+const ConnectedAccountPurposesSchema = z.array(QualifiedConnectedAccountPurposeV1Schema).check(z.superRefine((purposes, ctx) => {
+  const keys = purposes.map(qualifiedPurposeKey);
+  if (new Set(keys).size !== keys.length) ctx.addIssue({ code: 'custom', message: 'Model purposes must be unique' });
+}));
 
 export type ProviderCatalogProbeModelV1 = Readonly<{
   id: ProviderModelDescriptorV1['id'];
@@ -17,6 +24,8 @@ export type ProviderCatalogProbeModelV1 = Readonly<{
   contextWindowTokens?: ProviderModelDescriptorV1['contextWindowTokens'];
   modelOptions?: ProviderModelDescriptorV1['modelOptions'];
   capabilities?: ProviderModelDescriptorV1['capabilities'];
+  /** Producer-observed upstream slots; downstream protocol/model names are not vendor evidence. */
+  connectedAccountPurposes?: readonly QualifiedConnectedAccountPurposeV1[];
 }>;
 
 export const ProviderCatalogProbeModelV1Schema = z.strictObject({
@@ -25,6 +34,7 @@ export const ProviderCatalogProbeModelV1Schema = z.strictObject({
   contextWindowTokens: ProviderModelDescriptorV1Schema.shape.contextWindowTokens,
   modelOptions: ProviderModelDescriptorV1Schema.shape.modelOptions,
   capabilities: ProviderModelDescriptorV1Schema.shape.capabilities,
+  connectedAccountPurposes: z.optional(ConnectedAccountPurposesSchema),
 }) satisfies z.ZodMiniType<ProviderCatalogProbeModelV1>;
 
 const ProviderRuntimeTimestampV1Schema = lazyZodSchema(() => z.number().check(z.nonnegative()));
@@ -88,6 +98,7 @@ export type ProviderMergedCatalogRowV1 = Readonly<{
   confidence: 'manual' | 'verified_static' | 'probe' | 'account_unverified';
   catalogStale: boolean;
   stale?: true;
+  connectedAccountPurposes?: readonly QualifiedConnectedAccountPurposeV1[];
 }>;
 
 export const ProviderMergedCatalogRowV1Schema = z.strictObject({
@@ -96,6 +107,7 @@ export const ProviderMergedCatalogRowV1Schema = z.strictObject({
   confidence: z.enum(['manual', 'verified_static', 'probe', 'account_unverified']),
   catalogStale: z.boolean(),
   stale: z.optional(z.literal(true)),
+  connectedAccountPurposes: z.optional(ConnectedAccountPurposesSchema),
 }).check(z.superRefine((value, ctx) => {
   if (value.stale && !value.catalogStale) {
     ctx.addIssue({ code: 'custom', path: ['catalogStale'], message: 'Stale rows require stale catalog presentation' });
@@ -155,7 +167,8 @@ export function applyProviderCatalogRefreshV1(
   };
 }
 
-function probeDescriptor(model: ProviderCatalogProbeModelV1): ProviderModelDescriptorV1 {
+/** Project catalog evidence into the strict Agent-facing model contract. */
+export function projectProviderCatalogProbeModelDescriptorV1(model: ProviderCatalogProbeModelV1): ProviderModelDescriptorV1 {
   return {
     id: model.id,
     name: model.name ?? model.id,
@@ -169,7 +182,7 @@ function authoritativeProbeDescriptor(
   probe: ProviderCatalogProbeModelV1,
   curated: ProviderModelDescriptorV1 | undefined,
 ): ProviderModelDescriptorV1 {
-  const descriptor = probeDescriptor(probe);
+  const descriptor = projectProviderCatalogProbeModelDescriptorV1(probe);
   if (!curated) return descriptor;
   return {
     ...descriptor,
@@ -184,6 +197,8 @@ export function mergeProviderCatalogV1(input: Readonly<{
   probeState: ProviderCatalogTransitionStateV1;
   probeConfidence?: 'probe' | 'account_unverified';
   membershipPolicy?: ProviderCatalogMembershipPolicyV1;
+  /** Display facts only; these models do not establish membership or runtime capabilities. */
+  modelNameCatalog?: readonly ProviderModelDescriptorV1[];
 }>): Readonly<{
   rows: readonly ProviderMergedCatalogRowV1[];
   staleRows: readonly ProviderMergedCatalogRowV1[];
@@ -218,6 +233,7 @@ export function mergeProviderCatalogV1(input: Readonly<{
 
   const manualById = new Map(manualModels.map((model) => [model.id, model]));
   const staticById = new Map(staticModels.map((model) => [model.id, model]));
+  const modelNameCatalog = [...staticModels, ...(input.modelNameCatalog ?? [])];
   const probeById = new Map(probeModels.map((model) => [model.id, model]));
   const rows: ProviderMergedCatalogRowV1[] = [];
   const emitted = new Set<string>();
@@ -226,10 +242,11 @@ export function mergeProviderCatalogV1(input: Readonly<{
   const emit = (id: string, descriptor: ProviderModelDescriptorV1, confidence: ProviderMergedCatalogRowV1['confidence']) => {
     const manual = manualById.get(id);
     rows.push({
-      descriptor: manual?.name ? { ...descriptor, name: manual.name } : descriptor,
+      descriptor: { ...descriptor, name: manual?.name ?? resolveModelDisplayName(descriptor, modelNameCatalog) },
       sources: { manual: Boolean(manual), static: staticById.has(id), probe: probeById.has(id) },
       confidence,
       catalogStale,
+      ...(probeById.get(id)?.connectedAccountPurposes ? { connectedAccountPurposes: probeById.get(id)!.connectedAccountPurposes } : {}),
     });
     emitted.add(id);
   };
@@ -260,21 +277,23 @@ export function mergeProviderCatalogV1(input: Readonly<{
       emit(model.id, { id: model.id, name: model.name ?? model.id }, 'manual');
     }
     for (const model of sortedProbe.filter((candidate) => !emitted.has(candidate.id))) {
-      emit(model.id, probeDescriptor(model), probeConfidence);
+      emit(model.id, projectProviderCatalogProbeModelDescriptorV1(model), probeConfidence);
     }
   }
 
   const staleRows: ProviderMergedCatalogRowV1[] = [];
   for (const model of staleProbeModels) {
     if (emitted.has(model.id)) continue;
+    const descriptor = probeOwnsMembership
+      ? authoritativeProbeDescriptor(model, staticById.get(model.id))
+      : projectProviderCatalogProbeModelDescriptorV1(model);
     staleRows.push({
-      descriptor: probeOwnsMembership
-        ? authoritativeProbeDescriptor(model, staticById.get(model.id))
-        : probeDescriptor(model),
+      descriptor: { ...descriptor, name: resolveModelDisplayName(descriptor, modelNameCatalog) },
       sources: { manual: false, static: staticById.has(model.id), probe: true },
       confidence: probeConfidence,
       catalogStale: true,
       stale: true,
+      ...(model.connectedAccountPurposes ? { connectedAccountPurposes: model.connectedAccountPurposes } : {}),
     });
   }
   return { rows, staleRows };
