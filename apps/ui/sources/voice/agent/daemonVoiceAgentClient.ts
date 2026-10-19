@@ -98,7 +98,9 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
     const chatModelSelection = params.chatModelSelection ?? (chatModelId
       ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: chatModelId }
       : params.chatModelId?.trim() === 'default' ? null : undefined);
-    const commitModelSelection = params.commitModelSelection;
+    const commitModelSelection = params.commitModelSelection ?? (commitModelId && commitModelId !== 'default'
+      ? { agentTargetKey: buildAgentUniverseBackendTargetKey(backendId), providerConnectionId: null, modelId: commitModelId }
+      : undefined);
     const ensureOrStartMethod = requiresProviderSafeExecutionRunStartRpc({ modelSelection: chatModelSelection }, true)
       || requiresProviderSafeModelSelectionRpc(chatModelSelection, commitModelSelection)
       ? SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1
@@ -128,6 +130,7 @@ export class DaemonVoiceAgentClient implements VoiceAgentClient {
       ...(params.sessionConfigOptionOverrides
         ? { sessionConfigOptionOverrides: params.sessionConfigOptionOverrides }
         : {}),
+      ...(params.connectedServices ? { connectedServices: params.connectedServices } : {}),
       ...(params.commitIsolation === true ? { commitIsolation: true } : {}),
       ...(launchProfileId ? { launchProfileId } : {}),
       idleTtlSeconds: params.idleTtlSeconds,

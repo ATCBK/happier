@@ -1,10 +1,9 @@
-import { readStoredSessionMessages } from "@happier-dev/session-core/messages";
 import { storage } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { createTtsPlaybackController, type TtsSpeakHandle } from '@/voice/output/TtsController';
 import { speakAssistantText } from '@/voice/output/speakAssistantText';
 import { resolveVoiceNetworkTimeoutMs } from '@/voice/runtime/fetchWithTimeout';
-import { waitForNextAssistantTextMessageEntry } from '@/voice/runtime/waitForNextAssistantTextMessage';
+import { captureAssistantTextMessageBaseline, waitForNextAssistantTextMessageEntry } from '@/voice/runtime/waitForNextAssistantTextMessage';
 import {
   appendVoiceConversationAssistantText,
   appendVoiceConversationNoteText,
@@ -12,6 +11,7 @@ import {
 } from '@/voice/transcript/voiceConversationTranscript';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 import { transitionVoiceRuntimeToIdle } from '@/voice/runtime/machine/voiceConversationRuntimeHelpers';
+import { readSafeVoiceRuntimeFailureCode } from '@/voice/runtime/voiceRuntimeFailureCode';
 import { classifyVoiceMachineError } from '@/voice/runtime/machine/voiceMachineError';
 import { voiceOutputStatusStore } from '@/voice/runtime/outputStatus/voiceOutputStatusStore';
 import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/playback/VoicePlaybackController';
@@ -117,9 +117,10 @@ export async function sendVoiceTextTurn(params: {
         });
       },
     });
-    if (!result.ok) throw new Error(result.message ?? result.reason);
+    if (!result.ok) throw Object.assign(new Error(result.message ?? result.reason), { code: result.errorCode ?? result.reason });
     if (result.disposition === 'settled') return;
-    throw new Error(result.disposition === 'ambiguous' ? 'voice_turn_dispatch_ambiguous' : 'voice_turn_pending');
+    const code = result.errorCode ?? (result.disposition === 'ambiguous' ? 'voice_turn_dispatch_ambiguous' : 'voice_turn_pending');
+    throw Object.assign(new Error(code), { code });
   }
 
   const transitionVoiceRuntimeToIdleIfCurrent = (idleParams: Parameters<typeof transitionVoiceRuntimeToIdle>[0]) => {
@@ -476,7 +477,8 @@ export async function sendVoiceTextTurn(params: {
       }
       transitionVoiceRuntimeToIdleIfCurrent({
         controlSessionId: sessionId,
-        reason: 'send_failed',
+        reason: readSafeVoiceRuntimeFailureCode(error) ?? 'send_failed',
+        cause: error,
       });
       throw error instanceof Error ? error : new Error('send_failed');
     } finally {
@@ -493,26 +495,22 @@ export async function sendVoiceTextTurn(params: {
     }
   }
 
-  const baselineMessages = readStoredSessionMessages(storage.getState(), sessionId) as any[];
-  const baselineCount = baselineMessages.length;
-  const baselineIds = new Set<string>(
-    baselineMessages
-      .map((message: any) => message?.id)
-      .filter((messageId: any): messageId is string => typeof messageId === 'string'),
-  );
+  const { baselineCount, baselineIds } = captureAssistantTextMessageBaseline(sessionId);
 
   const autoSpeak = config?.tts?.autoSpeakReplies !== false;
   // The provider may reply before enqueue's HTTP acknowledgement. Demand its
   // transcript before submission so Sync retains that real reply for playback.
   const releaseReplyConsumer = autoSpeak ? registerSessionRealtimeTranscriptConsumer(sessionId) : null;
+  let submittedUserLocalId: string | undefined;
   voiceConversationRuntimeMachine.transitionToThinking({ controlSessionId: sessionId });
   try {
     throwIfAborted();
-    await sync.submitMessage(sessionId, userText, undefined, undefined, {
+    const submission = await sync.submitMessage(sessionId, userText, undefined, undefined, {
       callerSurface: 'voice_turn',
       forceImmediate: true,
       hostAdmissionOrigin: 'voice',
     });
+    submittedUserLocalId = submission.localId;
   } catch (error) {
     transitionVoiceRuntimeToIdleIfCurrent({
       controlSessionId: sessionId,
@@ -533,6 +531,7 @@ export async function sendVoiceTextTurn(params: {
     baselineIds,
     baselineCount,
     params.signal,
+    submittedUserLocalId,
   );
   if (params.signal?.aborted) {
     transitionVoiceRuntimeToIdleIfCurrent({ controlSessionId: sessionId });

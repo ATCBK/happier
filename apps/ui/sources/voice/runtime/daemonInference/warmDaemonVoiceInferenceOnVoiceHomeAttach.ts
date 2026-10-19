@@ -10,6 +10,7 @@ import {
     resolveLocalVoiceAdapterSettings,
 } from '@/voice/local/localVoiceSettings';
 import { resolveKokoroDaemonTtsPackId } from '@/voice/kokoro/assets/resolveKokoroDaemonTtsPackId';
+import { captureDaemonVoiceModelCatalogObservation } from '@/voice/settings/panels/modelCatalog/daemonVoiceModelCatalogObservation';
 
 import { createDaemonVoiceInferenceClientError } from './daemonVoiceInferenceErrors';
 import { resolveDaemonVoiceInferenceExecution } from './daemonVoiceInferencePolicy';
@@ -33,6 +34,7 @@ async function warmDaemonVoiceInferenceModels(
     if (!machineId) {
         return;
     }
+    const observation = captureDaemonVoiceModelCatalogObservation(machineId);
 
     const parsed = DaemonVoiceInferenceModelsWarmResponseSchema.safeParse(
         await machineRpcWithServerScope({
@@ -55,6 +57,7 @@ async function warmDaemonVoiceInferenceModels(
             parsed.data.error,
         );
     }
+    observation.observeModels(parsed.data.models);
 }
 
 async function resolveWarmPackIds(params: Readonly<{

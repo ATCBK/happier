@@ -449,7 +449,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     expect(storage.getState().sessions.s1.active).toBe(false);
     await expect(turn).rejects.toMatchObject({
       message: 'Target session is inactive. Resume it before starting local voice.',
-      code: 'VOICE_AGENT_TARGET_SESSION_INACTIVE',
+      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
     });
 
     expect(requestedPaths).toContain('/v2/sessions/s1');
@@ -591,7 +592,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
     expect(daemonStart).not.toHaveBeenCalled();
   });
 
-  it('surfaces a clear error when starting local voice on a target flavor without local control support', async () => {
+  it('starts an independently admitted Voice run on a target without terminal control support', async () => {
     setVoiceControllerState({
       sessions: {
         s1: { id: 's1', active: true, presence: 'online', modelMode: 'default', metadata: { flavor: 'kimi' } },
@@ -600,14 +601,11 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     const controller = createVoiceExecutionTransport();
 
-    await expect(controller.ensureRunningAndMaybeWelcome('s1')).rejects.toMatchObject({
-      message: 'Target session provider does not support local voice control.',
-      code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED',
-    });
-    expect(daemonStart).not.toHaveBeenCalled();
+    await expect(controller.ensureRunningAndMaybeWelcome('s1')).resolves.toBeNull();
+    expect(controller.isActive('s1')).toBe(true);
   });
 
-  it('surfaces a clear error when starting local voice on an OpenCode ACP session without effective local control support', async () => {
+  it('does not confuse OpenCode ACP terminal support with Voice Execution Run admission', async () => {
     setVoiceControllerState({
       settings: {
         opencodeBackendMode: 'server',
@@ -625,11 +623,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     const controller = createVoiceExecutionTransport();
 
-    await expect(controller.ensureRunningAndMaybeWelcome('s1')).rejects.toMatchObject({
-      message: 'Target session provider does not support local voice control.',
-      code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED',
-    });
-    expect(daemonStart).not.toHaveBeenCalled();
+    await expect(controller.ensureRunningAndMaybeWelcome('s1')).resolves.toBeNull();
+    expect(controller.isActive('s1')).toBe(true);
   });
 
   it('always enables daemon transcript persistence for the hidden voice conversation session', async () => {

@@ -1,5 +1,6 @@
 type GenerationLease = Readonly<{
   runtimeLeaseId: string;
+  signal: AbortSignal;
   runIfCurrent<T>(callback: () => T): T | undefined;
   isCurrent(): boolean;
   canCleanup(): boolean;
@@ -8,6 +9,7 @@ type GenerationLease = Readonly<{
 
 let nextGeneration = 0;
 let activeGeneration: number | null = null;
+let activeController: AbortController | null = null;
 let generationRevision = 0;
 const generationListeners = new Set<() => void>();
 
@@ -28,11 +30,16 @@ export function subscribeBundledConversationRuntimeGeneration(listener: () => vo
 /** Synchronous ownership lease protecting singleton voice state from late async teardown. */
 export function acquireBundledConversationRuntimeGeneration(): GenerationLease {
   const generation = ++nextGeneration;
+  const previousController = activeController;
+  const controller = new AbortController();
+  activeController = controller;
   let revoked = false;
   activeGeneration = generation;
+  previousController?.abort();
   publishGenerationChange();
   return Object.freeze({
     runtimeLeaseId: String(generation),
+    signal: controller.signal,
     runIfCurrent<T>(callback: () => T): T | undefined {
       return !revoked && activeGeneration === generation ? callback() : undefined;
     },
@@ -41,8 +48,10 @@ export function acquireBundledConversationRuntimeGeneration(): GenerationLease {
     revoke() {
       if (revoked) return;
       revoked = true;
+      controller.abort();
       if (activeGeneration === generation) {
         activeGeneration = null;
+        activeController = null;
         publishGenerationChange();
       }
     },
@@ -52,5 +61,7 @@ export function acquireBundledConversationRuntimeGeneration(): GenerationLease {
 export function resetBundledConversationRuntimeGenerationForTests(): void {
   nextGeneration = 0;
   activeGeneration = null;
+  activeController?.abort();
+  activeController = null;
   publishGenerationChange();
 }

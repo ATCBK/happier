@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -38,6 +39,7 @@ describe('teleportVoiceAgentToSessionRoot', () => {
 
   beforeEach(async () => {
     bindingAtStop = null;
+    const machineRow = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
     // A live daemon independently publishes activity; durable HTTP rows alone
     // do not prove either the old Voice Home or the requested root is online.
     unsubscribeActivity = storage.subscribe(current => {
@@ -59,8 +61,21 @@ describe('teleportVoiceAgentToSessionRoot', () => {
       bindingAtStop = readVoiceConversationBindingMetadata('carrier-1',
         readVoiceSessionOwnerMetadataFromState(storage.getState(), 'carrier-1'),
         { sourceServerId: active.binding.conversationSessionAddress.serverId });
+    }, handleOtherRpc: async (method, input) => {
+      if (method === RPC_METHODS.SPAWN_HAPPY_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+        const request = SessionResumeRequestV1Schema.parse(input);
+        expect(request.sessionId).toBe('carrier-1');
+        return { type: 'success', sessionId: request.sessionId };
+      }
+      throw new Error(`Unexpected Voice teleport RPC: ${method}`);
     } });
     harness = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: daemon.dispatch,
+      handleRequest: async path => {
+        const pathname = new URL(path, 'https://voice.test').pathname;
+        if (pathname === '/v1/machines') return Response.json([machineRow]);
+        if (pathname === '/v1/machines/machine-1') return Response.json({ machine: machineRow });
+        return null;
+      },
       initializeSessionId: 'global-carrier',
       existingSession: { id: 'global-carrier', active: true,
         metadata: writeVoiceConversationScopeMetadata({ path: '/voice', host: 'voice.test', machineId: 'machine-1',
@@ -78,7 +93,7 @@ describe('teleportVoiceAgentToSessionRoot', () => {
     });
     active = await harness.activateLocalAgent();
     const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now(),
-      access: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }).access });
+      access: machineRow.access });
     storage.setState({ machines: { [machine.id]: machine },
       machineListByServerId: { [active.binding.conversationSessionAddress.serverId]: [machine] } });
     setTeleportPolicy({});

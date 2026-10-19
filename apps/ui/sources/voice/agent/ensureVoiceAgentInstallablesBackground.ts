@@ -8,6 +8,7 @@ import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoice
 export async function ensureVoiceAgentInstallablesBackground(params: Readonly<{
   agentId: string | null;
   sessionId: string;
+  signal?: AbortSignal;
 }>): Promise<void> {
   // Agent identity is open here on purpose: installable deps are contributed per Agent, and a
   // plugin-contributed Agent declares its own through the daemon projection that
@@ -29,5 +30,6 @@ export async function ensureVoiceAgentInstallablesBackground(params: Readonly<{
     serverId: getActiveServerSnapshot().serverId,
     settings: state?.settings ?? {},
     resumeSessionId: params.sessionId,
+    signal: params.signal,
   });
 }

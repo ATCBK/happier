@@ -2,6 +2,13 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 
 const network = await installSessionOpsNetworkBoundary();
 import { readFile } from 'node:fs/promises';
+import * as React from 'react';
+const { renderHook } = await import('@/dev/testkit/hooks/renderHook');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+const { CurrentUiContextProvider, useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
 
 import type {
   BundledRealtimeProviderRuntimeHost,
@@ -29,7 +36,6 @@ import {
 } from '@happier-dev/protocol';
 import {
   computePluginUiArtifactFileSetSha256DigestV1,
-  type CurrentUiContextSnapshotV1,
 } from '@happier-dev/protocol/plugins/ui';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -41,7 +47,6 @@ const { EMPTY_PLUGIN_UI_PROJECTION } = await import("@/sync/domains/plugins/ui/p
 import type { PluginUiProjectionModel } from "@/sync/domains/plugins/ui/projection";
 const { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } = await import("@/sync/domains/plugins/ui/projectionUnion");
 const { createCurrentUiContextVoiceToolPort } = await import("@/components/appShell/currentUiContext/currentUiContextVoiceToolPort");
-import type { CurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 const { createAppShellPluginUiInvocationHost } = await import("@/components/appShell/plugins/pluginUiInvocationHost");
 import type { AppShellPluginUiActionExecute } from "@/components/appShell/plugins/pluginUiInvocationHost";
 const { loadPluginReactNativeBundleExport } = await import("@/components/plugins/reactNative/loader");
@@ -217,14 +222,13 @@ function createClientActionFixture(handler: PluginClientActionHandler) {
     ...declaration,
     pluginId: CLIENT_ACTION_ORIGIN.materializationRef.pluginId,
     occurrenceId: 'acme-synthetic-voice-client-action-occurrence-12',
-    serverIdentityId: CLIENT_ACTION_ORIGIN.serverIdentityId,
-    materializationRef: CLIENT_ACTION_ORIGIN.materializationRef,
+    executionOrigin: CLIENT_ACTION_ORIGIN,
     available: true,
     authorization: {
       generation: {
-        targetGeneration: String(CLIENT_ACTION_GENERATION),
-        desiredGeneration: String(CLIENT_ACTION_GENERATION),
-        appliedGeneration: String(CLIENT_ACTION_GENERATION),
+        targetGeneration: 'acme-synthetic-voice-client-action-occurrence-12',
+        desiredGeneration: 'acme-synthetic-voice-client-action-occurrence-12',
+        appliedGeneration: 'acme-synthetic-voice-client-action-occurrence-12',
       },
       resourceSelections: [],
       scopedGrants: [],
@@ -2173,14 +2177,13 @@ describe('external Voice provider host composition', () => {
       ...packedContextAction,
       pluginId: packedOrigin.materializationRef.pluginId,
       occurrenceId: 'packed-voice-occurrence-12',
-      serverIdentityId: packedOrigin.serverIdentityId,
-      materializationRef: packedOrigin.materializationRef,
+      executionOrigin: packedOrigin,
       available: true,
       authorization: {
         generation: {
-          targetGeneration: '12',
-          desiredGeneration: '12',
-          appliedGeneration: '12',
+          targetGeneration: 'packed-voice-occurrence-12',
+          desiredGeneration: 'packed-voice-occurrence-12',
+          appliedGeneration: 'packed-voice-occurrence-12',
         },
         resourceSelections: [],
         scopedGrants: [],
@@ -2206,55 +2209,31 @@ describe('external Voice provider host composition', () => {
         }),
       }),
     });
-    const createCurrentContext = (
-      id: string,
-      label: string,
-    ): Readonly<{
-      command: NonNullable<ReturnType<CurrentUiContextReader['resolveCurrentUiCommand']>>;
-      retirement: AbortController;
-      snapshot: CurrentUiContextSnapshotV1;
-    }> => {
-      const retirement = new AbortController();
-      const command: NonNullable<ReturnType<CurrentUiContextReader['resolveCurrentUiCommand']>> = {
-        id,
-        command: {
-          kind: 'executeAction',
-          action: {
-            pluginId: packedAction.pluginId,
-            localId: packedAction.id,
-          },
-        },
-        retirementSignal: retirement.signal,
-      };
-      const snapshot: CurrentUiContextSnapshotV1 = {
-        navigation: { area: 'app', screen: 'home' },
-        entity: { kind: 'voice', label },
-        commands: [{
-          id,
-          title: 'Open packed current context',
-        }],
-      };
-      return {
-        command,
-        retirement,
-        snapshot,
-      };
+    const contextAccount = await captureLazyActionAccountContext(preparationHome.home.id);
+    onTestFinished(() => contextAccount.dispose());
+    const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(InjectedAuthProvider,
+      { credentials: contextAccount.credentials, children: null }, React.createElement(MainAppTabStateProvider, null,
+        React.createElement(AppPaneProvider, null, React.createElement(CurrentUiContextProvider, null,
+          React.createElement(PluginSurfaceFocusEligibilityProvider,
+            { active: true, currentUiContextActive: true, children: null }, children)))));
+    // The mounted owner pairs safe descriptors with private semantic commands,
+    // retires their IDs and notifies Voice. No reader custody is fabricated.
+    const mountedContext = await renderHook((label: string) => {
+      const enrichment = React.useMemo(() => ({ entity: { kind: 'voice', label }, commands: [{
+        title: 'Open packed current context', command: { kind: 'executeAction' as const,
+          action: { pluginId: packedAction.pluginId, localId: packedAction.id } },
+      }] }), [label]);
+      usePublishCurrentUiContext(enrichment);
+      return useOptionalCurrentUiContextReader();
+    }, { wrapper, initialProps: 'Packed Voice current context' });
+    onTestFinished(() => mountedContext.unmount());
+    const currentContextReader = mountedContext.getCurrent();
+    if (!currentContextReader) throw new Error('Mounted Current UI reader is unavailable');
+    const readCurrentCommandId = () => {
+      const id = currentContextReader.readCurrentUiContext()?.commands.find(command => command.title === 'Open packed current context')?.id;
+      if (!id) throw new Error('Mounted packed Voice command is unavailable');
+      return id;
     };
-    let currentContext = createCurrentContext(
-      'current-ui-command:packed-a',
-      'Packed Voice current context',
-    );
-    const currentContextListeners = new Set<() => void>();
-    const currentContextReader: CurrentUiContextReader = Object.freeze({
-      readCurrentUiContext: () => currentContext.snapshot,
-      resolveCurrentUiCommand: (id) => currentContext.command.id === id
-        ? currentContext.command
-        : null,
-      subscribe: (listener) => {
-        currentContextListeners.add(listener);
-        return () => currentContextListeners.delete(listener);
-      },
-    });
     const currentUiContext = createCurrentUiContextVoiceToolPort({
       reader: currentContextReader,
       readProjection: () => packedProjection,
@@ -2465,17 +2444,12 @@ describe('external Voice provider host composition', () => {
       expect(JSON.stringify(fixtureEvents)).not.toContain('private session summary');
       expect(JSON.stringify(fixtureEvents)).not.toContain('/Users/alice');
 
-      const retiredCommandId = currentContext.command.id;
-      currentContext.retirement.abort();
-      currentContext = createCurrentContext(
-        'current-ui-command:packed-b',
-        'Packed Voice replacement context',
-      );
-      for (const listener of currentContextListeners) listener();
+      const retiredCommandId = readCurrentCommandId();
+      await mountedContext.rerender('Packed Voice replacement context');
       await expect(currentUiContext.invokeCurrentUiCommand?.({ commandId: retiredCommandId }))
         .resolves.toEqual({ ok: false, code: 'unavailable' });
       await expect(currentUiContext.invokeCurrentUiCommand?.({
-        commandId: currentContext.command.id,
+        commandId: readCurrentCommandId(),
       })).resolves.toEqual({ ok: true, result: { opened: true } });
       expect(fixtureEvents).toContainEqual(expect.objectContaining({
         kind: 'packed_current_context_action',
@@ -2497,7 +2471,7 @@ describe('external Voice provider host composition', () => {
         platform: 'web',
       })).toBeNull();
       await expect(currentUiContext.invokeCurrentUiCommand?.({
-        commandId: currentContext.command.id,
+        commandId: readCurrentCommandId(),
       })).resolves.toEqual({ ok: false, code: 'unavailable' });
       expect(JSON.stringify(fixtureEvents)).toContain('runtime_disposed');
     } finally {

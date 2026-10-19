@@ -150,6 +150,22 @@ describe('VoiceConversationRuntimeMachine', () => {
         });
     });
 
+    it.each([null, 'happier.voice.openai/realtime-openai'] as const)(
+        'preserves mute through End for %s and initializes a fresh attempt independently', (adapterId) => {
+            const machine = createVoiceConversationRuntimeMachine();
+            const owner = { controlSessionId: 's1', adapterId, attemptId: adapterId === null ? null : 1 };
+            machine.transitionToConnecting(owner);
+            machine.transitionToListening(owner);
+            machine.setMuted({ ...owner, micMuted: true });
+            machine.transitionToEnding(owner);
+            machine.transitionToDisconnected(owner);
+            expect(machine.getSnapshot()).toMatchObject({ state: 'disconnected', micMuted: true });
+
+            machine.transitionToConnecting({ ...owner, attemptId: adapterId === null ? null : 2 });
+            expect(machine.getSnapshot()).toMatchObject({ state: 'connecting', micMuted: false });
+        },
+    );
+
     it('does not let a replaced realtime owner retain or restore its mute projection', () => {
         const machine = createVoiceConversationRuntimeMachine();
 

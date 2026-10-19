@@ -31,7 +31,7 @@ afterEach(async () => {
     finally { disposeStreamingFixture = undefined; }
 });
 
-async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; persistent?: boolean; staleRpc?: boolean }> = {}) {
+async function createStreamingFixture(options: Readonly<{ streaming?: boolean; target?: boolean; targetWithoutTerminal?: boolean; persistent?: boolean; staleRpc?: boolean }> = {}) {
     const starts: Array<ReturnType<typeof ExecutionRunTurnStreamStartRequestSchema.parse>> = [];
     const reads: Array<ReturnType<typeof ExecutionRunTurnStreamReadRequestSchema.parse>> = [];
     let events: ExecutionRunTurnStreamEvent[] = [{ t: 'done', assistantText: 'assistant reply', actions: [] }];
@@ -69,8 +69,8 @@ async function createStreamingFixture(options: Readonly<{ streaming?: boolean; t
         },
     });
     const target = createSessionFixture({ id: 'streaming-target', active: true, activeAt: Date.now(), metadata: {
-        ...createSessionFixture().metadata!, flavor: 'claude', summary: { text: 'STREAMING_TARGET_SENTINEL', updatedAt: 1 },
-        path: '/private/STREAMING_PATH_SENTINEL', agentRuntimeCapabilitiesV1: { localControl: { supported: true } },
+        ...createSessionFixture().metadata!, flavor: options.targetWithoutTerminal ? 'codex' : 'claude', summary: { text: 'STREAMING_TARGET_SENTINEL', updatedAt: 1 },
+        path: '/private/STREAMING_PATH_SENTINEL', agentRuntimeCapabilitiesV1: { localControl: options.targetWithoutTerminal ? null : { supported: true } },
     } });
     const fixture = await createStandaloneVoicePolicyHarness({
         mode: 'off', sessions: [
@@ -176,6 +176,15 @@ async function mountAutomaticUiContext() {
 }
 
 describe('Voice streaming through retained initialization, execution transport and daemon RPC', () => {
+    it('delivers a carrier Voice Agent turn when its coding target has no terminal-control surface', async () => {
+        const f = await createStreamingFixture({ target: true, targetWithoutTerminal: true });
+        await expect(f.transport.sendTurn(f.controlSessionId, 'hello')).resolves.toEqual({
+            assistantText: 'assistant reply', actions: [],
+        });
+        expect(f.starts).toEqual([expect.objectContaining({ runId: 'streaming-run' })]);
+        expect(f.rpc.readRetainedRun()?.status).toBe('running');
+    });
+
     it('admits provider resume from the current bound publication while the retained RPC Session is stale', async () => {
         const f = await createStreamingFixture({ persistent: true, staleRpc: true });
         const { voiceSessionBindingStore, bindVoiceRuntimeAttemptBinding, createVoiceRuntimeAttemptBindingOwner } = await import('@/voice/binding/voiceConversationBindingStore');

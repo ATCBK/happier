@@ -123,12 +123,12 @@ export function createVoiceTurnStreaming(args: Readonly<{
 
         const sendWithHandle = async (displayUserText: string) => {
             const handle = await args.getVoiceAgentHandle(sessionId).catch((error: unknown) => {
-                // Selection refusal happens before this input reaches the turn
-                // transport. Preserve that positive no-effect fact for Pending.
-                if (error instanceof Error && 'code' in error && error.code === 'VOICE_AGENT_SELECTION_UNAVAILABLE') {
-                    throw createVoiceTextTurnRejectedBeforeEffectError(error, 'provider_unavailable_before_acceptance');
-                }
-                throw error;
+                // A recovery can follow a prior dispatch; do not infer its outcome
+                // from the later failure to reacquire a handle.
+                if (lastHandle) throw error;
+                // Initial acquisition has not received this input: no transcript
+                // commit or turn dispatch can have happened for it.
+                throw createVoiceTextTurnRejectedBeforeEffectError(error, 'provider_unavailable_before_acceptance');
             });
             lastHandle = handle;
             const nextUserText = preparePayloadText();

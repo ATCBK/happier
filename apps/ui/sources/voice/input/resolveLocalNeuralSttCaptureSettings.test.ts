@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveLocalNeuralSttCaptureSettings } from './resolveLocalNeuralSttCaptureSettings';
+import { VoiceLocalSttSchema } from '@/sync/domains/settings/voiceLocalSttSettings';
 
 describe('resolveLocalNeuralSttCaptureSettings', () => {
   it('keeps conversation recognition separate from reply and the per-purpose Dictation override', () => {
@@ -57,7 +58,7 @@ describe('resolveLocalNeuralSttCaptureSettings', () => {
         },
       },
     })).toEqual({
-      packId: 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17',
+      packId: VoiceLocalSttSchema.parse({}).localNeural.assetId,
       language: null,
     });
   });

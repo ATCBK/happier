@@ -78,19 +78,20 @@ describe('createLocalVoiceAdapter', () => {
     const adapter = createLocalVoiceAdapter('local_conversation', { contextUpdates: true, textTurns: true });
     await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
     const fallback = sessionRpcWithServerScope.getMockImplementation();
+    const responseFailure = new Error('assistant_stream_failed');
     let acceptedBeforeFailure = false;
     let accepted = false;
     sessionRpcWithServerScope.mockImplementation(async request => {
       if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
         acceptedBeforeFailure = accepted;
-        throw new Error('assistant_stream_failed');
+        throw responseFailure;
       }
       if (!fallback) throw new Error('Missing daemon transport responder');
       return fallback(request);
     });
-    await adapter.sendTextTurn?.({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+    await expect(adapter.sendTextTurn?.({ controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
       conversationSessionId: 'voice-home-session', text: 'keep this prompt', localId: 'voice-local-accepted',
-      deliveryCommand: 'interrupt_and_send', onAccepted: async () => { accepted = true; } });
+      deliveryCommand: 'interrupt_and_send', onAccepted: async () => { accepted = true; } })).rejects.toThrow(responseFailure);
     expect(accepted).toBe(true);
     expect(acceptedBeforeFailure).toBe(true);
     expect(adapter.getSnapshot()).toMatchObject({ errorMessage: 'send_failed', mode: 'idle' });

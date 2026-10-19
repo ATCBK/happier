@@ -17,6 +17,7 @@ import { resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatal
 import { AcpBackendDefinitionV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { createDeferred } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { readLocalConversationVoiceSettings, voiceSettingsDefaults, writeLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -216,6 +217,9 @@ describe('resolveVoiceConfiguredAgentTarget', () => {
     } });
     storage.setState({ settings: settingsParse({ voice }) });
     machineRpc.mockImplementation(async request => {
+      if (request.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+        return createExistingSessionDirectoryPreflightResult(request.payload);
+      }
       if (request.method === RPC_METHODS.SESSION_SPAWN_NEW) {
         const input = SessionSpawnNewInputV2Schema.parse(request.payload);
         expect(input.agentTarget).toMatchObject({ definitionId: 'row-review' });

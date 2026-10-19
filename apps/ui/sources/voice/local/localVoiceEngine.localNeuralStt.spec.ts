@@ -7,6 +7,8 @@ import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/pr
 import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
+import { VoiceLocalSttSchema } from '@/sync/domains/settings/voiceLocalSttSettings';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 
 import {
   audioStreamStart,
@@ -321,6 +323,20 @@ describe('local voice engine local neural STT (streaming)', () => {
   });
 
   it('falls back to the default local_neural pack when assetId is missing', async () => {
+    const defaultPackId = VoiceLocalSttSchema.parse({}).localNeural.assetId;
+    if (!defaultPackId) throw new Error('Local neural STT requires its declared fallback pack');
+    const fixtureManifest = localVoiceModelPackFilesystem.files.get(
+      `${localVoiceModelPackFilesystem.root}/${LOCAL_VOICE_STT_PACK_ID}/pack.json`,
+    );
+    if (!fixtureManifest) throw new Error('Expected the installed STT boundary manifest');
+    const defaultManifest = parseModelPackManifest({
+      ...parseModelPackManifest(JSON.parse(new TextDecoder().decode(fixtureManifest))),
+      packId: defaultPackId,
+    });
+    localVoiceModelPackFilesystem.files.set(
+      `${localVoiceModelPackFilesystem.root}/${defaultPackId}/pack.json`,
+      new TextEncoder().encode(JSON.stringify(defaultManifest)),
+    );
     const storage = await getStorage();
     storage.__setState({
       settings: {
@@ -359,7 +375,7 @@ describe('local voice engine local neural STT (streaming)', () => {
     await toggleLocalVoiceTurn('s1');
     expect(getLocalVoiceState().status, JSON.stringify(getLocalVoiceState())).toBe('recording');
     expect(sherpaStreamingCreate).toHaveBeenCalledWith(expect.objectContaining({
-      assetsDir: uriToFilePath(`${localVoiceModelPackFilesystem.root}/${LOCAL_VOICE_STT_PACK_ID}`),
+      assetsDir: uriToFilePath(`${localVoiceModelPackFilesystem.root}/${defaultPackId}`),
     }));
   });
 

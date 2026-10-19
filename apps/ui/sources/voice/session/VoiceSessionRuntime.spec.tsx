@@ -8,14 +8,14 @@ import { renderScreen as renderRuntimeScreen } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { settingsParse } from '@/sync/domains/settings/settings';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { SavedSecretResourceMaterialsResponseV1Schema, type SavedSecretResourceMaterialV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { createSessionFixture } from '@/dev/testkit';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
@@ -306,6 +306,9 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
         id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' }, isBuiltIn: true,
         capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true, startupInstructions: { versions: [1] } } },
       } }, familiesById: {} }) } };
+      if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+        return { ok: true, result: createExistingSessionDirectoryPreflightResult(raw.params) };
+      }
       if (method === RPC_METHODS.SESSION_SPAWN_NEW) {
         const request = SessionSpawnNewInputV2Schema.parse(raw.params);
         if (!('path' in request.directory)) throw new Error('Expected actual Global absolute directory');
@@ -593,10 +596,12 @@ describe('VoiceSessionRuntime', () => {
     for (const browser of browserBoundaries.splice(0).reverse()) browser.restore();
     for (const dispose of actionLoaderDisposals.splice(0).reverse()) dispose();
     const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-    retireActiveServerAccountScopeLifetime();
+    // The connection harness fences disconnect on its captured Account lifetime.
+    // Retiring it first skips disconnect and leaks the Account into the next test.
     await accountConnection?.dispose();
     accountConnection = null;
     for (const connection of retiredAccountConnections.splice(0).reverse()) await connection.dispose();
+    retireActiveServerAccountScopeLifetime();
     const { resetVoiceSessionRuntimeStateForTests } = await import('./voiceSessionStore');
     await resetVoiceSessionRuntimeStateForTests();
     currentUiContextToolSetMode.value = 'on_demand';
@@ -671,6 +676,36 @@ describe('VoiceSessionRuntime', () => {
     }
     // Rendering and End leave human approval custody untouched.
     expect(storage.getState().sessions[session.id]?.agentState?.requests?.['direct-request']).toEqual(request);
+  });
+
+  it('refreshes the active conversation scope when carrier metadata changes without changing its binding', async () => {
+    const mounted = await mountGeneratedElevenLabsRuntime();
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+    const { getVoiceSessionPresentedBinding, getVoiceSessionEndedAttempt } = await import('./voiceSessionStore');
+    const { readVoiceConversationScopeMetadata, writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
+    const binding = getVoiceSessionPresentedBinding();
+    if (!binding) throw new Error('Expected the admitted local binding');
+    const carrier = storage.getState().sessions[binding.conversationSessionId];
+    const carrierMetadata = carrier?.metadata;
+    if (!carrier || !carrierMetadata) throw new Error('Expected the admitted conversation carrier metadata');
+    const admittedBindings = voiceSessionBindingStore.getState();
+    await act(async () => {
+      storage.getState().applySessions([{
+        ...carrier,
+        metadata: writeVoiceConversationScopeMetadata(carrierMetadata, {
+          kind: 'session_root', sessionRootId: 'updated-conversation-root',
+        }),
+      }]);
+    });
+    expect(readVoiceConversationScopeMetadata(storage.getState().sessions[carrier.id]?.metadata)).toEqual({
+      kind: 'session_root', sessionRootId: 'updated-conversation-root',
+    });
+    expect(voiceSessionBindingStore.getState()).toBe(admittedBindings);
+    await act(async () => { await mounted.lifecycle.stop(binding.controlSessionId); });
+    expect(getVoiceSessionEndedAttempt()?.conversationScope).toEqual({
+      kind: 'session_root', sessionRootId: 'updated-conversation-root',
+    });
   });
 
   it('does not adopt a synced binding for an unbound live direct-session attempt', async () => {
@@ -1702,15 +1737,11 @@ describe('VoiceSessionRuntime', () => {
 
     await vi.waitFor(() => expect(getVoiceSessionLifecycleController()).toBeNull());
     expect(getVoiceSessionSnapshot()).toEqual({
-      ...activeSnapshot,
       adapterId: null,
       sessionId: null,
       status: 'disconnected',
       mode: 'idle',
       canStop: false,
-      canCommitInput: false,
-      canHoldToTalk: false,
-      inUseVoice: undefined,
     });
     const admissionAfterStop = voiceCaptureAdmissionController.acquire('dictation');
     expect(admissionAfterStop.status).toBe('acquired');

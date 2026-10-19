@@ -231,6 +231,12 @@ export function createTurnEndpointController(deps: TurnEndpointControllerDeps): 
             clearTimer(timer);
         },
         signalEndpointDetected: ({ sessionId, source, transcript, durationMs, confidence }) => {
+            // Streaming recognizers also report endpoints for pure silence.
+            // Those cannot spend this capture's one utterance admission. Acoustic
+            // VAD still finalizes real speech before recognition supplies text.
+            if ((source === 'native_stream' || source === 'daemon_stream') && !normalizeNonEmptyString(transcript)) {
+                return;
+            }
             const normalizedSessionId = normalizeSessionId(sessionId);
             if (!activeSession || !normalizedSessionId || activeSession.sessionId !== normalizedSessionId) {
                 return;

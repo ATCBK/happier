@@ -175,6 +175,17 @@ describe('local voice engine device STT (experimental)', () => {
             }
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'instead explain the wind speed', confidence: 0.9 }] });
             await vi.waitFor(() => expect(expoSpeechStop).toHaveBeenCalled());
+            let manualCommit: Promise<void> | undefined;
+            if (scenario === 'manual capture') {
+                await initialTurn;
+                expect(engine.getLocalVoiceState().status).toBe('recording');
+                expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
+                manualCommit = engine.commitLocalVoiceInput('s1');
+                void manualCommit.catch(error => {
+                    outputFailure = error instanceof Error
+                        ? { name: error.name, message: error.message } : { name: typeof error, message: String(error) };
+                });
+            }
             await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
                 sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
                     role: 'user', content: { type: 'text', text: 'instead explain the wind speed' },
@@ -182,6 +193,7 @@ describe('local voice engine device STT (experimental)', () => {
             })));
             await initialTurn;
             await engine.stopLocalVoiceSession();
+            await manualCommit;
         } finally {
             await engine.stopLocalVoiceSession();
             // The real hook retires its transcript-consumer registration before
@@ -205,6 +217,28 @@ describe('local voice engine device STT (experimental)', () => {
         expect(speechRecStart).toHaveBeenCalledTimes(2);
         expect(speechRecStop).toHaveBeenCalledTimes(2);
         await engine.stopLocalVoiceSession();
+    }, 180_000);
+
+    it('surfaces an automatic endpoint send failure without an unhandled rejection and permits a fresh capture', async () => {
+        await configureDuplexDeviceSpeech(true);
+        speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
+        localVoicePendingEnqueue.mockResolvedValueOnce(Response.json({ error: 'request timed out' }, { status: 400 }));
+        const unhandled: unknown[] = [];
+        const observeUnhandled = (error: unknown) => { unhandled.push(error); };
+        process.on('unhandledRejection', observeUnhandled);
+        const engine = await loadLocalVoiceEngineWithCompatState();
+        try {
+            await engine.toggleLocalVoiceTurn('s1');
+            emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
+            await vi.waitFor(() => expect(engine.getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'send_failed' }));
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            expect(unhandled).toEqual([]);
+            await engine.toggleLocalVoiceTurn('s1');
+            expect(engine.getLocalVoiceState()).toMatchObject({ status: 'recording', sessionId: 's1' });
+        } finally {
+            process.off('unhandledRejection', observeUnhandled);
+            await engine.stopLocalVoiceSession();
+        }
     }, 180_000);
 
     it('does not submit a late turn when End Voice cancels playback capture startup', async () => {

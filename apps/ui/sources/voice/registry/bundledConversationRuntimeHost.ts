@@ -36,6 +36,7 @@ import {
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import {
   areSessionAddressesEqual,
   normalizeSessionAddress,
@@ -410,12 +411,14 @@ const AGENT_REALTIME_SESSION_AVAILABLE = Object.freeze({ available: true as cons
 async function readAgentRealtimeSessionCandidacy(
   sessionAddress: SessionAddress,
   agent: ContributionRef,
+  signal?: AbortSignal,
 ): Promise<AgentRealtimeSessionAvailability> {
   const reading = readCandidateAgentSessionBasis(sessionAddress);
   if (!reading.candidate) return Object.freeze({ available: false as const, code: reading.code });
   const expectedTarget = await resolveQualifiedAgentBackendTargetForMachine({
     machineId: reading.basis.machineId,
     agent,
+    signal,
   });
   const live = readCandidateAgentSessionBasis(sessionAddress);
   if (!live.candidate) return Object.freeze({ available: false as const, code: live.code });
@@ -432,18 +435,19 @@ async function readAgentRealtimeSessionCandidacy(
     : Object.freeze({ available: false as const, code: 'feature_unavailable' as const });
 }
 
-async function isCandidateAgentSession(sessionAddress: SessionAddress, agent: ContributionRef): Promise<boolean> {
-  return (await readAgentRealtimeSessionCandidacy(sessionAddress, agent)).available;
+async function isCandidateAgentSession(sessionAddress: SessionAddress, agent: ContributionRef, signal?: AbortSignal): Promise<boolean> {
+  return (await readAgentRealtimeSessionCandidacy(sessionAddress, agent, signal)).available;
 }
 
 async function inspectAgentRealtimeSession(input: Readonly<{
   sessionAddress: SessionAddress;
   provider: ContributionRef;
   agent: ContributionRef;
+  signal: AbortSignal;
 }>): Promise<AgentRealtimeSessionAvailability> {
   // Local metadata is only a candidate prefilter. The session-scoped inspect RPC
   // below proves the exact qualified Agent ref through the daemon's normalized projection.
-  const candidacy = await readAgentRealtimeSessionCandidacy(input.sessionAddress, input.agent);
+  const candidacy = await readAgentRealtimeSessionCandidacy(input.sessionAddress, input.agent, input.signal);
   if (!candidacy.available) return candidacy;
   try {
     const raw = await sessionRpcWithServerScope({
@@ -453,6 +457,7 @@ async function inspectAgentRealtimeSession(input: Readonly<{
       // about a server-A session and read the miss as unavailability.
       serverId: input.sessionAddress.serverId,
       method: SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_INSPECT,
+      signal: input.signal,
       payload: { v: 1, provider: input.provider },
     });
     const parsed = AgentSessionRealtimeInspectResultV1Schema.safeParse(raw);
@@ -503,6 +508,7 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
     initializeVoiceNativeWebRtcBootstrap();
   }
   const generation = acquireBundledConversationRuntimeGeneration();
+  let retiringMachineSnapshot: ReturnType<typeof getVoiceConversationRuntimeSnapshot> | null = null;
   let currentUiContextSubscription: Readonly<{
     sessionId: string;
     unsubscribe: () => void;
@@ -747,14 +753,26 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
       transitionToSpeaking: (controlSessionId: string, adapterId: string, attemptId?: number) =>
         generation.runIfCurrent(() => voiceConversationRuntimeMachine.transitionToSpeaking({ controlSessionId, adapterId, attemptId })),
       transitionToEnding: (controlSessionId: string, adapterId: string, attemptId?: number) =>
-        generation.runIfCurrent(() => voiceConversationRuntimeMachine.transitionToEnding({ controlSessionId, adapterId, attemptId })),
-      transitionToDisconnected: (controlSessionId: string, adapterId: string, error: unknown | null, attemptId?: number) =>
-        generation.runIfCurrent(() => voiceConversationRuntimeMachine.transitionToDisconnected({
+        generation.runIfCurrent(() => {
+          voiceConversationRuntimeMachine.transitionToEnding({ controlSessionId, adapterId, attemptId });
+          const snapshot = getVoiceConversationRuntimeSnapshot();
+          retiringMachineSnapshot = snapshot.state === 'ending'
+            && snapshot.controlSessionId === controlSessionId && snapshot.adapterId === adapterId
+            ? snapshot : null;
+        }),
+      transitionToDisconnected: (controlSessionId: string, adapterId: string, error: unknown | null, attemptId?: number) => {
+        // Replacement revokes new effects, but physical teardown must still
+        // finish this exact ending snapshot. A new attempt's entry transition
+        // changes it even when its controller reuses session and attempt ids.
+        if (!generation.isCurrent() && getVoiceConversationRuntimeSnapshot() !== retiringMachineSnapshot) return;
+        voiceConversationRuntimeMachine.transitionToDisconnected({
           controlSessionId,
           adapterId,
           attemptId,
           error: error as Parameters<typeof voiceConversationRuntimeMachine.transitionToDisconnected>[0]['error'],
-        })),
+        });
+        retiringMachineSnapshot = null;
+      },
       setError: (controlSessionId: string, adapterId: string, error: unknown, attemptId?: number) =>
         generation.runIfCurrent(() => voiceConversationRuntimeMachine.setError({
           controlSessionId,
@@ -808,13 +826,14 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
     },
     createMicSession: createRealtimeMicSession,
     openLevelWriter: (input: Parameters<typeof voiceRuntimeLevelStore.open>[0]) => voiceRuntimeLevelStore.open(input),
-    ensureBound: (input: Readonly<{ adapterId: string; controlSessionId: string; requestedTargetSessionAddress: SessionAddress | null }>) => {
+    ensureBound: (input: Readonly<{ adapterId: string; controlSessionId: string; requestedTargetSessionAddress: SessionAddress | null; signal?: AbortSignal }>) => {
       if (!generation.isCurrent()) throw new Error('voice_runtime_generation_revoked');
       return voiceSessionBindingManager.ensureBound({
         adapterId: input.adapterId,
         controlSessionId: input.controlSessionId,
         requestedTargetSessionId: input.requestedTargetSessionAddress?.sessionId ?? null,
         requestedTargetServerId: input.requestedTargetSessionAddress?.serverId ?? null,
+        signal: input.signal,
       });
     },
     async acquireDirectMediaConversation(input: Readonly<{
@@ -1070,7 +1089,7 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
         });
       const conversationSessionAddress = binding?.conversationSessionAddress ?? null;
       if (!conversationSessionAddress) return null;
-      const isCandidate = await isCandidateAgentSession(conversationSessionAddress, input.agent);
+      const isCandidate = await isCandidateAgentSession(conversationSessionAddress, input.agent, input.signal);
       const liveBinding = voiceConversationBindingResolver.resolveByControlSessionId({
           controlSessionId: input.controlSessionId,
           adapterId: input.adapterId,
@@ -1107,6 +1126,7 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
             serverId: sessionAddress.serverId,
             method,
             payload,
+            signal,
             ...(method === SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_WATCH
               ? { timeoutMs: null }
               : {}),
@@ -1121,6 +1141,7 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
       requestedTargetSessionAddress: SessionAddress | null;
       settings: unknown;
       connectedServices?: ConnectedServiceBindingsV2;
+      signal?: AbortSignal;
     }>) {
       return await resolveAgentRealtimeVoiceConversationBinding({
         ...input,
@@ -1128,7 +1149,11 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
         globalConversationServerId:
           input.requestedTargetSessionAddress?.serverId
           ?? getActiveServerSnapshot().serverId,
-        inspect: inspectAgentRealtimeSession,
+        inspect: async (inspection) => {
+          const lifetime = mergeAbortSignals([input.signal, generation.signal]);
+          try { return await inspectAgentRealtimeSession({ ...inspection, signal: lifetime.signal }); }
+          finally { lifetime.dispose(); }
+        },
         ensureGlobalConversation: async ({ agent, isReusableSession }) => {
           const voice = voiceSettingsParse(
             input.settings && typeof input.settings === 'object'
@@ -1150,7 +1175,7 @@ export function createBundledConversationRuntimeHostLease(input: Readonly<{
             // proof of first-turn model visibility after cold resume.
             coldResumeStartupInstructionsEffective: false,
             isReusableSession,
-          });
+          }, input.signal);
         },
       });
     },

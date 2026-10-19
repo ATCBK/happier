@@ -108,6 +108,7 @@ export function createLocalVoiceAdapter(
     stop,
     toggle,
     interrupt,
+    commitInput: async ({ sessionId }) => await localVoiceRuntimeController.commitInput(sessionId),
     bargeIn,
     setMuted,
     sendContextUpdate,

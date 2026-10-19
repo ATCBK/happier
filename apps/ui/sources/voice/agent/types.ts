@@ -5,6 +5,7 @@ import type {
   ExecutionRunVoiceAgentIntentInputV1,
   AcpConfigOptionOverridesV1,
   ProviderBoundModelRef,
+  ConnectedServiceBindingsV2,
   VoiceAgentOutputEffectV1,
   VoiceAgentOutputEventV1,
   VoiceAssistantAction,
@@ -42,6 +43,8 @@ export type VoiceAgentStartParams = Readonly<{
   chatModelSelection?: ProviderBoundModelRef;
   commitModelSelection?: ProviderBoundModelRef;
   sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1;
+  /** Session-sourced Voice starts follow the bound target Agent's applied auth selection. */
+  connectedServices?: ConnectedServiceBindingsV2;
   /**
    * Daemon-only: forces commits to use a separate vendor session even when commitModelId matches chatModelId.
    */

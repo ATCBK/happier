@@ -14,7 +14,10 @@ import {
     localVoiceSpeechTranscription,
     acknowledgeLocalVoicePendingEnqueue,
     speechRecStart,
+    speechRecStop,
     publishLocalVoiceAssistantMessage,
+    publishLocalVoiceSubmittedUserMessage,
+    setNextRecorderPrepareError,
 } from './localVoiceEngine.testHarness';
 
 let localVoiceEngine: Awaited<ReturnType<typeof loadLocalVoiceEngineWithCompatState>>;
@@ -45,6 +48,8 @@ describe('local voice engine TTS behavior', () => {
 
     beforeEach(async () => {
         localVoiceEngine = await loadLocalVoiceEngineWithCompatState();
+        speechRecStart.mockImplementation(() => emitSpeechRecEvent('audiostart'));
+        speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
     }, 180_000);
 
     it('supports barge-in while device TTS is speaking when enabled', async () => {
@@ -86,8 +91,9 @@ describe('local voice engine TTS behavior', () => {
             onStoppedRef.current?.();
         });
 
-        localVoicePendingEnqueue.mockImplementationOnce(async request => {
-            await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'm1', text: 'Hi there' });
+        localVoicePendingEnqueue.mockImplementation(async request => {
+            await publishLocalVoiceSubmittedUserMessage(request);
+            await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: `m${localVoicePendingEnqueue.mock.calls.length}`, text: 'Hi there' });
             return acknowledgeLocalVoicePendingEnqueue(request);
         });
 
@@ -100,15 +106,24 @@ describe('local voice engine TTS behavior', () => {
         await waitForVoiceStatus(() => getLocalVoiceState().status, 'speaking');
         expect(getLocalVoiceState().status).toBe('speaking');
         // Initial transcription and playback interruption monitoring each own
-        // a native recognition start before the manual barge-in rearms it.
+        // a native recognition start. Manual barge-in retains the live producer.
         expect(speechRecStart).toHaveBeenCalledTimes(2);
 
         await toggleLocalVoiceTurn('s1');
         await sendTurnPromise;
 
         expect(expoSpeechStop).toHaveBeenCalledTimes(1);
-        expect(speechRecStart).toHaveBeenCalledTimes(3);
         expect(getLocalVoiceState().status).toBe('recording');
+        expect(speechRecStart).toHaveBeenCalledTimes(2);
+        emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'second turn', confidence: 0.9, segments: [] }] });
+        const secondTurn = toggleLocalVoiceTurn('s1');
+        await waitForVoiceStatus(() => getLocalVoiceState().status, 'speaking');
+        expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(2);
+        expect(localVoicePendingEnqueue.mock.calls[1]?.[0]).toMatchObject({ sessionId: 's1', body: {
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'second turn' } } },
+        } });
+        onDoneRef.current?.();
+        await secondTurn;
     });
 
     it('does not interrupt speaking when barge-in is disabled', async () => {
@@ -151,6 +166,7 @@ describe('local voice engine TTS behavior', () => {
         });
 
         localVoicePendingEnqueue.mockImplementationOnce(async request => {
+            await publishLocalVoiceSubmittedUserMessage(request);
             await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'm1', text: 'Hi there' });
             return acknowledgeLocalVoicePendingEnqueue(request);
         });
@@ -172,6 +188,48 @@ describe('local voice engine TTS behavior', () => {
 
         onDoneRef.current?.();
         await sendTurnPromise;
+    });
+
+    it.each([false, true])('acquires a missing recorded-audio producer after manual interruption and preserves startup failure recovery (fails=%s)', async fails => {
+        const storage = await getStorage();
+        const config = readLocalDirectVoiceSettings(storage.getState().settings.voice);
+        storage.__setState({ settings: { ...storage.getState().settings, voice: {
+            ...storage.getState().settings.voice, providerId: 'local_direct', providers: {
+                ...storage.getState().settings.voice.providers,
+                local_direct: { schemaVersion: 1, config: { ...config,
+                    stt: { ...config.stt, provider: 'happier.voice.openai-compat/stt' },
+                    tts: { ...config.tts, provider: 'device', autoSpeakReplies: true, bargeInEnabled: true },
+                } },
+            },
+        } } });
+        let stopPlayback: (() => void) | undefined;
+        expoSpeechSpeak.mockImplementation((_text, options) => {
+            stopPlayback = options.onStopped;
+            options.onStart?.();
+        });
+        expoSpeechStop.mockImplementation(() => stopPlayback?.());
+        localVoiceSpeechTranscription.mockResolvedValueOnce('first turn');
+        localVoicePendingEnqueue.mockImplementationOnce(async request => {
+            await publishLocalVoiceSubmittedUserMessage(request);
+            await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'recorded-reply', text: 'Hi there' });
+            return acknowledgeLocalVoicePendingEnqueue(request);
+        });
+        await localVoiceEngine.toggleLocalVoiceTurn('s1');
+        const sentTurn = localVoiceEngine.toggleLocalVoiceTurn('s1');
+        await waitForVoiceStatus(() => localVoiceEngine.getLocalVoiceState().status, 'speaking');
+        if (fails) setNextRecorderPrepareError(new Error('manual rearm preparation failed'));
+        const interrupted = localVoiceEngine.toggleLocalVoiceTurn('s1');
+        if (fails) {
+            await expect(interrupted).rejects.toThrow('manual rearm preparation failed');
+            expect(localVoiceEngine.getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'recording_start_failed' });
+            // Failed startup releases the same admission so a fresh Start can recover.
+            await localVoiceEngine.toggleLocalVoiceTurn('s1');
+        } else {
+            await interrupted;
+        }
+        await sentTurn;
+        expect(expoSpeechStop).toHaveBeenCalledTimes(1);
+        expect(localVoiceEngine.getLocalVoiceState().status).toBe('recording');
     });
 
     it('does not auto-speak when sending fails', async () => {

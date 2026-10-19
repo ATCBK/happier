@@ -1,8 +1,10 @@
 import 'fake-indexeddb/auto';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SessionCurrentProjectionRecordV1Schema, SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -41,6 +43,7 @@ const notes = () => selectVoiceTranscriptEntriesForConversationSession(storage.g
 function carrier(sessionId: string, rootId: string): Session {
     return createSessionFixture({ id: sessionId, serverId: connection.home.id, active: true,
         metadata: writeVoiceConversationScopeMetadata({ path: '/project/' + rootId, host: 'tester.local', machineId: 'machine-1',
+            flavor: 'codex',
             ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
         }, { kind: 'session_root', sessionRootId: rootId }),
     });
@@ -64,13 +67,20 @@ beforeEach(async () => {
     rejectNextBindingFor = null;
     const settings = settingsParse({ lastUsedAgent: 'codex', voice: {
         providers: { local_conversation: { schemaVersion: 1, config: {
-            conversationMode: 'agent', agent: { backend: 'daemon', rootSessionPolicy: 'keep_warm', maxWarmRoots: 5 },
+            conversationMode: 'agent', agent: { backend: 'daemon', agentSource: 'agent', agentId: 'codex', rootSessionPolicy: 'keep_warm', maxWarmRoots: 5 },
         } } },
     } });
     const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-binding' });
     network.setRpcAckResponder(async request => {
         if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
             return { ok: false, error: 'RPC method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
+        if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+            const resume = SessionResumeRequestV1Schema.parse(request.payload);
+            expect(request).toMatchObject({ targetId: 'machine-1', serverUrl: home.serverUrl });
+            expect(['carrier-s1', 'carrier-s2']).toContain(resume.sessionId);
+            expect(resume).toMatchObject({ type: 'resume-session', directory: '/project/' + resume.sessionId.slice('carrier-'.length) });
+            return { ok: true, result: { type: 'success', sessionId: resume.sessionId } };
+        }
         throw new Error('Unexpected daemon effect: ' + request.method);
     });
     const request = async (url: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
@@ -121,9 +131,39 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('binding publication through actual resolver and HTTP persistence', () => {
+    it('commits a carrier metadata edit when detail residency releases the row during the HTTP read', async () => {
+        // Establish the real server-side fixture before releasing its local
+        // detail projection. The metadata owner must use its hydrated read.
+        metadata.handle(new URL('/v2/sessions/carrier-s1', connection.home.serverUrl));
+        let released = 0;
+        const unsubscribe = storage.subscribe(state => {
+            if (!state.sessions['carrier-s1']) return;
+            const { 'carrier-s1': _released, ...sessions } = state.sessions;
+            released += 1;
+            storage.setState({ sessions });
+        });
+        const { 'carrier-s1': _coldCarrier, ...otherSessions } = storage.getState().sessions;
+        storage.setState({ sessions: otherSessions });
+        try {
+            await expect(sync.patchSessionMetadataWithRetry('carrier-s1', current => ({
+                ...current, summary: { text: 'Retained carrier title', updatedAt: 7 },
+            }))).resolves.toBeUndefined();
+            expect(released).toBeGreaterThan(0);
+            const response = metadata.handle(new URL('/v2/sessions/carrier-s1', connection.home.serverUrl));
+            if (!response) throw new Error('Missing carrier HTTP response');
+            const wire = SessionCurrentProjectionRecordV1Schema.parse((await response.json()).session);
+            expect(wire.metadata).toContain('Retained carrier title');
+            expect(wire.ownerMetadata?.t).toBe('plain');
+            if (wire.ownerMetadata?.t !== 'plain') throw new Error('Expected opened owner metadata');
+            expect(wire.ownerMetadata.v.system?.voiceConversationScopeV1).toMatchObject({ kind: 'session_root', sessionRootId: 's1' });
+        } finally { unsubscribe(); }
+    });
+
     it('publishes only after persistence succeeds and safely retries the failed binding', async () => {
         rejectNextBindingFor = 'carrier-s1';
-        await expect(voiceSessionBindingManager.ensureBound(input())).rejects.toThrow();
+        await expect(voiceSessionBindingManager.ensureBound(input())).rejects.toThrow('Invalid Session metadata tuple response');
+        expect(rejectNextBindingFor).toBeNull();
+        expect(metadata.writes).toContain('carrier-s1');
         expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s1')).toBeNull();
         expect(voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__')).toBeNull();
         expect(await persistedBinding('carrier-s1')).toBeNull();
@@ -145,7 +185,9 @@ describe('binding publication through actual resolver and HTTP persistence', () 
     it('retains prior target and emits no switch note on failed persistence, then retries safely', async () => {
         await voiceSessionBindingManager.ensureBound(input());
         rejectNextBindingFor = 'carrier-s1';
-        await expect(voiceSessionBindingManager.syncTargetSession({ controlSessionId: '__voice_agent__', targetSessionAddress: address('s2') })).rejects.toThrow();
+        await expect(voiceSessionBindingManager.syncTargetSession({ controlSessionId: '__voice_agent__', targetSessionAddress: address('s2') }))
+            .rejects.toThrow('Invalid Session metadata tuple response');
+        expect(rejectNextBindingFor).toBeNull();
         expect(voiceSessionBindingStore.getState().getByControlSessionId('__voice_agent__')?.targetSessionAddress).toEqual(address('s1'));
         expect(await persistedBinding('carrier-s1')).toMatchObject({ targetSessionAddress: address('s1') });
         expect(notes()).toEqual([]);
@@ -163,7 +205,8 @@ describe('binding publication through actual resolver and HTTP persistence', () 
         await expect(voiceSessionBindingManager.ensureBoundForOpenConversation({
             openConversationSessionId: 'carrier-s1', fallbackControlSessionId: '__voice_agent__', activeAdapterId: 'local_conversation',
             providerId: 'local_conversation', requestedTargetSessionId: 's2', requestedTargetServerId: connection.home.id,
-        })).rejects.toThrow();
+        })).rejects.toThrow('Invalid Session metadata tuple response');
+        expect(rejectNextBindingFor).toBeNull();
         expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s2')).toBeNull();
         expect(await persistedBinding('carrier-s2')).toBeNull();
         expect(voiceSessionBindingStore.getState().getByConversationSessionId('carrier-s1')).toEqual(initial);

@@ -34,6 +34,7 @@ export async function resolveVoiceConfiguredAgentTarget(params: Readonly<{
     machineId: string | null | undefined;
     selection: VoiceConfiguredAgentSelection;
     accountScope?: ServerAccountScope | null;
+    signal?: AbortSignal;
 }>): Promise<ResolvedVoiceConfiguredAgentTarget> {
     const agentId = normalizeNonEmptyString(params.selection.agentId);
     const targetKeySelection = normalizeNonEmptyString(params.selection.agentTargetKey);
@@ -64,6 +65,7 @@ export async function resolveVoiceConfiguredAgentTarget(params: Readonly<{
         ? await loadDaemonMergedProjectionInputs({
             machineId: normalizeNonEmptyString(params.machineId),
             serverId: scope.serverId,
+            signal: params.signal,
         })
         : null;
     const catalog = getAcpCatalogSnapshot(scope)?.catalog;

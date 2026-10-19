@@ -9,6 +9,7 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { BuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 
 const nativeAlertCalls = vi.hoisted(() => {
   const calls: Parameters<typeof import('react-native')['Alert']['alert']>[] = [];
@@ -63,7 +64,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
   function carrier(id: string, rootId?: string, machineId = 'machine-1', updatedAt = 1) {
     return createSessionFixture({ id, serverId: connection.home.id, active: true, updatedAt,
       metadata: writeVoiceConversationScopeMetadata({ path: rootId ? `/project/${rootId}` : '/Users/tester/.happy-dev/voice-agent',
-        host: 'tester.local', machineId,
+        host: 'tester.local', machineId, flavor: 'codex',
         ...buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true }),
       }, rootId ? { kind: 'session_root', sessionRootId: rootId } : { kind: 'voice_home' }),
     });
@@ -82,6 +83,10 @@ describe('ensureVoiceConversationBindingResolution', () => {
     network.setRpcAckResponder(async request => {
       if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
         return { ok: false, error: 'RPC method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
+      if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+        const input = SessionResumeRequestV1Schema.parse(request.payload);
+        return { ok: true, result: { type: 'success', sessionId: input.sessionId } satisfies import('@happier-dev/protocol').SpawnSessionResult };
+      }
       throw new Error(`Unexpected daemon effect: ${request.method}`);
     });
     const request = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response | null> => {
@@ -107,7 +112,7 @@ describe('ensureVoiceConversationBindingResolution', () => {
     storage.setState({ sessions: Object.fromEntries([
       carrier('voice-home'),
       ...['s1', 's2', 's9'].flatMap(id => [createSessionFixture({ id, serverId: connection.home.id,
-        metadata: { machineId: 'machine-1', path: `/project/${id}`, host: 'tester.local' } }), carrier(`voice-root-${id}`, id)]),
+        metadata: { machineId: 'machine-1', path: `/project/${id}`, host: 'tester.local', flavor: 'codex' } }), carrier(`voice-root-${id}`, id)]),
     ].map(session => [session.id, session])) });
     resetVoiceAdapterRegistryForTests();
     assembly = createBuiltinVoiceAdapterAssembly();
@@ -260,6 +265,12 @@ describe('ensureVoiceConversationBindingResolution', () => {
       } },
     } } } } });
     storage.setState({ settings });
+    storage.getState().applySessions(['s2', 'voice-root-s2'].map(id => {
+      const session = storage.getState().sessions[id]!;
+      return { ...session, metadata: { ...session.metadata!, flavor: 'opencode' } };
+    }));
+    metadata.replaceSession('s2');
+    metadata.replaceSession('voice-root-s2');
     const resolution = await ensureVoiceConversationBindingResolution({ providerId: 'local_conversation', controlSessionId: '__voice_agent__',
       requestedTargetSessionId: 's2', settings });
     expect(resolution?.transcriptMode).toBe('native_session');

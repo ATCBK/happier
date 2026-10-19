@@ -411,6 +411,7 @@ function createUnavailableInvocationUi(): PluginUiHostApi {
     publishCurrentUiContext: unavailable,
     activeComposer: async () => unavailable(),
     readComposer: async () => unavailable(),
+    readDiscussionComposer: async () => unavailable(),
     watchComposer: async () => unavailable(),
     applyComposer: async () => unavailable(),
     focusComposer: async () => unavailable(),
@@ -425,6 +426,7 @@ function createUnavailableInvocationUi(): PluginUiHostApi {
     watchLiveStream: async () => unavailable(),
     respondToSessionPermission: async () => unavailable(),
     executeAction: async () => unavailable(),
+    admitAction: async () => unavailable(),
     selectActionInput: async () => unavailable(),
     openNewSession: async () => unavailable(),
     openConnectedAccounts: async () => unavailable(),
@@ -954,6 +956,7 @@ export function createExternalVoiceProviderRuntimeContribution(input: Readonly<{
             controlSessionId: string;
             requestedTargetSessionAddress: SessionAddress | null;
             settings: unknown;
+            signal?: AbortSignal;
           }>) {
             const resolveBinding = input.host.resolveAgentRealtimeVoiceConversationBinding;
             if (!resolveBinding) {

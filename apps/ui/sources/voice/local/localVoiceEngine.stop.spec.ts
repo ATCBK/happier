@@ -305,7 +305,7 @@ describe('local voice engine stop', () => {
     });
   });
 
-  it('cancels an in-flight turn through an explicit ending-to-connected transition', async () => {
+  it('cancels an in-flight turn while keeping the conversation connected', async () => {
     const storage = await getStorage();
     storage.__setState({
       settings: {
@@ -330,7 +330,7 @@ describe('local voice engine stop', () => {
 
     localVoiceSpeechTranscription.mockResolvedValueOnce('hello world');
 
-    const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+    const { getVoiceConversationRuntimeSnapshot, useVoiceConversationRuntimeStore } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
     const { abortLocalVoiceTurn, toggleLocalVoiceTurn } = await import('./localVoiceEngine');
 
     await toggleLocalVoiceTurn('s1');
@@ -347,21 +347,29 @@ describe('local voice engine stop', () => {
     // by the End negatives actually receives direct-session submissions.
     await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledOnce());
 
-    const abortPromise = abortLocalVoiceTurn('s1');
-    expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
-      controlSessionId: 's1',
-      state: 'ending',
-      error: null,
-    });
+    const observedStates: string[] = [];
+    const unsubscribe = useVoiceConversationRuntimeStore.subscribe(({ snapshot }) => observedStates.push(snapshot.state));
+    try {
+      const abortPromise = abortLocalVoiceTurn('s1');
+      expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
+        controlSessionId: 's1',
+        state: 'connected',
+        error: null,
+      });
 
-    await abortPromise;
-    await stopPromise;
+      await abortPromise;
+      await stopPromise;
 
-    expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
-      controlSessionId: 's1',
-      state: 'connected',
-      error: null,
-    });
+      expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
+        controlSessionId: 's1',
+        state: 'connected',
+        error: null,
+      });
+      expect(observedStates).not.toContain('ending');
+      expect(observedStates).not.toContain('disconnected');
+    } finally {
+      unsubscribe();
+    }
   });
 
 

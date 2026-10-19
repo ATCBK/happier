@@ -26,10 +26,13 @@ describe('voiceConversationRuntimeHelpers', () => {
     it('surfaces capture errors onto disconnected runtime state carrying the error', async () => {
         const { surfaceRecoverableVoiceCaptureError } = await import('./voiceConversationRuntimeHelpers');
 
-        surfaceRecoverableVoiceCaptureError({
+        const original = {
             controlSessionId: 's1',
             reason: 'device_stt_start_failed',
-        });
+        };
+        const privateCause = new Error('private native transport failure');
+        Object.defineProperty(original, 'cause', { value: privateCause, enumerable: false });
+        surfaceRecoverableVoiceCaptureError(original);
 
         expect(voiceConversationRuntimeMachine.getSnapshot()).toMatchObject({
             controlSessionId: 's1',
@@ -40,6 +43,10 @@ describe('voiceConversationRuntimeHelpers', () => {
                 recoverable: true,
             },
         });
+        const error = voiceConversationRuntimeMachine.getSnapshot().error;
+        expect(error).toHaveProperty('cause', privateCause);
+        expect(Object.getOwnPropertyDescriptor(error, 'cause')?.enumerable).toBe(false);
+        expect(JSON.stringify(error)).not.toContain('private native transport failure');
     });
 
     it('maps idle-without-error transitions onto the idle, mic-off connected runtime state', async () => {

@@ -39,9 +39,11 @@ describe('voiceSessionManager', () => {
     await environment?.dispose();
   });
 
-  async function connect(starting: Promise<void>, peer = browser.peer) {
-    await vi.waitFor(() => expect(peer.createDataChannel).toHaveBeenCalledWith('oai-events'));
-    peer.channel.open();
+  async function connect(starting: Promise<void>, peer?: TestVoiceWebRtcPeer) {
+    await vi.waitFor(() => expect(browser.peers.length).toBeGreaterThan(0));
+    const connectedPeer = peer ?? browser.peer;
+    await vi.waitFor(() => expect(connectedPeer.createDataChannel).toHaveBeenCalledWith('oai-events'));
+    connectedPeer.channel.open();
     await starting;
     expect(runtime.adapter.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
     expect(browser.micSession.getStream()).not.toBeNull();

@@ -277,7 +277,9 @@ export function createVoiceConversationRuntimeMachine(): VoiceConversationRuntim
                 controlSessionId: transition.controlSessionId,
                 state: transition.toState,
                 reconnecting: nextReconnecting,
-                micMuted: clearsAttempt || (isEntryTransition && !sameOwner)
+                // Retirement ends capture without changing the user's mute
+                // fact. A newly admitted owner initializes its own projection.
+                micMuted: isEntryTransition && (!sameOwner || current.state === 'disconnected')
                     ? false
                     : current.micMuted,
                 inUseVoice: terminalState || (isEntryTransition && !sameOwner) ? undefined : current.inUseVoice,

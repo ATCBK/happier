@@ -1,33 +1,15 @@
 import { normalizeNonEmptyString } from '@/voice/shared/normalizeNonEmptyString';
 
 import { voiceConversationRuntimeMachine } from './VoiceConversationRuntimeMachine';
-import { createVoiceMachineError } from './voiceMachineError';
+import { createVoiceMachineError, resolveVoiceMachineErrorKind } from './voiceMachineError';
 
 import type { VoiceMachineErrorKind } from './voiceConversationRuntimeTypes';
-
-function resolveVoiceMachineErrorKind(reason: string, preferredKind?: VoiceMachineErrorKind): VoiceMachineErrorKind {
-    if (preferredKind) {
-        return preferredKind;
-    }
-    if (reason === 'turn_aborted') {
-        return 'turn_aborted';
-    }
-    if (reason === 'tts_failed') {
-        return 'tts_failed';
-    }
-    if (reason.includes('permission_denied')) {
-        return 'mic_permission_denied';
-    }
-    if (reason === 'mic_unavailable') {
-        return 'mic_unavailable';
-    }
-    return 'provider_error';
-}
 
 export function transitionVoiceRuntimeToIdle(params: Readonly<{
     controlSessionId?: string | null;
     reason?: string | null;
     kind?: VoiceMachineErrorKind;
+    cause?: unknown;
 }>): void {
     const controlSessionId = normalizeNonEmptyString(params.controlSessionId);
     const reason = normalizeNonEmptyString(params.reason);
@@ -46,12 +28,16 @@ export function transitionVoiceRuntimeToIdle(params: Readonly<{
         return;
     }
 
+    const error = createVoiceMachineError({
+        kind: resolveVoiceMachineErrorKind(reason, params.kind),
+        reason,
+    });
+    if (params.cause !== undefined) {
+        Object.defineProperty(error, 'cause', { value: params.cause, enumerable: false });
+    }
     voiceConversationRuntimeMachine.transitionToDisconnected({
         controlSessionId,
-        error: createVoiceMachineError({
-            kind: resolveVoiceMachineErrorKind(reason, params.kind),
-            reason,
-        }),
+        error,
     });
 }
 
@@ -70,10 +56,12 @@ export function surfaceRecoverableVoiceCaptureError(params: Readonly<{
     controlSessionId: string;
     reason: string;
     kind?: VoiceMachineErrorKind;
+    cause?: unknown;
 }>): void {
     transitionVoiceRuntimeToIdle({
         controlSessionId: params.controlSessionId,
         reason: params.reason,
         kind: params.kind,
+        cause: params.cause ?? params,
     });
 }

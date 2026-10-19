@@ -11,6 +11,8 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/f
 const { getActiveServerSnapshot } = await import("@/sync/domains/server/serverRuntime");
 const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 import { VOICE_RUNTIME_WARM_DEFAULTS } from '@happier-dev/protocol';
+import { DaemonVoiceInferenceModelStatusSchema, DaemonVoiceInferenceModelsStatusResponseSchema, DaemonVoiceInferenceModelsWarmResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
+const { captureDaemonVoiceModelCatalogObservation } = await import('@/voice/settings/panels/modelCatalog/daemonVoiceModelCatalogObservation');
 
 const machineRpcWithServerScopeMock = vi.fn();
 
@@ -145,6 +147,40 @@ describe('warmDaemonVoiceInferenceOnVoiceHomeAttach', () => {
             code: 'model_not_installed',
             message: 'daemon_voice_inference_model_not_installed',
         });
+    });
+
+    it.each([false, true])('publishes returned warm models without another probe or stale read overwrite (pending=%s)', async (pendingRead) => {
+        const packId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
+        const cold = DaemonVoiceInferenceModelStatusSchema.parse({
+            packId, kind: 'stt_sherpa', model: 'zipformer_transducer', version: null,
+            executionSupport: ['daemon'], runtimeFamily: 'sherpa_zipformer_streaming',
+            runtimeSupported: true, installState: 'installed', progress: null,
+            lastError: null, updatedAtMs: 0, runtimeState: 'evicted',
+        });
+        const observation = captureDaemonVoiceModelCatalogObservation('machine-selected');
+        observation.publish({ statuses: [cold], errorCode: null, loading: false, stale: false });
+        const warmed = DaemonVoiceInferenceModelStatusSchema.parse({ ...cold, runtimeState: 'ready', loadedArtifactBytes: 1024 });
+        const { createDeferred } = await import('@/dev/testkit');
+        const oldRead = createDeferred<unknown>();
+        machineRpcWithServerScopeMock.mockImplementation(async request => request.method === 'daemon.voiceInference.models.status'
+            ? await oldRead.promise
+            : DaemonVoiceInferenceModelsWarmResponseSchema.parse({ ok: true, models: [warmed] }));
+        const { DaemonVoiceInferenceClient } = await import('./DaemonVoiceInferenceClient');
+        const reading = pendingRead ? observation.read({ client: new DaemonVoiceInferenceClient(), packIds: [packId] }) : null;
+        if (pendingRead) await vi.waitFor(() => expect(network.requests.some(request => request.method === 'daemon.voiceInference.models.status')).toBe(true));
+        const { warmDaemonVoiceInferenceOnVoiceHomeAttach } = await import('./warmDaemonVoiceInferenceOnVoiceHomeAttach');
+        await warmDaemonVoiceInferenceOnVoiceHomeAttach({ settings: { voice: {
+            providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1, config: {
+                stt: { provider: 'local_neural', localNeural: { execution: 'daemon', assetId: packId } },
+            } } },
+        } }, sessionId: 'voice-home-session' });
+        expect(observation.getSnapshot()).toMatchObject({ statuses: [warmed], errorCode: null, loading: false });
+        oldRead.resolve(DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [cold] }));
+        if (reading) await expect(reading).resolves.toBeNull();
+        expect(observation.getSnapshot()).toMatchObject({ statuses: [warmed], errorCode: null, loading: false });
+        expect(network.requests.map(request => request.method)).toEqual([
+            ...(pendingRead ? ['daemon.voiceInference.models.status'] : []), 'daemon.voiceInference.models.warm',
+        ]);
     });
 });
 

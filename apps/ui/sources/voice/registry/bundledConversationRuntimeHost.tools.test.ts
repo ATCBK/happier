@@ -95,6 +95,40 @@ describe('bundled Conversation runtime host tool projection', () => {
     });
   });
 
+  it.each([false, true])('finishes only its exact retiring machine snapshot after host replacement (replacement started: %s)', async (replacementStarted) => {
+    const { voiceConversationRuntimeMachine: machine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+    const old = createBundledConversationRuntimeHostLease();
+    let replacement: ReturnType<typeof createBundledConversationRuntimeHostLease> | undefined;
+    const sessionId = 'same-control-session';
+    const adapterId = 'retiring-provider';
+    try {
+      old.host.machine.transitionToConnecting(sessionId, adapterId, 1);
+      old.host.machine.transitionToConnected(sessionId, adapterId, 1);
+      old.host.machine.transitionToEnding(sessionId, adapterId, 1);
+      replacement = createBundledConversationRuntimeHostLease();
+      if (replacementStarted) {
+        replacement.host.machine.transitionToConnecting(sessionId, adapterId, 1);
+        replacement.host.machine.transitionToConnected(sessionId, adapterId, 1);
+      }
+      const beforeCleanup = machine.getSnapshot();
+      old.host.machine.transitionToDisconnected(sessionId, adapterId, null, 1);
+      if (replacementStarted) expect(machine.getSnapshot()).toBe(beforeCleanup);
+      else expect(machine.getSnapshot().state).toBe('disconnected');
+
+      // A replacement can reuse both ids and its controller's first attempt
+      // number. Those values must not authorize the old host's late cleanup.
+      replacement.host.machine.transitionToConnecting(sessionId, adapterId, 1);
+      replacement.host.machine.transitionToConnected(sessionId, adapterId, 1);
+      const live = machine.getSnapshot();
+      old.host.machine.transitionToDisconnected(sessionId, adapterId, null, 1);
+      expect(machine.getSnapshot()).toBe(live);
+    } finally {
+      old.revoke();
+      replacement?.revoke();
+      machine.reset();
+    }
+  });
+
   it('projects current UI read and effect capabilities only from the local AppShell port and only with stable effect custody', async () => {
     const withoutPort = createBundledConversationRuntimeHostLease();
     const withPort = createBundledConversationRuntimeHostLease({

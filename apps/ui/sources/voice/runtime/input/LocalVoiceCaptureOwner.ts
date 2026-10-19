@@ -147,7 +147,7 @@ type LocalVoiceCaptureOwnerOptions = Readonly<{
     ) => DaemonStreamingSttController;
     nativeVadController?: NativeVadController;
     runtimeTurnPolicyController?: RuntimeTurnPolicyController;
-    /** Silent-capture watchdog window after provider startup; no audio within it surfaces `mic_plateau`. */
+    /** Unmuted live-capture window after provider startup; no audio within it surfaces `mic_plateau`. */
     micPlateauTimeoutMs?: number;
     /** Minimum spacing between forwarded partial-transcript snapshots. */
     partialThrottleMs?: number;
@@ -205,6 +205,7 @@ export function createLocalVoiceCaptureOwner(
     let captureLifecycleGeneration = 0;
     const retiredMicSessions = new WeakSet<object>();
     let micPlateauTimer: ReturnType<typeof setTimeout> | null = null;
+    let armActiveMicPlateauWatchdog: (() => void) | null = null;
     let latestPartialTranscript: string | null = null;
     let lastPublishedPartial: string | null = null;
     let lastPartialAt = 0;
@@ -316,11 +317,13 @@ export function createLocalVoiceCaptureOwner(
                 await teardownMicSessionOnce(activeLiveMicSession);
             }
 
-            deps.onCaptureError({
+            const error: RuntimeCaptureError = {
                 controlSessionId: activeSessionId,
                 kind: failure.kind,
                 reason: failure.reason,
-            });
+            };
+            Object.defineProperty(error, 'cause', { value: failure, enumerable: false });
+            deps.onCaptureError(error);
         })();
         pendingFailureCleanup = cleanup;
         void cleanup.finally(() => {
@@ -442,17 +445,33 @@ export function createLocalVoiceCaptureOwner(
             // Admission can legitimately outlive the silent-audio window (for
             // example, while a daemon stream negotiates its route). Start this
             // source-health timer only once the provider owns a live capture.
-            if (audioStarted || activeCaptureErrored || abortController.signal.aborted) {
+            if (
+                audioStarted
+                || !activeCaptureStarted
+                || activeCaptureErrored
+                || activeAbortController !== abortController
+                || abortController.signal.aborted
+                || (mutedSessionId === controlSessionId && muted)
+            ) {
                 return;
             }
+            clearMicPlateauWatchdog();
             micPlateauTimer = setTimer(() => {
                 micPlateauTimer = null;
-                if (activeCaptureSessionId !== controlSessionId || activeCaptureErrored) {
+                if (
+                    activeCaptureSessionId !== controlSessionId
+                    || activeAbortController !== abortController
+                    || !activeCaptureStarted
+                    || activeCaptureErrored
+                    || abortController.signal.aborted
+                    || (mutedSessionId === controlSessionId && muted)
+                ) {
                     return;
                 }
                 void failActiveCapture({ kind: 'mic_plateau', reason: 'mic_audio_plateau' });
             }, micPlateauTimeoutMs);
         };
+        armActiveMicPlateauWatchdog = armMicPlateauWatchdog;
         const sink: SttSink = {
             onAudioStarted: () => {
                 audioStarted = true;
@@ -608,10 +627,7 @@ export function createLocalVoiceCaptureOwner(
         const result = await controller.stop();
         if ('error' in result) {
             if (isCurrent()) {
-                await failActiveCapture({
-                    kind: result.error.kind,
-                    reason: result.error.reason,
-                });
+                await failActiveCapture(result.error);
             }
             return { finalText: '', failed: true };
         }
@@ -638,7 +654,12 @@ export function createLocalVoiceCaptureOwner(
             recordingMicSession.setMuted(nextMuted);
             return;
         }
+        const wasMuted = liveMicSession?.isMuted() ?? false;
         liveMicSession?.setMuted(nextMuted);
+        // Muted capture deliberately drops PCM. Measure source health only
+        // while input is live, with a fresh existing window on real unmute.
+        if (nextMuted) clearMicPlateauWatchdog();
+        else if (wasMuted) armActiveMicPlateauWatchdog?.();
     };
 
     const stopEndpointDrivenCapture = async (args: Readonly<{
@@ -778,8 +799,8 @@ export function createLocalVoiceCaptureOwner(
                         await releaseLiveMicAfterFailedStartup(normalizedSessionId, provider, micSession);
                         return;
                     }
-                    armMicPlateauWatchdog();
                     activeCaptureStarted = true;
+                    armMicPlateauWatchdog();
                     deps.onCaptureStarted(normalizedSessionId);
                     return;
                 }
@@ -836,6 +857,9 @@ export function createLocalVoiceCaptureOwner(
                     }
                     try {
                         await getLocalNeuralSttController(activeLocalNeuralExecution).start({ capturePurpose, sessionId: normalizedSessionId, micSession, sink, signal });
+                        if (activeLocalNeuralExecution === 'daemon' && micSession.isMuted()) {
+                            await daemonStreamingSttController?.setMuted(true);
+                        }
                     } catch (error) {
                         unlinkExternalAbort();
                         await releaseLiveMicAfterFailedStartup(normalizedSessionId, provider, micSession);
@@ -850,8 +874,8 @@ export function createLocalVoiceCaptureOwner(
                         await releaseLiveMicAfterFailedStartup(normalizedSessionId, provider, micSession);
                         return;
                     }
-                    armMicPlateauWatchdog();
                     activeCaptureStarted = true;
+                    armMicPlateauWatchdog();
                     deps.onCaptureStarted(normalizedSessionId);
                     return;
                 }
@@ -988,6 +1012,8 @@ export function createLocalVoiceCaptureOwner(
                         }
                         throw error;
                     }
+                } else if (provider === 'local_neural' && activeLocalNeuralExecution === 'daemon') {
+                    await daemonStreamingSttController?.setMuted(nextMuted);
                 }
             }
         },
@@ -1006,6 +1032,7 @@ export function createLocalVoiceCaptureOwner(
             const terminalDeadlineAt = now() + terminalAbandonmentMs;
 
             clearMicPlateauWatchdog();
+            armActiveMicPlateauWatchdog = null;
             captureLifecycleGeneration += 1;
             const captureStart = pendingCaptureStart;
             if (pendingCaptureStart === captureStart) pendingCaptureStart = null;

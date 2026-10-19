@@ -1,11 +1,5 @@
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
 import { sessionExecutionRunStop } from '@/sync/ops/sessionExecutionRuns';
-import {
-    readCurrentProjectedAgentCapabilities,
-    supportsAgentLifecycleCapability,
-} from '@/agents/backendCatalog/currentAgentCapabilities';
-import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { resolveSessionAddressFromLocalState } from '@/sync/domains/session/resolveSessionAddressFromLocalState';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { storage } from '@/sync/domains/state/storage';
@@ -68,31 +62,8 @@ export function resolveVoiceAgentSessionFromState(target: SessionAddress | strin
         : null;
 }
 
-/**
- * The Agent declarations projected by the target's OWN Home and machine.
- *
- * `surface.terminal` has no static per-Agent declaration, so a Session that publishes no
- * `agentRuntimeCapabilitiesV1.localControl` bit can only be answered from this projection —
- * the same evidence the live Session surface uses. Both the machine and the Home are part of
- * the projection scope, so a focused-Home substitution would answer for the wrong daemon.
- */
-async function resolveTargetProjectedAgentCapabilities(params: Readonly<{
-    agentId: string | null;
-    machineId: string | null;
-    serverId: string | null;
-}>) {
-    if (!params.agentId || !params.machineId) return null;
-    const inputs = await loadDaemonMergedProjectionInputs({
-        machineId: params.machineId,
-        ...(params.serverId ? { serverId: params.serverId } : {}),
-    });
-    return readCurrentProjectedAgentCapabilities({
-        projection: inputs?.pluginProjectionV2,
-        agentId: params.agentId,
-    });
-}
-
-export async function assertActiveDaemonTargetSession(target: SessionAddress | string): Promise<void> {
+export async function assertActiveDaemonTargetSession(target: SessionAddress | string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const sessionId = typeof target === 'string' ? target : target.sessionId;
     if (sessionId === VOICE_AGENT_GLOBAL_SESSION_ID) return;
     const state = storage.getState();
@@ -104,25 +75,8 @@ export async function assertActiveDaemonTargetSession(target: SessionAddress | s
     if (!session) return;
     const metadata = readVoiceSessionOwnerMetadataFromState(state, lookupTarget);
     const machineId = normalizeNonEmptyString(metadata?.machineId);
-    // An unreadable Agent identity is not Claude. Local voice control needs the
-    // Session's real Agent to declare a terminal surface, so an unknown identity
-    // stays unsupported instead of borrowing the default Agent's facts.
-    const agentId = resolveAgentIdFromSessionMetadata(metadata);
-    if (!supportsAgentLifecycleCapability({
-        agentId,
-        capability: 'surface.terminal',
-        metadata,
-        currentAgentCapabilities: await resolveTargetProjectedAgentCapabilities({
-            agentId,
-            machineId,
-            serverId: address?.serverId ?? null,
-        }),
-    })) {
-        throw Object.assign(
-            new Error('Target session provider does not support local voice control.'),
-            { code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED' },
-        );
-    }
+    // The coding target supplies context, not a terminal attachment. The
+    // carrier's Execution Run owner admits the selected Voice Agent runtime.
     if (session.active === false) {
         throw Object.assign(
             new Error('Target session is inactive. Resume it before starting local voice.'),

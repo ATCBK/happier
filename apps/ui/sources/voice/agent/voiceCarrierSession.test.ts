@@ -5,12 +5,13 @@ import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/m
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { storage } from '@/sync/domains/state/storage';
@@ -84,7 +85,7 @@ function captureCarrierSessionRecords() {
     const session = createSessionFixture({ active: true, ...partial as Parameters<typeof createSessionFixture>[0], id,
       serverId: account!.home.id, metadata: (partial as ReturnType<typeof createSessionFixture>).metadataLayoutVersion === 1
         ? (partial as ReturnType<typeof createSessionFixture>).metadata
-        : { path: '/voice', host: 'voice.test', ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
+        : { path: '/voice', host: 'voice.test', flavor: state.settings.lastUsedAgent, ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
     committedSessionRecords.set(id, sessionWireRecord(session));
   }
 }
@@ -93,7 +94,7 @@ function publishCarrierFixture() {
     const session = createSessionFixture({ active: true, ...partial as Parameters<typeof createSessionFixture>[0], id,
       serverId: account!.home.id, metadata: (partial as ReturnType<typeof createSessionFixture>).metadataLayoutVersion === 1
         ? (partial as ReturnType<typeof createSessionFixture>).metadata
-        : { path: '/voice', host: 'voice.test', ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
+        : { path: '/voice', host: 'voice.test', flavor: state.settings.lastUsedAgent, ...(partial as ReturnType<typeof createSessionFixture>).metadata } });
     return [id, session];
   }));
   const machines = Object.fromEntries(Object.entries(state.machines).map(([id, partial]) => [id,
@@ -186,6 +187,13 @@ vi.mock('@/modal', async () => {
   return createModalModuleMock().module;
 });
 async function dispatchMachineRpc(method: string, payload: unknown) {
+  if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+    return createExistingSessionDirectoryPreflightResult(payload);
+  }
+  if (method === RPC_METHODS.SPAWN_HAPPY_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+    const input = SessionResumeRequestV1Schema.parse(payload);
+    return { type: 'success', sessionId: input.sessionId };
+  }
   if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
     return daemonProjection ? { protocolVersion: 1, projection: daemonProjection } : { error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
   }
@@ -1010,7 +1018,9 @@ describe('voiceConversationSession', () => {
         serverId: homeId,
         machineId: 'm1',
         directory: 'c:/workspace/repo',
-        backendTarget: { kind: 'backend', backendId: 'claude' },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        connectedServices: undefined,
+        modelSelection: null,
         sessionId: 's_user',
       }),
     }));

@@ -169,6 +169,31 @@ describe('local conversation voice adapter', () => {
     expect(adapter.resolveContextChannel?.(storage.getState().settings.voice)).toBeNull();
   });
 
+  it('reads a Brief through the connected unprewarmed Agent with its actual Inbox context', async () => {
+    const { voiceHooks } = await import('@/voice/context/voiceHooks');
+    const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+    const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+    const attention = { serverId: null, available: false, phase: 'idle' as const, runIds: [], refreshFailed: false,
+      knownAt: null, hasMore: false, loadingMore: false, loadMoreFailed: false, retry: async () => {}, loadMore: async () => {} };
+    await adapter.toggle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+    await adapter.setMuted({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID, muted: true });
+    setVoiceSessionSnapshot(adapter.getSnapshot());
+    expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(false);
+    try {
+      expect(voiceHooks.onBriefRequested(VOICE_AGENT_GLOBAL_SESSION_ID, {
+        source: { isDataReady: true, personalSessionListCoverageComplete: true },
+        sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
+        workGroups: [], automationAttentionItems: [], workflowAttention: attention, automationAttention: attention,
+        isLoading: false, showCaughtUp: true,
+      })).toBe(true);
+      await vi.waitFor(() => expect(admittedProviderText()).toContain('INBOX BRIEF'));
+      expect(admittedProviderText()).toContain('Approvals are tap-only');
+    } finally {
+      await adapter.stop({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID });
+      setVoiceSessionSnapshot(adapter.getSnapshot());
+    }
+  });
+
   it('projects a disconnected runtime as an unavailable local session', () => {
     expect(adapter.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
   });
@@ -204,6 +229,10 @@ describe('local conversation voice adapter', () => {
     let interrupted = false;
     const interruption = adapter.interrupt({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID }).then(() => { interrupted = true; });
     try {
+      // Cancelling a reply retains the connection, including while the exact
+      // daemon stream acknowledgement has not settled.
+      expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+        status: 'connected', mode: 'idle', canStop: true });
       await vi.waitFor(() => expect(interrupted).toBe(true));
       expect(adapter.getSnapshot()).toMatchObject({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
         status: 'connected', mode: 'idle', canStop: true });

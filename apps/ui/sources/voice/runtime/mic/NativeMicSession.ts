@@ -197,8 +197,7 @@ export function createExpoAudioRecordingMicSession(
         await cleanup.cleanup();
     };
 
-    const releaseAudioMode = async (): Promise<void> => {
-        const activeLease = audioModeLease;
+    const releaseAudioMode = async (activeLease = audioModeLease): Promise<void> => {
         if (!activeLease) return;
         await activeLease.release();
         if (audioModeLease === activeLease) audioModeLease = null;
@@ -233,6 +232,7 @@ export function createExpoAudioRecordingMicSession(
         },
         isMuted: () => muted,
         teardown: async () => {
+            const retiringAudioModeLease = audioModeLease;
             const activeNativeRecording = nativeFileRecording;
             nativeFileRecording = null;
             if (activeNativeRecording) {
@@ -255,7 +255,7 @@ export function createExpoAudioRecordingMicSession(
                     // must still be restored by its canonical owner.
                 }
             }
-            await releaseAudioMode();
+            await releaseAudioMode(retiringAudioModeLease);
         },
         getStream: () => null,
         beginRecording: async (signal) => {
@@ -271,6 +271,10 @@ export function createExpoAudioRecordingMicSession(
                 await nextAudioModeLease.release();
                 return;
             }
+            // Teardown must own the lease while the platform prepares capture,
+            // even when that preparation never settles. Its identity also fences
+            // a late recorder from publishing over a subsequent recording.
+            audioModeLease = nextAudioModeLease;
             try {
                 if (Platform.OS === 'ios') {
                     const nextNativeRecording = createNativeRecording();
@@ -279,27 +283,28 @@ export function createExpoAudioRecordingMicSession(
                     }
                     try {
                         await nextNativeRecording.start();
-                        if (signal?.aborted) {
+                        if (!signal?.aborted && audioModeLease === nextAudioModeLease && muted) {
+                            await nextNativeRecording.setMuted(true);
+                        }
+                        if (signal?.aborted || audioModeLease !== nextAudioModeLease) {
                             await discardTerminalArtifact(
                                 await nextNativeRecording.stop().catch(() => null),
                             );
-                            await nextAudioModeLease.release();
+                            await releaseAudioMode(nextAudioModeLease);
                             return;
                         }
-                        if (muted) await nextNativeRecording.setMuted(true);
                     } catch (error) {
                         await discardTerminalArtifact(
                             await nextNativeRecording.stop().catch(() => null),
                         );
                         throw error;
                     }
-                    audioModeLease = nextAudioModeLease;
                     nativeFileRecording = nextNativeRecording;
                     return;
                 }
                 const nextRecorder = createRecorder();
                 await nextRecorder.prepareToRecordAsync();
-                if (signal?.aborted) {
+                if (signal?.aborted || audioModeLease !== nextAudioModeLease) {
                     try {
                         await nextRecorder.stop();
                         await discardTerminalArtifact(nextRecorder.uri ?? null);
@@ -307,17 +312,16 @@ export function createExpoAudioRecordingMicSession(
                         // Preparation rollback is best-effort; releasing the
                         // attempt-local audio-mode lease remains authoritative.
                     }
-                    await nextAudioModeLease.release();
+                    await releaseAudioMode(nextAudioModeLease);
                     return;
                 }
-                audioModeLease = nextAudioModeLease;
                 nextRecorder.record();
                 recorder = nextRecorder;
                 if (muted) {
                     nextRecorder.pause();
                 }
             } catch (error) {
-                await nextAudioModeLease.release();
+                await releaseAudioMode(nextAudioModeLease);
                 if (Platform.OS === 'web' && isPermissionDeniedMicrophoneError(error)) {
                     showPermissionDenied(false);
                     throw new Error('mic_permission_denied');
@@ -326,6 +330,7 @@ export function createExpoAudioRecordingMicSession(
             }
         },
         stopRecording: async () => {
+            const retiringAudioModeLease = audioModeLease;
             const activeNativeRecording = nativeFileRecording;
             nativeFileRecording = null;
             const activeRecorder = recorder;
@@ -339,7 +344,7 @@ export function createExpoAudioRecordingMicSession(
                 // silently drops valid browser recordings and skips STT.
                 return activeRecorder.uri ?? null;
             } finally {
-                await releaseAudioMode();
+                await releaseAudioMode(retiringAudioModeLease);
             }
         },
     };

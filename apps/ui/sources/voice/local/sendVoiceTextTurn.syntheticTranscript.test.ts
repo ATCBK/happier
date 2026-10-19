@@ -19,7 +19,8 @@ import { readMountedSessionRealtimeTranscriptConsumerSessionIds } from '@/sync/r
 import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
 import { readCanonicalVoiceTranscriptSnapshot } from '@/voice/transcript/voiceConversationTranscript';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunTurnStreamStartResponseSchema,
   ExecutionRunTurnStreamReadRequestSchema, ExecutionRunTurnStreamReadResponseSchema,
   ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunUserTranscriptCommitRequestSchema,
@@ -27,7 +28,9 @@ import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunTurnStreamStart
 import type { VoiceAssistantAction } from '@happier-dev/protocol';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
+import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import type { SpeechOptions } from 'expo-speech';
 
 const conversationModeState: { current: 'agent' | 'direct_session' } = { current: 'agent' };
@@ -51,6 +54,12 @@ installDisconnectedServerSocketBoundary(socket => {
     if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
     if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Expected canonical Voice RPC');
     const method = payload.method.slice(payload.method.indexOf(':') + 1);
+    if (method === RPC_METHODS.SPAWN_HAPPY_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+      const resume = SessionResumeRequestV1Schema.parse(payload.params);
+      expect(payload.method.slice(0, payload.method.indexOf(':'))).toBe('machine-1');
+      expect(resume).toMatchObject({ type: 'resume-session', sessionId: 'carrier-s1', directory: '/workspace/s1' });
+      return { ok: true, result: { type: 'success', sessionId: resume.sessionId } };
+    }
     return { ok: true, result: await retainedAgent.dispatch(method, payload.params) };
   });
 });
@@ -293,34 +302,79 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
     expect(pendingWrites('s1')).toEqual([]);
   });
 
-  it.each(['reply', 'cancel'] as const)('keeps a slow direct-session turn owned until %s', async (outcome) => {
+  it.each(['reply', 'cancel', 'remote_cancel'] as const)('keeps a slow direct-session turn owned until %s', async (outcome) => {
     conversationModeState.current = 'direct_session';
     const { sendVoiceTextTurn } = await import('./sendVoiceTextTurn');
     const { sync } = await import('@/sync/sync');
     // Observe the real submit promise so the reply clock starts after HTTP acceptance.
     const submission = vi.spyOn(sync, 'submitMessage');
     const settings = buildAccountSettings();
-    const config = settings.voice.providers.local_conversation!.config;
+    const config = readLocalConversationVoiceSettings(settings.voice);
     const controller = new AbortController();
     speech.speak.mockReset();
     speech.speak.mockImplementation((_text, options) => { options.onStart?.(); options.onDone?.(); });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let settled = false;
     const turn = sendVoiceTextTurn({
       sessionId: 's1', userText: 'slow spoken reply', signal: controller.signal,
       settings: { ...settings, voice: { ...settings.voice, providers: { ...settings.voice.providers,
         local_conversation: { schemaVersion: 1, config: { ...config, tts: { autoSpeakReplies: true, provider: 'device' } } },
       } } },
       playbackController: createVoicePlaybackController(), voiceAgentSessions,
-    });
+    }).then(() => { settled = true; });
     try {
       await vi.waitFor(() => expect(pendingWrites('s1')).toHaveLength(1));
       await submission.mock.results[0]!.value;
       await vi.advanceTimersByTimeAsync(65_000);
       expect(readMountedSessionRealtimeTranscriptConsumerSessionIds(account.homes.voice!.id)).toContain('s1');
       if (outcome === 'cancel') controller.abort();
-      const reply = { id: 'slow-reply', kind: 'agent-text', text: 'Here is the slow reply.', localId: null, createdAt: Date.now() } satisfies Message;
+      if (outcome === 'remote_cancel') {
+        const admission = pendingWrites('s1')[0]?.body;
+        if (!admission || typeof admission !== 'object' || !('localId' in admission)) throw new Error('Missing durable admission');
+        const user = { id: 'voice-user', kind: 'user-text', text: 'slow spoken reply', seq: 17,
+          localId: String(admission.localId), createdAt: Date.now() } satisfies Message;
+        storage.setState({ sessions: { ...storage.getState().sessions, s1: { ...storage.getState().sessions.s1!,
+          sessionTurns: buildSessionTurnsProjectionV1({ sessionId: 's1', updatedAt: Date.now(), turns: [{
+            turnId: 'coding-turn', startedAt: Date.now(), updatedAt: Date.now(), status: 'cancelled',
+            transcriptAnchors: { startUserMessageSeq: user.seq, finalAssistantMessageSeq: null },
+          }] }),
+        } }, sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: [user.id], messagesById: { [user.id]: user } }) } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(true);
+        expect(controller.signal.aborted).toBe(false);
+        expect(voiceConversationRuntimeMachine.getSnapshot().state).toBe('connected');
+        expect(speech.speak).not.toHaveBeenCalled();
+        return;
+      }
+      const reply = { id: 'slow-reply', kind: 'agent-text', text: 'Here is the slow reply.', localId: null, createdAt: Date.now(),
+        meta: { happierStreamSegmentV1: { v: 1, segmentKind: 'assistant', segmentLocalId: 'reply-local',
+          segmentState: 'complete', startedAtMs: Date.now(), updatedAtMs: Date.now() } },
+      } satisfies Message;
+      if (outcome === 'reply') {
+        const admission = pendingWrites('s1')[0]?.body;
+        if (!admission || typeof admission !== 'object' || !('localId' in admission)) throw new Error('Missing durable admission');
+        const user = { id: 'voice-user', kind: 'user-text', text: 'slow spoken reply', seq: 17,
+          localId: String(admission.localId), createdAt: Date.now() } satisfies Message;
+        const previousReply = { id: 'older-reply', kind: 'agent-text', text: 'An older hydrated reply.', seq: 16,
+          localId: null, createdAt: Date.now() - 1 } satisfies Message;
+        storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+          messageIdsOldestFirst: [previousReply.id, user.id], messagesById: { [previousReply.id]: previousReply, [user.id]: user },
+        }) } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(speech.speak).not.toHaveBeenCalled();
+        const draft = { ...reply, text: 'Here', meta: { happierStreamSegmentV1: {
+          ...reply.meta.happierStreamSegmentV1, segmentState: 'streaming' as const,
+        } } } satisfies Message;
+        storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+          messageIdsOldestFirst: [user.id, draft.id], messagesById: { [user.id]: user, [draft.id]: draft },
+        }) } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(speech.speak).not.toHaveBeenCalled();
+        expect(readMountedSessionRealtimeTranscriptConsumerSessionIds(account.homes.voice!.id)).toContain('s1');
+      }
+      const messages = [...readStoredSessionMessages(storage.getState(), 's1').filter(message => message.kind === 'user-text'), reply];
       storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
-        messageIdsOldestFirst: [reply.id], messagesById: { [reply.id]: reply },
+        messageIdsOldestFirst: messages.map(message => message.id), messagesById: Object.fromEntries(messages.map(message => [message.id, message])),
       }) } });
       await turn;
       expect(speech.speak.mock.calls.map(call => call[0])).toEqual(outcome === 'reply' ? [reply.text] : []);

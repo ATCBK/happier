@@ -20,7 +20,7 @@ import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/m
 import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
@@ -433,22 +433,36 @@ export let localVoiceHomeId = '';
 export const localVoicePendingEnqueue = vi.fn<(request: Readonly<{ sessionId: string; body: Record<string, unknown> }>) => Promise<Response>>();
 /** Publish a server message through the actual Socket SDK listeners and HTTP page, never a rendered store row. */
 export async function publishLocalVoiceAssistantMessage(input: Readonly<{ sessionId: string; id: string; text: string }>) {
+    const createdAt = Date.now();
+    const [projected] = projectClaudeJsonlLineToDirectMessages({
+        fileRelPath: 'session.jsonl', lineStartOffsetBytes: 0,
+        lineValue: { type: 'assistant', uuid: input.id, timestamp: createdAt,
+            message: { role: 'assistant', content: [{ type: 'text', text: input.text }] } },
+    });
+    if (!projected || projected.messageRole !== 'agent') throw new Error('Expected published Claude assistant transcript');
+    await publishLocalVoiceTranscriptMessage({ ...input, localId: null, messageRole: 'agent', content: { t: 'plain', v: projected.raw } });
+}
+
+/** Model the server's committed user row before the Agent's reply, using the actual admitted payload. */
+export async function publishLocalVoiceSubmittedUserMessage(request: Parameters<typeof localVoicePendingEnqueue>[0]) {
+    if (typeof request.body.localId !== 'string' || !request.body.localId) throw new Error('Expected admitted Voice input identity');
+    await publishLocalVoiceTranscriptMessage({ sessionId: request.sessionId, id: `user-${request.body.localId}`,
+        localId: request.body.localId, messageRole: 'user', content: request.body.content });
+}
+
+async function publishLocalVoiceTranscriptMessage(input: Readonly<{
+    sessionId: string; id: string; localId: string | null; messageRole: 'user' | 'agent'; content: unknown;
+}>) {
     if (!speechAccount) throw new Error('Expected admitted Voice Account transcript transport');
     const remoteKey = JSON.stringify([speechAccount.credentials.token, input.sessionId]);
     const messages = localVoiceRemoteMessages.get(remoteKey) ?? [];
     const seq = (messages.at(-1)?.seq ?? 0) + 1;
     const createdAt = Date.now();
-    const [projected] = projectClaudeJsonlLineToDirectMessages({
-        fileRelPath: 'session.jsonl', lineStartOffsetBytes: seq,
-        lineValue: { type: 'assistant', uuid: input.id, timestamp: createdAt,
-            message: { role: 'assistant', content: [{ type: 'text', text: input.text }] } },
-    });
-    if (!projected || projected.messageRole !== 'agent') throw new Error('Expected published Claude assistant transcript');
     const update = UpdateContainerSchema.parse({
         id: `update-${input.id}`, seq, createdAt,
         body: { t: 'new-message', sid: input.sessionId, message: {
-            id: input.id, seq, localId: null, messageRole: 'agent', createdAt, updatedAt: createdAt,
-            content: { t: 'plain', v: projected.raw },
+            id: input.id, seq, localId: input.localId, messageRole: input.messageRole, createdAt, updatedAt: createdAt,
+            content: input.content,
         } },
     });
     if (update.body.t !== 'new-message') throw new Error('Expected incoming Voice transcript message');
@@ -594,9 +608,9 @@ async function createLocalVoiceAccountHarness() {
                     const pending = /^\/v2\/sessions\/([^/]+)\/pending$/.exec(path);
                     if (pending && init?.method === 'POST') return localVoicePendingEnqueue({ sessionId: decodeURIComponent(pending[1]), body: JSON.parse(String(init.body)) });
                     if (pending) return Response.json({ pending: [], discarded: [], pendingVersion: 0 });
-                    // Durable streamed turns settle their claimed input before
-                    // reading daemon output; acknowledge that actual HTTP write.
-                    if (/^\/v2\/sessions\/[^/]+\/pending\/[^/]+\/delivery\/handled$/.test(path) && init?.method === 'POST') return Response.json({});
+                    // Durable streamed turns settle or block their claimed input;
+                    // both HTTP mutations acknowledge before the pending reread.
+                    if (/^\/v2\/sessions\/[^/]+\/pending\/[^/]+\/delivery\/(handled|block)$/.test(path) && init?.method === 'POST') return Response.json({});
                     const messagesPage = /^\/v1\/sessions\/([^/]+)\/messages$/.exec(path);
                     if (messagesPage) return Response.json(SessionMessagesPageV1Schema.parse({
                         messages: localVoiceRemoteMessages.get(JSON.stringify([
@@ -839,6 +853,8 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         let uploadedSize = 0;
         machineRpcWithServerScope.mockImplementation(async (request: any) => {
             switch (request?.method) {
+                case RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT:
+                    return createExistingSessionDirectoryPreflightResult(request.payload);
                 case RPC_METHODS.SESSION_SPAWN_NEW:
                     return await createVoiceConversationSessionFixture(request.payload);
                 case RPC_METHODS.SPAWN_HAPPY_SESSION:

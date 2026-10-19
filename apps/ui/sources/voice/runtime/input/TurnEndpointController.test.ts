@@ -108,6 +108,12 @@ describe('createTurnEndpointController', () => {
         });
         controller.startSession('session-2');
         controller.signalEndpointDetected({
+            sessionId: 'session-2',
+            source: 'native_stream',
+            transcript: '  ',
+        });
+        expect(onSignal).not.toHaveBeenCalled();
+        controller.signalEndpointDetected({
             sessionId: 'session-1',
             source: 'native_stream',
             transcript: 'stale',
@@ -124,6 +130,16 @@ describe('createTurnEndpointController', () => {
             source: 'native_stream',
             transcript: 'fresh',
             endpoint: { reason: 'acoustic_endpoint', confidence: null },
+        }));
+    });
+
+    it('admits an acoustic speech endpoint before recognition has supplied text', () => {
+        const onSignal = vi.fn();
+        const controller = createTurnEndpointController({ onSignal });
+        controller.startSession('session-1');
+        controller.signalEndpointDetected({ sessionId: 'session-1', source: 'native_vad', transcript: '' });
+        expect(onSignal).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 'session-1', source: 'native_vad', transcript: '',
         }));
     });
 

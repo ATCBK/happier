@@ -1,5 +1,6 @@
 import {
   abortLocalVoiceTurn,
+  commitLocalVoiceInput,
   announceLocalVoiceAgentAssistantText,
   appendLocalVoiceAgentAttemptContextUpdate,
   appendLocalVoiceAgentAutomaticUiContextUpdate,
@@ -15,6 +16,7 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 export type LocalVoiceRuntimeController = Readonly<{
   abortTurn: (sessionId: string) => Promise<void>;
+  commitInput: (sessionId: string) => Promise<void>;
   announceAgentAssistantText: (sessionId: string, text: string) => void;
   /** Explicit current-attempt context; synchronized Session updates do not use this seam. */
   appendAgentContextUpdate: (sessionId: string, update: string) => void;
@@ -42,6 +44,7 @@ export type LocalVoiceRuntimeController = Readonly<{
 export function createLocalVoiceRuntimeController(): LocalVoiceRuntimeController {
   return {
     abortTurn: async (sessionId) => await abortLocalVoiceTurn(sessionId),
+    commitInput: async (sessionId) => await commitLocalVoiceInput(sessionId),
     announceAgentAssistantText: (sessionId, text) => announceLocalVoiceAgentAssistantText(sessionId, text),
     appendAgentContextUpdate: (sessionId, update) => appendLocalVoiceAgentAttemptContextUpdate(sessionId, update),
     appendAgentAutomaticUiContextUpdate: (sessionId, update) => appendLocalVoiceAgentAutomaticUiContextUpdate(sessionId, update),
