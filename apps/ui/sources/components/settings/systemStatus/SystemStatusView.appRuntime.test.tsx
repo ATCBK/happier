@@ -1,8 +1,11 @@
 import * as React from 'react';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
-import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 (
     globalThis as typeof globalThis & {
@@ -12,42 +15,21 @@ import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/tes
 
 const setClipboardStringSafeMock = vi.hoisted(() => vi.fn(async () => true));
 const modalAlertMock = vi.hoisted(() => vi.fn());
-const homeTransportDiagnostics = vi.hoisted(() => [{
+const homeTransportDiagnostics = [{
     homeServerIdentityId: 'home_1',
     state: 'connected' as const,
     current: { carrier: 'iroh' as const, observedPath: 'direct' as const },
     lastKnown: { carrier: 'iroh' as const, observedPath: 'direct' as const },
     lastTransitionAtMs: 1_788_200_000_000,
-}]);
-const socketState = vi.hoisted(() => ({
-    lastError: 'authorization=copy-me-never',
-}));
+}];
 
 afterEach(() => {
     standardCleanup();
     setClipboardStringSafeMock.mockReset();
     setClipboardStringSafeMock.mockResolvedValue(true);
     modalAlertMock.mockReset();
-});
-
-vi.mock('react-native-mmkv', () => {
-    class MMKV {
-        #store = new Map<string, string>();
-
-        public getString(key: string): string | undefined {
-            return this.#store.get(key);
-        }
-
-        public set(key: string, value: string): void {
-            this.#store.set(key, value);
-        }
-
-        public delete(key: string): void {
-            this.#store.delete(key);
-        }
-    }
-
-    return { MMKV };
+    retireIrohHomeTransportDiagnostics('home_1');
+    storage.setState(initialStorageState, true);
 });
 
 vi.mock('react-native', async () => {
@@ -85,95 +67,55 @@ vi.mock('@/modal', async () => {
 });
 
 vi.mock('expo-constants', () => ({
-    default: { expoConfig: { version: '0.0.0-test' }, deviceName: 'test-device' },
+    default: { expoConfig: { version: '1.2.3' }, deviceName: 'test-device' },
 }));
 
-vi.mock('@/utils/ui/clipboard', () => ({
-    setClipboardStringSafe: setClipboardStringSafeMock,
+vi.mock('expo-application', () => ({
+    nativeApplicationVersion: '1.2.0', nativeBuildVersion: '101', applicationId: 'dev.happier.app',
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    FontWeights: {
-        regular: '400',
-        semiBold: '500',
-        bold: '600',
-    },
-    Typography: new Proxy({}, {
-        get: () => () => ({}),
-    }),
+vi.mock('expo-updates', async () => ({
+    ...(await import('@/dev/testkit/mocks/expoUpdates')).createExpoUpdatesMock(),
+    channel: 'preview', updateId: 'update-123', runtimeVersion: '18',
+    createdAt: new Date('2026-04-06T12:34:56.000Z'), isEmbeddedLaunch: false,
 }));
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({ generation: 1, serverId: 'srv_1', serverUrl: 'http://example.local' }),
+vi.mock('expo-clipboard', () => ({
+    setStringAsync: setClipboardStringSafeMock,
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, { profiles: [] });
-});
-
-vi.mock('@/sync/runtime/irohHomeTransportDiagnostics', () => ({
-    retireIrohHomeTransportDiagnostics: vi.fn(),
-    readIrohHomeTransportDiagnostics: () => homeTransportDiagnostics,
-    readIrohHomeTransportDiagnosticsRevision: () => 0,
-    isIrohHomeTransportDiagnosticsCurrent: (diagnostics: { state?: unknown; current?: unknown } | null | undefined) => (
-        diagnostics?.state === 'connected' && diagnostics.current !== undefined
-    ),
-    subscribeIrohHomeTransportDiagnostics: () => () => {},
-}));
-
-vi.mock('@/sync/runtime/readCurrentAppRuntimeInfo', () => ({
-    readCurrentAppRuntimeInfo: () => ({
-        appVersion: '1.2.3',
-        nativeApplicationVersion: '1.2.0',
-        nativeBuildVersion: '101',
-        applicationId: 'dev.happier.app',
-        updateChannel: 'preview',
-        updateId: 'update-123',
-        runtimeVersion: '18',
-        updateCreatedAt: '2026-04-06T12:34:56.000Z',
-        launchSource: 'ota',
-    }),
-}));
-
-vi.mock('./OtaUpdateStatusSection', () => ({
-    OtaUpdateStatusSection: () => null,
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useProfile: () => ({ id: 'prof_1', username: 'u1', connectedServices: [] }),
-        useIsDataReady: () => true,
-        useRealtimeStatus: () => 'connected',
-        useSocketStatus: () => ({ status: 'connected', lastError: socketState.lastError, lastErrorAt: 1_788_200_000_000 }),
-        useEndpointConnectivity: () => ({
-            status: 'online',
-            reason: null,
-            attempt: 1,
-            nextRetryAt: null,
-            lastConnectedAt: null,
-            lastDisconnectedAt: null,
-            lastErrorMessage: null,
-        }),
-        useSyncError: () => null,
-        useLastSyncAt: () => null,
-        useMachineListForServer: () => [],
-        useMachineListStatusForServer: () => 'loaded',
-        useMachineListByServerId: () => ({}),
-        useMachineListStatusByServerId: () => ({}),
+const network = await installSessionOpsNetworkBoundary();
+const { storage } = await import('@/sync/domains/state/storage');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+const { createIrohHomeTransportDiagnosticsPublisher, retireIrohHomeTransportDiagnostics } = await import('@/sync/runtime/irohHomeTransportDiagnostics');
+const { SystemStatusView } = await import('./SystemStatusView');
+const initialStorageState = storage.getState();
+beforeEach(async () => {
+    network.resetRequests();
+    const home = await network.addHome('http://example.local', 'prof_1', {
+        credentials: { token: createAccountTokenForTests('prof_1', { currentAccount: true }) },
     });
+    const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+    await setActiveServerId(home.id);
+    const state = storage.getState();
+    state.applyProfile({ ...profileDefaults, id: 'prof_1', username: 'u1' });
+    state.applyReady();
+    state.setSocketStatus('connected');
+    state.setSocketError('authorization=copy-me-never');
+    state.setEndpointConnectivity({ status: 'online', reason: null, attempt: 1, nextRetryAt: null,
+        lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null });
+    state.applyMachines([], true, { sourceServerId: home.id });
+    const publisher = createIrohHomeTransportDiagnosticsPublisher({
+        producerId: 'system-status-runtime-test', leaseId: 'runtime-diagnostics', homeServerIdentityId: 'home_1',
+    });
+    publisher.publish(homeTransportDiagnostics[0]);
 });
-
-vi.mock('@/utils/sessions/machineUtils', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/utils/sessions/machineUtils')>(),
-    isMachineOnline: () => false,
-}));
+afterAll(async () => { await network.dispose(); });
 
 describe('SystemStatusView app runtime info', () => {
     it('shows app runtime details and copies OTA runtime metadata into the system-status JSON payload', async () => {
-        const { SystemStatusView } = await import('./SystemStatusView');
         const screen = await renderScreen(<SystemStatusView />);
+        await flushHookEffects({ cycles: 10 });
 
         const text = screen.getTextContent();
         expect(text).toContain('bugReports.composer.environment.appVersionLabel');
@@ -190,6 +132,7 @@ describe('SystemStatusView app runtime info', () => {
             typeof node.props?.onPress === 'function'
         ));
         await pressTestInstanceAsync(copyRow, 'copy system status JSON');
+        await act(async () => { await vi.waitFor(() => expect(setClipboardStringSafeMock).toHaveBeenCalledTimes(1)); });
 
         expect(setClipboardStringSafeMock).toHaveBeenCalledTimes(1);
         expect(modalAlertMock).not.toHaveBeenCalled();

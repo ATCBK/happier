@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createMachineFixture, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
@@ -10,6 +10,9 @@ installSettingsViewCommonModuleMocks({ storage: 'real' });
 const clipboard = vi.hoisted(() => vi.fn(async (_text: string) => true));
 vi.mock('@/utils/ui/clipboard', () => ({ setClipboardStringSafe: clipboard }));
 
+// Package cleanup retires runtimeFetch after each case. Reclaim the same Home
+// HTTP boundary before the next case; its already-imported clients stay real.
+beforeEach(async () => { await home.reset(); });
 afterEach(async () => { standardCleanup(); await home.reset(); clipboard.mockClear(); });
 
 it.each([

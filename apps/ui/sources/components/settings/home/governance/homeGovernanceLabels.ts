@@ -6,7 +6,7 @@ import type {
     TeamCreationPolicyV1,
 } from '@happier-dev/protocol/home/governance';
 
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import { resolveHomeAccountStatusPresentation } from '@/sync/domains/home/governance/homeAccountAdministration';
 import type { HomeAccountActionUnavailableReason } from '@/sync/domains/home/governance/homeAccountAdministration';
 import type { HomeAdministrationHomeEntry } from '@/sync/domains/home/governance/homeAdministrationSettingsAdmission';

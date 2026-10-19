@@ -1,23 +1,23 @@
 import * as React from 'react';
-import { MMKV } from 'react-native-mmkv';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { scopedStorageId } from '@/utils/system/storageScope';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 const routes = createExpoRouterMock();
 vi.mock('expo-router', () => routes.module);
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'web' } });
 });
-// Authentication, native UI and locale are environment boundaries. Collection,
-// controller, profile persistence, group actions and membership controls stay real.
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ isAuthenticated: false, refreshFromActiveServer: async () => {} }),
-}));
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Native UI and locale are environment boundaries. Account authority and the
+// collection/controller run through their real providers below.
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
@@ -27,34 +27,32 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-beforeEach(() => {
-    vi.resetModules();
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+const { AuthProvider } = await import('@/auth/context/AuthContext');
+// The native profile store and its readers share one module lifetime. Replacing
+// the module graph per case also detaches the transport installed above.
+const { HomesDeviceScreen } = await import('./HomesDeviceScreen');
+const { HomesCollectionProvider } = await import('./HomesCollection');
+
+beforeEach(async () => {
+    await home.reset();
     routes.resetParams();
-    const scope = `home-group-draft-${crypto.randomUUID()}`;
-    vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', scope);
-    vi.stubEnv('EXPO_PUBLIC_HAPPY_SERVER_CONTEXT', '');
-    const profiles = new MMKV({ id: scopedStorageId('server-profiles', scope) });
-    profiles.set('server-state-v1', JSON.stringify({
-        activeServerId: 'home-a',
-        activeServerIdIsExplicit: true,
-        servers: Object.fromEntries(['home-a', 'home-b', 'home-c'].map((id) => [id, {
-            id, name: id, serverUrl: `https://${id}.example.test`,
-            createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual',
-        }])),
-        homeViewStateInitialized: true,
-        homeViewState: { version: 1, groups: [], activeTargetKind: 'server', activeTargetId: 'home-a' },
-    }));
+    for (const id of ['home-a', 'home-b', 'home-c']) {
+        await home.addHome({ name: id, serverUrl: `https://${id}.example.test`, accountId: null, active: id === 'home-a' });
+    }
 });
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
-    vi.unstubAllEnvs();
+    await home.reset();
 });
 
 async function renderDevice() {
-    const { HomesDeviceScreen } = await import('./HomesDeviceScreen');
-    const { HomesCollectionProvider } = await import('./HomesCollection');
-    return renderScreen(<HomesCollectionProvider><HomesDeviceScreen /></HomesCollectionProvider>);
+    return renderScreen(<AuthProvider initialCredentials={null}>
+        <HomesCollectionProvider><HomesDeviceScreen /></HomesCollectionProvider>
+    </AuthProvider>);
 }
 
 describe('Homes on this device', () => {

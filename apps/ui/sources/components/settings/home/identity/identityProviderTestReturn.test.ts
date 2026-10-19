@@ -148,7 +148,7 @@ describe('identityProviderTestReturn', () => {
     });
 
     it('consumes a Team callback at the exact route target without relying on the OAuth screen', async () => {
-        const consume = async (input: Readonly<{ teamId: string; connectionId: string; resultHandle: string }>) => ({
+        const consume = async (input: Readonly<{ teamId: string | null; connectionId: string; resultHandle: string }>) => ({
             ok: true as const,
             input,
         });

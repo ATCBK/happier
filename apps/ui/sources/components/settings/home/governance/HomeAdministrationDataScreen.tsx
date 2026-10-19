@@ -23,7 +23,7 @@ import { ItemLoadStateRows, type ItemLoadState } from '@/components/ui/lists/Ite
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { useHomeSettings } from '@/hooks/home/useHomeSettings';
 import { Modal } from '@/modal';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import {
     readHomeSettingsInvalidFailure,
     runHomeRetentionDryRun,

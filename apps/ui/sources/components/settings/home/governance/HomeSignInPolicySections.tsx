@@ -549,13 +549,13 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                                 subtitle: admissionDescription(admission),
                             })),
                         ]}
-                        itemTrigger={{ title: t('homeGovernance.signInPolicy.newAccounts'), itemProps: { testID: 'home-policy-auth-admission-trigger' } }}
+                        itemTrigger={{ title: t('homeGovernance.signInPolicy.newAccounts'), itemProps: { testID: 'home-policy-auth-admission-trigger', disabled: !interactive } }}
                         onSelect={(id) => {
                             setAdmissionOpen(false);
+                            if (!interactive) return;
                             const admission = ADMISSION_CHOICES.find((choice) => choice === id);
                             if (admission) patch({ admission });
                         }}
-                        disabled={!interactive}
                     />
                 ) : <SegmentedChoiceItem<HomeAdmissionModeV1>
                     testID="home-policy-auth-admission"

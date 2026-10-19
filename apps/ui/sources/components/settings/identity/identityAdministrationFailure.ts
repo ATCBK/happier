@@ -1,6 +1,7 @@
 import { t } from '@/text';
 import { homeDomainFailureCode, homeDomainFailureFromActionFailure } from '@/sync/api/home/homeDomainActions';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 /**
  * How an identity or directory administration request failed, in the terms a
@@ -289,7 +290,7 @@ export function resolveApprovalSettledReadFailure(
     if (!domainFailure) {
         return {
             code,
-            retryable: code === 'approval_rejected' || code === 'approval_canceled' || isIdentityAdministrationFailureRetryable(code),
+            retryable: isActionApprovalDeclinedErrorCode(code) || isIdentityAdministrationFailureRetryable(code),
         };
     }
     const resolvedCode = homeDomainFailureCode(domainFailure);

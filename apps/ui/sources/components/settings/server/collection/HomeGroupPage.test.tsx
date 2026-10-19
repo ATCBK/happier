@@ -79,39 +79,52 @@ describe('Home group draft', () => {
     });
 
     it('renames an existing group inline, keeping a cancelled draft out of persistence', async () => {
-        const profiles = new MMKV({ id: scopedStorageId('server-profiles', process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE!) });
-        const state = JSON.parse(profiles.getString('server-state-v1')!);
-        state.homeViewState.groups = [
-            { id: 'group-a', name: 'Original', serverIds: ['home-a'], presentation: 'grouped' },
-            { id: 'group-b', name: 'Other', serverIds: ['home-b'], presentation: 'grouped' },
-        ];
-        profiles.set('server-state-v1', JSON.stringify(state));
-        const { HomeGroupPage } = await import('./HomeGroupPage');
-        const { HomesCollectionProvider } = await import('./HomesCollection');
-        const screen = await renderScreen(<HomesCollectionProvider><HomeGroupPage groupId="group-a" /></HomesCollectionProvider>);
-        const openRename = async () => {
-            // Native portals do not mount their menu rows in this renderer; drive the real
-            // dropdown's public selection event without replacing its menu/action logic.
-            const menu = screen.findAllByProps({ testID: 'settings.homes.group.menu' })
-                .find((node) => typeof node.props.onSelect === 'function');
-            expect(menu).toBeDefined();
-            await act(async () => { await menu!.props.onSelect('rename'); });
-        };
-        await openRename();
-        const field = screen.findByTestId('settings.homes.group.name');
-        expect(field).not.toBeNull();
-        await act(async () => { field!.props.onChangeText('Cancelled'); });
-        await screen.pressByTestIdAsync('settings.homes.group.name.cancel');
-        expect(JSON.parse(profiles.getString('server-state-v1')!).homeViewState.groups[0].name).toBe('Original');
-        await openRename();
-        await act(async () => { screen.findByTestId('settings.homes.group.name')!.props.onChangeText(' Renamed '); });
-        await screen.pressByTestIdAsync('settings.homes.group.name.save');
-        expect(JSON.parse(profiles.getString('server-state-v1')!).homeViewState.groups[0].name).toBe('Renamed');
-        await openRename();
-        await act(async () => { screen.findByTestId('settings.homes.group.name')!.props.onChangeText('Do not apply to another group'); });
-        await screen.update(<HomesCollectionProvider><HomeGroupPage groupId="group-b" /></HomesCollectionProvider>);
-        expect(screen.findByTestId('settings.homes.group.name') === null).toBe(true);
-        expect(JSON.parse(profiles.getString('server-state-v1')!).homeViewState.groups[1].name).toBe('Other');
+        const reportError = console.error;
+        // React reports passive-effect loops without stopping them; make its own
+        // diagnostic fail this regression rather than letting act spin forever.
+        const renderErrors = vi.spyOn(console, 'error').mockImplementation((message, ...args: unknown[]) => {
+            if (typeof message === 'string' && message.includes('Maximum update depth exceeded')) {
+                throw new Error(message);
+            }
+            reportError(message, ...args);
+        });
+        try {
+            const profiles = new MMKV({ id: scopedStorageId('server-profiles', process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE!) });
+            const state = JSON.parse(profiles.getString('server-state-v1')!);
+            state.homeViewState.groups = [
+                { id: 'group-a', name: 'Original', serverIds: ['home-a'], presentation: 'grouped' },
+                { id: 'group-b', name: 'Other', serverIds: ['home-b'], presentation: 'grouped' },
+            ];
+            profiles.set('server-state-v1', JSON.stringify(state));
+            const { HomeGroupPage } = await import('./HomeGroupPage');
+            const { HomesCollectionProvider } = await import('./HomesCollection');
+            const screen = await renderScreen(<HomesCollectionProvider><HomeGroupPage groupId="group-a" /></HomesCollectionProvider>);
+            const openRename = async () => {
+                // Native portals do not mount their menu rows in this renderer; drive the real
+                // dropdown's public selection event without replacing its menu/action logic.
+                const menu = screen.findAllByProps({ testID: 'settings.homes.group.menu' })
+                    .find((node) => typeof node.props.onSelect === 'function');
+                expect(menu).toBeDefined();
+                await act(async () => { await menu!.props.onSelect('rename'); });
+            };
+            await openRename();
+            const field = screen.findByTestId('settings.homes.group.name');
+            expect(field).not.toBeNull();
+            await act(async () => { field!.props.onChangeText('Cancelled'); });
+            await screen.pressByTestIdAsync('settings.homes.group.name.cancel');
+            expect(JSON.parse(profiles.getString('server-state-v1')!).homeViewState.groups[0].name).toBe('Original');
+            await openRename();
+            await act(async () => { screen.findByTestId('settings.homes.group.name')!.props.onChangeText(' Renamed '); });
+            await screen.pressByTestIdAsync('settings.homes.group.name.save');
+            expect(JSON.parse(profiles.getString('server-state-v1')!).homeViewState.groups[0].name).toBe('Renamed');
+            await openRename();
+            await act(async () => { screen.findByTestId('settings.homes.group.name')!.props.onChangeText('Do not apply to another group'); });
+            await screen.update(<HomesCollectionProvider><HomeGroupPage groupId="group-b" /></HomesCollectionProvider>);
+            expect(screen.findByTestId('settings.homes.group.name') === null).toBe(true);
+            expect(JSON.parse(profiles.getString('server-state-v1')!).homeViewState.groups[1].name).toBe('Other');
+        } finally {
+            renderErrors.mockRestore();
+        }
     });
 
     it('honors an explicit empty seed instead of selecting the Home in use', async () => {

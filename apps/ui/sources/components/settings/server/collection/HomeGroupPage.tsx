@@ -27,7 +27,7 @@ import { useHappyAction } from '@/hooks/ui/useHappyAction';
 
 import { useHomesCollection } from './HomesCollection';
 import { HOMES_COLLECTION_ROOT } from './homeCollectionModel';
-import { homeGroupDraftTitle } from './homeGroupDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 /**
  * A group of Homes in Settings → Homes: which Homes it gathers and how their sessions are listed
@@ -133,6 +133,7 @@ const ExistingHomeGroupPage = React.memo(function ExistingHomeGroupPage(props: R
 });
 
 const NewHomeGroupPage = React.memo(function NewHomeGroupPage() {
+    const homeGroupDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     const router = useRouter();
     const params = useLocalSearchParams<{ groupServerIds?: string | string[] }>();
@@ -149,8 +150,8 @@ const NewHomeGroupPage = React.memo(function NewHomeGroupPage() {
 
     React.useEffect(() => {
         homeGroupDraftTitle.publish(name.trim());
-    }, [name]);
-    React.useEffect(() => () => homeGroupDraftTitle.publish(''), []);
+    }, [homeGroupDraftTitle, name]);
+    React.useEffect(() => () => homeGroupDraftTitle.publish(''), [homeGroupDraftTitle]);
 
     const leave = React.useCallback(() => {
         const result = runGuardedNavigation(() => router.replace(HOMES_COLLECTION_ROOT as never));

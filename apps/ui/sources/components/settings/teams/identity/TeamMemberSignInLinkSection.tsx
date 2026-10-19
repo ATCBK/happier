@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -33,7 +34,7 @@ export const TeamMemberSignInLinkSection = React.memo(function TeamMemberSignInL
         // inside the app, but retain the exact portable target query rather
         // than replacing it with this device's local profile id.
         const url = new URL(props.memberSignInUrl);
-        router.push(`${url.pathname}${url.search}`);
+        router.push(admitInternalRouteHref(`${url.pathname}${url.search}`));
     }, [props.memberSignInUrl, router]);
 
     if (props.memberSignInUrl === null) {

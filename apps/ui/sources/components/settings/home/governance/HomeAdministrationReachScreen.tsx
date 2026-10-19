@@ -4,6 +4,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { validateServerConfigText } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type {
     HomeReachabilityV1,
     HomeSettingEntryV1,
@@ -425,14 +426,6 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
     }, [writeSetting]);
 
     const setIroh = React.useCallback(async (enabled: boolean) => {
-        if (!enabled) {
-            const confirmed = await Modal.confirm(
-                t('homeGovernance.reach.irohOffTitle'),
-                t('homeGovernance.reach.irohOffBody'),
-                { cancelText: t('common.cancel'), confirmText: t('homeGovernance.reach.irohOffConfirm'), destructive: true },
-            );
-            if (!confirmed) return;
-        }
         setIrohBusy(true);
         try {
             const outcome = await setHomeIrohMode({ scope: context.scope, mode: enabled ? 'enabled' : 'disabled' });
@@ -444,6 +437,7 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
                 context.requestApproval?.(outcome.artifactId);
                 return;
             }
+            if (isActionApprovalDeclinedErrorCode(outcome.failure.code)) return;
             const notice = outcome.failure.code === 'home_iroh_needs_public_address'
                 ? { title: t('homeGovernance.reach.irohNeedsAddressTitle'), body: t('homeGovernance.reach.irohNeedsAddressBody') }
                 : homeGovernanceFailureNotice(outcome.failure);

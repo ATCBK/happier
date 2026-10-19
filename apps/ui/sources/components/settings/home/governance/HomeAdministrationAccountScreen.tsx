@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { HomeGovernanceErrorV1Schema, type HomeAccountDetailV1, type HomeRoleV1 } from '@happier-dev/protocol/home/governance';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 
 import { confirmForCapturedAccount } from '@/components/settings/apiTokens/confirmForCapturedAccount';
@@ -149,6 +150,7 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
                 context.requestApproval?.(outcome.artifactId);
                 return outcome;
             }
+            if (isActionApprovalDeclinedErrorCode(outcome.failure.code)) return outcome;
             const notice = homeGovernanceFailureNotice(outcome.failure);
             await Modal.alertAsync(notice.title, notice.body);
             // The refusal is itself evidence this Home moved under us.
@@ -161,20 +163,15 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
         }
     }, [context, onChanged]);
 
-    /**
-     * Every People action changes someone's access, so each one is confirmed and bound to the Home
-     * and Account current when its confirmation opened: a credential change while it is open aborts
-     * it instead of acting as someone else. The mutation then runs for exactly that captured scope.
-     */
-    const confirmThenRun = React.useCallback(async (
+    /** Capture the exact credential lifetime; the Action executor owns confirmation. */
+    const runForCapturedAccount = React.useCallback(async (
         action: PendingAction,
-        confirm: () => Promise<boolean>,
         operation: (scope: ServerAccountScope, target: ServerAccountScopeLifetime) => Promise<HomeGovernanceMutationOutcome | null>,
     ): Promise<HomeGovernanceMutationOutcome | null> => {
         if (operationInFlightRef.current) return null;
         const target = await confirmForCapturedAccount(
             { captureDestructiveTarget: () => context.captureDestructiveTarget?.() ?? null },
-            confirm,
+            async () => true,
         );
         if (!target) return null;
         return await run(action, () => operation(target.scope, target));
@@ -182,61 +179,36 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
 
     const changeRole = React.useCallback((nextRole: HomeRoleV1) => {
         if (nextRole === detail.homeRole || detail.mutationCapabilities.setRole[nextRole].status !== 'available') return;
-        void confirmThenRun(
+        void runForCapturedAccount(
             { kind: 'role', role: nextRole },
-            () => Modal.confirm(
-                t('homeGovernance.person.roleChangeTitle', { account: name, role: homeRoleLabel(nextRole) }),
-                t('homeGovernance.person.roleChangeBody'),
-                { confirmText: t('homeGovernance.person.roleChangeConfirm') },
-            ),
             (scope) => setHomeAccountRole({ scope, accountId: detail.accountId, homeRole: nextRole }),
         );
-    }, [confirmThenRun, detail, name]);
+    }, [runForCapturedAccount, detail]);
 
     const confirmSignOutEverywhere = React.useCallback(() => {
-        void confirmThenRun(
+        void runForCapturedAccount(
             { kind: 'signOutEverywhere' },
-            () => Modal.confirm(
-                t('homeGovernance.person.signOutEverywhereTitle', { account: name }),
-                t('homeGovernance.person.signOutEverywhereBody'),
-                { confirmText: t('homeGovernance.person.signOutEverywhere') },
-            ),
             (scope) => signOutHomeAccountEverywhere({ scope, accountId: detail.accountId }),
         );
-    }, [confirmThenRun, detail.accountId, name]);
+    }, [runForCapturedAccount, detail.accountId]);
 
     const confirmDisable = React.useCallback(() => {
-        void confirmThenRun(
+        void runForCapturedAccount(
             { kind: 'disable' },
-            () => Modal.confirm(
-                t('homeGovernance.disableTitle', { account: name }),
-                t('homeGovernance.disableBody'),
-                { confirmText: t('homeGovernance.disableConfirm'), destructive: true },
-            ),
             (scope) => disableHomeAccount({ scope, accountId: detail.accountId }),
         );
-    }, [confirmThenRun, detail.accountId, name]);
+    }, [runForCapturedAccount, detail.accountId]);
 
     const confirmEnable = React.useCallback(() => {
-        void confirmThenRun(
+        void runForCapturedAccount(
             { kind: 'enable' },
-            () => Modal.confirm(
-                t('homeGovernance.enableTitle', { account: name }),
-                t('homeGovernance.enableBody'),
-                { confirmText: t('homeGovernance.enableConfirm') },
-            ),
             (scope) => enableHomeAccount({ scope, accountId: detail.accountId }),
         );
-    }, [confirmThenRun, detail.accountId, name]);
+    }, [runForCapturedAccount, detail.accountId]);
 
     const confirmDelete = React.useCallback(async () => {
-        const outcome = await confirmThenRun(
+        const outcome = await runForCapturedAccount(
             { kind: 'delete' },
-            () => Modal.confirm(
-                t('homeGovernance.deleteTitle', { account: name }),
-                t('homeGovernance.deleteBody', { home: context.homeName }),
-                { confirmText: t('homeGovernance.deleteConfirm'), destructive: true },
-            ),
             async (scope, target) => {
                 const abort = new AbortController();
                 const retirement = target.onRetire(() => abort.abort());
@@ -266,7 +238,7 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
         );
         // Only a finished deletion removes the person this page is about.
         if (outcome?.kind === 'succeeded') router.back();
-    }, [confirmThenRun, context.homeName, context.requestApproval, detail.accountId, name, router]);
+    }, [runForCapturedAccount, context.requestApproval, detail.accountId, router]);
 
     // A Retired Account whose deletion did not finish is retried with the same
     // authorized operation, so the destructive verb stays honest.

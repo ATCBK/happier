@@ -325,10 +325,10 @@ describe('TeamCreateScreen', () => {
             serverUrl: 'https://home-a.example',
             accountId: 'member-a',
         });
-        // The Home never answers whether it offers Teams at all.
-        const never = new Promise<void>(() => {});
-        harness.answer(home, '/v1/features', { body: {}, respondAfter: never });
-        harness.answer(home, '/v1/features/authenticated', { body: {}, respondAfter: never });
+        // A failed capability read leaves Teams unknown; a held request is
+        // still loading and has not yet established an unavailable Home.
+        harness.answer(home, '/v1/features', { status: 503, body: {} });
+        harness.answer(home, '/v1/features/authenticated', { status: 503, body: {} });
         await harness.selectHomes([home]);
 
         const screen = await renderCreate();

@@ -5,7 +5,8 @@ import { act } from 'react-test-renderer';
 
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import type { IrohHomeTransportDiagnosticsPublisher } from '@/sync/runtime/irohHomeTransportDiagnostics';
 
 installDisconnectedServerSocketBoundary(socket => {
@@ -135,7 +136,12 @@ async function prepareHome(publicServerUrl?: string | null, serverUrl = 'https:/
         });
     }
     home.answer(homeId, '/v1/machines', { body: [] });
-    connection = await restoreServerAccountForTest({ serverUrl, request: home.request });
+    connection = await restoreServerAccountForTest({ serverUrl, request: async (input, init) => {
+        const response = await home.request(input, init);
+        if (response.status !== 404) return response;
+        const url = new URL(String(input));
+        return createEmptyAccountBootstrapHttpResponse(`${url.pathname}${url.search}`, init) ?? response;
+    } });
     activeHomeId = getActiveServerSnapshot().serverId;
     expect(getServerProfileById(activeHomeId)?.publicServerUrl)
         .toBe(publicServerUrl);
@@ -143,7 +149,7 @@ async function prepareHome(publicServerUrl?: string | null, serverUrl = 'https:/
     storage.setState(current => ({
         isDataReady: true,
         profileScope: { serverId: appliedServerId, accountId: 'account-a' },
-        profile: { ...current.profile, id: 'prof_1', username: 'u1', connectedServices: [] },
+        profile: { ...current.profile, id: 'account-a', username: 'u1', connectedServices: [] },
         machines: {},
         machineListByServerId: { [appliedServerId]: [] },
         machineListStatusByServerId: { [appliedServerId]: 'idle' },
@@ -169,7 +175,7 @@ describe('SystemStatusView (endpoint connectivity)', () => {
         });
         const screen = await renderScreen(<SystemStatusView />);
         const health = await renderHook(() => useActiveHomeConnectionHealth());
-        expect(health.getCurrent().kind).toBe('no_machine');
+        await waitForHomeGovernance(() => expect(health.getCurrent().kind).toBe('no_machine'));
 
         const joined = screen.getTextContent();
         expect(joined).toContain(activeHomeId);

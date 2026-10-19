@@ -6,15 +6,19 @@ import type { LocalDaemonStatusData } from '@/components/settings/machines/local
 import type { ActiveServerSnapshot } from '@/sync/domains/server/serverProfiles';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import type { RelayDriftBanner } from './relayDriftTypes';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
 import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
-import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { buildRelayDriftRepairSystemTaskSpec } from '@/sync/domains/server/relayDrift/relayDriftSystemTask';
 import { buildLocalDaemonServiceSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildLocalDaemonServiceSystemTaskSpec';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 
 const state = vi.hoisted(() => ({
     activeServerSnapshot: { serverId: 'server-a', serverUrl: 'https://relay.example.test', generation: 1 } as ActiveServerSnapshot,
@@ -36,11 +40,6 @@ const localDaemonControlState = vi.hoisted(() => ({
     status: null as LocalDaemonStatusData | null,
     isUnavailable: false,
 }));
-const approvalMocks = vi.hoisted(() => ({
-    readCredentials: vi.fn(async (..._args: unknown[]) => ({ token: 'relay-a-bearer' }) as { token: string } | null),
-    endpointFetch: vi.fn(async (..._args: unknown[]) => new Response('{}', { status: 200 })),
-    createServerFetchAtEndpoint: vi.fn((..._args: unknown[]) => approvalMocks.endpointFetch),
-}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -58,17 +57,8 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return { ...actual, TokenStorage: {
-        ...actual.TokenStorage,
-        getCredentialsForServerUrl: (...args: unknown[]) => approvalMocks.readCredentials(...args),
-    } };
-});
-vi.mock('@/sync/http/client', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/http/client')>();
-    return { ...actual, createServerFetchAtEndpoint: (...args: unknown[]) => approvalMocks.createServerFetchAtEndpoint(...args) };
-});
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 // The OS task fixture injects a real runner. Prompt custody and the daemon/setup
 // hooks beneath this system-task facade are never replaced.
 vi.mock('@/components/systemTasks', async (importOriginal) => {
@@ -77,46 +67,55 @@ vi.mock('@/components/systemTasks', async (importOriginal) => {
 });
 
 let localStorageHandle: ReturnType<typeof installLocalStorageMock>;
-const seededProfiles = new Set<string>();
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 async function renderScreen(element: React.ReactElement) {
     const profiles = await import('@/sync/domains/server/serverProfiles');
     if (state.activeServerSnapshot.activeLocalRelayUrl) {
-        vi.stubGlobal('window', { location: { origin: state.activeServerSnapshot.activeLocalRelayUrl } });
+        browser.reconfigureUrl(state.activeServerSnapshot.activeLocalRelayUrl);
+    } else if (browser.window.location.origin === 'https://renderer.fixture.test') {
+        browser.reconfigureUrl(state.activeServerSnapshot.serverUrl);
     }
-    const profile = await profiles.adoptHomeProfile({
-        descriptor: {
-            serverUrl: state.activeServerSnapshot.serverUrl,
-            homeServerIdentityId: 'srv_identity_a',
-            displayName: 'Relay A',
-        },
-        source: 'manual', suggestedName: 'Relay A',
-    });
-    seededProfiles.add(profile.id);
-    await profiles.setActiveServerId(profile.id, { scope: 'device' });
     const { storage } = await import('@/sync/domains/state/storageStore');
-    const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
+    const appProfile = storage.getState().profile;
+    const accountId = appProfile.id || 'acct_1';
     const selected = administrationTargetState.current;
     const machine = selected ? createMachineFixture({
         id: selected.machine.id,
         metadata: { ...createMachineFixture().metadata!, ...selected.machine.metadata },
         active: true, activeAt: Date.now(),
     }) : null;
-    const current = storage.getState();
-    storage.setState({
-        isDataReady: true,
-        machines: machine ? { [machine.id]: machine } : {},
-        machineListByServerId: {},
-        machineListStatusByServerId: {},
-        settings: {
-            ...current.settings,
-            machineAdministrationTargetsLocalV1: selected ? {
-                [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.relayDrift]: {
-                    serverIdentityId: 'srv_identity_a', machineId: selected.machine.id,
-                },
-            } : {},
-        },
+    const serverId = homes.findByServerUrl(state.activeServerSnapshot.serverUrl)?.serverId ?? await homes.addHome({
+        serverUrl: state.activeServerSnapshot.serverUrl,
+        serverIdentityId: 'srv_identity_a', name: 'Relay A', accountId,
     });
+    homes.answer(serverId, '/v1/machines', { body: selected
+        ? [createPlainMachineRowFixture({ id: selected.machine.id, accountId })] : [],
+    });
+    const emptySessions = SessionListQueryResponseV1Schema.parse({
+        sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    });
+    homes.answer(serverId, '/v2/sessions', { body: emptySessions });
+    homes.answer(serverId, '/v2/sessions/query', { body: emptySessions });
+    connection ??= await restoreServerAccountForTest({ serverUrl: state.activeServerSnapshot.serverUrl,
+        serverIdentityId: 'srv_identity_a', accountId, request: homes.request,
+    });
+    const profile = profiles.getServerProfileById(serverId);
+    if (!profile) throw new Error('Relay Home profile was not retained');
+    storage.setState({ profile: { ...storage.getState().profile, ...appProfile, id: accountId } });
+    const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
+    storage.getState().applyMachines(machine ? [machine] : [], true, { sourceServerId: connection.serverId, sourceAccountId: accountId });
+    storage.getState().markMachineListSettled(connection.serverId);
+    storage.getState().applySettingsLocal({ machineAdministrationTargetsLocalV1: selected ? {
+        [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.relayDrift]: {
+            serverIdentityId: 'srv_identity_a', machineId: selected.machine.id,
+        },
+    } : {} });
     const { clearCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } = await import('@/components/machines/doctorSnapshot/machineDoctorSnapshotCache');
     // The administration target resolves the portable identity to its saved profile.
     const cacheScope = { serverId: profile.id, machineId: selected?.machine.id ?? 'machine-1' };
@@ -143,22 +142,22 @@ async function renderScreen(element: React.ReactElement) {
 
 afterEach(async () => {
     standardCleanup();
-    const profiles = await import('@/sync/domains/server/serverProfiles');
-    for (const id of seededProfiles) if (profiles.getServerProfileById(id)) await profiles.removeServerProfile(id);
-    seededProfiles.clear();
+    await connection?.dispose();
+    connection = null;
+    await homes.reset();
     localStorageHandle.restore();
+    browser.restore();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
 });
 describe('useRelayDriftBanner', () => {
     beforeEach(async () => {
-        vi.stubGlobal('window', { location: {} });
-        vi.stubGlobal('document', {});
+        browser = await installBrowserRuntimeForTests({ url: 'https://renderer.fixture.test' });
         vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `relay-drift-${crypto.randomUUID()}`);
         localStorageHandle = installLocalStorageMock();
         (await import('@/sync/domains/server/serverProfiles')).resetServerProfilesRuntimeForTests();
-        Reflect.deleteProperty(globalThis as { location?: unknown }, 'location');
+        await homes.reset();
         state.activeServerSnapshot = {
             serverId: 'server-a',
             serverUrl: 'https://relay.example.test',
@@ -470,10 +469,7 @@ describe('useRelayDriftBanner', () => {
 
     it('does not show drift when the active relay is public but the app same-origin matches the daemon local relay', async () => {
         const { useRelayDriftBanner } = await import('./useRelayDriftBanner');
-        Object.defineProperty(globalThis.window, 'location', {
-            configurable: true,
-            value: { origin: 'http://127.0.0.1:3000' },
-        } as PropertyDescriptor);
+        browser.reconfigureUrl('http://127.0.0.1:3000');
         state.cachedDoctorSnapshot = {
             cachedAt: 1,
             snapshot: {
@@ -571,6 +567,7 @@ describe('useRelayDriftBanner', () => {
             activeRelayUrl: 'https://relay.example.test',
             activeWebappUrl: 'https://relay.example.test',
             activeLocalRelayUrl: null,
+            activeAccountId: 'acct_1',
         }));
         const bannerAfterStart = banner as RelayDriftBanner | null;
         expect(bannerAfterStart?.repairTaskSnapshot).toEqual(expect.objectContaining({
@@ -604,12 +601,6 @@ describe('useRelayDriftBanner', () => {
     });
 
     it('answers the repair task\'s token-only pairing prompt through the explicit-target approval owner', async () => {
-        approvalMocks.readCredentials.mockClear();
-        approvalMocks.endpointFetch.mockClear();
-        approvalMocks.endpointFetch
-            .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'pending', supportsV2: true }), { status: 200 }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), { status: 200 }));
-
         const { useRelayDriftBanner } = await import('./useRelayDriftBanner');
         const { createSystemTaskRunner } = await import('@/components/systemTasks/createSystemTaskRunner');
         const respondMock = vi.fn(async (_taskId: string, _answer: unknown) => {});
@@ -649,6 +640,9 @@ describe('useRelayDriftBanner', () => {
             return null;
         }
         await renderScreen(React.createElement(Probe));
+        const serverId = homes.findByServerUrl('https://relay.example.test')!.serverId;
+        homes.answer(serverId, '/v1/auth/request/status', { body: { status: 'pending', supportsV2: true } });
+        homes.answer(serverId, '/v1/auth/response', { body: { success: true } });
 
         const resolvedBanner = banner as RelayDriftBanner | null;
         if (!resolvedBanner) throw new Error('Expected a relay drift banner');
@@ -657,8 +651,6 @@ describe('useRelayDriftBanner', () => {
         });
 
         await renderer.act(async () => {
-            approvalMocks.readCredentials.mockClear();
-            approvalMocks.createServerFetchAtEndpoint.mockClear();
             const taskListener = listeners.get('task_repair_approval');
             expect(taskListener).toBeDefined();
             taskListener?.onEvent({
@@ -685,18 +677,16 @@ describe('useRelayDriftBanner', () => {
         // Repair is answered by the one approval owner: the Home-scoped credential for the
         // explicit target is read, the opaque response is posted, and the task resumes.
         await waitForHomeGovernance(() => expect(respondMock).toHaveBeenCalledWith('task_repair_approval', { approved: true }));
-        expect(approvalMocks.readCredentials).toHaveBeenCalledWith(
-            'https://relay.example.test',
-            { serverId: 'srv_identity_a' },
-        );
-        expect(JSON.stringify(respondMock.mock.calls)).not.toContain('relay-a-bearer');
+        const approvalRequests = homes.requestsFor('/v1/auth/response');
+        expect(approvalRequests).toHaveLength(1);
+        expect(approvalRequests[0]?.serverId).toBe(serverId);
+        expect(approvalRequests[0]?.input).toMatchObject({ responseKind: 'tokenOnly' });
+        expect(Boolean(approvalRequests[0]?.token && approvalRequests[0].token === connection!.credentials.token)).toBe(true);
+        expect(JSON.stringify(respondMock.mock.calls)).not.toContain(connection!.credentials.token);
         expect(JSON.stringify(respondMock.mock.calls)).not.toContain('opaque-token-only-response-b64');
     });
 
     it('declines a repair pairing prompt whose target identity does not match the active relay', async () => {
-        approvalMocks.readCredentials.mockClear();
-        approvalMocks.createServerFetchAtEndpoint.mockClear();
-
         const { useRelayDriftBanner } = await import('./useRelayDriftBanner');
         const { createSystemTaskRunner } = await import('@/components/systemTasks/createSystemTaskRunner');
         const respondMock = vi.fn(async (_taskId: string, _answer: unknown) => {});
@@ -743,8 +733,6 @@ describe('useRelayDriftBanner', () => {
         });
 
         await renderer.act(async () => {
-            approvalMocks.readCredentials.mockClear();
-            approvalMocks.createServerFetchAtEndpoint.mockClear();
             const taskListener = listeners.get('task_repair_mismatch');
             expect(taskListener).toBeDefined();
             taskListener?.onEvent({
@@ -768,8 +756,8 @@ describe('useRelayDriftBanner', () => {
         });
 
         await waitForHomeGovernance(() => expect(respondMock).toHaveBeenCalledWith('task_repair_mismatch', { approved: false, reason: 'relay_mismatch' }));
-        expect(approvalMocks.readCredentials).not.toHaveBeenCalled();
-        expect(approvalMocks.createServerFetchAtEndpoint).not.toHaveBeenCalled();
+        expect(homes.requestsFor('/v1/auth/request/status')).toHaveLength(0);
+        expect(homes.requestsFor('/v1/auth/response')).toHaveLength(0);
     });
 
     it('infers the active webapp url when repairing Happier Cloud relay drift', async () => {
@@ -834,6 +822,7 @@ describe('useRelayDriftBanner', () => {
             activeRelayUrl: 'https://api.happier.dev',
             activeWebappUrl: 'https://cloud.happier.dev',
             activeLocalRelayUrl: null,
+            activeAccountId: 'acct_1',
         }));
     });
 
@@ -899,6 +888,7 @@ describe('useRelayDriftBanner', () => {
             activeRelayUrl: 'https://relay.example.test',
             activeWebappUrl: 'https://relay.example.test',
             activeLocalRelayUrl: null,
+            activeAccountId: 'acct_1',
         }));
     });
 
@@ -965,6 +955,7 @@ describe('useRelayDriftBanner', () => {
             activeRelayUrl: 'https://relay.example.test',
             activeWebappUrl: 'https://relay.example.test',
             activeLocalRelayUrl: 'http://127.0.0.1:3000',
+            activeAccountId: 'acct_1',
         }));
     });
 

@@ -11,7 +11,7 @@ import {
 } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -41,6 +41,10 @@ const routerPush = vi.hoisted(() => vi.fn());
 const routerReplace = vi.hoisted(() => vi.fn());
 installSettingsViewCommonModuleMocks({
     storage: 'real',
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({ confirmResult: true }).module;
+    },
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({ params: () => routeParams.value, navigation: { setOptions: () => undefined }, router: { push: routerPush, replace: routerReplace, dismissTo: vi.fn() } }).module;
@@ -104,6 +108,7 @@ describe('Sign-in providers page', () => {
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/home/${serverId}/sign-in-providers/connections/company-connection`);
         await act(async () => { screen.pressByTestId('home-identity-provider-add'); });
         await waitForHomeGovernance(() => expect(screen.findHostByTestId('home-eligible-provider:workos')).not.toBeNull());
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 180 }); });
         await act(async () => { screen.pressByTestId('home-eligible-provider:workos'); });
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/home/${serverId}/sign-in-providers/connections/new`);
         expect(harness.requestsFor('/v1/home/identity/workos/connection/create')).toHaveLength(0);
@@ -123,6 +128,7 @@ describe('Sign-in providers page', () => {
         await waitForHomeGovernance(() => expect(screen.findByTestId('team-authentication-add-connection')).not.toBeNull());
         await act(async () => { screen.pressByTestId('team-authentication-add-connection'); });
         await waitForHomeGovernance(() => expect(screen.findHostByTestId('team-eligible-provider:workos_sso')).not.toBeNull());
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 180 }); });
         await act(async () => { screen.pressByTestId('team-eligible-provider:workos_sso'); });
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/teams/${serverId}/team-1/authentication/new?kind=workos_sso`);
         expect(harness.requestsFor('/v1/teams/identity/workos/connection/create')).toHaveLength(0);
@@ -165,6 +171,7 @@ describe('Sign-in providers page', () => {
         await waitForHomeGovernance(() => expect(screen.findHostByTestId('home-identity-provider-add')?.props.accessibilityState).toMatchObject({ disabled: false }));
         await act(async () => { screen.pressByTestId('home-identity-provider-add'); });
         await waitForHomeGovernance(() => expect(screen.findHostByTestId('home-eligible-provider:oidc')).not.toBeNull());
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 180 }); });
         await act(async () => { screen.pressByTestId('home-eligible-provider:oidc'); });
         expect(routerPush).not.toHaveBeenCalled();
         await act(async () => { screen.pressByTestId('home-eligible-provider:workos'); });
@@ -256,7 +263,6 @@ describe('Sign-in providers page', () => {
         expect(screen.findByTestId('home-identity-provider-add')).toBeNull();
         expect(screen.findByTestId('home-policy-team-jit')).not.toBeNull();
         expect(screen.findHostByTestId('home-policy-team-jit')?.props.accessibilityState).toMatchObject({ disabled: true });
-        expect(screen.findByTestId('home-policy-team-jit')?.props.onPress).toBeUndefined();
         expect(harness.requestsFor('/v1/identity/providers/list')).toHaveLength(0);
         expect(harness.requestsFor('/v1/identity/github-apps/list')).toHaveLength(0);
         expect(screen.findByTestId('home-policy-identity-network-mode:public_only')).not.toBeNull();

@@ -280,7 +280,7 @@ describe('createIdentityAdministrationClient', () => {
     it('keeps Home WorkOS choices inside Choose and submits only the explicitly selected usable connection', async () => {
         const serverId = (await upsertServerProfile({ serverUrl: 'https://home-company-choose.example', name: 'Company Home' })).id;
         const scope = createServerAccountScope(serverId, 'account-1')!;
-        let item = { ...connection(false), teamId: null, provider: { id: 'company-provider', kind: 'workos_sso', displayName: 'Acme' }, settings: { v: 1, kind: 'workos_sso' }, externalReference: { v: 1, kind: 'workos_sso', organizationId: 'org_acme', connectionId: null as string | null }, state: 'setting_up', lastObservation: null, allowedActions: ['home.identity.workos.reconcile', 'home.identity.workos.connection.set'] };
+        let item = { ...connection(false), revision: 2, teamId: null, provider: { id: 'company-provider', kind: 'workos_sso', displayName: 'Acme' }, settings: { v: 1, kind: 'workos_sso' }, externalReference: { v: 1, kind: 'workos_sso', organizationId: 'org_acme', connectionId: null as string | null }, state: 'setting_up', lastObservation: null, allowedActions: ['home.identity.workos.reconcile', 'home.identity.workos.connection.set'] };
         runtimeFetchMock.mockImplementation(async (input) => {
             const path = new URL(input.url).pathname;
             if (path.endsWith('/workos/reconcile')) return new Response(JSON.stringify({ outcome: 'selection_required', connection: item, candidates: [

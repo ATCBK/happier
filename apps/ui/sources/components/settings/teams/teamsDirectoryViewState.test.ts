@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import * as React from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import type { TeamSummaryV1 } from '@happier-dev/protocol/teams';
 
 import type { TeamsDirectorySnapshot } from '@/sync/store/teams/teamsSnapshots';
 import { resolveTeamsSettingsAdmission } from '@/sync/domains/teams/teamsSettingsAdmission';
+import { renderScreen } from '@/dev/testkit';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 
-import { resolveTeamsDirectoryViewState } from './teamsDirectoryViewState';
+import { resolveTeamsDirectoryViewState, teamsUnavailableHomeReason, teamsUnavailableHomeStateKind } from './teamsDirectoryViewState';
 
 function team(id: string, name: string, overrides?: Partial<TeamSummaryV1>): TeamSummaryV1 {
     return {
@@ -66,6 +69,33 @@ function snapshot(
 const HOME_NAMES: Readonly<Record<string, string>> = { alpha: 'Alpha', beta: 'Beta' };
 
 describe('resolveTeamsDirectoryViewState', () => {
+    it('renders an offline Home with the shared unavailable glyph and working recovery', async () => {
+        const state = resolveTeamsDirectoryViewState({
+            homes: [{ serverId: 'alpha', state: 'capable' }],
+            homeNamesByServerId: HOME_NAMES,
+            snapshotsByServerId: {
+                alpha: snapshot('alpha', null, { status: 'error', error: { kind: 'unreachable', retryable: true } }),
+            },
+        });
+        const home = state.unavailableHomes[0]!;
+        const retry = vi.fn();
+        const screen = await renderScreen(React.createElement(SurfaceStateCard, {
+            testID: 'teams-offline-home',
+            size: 'line',
+            kind: teamsUnavailableHomeStateKind(home),
+            title: home.homeName,
+            reason: teamsUnavailableHomeReason(home),
+            action: home.retryable ? { testID: 'teams-retry', label: 'Retry', onPress: retry } : undefined,
+        }));
+        try {
+            expect(screen.findAll((node) => node.props.name === 'cloud-slash').length).toBeGreaterThan(0);
+            await screen.pressByTestIdAsync('teams-retry');
+            expect(retry).toHaveBeenCalledOnce();
+        } finally {
+            await screen.unmount();
+        }
+    });
+
     it('settles a server failure without claiming transport loss or keeping initial skeletons', () => {
         const state = resolveTeamsDirectoryViewState({
             homes: [{ serverId: 'alpha', state: 'capable' }],

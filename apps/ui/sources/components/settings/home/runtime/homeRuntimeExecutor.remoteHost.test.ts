@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -9,54 +9,82 @@ import type { ActionApprovalRegistration } from '@/components/approvals/actionAp
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import type { SystemTaskBridge } from '@/components/systemTasks/types';
+
+const desktop = vi.hoisted(() => ({ bridge: null as SystemTaskBridge | null }));
+// Replace the native OS transport, not the shared runner or its lifecycle facade.
+vi.mock('@/components/systemTasks/createTauriSystemTaskBridge', () => ({ createTauriSystemTaskBridge: () => {
+    if (!desktop.bridge) throw new Error('SSH Home native task boundary was not installed');
+    return desktop.bridge;
+} }));
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 // Native presentation boundaries use the same setup as neighboring Home suites;
 // admission, catalog scope, credentials and task completion keep the real store.
 installSettingsViewCommonModuleMocks({ storage: 'real' });
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
+const nativeTasks = createManualSystemTaskRunner();
+desktop.bridge = nativeTasks.bridge;
+await loadSyncSingletonForTests();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
 const loadModules = async () => {
-    const store = await import('@/sync/domains/state/storage');
     const runtime = await import('@/components/systemTasks/systemTasksRuntime');
     const catalog = await import('@/sync/store/settings/remoteHostCatalogSnapshot');
-    const applied = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-    const server = await import('@/sync/domains/server/serverRuntime');
     const executor = await import('./homeRuntimeExecutor');
     await import('@/sync/ops/actions/defaultActionExecutor');
-    return [store, runtime, catalog, applied, server, executor] as const;
+    return { runtime, catalog, executor };
 };
-let modules: Awaited<ReturnType<typeof loadModules>> | undefined;
-beforeAll(async () => { modules = await loadModules(); });
+const modules = await loadModules();
 
 afterEach(async () => {
     await standardCleanup();
-    modules?.[2].resetRemoteHostCatalogSnapshotsForTests();
-    modules?.[3].publishAppliedActiveServerRuntimeAvailability(false);
+    for (const { taskId } of modules.runtime.getSystemTasksRunner().listActiveTasks!()) {
+        nativeTasks.emitResult(taskId, { protocolVersion: 1, taskId, ok: false,
+            error: { code: 'test_fixture_ended', message: 'Native test fixture ended' } });
+    }
+    await connection?.dispose();
+    connection = null;
+    modules.catalog.resetRemoteHostCatalogSnapshotsForTests();
     await home.reset();
 });
 
 async function prepareHome() {
-    if (!modules) throw new Error('Home runtime test modules were not loaded');
-    const [{ storage }, runtime, { applyRemoteHostCatalogSnapshot }, { publishAppliedActiveServerSnapshot },
-        { getActiveServerSnapshot }, { restartHomeRuntime }] = modules;
-    const serverId = await home.addHome({ name: 'SSH Home', serverUrl: 'https://ssh-home.test', accountId: 'account' });
+    const { runtime, catalog: { applyRemoteHostCatalogSnapshot }, executor: { restartHomeRuntime } } = modules;
+    const serverId = await home.addHome({ name: 'SSH Home', serverUrl: 'https://ssh-home.test', accountId: 'account', currentAccount: true });
     const scope = { serverId, accountId: 'account' };
-    storage.setState({ profileScope: scope, settingsScope: scope });
-    publishAppliedActiveServerSnapshot(getActiveServerSnapshot(), true);
     const host = { id: 'home-host', name: 'Home host', createdAt: 1, updatedAt: 2, lastUsedAt: null,
         linkedRelayProfileId: serverId, linkedMachineId: null,
         ssh: { target: 'dev@private.example', authMode: 'agent' as const } };
     const catalog = { status: 'ready' as const, revision: 4, hosts: [host], diagnostics: [] };
-    applyRemoteHostCatalogSnapshot(scope, catalog, true);
     home.answer(serverId, '/v1/account/entity-rows/remote-hosts', { body: { status: 'present', revision: 4,
         content: { t: 'plain', v: { v: 1, hosts: [host] } } } });
-    home.answer(serverId, '/v2/account/settings', { body: { version: 4, content: { t: 'plain', v: {} } } });
+    home.answer(serverId, '/v2/account/settings', { body: { version: 4, content: { t: 'plain', v: {
+        actionsSettingsV1: { v: 1, actions: { 'remote_hosts.relay.restart': { approvalRequiredSurfaces: ['ui'] } } },
+    } } } });
     home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }) });
     home.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
     home.answer(serverId, '/v1/account/entity-rows/profiles/transfer', { body: { status: 'absent' } });
-    const manual = createManualSystemTaskRunner();
-    vi.spyOn(runtime, 'getSystemTasksRunner').mockReturnValue(manual.runner);
+    const emptySessions = SessionListQueryResponseV1Schema.parse({
+        sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    });
+    home.answer(serverId, '/v2/sessions', { body: emptySessions });
+    home.answer(serverId, '/v2/sessions/query', { body: emptySessions });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://ssh-home.test', { serverId });
+    if (!credentials) throw new Error('SSH Home credentials were not stored');
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://ssh-home.test', accountId: 'account', credentials, request: home.request });
+    applyRemoteHostCatalogSnapshot(scope, catalog, true);
+    nativeTasks.bridge.start.mockClear();
+    const manual = { ...nativeTasks, runner: runtime.getSystemTasksRunner() };
     return { serverId, scope, host, manual, restartHomeRuntime };
 }
 

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -25,6 +25,10 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const { DiagnosisView } = await import('./DiagnosisView');
 const { SystemStatusView } = await import('../systemStatus/SystemStatusView');
+
+// The package cleanup retires runtimeFetch after each case; each new fixture
+// reclaims its own HTTP boundary before adding the next Home.
+beforeEach(async () => { await home.reset(); });
 
 afterEach(async () => {
     (await import('@/sync/domains/machines/reachability/machineReachability')).clearMachineRequestReachabilityForTest();

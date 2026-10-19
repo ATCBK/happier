@@ -108,10 +108,11 @@ const INVITATION_REVOKE_PATH = '/v1/teams/invitations/revoke';
 async function renderInvitations(serverId: string) {
     const { TeamInvitationsScreen } = await import('./TeamInvitationsScreen');
     const { NavigationContext, useNavigation } = await import('@react-navigation/native');
+    const { createNavigationPropMock } = await import('@/dev/testkit/mocks/reactNavigation');
     function NativeRoute({ children }: React.PropsWithChildren) {
         // A native navigator publishes a changed context on focus transitions;
         // a plain mutable flag cannot wake the real memoized destination owner.
-        return <NavigationContext.Provider value={{ ...useNavigation() }}>{children}</NavigationContext.Provider>;
+        return <NavigationContext.Provider value={createNavigationPropMock(useNavigation())}>{children}</NavigationContext.Provider>;
     }
     return renderScreen(<TeamInvitationsScreen serverId={serverId} teamId="team-1" />, { wrapper: NativeRoute });
 }

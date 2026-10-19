@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { homeAdministrationGitHubAppPath, homeAdministrationGitHubAppEditPath, homeAdministrationPoliciesPath } from '../governance/homeAdministrationRoutes';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedGitHubAppsListOutputV1 } from '@happier-dev/protocol';
@@ -74,9 +75,9 @@ beforeEach(async () => {
     surface = {
         scope: createServerAccountScope(profile.id, 'account-1')!, owner: { kind: 'home' }, mutationsAvailable: true,
         routes: {
-            detail: (id) => `/registrations/${id}`,
-            edit: (id) => `/registrations/${id}/edit`,
-            signIn: `/settings/home/${profile.id}/policies`,
+            detail: (id) => homeAdministrationGitHubAppPath(profile.id, id),
+            edit: (id) => homeAdministrationGitHubAppEditPath(profile.id, id),
+            signIn: homeAdministrationPoliciesPath(profile.id),
         },
     };
     projection = {
@@ -156,7 +157,7 @@ describe('managed GitHub App installation operations', () => {
         expect(verify?.props.accessibilityLabel).toBe('identityAdministration.githubVerifyInstallation');
         await screen.pressByTestIdAsync('github-installation-verify');
         expect(openExternalUrlMock).toHaveBeenCalledWith('https://github.com/login/oauth/authorize');
-        expect(consumePendingGitHubAppVerification('registration-1')).toEqual({ registrationId: 'registration-1', returnTo: '/registrations/registration-1' });
+        expect(consumePendingGitHubAppVerification('registration-1')).toEqual({ registrationId: 'registration-1', returnTo: surface.routes.detail('registration-1') });
     });
 
     it('keeps installation information visible while removal is pending and refreshes after success', async () => {

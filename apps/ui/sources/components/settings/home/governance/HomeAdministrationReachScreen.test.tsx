@@ -34,6 +34,7 @@ vi.mock('expo-file-system', async () => {
 });
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     router: async () => ({
         useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
         useNavigation: () => ({ setOptions: vi.fn() }),
@@ -45,7 +46,9 @@ installSettingsViewCommonModuleMocks({
 // schemas, the registry codec and the page's decisions are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
+const { HomeAdministrationReachScreen } = await import('./HomeAdministrationReachScreen');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const SETTINGS_GET = '/v1/home/settings/get';
@@ -70,13 +73,12 @@ function reachSettings(revision = 2) {
 }
 
 async function addHome(projection = homeGovernanceProjectionFixture()): Promise<string> {
-    const home = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example' });
+    const home = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example', currentAccount: true });
     harness.answer(home, GOVERNANCE_PATH, { body: projection });
     return home;
 }
 
 async function renderReach(serverId: string) {
-    const { HomeAdministrationReachScreen } = await import('./HomeAdministrationReachScreen');
     const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
     resetHomeGovernanceEngineForTests();
     const screen = await renderScreen(<HomeAdministrationReachScreen serverId={serverId} />);
@@ -98,6 +100,18 @@ afterEach(() => {
 });
 
 describe('HomeAdministrationReachScreen', () => {
+    it('uses the Action Ask policy for retiring direct connections without a caller dialog', async () => {
+        const home = await addHome();
+        harness.answer(home, SETTINGS_GET, { body: reachSettings() });
+        harness.answer(home, REACH_GET, { body: homeReachabilityFixture() });
+        await harness.requireUiApproval(home, 'home.reachability.iroh.set');
+        const screen = await renderReach(home);
+        const { Modal } = await import('@/modal');
+        await act(async () => { void screen.findByTestId('home-reach-iroh-switch')?.props.onValueChange(false); });
+        await waitForHomeGovernance(() => expect(harness.artifacts(home).list()).toHaveLength(1));
+        expect(harness.requestsFor(IROH_SET)).toHaveLength(0);
+        expect(Modal.confirm).not.toHaveBeenCalled();
+    });
     it.each(['owner', 'admin'] as const)('offers public-link configuration only to the Home %s', async (role) => {
         const projection = homeGovernanceProjectionFixture();
         const home = await addHome({

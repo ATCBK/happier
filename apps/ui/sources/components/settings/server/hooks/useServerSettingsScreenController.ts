@@ -303,6 +303,9 @@ export function useServerSettingsScreenController(): ServerSettingsController {
     // Membership editing follows an explicitly selected group and falls back to the
     // active one, so a saved group can be edited without switching the whole client.
     const [selectedGroupEditorId, setSelectedGroupEditorId] = React.useState<string | null>(null);
+    const onEditGroupMembers = React.useCallback((profile: ServerSelectionGroup) => {
+        setSelectedGroupEditorId(profile.id);
+    }, []);
     const editedGroupProfile = React.useMemo(() => (
         selectedGroupEditorId
             ? normalizedGroupProfiles.find((profile) => profile.id === selectedGroupEditorId) ?? null
@@ -382,7 +385,7 @@ export function useServerSettingsScreenController(): ServerSettingsController {
         editedServerGroupId: editedGroupId,
         editedServerGroupName: editedGroupId && editedGroupId !== activeMultiServerProfileId ? editedGroupProfile?.name ?? null : null,
         selectedGroupServerIds: selectedConcurrentServerIds,
-        onEditGroupMembers: (profile: ServerSelectionGroup) => setSelectedGroupEditorId(profile.id),
+        onEditGroupMembers,
         onToggleGroupPresentation: concurrentActions.onTogglePresentation,
         onToggleGroupServer: concurrentActions.onToggleConcurrentServer,
     };

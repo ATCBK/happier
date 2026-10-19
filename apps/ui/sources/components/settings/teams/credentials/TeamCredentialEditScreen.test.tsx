@@ -2,7 +2,6 @@ import * as React from 'react';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-    ARTIFACT_PLAIN_DATA_KEY_MARKER,
     decodePlainArtifactStoredContent,
     machinePoolActionEndpointPathV1,
     type MachinePoolViewV1,
@@ -21,18 +20,11 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerBack = vi.hoisted(() => vi.fn());
-// Resolve the real store only after the Home harness installs its HTTP boundary;
-// a static import eagerly loads the Action transport before `vi.doMock` can own it.
-let storage: typeof import('@/sync/domains/state/storage')['storage'];
-
 installSettingsViewCommonModuleMocks({
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
         router: { back: routerBack },
     }).module,
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({ importOriginal, overrides: {} });
-    },
+    storage: 'real',
     text: async () => vi.importActual<typeof import('@/text')>('@/text'),
 });
 
@@ -41,6 +33,13 @@ installHomeGovernanceBoundaries(harness);
 const { createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
 const administrationTarget = createMachineAdministrationTargetSelectionMock({ selectedMachineId: null });
 installMachineAdministrationTargetSelectionBoundary(administrationTarget);
+// Cold-load the real owner graph after transport installation, before case deadlines.
+const { storage } = await import('@/sync/domains/state/storage');
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
+const { resetMachinePoolSyncRuntimeForTests } = await import('@/sync/engine/machines/machinePoolSyncRuntime');
+const { resetMachinePoolProjectionForTests } = await import('@/sync/engine/machines/machinePoolProjection');
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const CREDENTIALS_LIST_PATH = '/v1/teams/credential-resources/list';
@@ -240,16 +239,7 @@ async function renderEditor(params?: Readonly<{
     if (params?.sourceReadFails) {
         harness.answer(serverId, '/v1/teams/credential-resources/sources/list', { status: 503 });
     }
-    harness.answer(serverId, ARTIFACT_CREATE_PATH, {
-        body: {
-            id: 'artifact-approval', header: '', body: '',
-            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
-        },
-    });
     storage.setState({
-        profileScope: { serverId, accountId: 'account-ada' },
-        settingsScope: { serverId, accountId: 'account-ada' },
         machineListByServerId: { [serverId]: [] },
         machineListStatusByServerId: { [serverId]: 'idle' },
         machinePoolListByServerId: { [serverId]: pools },
@@ -278,21 +268,19 @@ async function renderEditor(params?: Readonly<{
             {...(params?.section ? { section: params.section } : {})}
         />,
     );
-    await vi.waitFor(() => expect(collectRenderedTestIds(screen.tree.toJSON()))
+    await vi.waitFor(() => expect(collectRenderedTestIds(screen.tree.toJSON()), JSON.stringify({
+        text: screen.getTextContent(), requests: harness.requests.map(request => request.path),
+    }))
         .toContain('team-credential-edit-save'));
     return { screen, firstPoolId, secondPoolId, resource, serverId };
 }
 
 beforeEach(async () => {
-    ({ storage } = await import('@/sync/domains/state/storage'));
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
-    const { resetMachinePoolSyncRuntimeForTests } = await import('@/sync/engine/machines/machinePoolSyncRuntime');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetTeamActionClientForTests();
     resetMachinePoolSyncRuntimeForTests();
+    resetMachinePoolProjectionForTests();
     administrationTarget.controller.reset();
     await harness.reset();
     await harness.selectHomes([]);
@@ -363,7 +351,9 @@ describe('TeamCredentialEditScreen broker placement', () => {
         await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-save')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('team-credential-edit-save');
 
-        await vi.waitFor(() => expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(1));
+        await vi.waitFor(() => expect(harness.requestsFor(ARTIFACT_CREATE_PATH), JSON.stringify({
+            text: screen.getTextContent(), requests: harness.requests.map(request => request.path),
+        })).toHaveLength(1));
         expect(approvalRequestFromLastArtifact()).toMatchObject({
             actionId: 'teams.credentials.update',
             actionArgs: {

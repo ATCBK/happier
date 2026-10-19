@@ -67,4 +67,11 @@ describe('TeamMemberSignInLinkSection', () => {
         expect(screen.findByTestId('team-member-sign-in-copy-link')).toBeNull();
         expect(screen.findByTestId('team-member-sign-in-open')).toBeNull();
     });
+
+    it('preserves the Home application path prefix and encoded portable carrier for an in-app preview', async () => {
+        const screen = await renderScreen(<TeamMemberSignInLinkSection address={ADDRESS}
+            memberSignInUrl="https://app.example.test/happier/teams/team-1/sign-in?target=a%26b%252F&returnTo=https%3A%2F%2Fhome.test" />);
+        await screen.pressByTestIdAsync('team-member-sign-in-open');
+        expect(pushMock).toHaveBeenCalledWith('/happier/teams/team-1/sign-in?target=a%26b%252F&returnTo=https%3A%2F%2Fhome.test');
+    });
 });

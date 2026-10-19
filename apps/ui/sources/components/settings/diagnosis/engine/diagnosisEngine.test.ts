@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { buildDiagnosisReport } from './diagnosisEngine';
 
 describe('buildDiagnosisReport', () => {
-  it('detects UI vs machine serverUrl mismatch', () => {
+  it.each([
+    ['https://staging-api.happier.dev', true],
+    ['https://api.happier.dev/', false],
+    ['https://api.happier.dev/relay', true],
+    ['https://[invalid', true],
+  ])('compares diagnostic endpoints without collapsing paths or malformed URLs (%s)', (serverUrl, mismatch) => {
     const report = buildDiagnosisReport({
       ui: {
         activeServerId: 'cloud',
@@ -19,7 +24,7 @@ describe('buildDiagnosisReport', () => {
           capturedAt: '2026-02-23T00:00:00.000Z',
           server: {
             activeServerId: 'cloud',
-            serverUrl: 'https://staging-api.happier.dev',
+            serverUrl,
             publicServerUrl: 'https://staging-api.happier.dev',
             webappUrl: 'https://app.happier.dev',
           },
@@ -32,7 +37,7 @@ describe('buildDiagnosisReport', () => {
       nowMs: 0,
     });
 
-    expect(report.findings.some((f) => f.code === 'server.mismatch.ui_vs_machine')).toBe(true);
+    expect(report.findings.some((f) => f.code === 'server.mismatch.ui_vs_machine')).toBe(mismatch);
   });
 
   it('treats loopback-equivalent UI and machine serverUrls as the same Relay', () => {

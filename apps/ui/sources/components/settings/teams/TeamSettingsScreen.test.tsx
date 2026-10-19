@@ -1,10 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    ApprovalRequestV2Schema,
-    buildApprovalRequestArtifactHeaderV1,
-} from '@happier-dev/protocol';
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -87,23 +83,6 @@ const TEAM_LOGO_REMOVE_PATH = '/v1/teams/logo/remove';
 const ACCOUNT_SETTINGS_V2_PATH = '/v2/account/settings';
 const ARTIFACT_CREATE_PATH = '/v1/artifacts';
 const APPROVAL_ARTIFACT_ID = '00000000-0000-4000-8000-000000000001';
-
-async function cancelApprovalOnHome(serverId: string) {
-    // Another device cancels the actual stored request through the Account's
-    // canonical Artifact writer, including its schema, codec and version CAS.
-    const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-    const context = await captureActionAccountContext(serverId);
-    try {
-        const artifact = await context.fetchArtifact(APPROVAL_ARTIFACT_ID);
-        if (!artifact) throw new Error('approval_artifact_missing');
-        if (typeof artifact.body !== 'string') throw new Error('approval_artifact_body_not_json_text');
-        const request = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
-        const canceled = ApprovalRequestV2Schema.parse({ ...request, status: 'canceled', updatedAtMs: Date.now() });
-        await context.updateArtifact(artifact.id, buildApprovalRequestArtifactHeaderV1(canceled), JSON.stringify(canceled), artifact);
-    } finally {
-        context.dispose();
-    }
-}
 
 async function renderSettings(serverId: string) {
     const { TeamSettingsScreen } = await import('./TeamSettingsScreen');
@@ -692,7 +671,7 @@ describe('TeamSettingsScreen', () => {
         await waitForTestId(screen, 'team-approval');
         expect(screen.findByTestId('team-settings-save')?.props.disabled).toBe(true);
         expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(0);
-        await act(async () => cancelApprovalOnHome(serverId));
+        await expect(decideApprovalAsInbox(serverId, APPROVAL_ARTIFACT_ID, 'cancel')).resolves.toMatchObject({ ok: true });
 
         await vi.waitFor(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-approval');

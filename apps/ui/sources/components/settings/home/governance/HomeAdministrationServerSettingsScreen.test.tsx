@@ -32,6 +32,11 @@ vi.mock('@react-navigation/native', async () => {
 });
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({ confirmResult: true }).module;
+    },
     router: async () => ({
         useRouter: () => ({ push: vi.fn(), back: vi.fn(), setParams: vi.fn() }),
         useNavigation: () => ({ setOptions: vi.fn(), addListener: vi.fn(() => () => {}) }),

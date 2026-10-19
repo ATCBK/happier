@@ -38,12 +38,12 @@ export type TeamCredentialSourceHint =
  *
  * Opening any of these destinations does not change the focused Home.
  */
-export function teamsDirectoryPath(): string {
+export function teamsDirectoryPath(): '/settings/teams' {
     return '/settings/teams';
 }
 
 /** Opens Team selection for an exact connected-account source. */
-export function teamsDirectoryShareCredentialPath(source: TeamCredentialSourceHint): string {
+export function teamsDirectoryShareCredentialPath(source: TeamCredentialSourceHint): `/settings/teams?${string}` {
     const query = new URLSearchParams({
         credentialSourceKind: source.kind,
         credentialSourceServerId: source.serverId,
@@ -65,15 +65,15 @@ export function teamsDirectoryShareCredentialPath(source: TeamCredentialSourceHi
     return `${teamsDirectoryPath()}?${query.toString()}`;
 }
 
-export function teamsCreatePath(options?: Readonly<{ administrationServerId?: string }>): string {
+export function teamsCreatePath(options?: Readonly<{ administrationServerId?: string }>): '/settings/teams/new' | `/settings/teams/new?${string}` {
     const serverId = options?.administrationServerId?.trim();
-    const base = `${teamsDirectoryPath()}/new`;
+    const base = `${teamsDirectoryPath()}/new` as const;
     return serverId
         ? `${base}?administrationServerId=${encodeURIComponent(serverId)}`
         : base;
 }
 
-export function teamDetailPath(address: TeamAddress): string {
+export function teamDetailPath(address: TeamAddress): `/settings/teams/${string}/${string}` {
     return `${teamsDirectoryPath()}/${encodeURIComponent(address.serverId)}/${encodeURIComponent(address.teamId)}`;
 }
 
@@ -85,11 +85,11 @@ export function teamDetailPath(address: TeamAddress): string {
  * carries the Home so two Homes holding the same Team id open distinct surfaces
  * with their own filters, scroll and Back behaviour.
  */
-export function teamSessionsPath(address: TeamAddress): string {
+export function teamSessionsPath(address: TeamAddress): `/teams/${string}/sessions?serverId=${string}` {
     return `/teams/${encodeURIComponent(address.teamId)}/sessions?serverId=${encodeURIComponent(address.serverId)}`;
 }
 
-export function teamMembersPath(address: TeamAddress): string {
+export function teamMembersPath(address: TeamAddress): `/settings/teams/${string}/${string}/members` {
     return `${teamDetailPath(address)}/members`;
 }
 
@@ -107,8 +107,8 @@ export function teamMemberDetailPath(
      * waiting to be asked; opening the same detail any other way stays passive.
      */
     options?: Readonly<{ prepareHistory?: boolean }>,
-): string {
-    const path = `${teamMembersPath(address)}/${encodeURIComponent(membershipId)}`;
+): `/settings/teams/${string}/${string}/members/${string}` {
+    const path = `${teamMembersPath(address)}/${encodeURIComponent(membershipId)}` as const;
     return options?.prepareHistory === true ? `${path}?prepareHistory=1` : path;
 }
 
@@ -123,25 +123,24 @@ export function teamGroupMemberDetailPath(
     groupId: string,
     accountId: string,
     options?: Readonly<{ prepareHistory?: boolean }>,
-): string {
+): `/settings/teams/${string}/${string}/members/${string}` {
     const query = `?groupId=${encodeURIComponent(groupId)}&accountId=${encodeURIComponent(accountId)}`;
-    return `${teamMemberDetailPath(address, membershipId)}${query}`
-        + (options?.prepareHistory === true ? '&prepareHistory=1' : '');
+    return `${teamMemberDetailPath(address, membershipId)}${query}${options?.prepareHistory === true ? '&prepareHistory=1' : ''}`;
 }
 
-export function teamMemberAddPath(address: TeamAddress): string {
+export function teamMemberAddPath(address: TeamAddress): `/settings/teams/${string}/${string}/members/add` {
     return `${teamMembersPath(address)}/add`;
 }
 
-export function teamGroupsPath(address: TeamAddress): string {
+export function teamGroupsPath(address: TeamAddress): `/settings/teams/${string}/${string}/groups` {
     return `${teamDetailPath(address)}/groups`;
 }
 
-export function teamInvitationsPath(address: TeamAddress): string {
+export function teamInvitationsPath(address: TeamAddress): `/settings/teams/${string}/${string}/invitations` {
     return `${teamDetailPath(address)}/invitations`;
 }
 
-export function teamSettingsPath(address: TeamAddress): string {
+export function teamSettingsPath(address: TeamAddress): `/settings/teams/${string}/${string}/settings` {
     return `${teamDetailPath(address)}/settings`;
 }
 
@@ -150,22 +149,22 @@ export function teamSettingsPath(address: TeamAddress): string {
  * rather than adding a second Team root; the path owner still lives here so the
  * Team route shape has one definition.
  */
-export function teamAuthenticationPath(address: TeamAddress): string {
+export function teamAuthenticationPath(address: TeamAddress): `/settings/teams/${string}/${string}/authentication` {
     return `${teamDetailPath(address)}/authentication`;
 }
 
-export function teamIdentityConnectionPath(address: TeamAddress, connectionId: string): string {
+export function teamIdentityConnectionPath(address: TeamAddress, connectionId: string): `/settings/teams/${string}/${string}/authentication/${string}` {
     return `${teamAuthenticationPath(address)}/${encodeURIComponent(connectionId)}`;
 }
 
-export function teamIdentityConnectionProviderEditPath(address: TeamAddress, connectionId: string, providerId: string): string {
+export function teamIdentityConnectionProviderEditPath(address: TeamAddress, connectionId: string, providerId: string): `/settings/teams/${string}/${string}/authentication/${string}/edit?providerId=${string}` {
     return `${teamIdentityConnectionPath(address, connectionId)}/edit?providerId=${encodeURIComponent(providerId)}`;
 }
 
 export function teamIdentityProviderSetupPath(
     address: TeamAddress,
     providerKind: 'oidc' | 'github_app_identity' | 'workos_sso',
-): string {
+): `/settings/teams/${string}/${string}/authentication/new?kind=${string}` {
     return `${teamAuthenticationPath(address)}/new?kind=${encodeURIComponent(providerKind)}`;
 }
 
@@ -174,11 +173,11 @@ export function teamIdentityProviderSetupPath(
  * a Team App reaches Happier as a sign-in identity; repository access for the
  * same App stays with the Connected Services owner.
  */
-export function teamGitHubAppPath(address: TeamAddress, registrationId: string): string {
+export function teamGitHubAppPath(address: TeamAddress, registrationId: string): `/settings/teams/${string}/${string}/authentication/github-apps/${string}` {
     return `${teamAuthenticationPath(address)}/github-apps/${encodeURIComponent(registrationId)}`;
 }
 
-export function teamGitHubAppEditPath(address: TeamAddress, registrationId: string): string {
+export function teamGitHubAppEditPath(address: TeamAddress, registrationId: string): `/settings/teams/${string}/${string}/authentication/github-apps/${string}/edit` {
     return `${teamGitHubAppPath(address, registrationId)}/edit`;
 }
 
@@ -190,7 +189,7 @@ export function teamGitHubAppEditPath(address: TeamAddress, registrationId: stri
  * stay in the path: a link opened here addresses one exact resource on one exact
  * Home even when another Home holds a Team and a resource with the same ids.
  */
-export function teamCredentialsPath(address: TeamAddress): string {
+export function teamCredentialsPath(address: TeamAddress): `/settings/teams/${string}/${string}/credentials` {
     return `${teamDetailPath(address)}/credentials`;
 }
 
@@ -203,8 +202,8 @@ export function teamCredentialsPath(address: TeamAddress): string {
 export function teamCredentialCreatePath(
     address: TeamAddress,
     source?: TeamCredentialSourceHint,
-): string {
-    const path = `${teamCredentialsPath(address)}/new`;
+): `/settings/teams/${string}/${string}/credentials/new${'' | `?${string}`}` {
+    const path = `${teamCredentialsPath(address)}/new` as const;
     if (!source) return path;
     const query = new URLSearchParams({
         credentialSourceKind: source.kind,
@@ -226,16 +225,16 @@ export function teamCredentialCreatePath(
     return `${path}?${query.toString()}`;
 }
 
-export function teamCredentialDetailPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialDetailPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}` {
     return `${teamCredentialsPath(address)}/${encodeURIComponent(resourceId)}`;
 }
 
-export function teamCredentialEditPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialEditPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/edit` {
     return `${teamCredentialDetailPath(address, resourceId)}/edit`;
 }
 
 /** Audience and delivery for one resource. */
-export function teamCredentialAccessPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialAccessPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/edit?section=access` {
     return `${teamCredentialEditPath(address, resourceId)}?section=access`;
 }
 
@@ -247,40 +246,40 @@ export function teamCredentialAccessPath(address: TeamAddress, resourceId: strin
  * protocol can enforce, and because a person adjusting a ceiling should not have
  * to re-confirm a disclosure decision to reach Save.
  */
-export function teamCredentialRequestPolicyPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialRequestPolicyPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/edit?section=request-policy` {
     return `${teamCredentialEditPath(address, resourceId)}?section=request-policy`;
 }
 
-export function teamCredentialActivityPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialActivityPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/activity` {
     return `${teamCredentialDetailPath(address, resourceId)}/activity`;
 }
 
-export function teamCredentialLimitsPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialLimitsPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/edit?section=limits` {
     return `${teamCredentialEditPath(address, resourceId)}?section=limits`;
 }
 
-export function teamCredentialUsagePath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialUsagePath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/usage` {
     return `${teamCredentialDetailPath(address, resourceId)}/usage`;
 }
 
-export function teamCredentialExternalApiPath(address: TeamAddress, resourceId: string): string {
+export function teamCredentialExternalApiPath(address: TeamAddress, resourceId: string): `/settings/teams/${string}/${string}/credentials/${string}/external-api` {
     return `${teamCredentialDetailPath(address, resourceId)}/external-api`;
 }
 
-export function teamDirectoryPath(address: TeamAddress): string {
+export function teamDirectoryPath(address: TeamAddress): `/settings/teams/${string}/${string}/authentication/directory` {
     return `${teamAuthenticationPath(address)}/directory`;
 }
 
-export function teamDirectorySourcePath(address: TeamAddress, sourceId: string): string {
+export function teamDirectorySourcePath(address: TeamAddress, sourceId: string): `/settings/teams/${string}/${string}/authentication/directory/${string}` {
     return `${teamDirectoryPath(address)}/${encodeURIComponent(sourceId)}`;
 }
 
 /** One Group inside its Team. Group ids are unique only within their Team. */
-export function teamGroupDetailPath(address: TeamAddress, groupId: string): string {
+export function teamGroupDetailPath(address: TeamAddress, groupId: string): `/settings/teams/${string}/${string}/groups/${string}` {
     return `${teamGroupsPath(address)}/${encodeURIComponent(groupId)}`;
 }
 
-export function teamGroupCreatePath(address: TeamAddress): string {
+export function teamGroupCreatePath(address: TeamAddress): `/settings/teams/${string}/${string}/groups/new` {
     return `${teamGroupsPath(address)}/new`;
 }
 

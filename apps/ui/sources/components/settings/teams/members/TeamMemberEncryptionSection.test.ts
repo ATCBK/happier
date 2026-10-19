@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { signAccountContentKeyBindingV1, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 
 import {
     createRootLayoutFeaturesResponse,
@@ -33,6 +35,10 @@ import {
 } from './TeamMemberEncryptionSection';
 
 const announcements = vi.hoisted(() => vi.fn());
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' }, {
@@ -100,9 +106,16 @@ async function setupMountedMemberRequest(
         if (path === '/v1/account/encryption') {
             return Response.json({ mode: options?.accountEncryption ?? 'plain', updatedAt: 1 });
         }
-        if (path === '/v1/account/encryption/currentness' && options?.accountEncryption !== 'e2ee') {
-            return Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null,
+        if (path === '/v1/account/encryption/currentness') {
+            if (options?.accountEncryption !== 'e2ee') return Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null,
                 contentKeyFingerprint: null, updatedAt: 1 });
+            const material = createAccountScopedCryptoMaterialSnapshotV1({
+                accountEncryptionMode: 'e2ee', material: { type: 'dataKey', machineKey: managerKeys.secretKey },
+                dataKeyPublicKey: managerKeys.publicKey,
+            });
+            return Response.json({ mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing-current',
+                contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint),
+                recipientEnvelopeReadiness: { status: 'available' }, updatedAt: 1 });
         }
         return await request(String(url), init);
     });
@@ -392,7 +405,9 @@ describe('TeamMemberEncryptionSection mounted membership history', () => {
         await vi.waitFor(() => expect(screen.findRow('team-member-encryption-prepare')).not.toBeNull());
         announcements.mockClear();
         await act(async () => { screen.pressRow('team-member-encryption-prepare'); });
-        await vi.waitFor(() => expect(prepared).toBe(true));
+        await vi.waitFor(() => expect(prepared, JSON.stringify({ text: screen.getTextContent(),
+            requests: request.mock.calls.map(([url, init]) => ({ path: new URL(url).pathname, method: init?.method })),
+        })).toBe(true));
         expect(announcements).toHaveBeenCalledTimes(1);
         await act(async () => { commit.resolve(new Response(JSON.stringify({ appliedCount: 1 }))); });
         await vi.waitFor(() => expect(screen.findRow('team-member-encryption-prepare')).toBeNull());

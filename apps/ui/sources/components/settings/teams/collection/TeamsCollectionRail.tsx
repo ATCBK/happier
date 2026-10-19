@@ -17,7 +17,7 @@ import { teamCredentialCreatePath, teamDetailPath, teamsCreatePath } from '../te
 import type { TeamsDirectoryUnavailableHome } from '../teamsDirectoryViewState';
 import { teamsUnavailableHomeReason, teamsUnavailableHomeStateKind } from '../teamsDirectoryViewState';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { teamCreateDraftName } from './teamCreateDraftName';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     readTeamCredentialSourceHint,
     resolveSelectedTeamAddress,
@@ -54,6 +54,7 @@ export const TeamsCollectionAddButton = React.memo(function TeamsCollectionAddBu
 
 /** The new Team being set up in the detail pane, titled as its name is typed. */
 const TeamDraftRow = React.memo(function TeamDraftRow() {
+    const teamCreateDraftName = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

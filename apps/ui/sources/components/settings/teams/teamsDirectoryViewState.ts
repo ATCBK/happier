@@ -52,7 +52,7 @@ export type TeamsDirectoryViewState = Readonly<{
 export type TeamsDirectoryViewStateInput = Readonly<{
     homes: readonly TeamsHomeAdmissionEntry[];
     homeNamesByServerId: Readonly<Record<string, string | undefined>>;
-    snapshotsByServerId: Readonly<Record<string, TeamsDirectorySnapshot | undefined>>;
+    snapshotsByServerId: Readonly<Record<string, TeamsDirectorySnapshot | readonly (TeamsDirectorySnapshot | undefined)[] | undefined>>;
 }>;
 
 const EMPTY_ROWS: readonly TeamsDirectoryRow[] = Object.freeze([]);
@@ -90,7 +90,7 @@ export function teamsUnavailableHomeStateKind(home: Pick<TeamsDirectoryUnavailab
     switch (home.reason) {
         case 'loading': return 'loading';
         case 'denied': return 'denied';
-        case 'offline': return 'offline';
+        case 'offline': return 'unavailable';
         case 'unsupported': return 'unavailable';
         default: return 'error';
     }
@@ -141,35 +141,40 @@ export function resolveTeamsDirectoryViewState(
             continue;
         }
 
-        const snapshot = input.snapshotsByServerId[home.serverId];
-        const teams = snapshot?.data ?? null;
-
-        if (!teams) {
-            const { reason, retryable } = teamsUnavailableReason(snapshot?.error);
+        const source = input.snapshotsByServerId[home.serverId];
+        const snapshots = source === undefined || 'scope' in source ? [source] : source;
+        const missing = snapshots.filter((snapshot) => !snapshot?.data);
+        if (missing.length > 0) {
+            // One Home can have answered the active sequence while its archived
+            // sequence is still loading or failed. Keep its rows and name the gap.
+            const failed = missing.find((snapshot) => snapshot?.error);
+            const { reason, retryable } = teamsUnavailableReason(failed?.error);
             unavailableHomes.push(Object.freeze({ serverId: home.serverId, homeName, reason, retryable }));
-            continue;
         }
 
         // The Home has content on screen. It counts as answered even while a
         // refresh is failing, because blanking it would lose real information.
-        answeredHomes += 1;
-        if (snapshot?.stale === true || snapshot?.error !== null) stale = true;
-
-        for (const team of teams) {
-            const row: TeamsDirectoryRow = Object.freeze({
-                address: Object.freeze({ serverId: home.serverId, teamId: team.id }),
-                team,
-                homeName,
-            });
-            if (team.archivedAt === null) rows.push(row);
-            else archivedRows.push(row);
+        if (snapshots.some((snapshot) => snapshot?.data)) answeredHomes += 1;
+        for (const snapshot of snapshots) {
+            if (!snapshot?.data) continue;
+            const teams = snapshot.data;
+            if (snapshot.stale || snapshot.error !== null) stale = true;
+            for (const team of teams) {
+                const row: TeamsDirectoryRow = Object.freeze({
+                    address: Object.freeze({ serverId: home.serverId, teamId: team.id }),
+                    team,
+                    homeName,
+                });
+                if (team.archivedAt === null) rows.push(row);
+                else archivedRows.push(row);
+            }
         }
     }
 
     const partial = unavailableHomes.length > 0 || stale;
     const kind: TeamsDirectoryViewState['kind'] = answeredHomes === 0 && unavailableHomes.every((home) => home.reason === 'loading')
         ? 'loading'
-        : rows.length === 0 && archivedRows.length === 0 && answeredHomes === admittedHomes
+        : rows.length === 0 && archivedRows.length === 0 && answeredHomes === admittedHomes && unavailableHomes.length === 0
             ? 'empty'
             : 'ready';
 

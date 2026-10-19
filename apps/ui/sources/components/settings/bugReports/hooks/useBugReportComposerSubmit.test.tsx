@@ -108,7 +108,7 @@ describe('bug report Submit form through Action admission', () => {
     const screen = await renderScreen(React.createElement(Composer));
     const created = new Promise<void>(resolve => homes.artifacts(serverId).afterNextCreate(async () => { resolve(); }));
     let pending: Promise<void> = Promise.resolve();
-    await act(async () => { pending = screen.findByTestId('submit').props.onPress(); });
+    await act(async () => { pending = screen.findByTestId('submit')!.props.onPress(); });
     const admission = await Promise.race([
       created.then(() => ({ phase: 'approval' as const, alerts: [] })),
       pending.then(() => ({ phase: 'settled' as const, alerts: alerts.mock.calls })),
@@ -122,7 +122,7 @@ describe('bug report Submit form through Action admission', () => {
     expect(reportRequests).toEqual([]);
     expect(back).not.toHaveBeenCalled();
     await expect(peekPreRestartBugReportSnapshot()).resolves.toEqual(snapshot);
-    expect(screen.findByTestId('submit').props.submitting).toBe(true);
+    expect(screen.findByTestId('submit')!.props.submitting).toBe(true);
     expect(request.actionArgs).toMatchObject({ draft: { acceptedPrivacyNotice: false },
       destination: { providerUrl: feature.providerUrl, issueOwner: 'happier-dev', issueRepo: 'happier' } });
     expect(request.actionArgs).not.toHaveProperty('draft.title');
@@ -159,7 +159,7 @@ describe('bug report Submit form through Action admission', () => {
     let pending: Promise<void> = Promise.resolve();
     try {
       const created = new Promise<void>(resolve => homes.artifacts(serverId).afterNextCreate(async () => { resolve(); }));
-      await act(async () => { pending = screen.findByTestId('submit').props.onPress(); });
+      await act(async () => { pending = screen.findByTestId('submit')!.props.onPress(); });
       expect(await Promise.race([created.then(() => 'approval'), pending.then(() => 'settled')])).toBe('approval');
       const artifact = homes.artifacts(serverId).list()[0]!;
       await waitForHomeGovernance(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifact.id)).toBe(1));
