@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { transform } from 'esbuild';
 import { ConversationProvidersContributionProtocolV1 } from '@happier-dev/channels-protocol/v1';
-import { PluginCollectionMutationRequestV1Schema } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, PluginCollectionMutationRequestV1Schema } from '@happier-dev/protocol';
 import { UsageCoachFindingSchema } from '@happier-dev/protocol/usage/coach/coachFinding';
 import { DaemonPluginUiResourceReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -33,6 +33,7 @@ import type { AccountPluginDataStorageHostDependencies } from './context/account
 import { createPluginReloadController } from './reload/controller';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from './reload/runtimeLease';
 import { createCommittedInputTypeDeps } from './invocation/actions/createCommittedContributedActionDeps';
+import { executeContributedAction } from './invocation/actions/executeContributedAction';
 import type { ResolveSessionResourceAccess } from './invocation/services/resources';
 
 // Only replace the packaged-publication filesystem read; all catalog and runtime owners remain real.
@@ -108,6 +109,7 @@ async function seedFixture(options: Readonly<{
     usageCoach?: boolean;
     admissionFailure?: string;
     activationFailure?: boolean;
+    dormantAction?: boolean;
 }> = {}): Promise<Readonly<{ happyHomeDir: string; pluginRoot: string }>> {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-live-resources-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-live-resources-plugin-'));
@@ -122,7 +124,7 @@ async function seedFixture(options: Readonly<{
         engines: { happier: '^0.2.0' },
         runtime: { apiVersion: 1 },
         entrypoints: { daemon: './daemon.mjs' },
-        activation: { events: [{ kind: 'startup' }] },
+        ...(options.dormantAction ? {} : { activation: { events: [{ kind: 'startup' }] } }),
         hostAccess: options.accountStorage
             ? {
                 required: [{
@@ -135,6 +137,10 @@ async function seedFixture(options: Readonly<{
             }
             : { required: [], optional: [] },
         contributes: {
+            ...(options.dormantAction ? { actions: [{
+                id: 'inspect', title: 'Inspect', scopes: ['global'], surfaces: ['cli'],
+                execution: { target: 'daemon' }, placementBindings: ['commandPalette'], dangerLevel: 'safe',
+            }] } : {}),
             ...(options.inputType ? { actions: [{ id: 'choose-repository', title: 'Choose repository', scopes: ['global'], surfaces: ['cli'],
                 execution: { target: 'daemon' }, placementBindings: ['commandPalette'], dangerLevel: 'safe',
                 inputSchema: { type: 'object', properties: { repository: { type: 'object', additionalProperties: true } },
@@ -184,6 +190,11 @@ async function seedFixture(options: Readonly<{
             },
         };
         globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__ = control;
+        ${options.dormantAction ? `api.actions.register('inspect', async (_input, context) => {
+            const descriptor = context.services.resources.describe('live-status');
+            const result = await context.services.resources.read('live-status');
+            return { size: descriptor.size, value: new TextDecoder().decode(result.bytes) };
+        });` : ''}
         ${options.inputType ? `api.actions.register('choose-repository', async () => {
             control.inputTypeActionInvocations = (control.inputTypeActionInvocations ?? 0) + 1;
             return { accepted: true };
@@ -295,6 +306,57 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 describe('executable plugin dynamic resource observation (EU-4b)', () => {
+    it.each([false, true])('describes and reads a dormant external dynamic Resource from its first demanded Action (scoped replacement: %s)', async (scopedReplacement) => {
+        const { happyHomeDir, pluginRoot } = await seedFixture({ dormantAction: true });
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        let firstRuntime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        let peer: Awaited<ReturnType<typeof seedScopedDynamicResourcePeerFixture>> | null = null;
+        try {
+            if (scopedReplacement) peer = await seedScopedDynamicResourcePeerFixture(happyHomeDir);
+            const contributes = await resolveScopedDynamicResourceFixtureContributes(happyHomeDir);
+            runtime = await resolveExecutablePluginRuntimeRegistry({
+                happyHomeDir, contributes,
+            });
+            expect(runtime.activatedPluginIds.has(PLUGIN_ID)).toBe(false);
+            expect(globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__).toBeUndefined();
+            if (scopedReplacement) {
+                firstRuntime = runtime;
+                const occurrenceId = firstRuntime.readPluginOccurrenceId?.(PLUGIN_ID);
+                const sourceCustody = firstRuntime.readPluginSourceCustody?.(PLUGIN_ID);
+                if (!occurrenceId || !sourceCustody) throw new Error('Expected source-admitted dormant occurrence');
+                expect(firstRuntime.retainPluginActivationComponent?.(PLUGIN_ID) ?? null).toBeNull();
+                runtime = await resolveExecutablePluginRuntimeRegistry({
+                    happyHomeDir, contributes, pluginIds: [PEER_PLUGIN_ID],
+                    servingPluginOccurrences: new Map([[PLUGIN_ID, { occurrenceId, sourceCustody }]]),
+                });
+                expect(runtime.readPluginOccurrenceId?.(PLUGIN_ID)).toBe(occurrenceId);
+                expect(runtime.activatedPluginIds.has(PLUGIN_ID)).toBe(false);
+                expect(globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__).toBeUndefined();
+            }
+            const invoke = () => executeContributedAction({
+                runtimeRegistry: runtime!,
+                actionId: buildQualifiedPluginContributionKey({ pluginId: PLUGIN_ID, localId: 'inspect' }),
+                input: {}, context: { surface: 'cli' },
+            });
+            const value = JSON.stringify({ revision: 0 });
+            const first = await invoke();
+            expect(first).toEqual({
+                matched: true, result: { ok: true, result: { size: new TextEncoder().encode(value).byteLength, value } },
+            });
+            expect(runtime.activatedPluginIds.has(PLUGIN_ID)).toBe(true);
+            await expect(invoke()).resolves.toEqual({
+                matched: true, result: { ok: true, result: { size: new TextEncoder().encode(value).byteLength, value } },
+            });
+        } finally {
+            await runtime?.dispose();
+            await firstRuntime?.dispose();
+            delete globalThis.__HAPPIER_LIVE_RESOURCE_FIXTURE__;
+            await rm(happyHomeDir, { recursive: true, force: true });
+            await rm(pluginRoot, { recursive: true, force: true });
+            if (peer) await rm(peer.pluginRoot, { recursive: true, force: true });
+        }
+    }, 60_000);
+
     it('preserves a refused Resource producer reason through public registration and the daemon RPC', async () => {
         const { happyHomeDir, pluginRoot } = await seedFixture({ admissionFailure: 'plugin_collection_contract_conflict' });
         let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;

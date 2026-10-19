@@ -118,6 +118,10 @@ const publicationAnchor = defineProtocolUnion([
 const publicationTextLines = defineProtocolArray(defineProtocolString());
 const publicationSnapshot = defineProtocolUnion([
     defineProtocolObject({
+        kind: defineProtocolLiteral('none'),
+        capturedAt: defineProtocolNumber({ integer: true, minimum: 0 }),
+    }, { policy: 'closed' }),
+    defineProtocolObject({
         kind: defineProtocolLiteral('text'),
         selectedLines: publicationTextLines,
         beforeContext: publicationTextLines,

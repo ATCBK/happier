@@ -450,6 +450,8 @@ export type OpenConnectedAccountsRequest =
     | Readonly<{
         service: PluginUiContributionIdentityV1;
         accountId?: string;
+        /** Open host-owned selection for one declared consumer purpose. */
+        purpose?: Readonly<{ consumer: PluginUiContributionIdentityV1; purpose: string }>;
     }>;
 
 export interface PluginUiHostApi {

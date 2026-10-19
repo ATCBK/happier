@@ -685,6 +685,7 @@ export function buildAgentsById(
 
 function buildActionsById(
     registry: ResolvedContributionRegistry,
+    purposeScopes: ReturnType<typeof deriveRegistryConnectedAccountPurposeAuthorizations>,
     pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
     resolveActionPresentUserGatePolicy?: (
         pluginId: string,
@@ -747,6 +748,10 @@ function buildActionsById(
             id: action.definition.id,
             pluginId: action.pluginId,
             occurrenceId,
+            connectedAccountPurposes: purposeScopes.find(scope => scope.consumer.pluginId === action.pluginId
+                && scope.consumer.localId === action.definition.id)?.authorizedPurposes.map(scope => ({
+                    purpose: scope.purpose.purpose, serviceRefs: [...scope.serviceRefs],
+                })),
             title: localizedPresentation?.title ?? action.definition.title,
             description: localizedPresentation?.description ?? readOptionalString(action.definition.description),
             ...(action.definition.icon ? { icon: action.definition.icon } : {}),
@@ -816,10 +821,10 @@ function buildCommandsById(
 
 function buildResourcesById(
     registry: ResolvedContributionRegistry,
+    purposeScopes: ReturnType<typeof deriveRegistryConnectedAccountPurposeAuthorizations>,
     pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
 ): PluginProjectionV2['resourcesById'] {
     const resourcesById: PluginProjectionV2['resourcesById'] = {};
-    const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(registry);
     for (const resource of registry.resources) {
         if (!resource.pluginId) {
             continue;
@@ -938,6 +943,7 @@ export function buildPluginProjectionV2(params: Readonly<{
     }>;
 }>): PluginProjectionV2 {
     const installedPackages = params.installedPackages ?? [];
+    const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(params.registry);
     const pluginDiagnosticsByPluginId = params.pluginDiagnosticsByPluginId ?? params.registry.pluginDiagnosticsByPluginId;
     if (params.introspectionRuntimeSnapshot && params.introspectionRuntimeSnapshot.generation !== params.generation) {
         throw new Error(
@@ -1079,6 +1085,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         agentsById: buildAgentsById(params.registry, params.generation),
         actionsById: buildActionsById(
             params.registry,
+            purposeScopes,
             params.pluginExecutionOriginsByPluginId,
             params.resolveActionPresentUserGatePolicy,
             params.pluginFinalPolicyCurrentRuntimesById,
@@ -1086,7 +1093,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         ),
         toolsById: buildToolsById(params.registry),
         commandsById: buildCommandsById(params.registry),
-        resourcesById: buildResourcesById(params.registry, params.pluginExecutionOriginsByPluginId),
+        resourcesById: buildResourcesById(params.registry, purposeScopes, params.pluginExecutionOriginsByPluginId),
         settingsById: buildSettingsById(params.registry),
         familiesById,
         contributionIntrospection: narrowIntrospectionToClientReadFamilies(projectPluginContributionIntrospection({

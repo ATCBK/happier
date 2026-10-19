@@ -80,6 +80,10 @@ type CurrentChannelsSources = Readonly<{
         input: ConversationProviderObservationIngestInputV1,
         context: PluginInvocationContext,
     ) => Promise<void>;
+    retain: (
+        input: Readonly<{ now: number; limit: number }>,
+        context: PluginInvocationContext,
+    ) => Promise<Readonly<{ compactedCensuses: number; deletedCensuses: number }>>;
 }>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -107,7 +111,9 @@ async function loadCurrentChannelsSources(): Promise<CurrentChannelsSources> {
     }
     const createCurrentConnectionFixture = fixtureNamespace.createCurrentConversationConnectionFixture;
     const ingest = ingressNamespace.ingestConversationProviderObservationForInvocation;
-    if (typeof createCurrentConnectionFixture !== 'function' || typeof ingest !== 'function') {
+    const retain = ingressNamespace.runConversationIngressRetentionForInvocation;
+    if (typeof createCurrentConnectionFixture !== 'function' || typeof ingest !== 'function'
+        || typeof retain !== 'function') {
         throw new Error('Expected the current Channels ingress fixtures and handler.');
     }
     const parsedManifest = parsePluginManifest(manifestNamespace.PLUGIN_MANIFEST);
@@ -142,6 +148,7 @@ async function loadCurrentChannelsSources(): Promise<CurrentChannelsSources> {
         // their exported symbols before narrowing them to the exercised contract.
         createCurrentConnectionFixture: createCurrentConnectionFixture as (input: unknown) => unknown,
         ingest: ingest as CurrentChannelsSources['ingest'],
+        retain: retain as CurrentChannelsSources['retain'],
     });
 }
 
@@ -378,7 +385,7 @@ async function readEveryRowOfKind(input: Readonly<{
 }
 
 describe('Channels C3 physical E2EE ingress batches', () => {
-    it('fills every sealed 256-binding, 64 KiB ingress batch to the deployment operation bound', async () => {
+    it('fills sealed ingress batches and compacts terminal attention through the strict E2EE Collection host', async () => {
         const channels = await loadCurrentChannelsSources();
         const boundary = createHttpCollectionBoundary(channels.channelStateCollection.indexes);
         const admittedContract = normalizePluginAccountCollectionContractV1({
@@ -505,5 +512,36 @@ describe('Channels C3 physical E2EE ingress batches', () => {
         expect(census['record-kind']).toBe('ingress-census');
         expect(typeof census['created-at']).toBe('number');
         expect(jsonRecord(census.payload).phase).toBe('prepared');
+
+        // A permissive collection replacement would accept the reader's null
+        // projection sentinel and conceal the exact live retention regression.
+        const member = obligations[0]!;
+        const beforeInvalidWrite = boundary.capturedMutationRequests.length;
+        await expect(collection.batch([{
+            kind: 'put',
+            value: { ...jsonRecord(member.value), 'due-at': null },
+            expectedRevision: member.revision,
+        }])).rejects.toMatchObject({ code: 'plugin_collection_invalid_value' });
+        expect(boundary.capturedMutationRequests).toHaveLength(beforeInvalidWrite);
+
+        await expect(channels.retain({ now: Date.now(), limit: 1 }, context))
+            .resolves.toMatchObject({ compactedCensuses: 1, deletedCensuses: 0 });
+        const retainedMembers = await readEveryRowOfKind({ collection, recordKind: 'ingress-obligation' });
+        expect(retainedMembers).toHaveLength(bindingIds.length);
+        for (const row of retainedMembers) {
+            const value = jsonRecord(row.value);
+            expect(value).not.toHaveProperty('due-at');
+            expect(value).toMatchObject({ terminal: true, attention: true,
+                payload: { target: null, disposition: 'rejected', lifecycle: { phase: 'terminal', dueAt: null } } });
+        }
+        const compacted = await readEveryRowOfKind({ collection, recordKind: 'ingress-census' });
+        expect(compacted).toHaveLength(1);
+        const compactedPayload = jsonRecord(jsonRecord(compacted[0]!.value).payload);
+        expect(compactedPayload.normalizedIngress).toBeNull();
+        const retainedIds = jsonRecord(compactedPayload.compacted).retainedAttentionObligationRowIds;
+        expect(retainedIds).toHaveLength(retainedMembers.length);
+        expect(retainedIds).toEqual(expect.arrayContaining(retainedMembers.map(row => row.rowId)));
+        await expect(channels.retain({ now: Date.now(), limit: 1 }, context))
+            .resolves.toMatchObject({ compactedCensuses: 0, deletedCensuses: 0 });
     });
 });

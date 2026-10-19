@@ -1,4 +1,5 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import * as React from 'react';
 import { IDBFactory } from 'fake-indexeddb';
 import { t } from '@/text';
@@ -7,6 +8,7 @@ import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernance
 import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
 import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
+import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -114,6 +116,7 @@ import {
     renderScreen,
 } from '@/dev/testkit';
 import { createTestMessageChannel } from '@/dev/testkit/mocks/messageChannel';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -1361,6 +1364,7 @@ vi.mock('@/components/markdown/MarkdownView', () => ({
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    const { english } = await import('@/text/translations/pluginSettingsPresentationTranslations.shared');
     const frameworkChrome = {
         en: {
             submit: 'Submit',
@@ -1399,7 +1403,14 @@ vi.mock('@/text', async () => {
     } as const;
     return {
         ...createTextModuleMock({
-            translate: (key) => {
+            translate: (key, params) => {
+                // Keep the real notice interpolation: the Host must forward the refusing Machine's name.
+                if (key === 'settingsPlugins.surfaces.pluginCouldNotStart') return english.surfaces.pluginCouldNotStart({
+                    plugin: String(params?.plugin), machine: String(params?.machine),
+                });
+                if (key === 'settingsPlugins.surfaces.noMachineRunsPlugin') return english.surfaces.noMachineRunsPlugin({
+                    plugin: String(params?.plugin),
+                });
                 const chrome = frameworkChrome[activeLanguage.value as keyof typeof frameworkChrome];
                 if (key === 'common.submit') return chrome?.submit ?? key;
                 if (key === 'common.cancel') return chrome?.cancel ?? key;
@@ -2664,6 +2675,86 @@ async function serveDeclarativeDaemonSettings(input: Readonly<{
 }
 
 describe('PluginSurfacePlacementHost', () => {
+    it.each(['activation_refused', 'no_materialization'] as const)(
+        'lends the Administration %s notice through the real Host after a daemon Action is refused',
+        async reason => {
+            const pluginId = 'acme.browser';
+            reactNativeSurfaceProps.length = 0;
+            reactNativeSurfaceRuntime.enabled = true;
+            reactNativeSurfaceRuntime.module = Object.freeze({
+                renderSurface: () => React.createElement('View', { testID: 'machine-notice-panel' }),
+            });
+            const machine = createMachineFixture({ id: 'machine_1', activeAt: Date.now(),
+                metadata: { ...createMachineFixture().metadata!, displayName: 'Studio machine' } });
+            const machineRow = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+                metadata: encodePlainMachineStoredContent(machine.metadata!) };
+            await pluginSurfaceAccountLifetime.setScope({ serverId: 'server-a', accountId: 'account-a' },
+                path => path === '/v1/machines' ? Response.json({ machines: [machineRow] }) : undefined);
+            const { storage } = await import('@/sync/domains/state/storage');
+            const scope = pluginSurfaceAccountLifetime.value!.scope;
+            act(() => storage.getState().applyMachines([machine], true, { sourceServerId: scope.serverId }));
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                availabilityCursor: 1, materializations: [], snapshots: [], intentReads: [], inventoryComplete: true,
+            } });
+            const sourceCustody = developmentSourceCustody('acme-notice-test-root');
+            const hostSupplies = reason === 'activation_refused' ? [{
+                machineId: machine.id, serverId: scope.serverId, serverIdentityId: 'srv_server_a',
+                generation: 1, phase: 'unavailable' as const, interactionEnabled: false,
+                unavailableReasonCode: 'plugin_activation_failed', occurrenceId: 'notice-occurrence',
+                pluginVersion: '1.0.0', sourceCustody, executionTargetDefault: false,
+                executionOrigin: { serverIdentityId: 'srv_server_a', sourceRef: { pluginId, machineId: machine.id, sourceCustody } },
+            }] : [];
+            const authored = surfacePlacementFixture({
+                binding: { pluginId, destinationId: 'page', rendererId: 'native-panel', container: 'appPage', target: { kind: 'app' } },
+                renderer: { kind: 'reactNative', contributionId: 'native-panel', requiredHostMethods: ['executeAction'] },
+            });
+            const { occurrenceId: _occurrence, ...declaration } = authored;
+            const placement = { ...declaration, hostSupplies, hostCompatibility: 'compatible' as const };
+            const projection = { ...generatedReactNativeProjection, generation: 1,
+                installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Notice plugin', version: '1.0.0',
+                    enabled: true, source: { kind: 'bundled' as const, locator: pluginId },
+                    declaredExecution: { daemonActions: true, contributionPoints: false } } },
+                surfacePlacementsById: { [placement.id]: placement },
+                actionsById: { [`${pluginId}/refresh-index`]: projectedDaemonUiAction({
+                    pluginId, localId: 'refresh-index', machineId: machine.id, materializationId: 'notice-installation',
+                }) },
+            } satisfies PluginUiProjectionModel;
+            let noticeSource: WidgetFrameBodyNoticeSource | null = null;
+            const lend = (source: WidgetFrameBodyNoticeSource | null) => { noticeSource = source; };
+            const { PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+            const screen = await renderScreen(<WidgetFrameBodyNoticeContext.Provider value={lend}>
+                <PluginSurfacePlacementHost placement={placement} pluginUiProjection={projection} platform="web"
+                    reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} />
+            </WidgetFrameBodyNoticeContext.Provider>);
+            try {
+                await vi.waitFor(() => expect(reactNativeSurfaceProps.length,
+                    `${surfaceFixtureDiagnostics(screen, pluginId)} ${screen.getTextContent()}`).toBeGreaterThan(0));
+                expect(screen.findByTestId('machine-notice-panel')).not.toBeNull();
+                const { renderContext } = reactNativeSurfaceProps.at(-1) as { renderContext: RenderContext };
+                await act(async () => {
+                    await expect(renderContext.hostApi.executeAction('refresh-index', {}))
+                        .rejects.toMatchObject({ code: 'unavailable' });
+                });
+                const readNotice = () => (noticeSource as WidgetFrameBodyNoticeSource | null)?.();
+                await vi.waitFor(() => expect(readNotice()).toBeDefined());
+                if (reason === 'activation_refused') {
+                    await vi.waitFor(() => expect(readNotice()).toEqual({ sentence: t('settingsPlugins.surfaces.pluginCouldNotStart', {
+                        plugin: 'Notice plugin', machine: 'Studio machine',
+                    }) }));
+                    expect(readNotice()!.sentence).toContain('Studio machine');
+                    expect(readNotice()!.sentence).toContain('Restart Happier');
+                    expect(readNotice()!.sentence).not.toContain('Install it');
+                } else {
+                    expect(readNotice()).toEqual({ sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', {
+                        plugin: 'Notice plugin',
+                    }), managePluginId: pluginId });
+                    expect(readNotice()!.sentence).toContain('Install it');
+                }
+                expect(declarativeActionExecuteMock).not.toHaveBeenCalled();
+            } finally { await screen.unmount(); }
+        },
+    );
+
     it.each(['daemon-state', 'source-occurrence', 'catalog-generation'] as const)('keeps Account Settings intent bound to its declaration during %s updates', async change => {
         const pluginId = 'acme.settings-lifetime';
         const readEntered = createDeferred<void>();

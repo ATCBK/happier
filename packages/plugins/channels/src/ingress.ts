@@ -5867,8 +5867,11 @@ function compactedIngressCensusValue(input: Readonly<{
 function compactedTerminalAttentionObligationValue(
   obligation: IngressObligationRecord,
 ): JsonRecord {
+  // The reader normalizes an absent due projection to null; persisted terminal
+  // rows omit it, as required by the Collection's optional integer field.
+  const { [CHANNEL_STATE_FIELD.dueAt]: _dueAt, ...obligationWithoutDueAt } = obligation;
   return {
-    ...obligation,
+    ...obligationWithoutDueAt,
     payload: {
       ...obligation.payload,
       target: null,

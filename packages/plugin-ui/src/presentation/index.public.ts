@@ -271,12 +271,14 @@ export {
   HappierCollectionList,
   HappierCollectionListGroupLabel,
   HappierCollectionListMark,
+  HappierCollectionRestingRowsContext,
   useHappierCollectionDraftRowTitle,
   type HappierCollectionListFilters,
   type HappierCollectionListHost,
   type HappierCollectionListProps,
   type HappierCollectionListSearch,
   type HappierCollectionListTextRole,
+  type HappierCollectionRestingRows,
 } from './collection/CollectionList.js';
 export {
   HAPPIER_COLLECTION_DETAIL_SLIDE,

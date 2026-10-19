@@ -16,13 +16,15 @@ import { t } from '@/text';
 export const PluginSourcesScreen = React.memo(function PluginSourcesScreen() {
     // The phone's floating tab bar overlays the page: the registries view (list, and the details pane's footer) sits above it.
     const chromeClearance = useFloatingChromeClearance();
+    // A phone's pushed detail is the page: the list's purpose line no longer sits above it.
+    const [detailPushed, setDetailPushed] = React.useState(false);
     return (
         <View style={styles.page} testID="settings.plugins.sources">
-            <SettingsPageHeader description={t('settingsPlugins.sourceAdministration.subtitle')} />
+            <SettingsPageHeader {...(detailPushed ? {} : { description: t('settingsPlugins.sourceAdministration.subtitle') })} />
             <View style={[styles.body, chromeClearance > 0 ? { paddingBottom: chromeClearance } : null]}>
                 <PageContentColumn>
                     <ListPresentationProvider value="page" pageInsets="contained">
-                        <RegistrySourcesView kind="plugin" testID="settings.plugins.sources.registries" />
+                        <RegistrySourcesView kind="plugin" pageSheet onDetailPushedChange={setDetailPushed} testID="settings.plugins.sources.registries" />
                     </ListPresentationProvider>
                 </PageContentColumn>
             </View>

@@ -200,6 +200,15 @@ export function useHappierCollectionListRow(): boolean {
 export type HappierCollectionTableRowFacts = Readonly<{ hairline: boolean }>;
 export const HappierCollectionTableRowContext = createContext<HappierCollectionTableRowFacts | null>(null);
 
+/**
+ * How a Collection's resting list (no detail beside it) parts its rows. `air` (default): the page's own edges,
+ * rows apart by space, for a phone or a page. `ruled`: the table's own insets and the row hairline, as the list
+ * beside an open detail, for a host whose list fills a dialog and keeps one rhythm at rest and beside the detail.
+ * Host-provided; an author's Collection takes whatever its host presents.
+ */
+export type HappierCollectionRestingRows = 'air' | 'ruled';
+export const HappierCollectionRestingRowsContext = createContext<HappierCollectionRestingRows>('air');
+
 export function useHappierCollectionTableRow(): HappierCollectionTableRowFacts | null {
   return useContext(HappierCollectionTableRowContext);
 }

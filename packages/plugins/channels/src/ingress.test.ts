@@ -6356,7 +6356,17 @@ pairingRequestId: 'pairing-request-1',
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
-      const harness = createIngressHarness({ connection: socketChannelConnection() });
+      const validateChannelState = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+      const harness = createIngressHarness({
+        connection: socketChannelConnection(),
+        beforeBatch: ({ operations }) => {
+          for (const operation of operations) {
+            if (operation.kind === 'put') {
+              expect(isValidPluginJsonSchemaValue(validateChannelState, operation.value)).toBe(true);
+            }
+          }
+        },
+      });
       setSharedMentionGatedBinding(harness.rows);
       await ingestConversationProviderObservationForInvocation(
         sharedGroupObservation({

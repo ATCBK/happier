@@ -12,6 +12,7 @@ import {
   RegistrySourcesView,
   type RegistrySourcesViewItemFromSource,
 } from './RegistrySourcesView';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
 
 export type RegistrySourcesSlot = Readonly<{
   sources: NonNullable<CapabilityAddModalConfig<unknown>['sources']>;
@@ -52,18 +53,21 @@ export function useRegistrySourcesSlot(
           testID={`${testID}.select`}
         />
       ),
+      // The modal's registries are a configuration body like the details: section descriptions read above their rows.
       renderRegistriesView: ({ intent, back }) => (
-        <RegistrySourcesView
-          kind={kind}
-          initialIntent={intent}
-          {...(itemsFromSource ? { itemsFromSource } : {})}
-          onSourceAdded={(sourceId) => {
-            setSelection(sourceId);
-            back();
-          }}
-          onBack={back}
-          testID={`${testID}.view`}
-        />
+        <ListPresentationProvider value="page" pageInsets="contained">
+          <RegistrySourcesView
+            kind={kind}
+            initialIntent={intent}
+            {...(itemsFromSource ? { itemsFromSource } : {})}
+            onSourceAdded={(sourceId) => {
+              setSelection(sourceId);
+              back();
+            }}
+            onBack={back}
+            testID={`${testID}.view`}
+          />
+        </ListPresentationProvider>
       ),
       registriesHeader: {
         title: t('capabilities.registries.view.title'),

@@ -2,12 +2,14 @@ import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolv
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { describe, expect, it, vi } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
 
 import {
     preparePluginJsonSchema,
 } from '@happier-dev/protocol';
 import {
     definePlugin,
+    type PluginInvocationContext,
     type JsonValue,
 } from '@happier-dev/plugin-sdk';
 import {
@@ -16,6 +18,10 @@ import {
 import { PLUGIN_MANIFEST as CHANNELS_PLUGIN_MANIFEST } from '@happier-dev/plugins-channels';
 import { PLUGIN_MANIFEST as TELEGRAM_PLUGIN_MANIFEST } from '@happier-dev/plugins-channel-telegram';
 import { PLUGIN_MANIFEST as GITHUB_PLUGIN_MANIFEST } from '@happier-dev/plugins-scm-github';
+import { PLUGIN_MANIFEST as TRIAGE_PLUGIN_MANIFEST, TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1 } from '@happier-dev/plugins-triage/manifest';
+import { createTriageListEntriesActionHandler } from '../../../../../../../packages/plugins/triage/src/actions/listEntries';
+import { TriageListEntriesResultV1Schema } from '../../../../../../../packages/plugins/triage/src/actions/listEntriesProtocol';
+import { createTestkitCorpusCollections } from '../../../../../../../packages/plugins/triage/src/corpus/testkit/corpusCollections.test-support';
 import {
     defineContributionProtocol,
 } from '@happier-dev/plugin-sdk/contributions';
@@ -356,7 +362,180 @@ async function runtimeRegistryForResolvedContributions(
     } satisfies ResolvedExecutablePluginRuntimeRegistry;
 }
 
+async function triageListRegistry(includeContributor: boolean): Promise<ResolvedExecutablePluginRuntimeRegistry> {
+    const declarations = [
+        { manifest: TRIAGE_PLUGIN_MANIFEST, packageName: '@happier-dev/plugins-triage', occurrenceId: 'triage-a' },
+        ...(includeContributor ? [BUNDLED_GITHUB_PROVIDER] : []),
+    ];
+    const loadedPlugins = declarations.map(readBundledChannelsProviderPlugin);
+    const contributes = createResolvedContributionRegistry({
+        ...projectLoadedPluginContributes({
+            loadResult: { loadedPlugins, diagnosticsByPluginId: {} },
+            provenance: 'first_party',
+        }),
+        occurrenceIdsByPluginId: Object.fromEntries(declarations.map((entry) => [
+            entry.manifest.id, occurrenceId(entry.occurrenceId),
+        ])),
+    });
+    // Retained cold occurrences are a normal reload input. Keep real registry,
+    // admission and consumer fencing; no activation/provider read is needed.
+    return await resolveExecutablePluginRuntimeRegistry({
+        contributes,
+        pluginIds: [],
+        servingPluginOccurrences: new Map(declarations.map((entry) => [entry.manifest.id, {
+            occurrenceId: occurrenceId(entry.occurrenceId),
+            sourceCustody: sourceCustody(entry.manifest.id),
+        }])),
+    });
+}
+
 describe('targeted contribution observation service', () => {
+    it.each(['allConfigured', 'selected'] as const)(
+        'handles a fenced contributor during durable uninstall while the %s list storage read is pending',
+        async (selection) => {
+            const incumbent = await triageListRegistry(true);
+            const removed = await triageListRegistry(false);
+            const controller = createPluginReloadController({ resolveRuntimeRegistry: async () => incumbent });
+            const lease = await controller.acquireRuntimeRegistry();
+            await lease.release();
+            const target = new AbortController();
+            const service = createReloadControllerTargetedContributionsService({ reloadController: controller }).bind({
+                pluginId: TRIAGE_PLUGIN_MANIFEST.id,
+                signal: target.signal,
+                isCurrent: () => !target.signal.aborted,
+            });
+            const observation = service.observeForSelf(TRIAGE_SOURCES_CONTRIBUTION_POINT_REF_V1, { onInvalidated() {} });
+            const storageGate = deferred<void>();
+            const publicationGate = deferred<void>();
+            const publicationEntered = deferred<void>();
+            const { collections } = createTestkitCorpusCollections();
+            // Only the network-backed Collection boundary is held pending.
+            const context = {
+                signal: target.signal,
+                services: {
+                    targetedContributions: service,
+                    storage: { account: { collection: () => ({
+                        ...collections.sourceInstances,
+                        async query(...args: Parameters<typeof collections.sourceInstances.query>) {
+                            await storageGate.promise;
+                            return await collections.sourceInstances.query(...args);
+                        },
+                    }) } },
+                },
+            } as unknown as PluginInvocationContext;
+            let adoption: Promise<void> | undefined;
+            try {
+                const initial = await observation.readCurrent();
+                expect(initial.contributions.map((entry) => entry.contributor.pluginId))
+                    .toContain(GITHUB_PLUGIN_MANIFEST.id);
+                const remainingContributors = initial.contributions
+                    .map((entry) => entry.contributor)
+                    .filter((contributor) => contributor.pluginId !== GITHUB_PLUGIN_MANIFEST.id);
+                adoption = controller.adoptPreparedRuntimeRegistry({
+                    registry: removed,
+                    changedPluginIds: [GITHUB_PLUGIN_MANIFEST.id],
+                    durableRevision: 1,
+                    runningSessionDisposition: 'retainRunningSessions',
+                    beforePublish: async (_registry, publish) => {
+                        publicationEntered.resolve();
+                        await publicationGate.promise;
+                        publish();
+                    },
+                });
+                await publicationEntered.promise;
+                expect(incumbent.readPluginSourceCustody(GITHUB_PLUGIN_MANIFEST.id)).toBeNull();
+                expect(controller.readCurrentDurableRevision()).toBe(1);
+
+                let failure: unknown;
+                const list = createTriageListEntriesActionHandler()({
+                    v: 1,
+                    sources: selection === 'allConfigured'
+                        ? { kind: 'allConfigured' }
+                        : { kind: 'selected', sourceInstanceIds: ['11111111-1111-4111-8111-111111111111'] },
+                    order: 'newest', limit: 10,
+                }, context).catch((error: unknown) => { failure = error; });
+                try {
+                    // Cross a real event-loop turn: admission must be owned
+                    // before the independently blocked storage read settles.
+                    await setImmediate();
+                    expect(failure).toMatchObject({ code: 'plugin_targeted_contributions_unavailable' });
+                } finally {
+                    storageGate.resolve();
+                    await list;
+                }
+
+                // A failed list has not shut down the controller or rolled back
+                // the committed removal. Publication restores complete reads.
+                publicationGate.resolve();
+                await adoption;
+                expect((await observation.readCurrent()).contributions.map((entry) => entry.contributor))
+                    .toEqual(remainingContributors);
+                const current = await controller.acquireRuntimeRegistry();
+                expect(current.registry).toBe(removed);
+                expect(current.durableRevision).toBe(1);
+                await current.release();
+                const result = TriageListEntriesResultV1Schema.parse(await createTriageListEntriesActionHandler()({
+                    v: 1, sources: { kind: 'allConfigured' }, order: 'newest', limit: 10,
+                }, context));
+                expect(result.configuredSourcesStatus).toBe('complete');
+                expect(result.configuredSources).toEqual([]);
+                expect(result.window.rows).toEqual([]);
+            } finally {
+                storageGate.resolve();
+                publicationGate.resolve();
+                await adoption;
+                observation.dispose();
+                await controller.shutdown();
+            }
+        },
+    );
+
+    it('owns a late admission rejection after list storage has already failed', async () => {
+        const registry = await triageListRegistry(true);
+        const admissionGate = deferred<void>();
+        const admissionEntered = deferred<void>();
+        const controller = createPluginReloadController({ resolveRuntimeRegistry: async () => {
+            admissionEntered.resolve();
+            await admissionGate.promise;
+            return registry;
+        } });
+        const target = new AbortController();
+        const service = createReloadControllerTargetedContributionsService({ reloadController: controller }).bind({
+            pluginId: TRIAGE_PLUGIN_MANIFEST.id,
+            signal: target.signal,
+            isCurrent: () => !target.signal.aborted,
+        });
+        const { collections } = createTestkitCorpusCollections();
+        const storageFailure = new Error('Account Collection is unavailable');
+        const context = {
+            signal: target.signal,
+            services: {
+                targetedContributions: service,
+                storage: { account: { collection: () => ({
+                    ...collections.sourceInstances,
+                    async query() { throw storageFailure; },
+                }) } },
+            },
+        } as unknown as PluginInvocationContext;
+        const unhandled: unknown[] = [];
+        const recordUnhandled = (reason: unknown) => { unhandled.push(reason); };
+        process.on('unhandledRejection', recordUnhandled);
+        try {
+            const list = createTriageListEntriesActionHandler()({
+                v: 1, sources: { kind: 'allConfigured' }, order: 'newest', limit: 10,
+            }, context);
+            await expect(list).rejects.toBe(storageFailure);
+            await admissionEntered.promise;
+            target.abort();
+            await setImmediate();
+            expect(unhandled).toEqual([]);
+        } finally {
+            admissionGate.resolve();
+            await controller.shutdown();
+            process.off('unhandledRejection', recordUnhandled);
+        }
+    });
+
     it('projects real bundled Telegram and GitHub providers through cold admission and the reload service', async () => {
         const target = new AbortController();
         const contributes = resolveRealChannelsProviderRegistry();

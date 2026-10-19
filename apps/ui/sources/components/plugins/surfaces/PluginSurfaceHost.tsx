@@ -3116,8 +3116,10 @@ function PluginSurfaceHostMount(props: Readonly<(
         : mountedComposerBinding
             ?? (targetedBinding ? undefined : props.binding);
     const openConnectedAccounts = React.useCallback((request: PluginUiOpenConnectedAccountsRequestV1): void => {
-        router.push(buildConnectedAccountsSettingsRoute(request));
-    }, [router]);
+        router.push(buildConnectedAccountsSettingsRoute(request, accountLifetime && machineId ? {
+            scope: accountLifetime.scope, machineId,
+        } : undefined));
+    }, [router, accountLifetime, machineId]);
     const controllerBindingWithConnectedAccounts = React.useMemo<BoundPluginSurfaceBinding>(() => Object.freeze({
         ...(controllerBinding ?? {}),
         openConnectedAccounts,

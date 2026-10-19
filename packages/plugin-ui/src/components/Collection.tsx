@@ -34,7 +34,7 @@ import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/sema
 import type { HappierTypeRole, HappierUiTheme, HappierUiTypography } from '../environment/types.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierCollectionDetailWidthContext, HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
-import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
+import { HAPPIER_COLLECTION_LIST_TEXT, HappierCollectionRestingRowsContext, HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTableRowFacts, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
 import {
   HAPPIER_COLLECTION_INSTANT_MOTION,
   HAPPIER_INSTANT_DISCLOSURE_MOTION,
@@ -532,6 +532,8 @@ type CollectionStage<Item> = Readonly<{
    * take two lines and rows size to them. Beside a detail rows keep the exact height the travel plans with.
    */
   wrapTitles: boolean;
+  /** The resting list is ruled and keeps the table's insets (`restingRows="ruled"`). */
+  ruledResting: boolean;
   pageSections: boolean;
   useRowActions: ((item: Item) => CollectionRowActions) | undefined;
   expandable: boolean;
@@ -555,7 +557,8 @@ const LIST_LINE_GAP = 4;
 /** A list row's title keeps this share of the table's title minimum before its title meta moves beneath it. */
 const LIST_TITLE_MIN_SHARE = 0.5;
 /** The list row's action stands at the row's end inset, mirroring where its text starts. */
-const listActionStyle: HappierPortableStyle = { marginRight: TABLE.insetStart - TABLE.insetEnd };
+const LIST_ACTION_INSET = TABLE.insetStart - TABLE.insetEnd;
+const listActionStyle: HappierPortableStyle = { marginRight: LIST_ACTION_INSET };
 /** The title meta: end-aligned, whole (it never shrinks; the title gives way). */
 const metaCellStyle: HappierPortableStyle = { flexShrink: 0, alignItems: 'flex-end', marginLeft: HAPPIER_ROW_TITLE_META_GAP_PX };
 const NO_ROW_ACTIONS: CollectionRowActions = Object.freeze({});
@@ -1017,12 +1020,18 @@ function ListCells<Item>(props: Readonly<{
   AnimatedView: ReturnType<typeof useMotionDriver>['AnimatedView'];
   /** The resting phone list: a title may take a second line and the row grows to it (no travel to plan). */
   wrapTitle: boolean;
+  /** The resting list is ruled: the row keeps the table's insets instead of the page's edges. */
+  ruled: boolean;
   pageSection: boolean;
   /** No accessory cell follows the row's content, so the content runs to the row's trailing edge. */
   ownsTrailingInset: boolean;
 }>): ReactElement {
   const { item, anatomy, AnimatedView } = props;
   const typography = useOptionalHappierUiTypography();
+  const uiTheme = useHappierUiTheme();
+  // A ruled row with no trailing control ends where its action would: the action's own margin and the accessory
+  // cell's inset, less the row's 1 pt edge. A status at the title's end and an Add button share one end edge.
+  const ruledTrailingStyle: HappierPortableStyle = { paddingRight: LIST_ACTION_INSET + uiTheme.spacing.medium - 1 };
   const age = anatomy.age?.(item) ?? null;
   const where = anatomy.byline === undefined ? anatomy.where?.(item) : anatomy.byline(item);
   const reason = anatomy.reason?.(item);
@@ -1072,7 +1081,9 @@ function ListCells<Item>(props: Readonly<{
   return (
     <View pointerEvents={layer?.content} style={[listRowContentStyle,
       page ? pageRowContentStyle : props.wrapTitle ? { minHeight: props.height } : { height: props.height },
-      props.wrapTitle && !page ? (props.ownsTrailingInset ? restingListTrailingStyle : restingListContentStyle) : null]}>
+      props.wrapTitle && !page ? (props.ruled
+        ? (props.ownsTrailingInset ? ruledTrailingStyle : null)
+        : (props.ownsTrailingInset ? restingListTrailingStyle : restingListContentStyle)) : null]}>
       {glyph === null && badge === null ? null : (
         <View pointerEvents={layer?.leaf} style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
           {badge === null ? glyph : (
@@ -1246,6 +1257,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
         secondLine={{ value: progress, tracks: travel === null ? NO_TRACKS : HAPPIER_COLLECTION_TRANSITION_TRACKS.secondLine }}
         AnimatedView={AnimatedView}
         wrapTitle={stage.wrapTitles}
+        ruled={stage.ruledResting}
         pageSection={stage.pageSections}
         ownsTrailingInset={stage.wrapTitles && !stage.pageSections && accessory === null}
       />
@@ -1302,7 +1314,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
     </List.Item>
   );
   const destinationRow = (
-    <HappierCollectionTableRowContext.Provider value={stage.wrapTitles ? RESTING_LIST_ROW : RULED_ROW}>
+    <HappierCollectionTableRowContext.Provider value={stage.wrapTitles && !stage.ruledResting ? RESTING_LIST_ROW : RULED_ROW}>
       <HappierCollectionTreeRowContext.Provider value={treeFacts}>
         {renderCollectionItemDestination(host, anatomy, item, rowItem)}
       </HappierCollectionTreeRowContext.Provider>
@@ -1613,6 +1625,8 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const layoutState = useMemo(() => ({ mode: layoutMode, composition: publishedComposition }), [layoutMode, publishedComposition]);
 
   const wrapTitles = composition === 'list' && transition === null && !besideDetail;
+  const restingRows = useContext(HappierCollectionRestingRowsContext);
+  const ruledResting = wrapTitles && restingRows === 'ruled';
   // Peeks exist in the resting table; while the table fades out (reduced motion) they stay and fade with it.
   const expandable = rowGeometry === 'table'
     && (transition === null || transition.kind === 'fade')
@@ -1742,13 +1756,14 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     toggleExpanded: model.actions.toggleExpanded,
     tree: treeStage,
     wrapTitles,
+    ruledResting,
     pageSections,
     useRowActions: props.useRowActions,
     expandable,
     dividedKeys,
     onPeekHeight,
     onPeekSettled,
-  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
+  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, ruledResting, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
 
   // ---- the List engine's Collection facts ----
   const authorMultiple: NonNullable<CollectionProps<Item>['selection']>['multiple'] = props.selection?.multiple
@@ -1841,8 +1856,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         height: metrics.groupHeader,
         justifyContent: 'flex-end' as const,
         paddingBottom: LIST_LINE_GAP,
-        // On the page's edges, with its rows' marks and trailing facts (`restingListContentStyle`).
-        paddingHorizontal: 0,
+        // On the page's edges, with its rows' marks and trailing facts (`restingListContentStyle`); a ruled list
+        // keeps its rows' own inset.
+        paddingHorizontal: ruledResting ? TABLE.insetStart : 0,
       },
     } : {
       sectionHeaderTitleRole: 'micro' as const,
@@ -1879,7 +1895,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         {header}
       </driver.AnimatedView>
     ),
-  }), [canPeek, driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, wrapTitles, pageVirtualized, pageGeometry, pageSections, pageSheetHeader, enclosingPageSheet, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, transition, view.scrollRequest, viewportScrollRequest]);
+  }), [canPeek, driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, wrapTitles, ruledResting, pageVirtualized, pageGeometry, pageSections, pageSheetHeader, enclosingPageSheet, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, transition, view.scrollRequest, viewportScrollRequest]);
 
   // ---- Escape returns to the table from anywhere inside the Collection (web keyboard) ----
   const rootRef = useRef<View | null>(null);
