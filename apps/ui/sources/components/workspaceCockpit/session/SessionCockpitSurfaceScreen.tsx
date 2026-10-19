@@ -192,7 +192,9 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const resolveBoardPrimaryHost = useSessionBoardPrimaryMountResolver({
         address: sessionAddress,
         paneScopeId: props.scopeId,
-        presented: sceneFocused && surfaceFocused && surfaceVisible,
+        // Classic workspace panes have no independent Cockpit scene. Visible
+        // unfocused panes still run their visuals; retained Cockpit scenes do not.
+        presented: ((!cockpit && instanceKey !== null) || sceneFocused) && surfaceVisible,
         mobileSurface: props.surface === 'board' || props.surface === 'companion' ? props.surface : null,
     });
     const openRight = pane.openRight;

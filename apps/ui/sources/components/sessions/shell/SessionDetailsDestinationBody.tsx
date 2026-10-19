@@ -229,9 +229,9 @@ export function SessionDetailsDestinationBody() {
                             scopeId={scopeId}
                             presentation="screen"
                             routeServerId={routeHydrationState.serverId ?? routeScope.serverId}
-                            presented={isFocused && visible}
+                            presented={visible && (instanceKey !== null || isFocused)}
                             onRequestClose={instanceKey ? returnToSession : onRequestClose}
-                            {...(instanceKey ? { destinationTab, destinationActive: isFocused && visible,
+                            {...(instanceKey ? { destinationTab, destinationActive: visible,
                                 detailsDestinationKey: destinationTab?.key ?? null, onOpenDestinationTab: openDestinationTab } : {})}
                         />
                 )

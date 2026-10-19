@@ -239,6 +239,15 @@ describe('Project destination instance titles', () => {
         expect(hook.getCurrent().get('inactive-0')).toBe('Renamed checks');
         await hook.unmount();
     });
+    it('names a built-in Workflow tab from its catalog entry, never as a missing artifact', async () => {
+        storage.getState().applyArtifacts([], storage.getState().artifacts);
+        const entries = [{ key: 'builtin', ref: destination(`/workflows/${encodeURIComponent('builtin:plan-with-a-panel')}`) }];
+        const hook = await renderHook(() => useDestinationInstanceTitles(catalog, entries));
+        const panel = t('workflows.builtins.planWithAPanel.title');
+        expect(readDestinationInstanceTitle(catalog, entries[0]!.ref)).toBe(panel);
+        expect([...hook.getCurrent().values()]).toEqual([panel]);
+        await hook.unmount();
+    });
     it('names restored nested Session tabs from the live title projection without mounting their screens', async () => {
         const named = (name: string) => createSessionFixture({ id: 'restored-session', metadata: {
             path: '/project', host: 'tester', homeDir: '/home/tester', summary: { text: name, updatedAt: 1 },

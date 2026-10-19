@@ -8,7 +8,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { getActiveUnsavedChangesGuard, runGuardedNavigation, runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { readDestinationInstanceTitle, resolveDestinationRefFromHref, type CompactAppDestination, type DestinationRef } from '../destinations/compactAppDestinationCatalog';
+import { readDestinationInstanceTitle, resolveCurrentAppDestination, resolveDestinationRefFromHref, type CompactAppDestination, type DestinationRef } from '../destinations/compactAppDestinationCatalog';
 import { createWorkspaceNavigationAdapter, sameDestinationRef, type WorkspaceOpenOptions } from './workspaceNavigationAdapter';
 import { bindWorkspaceBrowserHistory, createWorkspaceBrowserTransport, installWorkspaceBrowserHistory } from './workspaceBrowserTransport';
 import type { WorkspaceNavigationEntry } from './workspaceNavigationHistory';
@@ -219,9 +219,15 @@ export function WorkspaceProvider(props: Readonly<{
         return mounted;
     }, [guardTraversal, scopeKey, phoneTransport]);
     const eligible = routeDestination !== null;
+    // Overlay routes (including direct /search) launch destinations through this
+    // owner even though the overlay itself is not a retained workspace tab.
+    const overlayRoute = resolveCurrentAppDestination(props.catalog, routeHref.split(/[?#]/)[0]!)?.activation === 'overlay';
 
     React.useEffect(() => {
-        if (!(props.enabled || phone) || !owner.isReady || (!phone && (!eligible || !runtime.initialized))) return;
+        if (!(props.enabled || phone) || !owner.isReady || (!phone && !overlayRoute && (!eligible || !runtime.initialized))) return;
+        // An overlay has no tab URL to adopt. Its Actions still persist changes
+        // to the restored workspace instead of treating them as URL hydration.
+        if (overlayRoute) runtime.initialized = true;
         let current = true;
         const execute = createWorkspaceActionAdapter({
             getState: () => latest.current.owner.getState(), navigation: runtime.adapter,
@@ -275,7 +281,7 @@ export function WorkspaceProvider(props: Readonly<{
             return outcome;
         });
         return () => { current = false; retire(); };
-    }, [eligible, findHandoff, isCurrentUiOwner, owner.isReady, phone, props.enabled, runtime, scopeKey]);
+    }, [eligible, findHandoff, isCurrentUiOwner, owner.isReady, overlayRoute, phone, props.enabled, runtime, scopeKey]);
 
     React.useLayoutEffect(() => {
         if (!hostsRoute || !owner.isReady || !eligible) return;

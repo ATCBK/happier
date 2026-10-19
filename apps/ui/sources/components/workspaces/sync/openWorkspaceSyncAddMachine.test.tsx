@@ -59,6 +59,7 @@ let pendingCreate = deferred<unknown>();
 let pendingPreflight = deferred<unknown>();
 let requireApproval = false;
 let holdPreflight = false;
+let targetFolder: 'nonempty' | 'empty' | 'missing' = 'nonempty';
 
 const source = () => ({ id: 'source-ref', serverId: workspace.serverId, machineId: 'machine-a', rootPath: '/source' });
 const callsFor = (method: string) => daemonRpc.mock.calls.map(([request]) => request).filter(request => request.method === method);
@@ -102,6 +103,7 @@ beforeEach(async () => {
     pendingPreflight = deferred();
     requireApproval = false;
     holdPreflight = false;
+    targetFolder = 'nonempty';
     projectsOpenOutcome.current = null;
     const machines = [['machine-a', 'Source', '/home/source'], ['machine-b', 'Target', '/home/target']].map(([id, displayName, homeDir]) => {
         const machine = createMachineFixture({ id, activeAt: Date.now() });
@@ -117,7 +119,9 @@ beforeEach(async () => {
         if (request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE) return pendingCreate.promise;
         if (request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
             const input = request.payload as { path: string };
-            return { ok: true, path: input.path, entries: [], truncated: false };
+            if (targetFolder === 'missing') return { ok: false, error: `ENOENT: no such file or directory, scandir '${input.path}'` };
+            const entries = targetFolder === 'nonempty' ? [{ name: '.git', path: `${input.path}/.git`, type: 'directory' }] : [];
+            return { ok: true, path: input.path, entries, truncated: false };
         }
         if (request.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
         throw new Error('Unexpected workspace sync RPC ' + request.method);
@@ -230,6 +234,52 @@ describe('Project Add machine modal', () => {
             contentPolicy: { selection: 'all_files', extraIncludePatterns: ['dist/**', '.env.local'] } });
         expect(confirmModal).toHaveBeenCalledWith('sessionHandoff.targetApproval.title',
             expect.stringContaining('sessionHandoff.targetApproval.exactMirror'), expect.anything());
+    });
+
+    describe('Use existing folder for a Git source', () => {
+        const unavailable = 'settingsSession.handoff.targetBootstrap.useExistingUnavailable';
+        const destinationMenu = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType(DropdownMenu)
+            .find(node => node.props.itemTrigger?.title === 'settingsSession.handoff.targetBootstrap.title')!;
+        const useExisting = (screen: Awaited<ReturnType<typeof renderScreen>>) => (destinationMenu(screen).props.items as ReadonlyArray<{ id: string; disabled?: boolean; subtitle?: string }>)
+            .find(item => item.id === 'use_existing')!;
+
+        it.each(['missing', 'empty'] as const)('disables it for a %s folder with its reason and prepares the folder instead', async (state) => {
+            targetFolder = state;
+            requireApproval = true;
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(useExisting(modal.screen)).toMatchObject({ disabled: true, subtitle: unavailable }));
+            expect(destinationMenu(modal.screen).props.selectedId).toBe('materialize_from_source_workspace');
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            await act(async () => { modal.submit().props.onPress(); });
+            await vi.waitFor(() => expect(confirmModal).toHaveBeenCalledOnce());
+            expect(storedApproval().actionArgs).toMatchObject({ targetPath: '/target', destinationIntent: 'materialize_from_source_workspace' });
+        });
+
+        it('keeps Use existing folder for a non-empty folder', async () => {
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(modal.submit().props.disabled).toBe(false));
+            expect(useExisting(modal.screen).disabled).toBeFalsy();
+            expect(destinationMenu(modal.screen).props.selectedId).toBe('use_existing');
+        });
+
+        it('keeps Use existing folder for an empty folder when the link is not a Git selection', async () => {
+            targetFolder = 'empty';
+            owner.openWorkspaceSyncAddMachine(source(), vi.fn());
+            const modal = await renderOpenedModal();
+            await chooseTarget(modal.screen);
+            await vi.waitFor(() => expect(useExisting(modal.screen).disabled).toBe(true));
+            const advanced = modal.screen.findAll(node => node.props.title === 'settingsSession.handoff.advanced.title'
+                && typeof node.props.onPress === 'function')[0]!;
+            await pressTestInstanceAsync(advanced, 'show advanced workspace policy');
+            const content = modal.screen.findAllByType(DropdownMenu).find(node => node.props.itemTrigger?.title === 'settingsSession.handoff.contentSelection.title')!;
+            await act(async () => invokeTestInstanceHandler(content, 'onSelect', 'all_files'));
+            await vi.waitFor(() => expect(useExisting(modal.screen).disabled).toBeFalsy());
+            expect(destinationMenu(modal.screen).props.selectedId).toBe('use_existing');
+        });
     });
 
     it('keeps an acknowledged committed result visible when the modal is dismissed', async () => {

@@ -35,6 +35,7 @@ import { canAttemptMachineSpawn } from '@/sync/domains/machines/identity/resolve
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { createWorkspaceSyncRelationship, approveWorkspaceSyncRelationshipCreate } from '@/sync/ops/workspaceSyncRelationshipCreate';
+import { useWorkspaceSyncTargetFolderState } from './useWorkspaceSyncTargetFolderState';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
@@ -109,7 +110,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
     const [machineId, setMachineId] = React.useState<string | null>(props.options.targetMachineId ?? null);
     const [targetPath, setTargetPath] = React.useState('');
     const [mode, setMode] = React.useState<WorkspaceSyncPersistentModeV1>('keep_synced');
-    const [destinationIntent, setDestinationIntent] = React.useState<WorkspaceSyncDestinationIntentV1>(
+    const [chosenDestinationIntent, setDestinationIntent] = React.useState<WorkspaceSyncDestinationIntentV1>(
         props.options.purpose === 'worker_clean_copy' ? 'materialize_from_source_workspace' : 'use_existing');
     const [contentSelection, setContentSelection] = React.useState<'git_worktree' | 'all_files'>('git_worktree');
     const [includeIgnoredMode, setIncludeIgnoredMode] = React.useState<'exclude' | 'include_selected'>('exclude');
@@ -144,6 +145,18 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                 : null;
         return other?.workspaceRef && tryBuildWorkspaceCacheKey(other.workspaceRef) === targetKey;
     }) ?? null : null;
+
+    // A Git link needs a checkout already in the folder to "use"; an empty or missing folder can only be
+    // prepared, so that is the effective choice while the folder is such (the person's own choice returns
+    // when the folder changes).
+    const folderChoiceValid = !targetPath.trim() || !pathSafety.allowed || insideSource ? null : resolvedPath;
+    const targetFolderState = useWorkspaceSyncTargetFolderState({
+        machineId: selectedMachine?.id ?? null, serverId: props.source.serverId, path: folderChoiceValid,
+    });
+    const useExistingNeedsFiles = contentSelection === 'git_worktree'
+        && (targetFolderState === 'missing' || targetFolderState === 'empty');
+    const destinationIntent: WorkspaceSyncDestinationIntentV1 = useExistingNeedsFiles
+        ? 'materialize_from_source_workspace' : chosenDestinationIntent;
 
     const invalidateDraft = React.useCallback(() => {
         setPendingApprovalId(null);
@@ -368,7 +381,9 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
                     selectedId={destinationIntent} title={t('settingsSession.handoff.targetBootstrap.title')}
                     subtitle={t(destinationIntent === 'use_existing' ? 'settingsSession.handoff.targetBootstrap.useExistingSubtitle' : 'settingsSession.handoff.targetBootstrap.materializeSubtitle')}
                     items={[
-                        { id: 'use_existing', title: t('settingsSession.handoff.targetBootstrap.useExistingTitle'), subtitle: t('settingsSession.handoff.targetBootstrap.useExistingSubtitle') },
+                        { id: 'use_existing', title: t('settingsSession.handoff.targetBootstrap.useExistingTitle'),
+                            subtitle: useExistingNeedsFiles ? t('settingsSession.handoff.targetBootstrap.useExistingUnavailable') : t('settingsSession.handoff.targetBootstrap.useExistingSubtitle'),
+                            disabled: useExistingNeedsFiles },
                         { id: 'materialize_from_source_workspace', title: t('settingsSession.handoff.targetBootstrap.materializeTitle'), subtitle: t('settingsSession.handoff.targetBootstrap.materializeSubtitle') },
                     ]}
                     onSelect={(value) => { setDestinationIntent(value as WorkspaceSyncDestinationIntentV1); setOpenMenu(null); invalidateDraft(); }}

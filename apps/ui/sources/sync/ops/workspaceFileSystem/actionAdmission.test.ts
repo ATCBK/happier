@@ -144,6 +144,35 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it.each(['unmount', 'replace'] as const)('retires a Project README read without an unhandled AbortError on %s', async retirement => {
+        const { useCodeTextFile } = await import('@/components/projects/files/code/useCodeTextFile');
+        filesystem.fileBytes = new TextEncoder().encode('A project README');
+        let finishRead!: () => void;
+        filesystem.readGate = new Promise<void>(resolve => { finishRead = resolve; });
+        const hook = await renderHook(({ path }) => useCodeTextFile({ ...target, serverId }, path), {
+            initialProps: { path: 'README.md' as string | null },
+        });
+        try {
+            await vi.waitFor(() => expect(filesystem.calls).toContainEqual(expect.objectContaining({
+                method: 'daemon.filesystem.readFile',
+            })));
+            if (retirement === 'unmount') {
+                await hook.unmount();
+            } else {
+                filesystem.fileBytes = new TextEncoder().encode('The next README');
+                filesystem.readGate = null;
+                await hook.rerender({ path: 'nested/README.md' });
+                await vi.waitFor(() => expect(hook.getCurrent()).toEqual({ kind: 'ready', text: 'The next README' }));
+            }
+            finishRead();
+            await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
+            if (retirement === 'replace') expect(hook.getCurrent()).toEqual({ kind: 'ready', text: 'The next README' });
+        } finally {
+            finishRead();
+            await hook.unmount();
+        }
+    });
+
     it.each(['session', 'project'] as const)('opens a tiny Search hit in the %s viewer at its seeded Find line without a finite carrier', async host => {
         const text = 'riverglassneedle first landing\nriverglassneedle second landing\nriverglassneedle third landing';
         filesystem.fileBytes = new TextEncoder().encode(text);

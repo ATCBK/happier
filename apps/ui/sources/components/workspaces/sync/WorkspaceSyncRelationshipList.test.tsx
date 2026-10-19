@@ -155,6 +155,23 @@ describe('WorkspaceSyncRelationshipRow', () => {
         }, null, mountedExecuteSpy));
     });
 
+    it('presents a refused lifecycle Action as its own refusal instead of a generic failure', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alert).mockClear();
+        const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={createSummary(0)} />);
+        const menu = screen.findAllByType('DropdownMenu')[0];
+
+        relationshipActionSpies.enable.mockResolvedValueOnce({ ok: false, errorCode: 'target_bootstrap_required', error: 'Git workspace sync target requires an explicit SCM bootstrap source' } as never);
+        await act(async () => { menu?.props.onSelect('enable'); });
+        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith('common.error', 'workspaceSync.error.destinationNeedsPreparation'));
+
+        vi.mocked(Modal.alert).mockClear();
+        relationshipActionSpies.enable.mockResolvedValueOnce({ ok: false, errorCode: 'something_unmapped', error: 'x' } as never);
+        await act(async () => { menu?.props.onSelect('enable'); });
+        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith('common.error', 'errors.operationFailed'));
+    });
+
     it('opens general details from every row while keeping conflict attention and actions row-scoped', async () => {
         const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
         const openDetails = vi.fn();
@@ -222,8 +239,11 @@ describe('WorkspaceSyncRelationshipRow', () => {
     it('tells two folders on the same machine apart in the open actions', async () => {
         const { WorkspaceSyncRelationshipRow } = await import('./WorkspaceSyncRelationshipList');
         const summary = createSummary(0, 'keep_synced');
-        summary.beta.machineName = summary.alpha.machineName;
-        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={summary} />);
+        const sameNameSummary = {
+            ...summary,
+            beta: { ...summary.beta, machineName: summary.alpha.machineName },
+        };
+        const screen = await renderScreen(<WorkspaceSyncRelationshipRow summary={sameNameSummary} />);
 
         const items = screen.findAllByType('DropdownMenu')[0]?.props.items as ReadonlyArray<{ id: string; title: string }>;
         const titles = items.filter((item) => item.id === 'open-alpha' || item.id === 'open-beta').map((item) => item.title);
