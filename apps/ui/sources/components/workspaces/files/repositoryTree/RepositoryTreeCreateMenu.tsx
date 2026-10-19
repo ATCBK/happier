@@ -22,6 +22,8 @@ export type RepositoryTreeCreateMenuItemId =
  */
 export const RepositoryTreeCreateMenu = React.memo(function RepositoryTreeCreateMenu(props: Readonly<{
     createEnabled: boolean;
+    /** A New file / New folder write is in flight: the + shows it until the Machine answers. */
+    createPending?: boolean;
     uploadEnabled: boolean;
     isWeb: boolean;
     /** Where uploads land ("Project root" until a folder is chosen). */
@@ -90,6 +92,7 @@ export const RepositoryTreeCreateMenu = React.memo(function RepositoryTreeCreate
                     testID="repository-tree-create-button"
                     iconName="plus"
                     variant="plain"
+                    busy={props.createPending}
                     selected={isOpen}
                     expanded={isOpen}
                     hasPopup="menu"

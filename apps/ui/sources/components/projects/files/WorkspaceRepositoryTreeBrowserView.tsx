@@ -294,6 +294,9 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     createHostRef.current = { workspaceScope, folderPath: folderPage?.path, enabled: allowCreateActions };
     const mounted = React.useRef(true);
     const createRequestRef = React.useRef<AbortController | null>(null);
+    // The write a New file / New folder started and has not yet heard back from; a Machine under load
+    // can take minutes, and nothing else on screen says it is still going.
+    const [pendingCreateSignal, setPendingCreateSignal] = React.useState<AbortSignal | null>(null);
     React.useEffect(() => {
         mounted.current = true;
         return () => { mounted.current = false; };
@@ -323,6 +326,15 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
         onExpandedPathsChange: setExpandedPaths,
     });
 
+    const whileCreating = React.useCallback(async <T,>(signal: AbortSignal, write: Promise<T>): Promise<T> => {
+        setPendingCreateSignal(signal);
+        try {
+            return await write;
+        } finally {
+            if (mounted.current) setPendingCreateSignal((current) => (current === signal ? null : current));
+        }
+    }, []);
+
     const createFile = React.useCallback(() => {
         if (!allowCreateActions) return;
         const lifetime = captureCreateLifetime();
@@ -350,7 +362,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             };
             let res: Awaited<ReturnType<typeof workspaceWriteFile>>;
             try {
-                res = await workspaceWriteFile(workspaceScope, path, '', null, { signal: lifetime.signal });
+                res = await whileCreating(lifetime.signal, workspaceWriteFile(workspaceScope, path, '', null, { signal: lifetime.signal }));
             } catch (error) {
                 if (lifetime.isCurrent()) Modal.alert(t('common.error'), error instanceof Error ? error.message : t('files.createFileFailed'));
                 return;
@@ -375,7 +387,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             }
             complete();
         })();
-    }, [captureCreateLifetime, actionApproval.requestApproval, allowCreateActions, props.onOpenFile, props.onOpenFilePinned, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [captureCreateLifetime, whileCreating, actionApproval.requestApproval, allowCreateActions, props.onOpenFile, props.onOpenFilePinned, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const createFolder = React.useCallback((parentDir?: string) => {
         if (!allowCreateActions) return;
@@ -403,7 +415,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 setExpandedPaths(nextExpanded.includes(directoryPath) ? nextExpanded : [...nextExpanded, directoryPath]);
                 refresh();
             };
-            const res = await workspaceCreateDirectory(workspaceScope, directoryPath);
+            const res = await whileCreating(lifetime.signal, workspaceCreateDirectory(workspaceScope, directoryPath));
             if (!lifetime.isCurrent()) return;
             if (!res.success) {
                 if (res.errorCode === 'approval_required' && res.approvalArtifactId) {
@@ -425,7 +437,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
 
             complete();
         })();
-    }, [captureCreateLifetime, actionApproval.requestApproval, allowCreateActions, refresh, setExpandedPaths, workspaceScope, revealPath]);
+    }, [captureCreateLifetime, whileCreating, actionApproval.requestApproval, allowCreateActions, refresh, setExpandedPaths, workspaceScope, revealPath]);
 
     const transfers = useWorkspaceFileTransfers({
         workspaceScope,
@@ -621,12 +633,13 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
     const createMenu = React.useMemo(() => (
         <RepositoryTreeCreateMenu
             createEnabled={allowCreateActions}
+            createPending={pendingCreateSignal !== null}
             uploadEnabled={transferActionsAvailable}
             isWeb={Platform.OS === 'web'}
             uploadDestinationLabel={uploadDestinationDir || rootLabel}
             onSelect={selectCreateMenuItem}
         />
-    ), [allowCreateActions, transferActionsAvailable, uploadDestinationDir, rootLabel, selectCreateMenuItem]);
+    ), [allowCreateActions, pendingCreateSignal, transferActionsAvailable, uploadDestinationDir, rootLabel, selectCreateMenuItem]);
     const showAllFiles = React.useCallback(() => setShowChangedOnly(false), [setShowChangedOnly]);
     const composed = folderPage && !widget ? folderPage.compose ?? null : null;
     // What is waiting on an approval, named. A composed page carries it in its own bar (no row pushes

@@ -158,6 +158,11 @@ export function IconButton(props: Readonly<{
     /** Borderless resting fill; overrides `variant`. See {@link IconButtonFill}. */
     fill?: IconButtonFill;
     disabled?: boolean;
+    /**
+     * Work owned elsewhere is in flight (a write that outlives the press that started it): the icon
+     * becomes the spinner and presses are ignored, as for a pending `onPress` promise.
+     */
+    busy?: boolean;
     /** Whether this toggle-style action is currently selected. */
     selected?: boolean;
     /** Disable the resting selection fill when the caller supplies another selection marker. */
@@ -307,6 +312,7 @@ export function IconButton(props: Readonly<{
             accessibilityHint={props.disabled === true && props.disabledReason ? props.disabledReason : props.accessibilityHint}
             describedById={disabledReason ? descriptionId : undefined}
             disabled={props.disabled}
+            busy={props.busy}
             selected={props.selected}
             checked={props.checked}
             expanded={props.expanded}
