@@ -172,9 +172,12 @@ describe('a card whose definition has not arrived', () => {
         const unknown = await frameTitle(pending({}));
         expect(React.isValidElement(unknown.title)).toBe(true);
         expect(unknown.text).not.toContain('boards.widgets.kind');
-        // A settled installed widget whose plugin is absent has no name to wait for: it keeps the generic word, not a skeleton.
+        // A settled installed widget whose surface cannot mount is named by the plugin it belongs to, not a placeholder word.
         const settled = await frameTitle(<Projection>{pending({})}</Projection>);
-        expect(settled.title).toBe('boards.widgets.kind');
+        expect(settled.title).toBe('Notes');
+        // With the plugin unknown to the app there is no name to wait for: the generic word, not a skeleton.
+        boundary.projection = null;
+        expect((await frameTitle(<Projection>{pending({})}</Projection>)).title).toBe('boards.widgets.kind');
         expect((await frameTitle(<Projection>{pending({}, { ...instance, definition: { kind: 'artifact', artifactId: 'definition-1' } })}</Projection>)).title)
             .toSatisfy((title: unknown) => React.isValidElement(title));
         expect((await frameTitle(pending({ widget }))).title).toBe('Notes status');

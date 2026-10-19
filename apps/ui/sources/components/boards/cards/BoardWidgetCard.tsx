@@ -8,7 +8,7 @@ import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/App
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
-import { WidgetFrameTitleSkeleton, readWidgetInstanceName } from '@/components/widgets/frame/widgetFrameTitle';
+import { WidgetFrameTitleSkeleton, readWidgetInstanceName, useWidgetInstanceName } from '@/components/widgets/frame/widgetFrameTitle';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
 import { useWidgetFrameSurfaceDefault } from '@/components/widgets/frame/useWidgetFrameStyle';
 import { buildWidgetDefinitionActions, buildWidgetFrameStyleActions, buildWidgetInstanceActions, buildWidgetMoveActions, buildWidgetSizeActions, orderWidgetMenu, WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
@@ -82,6 +82,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
     });
     const definition = useWidgetDefinitionFlows({ instance, scope, anchorRef: inputs.anchorRef, editInputs: inputs.editInputs, testID: props.testID });
     const title = describeBoardWidgetTitle(placement, candidate);
+    const instanceName = useWidgetInstanceName(placement.instance, candidate);
     const rename = useWidgetFrameRename({
         title,
         // An empty name gives the copy back its widget's name.
@@ -155,7 +156,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
                 placement="board"
                 widgetPresentation={widgetPresentation}
                 mark={candidate?.icon ?? 'squares-four'}
-                title={rename.field ?? readWidgetInstanceName(placement.instance, candidate) ?? <WidgetFrameTitleSkeleton />}
+                title={rename.field ?? instanceName ?? <WidgetFrameTitleSkeleton />}
                 source={bindingLabel ?? candidate?.pluginName}
                 menu={(
                     <View style={styles.controls}>
