@@ -13,7 +13,7 @@ import { resolveDiscussionContextInTx, discussionContextStorageAdapter } from '@
 import { mayInjectResourceContextInTx } from '@/app/session/access/sessionContextInjection';
 import { DiscussionMessageAddressingV1Schema, type DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
-import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
+import { DiscussionProducerV1StoredSchema } from '@happier-dev/protocol/discussions/content';
 import { hasExactCurrentPublisherAuthorityInTx } from '@/app/session/pending/hasExactCurrentPublisherAuthorityInTx';
 import type { CurrentSessionPublisherAuthority } from '@/app/presence/sessionPublisherPresence';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
@@ -211,7 +211,7 @@ export async function createSessionInputReplyProgressInTx(tx: Tx, params: Readon
             accountId: params.accountId, discussion: params.reply.discussion,
         })) return null;
         const question = await tx.discussionMessage.findUnique({ where: { id: params.reply.discussion.messageId }, select: { producerV1: true } });
-        const producer = question?.producerV1 == null ? null : DiscussionProducerV1Schema.safeParse(question.producerV1);
+        const producer = question?.producerV1 == null ? null : DiscussionProducerV1StoredSchema.safeParse(question.producerV1);
         if (producer && !producer.success || !isDeepStrictEqual(producer?.success ? producer.data.sourceSession : undefined,
             params.reply.sourceSession)) return null;
         return { v: 1, ...params.reply, disposition: 'return_pending' };

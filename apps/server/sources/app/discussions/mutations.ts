@@ -1,12 +1,11 @@
 import { isDeepStrictEqual } from 'node:util';
-import { DiscussionMessageContentV1Schema, DiscussionProducerV1Schema, DiscussionTitleV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1, type DiscussionProducerV1 } from '@happier-dev/protocol/discussions/content';
+import { DiscussionMessageContentV1Schema, DiscussionProducerV1Schema, DiscussionProducerV1StoredSchema, DiscussionTitleV1Schema, isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1, type DiscussionProducerV1 } from '@happier-dev/protocol/discussions/content';
 import { DiscussionCreateRequestV1Schema, DiscussionPostRequestV1Schema, type DiscussionCreateRequestV1, type DiscussionCreateResponseV1, type DiscussionDetailsResponseV1, type DiscussionPostRequestV1, type DiscussionPostResponseV1 } from '@happier-dev/protocol/discussions/api';
 import { serializeDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/discussions/equality';
 import type { DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
 import { computeSessionMutationEqualityPlainDigestV1, SessionMutationEqualityEvidenceV1Schema, type SessionMutationEqualityEvidenceV1 } from '@happier-dev/protocol/sessions/mutations/sessionMutationEqualityV1';
 import type { StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
-import { projectAuthenticatedAccountActorsById } from '@/app/session/messages/projectSessionMessageAccountActors';
 import { inTx, type Tx } from '@/storage/inTx';
 import { isDiscussionCredentialCurrentInTx, resolveDiscussionContextInTx, filterAccountsWithCurrentDiscussionReadAccessInTx, discussionContextStorageAdapter, newDiscussionContextStorageAdapter, type DiscussionContext } from './access';
 import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, resolveDiscussionDocTargetInTx, validateDiscussionDocContentSource } from './docPassages';
@@ -15,7 +14,7 @@ import { validateInitialDiscussionGrantsInTx, applyInitialDiscussionGrantsInTx }
 import { markDiscussionReadersChangedInTx, scheduleDiscussionBadgeRefreshInTx } from './changes';
 import { detachDiscussionFollowSourceInTx, attachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { withdrawDiscussionInputRepliesInTx } from '@/app/session/messages/sessionMessageReply';
-import { DISCUSSION_MESSAGE_SELECT, projectDiscussionMessageV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionMessageRow } from './projection';
+import { DISCUSSION_MESSAGE_SELECT, projectDiscussionAccountActorsInTx, projectDiscussionMessageV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionMessageRow } from './projection';
 import { projectDiscussionForViewerInTx, readDiscussionRowInTx } from './queries';
 import { initializeDiscussionReadBaselinesInTx } from './readState';
 import { reconcileDiscussionCreationIdentityRace } from './createIdentityReconciliation';
@@ -82,8 +81,8 @@ function equalEvidence(stored: unknown, next: SessionMutationEqualityEvidenceV1)
 
 function equalProducer(stored: unknown, next: DiscussionProducerV1 | undefined): boolean {
     if (stored == null) return next === undefined;
-    const parsed = DiscussionProducerV1Schema.safeParse(stored);
-    return next !== undefined && parsed.success && JSON.stringify(parsed.data) === JSON.stringify(next);
+    const parsed = DiscussionProducerV1StoredSchema.safeParse(stored);
+    return next !== undefined && parsed.success && isDeepStrictEqual(parsed.data, next);
 }
 
 async function readMessageByLocalIdInTx(tx: Tx, discussionId: string, localId: string) {
@@ -129,7 +128,8 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
     let producer: DiscussionProducerV1 | undefined;
     if (rawProducer) {
         const parsedProducer = DiscussionProducerV1Schema.safeParse(rawProducer);
-        if (!parsedProducer.success || (runtime && runtime.sessionId !== parsedProducer.data.sessionId)) return discussionFailure('discussion_post_denied');
+        if (!parsedProducer.success || parsedProducer.data.replyReturn !== undefined || parsedProducer.data.actionRequestAttributionV1 !== undefined
+            || (runtime && runtime.sessionId !== parsedProducer.data.sessionId)) return discussionFailure('discussion_post_denied');
         const session = await tx.session.findUnique({ where: { id: parsedProducer.data.sessionId }, select: { accountId: true, archivedAt: true } });
         if (!session || session.accountId !== input.actorAccountId || session.archivedAt) return discussionFailure('discussion_post_denied');
         producer = parsedProducer.data;
@@ -168,8 +168,9 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
         const projected = await projectDiscussionForViewerInTx(tx, { context, discussion,
             viewerAccountId: input.actorAccountId, authentication: input.authentication });
         if (!projected.ok) return projected;
-        const [actor] = await projectAuthenticatedAccountActorsById(tx, [first.authorAccountId]);
-        return discussionSuccess({ discussion: projected.value, firstMessage: projectDiscussionMessageV1(first, input.actorAccountId, actor ?? null) });
+        const actors = await projectDiscussionAccountActorsInTx(tx, [first]);
+        return discussionSuccess({ discussion: projected.value, firstMessage: projectDiscussionMessageV1(first, input.actorAccountId,
+            actors.messages[0]?.accountActor ?? null, actors.messages[0]?.requesterAccountActor ?? null) });
     }
     const initial = await validateInitialDiscussionGrantsInTx(tx, { actorAccountId: input.actorAccountId, authentication: creatorAuthentication, request });
     if (!initial.ok) return initial;
@@ -217,8 +218,9 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
         viewerAccountId: input.actorAccountId, authentication: input.authentication });
     if (!projected.ok) throw new Error(`Created Discussion projection failed: ${projected.error}`);
     await publishChangedInTx(tx, row.id);
-    const [actor] = await projectAuthenticatedAccountActorsById(tx, [first.authorAccountId]);
-    return discussionSuccess({ discussion: projected.value, firstMessage: projectDiscussionMessageV1(first, input.actorAccountId, actor ?? null) });
+    const actors = await projectDiscussionAccountActorsInTx(tx, [first]);
+    return discussionSuccess({ discussion: projected.value, firstMessage: projectDiscussionMessageV1(first, input.actorAccountId,
+        actors.messages[0]?.accountActor ?? null, actors.messages[0]?.requesterAccountActor ?? null) });
 }
 
 export async function createDiscussion(input: Parameters<typeof createDiscussionInTx>[1]): Promise<DiscussionResult<DiscussionCreateResponseV1>> {
@@ -234,7 +236,8 @@ async function admitProducerInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     if (!producer) return input.authentication.authority === 'present_user'
         ? discussionSuccess(undefined) : discussionFailure('discussion_post_denied');
     const parsed = DiscussionProducerV1Schema.safeParse(producer);
-    if (!parsed.success || parsed.data.replyReturn !== undefined || (runtime && runtime.sessionId !== parsed.data.sessionId)) return discussionFailure('discussion_post_denied');
+    if (!parsed.success || parsed.data.replyReturn !== undefined || parsed.data.actionRequestAttributionV1 !== undefined
+        || (runtime && runtime.sessionId !== parsed.data.sessionId)) return discussionFailure('discussion_post_denied');
     const participant = await tx.discussionParticipant.findUnique({ where: { discussionId_sessionId: { discussionId: input.discussionId, sessionId: parsed.data.sessionId } }, select: { answerPolicy: true, removedAt: true, session: { select: { accountId: true } } } });
     if (!participant || participant.removedAt || participant.session?.accountId !== input.actorAccountId) return discussionFailure('discussion_post_denied');
     if (participant.answerPolicy === 'drafts_for_approval') {
@@ -256,7 +259,7 @@ async function admitAddressedParticipantsInTx(tx: Tx, input: ExactDiscussion & R
         const replied = await tx.discussionMessage.findFirst({ where: { id: input.intent.replyTarget.messageId, discussionId: input.discussionId }, select: { producerV1: true } });
         if (!replied) return discussionFailure('discussion_invalid_reply_target');
         if (replied.producerV1 != null) {
-            const producer = DiscussionProducerV1Schema.safeParse(replied.producerV1);
+            const producer = DiscussionProducerV1StoredSchema.safeParse(replied.producerV1);
             if (!producer.success) return discussionFailure('discussion_invalid_content');
             repliedProducer = producer.data;
             if (!input.informationalReturn && producer.data.sessionId !== input.producer?.sessionId) ids.add(producer.data.sessionId);
@@ -316,6 +319,7 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
     const returnOutcome = returnProgress?.outcome?.kind;
     if (returnOutcome === 'declined') return discussionFailure('discussion_post_denied');
     if (returned?.success && producer && returnProgress) producer = { ...producer,
+        ...(returnProgress.actionRequestAttributionV1 ? { actionRequestAttributionV1: returnProgress.actionRequestAttributionV1 } : {}),
         ...(returned.data.acceptedTurnId ? { sourceSession: { sourceSessionId: producer.sessionId,
             sourceTurnId: returned.data.acceptedTurnId, sourceInputId: returned.data.requestLocalId, via: 'action' as const } } : {}),
         replyReturn: { ...returned.data, outcome: returnOutcome ?? 'answer' },
@@ -342,8 +346,9 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
         const storedAdmission = await admitDiscussionDocSourceInTx(tx, { ...input, source: storedSources.value.get(existing.id) ?? null,
             destination: { kind: 'resource', resourceId: discussion.id, adapter: discussionContextStorageAdapter } });
         if (!storedAdmission.ok) return storedAdmission;
-        const [actor] = await projectAuthenticatedAccountActorsById(tx, [existing.authorAccountId]);
-        return discussionSuccess({ message: projectDiscussionMessageV1(existing, input.actorAccountId, actor ?? null), messageSeq: discussion.messageSeq });
+        const actors = await projectDiscussionAccountActorsInTx(tx, [existing]);
+        return discussionSuccess({ message: projectDiscussionMessageV1(existing, input.actorAccountId,
+            actors.messages[0]?.accountActor ?? null, actors.messages[0]?.requesterAccountActor ?? null), messageSeq: discussion.messageSeq });
     }
     if (!context.keyReadiness) return discussionFailure('discussion_content_unavailable');
     if (context.access.level === 'view') return discussionFailure('discussion_post_denied');
@@ -369,8 +374,9 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
         publicationRef: { kind: 'discussion', discussion: { serverId: returned.data.serverId, discussionId: discussion.id }, messageId: message.id },
     })) throw new Error('Discussion publication lost its original reply custody');
     await publishChangedInTx(tx, discussion.id);
-    const [actor] = await projectAuthenticatedAccountActorsById(tx, [message.authorAccountId]);
-    return discussionSuccess({ message: projectDiscussionMessageV1(message, input.actorAccountId, actor ?? null), messageSeq: allocated.messageSeq });
+    const actors = await projectDiscussionAccountActorsInTx(tx, [message]);
+    return discussionSuccess({ message: projectDiscussionMessageV1(message, input.actorAccountId,
+        actors.messages[0]?.accountActor ?? null, actors.messages[0]?.requesterAccountActor ?? null), messageSeq: allocated.messageSeq });
 }
 
 export async function postDiscussionMessage(input: Parameters<typeof postDiscussionMessageInTx>[1]): Promise<DiscussionResult<DiscussionPostResponseV1>> {

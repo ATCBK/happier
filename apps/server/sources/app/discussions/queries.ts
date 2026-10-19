@@ -3,11 +3,10 @@ import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '@happie
 import type { DiscussionSummaryV1, DiscussionMessageV1 } from '@happier-dev/protocol/discussions/models';
 import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, validateDiscussionDocContentSource } from './docPassages';
 import { inTx, type Tx } from '@/storage/inTx';
-import { projectAuthenticatedAccountActorsById } from '@/app/session/messages/projectSessionMessageAccountActors';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { resolveDiscussionContextInTx, resolveDiscussionContextsInTx, discussionCandidateWhere, type DiscussionContext } from './access';
 import { buildDiscussionListCursorPredicate, decodeDiscussionListCursorV1, encodeDiscussionListCursorV1 } from './pagination';
-import { DISCUSSION_MESSAGE_SELECT, DISCUSSION_SELECT, loadDiscussionViewerFactsInTx, projectDiscussionCapabilitiesV1, projectDiscussionMessageV1, projectDiscussionSummaryV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionRow, type DiscussionMessageRow } from './projection';
+import { DISCUSSION_MESSAGE_SELECT, DISCUSSION_SELECT, loadDiscussionViewerFactsInTx, projectDiscussionAccountActorsInTx, projectDiscussionCapabilitiesV1, projectDiscussionMessageV1, projectDiscussionSummaryV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionRow, type DiscussionMessageRow } from './projection';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
 import { readHeldDiscussionPendingInputsInTx } from '@/app/session/pending/pendingMessageService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
@@ -83,16 +82,15 @@ export async function projectDiscussionsForViewerInTx(tx: Tx, input: Readonly<{
         // The Discussion grant still admits metadata, but cannot disclose its independent Doc source.
         if (!admitted.ok || !executableSource.ok) unavailableLatestContent.add(discussion.id);
     }
-    const actors = await projectAuthenticatedAccountActorsById(tx, [
-        ...input.discussions.map(row => facts.get(row.id)!.latestMessage.authorAccountId),
-        ...input.discussions.flatMap(row => facts.get(row.id)!.participantAccountIds),
-    ]);
-    const actorsByAccountId = new Map(actors.flatMap(actor => actor ? [[actor.accountId, actor] as const] : []));
+    const actors = await projectDiscussionAccountActorsInTx(tx, input.discussions.map(row => facts.get(row.id)!.latestMessage),
+        input.discussions.flatMap(row => facts.get(row.id)!.participantAccountIds));
+    const actorsByAccountId = new Map(actors.participants.flatMap(actor => actor ? [[actor.accountId, actor] as const] : []));
     return discussionSuccess(input.discussions.map((discussion, i) => {
         const context = input.contexts.get(discussion.id)!;
         const summary = projectDiscussionSummaryV1({ context, discussion, viewerAccountId: input.viewerAccountId, facts: facts.get(discussion.id)!,
             includeLatestMessageContent: input.anchorDocArtifactId === undefined && !unavailableLatestContent.has(discussion.id),
-            latestMessageAccountActor: actors[i] ?? null,
+            latestMessageAccountActor: actors.messages[i]?.accountActor ?? null,
+            latestMessageRequesterAccountActor: actors.messages[i]?.requesterAccountActor ?? null,
             participantAccounts: facts.get(discussion.id)!.participantAccountIds.map(accountId => actorsByAccountId.get(accountId)!),
             capabilities: projectDiscussionCapabilitiesV1({ access: context.access, keyReadiness: context.keyReadiness, discussionArchived: discussion.archivedAt !== null }) });
         return input.anchorDocArtifactId === undefined ? summary : { ...summary, firstMessage: firstMessages.get(discussion.id)! };
@@ -136,8 +134,9 @@ export async function projectReadableMessagesInTx(tx: Tx, input: Reader & Readon
         const source = sources.value.get(row.id);
         return !source || admitted.get(source.ref.artifactId) === true;
     });
-    const actors = await projectAuthenticatedAccountActorsById(tx, readable.map(row => row.authorAccountId));
-    const messages = readable.map((row, index) => projectDiscussionMessageV1(row, input.actorAccountId, actors[index] ?? null));
+    const actors = await projectDiscussionAccountActorsInTx(tx, readable);
+    const messages = readable.map((row, index) => projectDiscussionMessageV1(row, input.actorAccountId,
+        actors.messages[index]?.accountActor ?? null, actors.messages[index]?.requesterAccountActor ?? null));
     const addresses = messages.flatMap(message => (message.addressingV1?.participantSessionIds ?? []).map(participantSessionId => ({
         discussionId: input.discussionId, messageId: message.id, throughSeq: message.seq, participantSessionId,
     })));

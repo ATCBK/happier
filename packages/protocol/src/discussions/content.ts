@@ -13,6 +13,7 @@ export type { DiscussionId, DiscussionMessageId, DiscussionLocalId, DiscussionAd
 import { DiscussionParticipantRefV1Schema } from './references.js';
 import { SessionInputReturnedAnswerV1Schema, SessionInputSourceSessionV1Schema } from '../sessions/messages/sessionInputAdmission.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
+import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttributionV1.js';
 
 function nfcString() {
   return z.string().check(z.refine((value) => value === value.normalize('NFC'), 'Session discussion text must be NFC-normalized'));
@@ -134,6 +135,8 @@ export const DiscussionProducerV1Schema = lazyZodSchema(() => z.strictObject({
   toolCallId: z.optional(DiscussionIdSchema),
   /** Exact host-stamped causal turn/input, never inferred from display identity. */
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
+  /** Content-free original request cause, stamped only from protected reply custody by the append owner. */
+  actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
   /** Output-only snapshot of the original obligation, stamped by the append owner. */
   replyReturn: z.optional(z.extend(SessionMessageDiscussionReplyReturnV1Schema, {
     outcome: SessionInputReturnedAnswerV1Schema.shape.outcome,
@@ -141,4 +144,5 @@ export const DiscussionProducerV1Schema = lazyZodSchema(() => z.strictObject({
 }).check(z.refine(value => value.sourceSession === undefined || value.sourceSession.sourceSessionId === value.sessionId,
   'A Discussion producer causal source must belong to its actual Session')));
 export type DiscussionProducerV1 = z.infer<typeof DiscussionProducerV1Schema>;
+export const DiscussionProducerV1StoredSchema = createStoredReadSchema(DiscussionProducerV1Schema);
 

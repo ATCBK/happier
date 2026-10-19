@@ -632,12 +632,34 @@ export type DiscussionActionInputById = {
                     };
                 };
             } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'message';
                 messageId: string;
             } | undefined;
         };
         creationLocalId?: string | undefined;
         anchor?: {
+            kind: 'task';
+            entry: Readonly<{
+                source: Readonly<{
+                    pluginId: string;
+                    localId: string;
+                }>;
+                kindId: string;
+                collisionScope: string;
+                entryId: string;
+            }>;
+        } | {
             kind: 'session';
             sessionId: string;
             messageId?: string | undefined;
@@ -760,6 +782,17 @@ export type DiscussionActionInputById = {
                 };
             };
         } | {
+            kind: 'task';
+            entry: Readonly<{
+                source: Readonly<{
+                    pluginId: string;
+                    localId: string;
+                }>;
+                kindId: string;
+                collisionScope: string;
+                entryId: string;
+            }>;
+        } | {
             kind: 'message';
             messageId: string;
         } | undefined;
@@ -792,6 +825,17 @@ export type DiscussionActionInputById = {
                     bodyVersion: number;
                 };
             };
+        } | {
+            kind: 'task';
+            entry: Readonly<{
+                source: Readonly<{
+                    pluginId: string;
+                    localId: string;
+                }>;
+                kindId: string;
+                collisionScope: string;
+                entryId: string;
+            }>;
         } | {
             kind: 'message';
             messageId: string;
@@ -2645,6 +2689,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -2734,8 +2804,30 @@ export type DiscussionActionResultById = {
                         reason: string;
                     };
                 } | null | undefined;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
             };
             anchor: {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'session';
                 sessionId: string;
                 messageId?: string | undefined;
@@ -2900,6 +2992,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -2909,6 +3027,17 @@ export type DiscussionActionResultById = {
                 } | null;
                 mentionedAccountIds: string[];
                 createdAt: number;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
                 addressingV1?: {
                     throughSeq: number;
                     participantSessionIds: string[];
@@ -2932,6 +3061,17 @@ export type DiscussionActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | {
                     kind: 'message';
                     messageId: string;
@@ -3011,6 +3151,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -3100,8 +3266,30 @@ export type DiscussionActionResultById = {
                         reason: string;
                     };
                 } | null | undefined;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
             };
             anchor: {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'session';
                 sessionId: string;
                 messageId?: string | undefined;
@@ -3266,6 +3454,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -3275,6 +3489,17 @@ export type DiscussionActionResultById = {
                 } | null;
                 mentionedAccountIds: string[];
                 createdAt: number;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
                 addressingV1?: {
                     throughSeq: number;
                     participantSessionIds: string[];
@@ -3298,6 +3523,17 @@ export type DiscussionActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | {
                     kind: 'message';
                     messageId: string;
@@ -3469,6 +3705,32 @@ export type DiscussionActionResultById = {
                         participantSessionId: string;
                     } | undefined;
                 } | undefined;
+                actionRequestAttributionV1?: {
+                    requestRef: string;
+                    requester: {
+                        serverId: string;
+                        accountId: string;
+                    } | null;
+                    persona: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    origin: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    } | null;
+                } | undefined;
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
@@ -3478,6 +3740,17 @@ export type DiscussionActionResultById = {
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
+            requesterAccountActor?: {
+                v: 1;
+                accountId: string;
+                profile: {
+                    name: string | null;
+                    firstName: string | null;
+                    lastName: string | null;
+                    username: string | null;
+                    avatarUrl: string | null;
+                } | null;
+            } | null | undefined;
             addressingV1?: {
                 throughSeq: number;
                 participantSessionIds: string[];
@@ -3501,6 +3774,17 @@ export type DiscussionActionResultById = {
                         bodyVersion: number;
                     };
                 };
+            } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
             } | {
                 kind: 'message';
                 messageId: string;
@@ -3567,6 +3851,32 @@ export type DiscussionActionResultById = {
                             throughSeq: number;
                             participantSessionId: string;
                         } | undefined;
+                    } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
                     } | undefined;
                     replyReturn?: {
                         serverId: string;
@@ -3657,8 +3967,30 @@ export type DiscussionActionResultById = {
                         reason: string;
                     };
                 } | null | undefined;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
             };
             anchor: {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'session';
                 sessionId: string;
                 messageId?: string | undefined;
@@ -3823,6 +4155,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -3832,6 +4190,17 @@ export type DiscussionActionResultById = {
                 } | null;
                 mentionedAccountIds: string[];
                 createdAt: number;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
                 addressingV1?: {
                     throughSeq: number;
                     participantSessionIds: string[];
@@ -3855,6 +4224,17 @@ export type DiscussionActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | {
                     kind: 'message';
                     messageId: string;
@@ -4016,6 +4396,32 @@ export type DiscussionActionResultById = {
                         participantSessionId: string;
                     } | undefined;
                 } | undefined;
+                actionRequestAttributionV1?: {
+                    requestRef: string;
+                    requester: {
+                        serverId: string;
+                        accountId: string;
+                    } | null;
+                    persona: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    origin: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    } | null;
+                } | undefined;
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
@@ -4025,6 +4431,17 @@ export type DiscussionActionResultById = {
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
+            requesterAccountActor?: {
+                v: 1;
+                accountId: string;
+                profile: {
+                    name: string | null;
+                    firstName: string | null;
+                    lastName: string | null;
+                    username: string | null;
+                    avatarUrl: string | null;
+                } | null;
+            } | null | undefined;
             addressingV1?: {
                 throughSeq: number;
                 participantSessionIds: string[];
@@ -4048,6 +4465,17 @@ export type DiscussionActionResultById = {
                         bodyVersion: number;
                     };
                 };
+            } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
             } | {
                 kind: 'message';
                 messageId: string;
@@ -4200,6 +4628,32 @@ export type DiscussionActionResultById = {
                         participantSessionId: string;
                     } | undefined;
                 } | undefined;
+                actionRequestAttributionV1?: {
+                    requestRef: string;
+                    requester: {
+                        serverId: string;
+                        accountId: string;
+                    } | null;
+                    persona: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    origin: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    } | null;
+                } | undefined;
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
@@ -4209,6 +4663,17 @@ export type DiscussionActionResultById = {
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
+            requesterAccountActor?: {
+                v: 1;
+                accountId: string;
+                profile: {
+                    name: string | null;
+                    firstName: string | null;
+                    lastName: string | null;
+                    username: string | null;
+                    avatarUrl: string | null;
+                } | null;
+            } | null | undefined;
             addressingV1?: {
                 throughSeq: number;
                 participantSessionIds: string[];
@@ -4232,6 +4697,17 @@ export type DiscussionActionResultById = {
                         bodyVersion: number;
                     };
                 };
+            } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
             } | {
                 kind: 'message';
                 messageId: string;
@@ -4296,6 +4772,32 @@ export type DiscussionActionResultById = {
                             throughSeq: number;
                             participantSessionId: string;
                         } | undefined;
+                    } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
                     } | undefined;
                     replyReturn?: {
                         serverId: string;
@@ -4386,8 +4888,30 @@ export type DiscussionActionResultById = {
                         reason: string;
                     };
                 } | null | undefined;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
             };
             anchor: {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'session';
                 sessionId: string;
                 messageId?: string | undefined;
@@ -4552,6 +5076,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -4561,6 +5111,17 @@ export type DiscussionActionResultById = {
                 } | null;
                 mentionedAccountIds: string[];
                 createdAt: number;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
                 addressingV1?: {
                     throughSeq: number;
                     participantSessionIds: string[];
@@ -4584,6 +5145,17 @@ export type DiscussionActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | {
                     kind: 'message';
                     messageId: string;
@@ -4666,6 +5238,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -4755,8 +5353,30 @@ export type DiscussionActionResultById = {
                         reason: string;
                     };
                 } | null | undefined;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
             };
             anchor: {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'session';
                 sessionId: string;
                 messageId?: string | undefined;
@@ -4921,6 +5541,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -4930,6 +5576,17 @@ export type DiscussionActionResultById = {
                 } | null;
                 mentionedAccountIds: string[];
                 createdAt: number;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
                 addressingV1?: {
                     throughSeq: number;
                     participantSessionIds: string[];
@@ -4953,6 +5610,17 @@ export type DiscussionActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | {
                     kind: 'message';
                     messageId: string;
@@ -5035,6 +5703,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -5124,8 +5818,30 @@ export type DiscussionActionResultById = {
                         reason: string;
                     };
                 } | null | undefined;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
             };
             anchor: {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
+            } | {
                 kind: 'session';
                 sessionId: string;
                 messageId?: string | undefined;
@@ -5290,6 +6006,32 @@ export type DiscussionActionResultById = {
                             participantSessionId: string;
                         } | undefined;
                     } | undefined;
+                    actionRequestAttributionV1?: {
+                        requestRef: string;
+                        requester: {
+                            serverId: string;
+                            accountId: string;
+                        } | null;
+                        persona: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        origin: {
+                            kind: 'session';
+                            session: {
+                                serverId: string;
+                                sessionId: string;
+                            };
+                            messageId: string;
+                        } | {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        } | null;
+                    } | undefined;
                     replyReturn?: {
                         serverId: string;
                         requestLocalId: string;
@@ -5299,6 +6041,17 @@ export type DiscussionActionResultById = {
                 } | null;
                 mentionedAccountIds: string[];
                 createdAt: number;
+                requesterAccountActor?: {
+                    v: 1;
+                    accountId: string;
+                    profile: {
+                        name: string | null;
+                        firstName: string | null;
+                        lastName: string | null;
+                        username: string | null;
+                        avatarUrl: string | null;
+                    } | null;
+                } | null | undefined;
                 addressingV1?: {
                     throughSeq: number;
                     participantSessionIds: string[];
@@ -5322,6 +6075,17 @@ export type DiscussionActionResultById = {
                             bodyVersion: number;
                         };
                     };
+                } | {
+                    kind: 'task';
+                    entry: Readonly<{
+                        source: Readonly<{
+                            pluginId: string;
+                            localId: string;
+                        }>;
+                        kindId: string;
+                        collisionScope: string;
+                        entryId: string;
+                    }>;
                 } | {
                     kind: 'message';
                     messageId: string;
@@ -5501,6 +6265,32 @@ export type DiscussionActionResultById = {
                         participantSessionId: string;
                     } | undefined;
                 } | undefined;
+                actionRequestAttributionV1?: {
+                    requestRef: string;
+                    requester: {
+                        serverId: string;
+                        accountId: string;
+                    } | null;
+                    persona: {
+                        serverId: string;
+                        sessionId: string;
+                    };
+                    origin: {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    } | null;
+                } | undefined;
                 replyReturn?: {
                     serverId: string;
                     requestLocalId: string;
@@ -5510,6 +6300,17 @@ export type DiscussionActionResultById = {
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
+            requesterAccountActor?: {
+                v: 1;
+                accountId: string;
+                profile: {
+                    name: string | null;
+                    firstName: string | null;
+                    lastName: string | null;
+                    username: string | null;
+                    avatarUrl: string | null;
+                } | null;
+            } | null | undefined;
             addressingV1?: {
                 throughSeq: number;
                 participantSessionIds: string[];
@@ -5533,6 +6334,17 @@ export type DiscussionActionResultById = {
                         bodyVersion: number;
                     };
                 };
+            } | {
+                kind: 'task';
+                entry: Readonly<{
+                    source: Readonly<{
+                        pluginId: string;
+                        localId: string;
+                    }>;
+                    kindId: string;
+                    collisionScope: string;
+                    entryId: string;
+                }>;
             } | {
                 kind: 'message';
                 messageId: string;

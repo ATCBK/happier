@@ -591,6 +591,18 @@ belongs to the authenticated execution Account; trusted provenance must agree wi
 remain grants; executable participation binds an existing Session separately and requires
 runtime-control and pairwise disclosure admission. Neither invitation starts a turn.
 
+For a protected reply return, the append writer reopens the exact original reply progress
+and stamps its content-free `actionRequestAttributionV1` beside `producerV1.replyReturn`.
+Neither authored input nor the reply target supplies this cause. Retained producers use
+the tolerant stored reader; current writes and known fields remain strict. Message,
+latest-row and mutation responses project `requesterAccountActor` through the same sanitized
+Account display projector used by transcript authors and Team rosters, only for a requester
+on this Home. This needs no friendship, profile store or expanded Team roster disclosure.
+An autonomous/unknown or other-Home requester has no local Account-name projection. These
+facts describe who asked and who posted; they do not prove the Account or credential used
+by a separate outward operation. Reply custody without that exact operation actor leaves
+the result's “using” identity unknown.
+
 Account-placed agent Actions publish through the current Session's existing authenticated
 publisher. The host's private Session RPC adapter verifies its active admission witness, or
 reopens the actual executing approval Artifact and its immutable Session origin, before

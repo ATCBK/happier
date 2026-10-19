@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { DiscussionInviteResponseV1Schema, DiscussionRemoveParticipantResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
-import { buildDiscussionMutationRequestBodyV1, DiscussionCreateResponseV1Schema, DiscussionPostResponseV1Schema, DiscussionMessagesResponseV1Schema, DiscussionAgentPostResponseV1Schema,
+import { buildDiscussionMutationRequestBodyV1, DiscussionCreateResponseV1Schema, DiscussionDetailsResponseV1Schema, DiscussionPostResponseV1Schema, DiscussionMessagesResponseV1Schema, DiscussionAgentPostResponseV1Schema,
     DISCUSSION_AGENT_POST_EVENT_V1, DISCUSSION_HTTP_PATHS_V1, type DiscussionCreateRequestV1 } from '@happier-dev/protocol/discussions/api';
 import { createDiscussionMessageRefV1, DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 import { db } from '@/storage/db';
@@ -36,6 +36,7 @@ import { enqueuePendingMessageByAuthenticatedMachine, materializeNextPendingMess
 import { reconcileAutonomousExchangeAcceptedTurnInTx } from '@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx';
 import { updateAccountFollowCreationPreferencesInTx } from '@/app/session/follow/accountFollowCreationPreferences';
 import { type FollowPolicyV1, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { TriageEntryRefV1Schema } from '@happier-dev/protocol/tasks/entryRefV1';
 
 const document = (text: string) => ({ v: 1 as const, parts: [{ t: 'text' as const, text }] });
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -88,6 +89,60 @@ describe('First-class Discussions service (SQLite)', () => {
         await getSocketHandler(socket, 'session-runtime-activity-snapshot')({ sessionId, mutationId: crypto.randomUUID(), snapshot: { state: 'idle', activeCount: 0 } }, () => {});
         return { socket, machine };
     }
+    it('roundtrips a private Task anchor and reply through HTTP and SQLite without an available Task source', async () => {
+        const [owner, invitee, outsider] = await Promise.all([1, 2, 3].map(() => db.account.create({ data: { encryptionMode: 'plain' } })));
+        // No Task source or provider is installed in this real server fixture.
+        // These authored Discussion links do not perform a Task read or write.
+        const entry = TriageEntryRefV1Schema.parse({ source: { pluginId: 'unavailable.tasks', localId: 'issues' },
+            kindId: 'task', collisionScope: 'https://tracker.example\u001fproject', entryId: 'PAY-212' });
+        const target = { kind: 'task' as const, entry };
+        let actorAccountId = owner.id;
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        // Credential verification is the only replaced boundary; schemas,
+        // routes, resource grants, retry equality and SQLite remain real.
+        app.decorate('authenticate', async (request: FastifyRequest) => {
+            request.userId = actorAccountId; request.authAuthority = 'present_user'; request.authTokenKind = 'account';
+        });
+        registerDiscussionRoutes(app);
+        try {
+            const creation = await app.inject({ method: 'POST', url: DISCUSSION_HTTP_PATHS_V1.collection,
+                payload: { ...createRequest({ participants: [{ kind: 'account', accountId: invitee.id }] }), anchor: target } });
+            expect(creation.statusCode, creation.body).toBe(200);
+            const created = DiscussionCreateResponseV1Schema.parse(creation.json());
+            const discussionId = created.discussion.id;
+            expect(created.discussion.anchor).toEqual(target);
+            expect((await db.discussion.findUniqueOrThrow({ where: { id: discussionId } })).anchorSessionId).toBeNull();
+            actorAccountId = invitee.id;
+            const detailsUrl = DISCUSSION_HTTP_PATHS_V1.discussion.replace(':discussionId', discussionId);
+            const details = await app.inject({ method: 'GET', url: detailsUrl });
+            expect(details.statusCode).toBe(200);
+            expect(DiscussionDetailsResponseV1Schema.parse(details.json()).discussion.anchor).toEqual(target);
+            const messagesUrl = DISCUSSION_HTTP_PATHS_V1.messages.replace(':discussionId', discussionId);
+            const payload = { ...postRequest('A private Discussion answer'), replyTarget: target };
+            const posted = await app.inject({ method: 'POST', url: messagesUrl, payload });
+            expect(posted.statusCode, posted.body).toBe(200);
+            const reply = DiscussionPostResponseV1Schema.parse(posted.json());
+            expect(reply.message.replyTarget).toEqual(target);
+            const retried = await app.inject({ method: 'POST', url: messagesUrl, payload });
+            expect(retried.statusCode).toBe(200);
+            expect(DiscussionPostResponseV1Schema.parse(retried.json()).message.id).toBe(reply.message.id);
+            const changedTarget = await app.inject({ method: 'POST', url: messagesUrl, payload: { ...payload,
+                replyTarget: { ...target, entry: { ...entry, entryId: 'PAY-213' } } } });
+            expect(changedTarget.statusCode).toBe(409);
+            expect(changedTarget.json()).toEqual({ error: 'discussion_idempotency_conflict' });
+            const page = await app.inject({ method: 'GET', url: messagesUrl });
+            expect(page.statusCode).toBe(200);
+            expect(DiscussionMessagesResponseV1Schema.parse(page.json()).messages)
+                .toEqual([expect.objectContaining({ id: created.firstMessage.id }), expect.objectContaining({ id: reply.message.id, replyTarget: target })]);
+            expect((await db.discussionMessage.findUniqueOrThrow({ where: { id: reply.message.id } })).replyTargetV1).toEqual(target);
+            expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+            actorAccountId = outsider.id;
+            expect((await app.inject({ method: 'GET', url: detailsUrl })).statusCode).toBe(404);
+            expect((await app.inject({ method: 'GET', url: messagesUrl })).statusCode).toBe(404);
+        } finally { await app.close(); }
+    });
     it.each(['quiet', 'important'] as const)('carries persisted Discussion receive policy %s and the committed addressed event', async preset => {
         const { owner, discussionId } = await fixture();
         await inTx(tx => updateAccountFollowCreationPreferencesInTx(tx, { accountId: owner.id,
@@ -154,8 +209,14 @@ describe('First-class Discussions service (SQLite)', () => {
         await db.discussionMessage.update({ where: { id: watch.value.message.id }, data: { producerV1: { kind: 'agent' } } });
         expect((await observe()).observations).toEqual([]);
     });
-    it.each([false, true])('returns one protected answer to its original Discussion without readdressing the Agent asker (explicit new ask: %s)', async explicitNewAsk => {
-        const { owner, discussionId } = await fixture();
+    it.each([{ explicitNewAsk: false, requester: 'local' }, { explicitNewAsk: true, requester: 'autonomous' },
+        { explicitNewAsk: false, requester: 'foreign' }] as const)('returns one protected answer with its exact admitted cause and authorized requester name (%j)', async ({ explicitNewAsk, requester }) => {
+        const { owner, invitee, discussionId } = await fixture();
+        await db.account.update({ where: { id: invitee.id }, data: { name: 'Bob Chen' } });
+        const team = await db.team.create({ data: { name: 'Requesting Team' } });
+        await db.teamMembership.createMany({ data: [{ teamId: team.id, accountId: owner.id, role: 'owner' },
+            { teamId: team.id, accountId: invitee.id, role: 'member' }] });
+        const home = await getOrCreateServerIdentityId();
         const sessions = await Promise.all(['asker', 'answerer', 'reviewer'].map(() => db.session.create({ data: {
             accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}',
         } })));
@@ -169,8 +230,12 @@ describe('First-class Discussions service (SQLite)', () => {
         if (!question.ok) throw new Error(question.error);
         const discussion = { discussionId, messageId: question.value.message.id, throughSeq: question.value.message.seq,
             participantSessionId: answerer.id };
+        const cause = { requestRef: 'original-admitted-input', requester: requester === 'autonomous' ? null : {
+            serverId: requester === 'foreign' ? 'other-home' : home, accountId: invitee.id },
+            persona: { serverId: home, sessionId: asker.id },
+            origin: { kind: 'discussion' as const, discussion: { serverId: home, discussionId }, messageId: question.value.message.id } };
         const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id,
-            reply: { mode: 'return', discussion } }));
+            reply: { mode: 'return', discussion, actionRequestAttributionV1: cause } }));
         expect(progress).toMatchObject({ mode: 'return', discussion, disposition: 'return_pending' });
         expect(await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id,
             reply: { mode: 'return', discussion: { ...discussion, throughSeq: discussion.throughSeq + 1 } } }))).toBeNull();
@@ -198,11 +263,26 @@ describe('First-class Discussions service (SQLite)', () => {
         };
         expect(await postDiscussionMessage({ ...input, replyReturn: { serverId: 'home', requestLocalId, acceptedTurnId: 'wrong-turn' } })).toMatchObject({ ok: false });
         expect(await postDiscussionMessage({ ...input, producer: { ...input.producer, sessionId: asker.id } })).toMatchObject({ ok: false });
+        expect(await postDiscussionMessage({ ...input, producer: { ...input.producer,
+            actionRequestAttributionV1: { ...cause, requester: { serverId: home, accountId: owner.id } } } })).toMatchObject({ ok: false });
         expect(await postDiscussionMessage({ ...input, request: { ...input.request,
             replyTarget: { kind: 'message', messageId: 'another-question' } } })).toMatchObject({ ok: false });
         const posted = await publish();
         expect(posted).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: explicitNewAsk ? [reviewer.id] : [] } } } });
         if (!posted.ok) throw new Error(posted.error);
+        expect(posted.value.message.producerV1).toMatchObject({ actionRequestAttributionV1: cause });
+        const expectedRequester = requester === 'local' ? { v: 1, accountId: invitee.id,
+            profile: expect.objectContaining({ name: 'Bob Chen', username: null }) } : null;
+        expect(posted.value.message).toMatchObject({ requesterAccountActor: expectedRequester });
+        const read = await readDiscussionMessages({ authentication, actorAccountId: invitee.id, discussionId });
+        expect(read).toMatchObject({ ok: true, value: { messages: expect.arrayContaining([
+            expect.objectContaining({ id: posted.value.message.id, producerV1: expect.objectContaining({ actionRequestAttributionV1: cause }),
+                requesterAccountActor: expectedRequester === null ? null : expect.objectContaining(expectedRequester) }),
+        ]) } });
+        expect(await getDiscussion({ authentication, actorAccountId: invitee.id, discussionId })).toMatchObject({ ok: true,
+            value: { discussion: { latestMessage: { requesterAccountActor: expectedRequester === null ? null : expect.objectContaining(expectedRequester) } } } });
+        await db.discussionMessage.update({ where: { id: posted.value.message.id },
+            data: { producerV1: { ...posted.value.message.producerV1!, futurePresentation: true } } });
         // The exact ordinary terminal hook sees a different final text after the
         // explicit publication ACK was lost. It must preserve the committed answer.
         await db.sessionMessage.create({ data: { sessionId: answerer.id, seq: 2, messageRole: 'agent',

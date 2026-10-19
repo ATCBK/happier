@@ -385,7 +385,8 @@ describe('External Discussion composer through the public Action and native repl
             expect(loseNextPublicationAck).toBe(false);
             const posted = await db.discussionMessage.findUniqueOrThrow({ where: { discussionId_localId: { discussionId, localId: answerLocalId } } });
             expect(posted).toMatchObject({ authorAccountId: owner.id,
-                producerV1: { kind: 'agent', sessionId: receiver.id }, replyTargetV1: { kind: 'message', messageId: question.message.id },
+                producerV1: { kind: 'agent', sessionId: receiver.id, actionRequestAttributionV1: request.actionRequestAttributionV1 },
+                replyTargetV1: { kind: 'message', messageId: question.message.id },
                 addressingV1: { participantSessionIds: [] }, content: { t: 'plain', v: document(answerText) } });
             expect(attempts).toHaveLength(answer === 'final' ? 1 : 0);
             // Lost publisher ACK plus repeated native completion rejoins one row.

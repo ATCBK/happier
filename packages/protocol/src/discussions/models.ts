@@ -56,6 +56,8 @@ export const DiscussionLatestMessageV1Schema = lazyZodSchema(() => z.strictObjec
   authorAccountId: z.nullable(DiscussionAccountIdSchema),
   /** Stable sanitized actor identity; independent of current Presence/access. */
   accountActor: z.nullable(SessionMessageAccountActorV1Schema),
+  /** Sanitized read projection of the original requester; never a friendship or membership inference. */
+  requesterAccountActor: z.optional(z.nullable(SessionMessageAccountActorV1Schema)),
   producerV1: z.nullable(DiscussionProducerV1Schema),
   /** Original envelope, omitted by older producers or denied source admission; never a plaintext preview copy. */
   content: z.optional(createStoredReadSchema(StrictSessionStoredMessageContentEnvelopeSchema)),
@@ -110,6 +112,8 @@ export const DiscussionMessageV1Schema = lazyZodSchema(() => z.strictObject({
   authorAccountId: z.nullable(DiscussionAccountIdSchema),
   /** Stable sanitized actor identity; independent of current Presence/access. */
   accountActor: z.nullable(SessionMessageAccountActorV1Schema),
+  /** Same authorized Account projection as the author; names are not persisted on the producer. */
+  requesterAccountActor: z.optional(z.nullable(SessionMessageAccountActorV1Schema)),
   producerV1: z.nullable(DiscussionProducerV1Schema),
   content: createStoredReadSchema(StrictSessionStoredMessageContentEnvelopeSchema),
   mentionedAccountIds: z.array(DiscussionAccountIdSchema),
