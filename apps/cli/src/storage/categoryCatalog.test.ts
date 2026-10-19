@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile, utimes, chmod, realpath } from 'node:fs/
 import * as filesystem from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createStorageCategoryCatalog } from './categoryCatalog';
 import type { StorageCategoryCatalogDeps } from './categories/types';
@@ -16,6 +17,7 @@ import { createHostScmHostingProviderRuntimeServices } from '@/scm/hostingProvid
 import type { ScmStatusSnapshotRequest, ScmStatusSnapshotResponse } from '@happier-dev/protocol/scm';
 import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
+import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
 
 // The real filesystem remains underneath; only one test projects an OS ownership fact.
 vi.mock('node:fs/promises', async importOriginal => {
@@ -36,6 +38,85 @@ async function fixture() {
 }
 
 describe('Happier storage category catalog', () => {
+    it('names opaque cache and allocation folders by their owning tool instead of displaying digests', async () => {
+        const f = await fixture();
+        const digest = 'a'.repeat(64);
+        const cache = await f.add(join(f.happyHomeDir, 'cache', digest));
+        const snapshot = await f.add(join(f.happyHomeDir, '.runner-snapshots', digest));
+        const skill = await f.add(join(f.happyHomeDir, 'skills', 'cache', digest));
+        const namedCache = await f.add(join(f.happyHomeDir, 'cache', 'attachments'));
+        const allocation = await f.add(join(f.activeServerDir, 'session-directories', digest));
+        const agentHome = await f.add(join(f.activeServerDir, 'daemon', 'connected-services', 'homes', digest));
+        const isolation = await f.add(join(f.activeServerDir, 'isolation', 'agent', 'execution_run', digest));
+        const model = await f.add(join(f.activeServerDir, 'voiceInference', 'models', digest));
+        const handoff = await f.add(join(f.activeServerDir, 'session-handoff', digest));
+        const repositoryRoot = join(f.root, 'repo');
+        const worktree = await f.add(join(repositoryRoot, digest));
+        const byPath = new Map((await createStorageCategoryCatalog({ ...f,
+            readWorktrees: () => [{ path: worktree, repositoryRoot }] }).discover()).map(item => [item.path, item]));
+        expect(byPath.get(cache)?.title).toBe('Happier cache');
+        expect(byPath.get(snapshot)?.title).toBe('Session runner snapshot');
+        expect(byPath.get(skill)?.title).toBe('Skill cache');
+        expect(byPath.get(allocation)?.title).toBe('Session folder');
+        expect(byPath.get(namedCache)?.title).toBe('attachments');
+        expect(byPath.get(agentHome)?.title).toBe('Agent home');
+        expect(byPath.get(isolation)?.title).toBe('Agent run home');
+        expect(byPath.get(model)?.title).toBe('Model pack');
+        expect(byPath.get(handoff)?.title).toBe('Session handoff files');
+        expect(byPath.get(worktree)?.title).toBe('Worktree');
+    });
+    it('does not multiply category reads by repeated process path facts', async () => {
+        const f = await fixture();
+        const logs = join(f.happyHomeDir, 'logs');
+        await mkdir(logs);
+        for (let index = 0; index < 64; index++) await writeFile(join(logs, `${index}.log`), 'fixture');
+        const distinct = Array.from({ length: 180 }, (_, index) => join(f.root, 'work', `project-${index}`));
+        let paths = distinct;
+        const catalog = createStorageCategoryCatalog({ ...f, readProjects: () => ({ status: 'ready', projects: [] }),
+            readInUsePaths: () => ({ reliable: true, paths }) });
+        const started = performance.now();
+        const baseline = await catalog.discoverSnapshot();
+        const baselineMs = performance.now() - started;
+        paths = Array.from({ length: 1_800 }, (_, index) => distinct[index % distinct.length]);
+        const repeatedStarted = performance.now();
+        const repeated = await catalog.discoverSnapshot();
+        const repeatedMs = performance.now() - repeatedStarted;
+        expect(repeated).toEqual(baseline);
+        // A relative regression check, not an inventory limit or runtime cutoff.
+        expect(repeatedMs, `distinct=${baselineMs}ms repeated=${repeatedMs}ms`).toBeLessThan(Math.max(1_000, baselineMs * 4));
+    }, 30_000);
+    it('folds protected deep descendants without protecting sibling-prefix caches', async () => {
+        const f = await fixture();
+        const parent = await f.add(join(f.happyHomeDir, 'cache', 'a'));
+        const sibling = await f.add(join(f.happyHomeDir, 'cache', 'a-other'));
+        const retained = await f.add(join(parent, 'deep', 'retained-server'));
+        const catalog = createStorageCategoryCatalog({ ...f, activeServerDir: retained,
+            readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths: [] }) });
+        const result = await catalog.discoverSnapshot();
+        expect(result.items.find(item => item.path === parent)).toMatchObject({ verdict: 'forbidden', collectable: false,
+            reason: { code: 'contains_forbidden', detail: { count: 1 } } });
+        expect(result.items.find(item => item.path === sibling)).toMatchObject({ verdict: 'safe', collectable: true });
+    });
+    it('projects a retained log inventory without starving the daemon stall monitor', async () => {
+        const f = await fixture();
+        const logs = join(f.happyHomeDir, 'logs');
+        await mkdir(logs);
+        // QA21 observed649 files in just one live log root. This is an inventory,
+        // not a product cap; the other Storage categories remain real underneath.
+        for (let index = 0; index < 1_000; index++) await writeFile(join(logs, `${index}.log`), 'fixture');
+        const warnings: Readonly<Record<string, unknown>>[] = [];
+        const monitor = createDaemonEventLoopStallMonitor({ getActiveRpcOperations: () => [],
+            warn: (_message, data) => warnings.push(data) });
+        const catalog = createStorageCategoryCatalog({ ...f, readProjects: () => ({ status: 'ready', projects: [] }),
+            readInUsePaths: () => ({ reliable: true, paths: [] }) });
+        monitor.start();
+        try {
+            const result = await catalog.discoverSnapshot();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(result.items.filter(item => item.categoryId === 'logs')).toHaveLength(1_000);
+            expect(warnings).toEqual([]);
+        } finally { monitor.stop(); }
+    });
     it.skipIf(process.platform === 'win32')('binds a managed uv item to the same guarded Storage remover', async () => {
         const f = await fixture();
         const installRoot = join(f.happyHomeDir, 'tools', 'providers', managedAcpInstallId({ accountId: 'alice', definitionId: 'uv-agent', version: '1.0' }));

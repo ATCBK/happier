@@ -1,6 +1,6 @@
-import { MachineStoragePolicyV1Schema, type DiskNodeV1, type StorageItemV1, type StorageSizeV1, type StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
+import { MachineStoragePolicyV1Schema, type DiskNodeV1, type StorageItemV1, type StorageSizeV1, type StorageReasonV1, type StorageEvidenceV1 } from '@happier-dev/protocol/storage/storageV1';
 import type { StorageProtectionFacts } from '../protection/protectedPaths';
-import { classifyPath } from '../protection/protectedPaths';
+import { classifyPath, classifyPaths } from '../protection/protectedPaths';
 import { lstat, readdir } from 'node:fs/promises';
 import { storagePathBasename as basename, storagePathDirname as dirname, storagePathJoin as join,
   storagePathsEqual as canonicalAbsolutePathsEqual, storagePathContains, storagePathToFs } from '../storagePath';
@@ -31,7 +31,7 @@ export type StorageRecognitionFacts = Readonly<{
   readIgnoredPaths?: (repositoryRoot: string) => Promise<readonly string[] | null>;
 }>;
 export type StorageRecognitionResult = Readonly<{
-  recognizerId: string; group: StorageSuggestionGroup; verdict: 'safe' | 'caution'; reason: StorageReasonV1; evidence: string[];
+  recognizerId: string; group: StorageSuggestionGroup; verdict: 'safe' | 'caution'; reason: StorageReasonV1; evidence: StorageEvidenceV1[];
 }>;
 type RecognitionRule = Readonly<{
   id: string;
@@ -176,7 +176,7 @@ export async function recognizeStorageCandidate(candidate: StorageRecognitionCan
       ? canonicalAbsolutePathsEqual(dirname(candidate.path), path) : canonicalAbsolutePathsEqual(candidate.path, path))) continue;
     if (rule.unusedRepository && (!candidate.repositoryRoot || candidate.repositoryInUse !== false || !contained(candidate.repositoryRoot, candidate.path))) continue;
     if (!entry.isDirectory() && !rule.old) continue;
-    const evidence: string[] = [];
+    const evidence: StorageEvidenceV1[] = [];
     if (rule.manifests) {
       let parent = candidate.path;
       for (let level = 0; level < (rule.manifestParentLevel ?? 1); level += 1) parent = dirname(parent);
@@ -228,9 +228,10 @@ export function createStorageSuggestions(deps: StorageSuggestionsDeps) {
   return { async list(options: Readonly<{ callerKind: 'person' | 'agent' | 'automation'; group?: StorageSuggestionGroup; quickestForVolume?: string }>) {
     const [catalog, protection, scan] = await Promise.all([deps.readCatalogItems(), deps.readProtectionFacts(), deps.readCompletedScan?.() ?? null]);
     const candidates: { item: StorageItemV1; group: StorageSuggestionGroup }[] = [];
-    for (const item of catalog) {
-      if (!item.collectable || item.size.atLeast || (item.verdict !== 'safe' && item.verdict !== 'caution')) continue;
-      const classified = await classifyPath(item.path, { ...protection, managedItemPath: item.path });
+    const eligible = catalog.filter(item => item.collectable && !item.size.atLeast && (item.verdict === 'safe' || item.verdict === 'caution'));
+    const classifications = await classifyPaths(eligible.map(item => ({ path: item.path, managedItemPath: item.path })), protection);
+    for (const [index, item] of eligible.entries()) {
+      const classified = classifications[index];
       if (classified.tier === 'keep' || classified.tier === 'forbidden') continue;
       candidates.push({ item: { ...item, ...(classified.tier === 'caution' ? { verdict: 'caution', reason: classified.reason } : {}) },
         group: ['rebuilds', 'reinstalls', 'downloads_again'].includes(item.reason.code) ? 'can-be-rebuilt' : 'old-and-unused' });

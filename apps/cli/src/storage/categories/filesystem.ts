@@ -40,11 +40,16 @@ export function contains(root: string, path: string): boolean {
     return canonicalAbsolutePathsEqual(root, path) || isCanonicalAbsolutePathInsideRoot(root, path);
 }
 export function isInUse(path: string, context: StorageCategoryContext): boolean {
-    return context.inUse.paths.some(live => contains(path, live) || contains(live, path));
+    return context.inUse.paths.some(live => context.pathComparator.contains(path, live) || context.pathComparator.contains(live, path));
 }
 export const check: StorageCategoryVerdict = { verdict: 'check', reason: { code: 'facts_unavailable' }, collectable: false };
 export const inUse: StorageCategoryVerdict = { verdict: 'keep', reason: { code: 'in_use' }, collectable: true, loses: [{ code: 'in_use' }] };
 export const safe: StorageCategoryVerdict = { verdict: 'safe', reason: { code: 'rebuilds' }, collectable: true };
+/** Keep useful filenames, but describe content-addressed folders by their category owner. */
+export function opaqueItemTitle(path: string, ownerTitle: string): string {
+    const name = basename(path);
+    return /^[a-f0-9]{64}$/iu.test(name) ? ownerTitle : name;
+}
 export function item(categoryId: HappierStorageCategoryIdV1, path: string, verdict: StorageCategoryVerdict,
     options: Partial<Pick<StorageCategoryItem, 'title' | 'lastChangedAt' | 'lastUsedAt' | 'evidence' | 'kind'>> = {}): StorageCategoryItem {
     return { itemId: createHash('sha256').update(`${categoryId}\0${path}`).digest('hex'),

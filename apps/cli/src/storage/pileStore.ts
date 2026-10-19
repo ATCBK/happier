@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PileItemRefStoredV1Schema, StorageReasonV1Schema, type PileItemRefV1, type StorageItemRefV1, type StorageActorV1, type StorageSizeV1, type PileSummaryV1 } from '@happier-dev/protocol/storage/storageV1';
 import { readProtectedLocalStateFile, writeProtectedLocalStateFileAtomic } from '@/utils/fs/protectedLocalState';
 import { physicalStoragePathWithoutFollowingLeaf as physicalPathWithoutFollowingLeaf, storageAbsolutePath as resolve,
@@ -11,8 +11,8 @@ export type PileStoredView = Readonly<{ items: PileItemRefV1[]; droppedSinceLast
 export type PileDelta = Readonly<{ add?: readonly StorageItemRefV1[]; remove?: readonly string[]; clear?: boolean }>;
 export type DeclinedStorageItem = Readonly<{ ref: PileItemRefV1; size: StorageSizeV1; lastChangedAt?: number }>;
 const storedState = z.object({ v: z.literal(1), items: z.array(PileItemRefStoredV1Schema),
-    declined: z.record(z.string(), z.object({ path: z.string(), fingerprint: z.string() })).default(() => ({})),
-    dropped: z.array(z.object({ itemId: z.string(), path: z.string(), reason: StorageReasonV1Schema })).default(() => []),
+    declined: z._default(z.record(z.string(), z.object({ path: z.string(), fingerprint: z.string() })), () => ({})),
+    dropped: z._default(z.array(z.object({ itemId: z.string(), path: z.string(), reason: StorageReasonV1Schema })), () => []),
 });
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 function identityMatches(ref: PileItemRefV1, identity: Awaited<ReturnType<typeof readStoragePathIdentity>>) {

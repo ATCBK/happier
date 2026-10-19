@@ -36,7 +36,7 @@ it('uses current SCM facts and ordered Keep reasons, and never treats missing fa
         readSessionDraftPresence: async sessionId => sessionId === 'draft' ? { status: 'present', updatedAt: 1 } : { status: 'unknown' } });
     const items = (await catalog.discover()).filter(i => i.categoryId === 'worktrees');
     const reasons = Object.fromEntries(items.map(i => [i.title, [i.verdict, i.reason.code]]));
-    expect(reasons).toMatchObject({ main: ['keep', 'main_checkout'], 'in-use': ['keep', 'in_use'], dirty: ['keep', 'changed_files'],
+    expect(reasons).toMatchObject({ main: ['keep', 'unsupported'], 'in-use': ['keep', 'in_use'], dirty: ['keep', 'changed_files'],
         ahead: ['keep', 'unpushed_commits'], draft: ['keep', 'unsaved_edits'], pr: ['keep', 'open_pr'], missing: ['check', 'facts_unavailable'],
         merged: ['safe', 'merged_clean'], gone: ['safe', 'branch_gone'], pushed: ['safe', 'clean_pushed'], 'draft-unknown': ['check', 'facts_unavailable'],
         'pr-unknown': ['check', 'facts_unavailable'] });
@@ -44,8 +44,12 @@ it('uses current SCM facts and ordered Keep reasons, and never treats missing fa
         loses: [{ code: 'changed_files', detail: { count: 2 } }] });
     expect(items.find(value => value.title === 'ahead')).toMatchObject({ reason: { code: 'unpushed_commits', detail: { count: 1 } },
         loses: [{ code: 'unpushed_commits', detail: { count: 1 } }] });
+    expect(items.find(value => value.title === 'main')).toMatchObject({
+        reason: { code: 'unsupported', detail: { cause: 'checkout_reference_owner_unavailable' } },
+        loses: [{ code: 'main_checkout' }],
+    });
 });
-it('does not turn an unknown nested checkout into confirmed collectable Keep or hide the main-checkout reason', async () => {
+it('does not turn an unknown nested checkout into confirmed collectable Keep or hide the main-checkout loss', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-nested-verdicts-')); roots.push(root);
     const parent = join(root, '.dev', 'worktree', 'parent');
     const nested = join(parent, 'nested');
@@ -58,6 +62,8 @@ it('does not turn an unknown nested checkout into confirmed collectable Keep or 
             { path: nested, repositoryRoot: root }],
     });
     const values = (await catalog.discover()).filter(value => value.categoryId === 'worktrees');
-    expect(values.find(value => value.path === root)).toMatchObject({ verdict: 'keep', reason: { code: 'main_checkout' } });
+    expect(values.find(value => value.path === root)).toMatchObject({ verdict: 'keep',
+        reason: { code: 'unsupported', detail: { cause: 'checkout_reference_owner_unavailable' } },
+        loses: expect.arrayContaining([expect.objectContaining({ code: 'main_checkout' })]) });
     expect(values.find(value => value.path === parent)).toMatchObject({ verdict: 'check', collectable: false, reason: { code: 'facts_unavailable' } });
 });

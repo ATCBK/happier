@@ -10,6 +10,7 @@ import type { createStorageWorktreeOperations } from '../worktrees/storageWorktr
 import type { SkillCachePaths } from '@/prompts/skills/store/skillStore';
 import type { createProjectWorkspaceRetirement } from '@/workspaces/projectWorkspaceRetirement';
 import type { ScmBackendRegistry } from '@/scm/registry';
+import type { StoragePathComparator } from '../storagePath';
 
 export type StorageCleanupItem = Omit<StorageItemV1, 'size'> & Readonly<{
     /** A disk-index item has no invented Happier category. */
@@ -24,6 +25,8 @@ export type StorageCleanupItem = Omit<StorageItemV1, 'size'> & Readonly<{
     repositoryRoot?: string;
     fingerprint?: string;
     ownFingerprint?: string;
+    /** Intrinsic facts before descendant presentation is folded into a container. */
+    ownVerdict?: Readonly<Pick<StorageItemV1, 'verdict' | 'reason' | 'collectable' | 'loses'>>;
     fingerprintRequired?: boolean;
     nestedWorktreePaths?: readonly string[];
     /** A main checkout/common directory is moved whole, retaining its contained SCM bytes. */
@@ -34,6 +37,7 @@ export type StorageCategoryItem = StorageCleanupItem & Readonly<{ categoryId: Ha
     /** Category lifecycle presentation, stripped from the public item DTO. */
     categoryGroup?: Omit<StorageCategoryGroupV1, 'itemIds'>;
 }>;
+export type SizedStorageCategoryItem = StorageCategoryItem & Pick<StorageItemV1, 'size'>;
 export type StorageTrackedSession = Readonly<{ sessionId: string; cwd: string; running: boolean; stoppedAt?: number; archived?: boolean }>;
 export type StoragePathUse = Readonly<{ reliable: boolean; paths: readonly string[];
     sessions?: readonly Readonly<{ path: string; sessionId: string }>[];
@@ -107,6 +111,7 @@ export type StorageCategoryVerdict = Readonly<{
     categoryGroup?: StorageCategoryItem['categoryGroup'];
 }>;
 export type StorageCategoryContext = Readonly<{
+    pathComparator: StoragePathComparator;
     deps: StorageCategoryCatalogDeps;
     now: number;
     unusedBefore: number;

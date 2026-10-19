@@ -1,7 +1,7 @@
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getHappierTempRoot, getHappierTempDirOwnerPath, readHappierTempDirOwner, readHappierTempDirOwnerLiveness } from '@happier-dev/cli-common/tempDirs';
-import { check, directoriesAtDepth, entries, exists, inUse, isInUse, item, listedEntryStat, newestChange, safe, unavailableDirectory } from './filesystem';
+import { check, directoriesAtDepth, entries, exists, inUse, isInUse, item, listedEntryStat, newestChange, safe, unavailableDirectory, opaqueItemTitle } from './filesystem';
 import type { StorageCategoryContext, StorageCategoryDefinition, StorageCategoryVerdict } from './types';
 import { filesystemCategoryAdapters } from './filesystemAdapters';
 
@@ -57,7 +57,8 @@ export const temporary: StorageCategoryDefinition = {
             if (path.endsWith('.owner.json')) continue;
             const stat = await listedEntryStat(path, denied);
             if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) continue;
-            result.push(item('temporary', path, await temporaryCanGo(path, context, legacy.includes(path)), { evidence: ['happier_temporary_directory'] }));
+            result.push(item('temporary', path, await temporaryCanGo(path, context, legacy.includes(path)),
+                { title: opaqueItemTitle(path, 'Happier temporary files'), evidence: ['happier_temporary_directory'] }));
         }
         const facts = new Map(context.temporaryFacts.map(fact => [fact.path, fact.state]));
         for (const root of scopedRoots(context)) {
@@ -68,7 +69,9 @@ export const temporary: StorageCategoryDefinition = {
                 const state = facts.get(path);
                 result.push(item('temporary', path, state === 'in_use' || isInUse(path, context) ? inUse
                     : state === 'closed' || state === 'delivered' || state === 'ended' ? { ...safe, reason: { code: 'stopped' } } : check,
-                    { evidence: [state ? 'temporary_lifecycle_owner' : 'temporary_lifecycle_facts_unavailable'] }));
+                    { title: opaqueItemTitle(path, basename(root) === 'composer-media-stages' ? 'Composer attachments'
+                        : basename(root) === 'scm' ? 'Source control temporary files' : 'Session handoff files'),
+                        evidence: [state ? 'temporary_lifecycle_owner' : 'temporary_lifecycle_facts_unavailable'] }));
             }
         }
         return result;

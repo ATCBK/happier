@@ -23,6 +23,7 @@ import type { MachineStorageScanStartInputV1, MachineStorageScanGetInputV1,
 import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 import { createStorageMaintenance, type StorageMaintenanceDeps } from './maintenance/storageMaintenance';
 import { storagePathContains } from './storagePath';
+import type { SizedStorageCategoryItem } from './categories/types';
 
 export type StorageEnvironmentProtectionFacts = Pick<StorageProtectionFacts,
     'platform' | 'systemPaths' | 'personalFolders' | 'knownFolders' | 'env' | 'browserProfileRoots' | 'cloudSyncedFolders'>;
@@ -86,7 +87,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         return policy?.wholeDiskEnabled && policy.scheduledScan
             ? JSON.stringify(policy.scheduledScan) : undefined;
     };
-    let items: readonly (StorageItemV1 & Pick<StorageCategoryItem, 'sessionId' | 'fingerprint' | 'nestedWorktreePaths' | 'categoryGroup'>)[] = [];
+    let items: readonly SizedStorageCategoryItem[] = [];
     type Operation = { controller: AbortController; readers: number; done: Promise<HappierStorageSummaryV1> };
     let pending: Operation | null = null;
     const abortError = () => Object.assign(new Error('Storage request cancelled'), { name: 'AbortError' });
@@ -206,7 +207,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         sharedExtentsUnmeasured: measured.sharedExtentsUnmeasured, atLeast: measured.atLeast,
         ...(measured.freesUpToBytes !== undefined ? { freesUpToBytes: measured.freesUpToBytes } : {}),
     });
-    const sumSizes = (members: readonly StorageItemV1[]): StorageSizeV1 => members.reduce((sum, item) => ({
+    const sumSizes = (members: readonly Pick<StorageItemV1, 'size'>[]): StorageSizeV1 => members.reduce((sum, item) => ({
         allocatedBytes: sum.allocatedBytes + item.size.allocatedBytes,
         freesBytes: sum.freesBytes + item.size.freesBytes,
         sharedBytes: sum.sharedBytes + item.size.sharedBytes,
@@ -243,9 +244,15 @@ export function createStorageService(deps: StorageServiceDeps) {
         assertActive(signal);
         const byPath = new Map(measured.perPath.map(path => [path.path, path]));
         const unionById = new Map(('unions' in measured ? measured.unions : undefined)?.map(union => [union.id, union]));
+        const trashEntries = await operations.trashEntries();
         const nextItems = projected.map(item => {
             const value = byPath.get(item.path);
-            const size = value ? sizeOf(value) : { ...emptySize(), atLeast: true };
+            const measuredSize = value ? sizeOf(value) : { ...emptySize(), atLeast: true };
+            // Trash manifests own retained payload sizes; root directories and
+            // receipt files do not become bytes returned by emptying the Trash.
+            const retainedTrashSize = item.categoryId === 'trash'
+                ? sumSizes(trashEntries.filter(entry => entry.volumeId === volumeFor(item.path)?.id)) : undefined;
+            const size = retainedTrashSize ? { ...retainedTrashSize, atLeast: retainedTrashSize.atLeast || measuredSize.atLeast } : measuredSize;
             // Missing/partial measurement is never positive evidence that an item can go.
             return { ...item, size, ...(item.lastChangedAt === undefined && value?.lastChangedAtMs !== undefined
                 ? { lastChangedAt: value.lastChangedAtMs } : {}), ...(size.atLeast && item.verdict !== 'forbidden'
@@ -266,12 +273,11 @@ export function createStorageService(deps: StorageServiceDeps) {
         });
         assertActive(signal);
         const byVolume = new Map<string, number>();
-        for (const path of measured.perPath) {
-            const volume = volumeFor(path.path);
-            if (volume) byVolume.set(volume.id, (byVolume.get(volume.id) ?? 0) + path.allocatedBytes);
+        for (const item of nextItems) {
+            const volume = volumeFor(item.path);
+            if (volume) byVolume.set(volume.id, (byVolume.get(volume.id) ?? 0) + item.size.allocatedBytes);
         }
         const trash = categories.find(category => category.categoryId === 'trash');
-        const trashEntries = await operations.trashEntries();
         if (trash) trash.count = trashEntries.length;
         const suggestionsTop = await operations.summarySuggestions(nextItems);
         const environment = await deps.readStorageProtectionFacts?.();
@@ -347,14 +353,14 @@ export function createStorageService(deps: StorageServiceDeps) {
             enabled: deps.readPolicy?.().wholeDiskEnabled ?? false,
             scans: scanOwner ? [...(await scans()).index.states()] : [],
         } };
-        return options.actor ? operations.summaryForActor(current, options.actor) : current;
+        return options.actor ? operations.summaryForActor(current, options.actor, items) : current;
     }
     const readCompletedStorageScan: () => Promise<CompletedStorageSuggestionScan | null> = deps.readCompletedStorageScan ?? (async () => {
         if (!deps.readPolicy?.().wholeDiskEnabled) return null;
         const owner = await scans();
         if (!deps.readVolumes().some(volume => owner.index.hasWholeDiskCoverage(volume.id))) return null;
         const [projects, use, protection] = await Promise.all([
-            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), operations.readProtectionFacts(),
+            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), deps.readStorageProtectionFacts?.(),
         ]);
         const contains = storagePathContains;
         function* candidates() {
@@ -363,7 +369,7 @@ export function createStorageService(deps: StorageServiceDeps) {
                     .filter(root => contains(root, value.path)).sort((left, right) => right.length - left.length)[0];
                 const repositoryInUse = repositoryRoot && use?.reliable === true
                     ? use.paths.some(path => contains(repositoryRoot, path) || contains(path, repositoryRoot)) : undefined;
-                const browserProfileRoot = protection.browserProfileRoots?.find(root => contains(root, value.path));
+                const browserProfileRoot = protection?.browserProfileRoots?.find(root => contains(root, value.path));
                 yield { nodeId: value.node.nodeId, path: value.path, kind: value.node.kind, size: value.node.size,
                     lastChangedAt: value.node.changedAt, repositoryRoot, repositoryInUse, browserProfileRoot };
             }
@@ -450,18 +456,24 @@ export function createStorageService(deps: StorageServiceDeps) {
         async initializeScans() { await scans(); },
         summary,
         async categoryList(categoryId: HappierStorageCategoryIdV1, options: Readonly<{
-            signal?: AbortSignal; cursor?: string; sessionIds?: ReadonlySet<string>;
+            actor?: StorageOperationActor; signal?: AbortSignal; cursor?: string; sessionIds?: ReadonlySet<string>;
             assertCurrentAuthority?: () => Promise<void>;
         }> = {}): Promise<MachineStorageCategoryListResultV1> {
             if (options.cursor) throw Object.assign(new Error('Unknown storage cursor'), { code: 'invalid_storage_cursor' });
-            const current = await summary(options);
             if (categoryId === 'trash') {
-                const trashEntries = await operations.trashEntries();
-                return MachineStorageCategoryListResultV1Schema.parse({ categoryId, revision: current.revision, sizedAt: current.sizedAt,
+                assertActive(options.signal);
+                // The Trash owner already measured each manifest when it moved
+                // the payload. Reading its current entries needs no catalog scan.
+                const trashEntries = await operations.trashEntries(options.actor);
+                assertActive(options.signal);
+                if (!options.actor) await options.assertCurrentAuthority?.();
+                assertActive(options.signal);
+                return MachineStorageCategoryListResultV1Schema.parse({ categoryId, revision, sizedAt: now(),
                     trashEntries, items: trashEntries.map(entry => ({ itemId: entry.entryId, kind: 'category-item', categoryId: 'trash',
                         path: entry.originalPath, title: entry.title, size: entry.size, lastChangedAt: entry.movedAt,
                         evidence: ['trash_entry'], verdict: 'safe', reason: { code: 'old' }, collectable: false })) });
             }
+            const current = await summary({ signal: options.signal });
             // Refresh the caller's readonly Session scope after measurement, before
             // projection strips the private binding used to enforce that scope.
             await options.assertCurrentAuthority?.();
@@ -482,7 +494,7 @@ export function createStorageService(deps: StorageServiceDeps) {
             assertActive(options.signal);
             // Rebuild the native union: a changed category can share inodes with any other category.
             const current = await join(begin(), options.signal);
-            return options.actor ? operations.summaryForActor(current, options.actor) : current;
+            return options.actor ? operations.summaryForActor(current, options.actor, items) : current;
         },
         revision: () => revision,
         subscribe(listener: () => void) { assertActive(); listeners.add(listener); return () => { listeners.delete(listener); }; },

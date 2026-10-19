@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import * as childProcess from 'node:child_process';
+import * as filesystem from 'node:fs/promises';
 import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +8,7 @@ import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
-import { createStorageService, type StorageOperationActor, type StorageService } from './storageService';
+import { createStorageService, type StorageOperationActor, type StorageService, type StorageServiceDeps } from './storageService';
 import { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers } from '@/rpc/handlers/storage';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandlerMap, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -17,8 +19,8 @@ import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsS
 import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
 import { MachineStoragePolicyV1Schema, STORAGE_CHART_MAX_DRAWABLE_NODES,
     DiskScanStateV1Schema, HappierStorageSummaryV1Schema, MachineStorageScanGetResultV1Schema, MachineStoragePileResultV1Schema,
-    MachineStorageTrashMoveInputV1Schema, PileReviewV1Schema, PileApplyResultV1Schema,
-    MachineStorageCategoryListResultV1Schema, TrashRestoreResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
+    MachineStorageTrashMoveInputV1Schema, MachineStorageDeleteNowInputV1Schema, PileReviewV1Schema, PileApplyResultV1Schema,
+    MachineStorageCategoryListResultV1Schema, TrashEntryV1Schema, TrashRestoreResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createStorageScanIndex } from './scan/scanIndex';
 import { createGitScmBackendRuntimeRegistration } from '../../../../packages/plugins/scm-git/src/backend';
 import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
@@ -26,6 +28,18 @@ import { createScmBackendRegistry } from '@/scm/registry';
 import { createHostScmHostingProviderRuntimeServices } from '@/scm/hostingProviders/runtimeServices';
 import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 import { createStorageWorktreeOperations } from './worktrees/storageWorktreeOperations';
+import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
+import { createTrashStore, resolveTrashOsUserId } from './trash/trashStore';
+
+// Pass through the real OS boundaries while observing summary enumeration and helper work.
+vi.mock('node:fs/promises', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, readdir: vi.fn(actual.readdir) };
+});
+vi.mock('node:child_process', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:child_process')>();
+    return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 const execute = promisify(execFile);
 let disposeNative: (() => Promise<void>) | undefined;
@@ -63,6 +77,133 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     afterAll(async () => {
         await disposeNative?.();
         if (scratch) await rm(scratch, { recursive: true, force: true });
+    });
+
+    it('serves retained logs with process protection facts without starving the daemon', async () => {
+        const home = join(scratch, 'protected-log-inventory');
+        await mkdir(join(home, 'logs'), { recursive: true });
+        for (let index = 0; index < 650; index++) await writeFile(join(home, 'logs', `${index}.log`), 'fixture');
+        // The OS process owner emits repeated cwd/executable paths for descendants.
+        // The isolated full-summary profile reproduced a 2186ms stall at this inventory.
+        const paths = Array.from({ length: 1_800 }, (_, index) => join(scratch, 'work', `project-${index % 180}`));
+        const sessions = paths.map((path, index) => ({ path, sessionId: `session-${index % 180}` }));
+        const warnings: Readonly<Record<string, unknown>>[] = [];
+        const monitor = createDaemonEventLoopStallMonitor({ getActiveRpcOperations: () => [],
+            warn: (_message, data) => warnings.push(data) });
+        const service = createStorageService({ homeDir: scratch, readVolumes: () => [],
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'no-log-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths, sessions }) } });
+        monitor.start();
+        try {
+            const summary = await service.summary();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(summary.categories.find(category => category.categoryId === 'logs')?.count).toBe(650);
+            expect(warnings).toEqual([]);
+        } finally { monitor.stop(); service.dispose(); }
+    }, 60_000);
+
+    it('reuses sized catalog facts for retained and fresh Account-qualified summary RPCs', async () => {
+        const root = join(scratch, 'summary-cost'); const home = join(root, 'home'); const repo = join(root, 'repo');
+        await mkdir(home, { recursive: true }); await mkdir(repo);
+        await execute('git', ['init', repo]);
+        await writeFile(join(repo, '.gitignore'), '.dev/\n');
+        await execute('git', ['-C', repo, 'add', '.gitignore']);
+        await execute('git', ['-C', repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture']);
+        const worktree = join(repo, '.dev', 'worktree', 'summary');
+        await execute('git', ['-C', repo, 'worktree', 'add', '-b', 'summary', worktree]);
+        const cwds = [repo, worktree];
+        for (let index = 0; index < 6; index++) {
+            const cwd = join(repo, `source-${index}`); await mkdir(cwd); cwds.push(cwd);
+        }
+        for (let directory = 0; directory < 20; directory++) {
+            const path = join(home, 'logs', `group-${directory}`); await mkdir(path, { recursive: true });
+            await Promise.all(Array.from({ length: 20 }, (_, index) => writeFile(join(path, `${index}.log`), 'fixture')));
+        }
+        const oldLog = join(home, 'logs', 'group-0', '0.log'); await utimes(oldLog, 1, 1);
+        const registration = createGitScmBackendRuntimeRegistration();
+        const backend = createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
+            qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
+            hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) });
+        const statusSnapshot = backend.statusSnapshot!;
+        let phase = 'raw-fresh';
+        const inspections = new Map<string, number>();
+        const statuses = new Map<string, string[]>(); const fingerprints = new Map<string, string[]>();
+        const native = new Map<string, number>();
+        // Observe real SCM contributions and OS calls; all results still come from Git and the native helper.
+        const registry = createScmBackendRegistry([{ ...backend, statusSnapshot: async input => {
+            const roots = statuses.get(phase) ?? []; roots.push(input.context.detection.rootPath!); statuses.set(phase, roots);
+            return statusSnapshot(input);
+        } }]);
+        const readDirectories = vi.mocked(filesystem.readdir);
+        const actualChildProcess = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+        const nativeSpawn = vi.mocked(childProcess.spawn).mockImplementation(((...args: unknown[]) => {
+            const operation = phase;
+            const child = Reflect.apply(actualChildProcess.spawn, undefined, args) as ReturnType<typeof childProcess.spawn>;
+            if (Array.isArray(args[1]) && args[1][0] === 'disk-measure') {
+                native.set(operation, (native.get(operation) ?? 0) + 1);
+            }
+            // This exact Git read belongs to the canonical change-fingerprint owner.
+            if (Array.isArray(args[1]) && args[1].join(' ') === 'ls-files -z --others --exclude-standard'
+                && args[2] !== null && typeof args[2] === 'object' && 'cwd' in args[2] && typeof args[2].cwd === 'string') {
+                const roots = fingerprints.get(operation) ?? []; roots.push(args[2].cwd); fingerprints.set(operation, roots);
+            }
+            return child;
+        }) as typeof childProcess.spawn);
+        const identity = { serverId: 'home', machineId: 'machine', installationId: 'install', custodianAccountId: 'owner' };
+        const routes = createDaemonStorageRoutes({ target: () => identity, readOwnSessionIds: () => new Set(),
+            deps: () => ({ homeDir: home, scmRegistry: registry,
+                catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(root, 'absent-temp'),
+                    readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }),
+                    readInUsePaths: () => ({ reliable: true, paths: [] }),
+                    readWorktrees: async () => {
+                        const operation = phase;
+                        inspections.set(operation, (inspections.get(operation) ?? 0) + 1);
+                        return readStorageWorktrees({ cwds, happyHomeDir: home, registry });
+                    } },
+                readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: root, totalBytes: 1_000_000, availableBytes: 500_000 }] }) });
+        const handlers: RpcHandlerMap = new Map();
+        registerDaemonStorageRpcHandlers({ registerHandler(method, handler) { handlers.set(method, handler); } }, routes);
+        const context: RpcHandlerContext = { signal: new AbortController().signal,
+            machineAdmission: { ...identity, actorAccountId: 'owner', role: 'manage', encryptionMode: 'plain' },
+            verifyMachineAdmissionCurrent: async () => true };
+        const rpcSummary = async () => HappierStorageSummaryV1Schema.parse(await handlers.get(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET)!({ machineId: 'machine' }, context));
+        const metrics: Record<string, { scm: number; native: number; directoryReads: number }> = {};
+        async function readPhase<T>(operation: string, read: () => Promise<T>): Promise<T> {
+            phase = operation; const before = readDirectories.mock.calls.length;
+            const result = await read();
+            metrics[operation] = { scm: inspections.get(operation) ?? 0,
+                native: native.get(operation) ?? 0, directoryReads: readDirectories.mock.calls.slice(before)
+                    .filter(([path]) => typeof path === 'string' && path.startsWith(root)).length };
+            return result;
+        }
+        try {
+            const service = await routes.getService(identity);
+            const raw = await readPhase('raw-fresh', () => service.summary());
+            const retained = await readPhase('actor-retained', rpcSummary);
+            await readPhase('raw-retained', () => service.summary());
+            service.invalidate();
+            const fresh = await readPhase('actor-fresh', rpcSummary);
+            const refreshed = await readPhase('actor-refresh', () => service.refresh({ actor: {
+                accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrentAuthority: async () => {},
+            } }));
+            expect(retained.categories).toEqual(raw.categories);
+            expect(retained.suggestionsTop).toEqual(raw.suggestionsTop);
+            expect(retained.suggestionsTop).toContainEqual(expect.objectContaining({ path: oldLog, categoryId: 'logs' }));
+            expect(fresh.categories.find(category => category.categoryId === 'logs')?.count).toBe(400);
+            expect(refreshed.suggestionsTop).toContainEqual(expect.objectContaining({ path: oldLog, categoryId: 'logs' }));
+            expect(metrics['raw-fresh']?.directoryReads).toBeGreaterThan(0);
+            expect.soft(Object.fromEntries(Object.entries(metrics).map(([key, value]) => [key, value.scm])))
+                .toEqual({ 'raw-fresh': 1, 'actor-retained': 0, 'raw-retained': 0, 'actor-fresh': 1, 'actor-refresh': 1 });
+            expect.soft(Object.fromEntries(Object.entries(metrics).map(([key, value]) => [key, value.native])))
+                .toEqual({ 'raw-fresh': 1, 'actor-retained': 0, 'raw-retained': 0, 'actor-fresh': 1, 'actor-refresh': 1 });
+            expect.soft(metrics['actor-retained']?.directoryReads).toBe(0);
+            expect.soft(statuses.get('raw-fresh')?.sort()).toEqual([repo, worktree].sort());
+            expect.soft(statuses.get('actor-fresh')?.sort()).toEqual([repo, worktree].sort());
+            expect.soft(fingerprints.get('raw-fresh')?.sort()).toEqual([repo, worktree].sort());
+            expect.soft(fingerprints.get('actor-fresh')?.sort()).toEqual([repo, worktree].sort());
+        } finally {
+            routes.dispose(); nativeSpawn.mockImplementation(actualChildProcess.spawn); nativeSpawn.mockClear(); readDirectories.mockClear();
+        }
     });
 
     it.each(['linux', 'darwin', 'win32'] as const)('serves daemon-qualified %s scan shortcuts through the strict summary consumer', async platform => {
@@ -449,6 +590,101 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
     });
 
+    it.each(['trash', 'delete'] as const)('skips changed indexed-folder holders during %s while applying unchanged approved Keep and Caution items', async mode => {
+        const home = join(scratch, `holder-${mode}-home`); const root = join(scratch, `holder-${mode}-items`);
+        const paths = ['new-holder', 'replaced-holder', 'keep', 'caution'].map(name => join(root, name));
+        await mkdir(home); await mkdir(root);
+        for (const path of paths) { await mkdir(path); await writeFile(join(path, 'content'), path); }
+        let sessions = [{ path: paths[1]!, sessionId: 'original-session' },
+            { path: paths[2]!, sessionId: 'stable-session-a' }, { path: paths[2]!, sessionId: 'stable-session-b' }];
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'agent', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary: { reportAutomaticAction() {} } });
+        const service = createStorageService({ machineId: 'machine', homeDir: home, activityLog,
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true,
+                protectedFolders: [{ path: paths[2]!, addedAt: 1 }] }),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, `holder-${mode}-no-temp`),
+                readProjects: () => ({ status: 'ready', projects: [] }),
+                readInUsePaths: () => ({ reliable: true, paths: sessions.map(session => session.path), sessions }) },
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const scan = await service.scanStart({ machineId: 'machine', target: { folderPath: root } }, { actor });
+            await waitForStorageScan(service, scan.scanId, actor);
+            const collected = await service.pileSet({ machineId: 'machine', add: paths.map(path => ({ itemId: path, path })) }, { actor });
+            const review = PileReviewV1Schema.parse(await service.itemsCheck(collected.items, { actor }));
+            expect(review.items.map(item => item.verdict)).toEqual(['caution', 'keep', 'keep', 'caution']);
+            expect(review.items[1]?.loses).toContainEqual({ code: 'in_use', detail: { path: paths[1], sessionId: 'original-session' } });
+            sessions = [{ path: paths[0]!, sessionId: 'new-session' }, { path: paths[1]!, sessionId: 'replacement-session' },
+                { path: paths[2]!, sessionId: 'stable-session-b' }, { path: paths[2]!, sessionId: 'stable-session-a' }];
+            const result = PileApplyResultV1Schema.parse(mode === 'trash'
+                ? await service.trashMove(MachineStorageTrashMoveInputV1Schema.parse({ machineId: 'machine',
+                    items: review.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) }), { actor })
+                : await service.deleteNow(MachineStorageDeleteNowInputV1Schema.parse({ machineId: 'machine',
+                    items: review.items.map(item => ({ ref: item.ref, expect: item.expect })) }), { actor }));
+            expect(result.outcomes).toEqual(paths.map((itemId, index) => index < 2
+                ? { itemId, status: 'skipped', reason: { code: 'changed_since_review' } }
+                : { itemId, status: mode === 'trash' ? 'moved' : 'deleted' }));
+            for (const path of paths.slice(0, 2)) expect(await readFile(join(path, 'content'), 'utf8')).toBe(path);
+            for (const path of paths.slice(2)) await expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+            expect((await service.pileGet({ actor })).items.map(item => item.path)).toEqual(paths.slice(0, 2));
+            if (mode === 'trash') {
+                expect((await service.trashEntries()).map(entry => entry.originalPath).sort()).toEqual(paths.slice(2).sort());
+                expect(result.inTrashBytes).toBeGreaterThan(0); expect(result.freedBytes).toBe(0);
+                expect((await service.trashRestore({ machineId: 'machine', batchId: result.batchId }, { actor })).outcomes
+                    .every(outcome => outcome.status === 'restored')).toBe(true);
+                for (const path of paths.slice(2)) expect(await readFile(join(path, 'content'), 'utf8')).toBe(path);
+            } else { expect(await service.trashEntries()).toEqual([]); expect(result.freedBytes).toBeGreaterThan(0); }
+        } finally { service.dispose(); }
+    });
+
+    it.each(['none', 'holder', 'cloud', 'cloud-removed', 'unknown-holder'] as const)('normalizes completed child facts while retaining changed parent protection (%s)', async protection => {
+        const home = join(scratch, `completed-holder-${protection}-home`); const workspace = join(scratch, `completed-holder-${protection}-workspace`);
+        const root = join(workspace, '.happier', 'uploads', 'attachments'); const upload = join(root, 'completed-session');
+        await mkdir(home); await mkdir(upload, { recursive: true }); await writeFile(join(upload, 'content'), 'retained upload');
+        const uploadPresent = () => lstat(upload).then(() => true, error => {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error;
+        });
+        let retired = false;
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'agent', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary: { reportAutomaticAction() {} } });
+        const service = createStorageService({ machineId: 'machine', homeDir: home, activityLog,
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            readStorageProtectionFacts: async () => ({ cloudSyncedFolders: (protection === 'cloud' && !await uploadPresent()
+                || protection === 'cloud-removed' && await uploadPresent()) ? [root] : [] }),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'completed-holder-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }),
+                readTrackedSessions: () => retired ? [] : [{ sessionId: 'completed-session', cwd: workspace, running: false, stoppedAt: 1 }],
+                // OS cwd observations follow a renamed child out of its original container.
+                readInUsePaths: async () => {
+                    const present = await uploadPresent();
+                    if (protection === 'unknown-holder' && (!present || retired)) {
+                        retired = true;
+                        const path = join(upload, 'unknown-work'); await mkdir(path, { recursive: true });
+                        await writeFile(join(path, 'content'), 'new work');
+                        return { reliable: true, paths: [path], sessions: [{ path, sessionId: 'new-unknown-session' }] };
+                    }
+                    return { reliable: true, paths: present ? [upload] : protection === 'holder' ? [root] : [],
+                        sessions: present ? [{ path: upload, sessionId: 'holding-session' }]
+                            : protection === 'holder' ? [{ path: root, sessionId: 'new-parent-session' }] : [] };
+                } },
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const scan = await service.scanStart({ machineId: 'machine', target: { folderPath: root } }, { actor });
+            await waitForStorageScan(service, scan.scanId, actor);
+            const collected = await service.pileSet({ machineId: 'machine', add: [{ itemId: root, path: root }] }, { actor });
+            const review = await service.itemsCheck(collected.items, { actor });
+            expect(review.items[0]).toMatchObject({ verdict: 'keep', absorbs: [expect.any(String)] });
+            const result = await service.trashMove({ machineId: 'machine', items: review.items.map(item => ({ ref: item.ref,
+                expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect(result.outcomes.map(outcome => outcome.status)).toEqual(['moved', protection === 'none' ? 'moved' : 'skipped']);
+            expect((await service.trashEntries()).map(entry => entry.originalPath).sort()).toEqual((protection === 'none' ? [upload, root] : [upload]).sort());
+            if (protection !== 'none') {
+                expect(result.outcomes[1]).toEqual({ itemId: root, status: 'skipped', reason: { code: 'changed_since_review' } });
+                expect((await lstat(root)).isDirectory()).toBe(true);
+                if (protection === 'unknown-holder') expect(await readFile(join(upload, 'unknown-work', 'content'), 'utf8')).toBe('new work');
+            } else await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally { service.dispose(); }
+    });
+
     it('uses filesystem cleanup for indexed worktree contents and SCM ownership for the exact indexed worktree', async () => {
         const home = join(scratch, 'indexed-worktree-home'); const repo = join(scratch, 'indexed-worktree-repo');
         const worktree = join(repo, '.dev', 'worktree', 'cleanup'); const modules = join(worktree, 'node_modules');
@@ -466,13 +702,19 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
         const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        let inspectionPhase = 'scan';
+        const inspectionCounts = new Map<string, number>();
         const service = createStorageService({ machineId: 'machine', homeDir: home, scmRegistry: registry,
             activityLog: await createActivityLog({ activeServerDir: home, resourceSummary }),
             readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
             catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'indexed-worktree-no-temp'),
                 readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }),
                 readInUsePaths: () => ({ reliable: true, paths: [] }),
-                readWorktrees: () => readStorageWorktrees({ cwds: [repo], happyHomeDir: home, registry }),
+                readWorktrees: async () => {
+                    const phase = inspectionPhase;
+                    inspectionCounts.set(phase, (inspectionCounts.get(phase) ?? 0) + 1);
+                    return readStorageWorktrees({ cwds: [repo], happyHomeDir: home, registry });
+                },
                 worktreeOperations: createStorageWorktreeOperations({ happyHomeDir: home, registry }) },
             readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
         try {
@@ -480,25 +722,43 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             await waitForStorageScan(service, scan.scanId, actor);
             const ref = (path: string) => ({ itemId: path, path, identity: { dev: 'ignored', ino: 'ignored', kind: 'directory' as const },
                 collectedAt: 0, collectedBy: { accountId: 'owner', kind: 'person' as const } });
+            inspectionPhase = 'contents.collect';
             const contents = await service.pileSet({ machineId: 'machine', add: [ref(modules)] }, { actor });
+            expect(inspectionCounts.get(inspectionPhase)).toBe(1);
+            inspectionPhase = 'contents.review';
             const reviewed = await service.itemsCheck(contents.items, { actor });
             expect(reviewed.items[0]?.verdict).toBe('keep');
+            inspectionPhase = 'contents.apply';
             const moved = await service.trashMove({ machineId: 'machine', items: [{ ref: contents.items[0]!, expect: reviewed.items[0]!.expect,
                 claimedVerdict: reviewed.items[0]!.verdict }] }, { actor });
             expect(moved.outcomes).toEqual([{ itemId: modules, status: 'moved' }]);
             expect((await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout).toContain(`worktree ${worktree}`);
             expect((await execute('git', ['-C', worktree, 'rev-parse', '--is-inside-work-tree'])).stdout.trim()).toBe('true');
+            inspectionPhase = 'contents.restore';
             await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor });
+            inspectionPhase = 'exact.collect';
             const exact = await service.pileSet({ machineId: 'machine', add: [ref(worktree)] }, { actor });
+            inspectionPhase = 'exact.review';
             const exactReview = await service.itemsCheck(exact.items, { actor });
+            inspectionPhase = 'exact.apply';
             const retired = await service.trashMove({ machineId: 'machine', items: [{ ref: exact.items[0]!, expect: exactReview.items[0]!.expect,
                 claimedVerdict: exactReview.items[0]!.verdict }] }, { actor });
             expect(retired.outcomes).toEqual([{ itemId: worktree, status: 'moved' }]);
             const registrationAfter = (await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout;
             expect(registrationAfter).not.toContain(`worktree ${worktree}\n`);
             expect(registrationAfter).toContain('locked');
+            inspectionPhase = 'exact.restore';
             expect((await service.trashRestore({ machineId: 'machine', batchId: retired.batchId }, { actor })).outcomes[0]?.status).toBe('restored');
             expect((await execute('git', ['-C', worktree, 'rev-parse', '--is-inside-work-tree'])).stdout.trim()).toBe('true');
+            inspectionPhase = 'summary';
+            await service.summary();
+            // Each read shares one inspection. Apply retains fresh admission,
+            // Trash commit and adapter-effect checks; exact SCM also binds its owner.
+            expect(Object.fromEntries(['contents.collect', 'contents.review', 'contents.apply', 'exact.collect', 'exact.review', 'exact.apply', 'summary']
+                .map(phase => [phase, inspectionCounts.get(phase) ?? 0]))).toEqual({
+                'contents.collect': 1, 'contents.review': 1, 'contents.apply': 3,
+                'exact.collect': 1, 'exact.review': 1, 'exact.apply': 4, summary: 1,
+            });
         } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
     });
 
@@ -515,6 +775,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         await execute('git', ['-C', repo, 'worktree', 'add', '-b', 'container-inner', nested]);
         await writeFile(join(worktree, 'changed.txt'), 'outer changes');
         await writeFile(join(nested, 'changed.txt'), 'inner changes');
+        await writeFile(join(nested, 'extra.txt'), 'additional inner changes');
         const registration = createGitScmBackendRuntimeRegistration();
         const registry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
             qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
@@ -565,6 +826,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect(restored.outcomes[0]?.path).toBe(container);
             expect(await readFile(join(worktree, 'changed.txt'), 'utf8')).toBe('outer changes');
             expect(await readFile(join(nested, 'changed.txt'), 'utf8')).toBe('edited after review');
+            expect(await readFile(join(nested, 'extra.txt'), 'utf8')).toBe('additional inner changes');
             for (const [path, branch] of [[worktree, 'container-outer'], [nested, 'container-inner']]) {
                 expect((await execute('git', ['-C', path!, 'branch', '--show-current'])).stdout.trim()).toBe(branch);
                 expect((await execute('git', ['-C', path!, 'status', '--porcelain'])).stdout).toContain('changed.txt');
@@ -647,6 +909,68 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         } finally { service.dispose(); }
     });
 
+    it('summarizes retained Trash payloads per volume without counting empty roots or manifest overhead', async () => {
+        const home = join(scratch, 'trash-totals-home');
+        const secondary = join(scratch, 'trash-totals-secondary');
+        const volumes = [{ id: 'main', label: 'Main', mount: home, totalBytes: 1_000_000, availableBytes: 500_000 },
+            { id: 'secondary', label: 'Secondary', mount: secondary, totalBytes: 1_000_000, availableBytes: 500_000 }];
+        await Promise.all([home, secondary, join(home, 'trash')].map(path => mkdir(path, { recursive: true })));
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary });
+        const store = createTrashStore({ happyHomeDir: home, osUserId: await resolveTrashOsUserId(),
+            target: { machineId: 'machine' }, readVolumes: () => volumes, activityLog,
+            attributionFor: () => ({ kind: 'unknown' }), classifyRestorePath: async () => null, readEmptyAfterDays: () => 7 });
+        const service = createStorageService({ homeDir: scratch, machineId: 'machine', activityLog,
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'trash-totals-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths: [] }) },
+            readVolumes: () => volumes });
+        const assertTotals = async (expected: readonly number[], count: number) => {
+            const summary = await service.refresh();
+            const category = summary.categories.find(category => category.categoryId === 'trash')!;
+            const allocatedBytes = expected.reduce((sum, bytes) => sum + bytes, 0);
+            expect(summary.trash).toEqual({ count, allocatedBytes });
+            expect(category).toMatchObject({ count, size: { allocatedBytes } });
+            expect(summary.volumes.map(volume => volume.trashBytes)).toEqual(expected);
+            expect(summary.volumes.reduce((sum, volume) => sum + volume.happierBytes, 0))
+                .toBe(summary.categories.reduce((sum, category) => sum + category.size.allocatedBytes, 0));
+            return category;
+        };
+        try {
+            await assertTotals([0, 0], 0);
+            const entries = [];
+            for (const [index, volume] of volumes.entries()) {
+                const path = join(volume.mount, 'payload');
+                await writeFile(path, Buffer.alloc(8192 * (index + 1), index + 1));
+                const prepared = await store.prepare({ path, batchId: 'totals', title: 'Payload',
+                    size: { allocatedBytes: 0, freesBytes: 0, sharedBytes: 0, sharedExtentsUnmeasured: false, atLeast: false },
+                    movedBy: { accountId: 'owner', kind: 'person' } });
+                entries.push(await prepared.commit());
+            }
+            const category = await assertTotals(entries.map(entry => entry.size.allocatedBytes), 2);
+            expect(category.size.freesBytes).toBe(entries.reduce((sum, entry) => sum + entry.size.freesBytes, 0));
+            expect(category.size.sharedExtentsUnmeasured).toBe(entries.some(entry => entry.size.sharedExtentsUnmeasured));
+            expect((await service.categoryList('trash')).trashEntries).toEqual(entries);
+            // A persisted partial payload measurement remains partial even when
+            // a later full root measurement succeeds. The manifest is the size authority.
+            const manifestPath = join((await store.roots())[0]!.path, entries[0]!.entryId, 'entry.json');
+            const manifest: Record<string, unknown> = JSON.parse(await readFile(manifestPath, 'utf8'));
+            const entry = TrashEntryV1Schema.parse(manifest.entry);
+            const freesUpToBytes = entry.size.freesBytes + 4096;
+            await writeFile(manifestPath, JSON.stringify({ ...manifest, entry: { ...entry,
+                size: { ...entry.size, atLeast: true, freesUpToBytes } } }));
+            const partial = await assertTotals(entries.map(entry => entry.size.allocatedBytes), 2);
+            expect(partial.size).toMatchObject({ atLeast: true,
+                freesUpToBytes: freesUpToBytes + entries[1]!.size.freesBytes });
+            const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+            const emptied = await service.trashEmpty({ machineId: 'machine', batchId: 'totals' }, { actor });
+            expect(emptied.outcomes).toHaveLength(2);
+            expect(emptied.outcomes).toEqual(entries.map(entry => ({ entryId: entry.entryId, status: 'deleted' })));
+            await assertTotals([0, 0], 0);
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
     it('collects trusted refs, permits approved Keep, measures growth and records reversible Trash in the incumbent Activity log', async () => {
         const home = join(scratch, 'cleanup-home');
         const server = join(home, 'servers', 'fixture');
@@ -666,13 +990,14 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
         const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
         const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
-        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server,
+        const serviceDeps = { catalog: { happyHomeDir: home, activeServerDir: server,
             tempRoot: join(scratch, 'cleanup-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
             readInUsePaths: () => ({ reliable: true, paths: [cache] }) },
             activityLog, machineId: 'machine', custodianAccountId: 'owner', homeDir: scratch,
             readPolicy: () => MachineStoragePolicyV1Schema.parse({ protectedFolders: [{ path: protectedCache, addedAt: 1 }] }),
             readVolumes: () => [{ id: 'fixture-volume', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }],
-        });
+        } satisfies StorageServiceDeps;
+        const service = createStorageService(serviceDeps);
         try {
             const category = await service.categoryList('caches');
             const protectedItem = category.items.find(item => item.path === protectedCache)!;
@@ -711,9 +1036,33 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const moved = receipts.entries.find(entry => entry.kind === 'trash_moved')!;
             expect(moved.wayBack?.[0]?.input).toMatchObject({ machineId: 'machine', entryIds: [expect.any(String)] });
             expect(resourceSummary.getSummary()?.lastAutomaticAction).toBeUndefined();
+            const coldMoved = createStorageService(serviceDeps);
+            try {
+                const listed = MachineStorageCategoryListResultV1Schema.parse(await coldMoved.categoryList('trash'));
+                expect(listed.trashEntries).toEqual([expect.objectContaining({ batchId: applied.batchId, originalPath: cache,
+                    size: expect.objectContaining({ allocatedBytes: applied.inTrashBytes }) })]);
+                expect(listed.items[0]?.size).toEqual(listed.trashEntries?.[0]?.size);
+            } finally { coldMoved.dispose(); }
             const restored = await service.trashRestore({ machineId: 'machine', batchId: applied.batchId }, { actor });
             expect(restored.outcomes).toEqual([expect.objectContaining({ status: 'restored', path: cache })]);
             expect((await lstat(join(cache, 'grew'))).size).toBe(32768);
+            service.dispose();
+            // An unrelated catalog root can become unavailable after a successful
+            // Undo. A cold receipt still reads the canonical Trash manifests.
+            await writeFile(join(home, 'tools'), 'not a directory');
+            const observedAt = Date.now();
+            const cold = createStorageService({ ...serviceDeps, nowMs: () => observedAt });
+            try {
+                await expect(cold.categoryList('caches')).rejects.toMatchObject({ code: 'ENOTDIR' });
+                const receipt = MachineStorageCategoryListResultV1Schema.parse(await cold.categoryList('trash'));
+                expect(receipt).toMatchObject({ categoryId: 'trash', items: [], trashEntries: [], sizedAt: observedAt });
+                expect(receipt.revision).toBe(cold.revision());
+                const cancelled = new AbortController(); cancelled.abort();
+                await expect(cold.categoryList('trash', { signal: cancelled.signal })).rejects.toMatchObject({ name: 'AbortError' });
+                await expect(cold.categoryList('trash', { assertCurrentAuthority: async () => {
+                    throw Object.assign(new Error('Authority changed'), { code: 'unauthorized' });
+                } })).rejects.toMatchObject({ code: 'unauthorized' });
+            } finally { cold.dispose(); }
         } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
     });
 
@@ -853,6 +1202,8 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect(JSON.stringify(own)).not.toContain('"sessionId"');
             await expect(invoke(RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH, {}, 'recipient', 'use'))
                 .rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
+            expect(await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'trash' }, 'recipient', 'use'))
+                .toMatchObject({ categoryId: 'trash', items: [], trashEntries: [] });
             const service = await routes.getService(identity);
             const first = await service.summary();
             const changed = invoke(RPC_METHODS.DAEMON_STORAGE_WATCH, { sinceRevision: first.revision }, 'recipient', 'use');
