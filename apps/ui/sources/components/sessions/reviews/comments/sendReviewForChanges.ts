@@ -7,9 +7,10 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 import {
     captureSessionDraftCurrentness,
     clearSessionDraftCurrentness,
-    getSessionDraftSnapshot,
+    getSessionComposerDraftSnapshot,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { sync } from '@/sync/sync';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 export type SendReviewForChangesOutcome =
     /** The message reached its durable handoff; the draft text and the sent comments were cleared. */
@@ -38,6 +39,7 @@ export async function sendReviewForChanges(input: Readonly<{
     accountLifetime: ServerAccountScopeLifetime;
     drafts: readonly ReviewCommentDraft[];
     reviewScope: WorkspaceScopeBase | null;
+    signal?: AbortSignal;
     /** Removes the comments that were sent (the review-comment drafts' own owner). */
     clearSentDrafts: (sent: readonly ReviewCommentDraft[]) => void;
 }>): Promise<SendReviewForChangesOutcome> {
@@ -47,14 +49,11 @@ export async function sendReviewForChanges(input: Readonly<{
 
     const scope = input.accountLifetime.scope;
     const address = { kind: 'session', sessionId: input.sessionId } as const;
-    const snapshot = getSessionDraftSnapshot(scope, address);
-    const composer = snapshot?.document.composer ?? null;
+    const snapshot = getSessionComposerDraftSnapshot(scope, address);
+    const composer = snapshot?.composer ?? null;
     if (composer && (hasItems(composer.mentions.value) || hasItems(composer.attachments.value))) return 'handoff';
     const additionalMessage = typeof composer?.text.value === 'string' ? composer.text.value : '';
     const currentness = snapshot ? captureSessionDraftCurrentness({ scope, address }) : null;
-
-    const resolved = await resolveReviewCommentDraftAnchorsForPrompt({ drafts: included, reviewScope: input.reviewScope });
-    const outbound = buildReviewCommentsOutboundMessage({ sessionId: input.sessionId, drafts: resolved, additionalMessage });
 
     let handedOff = false;
     const clearOnce = () => {
@@ -65,7 +64,16 @@ export async function sendReviewForChanges(input: Readonly<{
         }
         input.clearSentDrafts(included);
     };
+    const accountCancellation = new AbortController();
+    const retirement = input.accountLifetime.onRetire(() => accountCancellation.abort());
+    const cancellation = mergeAbortSignals([input.signal, accountCancellation.signal]);
     try {
+        if (cancellation.signal?.aborted || !input.accountLifetime.isCurrent()) return 'failed';
+        const resolved = await resolveReviewCommentDraftAnchorsForPrompt({
+            drafts: included, reviewScope: input.reviewScope, signal: cancellation.signal,
+        });
+        if (cancellation.signal?.aborted || !input.accountLifetime.isCurrent()) return 'failed';
+        const outbound = buildReviewCommentsOutboundMessage({ sessionId: input.sessionId, drafts: resolved, additionalMessage });
         await sync.submitMessage(input.sessionId, outbound.text, outbound.displayText, outbound.metaOverrides, {
             ...(input.serverId ? { serverId: input.serverId } : {}),
             accountLifetime: input.accountLifetime,
@@ -74,6 +82,9 @@ export async function sendReviewForChanges(input: Readonly<{
         });
     } catch {
         return handedOff ? 'sent' : 'failed';
+    } finally {
+        retirement.dispose();
+        cancellation.dispose();
     }
     clearOnce();
     return 'sent';

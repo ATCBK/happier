@@ -89,7 +89,7 @@ describe('useSessionGitRepositoryMutations', () => {
             return refusal;
         });
         expect(await owner.undoLastCommit(expectedHeadOid)).toEqual(refusal);
-        expect(rpc.sessionScmCommitUndoLast).toHaveBeenCalledWith('s1', { expectedHeadOid }, undefined);
+        expect(rpc.sessionScmCommitUndoLast).toHaveBeenCalledWith('s1', { expectedHeadOid }, undefined, { onDispatched: expect.any(Function) });
         expect(storage.getState().getSessionProjectScmOperationLog('s1')).toEqual(expect.arrayContaining([
             expect.objectContaining({ operation: 'commit_undo', outcome: expect.objectContaining({ kind: 'needs_input', errorCode: 'COMMIT_UNDO_PUBLISHED' }) }),
         ]));
@@ -164,7 +164,7 @@ describe('useSessionGitRepositoryMutations', () => {
         const response = await (await mutations()).skipBranchOperation('cherry_pick');
 
         expect(response).toMatchObject({ success: true, outcome: { kind: 'succeeded' } });
-        expect(rpc.sessionScmBranchOperationSkip).toHaveBeenCalledWith('s1', { operation: 'cherry_pick' }, undefined);
+        expect(rpc.sessionScmBranchOperationSkip).toHaveBeenCalledWith('s1', { operation: 'cherry_pick' }, undefined, { onDispatched: expect.any(Function) });
         expect(storage.getState().getSessionProjectScmOperationLog('s1')).toEqual(expect.arrayContaining([
             expect.objectContaining({ operation: 'branch_operation_skip', status: 'success', outcome: { v: 1, kind: 'succeeded', nextActions: [] } }),
         ]));

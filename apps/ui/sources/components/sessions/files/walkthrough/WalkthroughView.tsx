@@ -10,7 +10,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PagePinnedBar } from '@/components/ui/layout/PagePinnedBar';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -153,7 +153,6 @@ export const WalkthroughView = React.memo(function WalkthroughView(
   const reading = props.reading;
   const phone = props.layout === 'phone';
   const reducedMotion = useReducedMotionPreference();
-  const safeArea = useSafeAreaInsets();
   const rootRef = React.useRef<View>(null);
   const scrollRef = React.useRef<ScrollView>(null);
   const stopOffsets = React.useRef(new Map<string, number>());
@@ -708,7 +707,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
           </View>
         </ScrollView>
         {currentStop && reading.phase !== 'inventory' ? (
-          <View testID="walkthrough-phone-bar" style={[styles.phoneBar, { paddingBottom: 12 + safeArea.bottom }]}>
+          <PagePinnedBar testID="walkthrough-phone-bar" style={styles.phoneBar}>
             <PhoneBarButton
               testID="walkthrough-previous"
               icon="caret-up"
@@ -776,7 +775,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
               onPress={() => move(1)}
               disabled={currentIndex >= reading.stops.length - 1}
             />
-          </View>
+          </PagePinnedBar>
         ) : null}
       </View>
     );
@@ -942,7 +941,7 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.variant('body'),
     color: theme.colors.text.secondary,
   },
-  phoneContent: { paddingBottom: 120 },
+  phoneContent: { paddingBottom: theme.space.s24 },
   section: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -966,19 +965,12 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.variant('heading'),
     color: theme.colors.text.primary,
   },
+  // A sibling under the reading, cleared of the floating tab bar and the safe area by its owner.
   phoneBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     flexDirection: 'row',
     gap: theme.space.s8,
     paddingHorizontal: theme.space.s12,
     paddingTop: theme.space.s8,
-    paddingBottom: theme.space.s12,
-    backgroundColor: theme.colors.surface.base,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.default,
   },
   phoneBarButton: {
     height: 44,

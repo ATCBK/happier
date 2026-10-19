@@ -58,7 +58,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
             provenance: walkthrough.savedResult?.walkthroughProvenance }) : null, [walkthrough, comparison.comparisonId, marksAvailable, marks.record]);
     const maxFilesSetting = useSetting('scmReviewMaxFiles');
     const maxLinesSetting = useSetting('scmReviewMaxChangedLines');
-    const { mountedInitialReviewState, explain, setExplain,
+    const { mountedInitialReviewState, startedReviewRunIds, setPersistedReviewTabState, explain, setExplain,
         onCollapsedPathsChange, onScrollTopChange } = useSessionScmReviewTabState(props.sessionId, pane, props.target, openDetailsTab);
     const selectView = React.useCallback((next: SessionScmReviewView) => openDetailsTab(
         createSessionScmReviewDetailsTab({ ...props.target, comparison, view: next }), { intent: 'pinned' }), [openDetailsTab, props.target, comparison]);
@@ -66,9 +66,12 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         if (!captured.comparison || !machineReachable) return;
         presentStartReviewDialog({ sessionId: props.sessionId, serverId: props.serverId ?? null,
             cwd: captured.comparison.repository.rootPath, comparison, scopeLabel, defaultWalkthrough: true,
-            onStarted: (started, narration) => { if (narration) openDetailsTab(createSessionScmReviewDetailsTab({
-                ...props.target, comparison: { ...comparison, comparisonId: started.comparisonId }, view: 'walkthrough' }), { intent: 'pinned' }); } });
-    }, [captured.comparison, machineReachable, comparison, props.sessionId, props.serverId, props.target, scopeLabel, openDetailsTab]);
+            onStarted: (started, narration) => {
+                setPersistedReviewTabState({ reviewRunIds: [...started.reviewRunIds] });
+                if (narration) openDetailsTab(createSessionScmReviewDetailsTab({
+                    ...props.target, comparison: { ...comparison, comparisonId: started.comparisonId }, view: 'walkthrough' }), { intent: 'pinned' });
+            } });
+    }, [captured.comparison, machineReachable, comparison, props.sessionId, props.serverId, props.target, scopeLabel, openDetailsTab, setPersistedReviewTabState]);
     const fileCount = captured.comparison?.inventory.files.length ?? null;
     const scopeOptions = React.useMemo(() => listFilesComparisonScopeOptions(NO_LOCAL_SCOPES, latestTurnId, comparison,
         { currentFileCount: fileCount ?? undefined }), [comparison, fileCount, latestTurnId]);
@@ -85,6 +88,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         onStartReview={openReview} reviewDisabled={!captured.comparison || !machineReachable} reviewDisabledReason={reviewDisabledReason}
         renderWalkthrough={({ layout, renderBar, onShowFiles }) => <SessionWalkthroughView sessionId={props.sessionId}
             serverId={props.serverId} comparison={comparison} scopeLabel={scopeLabel} layout={layout} active={props.active !== false}
+            startedReviewRunIds={startedReviewRunIds}
             renderBar={renderBar} onShowFiles={onShowFiles} onOpenFile={onShowFiles} onOpenComposer={goToComposer} />}
         renderFiles={(chrome) => <>
             {captured.error ? <WalkthroughNotice testID="captured-comparison-error" tone="warning" icon="warning" message={captured.error} /> : null}

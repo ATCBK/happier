@@ -7,6 +7,7 @@ import { ReviewWalkthroughResponseSchema } from '@happier-dev/protocol/reviews/r
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
+import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 
 installSessionFilesViewBoundaries();
 await prepareSessionFilesViewTestkit();
@@ -19,6 +20,12 @@ afterEach(async () => { vi.useRealTimers(); standardCleanup(); await fixture?.di
 
 const comparison = ScmComparisonSchema.parse({ id: 'detached-comparison', source: { kind: 'workingTree' },
     repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
+const anchorDraft: ReviewCommentDraft = {
+    id: 'anchor-draft', filePath: 'src/a.ts', source: 'file',
+    anchor: { kind: 'line', filePath: 'src/a.ts', line: 4, lineHash: 'lh1:1234567890abcdef' },
+    snapshot: { selectedLines: ['const value = true;'], beforeContext: [], afterContext: [] },
+    body: 'Check the condition.', createdAt: 1,
+};
 
 async function setup(detached = true, actionError?: Error, beforeActionReply?: Promise<void>) {
     fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
@@ -68,6 +75,186 @@ async function setup(detached = true, actionError?: Error, beforeActionReply?: P
 }
 
 describe('review walkthrough transport', () => {
+    it('keeps review drafts when an unanswered Ask-for-changes anchor request is cancelled', async () => {
+        const reply = createDeferred<void>();
+        await setup(false, undefined, reply.promise);
+        const { sendReviewForChanges } = await import('@/components/sessions/reviews/comments/sendReviewForChanges');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        expect(accountLifetime).not.toBeNull();
+        if (!accountLifetime) throw new Error('Expected restored Account lifetime');
+        vi.useFakeTimers();
+        const controller = new AbortController();
+        const clearSentDrafts = vi.fn();
+        let settled = false;
+        const observation = sendReviewForChanges({ sessionId: 's1', accountLifetime, drafts: [anchorDraft],
+            reviewScope: { serverId: fixture.home.id, machineId: 'm1', rootPath: '/repo' },
+            clearSentDrafts, signal: controller.signal }).then(outcome => { settled = true; return outcome; });
+        try {
+            await vi.waitFor(() => expect(fixture.requests.some(request => request.method === RPC_METHODS.WORKSPACE_ANCHORS_RESOLVE)).toBe(true));
+            controller.abort();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toBe(true);
+            expect(await observation).toBe('failed');
+            expect(clearSentDrafts).not.toHaveBeenCalled();
+        } finally {
+            reply.resolve();
+            void observation.catch(() => undefined);
+        }
+    });
+    it('releases an unanswered draft-anchor read when its modal closes and reopens', async () => {
+        const reply = createDeferred<void>();
+        await setup(false, undefined, reply.promise);
+        const { ReviewCommentsDraftsModal } = await import('@/components/sessions/agentInput/definitions/ReviewCommentsDraftsModal');
+        const render = () => fixture.render(<ReviewCommentsDraftsModal
+            sessionId="s1" onClose={() => {}} onUpdateDraft={() => {}} onDeleteDraft={() => {}}
+            reviewScope={{ serverId: fixture.home.id, machineId: 'm1', rootPath: '/repo' }}
+            reviewCommentDrafts={[anchorDraft]} />);
+        const screen = await render();
+        try {
+            await vi.waitFor(() => expect(fixture.requests.filter(request => request.method === RPC_METHODS.WORKSPACE_ANCHORS_RESOLVE)).toHaveLength(1));
+            await screen.unmount();
+            expect(fixture.emissions.some(item => item.event === 'rpc-cancel')).toBe(true);
+            reply.resolve();
+            const reopened = await render();
+            await vi.waitFor(() => expect(fixture.requests.filter(request => request.method === RPC_METHODS.WORKSPACE_ANCHORS_RESOLVE)).toHaveLength(2));
+            await reopened.unmount();
+        } finally {
+            reply.resolve();
+        }
+    });
+    it('cancels a non-replying capabilities query and permits the next request', async () => {
+        const reply = createDeferred<void>();
+        await setup(true, undefined, reply.promise);
+        const { machineCapabilitiesDescribe } = await import('@/sync/ops/capabilities');
+        vi.useFakeTimers();
+        const controller = new AbortController();
+        let settled = false;
+        const observation = machineCapabilitiesDescribe('m1', { serverId: fixture.home.id, signal: controller.signal })
+            .finally(() => { settled = true; });
+        try {
+            await vi.waitFor(() => expect(fixture.requests.some(request => request.method === RPC_METHODS.CAPABILITIES_DESCRIBE)).toBe(true));
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(settled).toBe(false);
+            controller.abort();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toBe(true);
+            expect(await observation).toMatchObject({ supported: false, reason: 'error' });
+            expect(fixture.emissions.some(item => item.event === 'rpc-cancel')).toBe(true);
+            reply.resolve();
+            expect(await machineCapabilitiesDescribe('m1', { serverId: fixture.home.id })).toMatchObject({ supported: true });
+        } finally {
+            reply.resolve();
+            await observation;
+        }
+    });
+    it.each([true, false])('cancels catalog hydration without publishing a retired query, then retries (active %s)', async active => {
+        const reply = createDeferred<void>();
+        await setup(false, undefined, reply.promise);
+        const session = fixture.storage.getState().sessions.s1!;
+        fixture.storage.setState({ sessions: { s1: { ...session, active } } });
+        const { ensureSessionSuggestionCatalogs } = await import('@/sync/ops/sessionCatalogs');
+        vi.useFakeTimers();
+        const controller = new AbortController();
+        let settled = false;
+        const observation = ensureSessionSuggestionCatalogs('s1', { skills: true }, { signal: controller.signal })
+            .finally(() => { settled = true; });
+        const method = active ? SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST : RPC_METHODS.DAEMON_SESSION_SKILL_CATALOG_LIST;
+        try {
+            await vi.waitFor(() => expect(fixture.requests.some(request => request.method === method)).toBe(true));
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(settled).toBe(false);
+            controller.abort();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toBe(true);
+            await observation;
+            expect(fixture.storage.getState().sessions.s1?.metadata?.sessionSkillCatalogV1).toBeUndefined();
+            reply.resolve();
+            await ensureSessionSuggestionCatalogs('s1', { skills: true });
+            expect(fixture.storage.getState().sessions.s1?.metadata?.sessionSkillCatalogV1).toMatchObject({ skills: [] });
+            expect(fixture.requests.filter(request => request.method === method)).toHaveLength(2);
+        } finally {
+            reply.resolve();
+            await observation;
+        }
+    });
+    it('cancels Session catalog discovery when the composer query is superseded', async () => {
+        const reply = createDeferred<void>();
+        await setup(false, undefined, reply.promise);
+        const { getSuggestions } = await import('@/components/autocomplete/suggestions');
+        vi.useFakeTimers();
+        const controller = new AbortController();
+        const observation = getSuggestions('s1', '$check', { kinds: ['skill'], signal: controller.signal });
+        try {
+            await vi.waitFor(() => expect(fixture.requests.some(request => request.method === SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST)).toBe(true));
+            controller.abort();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(await observation).toEqual([]);
+            expect(fixture.emissions.some(item => item.event === 'rpc-cancel')).toBe(true);
+            expect(fixture.storage.getState().sessions.s1?.metadata?.sessionSkillCatalogV1).toBeUndefined();
+        } finally {
+            reply.resolve();
+            await observation;
+        }
+    });
+    it.each([false, true])('waits for the walkthrough owner beyond 30 seconds (detached %s)', async detached => {
+        const reply = createDeferred<void>();
+        await setup(detached, undefined, reply.promise);
+        vi.useFakeTimers();
+        let settled = false;
+        const result = requestFinishedReviewWalkthrough({
+            ...(detached ? { sessionId: null, machineId: 'm1' } : { sessionId: 's1' }),
+            serverId: fixture.home.id, cwd: '/repo', runId: 'review-1', reviewRunIds: ['review-1'],
+            comparisonId: comparison.id, fallbackComparison: { kind: 'workingTree' },
+        }).finally(() => { settled = true; });
+        try {
+            await vi.waitFor(() => expect(fixture.requests.some(request => request.method === 'execution.run.action')).toBe(true));
+            await vi.advanceTimersByTimeAsync(32_402);
+            expect(settled).toBe(false);
+            reply.resolve();
+            expect(await result).toMatchObject({ ok: true, comparisonId: comparison.id });
+            expect(fixture.requests.filter(request => request.method === 'execution.run.action')).toHaveLength(1);
+        } finally {
+            reply.resolve();
+            await result;
+        }
+    });
+    it.each([
+        { detached: false, termination: 'cancel' },
+        { detached: false, termination: 'disconnect' },
+        { detached: true, termination: 'cancel' },
+    ] as const)('settles a walkthrough on $termination without resending (detached $detached)', async ({ detached, termination }) => {
+        const reply = createDeferred<void>();
+        await setup(detached, termination === 'disconnect' ? new Error('socket has been disconnected') : undefined, reply.promise);
+        vi.useFakeTimers();
+        const controller = new AbortController();
+        let settled = false;
+        const result = createDefaultActionExecutor({ resolveServerIdForSessionId: () => fixture.home.id }).execute(
+            'review.walkthrough',
+            { ...(detached ? { target: { kind: 'detached' as const } } : { sessionId: 's1' }),
+                runId: 'review-1', reviewRunIds: ['review-1'], comparisonId: comparison.id },
+            { serverId: fixture.home.id, signal: controller.signal,
+                ...(detached ? { externalActionTarget: { kind: 'machine' as const, machineId: 'm1',
+                    project: { machineId: 'm1', directory: '/repo' } }, executionRunTargetMachineId: 'm1' }
+                    : { defaultSessionId: 's1' }) },
+        ).finally(() => { settled = true; });
+        try {
+            await vi.waitFor(() => expect(fixture.requests.some(request => request.method === 'execution.run.action')).toBe(true));
+            if (termination === 'cancel') controller.abort();
+            else reply.resolve();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(settled).toBe(true);
+            expect(await result).toMatchObject({ ok: false,
+                errorCode: termination === 'cancel'
+                    ? detached ? 'MACHINE_RPC_ABORTED' : 'SOCKET_RPC_ABORTED'
+                    : 'RPC_OUTCOME_UNKNOWN' });
+            expect(fixture.requests.filter(request => request.method === 'execution.run.action')).toHaveLength(1);
+            if (termination === 'cancel') expect(fixture.emissions.some(item => item.event === 'rpc-cancel')).toBe(true);
+        } finally {
+            reply.resolve();
+            await result;
+        }
+    });
     it('accepts the finished walkthrough acknowledgement through the attached Session transport', async () => {
         await setup(false);
         const result = await requestFinishedReviewWalkthrough({ sessionId: 's1', serverId: fixture.home.id, cwd: '/repo',

@@ -85,7 +85,9 @@ export function resolveGitPullRequestFormPlacement(input: Readonly<{
 
 export type GitPullRequestCreateOutcome =
     | ScmCreatePrResult
-    | Readonly<{ kind: 'blocked'; message: string }>;
+    | Readonly<{ kind: 'blocked'; message: string }>
+    /** The person declined the Action's confirmation: nothing was created, and nothing failed. */
+    | Readonly<{ kind: 'declined' }>;
 
 export type GitPullRequestFormAfterCreate = Readonly<{
     clearDraft: boolean;
@@ -119,5 +121,7 @@ export function resolveGitPullRequestFormAfterCreate(outcome: GitPullRequestCrea
                 clearDraft: false, closeForm: false, created: null,
                 failure: { blocked: true, message: outcome.message }, openedProviderPage: null,
             };
+        case 'declined':
+            return { clearDraft: false, closeForm: false, created: null, failure: null, openedProviderPage: null };
     }
 }

@@ -244,7 +244,8 @@ describe('proposal discard Action policy', () => {
         boundary.discard = async (method, input) => {
             if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_DELETE) {
                 boundary.listSaved = false;
-                return ScmDiffSummaryResultDeleteResponseSchema.parse({ success: true, resultId: saved.resultId });
+                return ScmDiffSummaryResultDeleteResponseSchema.parse({ success: true, resultId: saved.resultId,
+                    comparisonId: saved.output.comparison!.id });
             }
             if (method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_EDIT) {
                 const parsed = ScmDiffSummaryResultEditInputSchema.parse(input);

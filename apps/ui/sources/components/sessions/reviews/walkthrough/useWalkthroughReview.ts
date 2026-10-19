@@ -7,7 +7,8 @@ import type { ReviewFindingsV2 } from '@happier-dev/protocol/messages/structured
 import type { ScmComparison } from '@happier-dev/protocol/scm/comparison';
 import type { ScmDiffSummaryOutputState, ScmDiffSummaryReviewRun, ScmDiffSummaryWalkthrough } from '@happier-dev/protocol/scm/diffSummary';
 
-import { readReviewPayload } from '@/components/sessions/reviews/findings/useReviewGroupSiblings';
+import { readReviewPayload } from '@/components/sessions/reviews/findings/readReviewPayload';
+import { resolveReviewRunOutput, resolveReviewRunStatus } from '@/components/sessions/reviews/findings/resolveReviewRunStatus';
 import { useReviewRunsComments } from '@/components/sessions/reviews/findings/useReviewRunComments';
 import { resolveEffectiveReviewFindings } from '@/components/sessions/reviews/messages/resolveEffectiveReviewFindings';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
@@ -19,6 +20,7 @@ import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExe
 import type { ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { loadReviewRunComments } from '@/sync/domains/reviews/comments/reviewRunComments';
 
 import { buildWalkthroughReviewOverlay, type WalkthroughReviewOverlay } from './reviewWalkthroughOverlay';
 import { resolveReviewWalkthroughProgress, type ReviewWalkthroughProgress } from './reviewWalkthroughProgress';
@@ -52,15 +54,10 @@ export type WalkthroughReviewState = Readonly<{
     /** When the review that a seeded narrator read finished ("11:04"). */
     reviewedAtMs: number | null;
     comparisonFreshness: 'unchanged' | 'changed' | 'unknown' | null;
+    retry(): Promise<void>;
 }>;
 
 const NO_READS: readonly ReviewRunRead[] = Object.freeze([]);
-
-/** A V2 result's own review outcome (V1 results carry none). */
-function readReviewOutcome(payload: ReviewFindingsV1 | ReviewFindingsV2 | null): 'complete' | 'partial' | 'failed' | null {
-    const outcome = payload && 'reviewOutcome' in payload ? payload.reviewOutcome : null;
-    return outcome === 'complete' || outcome === 'partial' || outcome === 'failed' ? outcome : null;
-}
 
 /**
  * A walkthrough's review (Walkthrough lab WT5): the reviewer Runs a review-produced result names (or the
@@ -93,6 +90,7 @@ export function useWalkthroughReview(params: Readonly<{
         producer?.narratedAtMs, producer?.reviewedRuns?.map(run => [run.runId, run.status, run.hasOutput])]);
 
     const [reads, setReads] = React.useState<Readonly<{ key: string; reads: readonly ReviewRunRead[] }>>({ key: '', reads: NO_READS });
+    const [retryVersion, setRetryVersion] = React.useState(0);
     React.useEffect(() => {
         if (!scope || runIds.length === 0 || (!sessionId && !machineId)) return;
         let current = true;
@@ -131,20 +129,29 @@ export function useWalkthroughReview(params: Readonly<{
             fireAndForget(load(), { tag: 'useWalkthroughReview.refresh' });
         }) : () => {};
         return () => { current = false; unsubscribe(); };
-    }, [runIds, readKey, scope, sessionId, machineId, params.cwd]);
+    }, [runIds, readKey, scope, sessionId, machineId, params.cwd, retryVersion]);
     const runReads = reads.key === readKey ? reads.reads : NO_READS;
 
-    const commentIdsByRunId = React.useMemo(() => Object.fromEntries(runReads.map((read) => [
-        read.runId, (read.payload?.findings ?? []).flatMap((finding) => finding.comment ? [finding.comment.id] : []),
-    ])), [runReads]);
+    const commentIdsByRunId = React.useMemo(() => Object.fromEntries(runIds.map(runId => [
+        runId, [...new Set([
+            ...(producer?.kind === 'review' ? producer.reviewedRuns?.find(run => run.runId === runId)?.commentIds ?? [] : []),
+            ...(runReads.find(read => read.runId === runId)?.payload?.findings ?? []).flatMap(finding => finding.comment ? [finding.comment.id] : []),
+        ])],
+    ])), [runIds, runReads, producer]);
     const comments = useReviewRunsComments({ scope: sessionId ? scope : null, sessionId, runIds, commentIdsByRunId, enabled: Boolean(sessionId) && runIds.length > 0 });
     const { messages } = useSessionMessages(sessionId, { enabled: Boolean(sessionId) && runIds.length > 0 });
+    const retry = React.useCallback(async () => {
+        setRetryVersion(version => version + 1);
+        if (scope && sessionId) await Promise.all(runIds.map(runId => loadReviewRunComments({ scope, sessionId, runId,
+            commentIds: commentIdsByRunId[runId] }).catch(() => undefined)));
+    }, [scope, sessionId, runIds, commentIdsByRunId]);
 
     return React.useMemo(() => {
-        if (!comparison || runIds.length === 0) return null;
+        if (runIds.length === 0) return null;
         const producerRuns = producer?.kind === 'review' ? producer.reviewedRuns ?? [] : [];
         const reviewerLabelByRunId: Record<string, string> = {};
         const readStateByRunId: Record<string, ReviewRunRead['state']> = {};
+        const outputReadStateByRunId: Record<string, 'ready' | 'loading' | 'unavailable'> = {};
         const reviews = runIds.map((runId): ReviewFindingsOverlayReview => {
             const read = runReads.find((entry) => entry.runId === runId);
             const recorded = producerRuns.find((run) => run.runId === runId);
@@ -155,22 +162,23 @@ export function useWalkthroughReview(params: Readonly<{
             reviewerLabelByRunId[runId] = resolveExecutionRunBackendLabel(backendTarget)
                 ?? payload?.runRef.backendId ?? recorded?.backendId ?? runId;
             const runRef = payload?.runRef ?? { runId, callId: read?.run?.callId ?? recorded?.callId ?? runId, backendId: recorded?.backendId ?? '' };
-            const findings = payload ? resolveEffectiveReviewFindings({ runRef, initialFindings: payload.findings, messages }).findings : [];
             const snapshot = comments[runIds.indexOf(runId)];
+            const output = resolveReviewRunOutput({ payload, recorded, comments: snapshot });
+            outputReadStateByRunId[runId] = output.readState;
+            const findings = payload ? resolveEffectiveReviewFindings({ runRef, initialFindings: payload.findings, messages }).findings : output.findings;
             const anchorsByFindingId: Record<string, ReviewCommentAnchorV1> = {};
             for (const comment of snapshot?.comments ?? []) {
                 if (comment.findingId) anchorsByFindingId[comment.findingId] = comment.anchor;
             }
-            const status = read?.run?.status ?? recorded?.status;
+            const status = resolveReviewRunStatus({ run: read?.run, payload, recorded });
             return {
                 runRef,
                 comparisonId: (payload && 'comparisonId' in payload && typeof payload.comparisonId === 'string' ? payload.comparisonId : undefined) ?? recorded?.comparisonId,
                 findings,
-                ...(status ? { status: status as ReviewFindingsOverlayReview['status'] } : {}),
-                hasOutput: payload !== null,
+                ...(status ? { status } : {}),
+                hasOutput: output.hasOutput,
+                ...(output.reviewOutcome ? { reviewOutcome: output.reviewOutcome } : {}),
                 ...(payload && 'limits' in payload && payload.limits?.findingsTruncated ? { findingsTruncated: true } : {}),
-                ...(readState !== 'readable' ? { reviewOutcome: 'partial' as const }
-                    : readReviewOutcome(payload) ? { reviewOutcome: readReviewOutcome(payload)! } : {}),
                 anchorsByFindingId,
             };
         });
@@ -178,12 +186,13 @@ export function useWalkthroughReview(params: Readonly<{
             overlay: projectReviewFindingsOverlay({ comparison, walkthrough: walkthrough?.value ?? null, reviews }),
             stops: walkthrough?.value?.stops ?? [],
             reviewerLabelByRunId,
+            readStateByRunId: outputReadStateByRunId,
         });
         const narrationMode = producer?.kind === 'review' ? producer.narrationMode ?? null : null;
         const producerRunId = producer?.kind === 'review' ? producer.runId ?? null : null;
         const findingsOnlyReviewer = runIds.length === 1 && narrationMode !== 'seeded_narrator'
             && producerRunId !== null && producerRunId !== runIds[0];
-        const finishedAt = runReads.map((read) => read.run?.finishedAtMs ?? 0).reduce((max, at) => Math.max(max, at), 0);
+        const finishedAt = runReads.reduce((max, read) => Math.max(max, read.payload?.generatedAtMs ?? read.run?.finishedAtMs ?? 0), 0);
         const progress = resolveReviewWalkthroughProgress({
             review: overlay.summary,
             narration: walkthrough ? {
@@ -203,6 +212,7 @@ export function useWalkthroughReview(params: Readonly<{
             narrationMode,
             reviewedAtMs: finishedAt > 0 ? finishedAt : null,
             comparisonFreshness: producer?.kind === 'review' ? producer.comparisonFreshness ?? null : null,
+            retry,
         };
-    }, [comments, comparison, messages, producer, runIds, runReads, walkthrough]);
+    }, [comments, comparison, messages, producer, runIds, runReads, walkthrough, retry]);
 }

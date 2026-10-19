@@ -80,13 +80,13 @@ export function buildWalkthroughReviewSlots(input: WalkthroughReviewSlotsInput):
             return {
                 proseReferences: proseCites ? {
                     scheme: 'finding',
-                    resolve: (target) => {
+                    resolve: (target: string) => {
                         const view = viewForReference(target);
                         if (!view) return null;
                         const colors = input.severityColors(view.severity);
-                        return { label: `${reviewSeverityLabel(view.severity)} · ${view.engineLabel}`, foreground: colors.foreground, background: colors.tint };
+                        return { label: `${reviewSeverityLabel(view.severity)} · ${view.engineLabel}`, severity: view.severity, foreground: colors.foreground, background: colors.tint };
                     },
-                    onPress: (target) => {
+                    onPress: (target: string) => {
                         const view = viewForReference(target);
                         if (view) goTo(view);
                     },
@@ -125,7 +125,11 @@ export function buildWalkthroughReviewSlots(input: WalkthroughReviewSlotsInput):
         // Until the story is written, "not tied to a stop" would be untrue; the findings-first list carries them.
         afterStops: input.writing ? null : <WalkthroughFindingsTail entries={overlay.tail} phone={phone} renderTriage={input.renderTriage} />,
         notice: input.notice,
-        writingLabel: input.writing ? t('reviewWalkthrough.writingWithFindings') : undefined,
+        writingLabel: input.writing
+            ? overlay.summary.state === 'loading' ? t('common.loading')
+                : overlay.summary.state === 'unavailable' ? t('common.requestFailed')
+                    : overlay.summary.state === 'running' ? t('reviewWalkthrough.steps.reviewing') : t('reviewWalkthrough.writingWithFindings')
+            : undefined,
     };
 }
 

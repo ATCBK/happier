@@ -119,7 +119,10 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
     const rpc = async <R,>(request: { sessionId: string; method: string; payload: unknown; scope?: { serverId: string; accountId: string } }): Promise<R> => {
         boundary.sessionCalls.push(request);
         if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [] } as R;
-        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && boundary.runResponse) return boundary.runResponse as R;
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && boundary.runResponse) {
+            await boundary.nativeRunBarrier?.();
+            return boundary.runResponse as R;
+        }
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO && boundary.savedResult) return { success: true, result: boundary.savedResult } as R;
         throw new Error(`Unexpected Session boundary method: ${request.method}`);
     };
@@ -136,7 +139,7 @@ const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
 const { ScmComparisonMoreMenu } = await import('@/components/sessions/files/comparison/ScmComparisonMoreMenu');
 type MenuSections = Parameters<typeof ScmComparisonMoreMenu>[0]['sections'];
 /** The bar as the review destination draws it: the view's own actions, then its menu rows behind `⋯`. */
-const barWithMenu = (actions: React.ReactNode, sections?: MenuSections) => <>{actions}{sections ? <ScmComparisonMoreMenu sections={sections} /> : null}</>;
+const barWithMenu = (actions: React.ReactNode, sections?: MenuSections, review?: React.ReactNode) => <>{actions}{review}{sections ? <ScmComparisonMoreMenu sections={sections} /> : null}</>;
 /** Chooses a saved-result operation from the bar's menu, the way a person does. */
 async function chooseFromMenu(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string) {
     const menu = screen.root.find((node) => node.type === DropdownMenu && node.props.testID === 'scm-comparison-more-menu');
@@ -167,6 +170,10 @@ const { formatWithCachedDateTimeFormatter } = await import('@/utils/datetime/cac
 const { getPreferredLanguage } = await import('@/text');
 await loadSyncSingletonForTests();
 const { SessionWalkthroughView } = await import('./SessionWalkthroughView');
+const { SessionCapturedScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionCapturedScmReviewDetailsView');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+const { SESSION_DETAILS_SCM_REVIEW_TAB_KEY } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
 const { ScmWalkthroughView } = await import('./ScmWalkthroughView');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const initialStorage = getStorage().getState();
@@ -233,7 +240,8 @@ async function createHome(serverUrl: string, settings?: Readonly<Record<string, 
 }
 
 async function mount(comparison: SessionScmReviewComparison, sessionId: string, storedModel = '', renderBar: (actions: React.ReactNode, sections?: MenuSections) => React.ReactNode = barWithMenu, authenticated = true,
-    automaticTarget?: Parameters<typeof createScmDiffSummaryModelCatalogHttpBoundary>[0]['automaticTarget']) {
+    automaticTarget?: Parameters<typeof createScmDiffSummaryModelCatalogHttpBoundary>[0]['automaticTarget'],
+    renderDestination?: (props: React.ComponentProps<typeof SessionWalkthroughView>) => React.ReactElement) {
     const settings = { ...initialStorage.settings, experiments: true, featureToggles: { 'execution.runs': true },
         'scm.diffSummary.modelProfileOverride': storedModel };
     const home = await createHome(`https://${sessionId}.example.test`, settings, `machine:${sessionId}`, automaticTarget);
@@ -246,9 +254,10 @@ async function mount(comparison: SessionScmReviewComparison, sessionId: string, 
         settings });
     getStorage().getState().applySessions([session]);
     if (authenticated) publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
-    const screen = await renderScreen(<SessionWalkthroughView sessionId={sessionId} serverId={home.id}
-        comparison={comparison} scopeLabel="Shown comparison" layout="wide" renderBar={renderBar}
-        onShowFiles={() => {}} onOpenFile={() => {}} onOpenComposer={() => {}} />, authenticated ? {
+    const viewProps = { sessionId, serverId: home.id, comparison, scopeLabel: 'Shown comparison', layout: 'wide' as const, renderBar,
+        onShowFiles: () => {}, onOpenFile: () => {}, onOpenComposer: () => {} };
+    const screen = await renderScreen(renderDestination
+        ? <AppPaneProvider>{renderDestination(viewProps)}</AppPaneProvider> : <SessionWalkthroughView {...viewProps} />, authenticated ? {
         wrapper: ({ children }) => <InjectedAuthProvider credentials={accountCredentials}>{children}</InjectedAuthProvider>,
     } : undefined);
     return { screen, home, machine };
@@ -310,6 +319,30 @@ async function mountWithAccountMarks(sessionId: string) {
 }
 
 describe('SessionWalkthroughView retained offline reading through real Account marks', () => {
+    it('shows admitted review progress from a captured comparison destination before any saved narration exists', async () => {
+        boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: {
+            runId: 'review-run', callId: 'review-call', sidechainId: 'review-sidechain', intent: 'review',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only', retentionPolicy: 'resumable',
+            runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 100, turnInFlight: true,
+        } });
+        function CapturedDestination(props: React.ComponentProps<typeof SessionWalkthroughView>) {
+            const scopeId = `session:${props.sessionId}`;
+            const pane = useAppPaneScope(scopeId);
+            const seedReview = pane.patchDetailsTabState;
+            React.useEffect(() => { seedReview(SESSION_DETAILS_SCM_REVIEW_TAB_KEY, { reviewRunIds: ['review-run'] }); }, [seedReview]);
+            const comparison = props.comparison;
+            if (!comparison) throw new Error('Expected a captured comparison destination');
+            return <SessionCapturedScmReviewDetailsView sessionId={props.sessionId} serverId={props.serverId}
+                scopeId={scopeId} comparison={comparison} target={{ comparison, view: 'walkthrough' }} />;
+        }
+        const { screen } = await mount({ kind: 'commit', commit: 'a'.repeat(40), comparisonId: 'captured-review' },
+            'captured-review-progress', '', undefined, true, undefined, props => <CapturedDestination {...props} />);
+        await vi.waitFor(() => expect(screen.findAllByTestId('review-walkthrough-steps').length).toBeGreaterThan(0));
+        expect(boundary.sessionCalls.some(call => call.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET
+            && (call.payload as { runId?: string }).runId === 'review-run')).toBe(true);
+        expect(generationCalls()).toEqual([]);
+    });
+
     it.each([
         { name: 'retires workspace-native generation at silent heartbeat expiry and recovers on heartbeat', expiry: true },
         { name: 'starts workspace-native generation and observes its exact Run output without Session notifications', expiry: false },
@@ -815,6 +848,7 @@ describe('SessionWalkthroughView START through real generation and model owners'
         };
         await vi.waitFor(() => expect(projection()).toMatchObject({ resultId: 'pending-result', executionRunId: null,
             savedResult: { revision: 0 }, outputs: { walkthrough: { state: 'pending' } } }));
+        expect(screen.findByTestId('walkthrough-notice-ended')).toBeNull();
         expect(generationCalls()).toEqual([]);
         boundary.savedResult = ScmDiffSummaryResultSchema.parse({ ...pending, revision: 1, canUndo: true,
             updateNotice: { kind: 'generation', revision: 1, affectedStopIds: [] },
@@ -855,6 +889,56 @@ describe('SessionWalkthroughView START through real generation and model owners'
         expect(generationCalls()).toEqual([]);
     }, 120_000);
 
+    it('waits for live conversation evidence before showing a restored walkthrough as unavailable', async () => {
+        boundary.savedSessionId = 'restored-conversation';
+        const source = { kind: 'workingTree' };
+        boundary.savedResult = ScmDiffSummaryResultSchema.parse({ resultId: 'conversation-result', revision: 1, canUndo: false,
+            output: { success: true, resultId: 'conversation-result', revision: 1, runId: 'conversation-run', sourceKey: 'conversation-comparison',
+                metadata: { sourceKey: 'conversation-comparison', source }, requestedOutputs: ['walkthrough'],
+                comparison: { id: 'conversation-comparison', source, repository: { rootPath: '/repo/exact' }, endpoints: {},
+                    inventory: { state: 'complete', files: [], reasons: [] } },
+                outputs: { walkthrough: { state: 'complete', value: { title: 'Saved reading', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        const live = ExecutionRunGetResponseSchema.parse({ run: {
+            runId: 'conversation-run', callId: 'conversation-call', sidechainId: 'conversation-sidechain', intent: 'review',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only', retentionPolicy: 'resumable',
+            runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1,
+            lifecycle: { v: 1, state: 'current' },
+            interaction: { kind: 'retained_agent_session.v1', capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
+        } });
+        // Admission precedes native interaction publication. The Run is current,
+        // but this first observation cannot establish conversational readiness.
+        boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: { ...live.run, interaction: undefined } });
+        const observation = createDeferred<void>();
+        boundary.nativeRunBarrier = () => observation.promise;
+        const { screen, home } = await mount({ kind: 'workingTree' }, boundary.savedSessionId);
+        await vi.waitFor(() => expect(boundary.sessionCalls.some(call => call.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET)).toBe(true));
+        expect(screen.getTextContent()).toContain('Saved reading');
+        expect(screen.findByTestId('walkthrough-notice-ended')).toBeNull();
+        expect(screen.findByTestId('walkthrough-open-conversation')).toBeNull();
+        await act(async () => { observation.resolve(); });
+        await vi.waitFor(() => {
+            const state = getScmDiffSummaryState();
+            const entry = Object.values(state.entriesByKey).find(value => value.sessionId === boundary.savedSessionId);
+            const observed = entry ? getScmDiffSummaryOperationState(state, entry.key)?.latestRun : undefined;
+            expect(observed).toMatchObject({ runId: live.run.runId, lifecycle: { state: 'current' } });
+            expect(observed?.interaction).toBeUndefined();
+        });
+        expect(screen.findByTestId('walkthrough-notice-ended')).toBeNull();
+        expect(screen.findByTestId('walkthrough-open-conversation')).toBeNull();
+        boundary.runResponse = live;
+        await act(async () => notifyExecutionRunActivity({ serverId: home.id, sessionId: boundary.savedSessionId }, { runId: live.run.runId }));
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-open-conversation')).not.toBeNull());
+        expect(screen.findByTestId('walkthrough-notice-ended')).toBeNull();
+        boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: { ...live.run, status: 'succeeded', interaction: undefined,
+            lifecycle: { v: 1, state: 'unavailable' } } });
+        await act(async () => notifyExecutionRunActivity({ serverId: home.id, sessionId: boundary.savedSessionId }, { runId: live.run.runId }));
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-notice-ended')).not.toBeNull());
+        expect(screen.findByTestId('walkthrough-open-conversation')).toBeNull();
+        expect(screen.getTextContent()).toContain('Saved reading');
+        expect(generationCalls()).toEqual([]);
+    }, 120_000);
+
     it('restores a review’s walkthrough the machine saved after the view opened, then places its findings beside the stop, with no model work', async () => {
         boundary.capabilities = async () => ({ protocolVersion: 1, results: {} });
         boundary.savedSessionId = 'reviewed-session';
@@ -891,6 +975,8 @@ describe('SessionWalkthroughView START through real generation and model owners'
         expect(screen.findByTestId('walkthrough-finding-ref-f1')).not.toBeNull();
         expect(screen.findByTestId('walkthrough-review-fact')).not.toBeNull();
         expect(screen.findByTestId('review-walkthrough-steps')).not.toBeNull();
+        // The review wrote this walkthrough with its findings in view, so explaining them again is not offered.
+        expect(screen.findByTestId('walkthrough-explain-findings')).toBeNull();
         expect(screen.findByTestId('walkthrough-review-explanation:s1:0')).not.toBeNull();
         expect(screen.getTextContent()).toContain('Adds d.');
         expect(screen.getTextContent()).toContain('The finding questions validation, without changing the walkthrough.');

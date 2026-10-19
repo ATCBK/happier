@@ -17,7 +17,9 @@ export async function resolveReviewCommentDraftAnchorsForPrompt(params: Readonly
     drafts: readonly ReviewCommentDraft[];
     reviewScope: WorkspaceScopeBase | null;
     resolveAnchors?: ReviewCommentAnchorResolver;
+    signal?: AbortSignal;
 }>): Promise<ReviewCommentDraft[]> {
+    if (params.signal?.aborted) throw params.signal.reason ?? new Error('Aborted');
     if (!params.reviewScope || params.drafts.length === 0) {
         return [...params.drafts];
     }
@@ -28,6 +30,7 @@ export async function resolveReviewCommentDraftAnchorsForPrompt(params: Readonly
             serverId: params.reviewScope.serverId,
             machineId: params.reviewScope.machineId,
             workspacePath: params.reviewScope.rootPath,
+            signal: params.signal,
             comments: params.drafts.map((draft) => ({
                 id: draft.id,
                 filePath: draft.filePath,
@@ -41,6 +44,7 @@ export async function resolveReviewCommentDraftAnchorsForPrompt(params: Readonly
             })),
         });
 
+        if (params.signal?.aborted) throw params.signal.reason ?? new Error('Aborted');
         if (!response.success) {
             return [...params.drafts];
         }
@@ -50,7 +54,8 @@ export async function resolveReviewCommentDraftAnchorsForPrompt(params: Readonly
             const anchorResolution = resolutionsById.get(draft.id);
             return anchorResolution ? { ...draft, anchorResolution } : draft;
         });
-    } catch {
+    } catch (error) {
+        if (params.signal?.aborted) throw error;
         return [...params.drafts];
     }
 }

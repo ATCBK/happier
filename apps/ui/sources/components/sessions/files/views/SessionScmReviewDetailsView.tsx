@@ -21,6 +21,7 @@ import {
 } from '@/components/projects/scm/WorkspaceScmReviewBody';
 import { SessionWalkthroughView } from '@/components/sessions/files/walkthrough/SessionWalkthroughView';
 import { SessionCommitsView } from '@/components/sessions/files/commits/SessionCommitsView';
+import { scmReviewViewUnavailableReason } from '@/sync/domains/scm/diffSummary/selection';
 import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthrough/useWalkthroughReviewedMarks';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { useSessionScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
@@ -37,6 +38,7 @@ import {
   type SessionScmReviewComparison,
   type SessionScmReviewTarget,
   type SessionScmReviewView,
+  SESSION_SCM_REVIEW_VIEWS,
 } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { createExecutionRunLauncherDetailsTab } from '@/components/sessions/runs/launcher/executionRunLauncherModel';
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
@@ -95,7 +97,7 @@ import { useWorkspaceScopeForSession } from '@/sync/domains/session/resolveWorks
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
 import { createPluginPermissionGrantActions } from '@/sync/domains/plugins/permissions/actions';
 import { usePluginPermissionGrants } from '@/sync/domains/plugins/permissions/usePluginPermissionGrants';
-import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
 import { selectPluginPermissionPendingRequests } from '@/sync/domains/plugins/permissions/store';
@@ -129,15 +131,10 @@ export type SessionScmReviewDetailsViewProps = Readonly<{
 }>;
 
 /** Files and Walkthrough over any comparison; Commits only over pending changes (lab WT4: explain-and-commit). */
-const COMPARISON_VIEWS: readonly SessionScmReviewView[] = [
-  'files',
-  'walkthrough',
-];
-const PENDING_COMPARISON_VIEWS: readonly SessionScmReviewView[] = [
-  'files',
-  'walkthrough',
-  'commits',
-];
+const COMPARISON_VIEWS = SESSION_SCM_REVIEW_VIEWS.filter(
+  (view) => scmReviewViewUnavailableReason(view, null) === null,
+);
+const PENDING_COMPARISON_VIEWS = SESSION_SCM_REVIEW_VIEWS;
 const PENDING_COMPARISON = { kind: 'workingTree' } as const;
 
 export const SessionScmReviewDetailsView = React.memo(
@@ -177,6 +174,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
     const goToComposer = useReviewComposerHandoff(props.scopeId);
     const {
       persistedReviewTabState,
+      startedReviewRunIds,
       mountedInitialReviewState,
       setPersistedReviewTabState,
       onCollapsedPathsChange,
@@ -272,22 +270,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       reviewServerId,
     ]);
     const accountScope = [...accountBindings.values()][0]?.scope;
-    const frontDoorActionExecutor = React.useMemo(() => {
-      const execute = createFrontDoorUiActionExecutor(
-        undefined,
-        accountScope
-          ? {
-              serverId: accountScope.serverId,
-              expectedAccountId: accountScope.accountId,
-            }
-          : undefined,
-      );
-      return (...args: Parameters<typeof execute>) => {
-        if (!accountScope)
-          return Promise.reject(new Error('action_account_scope_unavailable'));
-        return execute(...args);
-      };
-    }, [accountScope]);
+    const { executeValue: frontDoorActionExecutor } = useMountedActionExecution(accountScope, { openOnRequest: true });
     const pluginPermissionGrantActions = React.useMemo(
       () =>
         createPluginPermissionGrantActions({
@@ -684,7 +667,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       (comparison: SessionScmReviewComparison) => {
         // Commits exists only over pending changes; another scope keeps the reading view instead.
         const view =
-          requestedView === 'commits' && comparison.kind !== 'workingTree'
+          scmReviewViewUnavailableReason(requestedView, comparison)
             ? 'files'
             : requestedView;
         openDetailsTab(
@@ -722,7 +705,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       : t('scmComparison.scope.workingTree');
     const pending = shownComparison?.kind === 'workingTree';
     const reviewView: SessionScmReviewView =
-      requestedView === 'commits' && !pending ? 'files' : requestedView;
+      scmReviewViewUnavailableReason(requestedView, shownComparison) ? 'files' : requestedView;
     // What "This session" spans: since the Session began, over the turns that changed files.
     const sessionCreatedAt = useSession(props.sessionId)?.createdAt ?? null;
     const scopeDetail =
@@ -745,16 +728,17 @@ const SessionWorkingScmReviewDetailsView = React.memo(
     // A review of the comparison on screen (lab WT5-R4): the comparison replaces Change type and Base, and
     // the walkthrough output starts on. Without a working copy to capture from, the general launcher stays.
     const reviewCwd = effectiveSnapshot?.repo.rootPath ?? sessionPath ?? null;
+    // The dialog's Changes row says how much the review reads (lab WT5-R4: "start → now · 9 files").
+    const shownScopeFileCount = shownComparison
+      ? scopeOptions.find((option) => option.comparison !== null
+          && scmComparisonKey(option.comparison) === scmComparisonKey(shownComparison))?.fileCount ?? null
+      : null;
+    const reviewScopeDetail = [
+      scopeDetail,
+      shownScopeFileCount ? t('scmComparison.fileCount', { count: shownScopeFileCount }) : null,
+    ].filter((part): part is string => Boolean(part)).join(' · ') || null;
     useScmReviewActiveFileSelection({ pane, hostKey: JSON.stringify([reviewServerId, accountScope?.accountId, props.sessionId, reviewCwd]),
       activeFileKey: activeReviewFileKey, comparison: shownComparison, view: reviewView, presented: props.active !== false && Boolean(accountScope) });
-    const startedReviewRunIds = React.useMemo(() => {
-      const raw = (
-        persistedReviewTabState as { reviewRunIds?: unknown } | null | undefined
-      )?.reviewRunIds;
-      return Array.isArray(raw)
-        ? raw.filter((id): id is string => typeof id === 'string')
-        : null;
-    }, [persistedReviewTabState]);
     const openReviewDialog = React.useCallback(
       (preselectedEngineIds?: readonly string[]) => {
         if (!machineReachable) return;
@@ -770,7 +754,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
           cwd: reviewCwd,
           comparison: shownComparison,
           scopeLabel,
-          scopeDetail,
+          scopeDetail: reviewScopeDetail,
           defaultWalkthrough: true,
           ...(preselectedEngineIds ? { preselectedEngineIds } : {}),
           onStarted: (started, walkthrough) => {
@@ -812,7 +796,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         props.sessionId,
         props.target,
         reviewCwd,
-        scopeDetail,
+        reviewScopeDetail,
         scopeLabel,
         setPersistedReviewTabState,
         shownComparison,
@@ -890,6 +874,33 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         marks.record,
       ],
     );
+    // The comments the Files bar's toggle opens: drawn by Review under that bar, above the files.
+    const reviewCommentsPanel = reviewCommentsEnabled && reviewScope ? (
+      <ReviewCommentsSessionSurface
+        scope={accountScope}
+        workspace={{
+          machineId: reviewScope.machineId,
+          path: reviewScope.rootPath,
+        }}
+        sessionId={props.sessionId}
+        execute={frontDoorActionExecutor}
+        directWriteGrants={directWriteGrants}
+        pendingDirectWriteGrantRequests={pendingDirectWriteGrantRequests}
+        onGrantDirectWrite={pluginPermissionGrants.grant}
+        onCancelDirectWriteGrant={pluginPermissionGrants.dismissRequest}
+        onRevokeDirectWrite={pluginPermissionGrants.revoke}
+        permissionGrantStatus={pluginPermissionGrants.state.status}
+        permissionGrantError={pluginPermissionGrants.state.error}
+        onRefreshPermissionGrants={() => {
+          void pluginPermissionGrants.refresh();
+        }}
+        header="external"
+        open={commentsOpen}
+        onUnresolvedCountChange={setCommentsCount}
+        testID="review-comments-session"
+      />
+    ) : null;
+
     const renderFiles = (comparisonChrome: ScmReviewComparisonChrome) => {
       if (!effectiveSnapshot && !snapshotError) {
         return (
@@ -967,31 +978,6 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       return (
         <View style={{ flex: 1, minHeight: 0, position: 'relative' }}>
           {staleSnapshotNotice}
-          {reviewCommentsEnabled && reviewScope ? (
-            <ReviewCommentsSessionSurface
-              scope={accountScope}
-              workspace={{
-                machineId: reviewScope.machineId,
-                path: reviewScope.rootPath,
-              }}
-              sessionId={props.sessionId}
-              execute={frontDoorActionExecutor}
-              directWriteGrants={directWriteGrants}
-              pendingDirectWriteGrantRequests={pendingDirectWriteGrantRequests}
-              onGrantDirectWrite={pluginPermissionGrants.grant}
-              onCancelDirectWriteGrant={pluginPermissionGrants.dismissRequest}
-              onRevokeDirectWrite={pluginPermissionGrants.revoke}
-              permissionGrantStatus={pluginPermissionGrants.state.status}
-              permissionGrantError={pluginPermissionGrants.state.error}
-              onRefreshPermissionGrants={() => {
-                void pluginPermissionGrants.refresh();
-              }}
-              header="external"
-              open={commentsOpen}
-              onUnresolvedCountChange={setCommentsCount}
-              testID="review-comments-session"
-            />
-          ) : null}
           <ChangedFilesReview
             comparisonChrome={comparisonChrome}
             detailsHeader={reviewDetailsHeader}
@@ -1085,6 +1071,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         reviewDisabled={!machineReachable}
         reviewDisabledReason={reviewDisabledReason}
         barMenuSection={commentsMenuSection}
+        barPanel={reviewCommentsPanel}
                 barActions={reviewCommentsEnabled && (commentsOpen || (commentsCount ?? 0) > 0) ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
           expanded={commentsOpen} onPress={toggleComments} testID="review-comments-session-trigger" /> : null}
         renderFiles={renderFiles}

@@ -49,15 +49,30 @@ describe('useSessionFileTransferAvailabilityResolver', () => {
         await hook.unmount();
     });
 
-    it('keeps a current Runner unavailable without its current Iroh endpoint', async () => {
+    it('selects Home RPC for a browser Runner without its current Iroh endpoint', async () => {
         installTransferProjection({ machine: transferMachine({
             id: 'runner-1', kind: 'ephemeral_session_runner', daemonState: null,
             operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } },
         }) });
         recordCachedMachineRpcDirectRouteViable({ serverId: 'server-1', remoteMachineId: 'runner-1' });
         const hook = await renderHook(() => useSessionFileTransferAvailabilityState('s1'));
-        expect(hook.getCurrent().available).toBe(false);
-        expect(hook.getCurrent().decision).toBeNull();
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'machine_rpc_server' } });
+        await hook.unmount();
+    });
+
+    it('keeps a native Runner unavailable without its current Iroh endpoint', async () => {
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string) => {
+            expect(command).toBe('iroh_get_availability');
+            return { available: true };
+        } });
+        installTransferProjection({ machine: transferMachine({
+            id: 'runner-1', kind: 'ephemeral_session_runner', daemonState: null,
+            operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } },
+        }) });
+        recordCachedMachineRpcDirectRouteViable({ serverId: 'server-1', remoteMachineId: 'runner-1' });
+        await probeIrohMachineTransferLifecycleAvailability();
+        const hook = await renderHook(() => useSessionFileTransferAvailabilityState('s1'));
+        expect(hook.getCurrent()).toMatchObject({ available: false, decision: null });
         await hook.unmount();
     });
 
@@ -148,12 +163,12 @@ describe('useSessionFileTransferAvailabilityResolver', () => {
         await remote.unmount();
     });
 
-    it('fails closed when file transfer policy has no viable route', async () => {
+    it('retains Home RPC when browser Iroh policy is disabled', async () => {
         installTransferProjection({ features: transferFeatures({ transfer: { enabled: true, directPeer: { enabled: false }, serverRouted: { enabled: false } } }) });
-        const hook = await renderHook(() => useSessionFileTransferAvailabilityResolver('s1'));
-        expect(hook.getCurrent()(64)).toBe(false);
+        const hook = await renderHook(() => useSessionFileTransferAvailabilityState('s1'));
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'machine_rpc_server' } });
         await act(async () => installTransferProjection({ features: transferFeatures({ peerMediation: { enabled: false, observability: { enabled: false } } }) }));
-        expect(hook.getCurrent()(64)).toBe(false);
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'machine_rpc_server' } });
         await hook.unmount();
     });
 

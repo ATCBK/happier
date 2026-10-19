@@ -23,8 +23,8 @@ import { canRevertFromSnapshot } from '@/scm/operations/safety';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import { getScmUserFacingError } from '@/scm/operations/userFacingErrors';
 import { runScmOperationWithGitIndexLockRecovery } from '@/scm/operations/gitIndexLockRecovery';
-import { buildRevertConfirmBody } from '@/scm/operations/revertFeedback';
 import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperationLock';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { reportSessionScmOperation, trackBlockedScmOperation } from '@/scm/operations/reporting';
 import { tracking } from '@/track';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -227,29 +227,21 @@ export function SessionCommitDetailsView(props: SessionCommitDetailsViewProps) {
         const cwd = sessionPath;
         if (!cwd) return;
 
-        const confirmed = await Modal.confirm(
-            t('files.commitDetails.revert.title'),
-            buildRevertConfirmBody({
-                commit: sha,
-                branch: scmSnapshot?.branch.head ?? null,
-                detached: scmSnapshot?.branch.detached ?? false,
-                detachedLabel: t('files.detachedHead'),
-            }),
-            { confirmText: t('files.commitDetails.revert.confirm'), cancelText: t('common.cancel') }
-        );
-        if (!confirmed) return;
         const lockResult = await withSessionProjectScmOperationLock({
             state: storage.getState(),
             sessionId,
             ...(props.serverId ? { serverId: props.serverId } : {}),
             operation: 'revert',
-            run: async () => {
-                setIsReverting(true);
+            deferRunning: true,
+            run: async (markRunning) => {
                 try {
+                    // The revert shows as running only once its Action is dispatched, after any in-place confirmation.
                     const runBackout = async () => await sessionScmCommitBackout(sessionId, {
                         commit: sha,
-                    }, props.serverId);
+                    }, props.serverId, { onDispatched: () => { markRunning(); setIsReverting(true); } });
                     let response = await runBackout();
+                    // Declined, or waiting on an approval: nothing ran and nothing failed.
+                    if (isScmActionNotRun(response)) return;
 
                     if (!response.success) {
                         response = await runScmOperationWithGitIndexLockRecovery({

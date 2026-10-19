@@ -8,7 +8,7 @@ import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 
 import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
 import { scmFileStatusFromChange } from '@/scm/scmStatusFiles';
@@ -26,6 +26,8 @@ export function WalkthroughNotice(props: Readonly<{
     tone: 'neutral' | 'warning' | 'danger';
     icon: IconName;
     message: React.ReactNode;
+    /** What the message leaves unsaid (a failure's reason), as one quiet line under it; absent when there is none. */
+    detail?: string | null;
     actions?: React.ReactNode;
     phone?: boolean;
 }>) {
@@ -39,9 +41,14 @@ export function WalkthroughNotice(props: Readonly<{
             style={[styles.notice, props.phone ? styles.noticePhone : null,
                 palette ? { backgroundColor: palette.background, borderColor: palette.border } : null]}
         >
-            <View style={styles.noticeBody}>
-                <Icon name={props.icon} size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx} color={palette ? palette.foreground : theme.colors.text.tertiary} />
-                <View style={styles.noticeMessage}>{typeof props.message === 'string' ? <Text style={styles.noticeText}>{props.message}</Text> : props.message}</View>
+            <View style={[styles.noticeBody, props.detail ? styles.noticeBodyWithDetail : null]}>
+                <View style={props.detail ? styles.noticeGlyphOnFirstLine : null}>
+                    <Icon name={props.icon} size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx} color={palette ? palette.foreground : theme.colors.text.tertiary} />
+                </View>
+                <View style={styles.noticeMessage}>
+                    {typeof props.message === 'string' ? <Text style={styles.noticeText}>{props.message}</Text> : props.message}
+                    {props.detail ? <Text testID={props.testID ? `${props.testID}-reason` : undefined} variant="meta" selectable style={styles.noticeDetail}>{props.detail}</Text> : null}
+                </View>
             </View>
             {props.actions ? <View style={[styles.noticeActions, props.phone ? styles.noticeActionsPhone : null]}>{props.actions}</View> : null}
         </View>
@@ -74,6 +81,7 @@ export const WalkthroughInventory = React.memo(function WalkthroughInventory(pro
     phone?: boolean;
     onOpenFile?: (path: string) => void;
 }>) {
+    usePreferredLanguage();
     const { theme } = useUnistyles();
     return (
         <View testID="walkthrough-inventory" style={[styles.inventory, props.phone ? styles.inventoryPhone : null]}>
@@ -151,8 +159,12 @@ const styles = StyleSheet.create((theme) => ({
     // The message keeps its natural width as the line's basis, so when it and the actions don't fit one
     // line the actions wrap under it instead of squeezing the sentence into a one-word column.
     noticeBody: { flexDirection: 'row', alignItems: 'center', gap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx, flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
+    // With a second line the glyph stays on the first one, centred on its line box.
+    noticeBodyWithDetail: { alignItems: 'flex-start' },
+    noticeGlyphOnFirstLine: { marginTop: (HAPPIER_FRESHNESS_LINE_METRICS.text.lineHeight - HAPPIER_FRESHNESS_LINE_METRICS.glyphPx) / 2 },
     noticeMessage: { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
     noticeText: { ...Typography.default(), ...HAPPIER_FRESHNESS_LINE_METRICS.text, color: theme.colors.text.secondary },
+    noticeDetail: { color: theme.colors.text.tertiary },
     noticeActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, flexShrink: 0, marginLeft: 'auto' },
     noticeActionsPhone: { alignSelf: 'flex-end' },
     inventory: { paddingTop: 18 },

@@ -180,7 +180,6 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
             ? (scmCommitStrategySetting as ScmCommitStrategy)
             : 'atomic';
     }, [scmCommitStrategySetting]);
-    const scmRemoteConfirmPolicy = useSetting('scmRemoteConfirmPolicy');
     const scmPushRejectPolicy = useSetting('scmPushRejectPolicy');
     const autoRefreshIntervalSetting = useSetting('scmFilesAutoRefreshIntervalMs');
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations', props.serverId ? { scopeKind: 'spawn', serverId: props.serverId } : undefined);
@@ -269,7 +268,6 @@ export const SessionRightPanelGitView = React.memo((props: SessionRightPanelGitV
         scmSnapshot: effectiveScmSnapshot,
         scmWriteEnabled,
         scmCommitStrategy,
-        scmRemoteConfirmPolicy,
         scmPushRejectPolicy,
         refreshScmData,
         loadCommitHistory,

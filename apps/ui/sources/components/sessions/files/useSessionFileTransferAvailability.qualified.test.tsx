@@ -1,16 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './views/sessionFilesViewTestkit';
 import '@/components/workspaces/files/repositoryTree/repositoryUploadBrowserTestFixture';
 
 installSessionFilesViewBoundaries();
+await prepareSessionFilesViewTestkit();
 // The canonical fixture replaces only the external Iroh SDK; lifecycle/probe decisions stay real.
 
 describe('Session transfer availability qualifies its Machine', () => {
     let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>> | undefined;
-    beforeAll(prepareSessionFilesViewTestkit);
     afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
     it('rejects a same-id active Machine outside the addressed Home and recovers only its own projection', async () => {
         fixture = await createSessionFilesViewFixture({ rootPath: '/qualified-transfer-browser' });

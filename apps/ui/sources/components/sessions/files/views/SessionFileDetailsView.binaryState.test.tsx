@@ -1,12 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 import { createSessionFileNativeTransferBoundary } from '../sessionFileNativeTransferTestkit';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
-installSessionFilesViewBoundaries();
+installSessionFilesViewBoundaries({ confirmResult: true });
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
 const filePath = 'bin.dat';
@@ -37,6 +37,7 @@ describe('SessionFileDetailsView (binary)', () => {
         const { SessionFileDetailsView } = await import('./SessionFileDetailsView');
         const { FileActionToolbar } = await import('@/components/workspaces/files/file/FileActionToolbar');
         const screen = await fixture.render(<SessionFileDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" filePath={filePath} />);
+        await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
         expect(screen.tree.root.findAllByType(FileActionToolbar)).toHaveLength(1);
         expect(screen.findHostByTestId('file-header-download')).not.toBeNull();
     });
@@ -46,6 +47,7 @@ describe('SessionFileDetailsView (binary)', () => {
         const { FileActionToolbar } = await import('@/components/workspaces/files/file/FileActionToolbar');
         const { FileBinaryState, FileErrorState } = await import('@/components/workspaces/files/file/FileScreenState');
         const screen = await fixture.render(<SessionFileDetailsView serverId={fixture.home.id} sessionId="s1" scopeId="session:s1" filePath={filePath} />);
+        await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
         const toolbar = screen.tree.root.findAllByType(FileActionToolbar);
         expect(toolbar).toHaveLength(1);
         expect(toolbar[0]!.props.showWrapLinesToggle).toBe(false);

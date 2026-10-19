@@ -1,4 +1,5 @@
 import type { ReviewFinding, ReviewFindingOverlayEntry, ReviewFindingsOverlay, ScmDiffSummaryWalkthrough } from '@happier-dev/protocol';
+import type { ReviewOverlayFinding } from '@happier-dev/protocol/reviews/projectReviewFindingsOverlay';
 
 import { formatReviewFindingLocation, REVIEW_SEVERITY_RANK } from '@/components/sessions/reviews/findings/reviewFindingPresentation';
 
@@ -12,7 +13,7 @@ export type WalkthroughFindingView = Readonly<{
     key: string;
     runId: string;
     findingId: string;
-    finding: ReviewFinding;
+    finding: ReviewOverlayFinding;
     severity: ReviewFinding['severity'];
     engineLabel: string;
     location: string | null;
@@ -26,7 +27,7 @@ export type WalkthroughFindingTailEntry = WalkthroughFindingView & Readonly<{ ta
 
 export type WalkthroughReviewSummary = Readonly<{
     /** running: an engine is still reviewing · partial: an engine stopped without a complete result. */
-    state: 'running' | 'partial' | 'complete';
+    state: 'running' | 'partial' | 'complete' | 'loading' | 'unavailable';
     total: number;
     inStory: number;
     elsewhere: number;
@@ -69,6 +70,7 @@ export function buildWalkthroughReviewOverlay(params: Readonly<{
     stops: ScmDiffSummaryWalkthrough['stops'];
     /** The reviewer's name for each review Run ("Codex"); several Runs may share a backend. */
     reviewerLabelByRunId: Readonly<Record<string, string>>;
+    readStateByRunId?: Readonly<Record<string, 'ready' | 'loading' | 'unavailable'>>;
 }>): WalkthroughReviewOverlay {
     const viewOf = (entry: ReviewFindingOverlayEntry): WalkthroughFindingView => ({
         key: entry.key,
@@ -137,7 +139,9 @@ export function buildWalkthroughReviewOverlay(params: Readonly<{
     const finished = reviews.filter((review) => review.status === 'succeeded' && review.hasOutput
         && (review.reviewOutcome === undefined || review.reviewOutcome === 'complete') && !review.findingsTruncated);
     const failed = reviews.filter((review) => !running.includes(review) && !finished.includes(review));
-    const state = failed.length > 0 ? 'partial' : running.length > 0 ? 'running' : params.overlay.status === 'incomplete' ? 'partial' : 'complete';
+    const readStates = Object.values(params.readStateByRunId ?? {});
+    const state = readStates.includes('unavailable') ? 'unavailable' : readStates.includes('loading') ? 'loading'
+        : running.length > 0 ? 'running' : failed.length > 0 ? 'partial' : params.overlay.status === 'incomplete' ? 'partial' : 'complete';
     const viewsByReference = new Map([...byReference.entries()].flatMap(([reference, matches]) => (
         matches.length === 1 ? [[reference, matches[0]!] as const] : [])));
     return {

@@ -1,14 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, invokeTestInstanceHandler, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 import { createSessionFileNativeTransferBoundary } from '../sessionFileNativeTransferTestkit';
 import { createExpoFileSystemFileMock } from '@/dev/testkit/mocks/expoFileSystem';
 
-installSessionFilesViewBoundaries();
+installSessionFilesViewBoundaries({ confirmResult: true });
 const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn() }));
 vi.mock('expo-clipboard', () => clipboard);
+await prepareSessionFilesViewTestkit();
+const { WorkspaceFileDetailsView } = await import('@/components/workspaces/files/details/WorkspaceFileDetailsView');
 
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
@@ -19,7 +21,6 @@ let fileSystem: ReturnType<typeof createExpoFileSystemFileMock>;
 const filePath = 'src/example.txt';
 const fileText = 'first line\nsecond line – café\n';
 
-beforeAll(prepareSessionFilesViewTestkit);
 beforeEach(async () => {
     standardCleanup();
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -51,8 +52,9 @@ beforeEach(async () => {
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); vi.unstubAllGlobals(); });
 
 async function renderFile(path = filePath) {
-    const { WorkspaceFileDetailsView } = await import('@/components/workspaces/files/details/WorkspaceFileDetailsView');
-    return fixture.render(<WorkspaceFileDetailsView scopeId="project:content-actions" scope={fixture.scope} filePath={path} presentation="screen" />);
+    const screen = await fixture.render(<WorkspaceFileDetailsView scopeId="project:content-actions" scope={fixture.scope} filePath={path} presentation="screen" />);
+    await vi.waitFor(() => expect(screen.findByTestId('file-action-toolbar')).not.toBeNull());
+    return screen;
 }
 
 async function setToolbarWidth(screen: Awaited<ReturnType<typeof renderFile>>, width: number) {

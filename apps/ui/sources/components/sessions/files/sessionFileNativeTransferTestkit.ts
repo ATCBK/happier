@@ -5,7 +5,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { FilesystemDownloadInputSchema, FilesystemDownloadOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FilesystemDownloadInputSchema, FilesystemDownloadOutputSchema, FilesystemReadFileOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import nacl from 'tweetnacl';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import type { FileViewRpcRequest } from './views/sessionFilesViewTestkit';
@@ -35,6 +35,7 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
     let name = input.name ?? 'file.png';
     let nextGate: ReturnType<typeof createDeferred<void>> | null = null;
     let counter = 0;
+    let tunnelCounter = 0;
     const exports = new Map<string, { bytes: Uint8Array; name: string; destinationId?: string; manifestHash?: string }>();
     const prepares: FileViewRpcRequest[] = [];
     const httpRequests: Array<{ url: string; signal: AbortSignal | null | undefined }> = [];
@@ -48,7 +49,7 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
         const handshake = IrohMachineHandshakeV1Schema.parse(JSON.parse(input.handshakeJson));
         const proof = verifyPeerRouteEphemeralProofV2({ grant: handshake.grant, proof: handshake.proof });
         if (!proof.valid) throw new Error(`Invalid client proof: ${proof.reasonCode}`);
-        const lease = { machineTunnelId: `preview-lease-${counter}`, endpointHandle: 'preview-endpoint', localPort: 48126,
+        const lease = { machineTunnelId: `preview-lease-${++tunnelCounter}`, endpointHandle: 'preview-endpoint', localPort: 48126,
             connectionActive: true, remoteEndpointId: handshake.target.endpointId, observedPath: 'relay', startedAtMs: Date.now(), lastErrorCode: null };
         sdk.tunnels.set(lease.machineTunnelId, lease);
         return lease;
@@ -56,10 +57,14 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
     return {
         origin: SESSION_FILE_MACHINE_CARRIER_ORIGIN, prepares, httpRequests, grantRequests,
         nativeStarts: sdk.start, nativeStops: sdk.stop,
+        get activeNativeTunnelIds() { return [...sdk.tunnels.keys()]; },
         setPayload(nextBytes: Uint8Array, nextName = name) { bytes = nextBytes; name = nextName; },
         deferNextOpen() { const gate = createDeferred<void>(); nextGate = gate; return gate; },
         rpc(request: FileViewRpcRequest) {
             if (request.method === RPC_METHODS.STAT_FILE) return { success: true, exists: true, kind: 'file', sizeBytes: bytes.byteLength };
+            if (request.method === getActionSpec('daemon.filesystem.readFile').bindings?.rpcMethod) {
+                return FilesystemReadFileOutputSchema.parse({ success: true, content: Buffer.from(bytes).toString('base64') });
+            }
             if (request.method === RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE) return { success: true };
             const isFilesystemDownload = request.method === getActionSpec('daemon.filesystem.download').bindings?.rpcMethod;
             if (!isFilesystemDownload && request.method !== RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE) return undefined;

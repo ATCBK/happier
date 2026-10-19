@@ -113,7 +113,7 @@ describe('GitKeptAsideNotice (Git lab SZ)', () => {
         await flushHookEffects({ cycles: 3 });
 
         // The stack may have moved since the list RPC: only the captured object is safe to restore.
-        expect(state.stashPop).toHaveBeenCalledWith('s1', { stashRef: 'a'.repeat(40) }, undefined);
+        expect(state.stashPop).toHaveBeenCalledWith('s1', { stashRef: 'a'.repeat(40) }, undefined, { onDispatched: expect.any(Function) });
         expect(storage.getState().getSessionProjectScmOperationLog('s1')[0]).toMatchObject({ operation: 'stash_restore', status: 'success' });
     });
 

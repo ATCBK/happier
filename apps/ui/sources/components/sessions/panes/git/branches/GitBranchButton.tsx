@@ -7,7 +7,7 @@ import { repoScmBranchService } from '@/scm/repository/repoScmBranchService';
 import { resolveSessionPathWithinWorktree } from '@/scm/repository/resolveSessionPathWithinWorktree';
 import { useRepoScmBranchList } from '@/scm/repository/useRepoScmBranchList';
 import { repoScmWorktreeService } from '@/scm/repository/repoScmWorktreeService';
-import { runSessionScmMutation } from '@/scm/operations/runSessionScmMutation';
+import { runSessionScmMutation, type ScmMutationCall } from '@/scm/operations/runSessionScmMutation';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { sessionScmBranchCheckout, sessionScmBranchCreate, sessionScmStashCreate } from '@/sync/ops';
@@ -34,6 +34,7 @@ import {
 } from '@/components/workspaces/scm/branches/branchMenuPredicates';
 import { handleSourceControlBranchMenuSelect } from '@/components/sessions/sourceControl/branches/handleSourceControlBranchMenuSelect';
 import { useSessionScmStashes } from './useSessionScmStashes';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export type GitBranchButtonProps = Readonly<{
     sessionId: string;
@@ -204,7 +205,7 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
             operation: 'branch_create',
             cwd: repoPath,
             fallbackError: t('files.branchMenu.create.failed'),
-            run: () => sessionScmBranchCreate(props.sessionId, { name: trimmed, checkout: true }, props.serverId),
+            run: (call) => sessionScmBranchCreate(props.sessionId, { name: trimmed, checkout: true }, props.serverId, call),
             successDetail: () => trimmed,
             refreshAfterMutation: afterBranchWrite,
         });
@@ -231,11 +232,11 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
         }
         closeMenu();
 
-        const attemptCheckout = (overwriteCurrentBranchStash: boolean) => sessionScmBranchCheckout(props.sessionId, {
+        const attemptCheckout = (overwriteCurrentBranchStash: boolean, call: ScmMutationCall) => sessionScmBranchCheckout(props.sessionId, {
             name: target,
             strategy,
             ...(overwriteCurrentBranchStash ? { overwriteCurrentBranchStash: true } : null),
-        }, props.serverId);
+        }, props.serverId, call);
 
         await runSessionScmMutation({
             state: storage.getState(),
@@ -244,8 +245,8 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
             operation: 'branch_switch',
             cwd: repoPath,
             fallbackError: t('files.branchMenu.switch.failed'),
-            run: async () => {
-                const response = await attemptCheckout(false);
+            run: async (call) => {
+                const response = await attemptCheckout(false, call);
                 if (strategy !== 'stash_on_current_branch' || !isBranchStashAlreadyExistsError(response)) return response;
                 const overwrite = askBeforeOverwrite
                     ? await Modal.confirm(
@@ -258,7 +259,7 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
                         },
                     )
                     : true;
-                return overwrite ? await attemptCheckout(true) : 'cancelled' as const;
+                return overwrite ? await attemptCheckout(true, call) : 'cancelled' as const;
             },
             successDetail: () => target,
             refreshAfterMutation: afterBranchWrite,
@@ -278,8 +279,8 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
             operation: 'stash_create',
             cwd: repoPath,
             fallbackError: t('sessionGitBranches.keepAsideFailed'),
-            run: () => sessionScmStashCreate(props.sessionId, {}, props.serverId),
-            successDetail: (response) => response.stashRef ?? undefined,
+            run: (call) => sessionScmStashCreate(props.sessionId, {}, props.serverId, call),
+            successDetail: (response) => 'stashRef' in response ? response.stashRef ?? undefined : undefined,
             refreshAfterMutation: () => scmStatusSync.invalidateFromMutationAndAwait(props.sessionId, props.serverId),
         });
     }, [canCreateStash, changedCount, closeMenu, disabled, props.sessionId, props.serverId, repoPath]);
@@ -295,6 +296,7 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
             ...(targetServerId ? { serverId: targetServerId } : {}),
         });
         if (!lifetime.isCurrent() || !isCurrentDraftTarget()) return;
+        if (isScmActionNotRun(response)) return;
         if (!response.success) {
             Modal.alert(t('common.error'), response.error || t('files.branchMenu.worktrees.createFailed'));
             return;
@@ -314,6 +316,7 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
             path: machineTarget.basePath,
             ...(targetServerId ? { serverId: targetServerId } : {}),
         });
+        if (isScmActionNotRun(response)) return;
         if (!response.success) {
             Modal.alert(t('common.error'), response.stderr || t('files.branchMenu.worktrees.pruneFailed'));
             return;
@@ -324,22 +327,13 @@ export function GitBranchButton(props: GitBranchButtonProps): React.ReactElement
 
     const removeWorktree = React.useCallback(async (worktreePath: string) => {
         if (!canCreateWorktrees || !machineTarget) return;
-        const confirmed = await Modal.confirm(
-            t('files.branchMenu.worktrees.removeConfirmTitle'),
-            t('files.branchMenu.worktrees.removeConfirmBody', { path: worktreePath }),
-            {
-                confirmText: t('files.branchMenu.worktrees.removeConfirmButton'),
-                cancelText: t('common.cancel'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
         const response = await repoScmWorktreeService.removeWorktreeForMachinePath({
             machineId: machineTarget.machineId,
             path: machineTarget.basePath,
             worktreePath,
             ...(targetServerId ? { serverId: targetServerId } : {}),
         });
+        if (isScmActionNotRun(response)) return;
         if (!response.success) {
             Modal.alert(t('common.error'), response.stderr || t('files.branchMenu.worktrees.removeFailed'));
             return;

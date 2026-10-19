@@ -11,6 +11,7 @@ export type ReviewWalkthroughReviewStep = Readonly<
     | { state: 'done'; kind: 'engine_reviewed'; engine: string; findings: number }
     | { state: 'done'; kind: 'reviewed_at' | 'review_at'; at: string }
     | { state: 'partial'; kind: 'partial'; findings: number }
+    | { state: 'waiting'; kind: 'loading' | 'unavailable' }
 >;
 
 export type ReviewWalkthroughNarrationStep = Readonly<
@@ -44,7 +45,9 @@ export function resolveReviewWalkthroughProgress(params: Readonly<{
     reviewedAt?: string | null;
 }>): ReviewWalkthroughProgress {
     const { review, narration } = params;
-    const reviewStep: ReviewWalkthroughReviewStep = review.state === 'running'
+    const reviewStep: ReviewWalkthroughReviewStep = review.state === 'loading' || review.state === 'unavailable'
+        ? { state: 'waiting', kind: review.state }
+        : review.state === 'running'
         ? (!narration && review.finishedEngineLabels.length > 0
             // A review on its own names who is done and who still reviews ("Claude done · Codex reviewing").
             ? { state: 'running', kind: 'engines_reviewing', done: review.finishedEngineLabels, running: review.runningEngineLabels }
@@ -59,7 +62,7 @@ export function resolveReviewWalkthroughProgress(params: Readonly<{
     if (!narration) return { review: reviewStep, narration: null };
 
     // Narration starts once the findings are in; until then its step waits, named.
-    const waiting = review.state === 'running' || narration.state === 'pending';
+    const waiting = review.state === 'running' || review.state === 'loading' || review.state === 'unavailable' || narration.state === 'pending';
     const activity = waiting ? 'waiting' as const : 'running' as const;
     let narrationStep: ReviewWalkthroughNarrationStep;
     if (narration.state === 'complete') narrationStep = { state: 'done', kind: 'ready' };

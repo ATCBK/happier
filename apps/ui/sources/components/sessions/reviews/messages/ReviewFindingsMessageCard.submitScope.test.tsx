@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import type { ReviewCommentV1, ReviewFindingsV2 } from '@happier-dev/protocol';
 
 import { buildReviewCommentFixture, createDeferred, createRootLayoutFeaturesResponse, createSessionFixture, flushHookEffects, renderScreen, standardCleanup, storePlainReviewCommentFixture } from '@/dev/testkit';

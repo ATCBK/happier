@@ -42,7 +42,7 @@ export function reviewSeverityLabel(severity: ReviewFinding['severity']): string
     }
 }
 
-export function formatReviewFindingLocation(finding: ReviewFinding): string | null {
+export function formatReviewFindingLocation(finding: Pick<ReviewFinding, 'filePath' | 'startLine' | 'endLine'>): string | null {
     if (!finding.filePath) return null;
     if (typeof finding.startLine === 'number' && typeof finding.endLine === 'number' && finding.endLine !== finding.startLine) {
         return `${finding.filePath}:${finding.startLine}-${finding.endLine}`;

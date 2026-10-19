@@ -4,21 +4,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import { installSessionGitPaneCommonModuleMocks } from './sessionGitPaneTestHelpers';
+import { installSessionPaneRuntimeTestHarness } from '../sessionPaneRuntimeTestHarness';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const gitCommitTabTheme = createThemeFixture();
-import { readSessionScmDraft, resetSessionDraftValueCachesForTests } from '@/dev/testkit/sessionDraftRepositoryTestkit';
+import { readSessionScmDraft } from '@/dev/testkit/sessionDraftRepositoryTestkit';
 
 vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
     const { createBrowserRecordStorageModuleMock } = await import('@/dev/testkit/mocks/browserRecordStorage');
     return createBrowserRecordStorageModuleMock();
-});
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({ importOriginal, tokenStorage: { getCredentialsForServerUrl: async () => ({ token: 'header.' + Buffer.from(JSON.stringify({ sub: 'account-git-draft' })).toString('base64') + '.signature', secret: '' }) } });
 });
 
 installSessionGitPaneCommonModuleMocks({
@@ -40,21 +36,18 @@ installSessionGitPaneCommonModuleMocks({
         });
     },
 });
+const runtime = installSessionPaneRuntimeTestHarness();
 
 describe('SessionRightPanelGitCommitTab (draft debounce)', () => {
     it('debounces typing into the session draft and restores the persisted message after remount', async () => {
-        resetSessionDraftValueCachesForTests();
-        const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
-        await prepareSessionDraftPersistenceStorage();
-        const { upsertServerProfile, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
-        const profile = await upsertServerProfile({ serverUrl: 'https://git-draft.example.test', name: 'Git draft test' });
-        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(profile.id), accountId: 'account-git-draft' };
+        const scope = runtime.accountScope;
+        if (!scope) throw new Error('Expected the hydrated pane Account');
         const { useSessionScmDraft } = await import('@/hooks/session/sourceControl/useSessionScmDraft');
         let available = false;
         const { SessionRightPanelGitCommitTab } = await import('./SessionRightPanelGitCommitTab');
 
         function Controller() {
-            const draft = useSessionScmDraft({ sessionId: 's1', serverId: profile.id });
+            const draft = useSessionScmDraft({ sessionId: 's1', serverId: runtime.serverId });
             available = draft.available;
             return <SessionRightPanelGitCommitTab
             theme={gitCommitTabTheme}
@@ -97,7 +90,7 @@ describe('SessionRightPanelGitCommitTab (draft debounce)', () => {
             showCommitComposer={true}
         />;
         }
-        const screen = await renderScreen(<Controller />);
+        const screen = await renderScreen(<runtime.Wrapper><Controller /></runtime.Wrapper>);
         await flushHookEffects({ cycles: 3 });
         expect(available).toBe(true);
 
@@ -116,7 +109,7 @@ describe('SessionRightPanelGitCommitTab (draft debounce)', () => {
             vi.useRealTimers();
         }
         await act(async () => { screen.tree.unmount(); });
-        const remounted = await renderScreen(<Controller />);
+        const remounted = await renderScreen(<runtime.Wrapper><Controller /></runtime.Wrapper>);
         await flushHookEffects({ cycles: 3 });
         expect(remounted.findByTestId('scm-commit-message')?.props.value).toBe('hel');
     });

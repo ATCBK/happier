@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { ReviewFinding, ReviewFollowUpV1 } from '@happier-dev/protocol';
 import { resolveEffectiveReviewFindings } from './resolveEffectiveReviewFindings';
-import { readReviewPayload } from '../findings/useReviewGroupSiblings';
+import { readReviewPayload } from '../findings/readReviewPayload';
 
 const runRef = { runId: 'run-1', callId: 'call-1', backendId: 'codex' };
 const finding: ReviewFinding = { id: 'f1', title: 'Issue', severity: 'high', category: 'correctness', summary: 'Issue' };

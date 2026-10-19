@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { ComposerContentHandleV1 } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { renderHook } from '@/dev/testkit';
 import { createSessionFileNativeTransferBoundary } from '../../sessionFileNativeTransferTestkit';
@@ -11,6 +12,11 @@ const files = vi.hoisted(() => new Map<string, { exists: boolean; chunks: Uint8A
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' });
+});
+// Accept the real Action owner's in-place read confirmation at the modal boundary.
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
 });
 // Expo's OS-backed file API is the sink boundary. The real preview source owns custody.
 vi.mock('expo-file-system', () => ({
@@ -68,12 +74,14 @@ describe('useSessionImagePreview', () => {
         expect(transfer.prepares).toEqual([]);
 
         await act(async () => fixture.storage.getState().applySessions([fixture.session]));
-        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('loaded'));
-        expect(transfer.prepares.map((request) => request.payload)).toEqual([{
-            t: 'workspace_file_download_v1', workingDirectory: '/repo',
-            path: '/repo/.happier/uploads/messages/m1/file.png', asZip: false,
-        }]);
-        expect(transfer.prepares[0]?.targetId).toBe(fixture.scope.machineId);
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'loaded', error: null }));
+        expect(transfer.prepares).toHaveLength(1);
+        expect(transfer.prepares[0]).toMatchObject({
+            targetId: fixture.scope.machineId,
+            method: getActionSpec('daemon.filesystem.download').bindings?.rpcMethod,
+            payload: { input: { rootPath: '/repo',
+                path: '/repo/.happier/uploads/messages/m1/file.png', asZip: false } },
+        });
         expect(hook.getCurrent().uri?.startsWith('data:')).toBe(false);
         const file = files.get(hook.getCurrent().uri!);
         expect(file?.chunks.flatMap((chunk) => [...chunk])).toEqual([97, 98, 99]);
@@ -105,7 +113,7 @@ describe('useSessionImagePreview', () => {
         await hook.unmount();
         expect(pendingRequest.signal?.aborted).toBe(true);
         gate.resolve();
-        await vi.waitFor(() => expect(transfer.nativeStops).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(transfer.activeNativeTunnelIds).toEqual([]));
     });
 
     it('cleans up a preview source when its transfer resolves after unmount', async () => {
@@ -122,7 +130,7 @@ describe('useSessionImagePreview', () => {
         await vi.waitFor(() => expect([...files.values()].every((file) => !file.exists)).toBe(true));
         // Outcome, not call counts: every sink was closed once and nothing is left in the cache.
         expect([...files.values()].every((file) => file.closed === 1 && !file.exists)).toBe(true);
-        await vi.waitFor(() => expect(transfer.nativeStops).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(transfer.activeNativeTunnelIds).toEqual([]));
     });
 
     it('keeps one in-flight transfer for equivalent workspace scope objects and publishes its URI once', async () => {

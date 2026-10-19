@@ -8,7 +8,7 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 
 import { hasAgentIconMark } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
@@ -46,7 +46,8 @@ export const ReviewFindingDecisionControl = React.memo(function ReviewFindingDec
     disabled: boolean;
     onDecide: (decision: ReviewFindingDecision) => void;
 }>) {
-    const tabs = React.useMemo(() => REVIEW_FINDING_DECISIONS.map((decision) => ({ id: decision, label: decisionLabel(decision) })), []);
+    const language = usePreferredLanguage();
+    const tabs = React.useMemo(() => REVIEW_FINDING_DECISIONS.map((decision) => ({ id: decision, label: decisionLabel(decision) })), [language]);
     return (
         <SegmentedTabBar<ReviewFindingDecision>
             role="radiogroup"

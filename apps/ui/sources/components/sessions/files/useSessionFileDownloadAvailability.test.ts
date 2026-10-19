@@ -19,21 +19,21 @@ describe('useSessionFileDownloadAvailability', () => {
     });
     afterEach(() => { resetRuntimeFetch(); vi.unstubAllGlobals(); });
 
-    it('reacts to current endpoint projection changes without trusting cached legacy direct-route viability', async () => {
+    it('selects the current browser carrier without trusting cached legacy direct-route viability', async () => {
         const machine = transferMachine({ operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } } });
         installTransferProjection({ machine });
-        const { useSessionFileDownloadAvailability } = await import('./useSessionFileDownloadAvailability');
-        const hook = await renderHook(() => useSessionFileDownloadAvailability('s1'));
-        expect(hook.getCurrent()).toBe(false);
+        const { useSessionFileTransferAvailabilityState } = await import('./useSessionFileTransferAvailability');
+        const hook = await renderHook(() => useSessionFileTransferAvailabilityState('s1'));
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'machine_rpc_server' } });
 
         await act(async () => recordCachedMachineRpcDirectRouteViable({ serverId: 'server-1', remoteMachineId: machine.id }));
         await hook.rerender();
-        expect(hook.getCurrent()).toBe(false);
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'machine_rpc_server' } });
 
         await act(async () => installTransferProjection({ machine: transferMachine() }));
-        expect(hook.getCurrent()).toBe(true);
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'iroh_peer' } });
         await act(async () => installTransferProjection({ machine }));
-        expect(hook.getCurrent()).toBe(false);
+        expect(hook.getCurrent()).toMatchObject({ available: true, decision: { preferredRouteKind: 'machine_rpc_server' } });
         await hook.unmount();
     });
 
@@ -54,10 +54,10 @@ describe('useSessionFileDownloadAvailability', () => {
         }
     });
 
-    it('hides download actions when direct mode is unreachable and session RPC is unavailable', async () => {
+    it('hides download actions when neither a current daemon application nor session RPC is available', async () => {
         installTransferProjection({
             session: createSessionFixture({ id: 's1', serverId: 'server-1', active: false }),
-            machine: transferMachine({ operationProtocolCapabilities: {} }),
+            machine: transferMachine({ operationProtocolCapabilities: {}, daemonState: null }),
         });
         recordCachedMachineRpcDirectRouteUnavailable({ serverId: 'server-1', remoteMachineId: 'machine-1' }, 'machine_rpc_direct_unavailable');
         const { useSessionFileDownloadAvailability } = await import('./useSessionFileDownloadAvailability');

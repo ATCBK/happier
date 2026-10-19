@@ -1,584 +1,199 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
-import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
-import type { Session, ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
-import { installSessionFilesViewCommonModuleMocks } from './sessionFilesViewsTestHelpers';
+import { flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import type { DiffFilesListViewProps } from '@/components/ui/code/diff/DiffFilesListView';
+import {
+    createSessionFilesViewFixture, fileViewSnapshot,
+    installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit,
+} from './sessionFilesViewTestkit';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+installSessionFilesViewBoundaries({ platformOS: 'web', emitViewability: false });
+// Static fixture dependencies also consume the OS port; install it before their graph loads.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
 
-const commitSessionId = 's1';
 const commitSha = 'abc';
-const diffFilesListSpy = vi.fn();
-
-const sessionScmDiffCommitSpy = vi.fn(async (_sessionId: string, _request: { commit: string }): Promise<{
-    success: boolean;
-    diff: string;
-    error: string | null;
-}> => ({
-    success: true,
-    diff: [
-        'diff --git a/src/a.ts b/src/a.ts',
-        'index 0000000..1111111 100644',
-        '--- a/src/a.ts',
-        '+++ b/src/a.ts',
-        '@@ -1,1 +1,1 @@',
-        '-export const a = 1;',
-        '+export const a = 2;',
-        '',
-    ].join('\n'),
-    error: null,
-}));
-
-const sessionScmCommitBackoutSpy = vi.fn(async () => ({ success: true }));
-
-let reviewCommentsEnabled = false;
-let sessionsMock: Session[] | null = [];
-let sessionMock: Session | null = createCommitSessionFixture();
-let prefetchAheadCount = 1;
-let prefetchBehindCount = 1;
-const mountedTrees: renderer.ReactTestRenderer[] = [];
-let SessionCommitDetailsViewComponent: typeof import('./SessionCommitDetailsView').SessionCommitDetailsView | null = null;
-
-const stableSnapshot: ScmWorkingSnapshot = {
-    projectKey: 'project-1',
-    fetchedAt: 1,
-    repo: {
-        isRepo: true,
-        rootPath: '/repo',
-        backendId: 'git',
-        mode: '.git',
-        worktrees: [],
-    },
-    branch: {
-        head: 'main',
-        upstream: null,
-        ahead: 0,
-        behind: 0,
-        detached: false,
-    },
-    hasConflicts: false,
-    entries: [],
-    totals: {
-        includedFiles: 0,
-        pendingFiles: 0,
-        untrackedFiles: 0,
-        includedAdded: 0,
-        includedRemoved: 0,
-        pendingAdded: 0,
-        pendingRemoved: 0,
-    },
+const commitEntry = {
+    sha: 'abc1234def5678', shortSha: 'abc1234', authorName: 'Leeroy Brun',
+    authorEmail: 'leeroy@example.test', timestamp: 1_790_000_000,
+    subject: 'Key the settings modal by route, not window width',
+    body: 'Resizing the window remounted SettingsModal because its key included the width.',
 };
+const diffResponse = vi.fn();
+let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+let screen: Awaited<ReturnType<typeof fixture.render>>;
 
-function createCommitSessionFixture(): Session {
-    return createSessionFixture({
-        metadata: {
-            path: '/repo',
-            host: 'tester.local',
-            homeDir: '/Users/tester',
-            machineId: 'machine-1',
-        } as Session['metadata'],
+function commitDiff(count = 1): string {
+    return Array.from({ length: count }, (_, index) => {
+        const path = `src/f${index}.ts`;
+        return [`diff --git a/${path} b/${path}`, `--- a/${path}`, `+++ b/${path}`,
+            '@@ -1 +1 @@', `-v${index}`, `+v${index + 1}`, ''].join('\n');
+    }).join('\n');
+}
+
+beforeAll(prepareSessionFilesViewTestkit);
+beforeEach(async () => {
+    browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+    diffResponse.mockReset().mockResolvedValue({ success: true, diff: commitDiff() });
+    fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
+        if (request.method === RPC_METHODS.SCM_DIFF_COMMIT) return diffResponse(request);
+        if (request.method === RPC_METHODS.SCM_LOG_LIST) return { success: true, queryApplied: true, entries: [commitEntry] };
+        return undefined;
+    } });
+    fixture.setSnapshot(fileViewSnapshot({ rootPath: '/repo' }));
+    fixture.storage.getState().applySettingsLocal({
+        wrapLinesInDiffs: true, showLineNumbers: true,
+        scmReviewMaxFiles: 1, scmReviewMaxChangedLines: 2000,
+        scmReviewPrefetchAheadCountWeb: 1, scmReviewPrefetchBehindCountWeb: 1,
+        scmReviewPrefetchDebounceMs: 0,
     });
+    fixture.storage.setState({ isDataReady: true });
+});
+afterEach(async () => {
+    standardCleanup();
+    await fixture?.dispose();
+    browser?.restore();
+});
+
+function diffRequests() {
+    return fixture.requests.filter(request => request.method === RPC_METHODS.SCM_DIFF_COMMIT);
 }
 
-function resetCommitDetailsStorageState(): void {
-    sessionsMock = [];
-    sessionMock = createCommitSessionFixture();
-    prefetchAheadCount = 1;
-    prefetchBehindCount = 1;
+async function renderCommitDetailsView() {
+    const { SessionCommitDetailsView } = await import('./SessionCommitDetailsView');
+    screen = await fixture.render(<SessionCommitDetailsView serverId={fixture.scope.serverId} sessionId={fixture.session.id} sha={commitSha} />);
+    await vi.waitFor(() => expect(screen.findHostByTestId('scm-commit-details-loading')).toBeNull());
+    return screen;
 }
 
-function getLastDiffFilesListProps(): Record<string, unknown> | null {
-    return (diffFilesListSpy.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined) ?? null;
+async function diffListProps(): Promise<DiffFilesListViewProps> {
+    const { DiffFilesListView } = await import('@/components/ui/code/diff/DiffFilesListView');
+    return screen.tree.root.findByType(DiffFilesListView).props;
 }
 
-async function settleCommitDetailsView(): Promise<void> {
+async function expectWebControls() {
+    expect(screen.findHostByTestId('diff-presentation:unified')).not.toBeNull();
+    expect(screen.findHostByTestId('diff-presentation:split')).not.toBeNull();
+    expect(screen.findHostByTestId('code-wrap-lines-toggle')).not.toBeNull();
+}
+
+async function reportVisibleFile(index: number) {
+    const props = await diffListProps();
+    await act(async () => props.onViewableItemsChanged?.({ viewableItems: [{ index }] }));
     await flushHookEffects({ cycles: 2 });
 }
 
-async function loadSessionCommitDetailsViewComponent(): Promise<typeof import('./SessionCommitDetailsView').SessionCommitDetailsView> {
-    if (!SessionCommitDetailsViewComponent) {
-        const module = await import('./SessionCommitDetailsView');
-        SessionCommitDetailsViewComponent = module.SessionCommitDetailsView;
-    }
-    return SessionCommitDetailsViewComponent;
-}
-
-async function renderCommitDetailsView(): Promise<renderer.ReactTestRenderer> {
-    const SessionCommitDetailsView = await loadSessionCommitDetailsViewComponent();
-    let tree!: renderer.ReactTestRenderer;
-    tree = (await renderScreen(<SessionCommitDetailsView sessionId={commitSessionId} sha={commitSha} />)).tree;
-    await settleCommitDetailsView();
-    mountedTrees.push(tree);
-    return tree;
-}
-
-installSessionFilesViewCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            View: 'View',
-            ActivityIndicator: 'ActivityIndicator',
-            Pressable: 'Pressable',
-            ScrollView: 'ScrollView',
-            Dimensions: {
-                get: () => ({ width: 1200, height: 800, scale: 1, fontScale: 1 }),
-            },
-            Platform: {
-                OS: 'web',
-                select: (value: Record<string, unknown>) => value?.web ?? value?.default ?? null,
-            },
-        });
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                alert: vi.fn(),
-                confirm: vi.fn(async () => false),
-            },
-        }).module;
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            storage: createStorageStoreMock({
-                sessions: sessionMock
-                    ? {
-                        [commitSessionId]: {
-                            ...sessionMock,
-                            serverId: 'server-1',
-                        },
-                    }
-                    : {},
-                machines: {},
-                sessionListIndexByServerId: {},
-                getProjectForSession: () => null,
-                upsertWorkspaceReviewCommentDraft: () => {},
-                deleteWorkspaceReviewCommentDraft: () => {},
-            }),
-            useSessions: () => sessionsMock,
-            useSession: () => sessionMock,
-            useProjectForSession: () => null,
-            useSessionProjectScmSnapshot: () => stableSnapshot,
-            useSessionProjectScmInFlightOperation: () => null,
-            useWorkspaceReviewCommentsDrafts: () => [],
-            useSessionRpcAvailabilityState: () => ({
-                sessionExists: sessionMock !== null,
-                sessionRpcAvailable: sessionMock !== null,
-            }),
-            useSessionWorkspacePath: () => sessionMock?.metadata?.path ?? null,
-            useSetting: (key: string) => {
-                if (key === 'wrapLinesInDiffs') return true;
-                if (key === 'showLineNumbers') return true;
-                if (key === 'scmReviewMaxFiles') return 1;
-                if (key === 'scmReviewMaxChangedLines') return 2000;
-                if (key === 'scmReviewPrefetchAheadCountWeb') return prefetchAheadCount;
-                if (key === 'scmReviewPrefetchBehindCountWeb') return prefetchBehindCount;
-                if (key === 'scmReviewPrefetchDebounceMs') return 0;
-                return undefined;
-            },
-            importOriginal,
-        });
-    },
-});
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-}));
-
-vi.mock('@/sync/ops', () => ({
-    sessionScmDiffCommit: (...args: Parameters<typeof sessionScmDiffCommitSpy>) => sessionScmDiffCommitSpy(...args),
-    sessionScmCommitBackout: (...args: Parameters<typeof sessionScmCommitBackoutSpy>) => sessionScmCommitBackoutSpy(...args),
-}));
-
-const machineScmLogListSpy = vi.fn(async (_machineId: string, _request: { cwd: string; query?: string; limit?: number }) => ({
-    success: true,
-    queryApplied: true,
-    entries: [{
-        sha: 'abc1234def5678',
-        shortSha: 'abc1234',
-        authorName: 'Leeroy Brun',
-        authorEmail: 'leeroy@example.test',
-        timestamp: 1_790_000_000,
-        subject: 'Key the settings modal by route, not window width',
-        body: 'Resizing the window remounted SettingsModal because its key included the width.',
-    }],
-}));
-
-vi.mock('@/sync/ops/scm/machineScm', () => ({
-    machineScmLogList: (...args: Parameters<typeof machineScmLogListSpy>) => machineScmLogListSpy(...args),
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => (featureId === 'files.reviewComments' ? reviewCommentsEnabled : false),
-}));
-
-vi.mock('@/sync/domains/session/resolveWorkspaceScopeForSession', () => ({
-    useWorkspaceScopeForSession: (sessionId: string | null | undefined) => (
-        sessionId === commitSessionId
-            ? { serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo' }
-            : null
-    ),
-}));
-
-vi.mock('@/track', () => ({
-    tracking: null,
-}));
-
-vi.mock('@/scm/scmStatusSync', () => ({
-    scmStatusSync: {
-        invalidateFromMutationAndAwait: vi.fn(async () => {}),
-    },
-}));
-
-vi.mock('@/scm/operations/safety', () => ({
-    canRevertFromSnapshot: () => true,
-}));
-
-vi.mock('@/scm/core/operationPolicy', () => ({
-    evaluateScmOperationPreflight: () => ({ allowed: true, message: '' }),
-}));
-
-vi.mock('@/scm/operations/userFacingErrors', () => ({
-    getScmUserFacingError: ({ fallback }: { fallback: string }) => fallback,
-}));
-
-vi.mock('@/scm/operations/revertFeedback', () => ({
-    buildRevertConfirmBody: () => 'body',
-}));
-
-vi.mock('@/scm/operations/withOperationLock', () => ({
-    withSessionProjectScmOperationLock: async ({ run }: { run: () => Promise<void> }) => {
-        await run();
-        return { started: true, message: '' };
-    },
-}));
-
-vi.mock('@/scm/operations/reporting', () => ({
-    reportSessionScmOperation: vi.fn(),
-    trackBlockedScmOperation: vi.fn(),
-}));
-
-vi.mock('@/components/ui/code/diff/DiffFilesListView', () => ({
-    DiffFilesListView: (props: Record<string, unknown>) => {
-        diffFilesListSpy(props);
-        return React.createElement('DiffFilesListView', props);
-    },
-}));
-
-vi.mock('@/components/ui/code/diff/DiffPresentationStyleToggleButton', () => ({
-    DiffPresentationStyleToggleButton: 'DiffPresentationStyleToggleButton',
-}));
-vi.mock('@/components/ui/code/WrapLinesToggleButton', () => ({ WrapLinesToggleButton: 'WrapLinesToggleButton' }));
-
-vi.mock('@/components/ui/code/diff/reviewComments/DiffReviewCommentsViewer', () => ({
-    DiffReviewCommentsViewer: 'DiffReviewCommentsViewer',
-}));
-
 describe('SessionCommitDetailsView', () => {
-    afterEach(async () => {
-        while (mountedTrees.length > 0) {
-            const tree = mountedTrees.pop();
-            if (!tree) continue;
-            await act(async () => {
-                tree.unmount();
-            });
-        }
-    });
-
-    beforeEach(() => {
-        reviewCommentsEnabled = false;
-        sessionScmDiffCommitSpy.mockClear();
-        sessionScmCommitBackoutSpy.mockClear();
-        diffFilesListSpy.mockClear();
-        resetCommitDetailsStorageState();
-    });
-
     it('retries a failed commit diff without leaving the details pane', async () => {
-        sessionScmDiffCommitSpy.mockResolvedValueOnce({ success: false, diff: '', error: 'Temporary failure' });
-        const tree = await renderCommitDetailsView();
-        const visibleText = () => tree.root
-            .findAll((node) => String(node.type) === 'Text')
-            .flatMap((node) => node.children)
-            .filter((child): child is string => typeof child === 'string')
-            .join(' ');
-        // Pane-states lab 0 "X": what failed in words and one recovery; the transport message is a
-        // diagnostic behind the collapsed Details, never the headline.
-        expect(tree.root.findAllByProps({ testID: 'scm-commit-details-error' }).length).toBeGreaterThan(0);
-        expect(visibleText()).not.toContain('Temporary failure');
-        const details = tree.root.findAllByProps({ testID: 'scm-commit-details-error-details-toggle' })[0];
-        await act(async () => { details.props.onPress(); });
-        expect(visibleText()).toContain('Temporary failure');
-        const retry = tree.root.findAll((node) => node.props?.testID === 'scm-commit-details-error-action' && typeof node.props?.action === 'function')[0];
-        expect(retry).toBeTruthy();
-        await act(async () => { await retry.props.action(); });
-        await settleCommitDetailsView();
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(2);
-        expect(tree.root.findAllByProps({ testID: 'scm-commit-details-error' })).toHaveLength(0);
+        diffResponse.mockResolvedValueOnce({ success: false, error: 'Temporary failure' });
+        await renderCommitDetailsView();
+        expect(screen.findHostByTestId('scm-commit-details-error')).not.toBeNull();
+        expect(screen.getTextContent()).not.toContain('Temporary failure');
+        await screen.pressByTestIdAsync('scm-commit-details-error-details-toggle');
+        expect(screen.getTextContent()).toContain('Temporary failure');
+        await screen.pressByTestIdAsync('scm-commit-details-error-action');
+        await vi.waitFor(() => expect(screen.findHostByTestId('scm-commit-details-error')).toBeNull());
+        expect(diffRequests()).toHaveLength(2);
+        expect((await diffListProps()).files).toHaveLength(1);
     });
 
     it('reads as the commit itself: its subject, author, short SHA and message', async () => {
-        const tree = await renderCommitDetailsView();
-        await settleCommitDetailsView();
-        const texts = tree.root
-            .findAll((node) => (node.type as unknown) === 'Text')
-            .flatMap((node) => node.children)
-            .filter((child): child is string => typeof child === 'string');
-        const title = tree.root.findAll((node) => node.props?.testID === 'scm-commit-details-header.title' && typeof node.type === 'string')[0];
-        expect(title?.children.join('')).toBe('Key the settings modal by route, not window width');
-        expect(texts).toContain('Leeroy Brun');
-        expect(texts).toContain('abc1234');
-        expect(texts.join(' ')).toContain('remounted SettingsModal');
-        expect(machineScmLogListSpy).toHaveBeenCalledWith('machine-1', expect.objectContaining({ cwd: '/repo', query: 'abc' }), expect.anything());
+        await renderCommitDetailsView();
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain(commitEntry.subject));
+        expect(screen.getTextContent()).toContain(commitEntry.authorName);
+        expect(screen.getTextContent()).toContain(commitEntry.shortSha);
+        expect(screen.getTextContent()).toContain('remounted SettingsModal');
+        expect(fixture.requests).toEqual(expect.arrayContaining([expect.objectContaining({
+            targetId: fixture.scope.machineId, method: RPC_METHODS.SCM_LOG_LIST,
+            payload: expect.objectContaining({ cwd: '/repo', query: commitSha }),
+        })]));
     });
 
     it('renders the diff file list using virtualization', async () => {
-        const tree = await renderCommitDetailsView();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalled();
-        expect(diffFilesListSpy).toHaveBeenCalledWith(expect.objectContaining({ virtualizeFileList: true }));
-        expect(tree.findAllByType('DiffPresentationStyleToggleButton' as any)).toHaveLength(1);
-        expect(tree.findAllByType('WrapLinesToggleButton' as any)).toHaveLength(1);
-        expect(tree.findAllByType('ScrollView' as any)).toHaveLength(0);
+        await renderCommitDetailsView();
+        const { VirtualizedList } = await import('@/components/ui/lists/virtualized/VirtualizedList');
+        expect(diffRequests()).toHaveLength(1);
+        expect((await diffListProps()).virtualizeFileList).toBe(true);
+        expect(screen.tree.root.findAllByType(VirtualizedList)).toHaveLength(1);
+        await expectWebControls();
     });
 
     it('tracks the first visible file as the large-review expansion anchor', async () => {
-        sessionScmDiffCommitSpy.mockResolvedValueOnce({
-            success: true,
-            diff: [
-                'diff --git a/src/a.ts b/src/a.ts',
-                'index 0000000..1111111 100644',
-                '--- a/src/a.ts',
-                '+++ b/src/a.ts',
-                '@@ -1,1 +1,1 @@',
-                '-export const a = 1;',
-                '+export const a = 2;',
-                '',
-                'diff --git a/src/b.ts b/src/b.ts',
-                'index 0000000..1111111 100644',
-                '--- a/src/b.ts',
-                '+++ b/src/b.ts',
-                '@@ -1,1 +1,1 @@',
-                '-export const b = 1;',
-                '+export const b = 2;',
-                '',
-                'diff --git a/src/c.ts b/src/c.ts',
-                'index 0000000..1111111 100644',
-                '--- a/src/c.ts',
-                '+++ b/src/c.ts',
-                '@@ -1,1 +1,1 @@',
-                '-export const c = 1;',
-                '+export const c = 2;',
-                '',
-            ].join('\n'),
-            error: null,
-        });
-        prefetchAheadCount = 0;
-        prefetchBehindCount = 0;
-        const tree = await renderCommitDetailsView();
-        const firstRenderProps = getLastDiffFilesListProps();
-        expect(firstRenderProps).toBeTruthy();
-
-        const firstKeys = Array.from((firstRenderProps as { expandedKeys: ReadonlySet<string> }).expandedKeys);
-        expect(firstKeys).toHaveLength(1);
-
-        const files = (firstRenderProps as { files: Array<{ key: string }> }).files;
-        expect(files).toHaveLength(3);
-
-        await act(async () => {
-            (firstRenderProps as { onViewableItemsChanged?: (info: { viewableItems: Array<{ index: number }> }) => void })
-                .onViewableItemsChanged?.({
-                    viewableItems: [{ index: 1 }],
-                });
-        });
-        await settleCommitDetailsView();
-
-        const secondRenderProps = getLastDiffFilesListProps();
-        const expandedKeys = (secondRenderProps as { expandedKeys: ReadonlySet<string> }).expandedKeys;
-        expect(expandedKeys.has(files[0].key)).toBe(false);
-        expect(expandedKeys.has(files[1].key)).toBe(true);
-
-        expect(tree.findAllByType('DiffPresentationStyleToggleButton' as any)).toHaveLength(1);
+        diffResponse.mockResolvedValueOnce({ success: true, diff: commitDiff(3) });
+        fixture.storage.getState().applySettingsLocal({ scmReviewPrefetchAheadCountWeb: 0, scmReviewPrefetchBehindCountWeb: 0 });
+        await renderCommitDetailsView();
+        const initial = await diffListProps();
+        expect(initial.files).toHaveLength(3);
+        expect([...initial.expandedKeys]).toEqual([initial.files[0]!.key]);
+        await reportVisibleFile(1);
+        expect([...(await diffListProps()).expandedKeys]).toEqual([initial.files[1]!.key]);
+        await expectWebControls();
     });
 
     it('does not refetch the diff when the session object identity changes', async () => {
-        const tree = await renderCommitDetailsView();
-        const SessionCommitDetailsView = await loadSessionCommitDetailsViewComponent();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(1);
-
-        sessionMock = createCommitSessionFixture();
-
-        await act(async () => {
-            tree.update(<SessionCommitDetailsView sessionId={commitSessionId} sha={commitSha} />);
-        });
-        await settleCommitDetailsView();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(1);
+        await renderCommitDetailsView();
+        expect(diffRequests()).toHaveLength(1);
+        await act(async () => fixture.storage.getState().applySessions([{ ...fixture.session, updatedAt: fixture.session.updatedAt + 1 }]));
+        const { SessionCommitDetailsView } = await import('./SessionCommitDetailsView');
+        // Preserve the public renderer's SafeArea wrapper and the app providers.
+        await screen.update(fixture.wrap(<SessionCommitDetailsView serverId={fixture.scope.serverId} sessionId={fixture.session.id} sha={commitSha} />));
+        expect(diffRequests()).toHaveLength(1);
+        expect((await diffListProps()).files).toHaveLength(1);
     });
 
     it('keeps rendering the loaded diff if session metadata temporarily becomes unavailable', async () => {
-        const tree = await renderCommitDetailsView();
-        const SessionCommitDetailsView = await loadSessionCommitDetailsViewComponent();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(1);
-        expect(diffFilesListSpy).toHaveBeenCalled();
-        expect(tree.findAllByType('DiffPresentationStyleToggleButton' as any)).toHaveLength(1);
-
-        sessionMock = null;
-        await act(async () => {
-            tree.update(<SessionCommitDetailsView sessionId={commitSessionId} sha={commitSha} />);
-        });
-        await settleCommitDetailsView();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(1);
-        expect(tree.findAllByType('DiffPresentationStyleToggleButton' as any)).toHaveLength(1);
+        await renderCommitDetailsView();
+        const initialFiles = (await diffListProps()).files;
+        await act(async () => fixture.storage.setState(state => ({
+            sessions: { ...state.sessions, [fixture.session.id]: { ...state.sessions[fixture.session.id]!, metadata: null } },
+        })));
+        await flushHookEffects({ cycles: 2 });
+        expect(diffRequests()).toHaveLength(1);
+        expect((await diffListProps()).files).toBe(initialFiles);
+        await expectWebControls();
     });
 
     it('does not refetch the diff when sessions storage readiness toggles after the diff loads', async () => {
-        const tree = await renderCommitDetailsView();
-        const SessionCommitDetailsView = await loadSessionCommitDetailsViewComponent();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(1);
-
-        sessionsMock = null;
-        await act(async () => {
-            tree.update(<SessionCommitDetailsView sessionId={commitSessionId} sha={commitSha} />);
-        });
-        await settleCommitDetailsView();
-
-        sessionsMock = [];
-        await act(async () => {
-            tree.update(<SessionCommitDetailsView sessionId={commitSessionId} sha={commitSha} />);
-        });
-        await settleCommitDetailsView();
-
-        expect(sessionScmDiffCommitSpy).toHaveBeenCalledTimes(1);
+        await renderCommitDetailsView();
+        const initialFiles = (await diffListProps()).files;
+        await act(async () => fixture.storage.setState({ isDataReady: false }));
+        expect((await diffListProps()).files).toBe(initialFiles);
+        await act(async () => fixture.storage.setState({ isDataReady: true }));
+        expect(diffRequests()).toHaveLength(1);
+        expect((await diffListProps()).files).toBe(initialFiles);
     });
 
     it('enables review comments rendering for inline diffs when the feature is enabled', async () => {
-        reviewCommentsEnabled = true;
+        fixture.storage.getState().applySettingsLocal({ featureToggles: {
+            ...fixture.storage.getState().settings.featureToggles, 'files.reviewComments': true,
+        } });
         await renderCommitDetailsView();
-
-        const props = getLastDiffFilesListProps() as {
-            renderInlineUnifiedDiff?: (input: {
-                file: { key: string };
-                virtualized: boolean;
-                maxVirtualizedHeight: number;
-                wrapLines: boolean;
-                showLineNumbers: boolean;
-                showPrefix: boolean;
-            }) => { type?: unknown } | null;
-            files: Array<{ key: string }>;
-        };
-
-        if (typeof props.renderInlineUnifiedDiff !== 'function') {
-            throw new Error('Expected renderInlineUnifiedDiff to be a function');
-        }
-
-        const node = props.renderInlineUnifiedDiff({
-            file: props.files[0],
-            virtualized: false,
-            maxVirtualizedHeight: 123,
-            wrapLines: true,
-            showLineNumbers: true,
-            showPrefix: true,
-        });
-
-        expect(node?.type).toBe('DiffReviewCommentsViewer');
+        const { DiffReviewCommentsViewer } = await import('@/components/ui/code/diff/reviewComments/DiffReviewCommentsViewer');
+        expect(screen.tree.root.findAllByType(DiffReviewCommentsViewer)).toHaveLength(1);
     });
 
     it('starts large commits with the initial bounded prefetch window expanded', async () => {
-        sessionScmDiffCommitSpy.mockImplementationOnce(async () => ({
-            success: true,
-            diff: [
-                'diff --git a/src/a.ts b/src/a.ts',
-                '--- a/src/a.ts',
-                '+++ b/src/a.ts',
-                '@@ -1 +1 @@',
-                '-a',
-                '+a2',
-                '',
-                'diff --git a/src/b.ts b/src/b.ts',
-                '--- a/src/b.ts',
-                '+++ b/src/b.ts',
-                '@@ -1 +1 @@',
-                '-b',
-                '+b2',
-                '',
-                'diff --git a/src/c.ts b/src/c.ts',
-                '--- a/src/c.ts',
-                '+++ b/src/c.ts',
-                '@@ -1 +1 @@',
-                '-c',
-                '+c2',
-                '',
-                'diff --git a/src/d.ts b/src/d.ts',
-                '--- a/src/d.ts',
-                '+++ b/src/d.ts',
-                '@@ -1 +1 @@',
-                '-d',
-                '+d2',
-                '',
-            ].join('\n'),
-            error: null,
-        }));
-        prefetchAheadCount = 1;
-        prefetchBehindCount = 1;
+        diffResponse.mockResolvedValueOnce({ success: true, diff: commitDiff(4) });
         await renderCommitDetailsView();
-
-        const props = getLastDiffFilesListProps() as { files: Array<{ key: string }>; expandedKeys: ReadonlySet<string> };
-        expect(props).toBeTruthy();
-
-        expect(Array.from(props.expandedKeys)).toEqual(props.files.slice(0, 3).map((file) => file.key));
-        expect(typeof (getLastDiffFilesListProps() as { onViewableItemsChanged?: unknown }).onViewableItemsChanged).toBe('function');
+        const props = await diffListProps();
+        expect([...props.expandedKeys]).toEqual(props.files.slice(0, 3).map(file => file.key));
+        expect(props.onViewableItemsChanged).toEqual(expect.any(Function));
     });
 
     it('tracks the bounded prefetch window around the first visible file', async () => {
-        sessionScmDiffCommitSpy.mockImplementationOnce(async () => ({
-            success: true,
-            diff: Array.from({ length: 8 }, (_v, i) => ([
-                `diff --git a/src/f${i}.ts b/src/f${i}.ts`,
-                `--- a/src/f${i}.ts`,
-                `+++ b/src/f${i}.ts`,
-                '@@ -1 +1 @@',
-                `-v${i}`,
-                `+v${i + 1}`,
-                '',
-            ].join('\n'))).join('\n'),
-            error: null,
-        }));
-        prefetchAheadCount = 1;
-        prefetchBehindCount = 2;
+        diffResponse.mockResolvedValueOnce({ success: true, diff: commitDiff(8) });
+        fixture.storage.getState().applySettingsLocal({ scmReviewPrefetchAheadCountWeb: 1, scmReviewPrefetchBehindCountWeb: 2 });
         await renderCommitDetailsView();
-
-        const initialProps = getLastDiffFilesListProps() as {
-            files: Array<{ key: string }>;
-            expandedKeys: ReadonlySet<string>;
-            onViewableItemsChanged?: (info: { viewableItems: Array<{ index: number }> }) => void;
-        };
-        expect(initialProps).toBeTruthy();
-
-        const files = initialProps.files;
-        expect(files).toHaveLength(8);
-
-        await act(async () => {
-            initialProps.onViewableItemsChanged?.({ viewableItems: [{ index: 5 }] });
-        });
-
-        const afterProps = getLastDiffFilesListProps() as {
-            expandedKeys: ReadonlySet<string>;
-        };
-        const expandedKeys = afterProps.expandedKeys;
-
-        expect(expandedKeys.has(files[2].key)).toBe(false);
-        expect(expandedKeys.has(files[3].key)).toBe(true);
-        expect(expandedKeys.has(files[4].key)).toBe(true);
-        expect(expandedKeys.has(files[5].key)).toBe(true);
-        expect(expandedKeys.has(files[6].key)).toBe(true);
-        expect(expandedKeys.has(files[7].key)).toBe(false);
+        const initial = await diffListProps();
+        expect(initial.files).toHaveLength(8);
+        await reportVisibleFile(5);
+        expect([...(await diffListProps()).expandedKeys]).toEqual(initial.files.slice(3, 7).map(file => file.key));
     });
 });

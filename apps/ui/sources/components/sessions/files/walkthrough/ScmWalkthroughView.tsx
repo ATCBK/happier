@@ -7,7 +7,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { getPreferredLanguage, t } from '@/text';
 import { RunWorkNotifications } from '@/components/sessions/work/RunWorkNotifications';
@@ -20,7 +20,7 @@ import { ScmDiffSummaryStartOptions, scmDiffSummaryPrerequisiteOf, scmDiffSummar
 import { applySavedScmDiffSummaryResult } from '@/sync/ops/scmDiffSummary/generate';
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 
 import type { useScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useScmDiffSummaryBinding';
@@ -46,7 +46,7 @@ export type ScmWalkthroughViewProps = Readonly<{
     layout: WalkthroughViewLayout;
     active?: boolean;
     /** The comparison bar, drawn by the review destination above every view, with this view's own actions and menu rows. */
-    renderBar: (actions: React.ReactNode, sections?: readonly ScmComparisonMenuSection[]) => React.ReactNode;
+    renderBar: (actions: React.ReactNode, sections?: readonly ScmComparisonMenuSection[], review?: React.ReactNode) => React.ReactNode;
     onShowFiles: () => void;
     onOpenFile: (path: string) => void;
     /** Hands the person to the Session composer, whose recipient now names the generator. */
@@ -70,7 +70,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     const displayHomeId = scope?.serverId ?? props.serverId;
     // Subscribe to attribution, not heartbeat objects. Exact Home lookup and
     // machine naming stay at their existing owners while the machine is offline.
-    const machineName = getStorage()(state => getMachineDisplayName(
+    const machineName = getStorage()(state => getMachineSentenceName(
         resolveServerScopedMachine(state, displayHomeId, props.displayMachineId ?? '') ?? { absence: 'unlisted' },
     ));
     const observedAtMs = viewModel?.observedAtMs ?? null;
@@ -95,7 +95,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         })
         : null), [capturedComparison, marks.record, viewModel?.analysis, viewModel?.outputs?.walkthrough, viewModel?.savedResult?.walkthroughProvenance]);
 
-    const discussion = React.useMemo(() => (runId && props.sessionId
+    const discussion = React.useMemo(() => (props.sessionId
         ? resolveScmDiffSummaryDiscussionTarget({
             sessionId: props.sessionId,
             serverId: props.serverId,
@@ -151,7 +151,9 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     // The generator's own transcript is the existing run destination, never the human discussion thread.
     const router = useRouter();
     const conversationHref = discussion?.kind === 'continue' ? discussion.href : null;
-    const conversationAction = conversationHref ? (
+    const phone = props.layout === 'phone';
+    // A phone lists it as a named row of the comparison menu; the wide bar keeps the quiet icon.
+    const conversationAction = conversationHref && !phone ? (
         <IconButton
             testID="walkthrough-open-conversation"
             variant="plain"
@@ -203,12 +205,12 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
             if (!done.ok) setError(done.error);
         }
         : null), [bound.isCurrent, bound.host.sessionId, bound.host.machineId, canSend, cwd, explainTargets, props.serverId, scope, reading?.phase, review, savedForExplain, setError, viewModel?.producer?.runId]);
-    const reviewActions = review ? (
-        <>
-            {onExplain ? <ReviewExplainFindingsButton running={explaining} onPress={() => { void onExplain(); }} /> : null}
-            <ReviewWalkthroughSteps progress={review.progress} />
-        </>
-    ) : null;
+    // A walkthrough the review wrote already reads with its findings (lab WT5-R6): Explain is offered only over a
+    // walkthrough written before or apart from the review (WT5-R2).
+    const explainOffered = onExplain && viewModel?.producer?.kind !== 'review';
+    const explainAction = review && (explainOffered || explaining)
+        ? <ReviewExplainFindingsButton running={explaining} onPress={() => { if (onExplain) void onExplain(); }} /> : null;
+    const reviewStatus = review ? <ReviewWalkthroughSteps progress={review.progress} phone={phone} /> : null;
 
     const { theme } = useUnistyles();
     const markAgentId = resolveExecutionRunAgentMarkId(viewModel?.latestRun?.backendTarget, theme);
@@ -231,11 +233,20 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         onResult: (result) => { if (bound.isCurrent()) applySavedScmDiffSummaryResult(key, result); },
         onError: (failure) => { if (bound.isCurrent()) setError(failure.error); },
     } : null);
-    const savedSections = React.useMemo(() => (savedActions.section ? [savedActions.section] : undefined), [savedActions.section]);
+    const conversationSection = React.useMemo<ScmComparisonMenuSection | null>(() => (conversationHref && phone ? {
+        id: 'conversation',
+        items: [{ id: 'open', testID: 'walkthrough-open-conversation', title: t('walkthrough.openConversation'),
+            icon: <Icon name="chat-circle-dots" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> }],
+        onSelect: () => router.push(conversationHref as never),
+    } : null), [conversationHref, phone, router, theme.colors.text.secondary]);
+    const savedSections = React.useMemo(() => {
+        const sections = [conversationSection, savedActions.section].filter((section): section is ScmComparisonMenuSection => Boolean(section));
+        return sections.length > 0 ? sections : undefined;
+    }, [conversationSection, savedActions.section]);
 
     return (
         <View style={{ flex: 1, minHeight: 0 }}>
-            {props.renderBar(<>{reviewActions}{conversationAction}</>, savedSections)}
+            {props.renderBar(<>{explainAction}{conversationAction}</>, savedSections, reviewStatus)}
             {modelChoice.choosing ? <ScmDiffSummaryModelPicker value={model} onChange={setModel} modelChoices={modelChoices} machineId={machine?.machineId} serverId={props.serverId} /> : null}
             <WalkthroughView
                 reading={reading ?? EMPTY_WALKTHROUGH_READING}
@@ -270,7 +281,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 onEnableExplain={openExplainSetting}
                 onRetry={onStart}
                 onChooseModel={modelChoice.choose}
-                endedConversation={saved && sessionId && discussion?.kind !== 'continue' ? { onStartNew, onAskSession } : null}
+                endedConversation={saved && sessionId && discussion?.kind === 'unavailable' ? { onStartNew, onAskSession } : null}
                 notify={machine?.machineId && cwd && runId && capturedComparison && viewModel?.resultId
                     ? <RunWorkNotifications serverId={props.serverId}
                         source={{ kind: 'execution_run', machineId: machine.machineId, runId, ...(sessionId ? { sessionId } : {}) }}

@@ -5,7 +5,8 @@ import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { hasAgentIconMark } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -20,6 +21,7 @@ import { Modal } from '@/modal';
 import type { CustomModalChromeConfig, CustomModalInjectedProps } from '@/modal/types';
 import type { ScmReviewComparisonSelector } from '@/sync/domains/scm/diffSummary/selection';
 import {
+    isReviewWalkthroughEngineAvailable,
     resolveReviewWalkthroughPlan,
     type ReviewWalkthroughEngine,
     type ReviewWalkthroughPlan,
@@ -31,6 +33,12 @@ import { useReviewExecutionRunLaunchOptions } from '@/components/sessions/runs/l
 import { getSessionInputFailureLabelKey } from '@/components/sessions/pending/pendingMessageVisualState';
 import { randomUUID } from '@/platform/randomUUID';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
+import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
+import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
+import { resolveReviewEngineTarget } from '@/sync/domains/reviews/reviewEngineCatalog';
+import { formatMachineAgentStatus } from '@/components/machines/agents/machineAgentCopy';
+import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
 
 /**
  * Start review over the comparison on screen (Walkthrough lab WT5-R4, R4p, R7): the existing review
@@ -58,6 +66,8 @@ export type StartReviewDialogViewProps = Readonly<{
     onStart: () => void;
     phone?: boolean;
     launchOptions?: React.ReactNode;
+    /** The existing launch input, so an explicit Team choice cannot be labeled as an Account default. */
+    launchInput?: Readonly<Record<string, unknown>>;
     walkthroughUnavailable?: boolean;
 }>;
 
@@ -114,6 +124,8 @@ export function StartReviewDialogView(props: StartReviewDialogViewProps) {
         ? t('reviewWalkthrough.dialog.narratorFindingsOnly', { engine: plan.selected[0]?.label ?? '' })
         : t('reviewWalkthrough.dialog.narratorSeveral', { count: plan.selected.length });
     const engines = props.engines;
+    // A phone sheet keeps fewer rows in view so the walkthrough choice stays above the footer (WT5-R4p).
+    const rowsInView = phone ? ENGINE_ROWS_IN_VIEW_PHONE : ENGINE_ROWS_IN_VIEW;
     return (
         <View testID="start-review-dialog" style={[styles.dialog, phone ? styles.dialogPhone : null]}>
             <View style={styles.head}>
@@ -133,24 +145,40 @@ export function StartReviewDialogView(props: StartReviewDialogViewProps) {
                     ) : engines.length === 0 ? (
                         <SurfaceStateCard size="line" kind="empty" title={t('reviewWalkthrough.dialog.noEngines')} />
                     ) : (
-                        <View style={styles.group}>
+                        // A long host inventory scrolls inside its own frame, so Changes, Instructions and the
+                        // walkthrough choice stay in view (WT5-R4); the half row at the edge says there is more.
+                        <ScrollView
+                            testID="start-review-engines"
+                            style={[styles.group, engines.length > rowsInView ? { maxHeight: ENGINE_ROW_HEIGHT * (rowsInView + 0.5) } : null]}
+                            nestedScrollEnabled
+                            keyboardShouldPersistTaps="handled"
+                        >
                             {engines.map((engine, index) => {
-                                const checked = props.selectedEngineIds.includes(engine.engineId);
-                                const subtitle = [engine.description, engine.structuredNarration ? null : t('reviewWalkthrough.dialog.findingsOnly')].filter(Boolean).join(' · ');
+                                const available = isReviewWalkthroughEngineAvailable(engine);
+                                const checked = available && props.selectedEngineIds.includes(engine.engineId);
+                                const launchModelId = checked && props.launchInput?.teamCredentialModel !== undefined ? null : engine.launchModelId;
+                                const availability = !available && engine.machineAgent !== undefined
+                                    ? (engine.enabled ? formatMachineAgentStatus(resolveMachineAgentStatus(engine.machineAgent)) : t('common.unavailable')) : null;
+                                const reconnect = engine.machineAgent?.state === 'needsSignIn'
+                                    && engine.machineAgent.signIn.connectedServices.some(service => service.connected && !service.healthy)
+                                    ? t('connectedServices.detail.actions.reconnect') : null;
+                                const subtitle = availability
+                                    ? [availability, reconnect].filter(Boolean).join(' · ')
+                                    : [launchModelId, engine.structuredNarration ? null : t('reviewWalkthrough.dialog.findingsOnly')].filter(Boolean).join(' · ');
                                 return (
                                     <HappierPressable
                                         key={engine.engineId}
                                         testID={`start-review-engine-${engine.engineId}`}
                                         accessibilityRole="checkbox"
                                         checked={checked}
-                                        disabled={!engine.enabled}
+                                        disabled={!available}
                                         accessibilityLabel={subtitle ? `${engine.label}, ${subtitle}` : engine.label}
                                         onPress={() => props.onToggleEngine(engine.engineId)}
                                         style={(state) => [
                                             styles.engine,
                                             index > 0 ? styles.engineDivided : null,
                                             state.pressed ? styles.pressed : null,
-                                            !engine.enabled ? styles.disabled : null,
+                                            !available ? styles.disabled : null,
                                             focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
                                         ]}
                                     >
@@ -163,7 +191,7 @@ export function StartReviewDialogView(props: StartReviewDialogViewProps) {
                                     </HappierPressable>
                                 );
                             })}
-                        </View>
+                        </ScrollView>
                     )}
                 </View>
                 <View style={styles.field}>
@@ -219,17 +247,18 @@ export function StartReviewDialogView(props: StartReviewDialogViewProps) {
             </ScrollView>
             <View style={[styles.foot, phone ? styles.footPhone : null]}>
                 <Text testID="start-review-footer" style={styles.footNote}>{footer ?? ''}</Text>
-                <View style={styles.footActions}>
-                    <RoundButton testID="start-review-cancel" size="normal" display="secondary" title={t('common.cancel')} onPress={props.onCancel} />
+                {/* One primary action; Cancel is the tertiary way out, words beside it rather than a second fill. */}
+                <RoundButtonSizeScope size="normal" presentation="uniform"><View style={styles.footActions}>
+                    {/* The link is a sentence-ending control (it aligns to its own start); centre it on the primary's line. */}
+                    <View style={styles.footCancel}><TextLinkButton testID="start-review-cancel" tone="quiet" label={t('common.cancel')} onPress={props.onCancel} /></View>
                     <RoundButton
                         testID="start-review-start"
-                        size="normal"
                         title={t('scmComparison.startReview')}
                         disabled={!plan.canStart || props.busy === true}
                         loading={props.busy}
                         onPress={props.onStart}
                     />
-                </View>
+                </View></RoundButtonSizeScope>
             </View>
         </View>
     );
@@ -255,7 +284,7 @@ export type StartReviewDialogProps = CustomModalInjectedProps & StartReviewDialo
 export function StartReviewDialog(props: StartReviewDialogProps) {
     const deviceType = useDeviceType();
     const [operationId] = React.useState(randomUUID);
-    const [engines, setEngines] = React.useState<readonly ReviewWalkthroughEngine[] | null>(null);
+    const [listedEngines, setEngines] = React.useState<readonly ReviewWalkthroughEngine[] | null>(null);
     const [enginesError, setEnginesError] = React.useState<string | null>(null);
     const [selected, setSelected] = React.useState<readonly string[] | null>(props.preselectedEngineIds ?? null);
     const [instructions, setInstructions] = React.useState('');
@@ -263,6 +292,11 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
     const [narratorEngineId, setNarratorEngineId] = React.useState<string | null>(null);
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
+    const sessionMachine = useSessionMachineTarget(props.sessionId ?? null, props.serverId);
+    const machineInventory = useMachineAgents({ serverId: props.serverId, machineId: props.machineId ?? sessionMachine?.machineId });
+    const engines = React.useMemo(() => listedEngines?.map(engine => ({ ...engine,
+        machineAgent: findMachineAgentForBackendTarget(machineInventory.agents, resolveReviewEngineTarget(engine.engineId)),
+    })) ?? null, [listedEngines, machineInventory.agents]);
 
     React.useEffect(() => {
         let current = true;
@@ -276,7 +310,7 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
 
     // Until the person chooses, the first engine that can review is selected (the launcher's own default).
     const selectedEngineIds = React.useMemo(() => selected
-        ?? (engines?.find((engine) => engine.enabled) ? [engines.find((engine) => engine.enabled)!.engineId] : []), [engines, selected]);
+        ?? (engines?.find(isReviewWalkthroughEngineAvailable) ? [engines.find(isReviewWalkthroughEngineAvailable)!.engineId] : []), [engines, selected]);
     const plan = React.useMemo(() => resolveReviewWalkthroughPlan({
         engines: engines ?? [], selectedEngineIds, walkthrough, narratorEngineId,
     }), [engines, narratorEngineId, selectedEngineIds, walkthrough]);
@@ -291,6 +325,10 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
     }, [selectedEngineIds]);
 
     const { onClose, onStarted } = props;
+    const cancel = React.useCallback(() => {
+        launcher.cancelStart();
+        onClose();
+    }, [launcher.cancelStart, onClose]);
     const start = React.useCallback(async () => {
         if (!plan.canStart || !launchReady || busy) return;
         setBusy(true);
@@ -310,11 +348,12 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
             const label = getSessionInputFailureLabelKey(cause);
             return { ok: false as const, error: label ? t(label) : cause instanceof Error ? cause.message : t('common.requestFailed') };
         });
+        if (!launcher.isStartCurrent()) return;
         setBusy(false);
         if (!started.ok) { setError(started.error); return; }
         onClose();
         onStarted(started, plan.walkthrough);
-    }, [busy, launchReady, instructions, launchOptions.input, launcher.startAction, operationId, onClose, onStarted, plan, props.comparison, props.comparisonId, props.cwd, props.serverId, props.sessionId, props.machineId]);
+    }, [busy, launchReady, instructions, launchOptions.input, launcher.startAction, launcher.isStartCurrent, operationId, onClose, onStarted, plan, props.comparison, props.comparisonId, props.cwd, props.serverId, props.sessionId, props.machineId]);
 
     return (
         <StartReviewDialogView
@@ -334,10 +373,11 @@ export function StartReviewDialog(props: StartReviewDialogProps) {
             plan={launchReady ? plan : { ...plan, canStart: false }}
             busy={busy}
             error={error}
-            onCancel={onClose}
+            onCancel={cancel}
             onStart={() => { void start(); }}
             phone={deviceType === 'phone'}
             launchOptions={launchOptions.controls}
+            launchInput={launchOptions.input}
         />
     );
 }
@@ -348,9 +388,9 @@ export function startReviewDialogChrome(): CustomModalChromeConfig {
         kind: 'card',
         header: 'none',
         title: t('scmComparison.startReview'),
-        // The dialog scrolls its own body above a pinned footer, so the card is held to the viewport
-        // instead of growing with the host's engine list.
-        scrollHost: 'body',
+        // The card hugs the form up to the viewport bound and scrolls its own body above the pinned
+        // footer; the engine list keeps its own bounded frame (WT5-R4).
+        scrollHost: 'bounded',
         bodyScroll: 'none',
         dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.86 },
         phonePresentation: 'sheet',
@@ -367,6 +407,11 @@ export function presentStartReviewDialog(props: StartReviewDialogInput): string 
     });
 }
 
+/** Engine rows: one line of name, one of model or capability (WT5-R4). */
+const ENGINE_ROW_HEIGHT = 48;
+const ENGINE_ROWS_IN_VIEW = 5;
+const ENGINE_ROWS_IN_VIEW_PHONE = 3;
+
 const styles = StyleSheet.create((theme) => ({
     dialog: { maxHeight: '100%', flexShrink: 1, minHeight: 0 },
     dialogPhone: {},
@@ -378,13 +423,13 @@ const styles = StyleSheet.create((theme) => ({
     labelRow: { flexDirection: 'row', alignItems: 'baseline', gap: theme.space.s8 },
     label: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.secondary,  },
     labelHint: { ...Typography.variant('label', 'regular'), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
-    group: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.default, overflow: 'hidden' },
-    engine: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, minHeight: 56, paddingHorizontal: 14, paddingVertical: theme.space.s8 },
+    group: { flexGrow: 0, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.default, overflow: 'hidden' },
+    engine: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, minHeight: ENGINE_ROW_HEIGHT, paddingHorizontal: 14, paddingVertical: theme.space.s6 },
     engineDivided: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     engineMark: { width: 20, alignItems: 'center' },
     engineText: { flex: 1, minWidth: 0 },
-    engineTitle: { ...Typography.variant('heading', 'medium'), color: theme.colors.text.primary },
-    engineSubtitle: { marginTop: 1, ...Typography.variant('body'), color: theme.colors.text.tertiary,  },
+    engineTitle: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
+    engineSubtitle: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
     pressed: { backgroundColor: theme.colors.surface.pressed },
     disabled: { opacity: 0.45 },
     changes: {
@@ -400,13 +445,13 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.inset,
     },
     changesPhone: { alignItems: 'flex-start' },
-    changesScope: { ...Typography.variant('heading'), color: theme.colors.text.primary,  },
+    changesScope: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
     changesDetail: { flexShrink: 1, ...Typography.variant('label', 'regular'), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
     also: { borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border.default, overflow: 'hidden' },
     alsoOn: { borderColor: theme.colors.state.active.border, backgroundColor: theme.colors.surface.sectionTint, borderWidth: 1.5 },
     alsoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s12, paddingHorizontal: 14, paddingVertical: 14 },
     alsoText: { flex: 1, minWidth: 0, gap: 3 },
-    alsoTitle: { ...Typography.variant('heading'), color: theme.colors.text.primary,  },
+    alsoTitle: { ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary },
     alsoBody: { ...Typography.variant('label', 'regular'), color: theme.colors.text.secondary },
     narrator: {
         flexDirection: 'column',
@@ -432,6 +477,7 @@ const styles = StyleSheet.create((theme) => ({
         borderTopColor: theme.colors.border.default,
     },
     footPhone: { paddingBottom: 18 },
-    footNote: { flex: 1, minWidth: 0, ...Typography.variant('body'),  color: theme.colors.text.tertiary,  },
-    footActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
+    footNote: { flex: 1, minWidth: 0, ...Typography.variant('meta'), color: theme.colors.text.tertiary },
+    footActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 },
+    footCancel: { alignSelf: 'center' },
 }));
