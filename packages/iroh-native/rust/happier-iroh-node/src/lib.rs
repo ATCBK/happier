@@ -88,6 +88,38 @@ fn run_lifecycle_operation(
     Ok(PromiseRaw::new(env.raw(), promise.raw()))
 }
 
+/// Release glibc-retained free pages without blocking the JS thread. Other
+/// allocators/platforms have no corresponding operation here.
+#[napi]
+pub fn trim_process_allocator() -> napi::bindgen_prelude::AsyncTask<TrimProcessAllocator> {
+    napi::bindgen_prelude::AsyncTask::new(TrimProcessAllocator)
+}
+
+// Unlike long network lifecycle waits, this short allocator operation uses
+// NAPI's existing worker pool. Standard-only daemons must not initialize the
+// CPU-sized Iroh runtime just to release allocator residency.
+pub struct TrimProcessAllocator;
+
+impl napi::Task for TrimProcessAllocator {
+    type Output = bool;
+    type JsValue = bool;
+
+    fn compute(&mut self) -> Result<bool> {
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            // SAFETY: glibc documents malloc_trim as MT-Safe. Zero retains only
+            // the allocator's minimum trailing space; no caller-owned data is freed.
+            Ok(unsafe { libc::malloc_trim(0) } != 0)
+        }
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        Ok(false)
+    }
+
+    fn resolve(&mut self, _env: Env, released: bool) -> Result<bool> {
+        Ok(released)
+    }
+}
+
 fn invoke_json_op(
     operation: extern "C" fn(*const c_char) -> *mut c_char,
     request: &CString,

@@ -53,6 +53,8 @@ export type IrohNodeAvailability = Readonly<{
 
 /** Raw `.node` addon surface: one JSON-string request per C ABI operation. */
 export type IrohNodeNativeAddon = Readonly<{
+  /** Optional host allocator maintenance, outside the Iroh lifecycle ABI. */
+  trimProcessAllocator?: () => Promise<boolean>;
   getAvailability: () => IrohNodeAvailability;
   startMachineHttpTunnel: (
     request: string,
