@@ -837,6 +837,33 @@ describe('HomeHub plugin widgets', () => {
         expect(screen.getTextContent()).toContain('Release checks');
     });
 
+    it.each(['installed', 'builtin'] as const)('lands a top-level %s widget carried to the new-row target at the end of Home', async kind => {
+        widgets.projection = widgetProjectionOf([
+            { pluginId: 'acme.ci', localId: 'checks', title: 'Checks', target: 'app' },
+        ], { 'acme.ci': widgetInstalledPackage('acme.ci', 'CI') });
+        const copy = (id: string): WidgetInstanceV1 => ({ v: 1, id, definition: { kind: 'installed', surface: { pluginId: 'acme.ci', localId: 'checks' } }, bindings: {} });
+        const first: WidgetInstanceV1 = kind === 'builtin' ? { v: 1, id: 'first', definition: { kind: 'builtin', id: 'your_home' }, bindings: {} } : copy('first');
+        const second = copy('second'); const third = copy('third');
+        settings.layout = { order: ['start', 'attention', 'setup', first.id, second.id, third.id], hidden: [], items: placed(first, second, third) };
+        const screen = await renderHome();
+        await lay(screen, { [first.id]: 300, [second.id]: 300, [third.id]: 300 });
+        await act(async () => { screen.pressByTestId('home-hub.customize'); });
+        await flushHookEffects({ cycles: 2 });
+        const drag = screen.root.findAllByType(SessionSurfaceEntityDragHandle).find(handle => handle.props.testID === `home-hub.section.${first.id}.move`)!.props.drag;
+        const newRow = screen.root.findAllByType(SessionSurfaceEntityTargetFeedback).find(node => node.props.testID === 'home-hub.new-row.drop')!.props.drag;
+        let carry: ReturnType<typeof drag.runtime.begin> = null;
+        await act(async () => { carry = drag.runtime.begin(drag.sourceId, 'keyboard'); });
+        let destination: ReturnType<typeof drag.runtime.getDestinations>[number] | undefined;
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            destination = drag.runtime.getDestinations(drag.sourceId).find(entry => entry.targetId === newRow.targetId);
+            expect(destination?.admission.status).toBe('allowed');
+        });
+        await act(async () => { carry!.choose(destination!.targetId, destination!.destination); expect((await carry!.release())?.status).toBe('applied'); });
+        await vi.waitFor(() => expect(artifact.layout().order.at(-1)).toBe(first.id));
+        expect(artifact.layout().order.filter(id => [first.id, second.id, third.id].includes(id))).toEqual([second.id, third.id, first.id]);
+    });
+
     it('opens Add from a group\'s empty slot and puts the new widget into that group', async () => {
         widgets.projection = widgetProjectionOf([
             { pluginId: 'acme.ci', localId: 'checks', title: 'Checks', target: 'app' },

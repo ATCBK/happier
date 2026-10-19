@@ -132,7 +132,8 @@ describe('Add to Home', () => {
         });
         expect(sections.map((section) => [section.id, section.title])).toEqual([
             ['builtins:machines', 'machines.widgets.machine_fleet'], ['builtins:usage', 'usage.board.page.title'],
-            ['builtins:projects', 'tabs.projects'], ['builtins', 'widgetAdd.builtIn'], ['plugin:happier.triage', 'PRs & Issues'],
+            ['builtins:projects', 'tabs.projects'], ['builtins:session', 'sessionBoard.companion.title'], ['builtins', 'widgetAdd.builtIn'],
+            ['plugin:happier.triage', 'PRs & Issues'],
         ]);
         const builtIn = sections.find(section => section.id === 'builtins')!.entries;
         expect(sections.filter(section => section.id.startsWith('builtins')).flatMap(section => section.entries.map(entry => entry.id)).sort()).toEqual([

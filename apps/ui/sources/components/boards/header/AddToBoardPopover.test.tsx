@@ -11,7 +11,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
-import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
+import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { ARTIFACT_LIST_PATH, RUN_STORAGE_PATH, boardDefinitionArtifact, boardRunStoragePage, installBoardLibraryTestHarness } from '../boardLibraryTestHarness';
 
@@ -146,8 +146,9 @@ describe('AddToBoardPopover library recovery', () => {
         const lead = sections[0]!.options!.map(option => option.id);
         expect(lead).toContain('widget:plugin-acme.widgets/counter');
         expect(lead.at(-1)).toBe('widgets:gallery');
-        // Machines, Usage and Project widgets have pages of their own: one row away through Gallery, never the lead.
-        const families = [...MACHINE_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...PROJECT_BUILTIN_WIDGET_IDS_V1];
+        // Machines, Usage, Project and Session-companion widgets are families: one row away through Gallery, never the lead.
+        const families = [...MACHINE_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
+            ...SESSION_COMPANION_BUILTIN_ITEM_IDS];
         expect(lead.filter(id => families.some(family => id.endsWith(family)))).toEqual([]);
         // Typing still finds every widget in this one search.
         const more = sections[1]!;
@@ -155,6 +156,8 @@ describe('AddToBoardPopover library recovery', () => {
         expect(more.visibleWhen?.('vit')).toBe(true);
         const found = (await more.resolve!('vit', new AbortController().signal)).options.map(option => option.id);
         expect(found.some(id => id.endsWith('machine_vitals'))).toBe(true);
+        const companion = (await more.resolve!('session summary', new AbortController().signal)).options.map(option => option.id);
+        expect(companion.some(id => id.endsWith('session_summary'))).toBe(true);
         expect(found).not.toContain('widget:plugin-acme.widgets/counter');
     });
     it.each(['refused', 'pending'] as const)('opens a picked widget in the shared Add surface and shows a %s Add there without adding twice', async kind => {
