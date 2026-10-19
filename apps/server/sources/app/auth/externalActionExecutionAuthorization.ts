@@ -1487,8 +1487,7 @@ export async function verifyExternalActionDomainExecutionRequest(
         if (!isDiscussionCandidateReadHttpPurpose(verified, proof)) return null;
     } else if (isSessionStateFieldActionHttpPurpose(verified, proof)) {
         // The existing Session routes retain actor access, tuple CAS and publisher policy.
-    } else if (isSessionTargetPreparationHttpPurpose(verified, proof)
-        || isSessionListHttpPurpose(verified, proof)
+    } else if (isSessionListHttpPurpose(verified, proof)
         || isInstalledSessionSubtreeObservationHttpPurpose(verified, proof)
         || isSessionSourceKeyTransportHttpPurpose(verified, proof)
         || await isInstalledSessionLifecycleHttpPurpose(verified, proof)) {
@@ -1634,6 +1633,9 @@ export async function verifyExternalActionDomainExecutionRequest(
         // admission or spend a sibling Follow subaction/private census.
         if (verified.effectActionId !== verified.binding.actionId
             || !isAccountActionHttpOperation(verified.effectActionId, proof)) return null;
+    } else if (isSessionTargetPreparationHttpPurpose(verified, proof)) {
+        // Specialized roots above retain their narrower native-purpose contract.
+        // General Session operands prepare only the signed selector read phases.
     } else if (isAccountActionHttpPurpose(verified, proof)) {
         // The signature binds these exact bytes; route schemas and the domain
         // still own resource admission, while the credential policy below

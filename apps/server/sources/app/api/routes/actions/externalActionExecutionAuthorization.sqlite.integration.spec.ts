@@ -2750,7 +2750,8 @@ describe("external Action execution authorization", () => {
                 body: query, privateKey: fixture.keyPair.secretKey }) });
             expect(listed.statusCode, listed.body).toBe(200);
             expect(listed.json().sessions.map((row: { id: string }) => row.id)).toEqual([session.id]);
-            expect((await get(sourcesPath)).statusCode).toBe(200);
+            const sourceList = await get(sourcesPath);
+            expect(sourceList.statusCode, sourceList.body).toBe(200);
             expect((await get(`/v2/sessions/${foreignSession.id}/follows/sessions`)).statusCode).toBe(404);
             for (const owner of [fixture.account, foreignAccount]) {
                 const created = await createDiscussion({ actorAccountId: owner.id,
@@ -2782,6 +2783,14 @@ describe("external Action execution authorization", () => {
                 { kind: 'machine', machineId: 'foreign-machine' })).toBeNull();
             const unrelated = await issue('agents.models.list');
             expect(await verify('GET', censusPath, undefined, {}, undefined, unrelated)).toBeNull();
+            await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
+                ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId] },
+            } } });
+            const actionRestricted = await issue();
+            const privateDenied = await app.inject({ method: 'GET', url: censusPath, headers: machineHeaders({
+                authorizationToken: actionRestricted.token, effectActionId: actionId, method: 'GET', path: censusPath,
+                body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect([privateDenied.statusCode, privateDenied.json()]).toEqual([403, { error: 'credential_scope_denied' }]);
             await db.accountApiToken.update({ where: { id: fixture.pat.tokenId }, data: { accessGrant: {
                 ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId] },
                 targets: { sessions: [session.id], machines: [fixture.machine.id] },

@@ -10421,6 +10421,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX = Object.freeze(defineActionS
   {
     id: 'follow.list', approval: {result: 'none'},
     sessionTarget: { field: 'receiver.sessionId', cardinality: 'one' },
+    sideEffectClass: 'read',
     title: 'List followed sessions',
     description: 'List the sessions whose updates are included with this session\'s next turn.',
     safety: 'safe',

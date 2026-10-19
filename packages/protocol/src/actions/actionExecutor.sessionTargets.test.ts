@@ -99,7 +99,7 @@ describe('SessionTarget at the Actions front door', () => {
         return { follows: [], sources: [edge('parent', 'manager'), { ...edge('parent', 'manager'), relation: 'manager' }],
           rules: [], coverage: 'complete', peopleCount: 7 };
       },
-      readSessionFollowRules: async () => ({ kind: 'complete', rules: [rule('manager'), rule('rule-receiver'), rule(null), rule('off', false)] }),
+      readSessionFollowRules: async () => ({ kind: 'complete', rules: [rule('manager'), rule('rule-receiver'), rule('parent'), rule(null), rule('off', false)] }),
       sessionFollowPreview: async () => preview(['parent']),
     } as unknown as ActionExecutorDeps);
     await expect(executor.execute('session.message.send', { sessionId: { selector: 'followers' }, message: 'hello' }, context))
@@ -115,7 +115,7 @@ describe('SessionTarget at the Actions front door', () => {
     const executor = createActionExecutor({ ...h.deps,
       sessionFollowAction: async () => ({ follows: [], sources: [edge('explicit', 'parent')],
         rules: [rule('parent')], coverage: 'complete' }),
-      sessionFollowPreview: async () => preview(['explicit', 'rule-source']),
+      sessionFollowPreview: async () => preview(['explicit', 'parent', 'rule-source']),
     } as unknown as ActionExecutorDeps);
     await expect(executor.execute('session.message.send', { sessionId: { selector: 'following' }, message: 'hello' }, context))
       .resolves.toMatchObject({ ok: true, result: { kind: 'fanout', results: [

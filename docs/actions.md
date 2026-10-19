@@ -37,10 +37,19 @@ authorized Follow preview/filter owner and refuses unavailable candidates or
 continuation. The host readers exhaust ordinary and attention pages. Follow selectors
 combine authorized stored relations with current rule matches through that same
 filter owner; private person follows and non-Session sources never become Session
-targets. Discussion selection reads the admitted participant roster, including model
+targets. Rule-backed Following and Followers exclude self-follow, as the Follow
+delivery owner does. Discussion selection reads the admitted participant roster, including model
 slots only after they have an ordinary Session; selection creates no Session or grant.
 Incomplete reads refuse the whole selection before effects. The remaining declaration
 sweep and the coordination program's loaded-runtime validation are separate gates.
+
+External selector preparation signs these reads under the original Action root.
+The catalog declares `follow.list` as a read so the existing route-purpose check
+admits it; the verifier still binds each preparation phase to its exact signed
+request. Private Follow-rule census retains full Account credential admission,
+and resource access is checked by each reader. Preparation grants no Follow write.
+Specialized native operations retain their narrower preparation contracts before
+this general selector admission applies.
 
 Session messaging in 0.3 development uses that same front door. Send writes
 `session.message.send` with `reply: 'none'`; an ask uses `wait` for inline

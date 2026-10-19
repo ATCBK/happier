@@ -162,11 +162,16 @@ async function follows(
   }
   for (const rule of rules) {
     if (!rule.definition.enabled || rule.receiver.kind !== 'session') continue;
+    if (direction === 'followers' && rule.receiver.sessionId === base.sessionId) continue;
     const matches = await matching(deps, { selector: 'matching', filter: rule.definition.filter }, scopedContext,
       { serverId: base.serverId, sessionId: rule.receiver.sessionId });
     if ('ok' in matches) return matches;
-    if (direction === 'following') selected.push(...matches);
-    else if (matches.some(address => address.serverId === base.serverId && address.sessionId === base.sessionId)) {
+    // Rule delivery excludes its receiver as a source, just as stored Follow
+    // relations do. A raw filter preview can still match that same Session.
+    const receiverSessionId = rule.receiver.sessionId;
+    const sources = matches.filter(address => address.serverId !== base.serverId || address.sessionId !== receiverSessionId);
+    if (direction === 'following') selected.push(...sources);
+    else if (sources.some(address => address.serverId === base.serverId && address.sessionId === base.sessionId)) {
       const receiver = await resolveActionSessionAddress(deps, { sessionId: rule.receiver.sessionId }, scopedContext, actionId, true);
       if (receiver.kind !== 'unique' || receiver.address.serverId !== base.serverId
         || receiver.address.sessionId !== rule.receiver.sessionId) return unavailable('follow_receiver_unavailable');
