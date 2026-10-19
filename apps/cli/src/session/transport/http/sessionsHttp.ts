@@ -29,7 +29,9 @@ import type { StoredCredentials } from '@/persistence';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveSessionEncryptionContext } from '@/api/client/encryptionKey';
-import { createHttpStatusError, HttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
+import { createHttpStatusError, HttpStatusError, isAuthenticationStatus, readHttpStatus } from '@/api/client/httpStatusError';
+import { readNormalizedConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
+import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { encodeBase64 } from '@/api/encryption';
 import {
   buildCurrentAccountStoredContentCompatibilityHttpHeaders,
@@ -1532,6 +1534,16 @@ export async function postSessionCreationRequest<T>(params: Readonly<{
     timeout: params.signal ? 0 : 60_000,
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.validateStatus ? { validateStatus: params.validateStatus } : {}),
+  }).catch((cause: unknown) => {
+    // A response is handled by the existing refusal/rollback readers. Losing
+    // the response after dispatch cannot prove that Session birth rolled back.
+    if (readHttpStatus(cause) !== null || classifyHomeDomainHttpMutationFailureV1({
+      error: cause, issued: true, aborted: params.signal?.aborted === true,
+    }) !== 'outcome_unknown') throw cause;
+    throw Object.assign(new Error('Session creation outcome is unknown; reconcile the original creation key before retrying'), {
+      code: 'outcome_unknown' as const,
+      cause: { ...serializeAxiosErrorForLog(cause), code: readNormalizedConnectionErrorCode(cause) },
+    });
   });
   // Cancellation cannot undo a remote commit, but it cannot report success to
   // an invocation that has already retired either.

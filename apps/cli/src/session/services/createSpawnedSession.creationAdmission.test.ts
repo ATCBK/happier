@@ -41,7 +41,10 @@ import { buildSessionMetadataEnvelopeCreateFields } from '@/session/metadata/bui
 
 // Only HTTP/authentication and exact-machine transport boundaries are replaced;
 // lookup decoding, creation settlement and Message admission remain real.
-vi.mock('axios', () => ({ default: { post: vi.fn(), get: vi.fn() } }));
+vi.mock('axios', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('axios')>();
+  return { default: { post: vi.fn(), get: vi.fn(), isAxiosError: actual.default.isAxiosError } };
+});
 vi.mock('@/auth/validateStoredAuthTokenAgainstActiveServer', () => ({
   validateStoredAuthTokenAgainstActiveServer: vi.fn(async () => ({ state: 'valid' })),
 }));
@@ -532,6 +535,64 @@ describe('canonical Session creation admission', () => {
       await expect(result).rejects.toThrow('Unexpected status from /v1/sessions: 503');
     }
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an uncertain archived restore by the original creation key before resending', async () => {
+    fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({ features: {},
+      capabilities: { encryption: { storagePolicy: 'optional', allowAccountOptOut: true, defaultAccountMode: 'plain' } } }))));
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { accessKey: 'existing' } });
+    let row: Record<string, unknown> | null = null;
+    let loseRestoreResponse = false;
+    const creationTags: unknown[] = [];
+    vi.mocked(axios.post).mockImplementation(async (url, raw) => {
+      if (String(url).endsWith('/lookup-by-tags')) return { status: 200, data: { sessions: row ? [row] : [] } };
+      if (!String(url).endsWith('/v1/sessions')) throw new Error(`Unexpected creation request ${url}`);
+      const input = raw as ReturnType<typeof buildSessionMetadataEnvelopeCreateFields> & { tag: string };
+      creationTags.push(input.tag);
+      row = { id: 'session-created', seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+        archivedAt: null, metadataVersion: 1, metadataLayoutVersion: 1,
+        metadata: input.sharedMetadata.ciphertext, ownerMetadata: input.ownerMetadata, encryptionMode: 'plain',
+        agentState: null, agentStateVersion: 0, dataEncryptionKey: null, share: null };
+      if (loseRestoreResponse) throw Object.assign(new Error('Creation response lost'), { code: 'ECONNABORTED' });
+      return { status: 200, data: { session: row, created: creationTags.length === 1 } };
+    });
+    const executor = createActionExecutor(createCliActionDeps({
+      token: params.credentials.token, credentials: params.credentials,
+      sessionId: 'cli-global', mode: 'plain', ctx: null, rawSession: {},
+      serverId: 'home-a', serverHttpBaseUrl: 'https://home-a.example.test',
+      actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({ memoryUpkeepInNewBots: false }) }),
+      sessionSpawnDirectTargetTransport: {
+        machineId: 'machine-1',
+        prepare: async () => ({ ok: true, directory: '/repo', directoryKind: 'path', directoryCreationRequired: false, checkout: null }),
+        spawnedSession: { spawn, resolveSpawnSessionByNonce },
+      },
+    }));
+    const input = SessionSpawnNewInputV2Schema.parse({
+      creationKey: 'uncertain-restore', executionTarget: { serverId: 'home-a', machineId: 'machine-1' },
+      directory: { kind: 'path', path: '/repo' }, agentTarget: params.agentTarget,
+      connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false,
+      attestedContext: { externalPrincipalId: 'fixture-principal', sourceMessageId: 'fixture-message' },
+    });
+    const context = { surface: 'plugin' as const, authority: 'account_automation' as const, serverId: 'home-a',
+      actionCaller: { kind: 'plugin' as const, pluginId: 'happier.channels' } };
+    expect(await executor.execute('session.spawn_new', input, context))
+      .toMatchObject({ ok: true, result: { type: 'success', sessionId: 'session-created' } });
+    const readRow = (): Record<string, unknown> | null => row;
+    const committedRow = readRow();
+    if (!committedRow) throw new Error('Initial Session was not committed');
+    row = { ...committedRow, archivedAt: 123 };
+    loseRestoreResponse = true;
+    const uncertain = await executor.execute('session.spawn_new', input, context);
+    if (!uncertain.ok) throw new Error('Uncertain creation lost its Action result');
+    expect(SessionSpawnNewResultV1Schema.parse(uncertain.result))
+      .toEqual({ type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' });
+    expect(await executor.execute('session.spawn_new', input, context)).toMatchObject({ ok: true,
+      result: { type: 'success', disposition: 'rejoined', sessionId: 'session-created' } });
+    expect(creationTags).toHaveLength(2);
+    expect(creationTags[1]).toBe(creationTags[0]);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it('rejoins an existing creation without preparing unavailable changed trigger drafts', async () => {
