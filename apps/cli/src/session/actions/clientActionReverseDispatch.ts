@@ -27,6 +27,9 @@ export function createClientActionReverseDispatcher(
 ): NonNullable<ActionExecutorDeps['clientActionExecute']> {
   return async ({ actionId, input, context }) => {
     const unavailable = () => clientActionUnavailable(actionId);
+    const machineTransportUnavailable = (errorCode = 'machine_transport_unavailable') => ({
+      ok: false as const, errorCode, error: errorCode,
+    });
     const client = getMachineClient();
     const originAction = PluginExecutionOriginActionIdSchema.safeParse(actionId);
     const originInput = originAction.success ? PluginExecutionOriginActionInputSchemas[originAction.data].parse(input) : null;
@@ -45,7 +48,8 @@ export function createClientActionReverseDispatcher(
         && typeof Reflect.get(input, 'commandId') === 'string'
         ? currentUiContextCommandClientRpcMethod(Reflect.get(input, 'commandId'))
       : address?.success ? workflowDraftClientRpcMethod(address.data) : RPC_METHODS.UI_ACTION_EXECUTE;
-    if (!client?.hasConnectedClientRpcHandler(method)) return unavailable();
+    if (!client) return machineTransportUnavailable();
+    if (!client.hasConnectedClientRpcHandler(method)) return unavailable();
     if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
     const actionCaller = context.actionCaller ? projectApprovalExecutionOriginCaller(context.actionCaller) : undefined;
     if (context.actionCaller && !actionCaller) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -75,7 +79,8 @@ export function createClientActionReverseDispatcher(
         if (response.errorCode === RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE) return unavailable();
         if (answeringClient && response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return { ok: false,
           errorCode: 'client_routing_update_required', error: 'Update the Home server to support answering-client routing' };
-        return !issued || response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE ? unavailable() : unknownOutcome();
+        if (response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return unavailable();
+        return issued ? unknownOutcome() : machineTransportUnavailable(response.errorCode);
       }
       const execution = parseClientActionDispatchResult(actionId, response.result);
       if (actionId === 'plugins.execution_origin.list' && execution?.ok && execution.result
@@ -85,7 +90,7 @@ export function createClientActionReverseDispatcher(
       }
       return execution ?? unknownOutcome();
     } catch {
-      return issued ? unknownOutcome() : unavailable();
+      return issued ? unknownOutcome() : machineTransportUnavailable();
     }
   };
 }
