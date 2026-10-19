@@ -2,6 +2,10 @@ import type { Prisma } from "@prisma/client";
 import type { Tx } from "@/storage/inTx";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import { readAutomationSessionReviewProjectionIdsInTx } from "@/app/automations/sessionReviewProjectionInvalidation";
+import { automationRunCauseSelect } from "@/app/automations/automationPersistenceSelect";
+import { isAutomationCauseRow, retainedV2OriginKindForRun } from "@/app/automations/automationRunCauseCodec";
+import { resolveAutomationPendingInputSessionIdTx } from "@/app/automations/automationRunSessionTarget";
+import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import { readManagedWakePublicationAccountIdsInTx } from "@/app/machines/managed/managedWake";
 import {
     resolveWorkflowRunAdmissionRecipientAccountIdsInTx,
@@ -77,7 +81,9 @@ export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: Workflow
     const runs = runIds.length > 0 || scope.runWhere ? await tx.automationRun.findMany({ where: { OR: [
         ...(runIds.length > 0 ? [{ id: { in: runIds } }] : []),
         ...(scope.runWhere ? [scope.runWhere] : []),
-    ] }, select: { id: true, accountId: true, automationId: true, originSessionId: true, producedSessionId: true,
+    ] }, select: { ...automationRunCauseSelect, id: true, accountId: true, automationId: true,
+        originSessionId: true, producedSessionId: true, executionInputEnvelope: true,
+        account: { select: { encryptionMode: true } },
         workflowCustodyState: true, assignments: { select: { machineId: true } } } }) : [];
     for (const run of runs) if (run.automationId) automationIds.add(run.automationId);
     const watchers = runs.length > 0 ? await tx.automationTrigger.findMany({ where: {
@@ -89,7 +95,22 @@ export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: Workflow
     const followDestinations = runs.length ? await tx.sessionFollowEdge.findMany({ where: {
         sourceWorkflowRunId: { in: runs.map(run => run.id) }, relation: 'follower',
     }, select: { destinationSessionId: true } }) : [];
+    const pendingTargetSessionIds: string[] = [];
+    for (const run of runs) {
+        if (!isAutomationCauseRow(run)) continue;
+        // This is a pure candidate census, not mode admission. The complete
+        // Account/Session cohort is fenced and reread by the caller afterward.
+        const mode = resolveEffectiveAccountEncryptionModeFromAccountRow(run.account);
+        if (mode.status !== "ready") continue;
+        const sessionId = await resolveAutomationPendingInputSessionIdTx({
+            tx, accountId: run.accountId, automationId: run.automationId, runId: run.id,
+            executionInputEnvelope: run.executionInputEnvelope, accountEncryptionMode: mode.mode,
+            retainedV2OriginKind: retainedV2OriginKindForRun(run),
+        });
+        if (sessionId !== null) pendingTargetSessionIds.push(sessionId);
+    }
     const sessionIds = [...new Set([...(scope.sessionIds ?? []), ...automationAudience.sessionIds,
+        ...pendingTargetSessionIds,
         ...followDestinations.map(edge => edge.destinationSessionId),
         ...runs.flatMap(run => [run.originSessionId, run.producedSessionId].filter((id): id is string => id !== null)),
     ])].sort();

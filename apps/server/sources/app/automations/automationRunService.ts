@@ -4,7 +4,6 @@ import { markAccountChanged, type AccountChangePublication } from "@/app/changes
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { AUTOMATION_RUN_CANCELLED_AFTER_DISPATCH_PERMITTED_CAUSE_V1, AUTOMATION_RUN_CANCELLED_WHILE_RUNNING_CAUSE_V1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
 import { AutomationRunResultStoredV1Schema, validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1, type AutomationRunResultStoredV1 } from '@happier-dev/protocol/automations/event';
-import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { parseAutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 import { sameAutomationAccountContentIdentityV1, sameAutomationAccountCurrentnessWitnessV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { type ExecutionRunWaitResult } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -25,10 +24,8 @@ import {
 } from "./automationRunCauseCodec";
 import { advanceAutomationScheduleCursorAfterTerminalRunTx } from "./automationRunQueueService";
 import { applyAutomationRunSucceededTx, applyAutomationRunTerminalEffectsTx } from "./automationRunSucceeded";
-import {
-    assertAutomationRunFailureDetailEnvelopeOuterForMode,
-    readRetainedAutomationRunExecutionTargetV2,
-} from "./automationStoredContentRead";
+import { assertAutomationRunFailureDetailEnvelopeOuterForMode } from "./automationStoredContentRead";
+import { deriveStrictNewSessionCreationTag, findStrictNewSessionByRunCreationTagTx, resolveAutomationPendingInputSessionIdTx } from "./automationRunSessionTarget";
 import {
     AUTOMATION_EXECUTION_DISPATCH_MAX_ATTEMPTS,
     type AutomationRunItem,
@@ -164,68 +161,6 @@ async function resolveProducedSessionIdTx(params: {
     return session ? session.id : null;
 }
 
-/**
- * A strict new-Session Run may retain only the Session created/rejoined by its
- * own immutable Automation creation identity. Other Run arms retain their
- * incumbent same-Account validation, so this does not alter predecessor flows.
- */
-function deriveStrictNewSessionCreationTag(params: {
-    originKind: string;
-    automationId: string | null;
-    runId: string;
-    executionInputEnvelope: string | null;
-}): string | null {
-    if (params.originKind !== "automation" || params.automationId === null) return null;
-    const recipe = parseAutomationRunExecutionRecipeV1(params.executionInputEnvelope);
-    if (recipe.kind !== "available" || recipe.recipe.target.kind !== "newSession") return null;
-    return deriveSessionCreationTagV1({
-        callerCreationNamespace: `automation:${params.automationId}`,
-        creationKey: `automation-run:${params.runId}`,
-    });
-}
-
-async function findStrictNewSessionByRunCreationTagTx(params: {
-    tx: any;
-    accountId: string;
-    originKind: string;
-    automationId: string | null;
-    runId: string;
-    executionInputEnvelope: string | null;
-}): Promise<{ id: string } | null> {
-    const sessionCreationTag = deriveStrictNewSessionCreationTag(params);
-    if (!sessionCreationTag) return null;
-    return await params.tx.session.findUnique({
-        where: {
-            accountId_tag: {
-                accountId: params.accountId,
-                tag: sessionCreationTag,
-            },
-        },
-        select: { id: true },
-    });
-}
-
-async function findNewSessionByRunCreationTagTx(params: {
-    tx: Tx;
-    accountId: string;
-    automationId: string;
-    runId: string;
-}): Promise<{ id: string } | null> {
-    const sessionCreationTag = deriveSessionCreationTagV1({
-        callerCreationNamespace: `automation:${params.automationId}`,
-        creationKey: `automation-run:${params.runId}`,
-    });
-    return await params.tx.session.findUnique({
-        where: {
-            accountId_tag: {
-                accountId: params.accountId,
-                tag: sessionCreationTag,
-            },
-        },
-        select: { id: true },
-    });
-}
-
 async function resolveStrictNewSessionProducedSessionIdTx(params: {
     tx: any;
     accountId: string;
@@ -255,55 +190,6 @@ async function resolveProducedSessionIdForRunTx(params: {
     return recipe.kind === "available" && recipe.recipe.target.kind === "newSession"
         ? await resolveStrictNewSessionProducedSessionIdTx(params)
         : await resolveProducedSessionIdTx(params);
-}
-
-async function resolveAutomationPendingInputSessionIdTx(params: Readonly<{
-    tx: Tx;
-    accountId: string;
-    automationId: string;
-    runId: string;
-    executionInputEnvelope: string | null;
-    accountEncryptionMode: "plain" | "e2ee";
-    retainedV2OriginKind: "scheduled" | "manual" | undefined;
-}>): Promise<string | null> {
-    const recipe = parseAutomationRunExecutionRecipeV1(params.executionInputEnvelope);
-    if (recipe.kind === "available" && recipe.recipe.target.kind === "existingSession") {
-        const session = await params.tx.session.findFirst({
-            where: {
-                id: recipe.recipe.target.sessionId,
-                accountId: params.accountId,
-            },
-            select: { id: true },
-        });
-        return session?.id ?? null;
-    }
-    if (recipe.kind === "available" && recipe.recipe.target.kind === "newSession") {
-        const session = await findStrictNewSessionByRunCreationTagTx({
-            ...params,
-            originKind: "automation",
-        });
-        return session?.id ?? null;
-    }
-    if (recipe.kind === "available") return null;
-
-    const retainedTarget = params.executionInputEnvelope === null
-        || params.retainedV2OriginKind === undefined
-        ? null
-        : readRetainedAutomationRunExecutionTargetV2({
-            raw: params.executionInputEnvelope,
-            mode: params.accountEncryptionMode,
-            retainedV2OriginKind: params.retainedV2OriginKind,
-        });
-    if (retainedTarget?.kind === "existingSession") {
-        const session = await params.tx.session.findFirst({
-            where: { id: retainedTarget.sessionId, accountId: params.accountId },
-            select: { id: true },
-        });
-        return session?.id ?? null;
-    }
-    if (retainedTarget?.kind !== "newSession") return null;
-    const session = await findNewSessionByRunCreationTagTx(params);
-    return session?.id ?? null;
 }
 
 /**

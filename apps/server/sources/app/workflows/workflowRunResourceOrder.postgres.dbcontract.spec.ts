@@ -5,6 +5,8 @@ import { automationAccountCurrentnessSelect, deriveAutomationAccountCurrentnessW
 import { db, initDbPostgres } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { initializeWorkflowRunExecution } from "./workflowRunService";
+import { cancelAutomationRun } from "@/app/automations/automationRunService";
+import { encodeAutomationRunCause } from "@/app/automations/automationRunCauseCodec";
 
 describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Workflow Run resource ordering", () => {
     beforeAll(async () => {
@@ -16,6 +18,78 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Workflow Run re
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it("cancels a retained existing-session Run with its pending target audience admitted before the Run", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const viewer = await db.account.create({ data: { encryptionMode: "plain" } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(),
+            metadata: "{}", encryptionMode: "plain", pendingCount: 1 } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: account.id,
+            sharedWithUserId: viewer.id, accessLevel: "view" } });
+        const templateCiphertext = JSON.stringify({ kind: "happier_automation_template_plain_v1",
+            payload: { prompt: "Run the retained automation", existingSessionId: session.id } });
+        const automation = await db.automation.create({ data: { accountId: account.id, name: "Retained target",
+            targetType: "existing_session", templateVersion: 1, templateCiphertext } });
+        const invokedAt = Date.now();
+        const run = await db.automationRun.create({ data: { accountId: account.id, automationId: automation.id,
+            ...encodeAutomationRunCause({ kind: "manual", invokedAt }), state: "running", attempt: 1,
+            scheduledAt: new Date(invokedAt), dueAt: new Date(invokedAt), startedAt: new Date(invokedAt),
+            executionInputEnvelope: JSON.stringify({ kind: "happier_automation_run_execution_input_v1",
+                targetType: "existing_session", templateVersion: 1, templateCiphertext,
+                origin: { kind: "manual", invokedAt } }) } });
+        const localId = `automation:run:${run.id}`;
+        await db.sessionPendingMessage.create({ data: { sessionId: session.id, localId, messageRole: "user",
+            content: { t: "plain", v: { role: "user", content: { type: "text", text: "Automation pending input" } } },
+            requestedAction: { v: 1, kind: "enqueue" }, status: "queued", deliveryState: "delivering", position: 1 } });
+        const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        process.env.HAPPIER_DB_TX_MAX_RETRIES = "0";
+        const transaction = db.$transaction;
+        const locks: Array<{ kind: string; ids: unknown[] }> = [];
+        let heldAtRun: typeof locks | undefined;
+        let pid = 0;
+        // Observe only the genuine database transport; cancellation, retained
+        // recipe parsing, Session retirement and publication stay production-owned.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                pid = (await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid'))[0].pid;
+                return callback(new Proxy(tx, { get(inner, key, innerReceiver) {
+                    if (key !== "$queryRawUnsafe") return Reflect.get(inner, key, innerReceiver);
+                    return async (query: string, ...values: unknown[]) => {
+                        const result = await inner.$queryRawUnsafe(query, ...values);
+                        if (query.includes("FOR ")) {
+                            const kind = query.includes('FROM "AutomationRun"') ? "run"
+                                : query.includes('FROM "Session"') ? "session"
+                                    : query.includes('FROM "Account"') ? "account" : null;
+                            if (kind === "run" && heldAtRun === undefined) heldAtRun = [...locks];
+                            if (kind) locks.push({ kind, ids: values.flat() });
+                        }
+                        return result;
+                    };
+                } }));
+            }, ...args.slice(1)]);
+        } });
+        try {
+            const cancelled = await cancelAutomationRun({ accountId: account.id, runId: run.id })
+                .then(value => ({ value }), error => ({ error }));
+            console.info("Workflow retained target admission", JSON.stringify({ pid, maxRetries: 0, locks, heldAtRun }));
+            console.info("Workflow retained target cancellation", cancelled);
+            expect(cancelled).toMatchObject({ value: { id: run.id, state: "outcome_uncertain" } });
+            expect(heldAtRun?.filter(lock => lock.kind === "account").flatMap(lock => lock.ids)).toContain(viewer.id);
+            expect(heldAtRun?.filter(lock => lock.kind === "session").flatMap(lock => lock.ids)).toContain(session.id);
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId } } }))
+                .toMatchObject({ status: "discarded", discardedReason: "session_input_cancelled" });
+            expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).pendingCount).toBe(0);
+            expect(await db.accountChange.findUnique({ where: { accountId_kind_entityId: {
+                accountId: viewer.id, kind: "session", entityId: session.id,
+            } } })).toMatchObject({ entityId: session.id });
+        } finally {
+            db.$transaction = transaction;
+            if (previousRetries === undefined) delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+            else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
+        }
+    });
 
     it("rejoins concurrent initialization without a Session resource or duplicate root error", async () => {
         const account = await db.account.create({ data: { encryptionMode: "plain" } });
