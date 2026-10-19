@@ -1,4 +1,5 @@
 import { logger } from "@/ui/logger";
+import { delayUnrefAbortable } from '@/utils/time';
 import { claudeLocal, ExitCodeError } from "./claudeLocal";
 import { Session, type SessionFoundInfo } from "./session";
 import type { EnhancedMode } from './loop';
@@ -576,8 +577,9 @@ export async function claudeLocalLauncher(
                         break;
                     }
 
-                    // Backoff to avoid tight retry loops and log spam.
-                    await new Promise((resolve) => setTimeout(resolve, Math.min(1000 * errorCount, 5000)));
+                    // Backoff to avoid tight retry loops and log spam. Ends early when the process
+                    // abort fires (runner termination or mode switch); the loop head then returns.
+                    await delayUnrefAbortable(Math.min(1000 * errorCount, 5000), processAbortController.signal);
                     continue;
                 } else {
                     break;

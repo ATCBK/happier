@@ -711,6 +711,30 @@ describe('claudeLocalLauncher', () => {
     expect(mockClaudeLocal).toHaveBeenCalledOnce();
   });
 
+  it('ends a local retry backoff promptly when runner termination aborts the launcher', async () => {
+    const { session } = createLocalHarness();
+    const launchFailed = createDeferred<void>();
+    mockClaudeLocal.mockImplementationOnce(async () => {
+      launchFailed.resolve(undefined);
+      throw new Error('spawn failed');
+    });
+    const termination = new AbortController();
+    const { claudeLocalLauncher } = await import('./claudeLocalLauncher');
+    const launch = claudeLocalLauncher(session, { signal: termination.signal });
+    await launchFailed.promise;
+    // Let the launcher enter its post-failure retry backoff (1s for the first error).
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    termination.abort('claude-runner-termination');
+
+    const settled = await Promise.race([
+      launch,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 300)),
+    ]);
+    expect(settled).toEqual({ type: 'exit', code: 0 });
+    expect(mockClaudeLocal).toHaveBeenCalledOnce();
+  });
+
   it('defers UI-triggered remote switch until the active local Claude turn settles', async () => {
     vi.useFakeTimers();
     const { session } = createLocalHarness();
