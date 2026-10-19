@@ -103,7 +103,7 @@ export async function discoverMemoryExternalTranscriptSources(input: Parameters<
 /** Configured native sources consume the incumbent observation resource owner. */
 export function createMemoryExternalTranscriptSources(input: Readonly<{
   credentials: StoredCredentials;
-  onChange(): void;
+  onChange(refreshSources: boolean): void;
 }>) {
   let observation: MemoryExternalObservation | null = null;
   let records: ReadonlyArray<MemoryExternalSourceReader & { demand: Disposable | null }> = [];
@@ -156,7 +156,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     const operationSignal = AbortSignal.any([signal, lifetime.signal]);
     if (!unsubscribeRegistry) {
       const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
-      unsubscribeRegistry = pluginReloadController.subscribe(() => { invalidateInventory(); traversal.invalidate(); input.onChange(); });
+      unsubscribeRegistry = pluginReloadController.subscribe(() => { invalidateInventory(); traversal.invalidate(); input.onChange(true); });
     }
     const [{ acquireAuthoritativePluginRuntimeRegistryLease }, { configuredExternalSessionSourcesUseConnectedProfiles },
       { resolveNativeUsageSourceMetadata }] = await Promise.all([
@@ -192,10 +192,13 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
             retirementSignal: AbortSignal.any([lifetime.signal, boundary.retirementSignal]) },
           source: resolved.descriptor.source, changeObservation: sourceObservation.changeObservation,
           ...(sourceObservation.watchFileChanges ? { watchFileChanges: sourceObservation.watchFileChanges } : {}),
-          onChange: () => {
-            invalidateInventory(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
+          onChange: ({ reason }) => {
+            // Known-file changes go through the retained transcript frontier.
+            // Only structural/source changes need a fresh source-wide file set.
+            const refreshSources = reason !== 'file_changed';
+            if (refreshSources) invalidateInventory(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
             traversal.invalidate(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
-            input.onChange();
+            input.onChange(refreshSources);
           },
         }) : null;
         next.push({ agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey, source: resolved.descriptor.source,
@@ -306,6 +309,10 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     invalidate() { invalidateInventory(undefined, undefined, false); },
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error') {
       traversal.noteSyncResult(source, state);
+      if (state === 'removed') {
+        invalidateInventory(source.agentId, source.sourceKey);
+        input.onChange(true);
+      }
     },
     getIndexSources(db: DeepIndexDbHandle | null): MemoryIndexSourceStatusV1[] {
       const groups = new Map(traversal.getIndexSources(db).map(row =>
@@ -322,8 +329,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     attach(next: MemoryExternalObservation) {
       observation = next;
       invalidateInventory();
-      input.onChange();
-      return () => { if (observation === next) { observation = null; invalidateInventory(); input.onChange(); } };
+      input.onChange(true);
+      return () => { if (observation === next) { observation = null; invalidateInventory(); input.onChange(true); } };
     },
     take: traversal.take,
     async readPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, settings: MemorySettingsV1, signal: AbortSignal) {

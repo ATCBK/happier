@@ -7,11 +7,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
 
-const disk = vi.hoisted(() => ({ project: '', armOnWatch: '', armed: false, opens: 0, entered: () => {}, wait: Promise.resolve() }));
+const disk = vi.hoisted(() => ({ project: '', armOnWatch: '', armed: false, opens: 0, blockAt: 2, entered: () => {}, wait: Promise.resolve() }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, opendir: async (...args: Parameters<typeof actual.opendir>) => {
-    if (disk.armed && String(args[0]) === disk.project && ++disk.opens === 2) { disk.entered(); await disk.wait; }
+    if (disk.armed && String(args[0]) === disk.project && ++disk.opens === disk.blockAt) { disk.entered(); await disk.wait; }
     return actual.opendir(...args);
   } };
 });
@@ -94,9 +94,24 @@ describe('memory worker native source readiness', () => {
         finally { db.close(); }
       };
       expect(search('quartz')).toHaveLength(1);
+      // An append to an admitted file must reach its incremental transcript
+      // reader without waiting for a fresh whole-source file-set discovery.
+      disk.project = project;
+      disk.armed = true;
+      disk.opens = 0;
+      disk.blockAt = 1;
+      const appendDiscoveryEntered = new Promise<void>(resolve => { disk.entered = resolve; });
+      disk.wait = new Promise<void>(resolve => { releaseDisk = resolve; });
       await appendFile(firstPath, row('append', 'garnet appended native message'));
       fileChanges.get(firstPath)!(firstPath);
-      await worker.ensureUpToDate();
+      pendingSync = worker.ensureUpToDate();
+      expect(await Promise.race([pendingSync.then(() => 'tick finished'), appendDiscoveryEntered.then(() => 'waiting on whole-source discovery')]))
+        .toBe('tick finished');
+      releaseDisk();
+      await pendingSync;
+      disk.project = '';
+      disk.armed = false;
+      disk.blockAt = 2;
       expect(search('garnet')).toHaveLength(1);
       const addedPath = join(project, 'added.jsonl');
       await writeFile(addedPath, row('added', 'topaz newly discovered message'));
@@ -162,6 +177,7 @@ describe('memory worker native source readiness', () => {
       disk.project = '';
       disk.armOnWatch = '';
       disk.armed = false;
+      disk.blockAt = 2;
       await worker?.stop();
       await observation?.dispose();
       await runtime?.dispose();

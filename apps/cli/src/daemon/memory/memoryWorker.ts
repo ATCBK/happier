@@ -183,7 +183,7 @@ export async function startMemoryWorker(params: Readonly<{
   const observedUpdatedAtBySessionId = new Map<string, number>();
   const editedSessionIds = new Set<string>();
   const externalSources = createMemoryExternalTranscriptSources({ credentials: params.credentials,
-    onChange: () => { externalSourcesNeedRefresh = true; workLoop?.trigger(); } });
+    onChange: refreshSources => { externalSourcesNeedRefresh ||= refreshSources; workLoop?.trigger(); } });
   let externalSourcesNeedRefresh = true;
   let externalSyncPromise: Promise<void> | null = null;
   const sessionCryptoContextCache = new Map<string, SessionStoredContentCryptoContext>();
