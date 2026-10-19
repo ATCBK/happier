@@ -718,7 +718,13 @@ export function sessionUpdateHandler(
                         : { status: 'held', code: 'session_input_target_unavailable' } } : {}),
             });
         } catch (error) {
-            log({ module: "websocket", level: "warn" }, `Session Follow observation failed: ${error}`);
+            log({
+                module: "websocket",
+                level: "warn",
+                ...(isTransactionDeadlineExceededError(error) && error.transactionClass
+                    ? { transactionClass: error.transactionClass }
+                    : {}),
+            }, `Session Follow observation failed: ${error}`);
             respond({ ok: false, v: 1, error: "internal" });
         }
     });
