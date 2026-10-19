@@ -16,7 +16,7 @@ import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadat
 import type { MachinePoolViewV1 } from '@happier-dev/protocol/machines/pools/v1';
 import type { PrimaryTurnStatusV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
-import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { readSessionListRenderableOwnerMetadataView, readSessionListRenderableSharedMetadata } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import {
   resolveAutomationRunProjections,
   resolveWorkflowRunRows,
@@ -291,7 +291,7 @@ export function selectSessionDisplayNameSource(
     lockedDisplayTitle: session.lockedDisplayTitle,
     access: session.access,
     accessLevel: session.accessLevel,
-    metadata: session.metadata,
+    metadata: session === directSession ? session.metadata : readSessionListRenderableSharedMetadata(session),
     metadataLayoutVersion: session.metadataLayoutVersion,
     ownerMetadataView: session === directSession
       ? directSession?.ownerMetadataView

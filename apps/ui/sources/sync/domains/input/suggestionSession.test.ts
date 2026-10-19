@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 import {
     buildComposerSessionTokenSlug,
@@ -213,19 +215,11 @@ describe('composer session suggestion source (D-7, D-8)', () => {
         });
 
         it('reads layout-v1 identity from the canonical shared presentation envelope', () => {
+            const row = buildSessionListRenderableFromSession(createSessionFixture({ id: 'peer', metadataLayoutVersion: 1,
+                accessLevel: 'view', metadata: parseDecryptedSessionMetadata({ v: 1,
+                    agentPresentation: { agentId: 'acme.native/agent' } }, 1) }));
             const [item] = projectComposerSessionSuggestionItems(
-                state({
-                    byServer: {
-                        'server-a': [renderable('peer', {
-                            metadataLayoutVersion: 1,
-                            accessLevel: 'view',
-                            metadata: {
-                                v: 1,
-                                agentPresentation: { agentId: 'acme.native/agent' },
-                            },
-                        })],
-                    },
-                }),
+                { sessions: {}, sessionListRowsByServerId: { 'server-a': { peer: row } } },
                 { serverId: 'server-a', currentSessionId: null },
             );
 

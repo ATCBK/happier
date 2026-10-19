@@ -40,7 +40,7 @@ import {
 } from '@/sync/ops/sessionMachineTarget';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { readSessionListRenderableOwnerMetadataView, readSessionListRenderableSharedMetadata } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
@@ -593,7 +593,11 @@ export function isUntitledSessionName(name: string): boolean {
  * Extracts a display name from a session's metadata path.
  * Returns the last segment of the path, or "Untitled session" when nothing names it.
  */
-export function getSessionName(session: SessionDisplayNameSource, serverId?: string | null): string {
+export function getSessionName(
+    session: SessionDisplayNameSource,
+    serverId?: string | null,
+    options?: Readonly<{ snapshotOnly?: boolean }>,
+): string {
     const summaryText = readSessionDisplayTitleField(session).value;
     const ownerMetadata = readDisplayOwnerMetadata(session);
     if (summaryText) {
@@ -605,7 +609,7 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
     }
     // The held row already owns the transcript projection. Full Sessions (headers and notices)
     // reuse its Home-qualified title instead of scanning the transcript or deriving another name.
-    if (session.metadata != null && ('agentState' in session || 'ownerMetadataView' in session)) {
+    if (!options?.snapshotOnly && session.metadata != null && ('agentState' in session || 'ownerMetadataView' in session)) {
         const home = serverId?.trim() || session.serverId?.trim() || getActiveServerId();
         const row = readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, home, session.id);
         const title = readSessionDisplayTitleField(session, {
@@ -619,7 +623,7 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
     }
     if (ownerMetadata) {
         const displayMetadata = ownerMetadata;
-        const displayPath = readPrivateDisplayMachineTarget(session, ownerMetadata, serverId)?.basePath
+        const displayPath = (options?.snapshotOnly ? null : readPrivateDisplayMachineTarget(session, ownerMetadata, serverId))?.basePath
             ?? readDisplayPathForSession({
             sessionId: null,
             metadata: displayMetadata ?? null,
@@ -639,8 +643,13 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
  * say their own generic word (a notification, a warning) rather than the untitled one. The name
  * itself is never decided anywhere else.
  */
-export function readSessionNameIfNamed(session: SessionDisplayNameSource, serverId?: string | null): string | null {
-    const name = getSessionName(session, serverId);
+export function readSessionNameIfNamed(
+    session: SessionDisplayNameSource,
+    serverId?: string | null,
+    /** Exact authorized reads must not borrow another projection's cached title or path. */
+    options?: Readonly<{ snapshotOnly?: boolean }>,
+): string | null {
+    const name = getSessionName(session, serverId, options);
     return isUntitledSessionName(name) ? null : name;
 }
 
@@ -694,7 +703,12 @@ export function getSessionWorkContextParts(session: SessionDisplayNameSource, se
     const machine = machineId ? state.machineListByServerId[home]?.find(item => item.id === machineId)
         ?? (home === getActiveServerId() ? state.machines[machineId] : undefined) : undefined;
     const machineName = getMachineDisplayName(machine) ?? readSessionOwnerHostName(session);
-    const agentId = readSessionPresentationAgentId(session);
+    const agentId = readSessionPresentationAgentId({
+        metadataLayoutVersion: session.metadataLayoutVersion,
+        metadata: 'ownerMetadataView' in session || 'agentState' in session
+            ? session.metadata
+            : readSessionListRenderableSharedMetadata(session),
+    });
     const agent = agentId ? resolveAgentCatalogProjection(agentId, { enabledAgentIds: [] }).title : null;
     const workspace = !machineName && ownerMetadata && readSessionDirectoryKind(ownerMetadata) !== 'managed'
         ? resolveSessionWorkspaceDisplayPresentation({ serverId: home, metadata: ownerMetadata,
