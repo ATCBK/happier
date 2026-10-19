@@ -4,7 +4,7 @@ import {
 } from '@/sync/ops/machineFileBrowser';
 
 import { sortDirectoryEntries } from './sortDirectoryEntries';
-import { warmInFlight } from './warmInFlight';
+import { warmInFlight, type WarmInFlightRequest } from './warmInFlight';
 
 export type MachineFileBrowserRoot = Readonly<{
     id: string;
@@ -35,8 +35,8 @@ type CachedDirectoryEntries = Readonly<{
 
 const rootsCache = new Map<string, MachineFileBrowserRoot[]>();
 const directoryEntriesCache = new Map<string, CachedDirectoryEntries>();
-const rootsWarmInFlight = new Map<string, Promise<ListMachineFileBrowserRootsResult>>();
-const directoryWarmInFlight = new Map<string, Promise<ListMachineFileBrowserDirectoryEntriesResult>>();
+const rootsWarmInFlight = new Map<string, WarmInFlightRequest<ListMachineFileBrowserRootsResult>>();
+const directoryWarmInFlight = new Map<string, WarmInFlightRequest<ListMachineFileBrowserDirectoryEntriesResult>>();
 
 function getRootsCacheKey(machineId: string, serverId?: string | null): string {
     return `${serverId ?? ''}:${machineId}`;
@@ -160,8 +160,10 @@ function setCachedMachineFileBrowserEntries(input: {
 export async function listMachineFileBrowserRoots(input: {
     machineId: string;
     serverId?: string | null;
+    signal?: AbortSignal;
 }): Promise<ListMachineFileBrowserRootsResult> {
-    const response = await machineFilesystemListRoots(input.machineId, { serverId: input.serverId });
+    const response = await machineFilesystemListRoots(input.machineId, { serverId: input.serverId, signal: input.signal });
+    input.signal?.throwIfAborted();
     if (!response.ok) {
         const error = typeof response.error === 'string' ? response.error.trim() : '';
         return { ok: false, error: error || 'unknown_error' };
@@ -190,12 +192,13 @@ export async function listMachineFileBrowserRoots(input: {
 export async function warmMachineFileBrowserRoots(input: {
     machineId: string;
     serverId?: string | null;
+    signal?: AbortSignal;
 }): Promise<ListMachineFileBrowserRootsResult> {
     const cached = getCachedMachineFileBrowserRoots(input);
     if (cached) return { ok: true, roots: cached };
 
     const key = getRootsCacheKey(input.machineId, input.serverId);
-    return await warmInFlight(rootsWarmInFlight, key, async () => await listMachineFileBrowserRoots(input));
+    return await warmInFlight(rootsWarmInFlight, key, signal => listMachineFileBrowserRoots({ ...input, signal }), input.signal);
 }
 
 export async function listMachineFileBrowserDirectoryEntries(input: {
@@ -203,11 +206,13 @@ export async function listMachineFileBrowserDirectoryEntries(input: {
         directoryPath: string;
         includeFiles: boolean;
         serverId?: string | null;
+        signal?: AbortSignal;
 }): Promise<ListMachineFileBrowserDirectoryEntriesResult> {
     const response = await machineFilesystemListDirectory(input.machineId, {
         path: input.directoryPath,
         includeFiles: input.includeFiles,
-    }, { serverId: input.serverId });
+    }, { serverId: input.serverId, signal: input.signal });
+    input.signal?.throwIfAborted();
 
     if (!response.ok) {
         const error = typeof response.error === 'string' ? response.error.trim() : '';
@@ -245,6 +250,7 @@ export async function warmMachineFileBrowserDirectoryCache(input: {
     directoryPath: string;
     includeFiles: boolean;
     serverId?: string | null;
+    signal?: AbortSignal;
 }): Promise<ListMachineFileBrowserDirectoryEntriesResult> {
     const cachedEntries = getCachedMachineFileBrowserEntries(input);
     const cachedMetadata = getCachedMachineFileBrowserDirectoryMetadata(input);
@@ -253,5 +259,5 @@ export async function warmMachineFileBrowserDirectoryCache(input: {
     }
 
     const key = getDirectoryCacheKey(input.machineId, input.directoryPath, input.includeFiles, input.serverId);
-    return await warmInFlight(directoryWarmInFlight, key, async () => await listMachineFileBrowserDirectoryEntries(input));
+    return await warmInFlight(directoryWarmInFlight, key, signal => listMachineFileBrowserDirectoryEntries({ ...input, signal }), input.signal);
 }

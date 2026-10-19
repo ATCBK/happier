@@ -83,8 +83,8 @@ export function useLazyDirectoryTree(input: {
     reloadToken?: string | number | null;
     getCachedEntries: (directoryPath: string) => LazyDirectoryTreeEntry[] | null;
     getCachedDirectoryMetadata?: (directoryPath: string) => Readonly<{ truncated?: boolean }> | null;
-    loadDirectoryEntries: (directoryPath: string) => Promise<LazyDirectoryTreeLoadResult>;
-    warmDirectoryEntries?: ((directoryPath: string) => Promise<LazyDirectoryTreeLoadResult>) | null;
+    loadDirectoryEntries: (directoryPath: string, signal: AbortSignal) => Promise<LazyDirectoryTreeLoadResult>;
+    warmDirectoryEntries?: ((directoryPath: string, signal: AbortSignal) => Promise<LazyDirectoryTreeLoadResult>) | null;
     warmChildDirectoriesLimit?: number;
 }) {
     const {
@@ -181,6 +181,19 @@ export function useLazyDirectoryTree(input: {
     const directoryErrorsRef = React.useRef(directoryErrors);
     const rootDirectoryPathRef = React.useRef(rootDirectoryPath);
     const previousReloadTokenRef = React.useRef(reloadToken);
+    const requestLifetimeRef = React.useRef<AbortController | null>(null);
+    React.useEffect(() => {
+        const controller = new AbortController();
+        requestLifetimeRef.current = controller;
+        loadingRef.current.clear();
+        pendingForcedReloadsRef.current.clear();
+        setLoadingDirectories(new Set());
+        if (!enabled) {
+            controller.abort();
+            setRootLoading(false);
+        }
+        return () => controller.abort();
+    }, [enabled, loadDirectoryEntries, reloadToken, rootDirectoryPath, scopeKey, warmChildDirectoriesLimit, warmDirectoryEntries]);
     const shouldForceReloadExpandedDirectories = reloadToken !== previousReloadTokenRef.current;
     React.useEffect(() => {
         directoryEntriesByPathRef.current = directoryEntriesByPath;
@@ -226,11 +239,14 @@ export function useLazyDirectoryTree(input: {
 
     const warmChildren = React.useCallback((entries: readonly LazyDirectoryTreeEntry[]) => {
         if (!warmDirectoryEntries || warmChildDirectoriesLimit <= 0) return;
+        const signal = requestLifetimeRef.current?.signal;
+        if (!signal || signal.aborted) return;
         const childDirectories = entries
             .filter((entry) => entry.type === 'directory')
             .slice(0, warmChildDirectoriesLimit);
         for (const entry of childDirectories) {
-            void warmDirectoryEntries(entry.path);
+            // Warming is optional; foreground loading reports its own failures.
+            void warmDirectoryEntries(entry.path, signal).catch(() => {});
         }
     }, [warmChildDirectoriesLimit, warmDirectoryEntries]);
     const loadDirectoryEntriesRef = React.useRef(loadDirectoryEntries);
@@ -257,6 +273,8 @@ export function useLazyDirectoryTree(input: {
         }
 
         const requestScopeKey = scopeKeyRef.current;
+        const signal = requestLifetimeRef.current?.signal;
+        if (!signal || signal.aborted) return;
         loadingRef.current.add(clean);
         setLoadingDirectories((prev) => {
             const next = new Set(prev);
@@ -265,15 +283,18 @@ export function useLazyDirectoryTree(input: {
         });
 
         try {
-            const result = await loadDirectoryEntriesRef.current(clean);
-            if (scopeKeyRef.current !== requestScopeKey) {
+            const result = await loadDirectoryEntriesRef.current(clean, signal);
+            if (signal.aborted || scopeKeyRef.current !== requestScopeKey) {
                 return;
             }
             applyDirectoryLoadResult(clean, result);
             if (result.ok) {
                 warmChildrenRef.current(result.entries);
             }
+        } catch (error) {
+            if (!signal.aborted) applyDirectoryLoadResult(clean, { ok: false, error: error instanceof Error ? error.message : 'unknown_error' });
         } finally {
+            if (signal.aborted) return;
             loadingRef.current.delete(clean);
             setLoadingDirectories((prev) => {
                 const next = new Set(prev);
@@ -290,12 +311,13 @@ export function useLazyDirectoryTree(input: {
         if (!enabled) return;
 
         let cancelled = false;
+        const signal = requestLifetimeRef.current!.signal;
         const loadRoot = async () => {
             setRootLoading(true);
             setRootError(null);
             try {
-                const result = await loadDirectoryEntries(rootDirectoryPath);
-                if (cancelled || scopeKeyRef.current !== scopeKey) return;
+                const result = await loadDirectoryEntries(rootDirectoryPath, signal);
+                if (cancelled || signal.aborted || scopeKeyRef.current !== scopeKey) return;
                 if (result.ok) {
                     setDirectoryEntriesByPath((prev) => {
                         const next = new Map(prev);
@@ -312,6 +334,8 @@ export function useLazyDirectoryTree(input: {
                     const err = typeof result.error === 'string' ? result.error.trim() : '';
                     setRootError(err || 'unknown_error');
                 }
+            } catch (error) {
+                if (!cancelled && !signal.aborted) setRootError(error instanceof Error ? error.message : 'unknown_error');
             } finally {
                 if (!cancelled) setRootLoading(false);
             }
@@ -342,10 +366,13 @@ export function useLazyDirectoryTree(input: {
     }, [setExpandedPaths]);
 
     const retryRoot = React.useCallback(async () => {
+        const signal = requestLifetimeRef.current?.signal;
+        if (!signal || signal.aborted) return;
         setRootError(null);
         setRootLoading(true);
         try {
-            const result = await loadDirectoryEntries(rootDirectoryPath);
+            const result = await loadDirectoryEntries(rootDirectoryPath, signal);
+            if (signal.aborted) return;
             if (result.ok) {
                 setDirectoryEntriesByPath((prev) => {
                     const next = new Map(prev);
@@ -356,8 +383,10 @@ export function useLazyDirectoryTree(input: {
                 const err = typeof result.error === 'string' ? result.error.trim() : '';
                 setRootError(err || 'unknown_error');
             }
+        } catch (error) {
+            if (!signal.aborted) setRootError(error instanceof Error ? error.message : 'unknown_error');
         } finally {
-            setRootLoading(false);
+            if (!signal.aborted) setRootLoading(false);
         }
     }, [loadDirectoryEntries, rootDirectoryPath]);
 

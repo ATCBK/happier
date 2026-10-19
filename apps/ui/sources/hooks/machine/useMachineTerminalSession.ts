@@ -510,6 +510,7 @@ export function useMachineTerminalSession(params: Readonly<{
                 machineId: params.machineId,
                 serverId: scope?.serverId ?? params.serverId,
                 accountId: scope?.accountId,
+                signal: interest.signal,
             });
             terminalStreamCarrierRef.current = carrier;
             terminalRendererAckDeliveryRef.current = createTerminalRendererAckDelivery({

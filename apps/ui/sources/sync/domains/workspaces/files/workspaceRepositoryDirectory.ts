@@ -4,7 +4,7 @@ import {
     type ListRepositoryDirectoryEntriesResult,
     type RepositoryDirectoryEntry,
 } from '@/sync/domains/input/repositoryDirectoryEntries';
-import { warmInFlight } from '@/sync/domains/input/warmInFlight';
+import { warmInFlight, type WarmInFlightRequest } from '@/sync/domains/input/warmInFlight';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { markWorkspaceRepositoryDirectoryChanged } from './workspaceRepositoryDirectoryRevision';
 
@@ -21,7 +21,7 @@ function getCacheKey(workspaceCacheKey: string, directoryPath: string): string {
 }
 
 const workspaceRepositoryDirectoryCache = new Map<string, { entries: RepositoryDirectoryEntry[]; gitIgnoreAvailable?: boolean }>();
-const workspaceRepositoryDirectoryWarmInFlight = new Map<string, Promise<ListRepositoryDirectoryEntriesResult>>();
+const workspaceRepositoryDirectoryWarmInFlight = new Map<string, WarmInFlightRequest<ListRepositoryDirectoryEntriesResult>>();
 
 export function getCachedWorkspaceRepositoryDirectoryEntries(input: Readonly<{
     workspaceCacheKey: string;
@@ -87,6 +87,7 @@ export function clearCachedWorkspaceRepositoryDirectoryEntries(input: Readonly<{
 export async function warmWorkspaceRepositoryDirectoryCache(input: Readonly<{
     scope: WorkspaceScopeBase;
     directoryPath: string;
+    signal?: AbortSignal;
 }>): Promise<ListRepositoryDirectoryEntriesResult> {
     const workspaceCacheKey = tryBuildWorkspaceCacheKey(input.scope);
     if (!workspaceCacheKey) return { ok: false, error: 'unknown_error' };
@@ -100,14 +101,15 @@ export async function warmWorkspaceRepositoryDirectoryCache(input: Readonly<{
     }
 
     const key = getCacheKey(workspaceCacheKey, input.directoryPath);
-    return await warmInFlight(workspaceRepositoryDirectoryWarmInFlight, key, async () => (
-        await listWorkspaceRepositoryDirectoryEntries(input)
-    ));
+    return await warmInFlight(workspaceRepositoryDirectoryWarmInFlight, key, signal => (
+        listWorkspaceRepositoryDirectoryEntries({ ...input, signal })
+    ), input.signal);
 }
 
 export async function listWorkspaceRepositoryDirectoryEntries(input: Readonly<{
     scope: WorkspaceScopeBase;
     directoryPath: string;
+    signal?: AbortSignal;
 }>): Promise<ListRepositoryDirectoryEntriesResult> {
     const workspaceCacheKey = tryBuildWorkspaceCacheKey(input.scope);
     if (!workspaceCacheKey) return { ok: false, error: 'unknown_error' };
@@ -122,8 +124,9 @@ export async function listWorkspaceRepositoryDirectoryEntries(input: Readonly<{
             includeFiles: true,
             includeGitIgnore: true,
         },
-        { serverId: input.scope.serverId },
+        { serverId: input.scope.serverId, signal: input.signal },
     );
+    input.signal?.throwIfAborted();
     if (!response.ok) {
         return { ok: false, error: response.error || 'unknown_error' };
     }
