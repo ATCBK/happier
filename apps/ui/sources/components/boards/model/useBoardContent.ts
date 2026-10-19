@@ -198,7 +198,7 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
     const includesRuns = filter !== null && canSessionListFilterIncludeRunsV1(filter);
     const readsRuns = includesRuns && homes.activeServerId !== null
         && filter.homeServerIds.some((home) => areServerProfileIdentifiersEquivalent(home, homes.activeServerId));
-    const window = useWorkflowRunWindow('all', { enabled: readsRuns });
+    const window = useWorkflowRunWindow(filter?.underSessionId ? `under:${filter.underSessionId}` : 'all', { enabled: readsRuns });
     const queryHomes = React.useMemo(() => {
         if (!filter || !includesSessions) return [];
         // An empty Home selection means every mounted Home, as in the Sessions list.
@@ -238,6 +238,7 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
             servedHomeServerId: readsRuns ? homes.activeServerId : null,
             filter,
             runs: window.rows.map(row => row.summary),
+            runUnderSessionId: readsRuns ? filter.underSessionId : undefined,
             viewerAccountId: runViewerAccountId,
         }).length > 0) complete = false;
         for (const home of queryHomes) {
@@ -259,7 +260,8 @@ function useFilteredWorkRefs(board: WorkBoardV1, homes: BoardHomes): Readonly<{
         if (readsRuns && homes.activeServerId) {
             for (const row of window.rows) {
                 if (!row.summary) continue;
-                const match = matchWorkflowRunSessionListFilter(row.summary, homes.activeServerId, filter, runViewerAccountId);
+                const match = matchWorkflowRunSessionListFilter(row.summary, homes.activeServerId, filter, runViewerAccountId,
+                    filter.underSessionId !== undefined);
                 if (match === 'unavailable') complete = false;
                 if (match === 'match') next.push(runRef(homes.activeServerId, row.id));
             }
