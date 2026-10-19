@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
-import { settleSessionInputRequestV1, withSessionInputAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionReceiptV1Schema, settleSessionInputRequestV1, withSessionInputAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createMutableApiSessionClientFixture, createSessionRecordFixture, createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { UserMessage } from '@/api/types';
@@ -14,6 +14,7 @@ import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import type { RuntimeTurnPromptMeta } from './turns/runtimeTurnOperations';
 import { createPermissionModeQueueState } from './createPermissionModeQueueState';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import { createSessionProviderInputOutcomeBinding, type SessionProviderInputOutcome } from './session/input/providerInputOutcome';
 
 function createFollowHarness(overrides?: Partial<ApiSessionClient>) {
   let emit: ((message: UserMessage) => boolean | void) | undefined;
@@ -38,11 +39,11 @@ function createFollowHarness(overrides?: Partial<ApiSessionClient>) {
     original: { sourceSessionId: 'source', sourceMessage: { localId: `source-occurrence-${seq}`, seq } }, event: { kind: 'update_posted' },
   });
   const emitDelivery = (followDeliveryV1: ReturnType<typeof delivery>, includeReceipt = true, localId = 'follow-input', accountReceipt = false) => {
-    const inputAdmissionReceipt = { v: 1, followDeliveryV1,
+    const inputAdmissionReceipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, followDeliveryV1,
       ...(accountReceipt ? { issuer: 'authenticatedAccount', actorAccountId: 'account', sessionRelationship: 'owner' }
         : { issuer: 'authenticatedMachine' }),
       admittedTarget: { homeId: 'home', accountId: 'account', sessionId: 'destination',
-        machineId: 'destination-machine', installationId: 'destination-installation' } } as const;
+        machineId: 'destination-machine', installationId: 'destination-installation' } });
     const authority = settleSessionInputRequestV1({ request: { v: 1, producer: 'sessionAction', permission: {}, followDeliveryV1 },
       currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
     if (!emit) throw new Error('missing user input binding');
@@ -108,9 +109,9 @@ describe('protected Follow queue to host context', () => {
         ? { localInputId: input.localInputId, original: input.original }
         : { sourceSessionId: input.sourceSessionId, delivered: input.consumed }),
     }));
-    const settlements: unknown[] = [];
+    const settlements: SessionProviderInputOutcome[] = [];
     const harness = createFollowHarness({ observePendingSessionFollow, acknowledgeSessionFollow,
-      runSessionFollowSourceRequest: async ({ request }) => await request(),
+      runSessionFollowSourceRequest: ({ request }) => request(),
       enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
       observeProviderInputSettlement: async input => { settlements.push(input); return true; },
     });
@@ -185,7 +186,11 @@ describe('protected Follow queue to host context', () => {
     const reconcile = createSessionFollowContextReconciler({ session: harness.session, hydrateObservation: hydrate,
       maxFollowContextUtf8Bytes: scenario === 'omitted' ? 0 : scenario === 'selected-prefix-one-fits' ? 6_000 : 8192 });
     let finished = false;
-    const accepted = new Map<string, (() => void) | null>();
+    const binding = createSessionProviderInputOutcomeBinding({ getTarget: () => ({
+      sessionId: harness.session.sessionId,
+      hasPendingProviderInput: localId => ['human-input', 'follow-input', 'follow-second'].includes(localId),
+      observeProviderInputSettlement: outcome => harness.session.observeProviderInputSettlement(outcome),
+    }) });
     const sends: { prompt: string; meta?: RuntimeTurnPromptMeta }[] = [];
     const resets: unknown[] = [];
     try {
@@ -197,10 +202,13 @@ describe('protected Follow queue to host context', () => {
           beginTurnLifecycle: () => undefined,
           sendTurnPrompt: async (prompt, meta) => {
             sends.push({ prompt, meta });
-            for (const id of meta?.localIds ?? []) {
-              accepted.get(id)?.();
-              if (scenario === 'represented' && id === meta?.localId) expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
-            }
+            if (!meta?.localId) throw new Error('Missing native primary input identity');
+            const accepted = { type: 'input-accepted' as const, localInputId: meta.localId,
+              userMessageSeq: meta.userMessageSeq ?? null, userMessageSeqs: meta.userMessageSeqs,
+              delivery: { kind: 'newTurn' as const, turnId: 'native-turn' } };
+            binding.observeProviderInputOutcome(accepted);
+            binding.observeProviderInputOutcome(accepted);
+            if (scenario === 'represented') expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
           },
           steerInFlightTurn: async () => undefined, waitForTurnCompletion: async () => undefined,
           subscribeRuntimeEvents: () => () => undefined, cancelTurn: async () => undefined,
@@ -216,7 +224,7 @@ describe('protected Follow queue to host context', () => {
         messageBuffer: new MessageBuffer(), shouldExit: () => finished, getAbortSignal: () => new AbortController().signal,
         keepAlive: () => undefined, setThinking: () => undefined, sendReady: () => { finished = true; },
         currentPermissionModeUpdatedAt: 0, setCurrentPermissionMode: () => undefined, setCurrentPermissionModeUpdatedAt: () => undefined,
-        registerProviderAcceptedEffect: (id, effect) => { accepted.set(id, effect); }, formatPromptErrorMessage: String,
+        registerProviderAcceptedEffect: binding.registerProviderAcceptedEffect, formatPromptErrorMessage: String,
       });
       expect(sends).toHaveLength(refused || scenario === 'local-command' ? 0 : 1);
       expect(resets).toHaveLength(scenario === 'local-command' ? 1 : 0);
@@ -235,19 +243,18 @@ describe('protected Follow queue to host context', () => {
           .toEqual([{ delivery: second, localInputId: 'follow-second', userMessageSeq: 19 }]);
         expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
       } else if (scenario === 'selected-prefix-one-fits') {
-        expect(sends[0].meta?.localIds).toEqual(['human-input', 'follow-input']);
+        expect(sends[0].meta?.localIds).toEqual(['human-input']);
         expect(sends[0].prompt).toContain('retained source update 4');
         expect(sends[0].prompt).not.toContain('retained source update 5');
         expect(harness.messageQueue.queue).toHaveLength(1);
         expect(harness.messageQueue.queue[0].message.followDeliveries)
           .toEqual([{ delivery: second, localInputId: 'follow-second', userMessageSeq: 19 }]);
-        expect(acknowledgeSessionFollow.mock.calls.map(([ack]) => ({ localInputId: 'localInputId' in ack ? ack.localInputId : null,
-          consumedSeq: ack.consumed.transcriptSeq }))).toEqual([{ localInputId: 'follow-input', consumedSeq: 4 }]);
+        await vi.waitFor(() => expect(acknowledgeSessionFollow.mock.calls.map(([ack]) => ({ localInputId: 'localInputId' in ack ? ack.localInputId : null,
+          consumedSeq: 'consumed' in ack ? ack.consumed.transcriptSeq : null }))).toEqual([{ localInputId: 'follow-input', consumedSeq: 4 }]));
       } else {
         if (runScenario) expect(sends[0].prompt).toContain('run-original');
         else if (!requestScenario) expect(sends[0].prompt).toContain('retained source update');
-        expect(sends[0].meta?.localIds).toEqual(standalone ? ['follow-input']
-          : scenario === 'two-originals' ? ['human-input', 'follow-input', 'follow-second'] : ['human-input', 'follow-input']);
+        expect(sends[0].meta?.localIds).toEqual(standalone ? ['follow-input'] : ['human-input']);
         if (scenario === 'two-originals') expect(sends[0].prompt).toContain('retained source update 5');
         expect(harness.messageQueue.queue).toEqual([]);
         await vi.waitFor(() => expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({
@@ -264,12 +271,27 @@ describe('protected Follow queue to host context', () => {
           expect(ack).not.toHaveProperty('policy');
         }
         if (scenario === 'two-originals') {
-          expect(acknowledgeSessionFollow.mock.calls.map(([ack]) => ({ localInputId: 'localInputId' in ack ? ack.localInputId : null,
-            consumedSeq: ack.consumed.transcriptSeq }))).toEqual([
+          await vi.waitFor(() => expect(acknowledgeSessionFollow.mock.calls.map(([ack]) => ({ localInputId: 'localInputId' in ack ? ack.localInputId : null,
+            consumedSeq: 'consumed' in ack ? ack.consumed.transcriptSeq : null }))).toEqual([
             { localInputId: 'follow-input', consumedSeq: 4 }, { localInputId: 'follow-second', consumedSeq: 5 },
-          ]);
+          ]));
         }
       }
+      const omitted = scenario === 'omitted' || scenario === 'selected-prefix-gap' || scenario === 'local-command';
+      const expectedAcceptedIds = refused ? [] : standalone ? ['follow-input']
+        : omitted ? ['human-input'] : scenario === 'two-originals'
+          ? ['follow-input', 'follow-second', 'human-input'] : ['follow-input', 'human-input'];
+      await vi.waitFor(() => expect(settlements.filter(outcome => outcome.kind === 'accepted')).toEqual(
+        expectedAcceptedIds.map(localId => expect.objectContaining({ kind: 'accepted', localId,
+          userMessageSeq: localId === 'follow-input' ? 17 : localId === 'follow-second' ? 19 : 18,
+          ...(scenario === 'local-command' ? {} : { providerTurnId: 'native-turn', providerDeliveryKind: 'newTurn' }) })),
+      ));
+      if (scenario === 'local-command') expect(settlements[0]).not.toHaveProperty('providerTurnId');
+      if (sends.length) expect(sends[0].meta).toMatchObject({
+        localId: standalone ? 'follow-input' : 'human-input',
+        userMessageSeq: standalone ? 17 : 18,
+        userMessageSeqs: [standalone ? 17 : 18],
+      });
     } finally { material.dispose(); }
   });
 });
