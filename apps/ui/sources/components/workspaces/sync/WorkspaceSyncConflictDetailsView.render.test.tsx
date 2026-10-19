@@ -1,11 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncConflictInspectRpcResultV1Schema } from '@happier-dev/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WorkspaceSyncConflictInspectRpcResultV1Schema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { createCapturingLegendListMock, pressTestInstance, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionHandoffCommonModuleMocks } from '@/components/sessions/handoff/sessionHandoffTestHelpers';
+import { createWorkspaceSyncHarness } from '@/dev/testkit/harness/workspaceSyncHarness';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 const confirmResolution = vi.hoisted(() => vi.fn(async (_title: string, _body: string) => false));
@@ -13,37 +13,28 @@ const { module: capturedLegendList, state: legendListState } = createCapturingLe
 let includeThirdEndpoint = false;
 let machineDisplayNames: Record<string, string> = {};
 
-installSessionHandoffCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ spies: { confirm: confirmResolution } }).module;
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        const policy = { v: 1 as const, selection: 'git_worktree' as const, extraIgnorePatterns: [], extraIncludePatterns: [],
-            policyDigest: computeWorkspaceSyncPolicyDigest({ v: 1, selection: 'git_worktree', extraIgnorePatterns: [], extraIncludePatterns: [] }) };
-        const refs = [
-            { id: 'hub', serverId: 'server-1', machineId: 'machine-a', rootPath: '/hub', createdAtMs: 1 },
-            { id: 'spoke', serverId: 'server-1', machineId: 'machine-b', rootPath: '/spoke', createdAtMs: 1 },
-        ];
-        const link = { v: 1 as const, relationshipId: 'link-1', controllerMachineId: 'machine-a',
-            alphaWorkspaceRefId: 'hub', betaWorkspaceRefId: 'spoke', mode: 'keep_both_in_sync' as const,
-            contentPolicy: policy, enabled: true, createdAtMs: 1, updatedAtMs: 1 };
-        const extendedRefs = [
-            ...refs, { id: 'third', serverId: 'server-1', machineId: 'machine-c', rootPath: '/third', createdAtMs: 1 },
-        ];
-        const extendedRelationships = [link, { ...link, relationshipId: 'link-2', betaWorkspaceRefId: 'third' }];
-        return createStorageModuleStub({
-            useWorkspaceRefs: () => includeThirdEndpoint ? extendedRefs : refs,
-            useWorkspaceSyncRelationships: () => includeThirdEndpoint ? extendedRelationships : [link],
-            useMachineDisplayNamesById: () => machineDisplayNames,
-        });
-    },
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: key => key });
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { confirm: confirmResolution } }).module;
 });
 vi.mock('@legendapp/list/react-native', () => capturedLegendList);
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (input: unknown) => machineRpc(input),
-}));
+const workspace = createWorkspaceSyncHarness(request => machineRpc(request));
+await workspace.ready;
+const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
+
+beforeEach(async () => { await workspace.reset(); });
 
 const alpha = { kind: 'file' as const, digest: 'a'.repeat(40), executable: false, size: 3 };
 const beta = { kind: 'file' as const, digest: 'b'.repeat(40), executable: true, size: 3 };
@@ -78,13 +69,43 @@ afterEach(async () => {
     confirmResolution.mockClear();
     includeThirdEndpoint = false;
     machineDisplayNames = {};
-    const { resetWorkspaceSyncConflictStoreForTests } = await import('@/sync/domains/sessionHandoff/workspaceSyncConflictStore');
-    resetWorkspaceSyncConflictStoreForTests();
+    await workspace.dispose();
 });
 
 describe('workspace conflict comparison', () => {
+    it('retires the observer of an unanswered resolution when the conflict view unmounts', async () => {
+        let resolutionSignal: AbortSignal | undefined;
+        machineRpc.mockImplementation(async (input: { method: string; signal: AbortSignal;
+            payload: { path?: string; preview?: { workspaceRefId: string } } }) => {
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST) return {
+                status: 'page', relationshipId: 'link-1', totalCount: 1, nextCursor: null, conflicts: [conflict('first.txt')],
+            };
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_INSPECT) {
+                return inspection(input.payload.path ?? 'first.txt', input.payload.preview?.workspaceRefId);
+            }
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE) {
+                resolutionSignal = input.signal;
+                return await new Promise((_resolve, reject) => input.signal.addEventListener('abort',
+                    () => reject(new Error('aborted')), { once: true }));
+            }
+            throw new Error(`Unexpected RPC ${input.method}`);
+        });
+        const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={{
+            kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
+            controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt',
+        }} />);
+        await vi.waitFor(() => expect(screen.find((node) => node.props.title === 'workspaceSync.review.useNamedVersion').props.disabled).toBe(false));
+        confirmResolution.mockResolvedValueOnce(true);
+        act(() => { pressTestInstance(screen.find(node => node.props.title === 'workspaceSync.review.useNamedVersion'), 'submit reviewed version'); });
+        await vi.waitFor(() => expect(resolutionSignal).toBeDefined());
+        await screen.unmount();
+        expect(resolutionSignal?.aborted).toBe(true);
+        expect(machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE)).toHaveLength(1);
+    });
     it('navigates the named version group with arrows and presents ineligible targets as information', async () => {
         includeThirdEndpoint = true;
+        await workspace.seedProject({ includeThirdEndpoint });
         machineRpc.mockImplementation(async (input: { method: string; payload: { path?: string; relationshipId?: string; preview?: { workspaceRefId: string } } }) => {
             if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
             if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST) {
@@ -104,7 +125,7 @@ describe('workspace conflict comparison', () => {
         const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
         const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={{
             kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
-            controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'first.txt',
+            controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt',
         }} />, { createNodeMock: (element) => {
             const props = element.props;
             if (element.type !== 'Pressable' || typeof props !== 'object' || props === null
@@ -143,6 +164,7 @@ describe('workspace conflict comparison', () => {
 
     it('renders paged paths and keeps the selected comparison through compact and wide layouts', async () => {
         machineDisplayNames = { 'machine-a': 'workspace-sync-browser-qa-44e44982-121d-4b9d-9666-bbe9b62ea2ff' };
+        await workspace.seedProject({ machineDisplayNames });
         let refreshed = false;
         machineRpc.mockImplementation(async (input: { method: string; payload: { cursor?: string; path?: string; preview?: { workspaceRefId: string } } }) => {
             if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
@@ -161,9 +183,9 @@ describe('workspace conflict comparison', () => {
         const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
         const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={{
             kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
-            controllerMachineId: 'machine-a', serverId: 'server-1',
+            controllerMachineId: 'machine-a', serverId: workspace.serverId,
         }} />);
-        expect(machineRpc.mock.calls.map(([input]) => input.method)).toContain(RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST);
+        await vi.waitFor(() => expect(machineRpc.mock.calls.map(([input]) => input.method)).toContain(RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST));
         await vi.waitFor(() => expect(legendListState.props?.data.map((row: { path: string }) => row.path)).toEqual(['first.txt']));
         expect(screen.getTextContent()).toContain('first.txt');
 
@@ -244,7 +266,7 @@ describe('workspace conflict comparison', () => {
         });
         const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
         const resource = { kind: 'workspaceSyncConflicts' as const, hubWorkspaceRefId: 'hub',
-            workspaceRefId: 'spoke', controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'first.txt' };
+            workspaceRefId: 'spoke', controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt' };
         const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={resource} />);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('workspaceSync.review.versions'));
         await screen.update(<WorkspaceSyncConflictDetailsView resource={{ ...resource,
@@ -269,13 +291,13 @@ describe('workspace conflict comparison', () => {
         });
         const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
         const resource = { kind: 'workspaceSyncConflicts' as const, hubWorkspaceRefId: 'hub',
-            workspaceRefId: 'spoke', controllerMachineId: 'machine-a', serverId: 'server-1' };
+            workspaceRefId: 'spoke', controllerMachineId: 'machine-a', serverId: workspace.serverId };
         const first = await renderScreen(<WorkspaceSyncConflictDetailsView resource={resource} />);
         await vi.waitFor(() => expect(first.getTextContent()).toContain('old.txt'));
         await first.unmount();
 
         const reopened = await renderScreen(<WorkspaceSyncConflictDetailsView resource={resource} />);
-        expect(pageReads).toBe(2);
+        await vi.waitFor(() => expect(pageReads).toBe(2));
         expect(reopened.getTextContent()).toContain('old.txt');
         expect(reopened.find((node) => typeof node.props.title === 'string'
             && node.props.title.includes('workspaceSync.review.moreOnLink')).props.disabled).toBe(true);
@@ -288,6 +310,7 @@ describe('workspace conflict comparison', () => {
 
     it('requires an explicit destination choice in a three-endpoint set and names untouched workspaces in confirmation', async () => {
         includeThirdEndpoint = true;
+        await workspace.seedProject({ includeThirdEndpoint });
         machineRpc.mockImplementation(async (input: { method: string; payload: { relationshipId?: string; path?: string; preview?: { workspaceRefId: string } } }) => {
             if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_LIST) return { statuses: [] };
             if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST) {
@@ -307,7 +330,7 @@ describe('workspace conflict comparison', () => {
         const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
         const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={{
             kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
-            controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'first.txt',
+            controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt',
         }} />);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('workspaceSync.review.chooseTargets'));
         expect(screen.findAll((node) => node.props.title === 'workspaceSync.review.compareNamedVersion'
@@ -335,7 +358,7 @@ describe('workspace conflict comparison', () => {
         if (approvedRequest) {
             await screen.update(<WorkspaceSyncConflictDetailsView resource={{
                 kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
-                controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'first.txt',
+                controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt',
             }} approvedRequest={approvedRequest} embedded />);
             expect(screen.getTextContent()).toContain('workspaceSync.review.notSelected');
             expect(screen.findAll((node) => typeof node.type === 'string' && node.props.role === 'radio')).toHaveLength(0);
@@ -353,7 +376,7 @@ describe('workspace conflict comparison', () => {
         if (keepRequest) {
             await screen.update(<WorkspaceSyncConflictDetailsView resource={{
                 kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
-                controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'first.txt',
+                controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt',
             }} approvedRequest={keepRequest} embedded />);
             expect(screen.find((node) => node.props.title === 'workspaceSync.review.preserveAt').props.copy)
                 .toBe('first.happier-conflict.txt');
@@ -373,17 +396,19 @@ describe('workspace conflict comparison', () => {
                 if (holdReinspection && !input.payload.preview) return new Promise((resolve) => { reinspectionCompletion.current = resolve; });
                 return inspection(input.payload.path ?? 'first.txt', input.payload.preview?.workspaceRefId);
             }
+            if (input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE) throw new Error('Endpoint offline');
             throw new Error(`Unexpected RPC ${input.method}`);
         });
         const { WorkspaceSyncConflictDetailsView } = await import('./WorkspaceSyncConflictDetailsView');
         const screen = await renderScreen(<WorkspaceSyncConflictDetailsView resource={{
             kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'hub', workspaceRefId: 'spoke',
-            controllerMachineId: 'machine-a', serverId: 'server-1', initialPath: 'first.txt',
+            controllerMachineId: 'machine-a', serverId: workspace.serverId, initialPath: 'first.txt',
         }} />);
         await vi.waitFor(() => expect(screen.find((node) => node.props.title === 'workspaceSync.review.useNamedVersion').props.disabled).toBe(false));
         confirmResolution.mockResolvedValueOnce(true);
         await pressTestInstanceAsync(screen.find((node) => node.props.title === 'workspaceSync.review.useNamedVersion'), 'submit reviewed version');
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('errors.operationFailed'));
+        expect(machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE)).toHaveLength(1);
         expect(screen.findAll((node) => node.props.title === 'workspaceSync.review.useNamedVersion')).toHaveLength(0);
         expect(screen.getTextContent()).toContain('one');
         holdReinspection = true;
@@ -394,14 +419,15 @@ describe('workspace conflict comparison', () => {
         await act(async () => { reinspectionCompletion.current?.(inspection('first.txt')); });
         await vi.waitFor(() => expect(screen.getTextContent()).not.toContain('errors.operationFailed'));
         expect(screen.find((node) => node.props.title === 'workspaceSync.review.useNamedVersion').props.disabled).toBe(false);
-        expect(machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE)).toHaveLength(0);
+        expect(machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE)).toHaveLength(1);
         holdReinspection = false;
         confirmResolution.mockResolvedValueOnce(true);
         await pressTestInstanceAsync(screen.find((node) => node.props.title === 'workspaceSync.review.useNamedVersion'), 'submit another reviewed version');
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('errors.operationFailed'));
+        expect(machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_RESOLVE)).toHaveLength(2);
         await screen.update(<WorkspaceSyncConflictDetailsView resource={{
             kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'other-hub', workspaceRefId: 'other-ref',
-            controllerMachineId: 'machine-z', serverId: 'server-1', initialPath: 'first.txt',
+            controllerMachineId: 'machine-z', serverId: workspace.serverId, initialPath: 'first.txt',
         }} />);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('workspaceSync.review.versions'));
         expect(screen.getTextContent()).not.toContain('errors.operationFailed');

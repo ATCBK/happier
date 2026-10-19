@@ -8,6 +8,7 @@ import { useAllMachines } from '@/sync/domains/state/storage';
 import { inspectWorkspaceSyncLegacyState } from '@/sync/ops/workspaceSync';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { invokeDesktopHost, isDesktopHost } from '@/utils/platform/desktopHost';
 import {
     getVersionSupportState,
@@ -55,20 +56,25 @@ export const WorkspaceSyncLegacyStateRecovery = React.memo(function WorkspaceSyn
     const [outdatedMachineIds, setOutdatedMachineIds] = React.useState<readonly string[]>([]);
     const [checking, setChecking] = React.useState(false);
     const [inspectionFailed, setInspectionFailed] = React.useState(false);
-    const inspectionsInFlightRef = React.useRef(0);
+    const inspectionRequestRef = React.useRef<{ controller: AbortController; pending: boolean } | null>(null);
 
     const inspect = React.useCallback(async () => {
-        inspectionsInFlightRef.current += 1;
+        inspectionRequestRef.current?.controller.abort();
+        const request = { controller: new AbortController(), pending: true };
+        inspectionRequestRef.current = request;
         setChecking(true);
         const outdated: string[] = [];
         const settled = await Promise.allSettled(machines.map(async (machine): Promise<Finding | null> => {
-            const inspection = await inspectWorkspaceSyncLegacyState({ controllerMachineId: machine.id });
+            const inspection = await inspectWorkspaceSyncLegacyState({ controllerMachineId: machine.id,
+                signal: request.controller.signal });
             return inspection.status === 'absent' ? null : {
                 machineId: machine.id,
                 machineName: getMachineDisplayName(machine) ?? machine.id,
                 inspection,
             };
         }));
+        if (request.controller.signal.aborted || inspectionRequestRef.current !== request) return;
+        request.pending = false;
         setFindings((previous) => {
             const next = new Map(
                 previous
@@ -94,16 +100,18 @@ export const WorkspaceSyncLegacyStateRecovery = React.memo(function WorkspaceSyn
             && machines[index]
             && !outdated.includes(machines[index]!.id)
         )));
-        inspectionsInFlightRef.current -= 1;
-        if (inspectionsInFlightRef.current === 0) setChecking(false);
+        setChecking(false);
     }, [machines]);
 
     const reinspect = React.useCallback(() => {
-        if (inspectionsInFlightRef.current > 0) return;
+        if (inspectionRequestRef.current?.pending && !inspectionRequestRef.current.controller.signal.aborted) return;
         void inspect();
     }, [inspect]);
 
-    React.useEffect(() => { void inspect(); }, [inspect]);
+    React.useEffect(() => {
+        void inspect();
+        return () => inspectionRequestRef.current?.controller.abort();
+    }, [inspect]);
 
     if (!checking && findings.length === 0 && outdatedMachineIds.length === 0 && !inspectionFailed) return null;
     return (
@@ -112,16 +120,19 @@ export const WorkspaceSyncLegacyStateRecovery = React.memo(function WorkspaceSyn
             description={t('workspaceSync.legacyRecovery.footer')}
         >
             {checking ? <Item title={t('workspaceSync.legacyRecovery.checking')} showChevron={false} /> : null}
-            {outdatedMachineIds.map((machineId) => (
+            {outdatedMachineIds.map((machineId) => {
+                const outdated = machines.find((machine) => machine.id === machineId);
+                return (
                 <Item
                     key={machineId}
                     testID={`workspace-sync-legacy-outdated-${machineId}`}
-                    title={t('workspaceSync.legacyRecovery.outdatedTitle', { machine: getMachineDisplayName(machines.find((machine) => machine.id === machineId)) ?? machineId })}
+                    title={t('workspaceSync.legacyRecovery.outdatedTitle', { machine: outdated ? getMachineSentenceName(outdated) : machineId })}
                     subtitle={t('workspaceSync.legacyRecovery.outdatedBody')}
                     subtitleLines={0}
                     showChevron={false}
                 />
-            ))}
+                );
+            })}
             {inspectionFailed ? (
                 <Item
                     testID="workspace-sync-legacy-inspection-failed"

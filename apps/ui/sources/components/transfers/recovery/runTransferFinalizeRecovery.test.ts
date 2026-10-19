@@ -14,6 +14,7 @@ import { runTransferFinalizeRecovery } from './runTransferFinalizeRecovery';
 import type { TransferFinalizeRecoveryModal } from './TransferFinalizeRecoveryModal';
 
 const modalShowMock = vi.hoisted(() => vi.fn<IModal['show']>());
+const modalHideMock = vi.hoisted(() => vi.fn<IModal['hide']>());
 const finalizeHttp = vi.hoisted(() => vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>());
 const abortRpc = vi.hoisted(() => vi.fn<(request: { method: string; payload: unknown }) => Promise<unknown>>());
 
@@ -21,7 +22,7 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit')).createExpoVectorIconsMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit')).createExpoRouterMock().module);
-vi.mock('@/modal', async () => (await import('@/dev/testkit')).createModalModuleMock({ spies: { show: modalShowMock } }).module);
+vi.mock('@/modal', async () => (await import('@/dev/testkit')).createModalModuleMock({ spies: { show: modalShowMock, hide: modalHideMock } }).module);
 // Registered here (hoisted above every import) so the transfer plumbing imported above binds the socket
 // boundary too; the harness call below only configures it.
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -62,6 +63,7 @@ describe('runTransferFinalizeRecovery', () => {
     beforeAll(loadSyncSingletonForTests);
     beforeEach(async () => {
         modalShowMock.mockReset();
+        modalHideMock.mockReset();
         finalizeHttp.mockReset().mockImplementation(async () => Response.json(finalizedBody));
         abortRpc.mockReset().mockResolvedValue({ success: true, aborted: true });
         const features = createRootLayoutFeaturesResponse({ features: { machines: transferFeatures().features.machines } });
@@ -111,6 +113,63 @@ describe('runTransferFinalizeRecovery', () => {
     function run(recovery = createRecovery()) {
         return runTransferFinalizeRecovery({ recovery, title: 'Upload needs attention', message: 'The upload is staged.' });
     }
+
+    it('retires an unanswered recovery choice when its request is cancelled and permits a fresh recovery', async () => {
+        let lateChoice!: () => void;
+        modalShowMock.mockImplementationOnce(config => {
+            lateChoice = () => choose(config, 'discard_staged');
+            return 'retired-modal';
+        });
+        const observer = new AbortController();
+        const recovery = createRecovery();
+        let settled = false;
+        const pending = runTransferFinalizeRecovery({ recovery, title: 'Upload', message: 'Staged', signal: observer.signal })
+            .then(result => { settled = true; return result; });
+        observer.abort();
+        await vi.waitFor(() => expect(settled).toBe(true));
+        await expect(pending).resolves.toBeNull();
+        expect(modalHideMock).toHaveBeenCalledWith('retired-modal');
+        lateChoice();
+        expect(abortRpc).not.toHaveBeenCalled();
+        expect(recovery.isActionable()).toBe(true);
+        modalShowMock.mockImplementationOnce(config => { choose(config, 'retry_finalize'); return 'fresh-modal'; });
+        await expect(run(recovery)).resolves.toMatchObject({ status: 'finalized' });
+    });
+
+    it('cancels a nonreplying direct retry with its recovery request and allows another explicit retry', async () => {
+        let requestSignal: AbortSignal | null | undefined;
+        finalizeHttp.mockImplementationOnce(async (_url, init) => {
+            requestSignal = init?.signal;
+            return await new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+            });
+        });
+        modalShowMock.mockImplementationOnce(config => { choose(config, 'retry_finalize'); return 'first-modal'; });
+        const observer = new AbortController();
+        const recovery = createRecovery();
+        const pending = runTransferFinalizeRecovery({ recovery, title: 'Upload', message: 'Staged', signal: observer.signal });
+        await vi.waitFor(() => expect(requestSignal).toBeDefined());
+        observer.abort();
+        expect(requestSignal?.aborted).toBe(true);
+        await expect(pending).resolves.toBeNull();
+        expect(recovery.isActionable()).toBe(true);
+        modalShowMock.mockImplementationOnce(config => { choose(config, 'retry_finalize'); return 'fresh-modal'; });
+        await expect(run(recovery)).resolves.toMatchObject({ status: 'finalized' });
+    });
+
+    it('cancels a nonreplying discard RPC with its recovery request and permits a fresh discard', async () => {
+        abortRpc.mockImplementationOnce(() => new Promise(() => {}));
+        modalShowMock.mockImplementationOnce(config => { choose(config, 'discard_staged'); return 'first-modal'; });
+        const observer = new AbortController();
+        const recovery = createRecovery();
+        const pending = runTransferFinalizeRecovery({ recovery, title: 'Upload', message: 'Staged', signal: observer.signal });
+        await vi.waitFor(() => expect(abortRpc).toHaveBeenCalledTimes(1));
+        observer.abort();
+        await expect(pending).resolves.toBeNull();
+        expect(recovery.isActionable()).toBe(true);
+        modalShowMock.mockImplementationOnce(config => { choose(config, 'discard_staged'); return 'fresh-modal'; });
+        await expect(run(recovery)).resolves.toEqual({ status: 'discarded' });
+    });
 
     it('invokes only the explicitly selected finalize retry action', async () => {
         modalShowMock.mockImplementationOnce(config => { choose(config, 'retry_finalize'); return 'recovery-modal'; });

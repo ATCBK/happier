@@ -82,9 +82,12 @@ export function useCheckoutReachability(
   );
 }
 
-/** Presence is pushed by the machine; Retry asks the server for the machine's current state now. */
+/**
+ * Presence is pushed by the machine; Retry asks the server for the machine's current state now. The one
+ * Retry of every "machine isn't answering" line (a checkout's page, a Session's Work pane).
+ */
 // Loaded on press: the states that offer Retry stay leaf modules without the sync engine's graph.
-async function retryCheckoutMachine(): Promise<unknown> {
+export async function retryMachineReachability(): Promise<unknown> {
   const { sync } = await import('@/sync/sync');
   return sync.refreshMachinesThrottled({ staleMs: 0, force: true });
 }
@@ -117,7 +120,7 @@ export function CheckoutReachabilityLine(
           reason={t('projects.checkouts.notAnswering', {
             machine: shown.machineName,
           })}
-          action={{ label: t('common.retry'), onPress: retryCheckoutMachine }}
+          action={{ label: t('common.retry'), onPress: retryMachineReachability }}
         />
       ) : null}
     </ExpandableItem>
@@ -158,7 +161,7 @@ export function CheckoutUnreachableState(
       title={t('projects.checkouts.notAnswering', {
         machine: reachability.machineName,
       })}
-      action={{ label: t('common.retry'), onPress: retryCheckoutMachine }}
+      action={{ label: t('common.retry'), onPress: retryMachineReachability }}
     />
   );
 }

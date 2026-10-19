@@ -6,11 +6,12 @@ const modal = vi.hoisted(() => ({ show: vi.fn(() => 'modal-id') }));
 
 vi.mock('@/modal', async () => createModalModuleMock({ spies: { show: modal.show } }).module);
 
+const { openWorkspaceSyncRelationshipDetails } = await import('./openWorkspaceSyncRelationshipDetails');
+
 describe('openWorkspaceSyncRelationshipDetails', () => {
     beforeEach(() => modal.show.mockClear());
 
-    it('leaves scrolling to the existing details view for narrow and large-text layouts', async () => {
-        const { openWorkspaceSyncRelationshipDetails } = await import('./openWorkspaceSyncRelationshipDetails');
+    it('leaves scrolling to the existing details view for narrow and large-text layouts', () => {
         openWorkspaceSyncRelationshipDetails({
             relationshipId: 'relationship-1',
             relationship: {

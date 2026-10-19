@@ -31,12 +31,15 @@ import { useMachineListByServerId, useMachineListStatusByServerId, useMachineRec
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { canAttemptMachineSpawn } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { createWorkspaceSyncRelationship, approveWorkspaceSyncRelationshipCreate } from '@/sync/ops/workspaceSyncRelationshipCreate';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { randomUUID } from '@/platform/randomUUID';
 
@@ -63,6 +66,9 @@ const emptyPaths = [] as const;
 const ignoreClose = () => {};
 
 function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
+    const { binding } = useServerCredentialAccountScopeBinding(props.source.serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    useMachineReachabilityRevision();
     const activeServer = useActiveServerSnapshot();
     const machineListByServerId = useMachineListByServerId();
     const machineListStatusByServerId = useMachineListStatusByServerId();
@@ -138,7 +144,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
         ? t('workspaceSync.error.needsAttention')
         : !selectedMachine
         ? t('workspaceSync.start.blocked.targetMachine')
-        : !canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId: machineId })
+        : !canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId: machineId, scope })
             ? t('workspaceSync.start.blocked.targetMachineOffline')
         : !targetPath.trim() || !pathSafety.allowed
             ? t('workspaceSync.start.blocked.destinationFolder')
@@ -150,7 +156,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             setPhase('approval_pending');
             return;
         }
-        const machineName = selectedMachine ? getMachineDisplayName(selectedMachine) : '';
+        const machineName = selectedMachine ? getMachineSentenceName(selectedMachine) : '';
         const pathLabel = formatPathRelativeToHome(resolvedPath, homeDir);
         const consequence = destinationIntent === 'materialize_from_source_workspace'
             ? t('sessionHandoff.targetApproval.replaceTarget', { machine: machineName, path: pathLabel })
@@ -193,6 +199,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
 
     const submit = React.useCallback(async () => {
         if (submissionInFlight.current || busy || phase === 'linked' || inspectRequired) return;
+        if (!binding?.isCurrent()) return;
         if (existing) {
             props.onOpenExisting(existing);
             props.onClose();
@@ -201,6 +208,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
         if (blockedReason || !selectedMachine || !hub) return;
         submissionInFlight.current = true;
         const controller = new AbortController();
+        const retirement = binding.onRetire(() => controller.abort());
         props.operation.inFlight = true;
         props.operation.abortController = controller;
         try {
@@ -279,11 +287,12 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             setPhase('idle');
         }
         } finally {
+            retirement.dispose();
             submissionInFlight.current = false;
             props.operation.inFlight = false;
             props.operation.abortController = null;
         }
-    }, [blockedReason, busy, confirmAndApprove, contentSelection, destinationIntent, existing, hub, includeIgnoredMode, inspectRequired, materializedSourceRefId, mode, patternsDraft, pendingApprovalId, phase, props, resolvedPath, selectedMachine]);
+    }, [binding, blockedReason, busy, confirmAndApprove, contentSelection, destinationIntent, existing, hub, includeIgnoredMode, inspectRequired, materializedSourceRefId, mode, patternsDraft, pendingApprovalId, phase, props, resolvedPath, selectedMachine]);
 
     const footer = React.useMemo(() => (
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
@@ -318,7 +327,7 @@ function WorkspaceSyncAddMachineModal(props: AddMachineProps) {
             /> : null}
             <WorkspaceActivationDestinationFields
                 machine={{
-                    machines, selectedMachine, showSearch: true, presentation: 'dropdown',
+                    machines, selectedMachine, serverId: props.source.serverId, showSearch: true, presentation: 'dropdown',
                     showCliGlyphs: false, autoDetectCliGlyphs: false, disableOfflineMachines: true,
                     testIdPrefix: 'workspace-sync-add-machine',
                     onSelect: (machine) => { setMachineId(machine.id); setTargetPath(''); invalidateDraft(); },

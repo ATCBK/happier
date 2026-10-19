@@ -1,9 +1,10 @@
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceSyncConflictInspectRpcResultV1Schema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
+import { createWorkspaceSyncHarness } from '@/dev/testkit/harness/workspaceSyncHarness';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('react-native', async () => {
@@ -14,18 +15,19 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (input: unknown) => machineRpc(input),
-}));
+const workspace = createWorkspaceSyncHarness(request => machineRpc(request));
+await workspace.ready;
 
 const a = { kind: 'file' as const, digest: 'a'.repeat(40), executable: false, size: 3 };
 const b = { kind: 'file' as const, digest: 'b'.repeat(40), executable: false, size: 3 };
 const c = { kind: 'file' as const, digest: 'c'.repeat(40), executable: false, size: 3 };
 
 describe('workspace sync selected previews', () => {
-    afterEach(() => {
+    beforeEach(async () => { await workspace.reset(); });
+    afterEach(async () => {
         standardCleanup();
         machineRpc.mockReset();
+        await workspace.dispose();
     });
 
     it('reads only the selected two versions and keeps one useful when the other endpoint fails', async () => {
@@ -49,14 +51,16 @@ describe('workspace sync selected previews', () => {
         });
         const { useSelectedPreview } = await import('./WorkspaceSyncConflictDetailsView');
         const hook = await renderHook(() => ({
-            first: useSelectedPreview({ controllerMachineId: 'machine-a', path: 'src/tool', workspaceRefId: 'workspace-a', entry: a }),
-            second: useSelectedPreview({ controllerMachineId: 'machine-a', path: 'src/tool', workspaceRefId: 'workspace-b', entry: b }),
+            first: useSelectedPreview({ controllerMachineId: 'machine-a', serverId: workspace.serverId, path: 'src/tool', workspaceRefId: 'workspace-a', entry: a }),
+            second: useSelectedPreview({ controllerMachineId: 'machine-a', serverId: workspace.serverId, path: 'src/tool', workspaceRefId: 'workspace-b', entry: b }),
         }));
         await act(async () => { await Promise.resolve(); });
         expect(machineRpc.mock.calls.every(([input]) => input.method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICT_INSPECT)).toBe(true);
-        expect(machineRpc.mock.calls.map(([input]) => input.payload.preview.workspaceRefId).sort()).toEqual(['workspace-a', 'workspace-b']);
-        expect(hook.getCurrent().first).toMatchObject({ phase: 'ready', value: { status: 'text', text: 'one' } });
-        expect(hook.getCurrent().second).toMatchObject({ phase: 'error', value: null });
+        await vi.waitFor(() => {
+            expect(machineRpc.mock.calls.map(([input]) => input.payload.preview.workspaceRefId).sort()).toEqual(['workspace-a', 'workspace-b']);
+            expect(hook.getCurrent().first).toMatchObject({ phase: 'ready', value: { status: 'text', text: 'one' } });
+            expect(hook.getCurrent().second).toMatchObject({ phase: 'error', value: null });
+        });
         await hook.unmount();
     });
 
@@ -74,13 +78,13 @@ describe('workspace sync selected previews', () => {
         machineRpc.mockImplementationOnce(() => new Promise((resolve) => { pendingRefresh.complete = resolve; }));
         const { useSelectedPreview } = await import('./WorkspaceSyncConflictDetailsView');
         const hook = await renderHook(({ entry }: { entry: typeof a }) => useSelectedPreview({
-            controllerMachineId: 'machine-a', path: 'src/tool', workspaceRefId: 'workspace-a', entry,
+            controllerMachineId: 'machine-a', serverId: workspace.serverId, path: 'src/tool', workspaceRefId: 'workspace-a', entry,
         }), { initialProps: { entry: a } });
-        expect(hook.getCurrent()).toMatchObject({ phase: 'ready', value: { text: 'old' } });
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ phase: 'ready', value: { text: 'old' } }));
         await hook.rerender({ entry: replacement });
         expect(hook.getCurrent()).toMatchObject({ phase: 'refreshing', value: { text: 'old' } });
         await act(async () => { pendingRefresh.complete?.(responseFor(replacement, 'new')); });
-        expect(hook.getCurrent()).toMatchObject({ phase: 'ready', value: { text: 'new' } });
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ phase: 'ready', value: { text: 'new' } }));
         await hook.unmount();
     });
 });

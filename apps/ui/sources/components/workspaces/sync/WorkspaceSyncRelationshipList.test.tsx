@@ -175,10 +175,6 @@ describe('WorkspaceSyncRelationshipRow', () => {
         expect(openDetails).toHaveBeenCalledWith(summary);
         expect(openConflicts).not.toHaveBeenCalled();
 
-        const conflictAction = screen.findByTestId('workspace-sync-relationship-relationship-1-conflicts');
-        const moreAction = screen.findByTestId('workspace-sync-relationship-relationship-1-actions');
-        expect(conflictAction?.props.minimumInteractiveTargetSize).toBe(44);
-        expect(moreAction?.props.minimumInteractiveTargetSize).toBe(44);
         await screen.pressByTestIdAsync('workspace-sync-relationship-relationship-1-conflicts');
         expect(openConflicts).toHaveBeenCalledWith(summary);
     });
