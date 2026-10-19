@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSessionClientMaterializationRuntime } from './createSessionClientMaterializationRuntime';
+import { readLatestTurnStatusSnapshot } from '../../sessionTurnStatusSnapshot';
 
 describe('createSessionClientMaterializationRuntime', () => {
   type RuntimeDeps = Parameters<typeof createSessionClientMaterializationRuntime>[0];
@@ -80,6 +81,20 @@ describe('createSessionClientMaterializationRuntime', () => {
       status: 'failed',
       observedAt: 345,
     });
+  });
+
+  it('releases the asking turn for returned information and clears waiting on the next begin', () => {
+    const runtime = createRuntime();
+    runtime.observeSessionTurnMutationAction('begin', 100);
+    expect(runtime.observeSessionTurnMutationAction('wait', 200)).toEqual({ isTerminal: true });
+    expect(runtime.getLatestTurnSnapshot()).toEqual({ status: 'waiting', observedAt: 200 });
+    expect(runtime.hasActiveLocalTurn()).toBe(false);
+    expect(runtime.shouldAttemptPendingMaterialization()).toBe(true);
+    // Snapshot/reconnect must preserve the same typed state as the local owner.
+    expect(readLatestTurnStatusSnapshot('waiting')).toBe('waiting');
+    runtime.observeSessionTurnMutationAction('begin', 300);
+    expect(runtime.getLatestTurnSnapshot()).toEqual({ status: 'in_progress', observedAt: 300 });
+    expect(runtime.hasActiveLocalTurn()).toBe(true);
   });
 
   it('rejects an older remote turn projection after a newer local terminal event', () => {

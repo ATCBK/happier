@@ -1,6 +1,15 @@
 import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSessionClient';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
+import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePromptLoop';
+import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
+import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
+import { createSessionFollowSourceMaterialResolver } from '@/agent/runtime/session/follow/sessionFollowSourceMaterialResolver';
+import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SessionInputRequestV1Schema, SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 
 import { ApiSessionClient } from './session/sessionClient';
 import { decodeBase64, decrypt, encodeBase64, encrypt } from './encryption';
@@ -28,6 +37,7 @@ import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecyc
 import {
     bindApiSessionSocketPairMock as bindApiSessionSocketPairHarness,
     createApiSessionSocketStub,
+    resolveApiSessionSocketDefaultAck,
     flushApiSessionClientMessageCommitQueue,
 } from '@/testkit/backends/apiSessionSocketHarness';
 
@@ -809,6 +819,143 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect(onUserMessage).toHaveBeenCalledTimes(1);
     });
 
+    it.each(['timeout', 'account_timeout', 'server_error', 'database_connection_unavailable', 'forbidden', 'missing_receipt'] as const)(
+        'retains the exact Follow original through %s without a duplicate native acceptance', async failure => {
+        const session = createMockSession({ pendingCount: 1, pendingVersion: 3 });
+        const sourceSessionId = 'source-session';
+        const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake', event: { kind: 'message' },
+            original: { sourceSessionId, sourceMessage: { localId: 'original', seq: 1 } } });
+        const localId = deriveSessionFollowInputLocalIdV1({ destinationSessionId: session.id, original: delivery.original });
+        const request = SessionInputRequestV1Schema.parse({ v: 1, producer: 'sessionAction', followDeliveryV1: delivery,
+            permission: { requestedPermissionCeiling: 'default' } });
+        const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine',
+            followDeliveryV1: delivery, admittedTarget: { homeId: 'home', accountId: 'account', sessionId: session.id,
+                machineId: 'test-machine', installationId: 'installation' } });
+        const content = { t: 'encrypted' as const, c: encodeBase64(encrypt(session.encryptionKey, session.encryptionVariant, {
+            role: 'user', content: { type: 'text', text: '' }, meta: { happierInputRequestV1: request },
+        })) };
+        const observed = { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null };
+        const delivered = { ...observed, transcriptSeq: 0 };
+        let accepted = false;
+        let blocked = false;
+        let sourceReads = 0;
+        const sessionSocket = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+            if (event === 'pending-materialize-next') return accepted || blocked
+                ? { ok: true, didMaterialize: false, pendingCount: 0, pendingBlockedCount: blocked ? 1 : 0, pendingVersion: 4 }
+                : { ok: true, didMaterialize: true, didWrite: false, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 3,
+                    deliveryState: { mode: 'provider', unresolved: true }, message: { id: null, seq: null, localId,
+                        messageRole: 'user', content, ...(failure === 'missing_receipt' ? {} : { inputAdmissionReceipt: receipt }),
+                        requestedAction: { v: 1, kind: 'enqueue' }, providerAction: 'send', createdAt: 1, updatedAt: 1 } };
+            if (event === 'session-pending-admission-settlement-v1') return { v: 1, result: failure === 'missing_receipt'
+                ? { status: 'rejected', code: 'session_input_untrusted_assertion' } : { status: 'accepted', localId } };
+            if (event === 'session-follow-observe-pending-v1') return { ok: true, v: 1, sessionId: session.id,
+                publisherGeneration: '1', currentSourceSessionIds: [sourceSessionId], observations: [{ kind: 'admitted_input',
+                    localInputId: localId, delivery, sourceSessionId, destinationSessionId: session.id, delivered, observed }] };
+            if (event === 'session-follow-acknowledge-v1') return { ok: true, v: 1, sourceSessionId,
+                destinationSessionId: session.id, delivered: observed };
+            return resolveApiSessionSocketDefaultAck(event, payload);
+        } });
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket: createApiSessionSocketStub() });
+        installAxiosGetBoundaryMock(async url => {
+            if (url.includes('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+            if (url.endsWith(`/v2/sessions/${sourceSessionId}`)) {
+                sourceReads += 1;
+                if (sourceReads === 1) throw new AxiosError('timeout of 10000ms exceeded', 'ECONNABORTED');
+                return { status: 200, data: { session: createSessionRecordFixture({ id: sourceSessionId,
+                    encryptionMode: 'plain', metadata: '{}', seq: 1, agentStateVersion: 0 }) } };
+            }
+            if (url.includes(`/v1/sessions/${sourceSessionId}/messages`)) return { status: 200, data: {
+                messages: projection.messages.map(row => ({ ...row, id: 'source-1', localId: 'original', updatedAt: 1 })),
+                hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+            } };
+            return { status: 200, data: { messages: [] } };
+        });
+        const projection = SessionFollowSourceProjectionResponseV1Schema.parse({ v: 1,
+            source: { id: sourceSessionId, encryptionMode: 'plain', metadata: '{}', archivedAt: null, createdAt: 1, updatedAt: 1,
+                active: true, activeAt: 1, thinking: false, thinkingAt: null, latestTurnStatus: null,
+                latestTurnStatusObservedAt: null, latestReadyEventSeq: null, latestReadyEventAt: null,
+                meaningfulActivityAt: null, agentStateVersion: 0 },
+            messages: [{ seq: 1, createdAt: 1, messageRole: 'agent', content: { t: 'plain', v:
+                buildAcpAgentMessageEnvelope({ provider: 'codex', body: { type: 'message', message: 'RETAINED_FOLLOW_ORIGINAL' } }) } }],
+            hasMore: false });
+        vi.spyOn(axios, 'post').mockImplementation(async url => {
+            if (String(url).endsWith('/follows/source-projection')) {
+                sourceReads += 1;
+                if (sourceReads === 1) {
+                    if (failure === 'timeout') throw new AxiosError('timeout of 10000ms exceeded', 'ECONNABORTED');
+                    if (failure === 'database_connection_unavailable') throw Object.assign(new Error('Home unavailable'), { code: failure });
+                    if (failure === 'server_error') return { status: 503, data: { error: 'database_connection_unavailable' } };
+                    if (failure === 'forbidden') return { status: 403, data: { error: 'forbidden' } };
+                }
+                return { status: 200, data: projection };
+            }
+            if (String(url).endsWith('/delivery/block')) {
+                blocked = true;
+                return { status: 200, data: { ok: true, pendingCount: 1, pendingBlockedCount: 1, pendingVersion: 4 } };
+            }
+            throw new Error(`Unexpected HTTP POST: ${new URL(String(url)).pathname}`);
+        });
+        const client = createClient(session);
+        const queue = createPermissionModeQueueState({ session: client, agentTargetKey: 'agent:happier.agent.codex/codex',
+            initialPermissionMode: 'default', inFlightSteer: { isTurnInFlight: () => false, supportsInFlightSteer: () => false,
+                steerText: async () => {}, registerProviderAcceptedEffect: () => {}, rejectPromptBeforeProvider: input => {
+                for (const id of input.localIds ?? []) void client.observeProviderInputSettlement({ kind: 'rejected_before_effect',
+                    localId: id, userMessageSeq: null, reason: 'unsupported_action', retryable: false });
+            } } });
+        await waitForPendingInputContract(client);
+        const material = createSessionFollowSourceMaterialResolver();
+        const reconcile = createSessionFollowContextReconciler({ session: client, maxFollowContextUtf8Bytes: 100_000,
+            hydrateObservation: createSessionFollowSourceHydrator({ session: client, credentials: { token: 'fake-token', encryption: null },
+                ...(failure === 'account_timeout' ? {} : { sourceMaterialResolver: material }) }) });
+        const controller = new AbortController();
+        const sent: string[] = [];
+        const failures: unknown[] = [];
+        const effects = new Map<string, () => void>();
+        const loop = runPermissionModePromptLoop({ providerName: 'Test', agentMessageType: 'codex', explicitPermissionMode: undefined,
+            session: client, messageQueue: queue.messageQueue, permissionHandler: { setPermissionMode() {}, reset() {} },
+            runtime: { beginTurnLifecycle() {}, async sendTurnPrompt(prompt, meta) {
+                sent.push(prompt); accepted = true; if (meta?.localId) effects.get(meta.localId)?.();
+            }, async steerInFlightTurn() {}, async waitForTurnCompletion() {}, subscribeRuntimeEvents: () => () => {},
+                async cancelTurn() {}, readSessionIdentity: () => ({ sessionId: null }), async updateSessionRuntimeConfig() {}, async resetOrDisposeRuntime() {} },
+            prepareHostContext: async input => await reconcile(input),
+            createOverrideSynchronizer: () => ({ syncFromMetadata() {}, async flushPendingAfterStart() {} }),
+            messageBuffer: new MessageBuffer(), shouldExit: () => accepted || blocked || controller.signal.aborted,
+            getAbortSignal: () => controller.signal, keepAlive() {}, setThinking() {}, sendReady() {},
+            currentPermissionModeUpdatedAt: 0, setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {},
+            registerProviderAcceptedEffect: (id, effect) => { if (effect) effects.set(id, effect); else effects.delete(id); },
+            formatPromptErrorMessage: String, onPromptFailure: error => { failures.push(error); } });
+        try {
+            if (failure === 'forbidden' || failure === 'missing_receipt') {
+                await vi.waitFor(() => expect(blocked || failure === 'missing_receipt' && sessionSocket.emitWithAck.mock.calls.some(
+                    ([event, payload]) => event === 'session-pending-admission-settlement-v1'
+                        && (payload as { decision?: { kind?: string } }).decision?.kind === 'reject')).toBe(true));
+                if (failure === 'forbidden') {
+                    await vi.waitFor(() => expect(failures).toMatchObject([{
+                        status: 'attachment_unavailable',
+                        cause: { classification: { statusCode: 403, retryable: false } },
+                    }]));
+                    expect(sourceReads).toBe(1);
+                }
+            } else {
+                // Silent timeout recovery uses existing preparation pacing; other
+                // transient failures exercise the metadata/reconnect wake.
+                await vi.waitFor(() => expect(sourceReads).toBe(1));
+                if (failure !== 'timeout') client.emit('metadata-updated');
+                await vi.waitFor(() => expect(sent).toEqual([expect.stringContaining('RETAINED_FOLLOW_ORIGINAL')]), {
+                    timeout: failure === 'timeout' ? 15_000 : 1_000,
+                });
+                client.emit('metadata-updated');
+                expect(failures).toEqual([]);
+                expect(blocked).toBe(false);
+            }
+            expect(sent).toHaveLength(failure === 'forbidden' || failure === 'missing_receipt' ? 0 : 1);
+        } finally {
+            controller.abort();
+            await loop;
+            material.dispose();
+        }
+    });
+
     it('delivers an idempotent current transcript row with its exact committed sequence', async () => {
         const session = createMockSession({ pendingCount: 1, pendingVersion: 3 });
         const plaintext = {
@@ -856,7 +1003,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect(client.hasPendingQueueMaterializedLocalId('local-current-9')).toBe(true);
     });
 
-    it.each([null, 'run-a'] as const)('reconciles retained acceptance on the same connection after two lost settlement replies without redelivering to the Agent (%s)', async runId => {
+    it.each([null, 'run-a'] as const)('retries retained acceptance on the same connection after two lost settlement replies without redelivering to the Agent (%s)', async runId => {
         const localId = 'accepted-response-loss';
         const recipient = runId ? { kind: 'execution_run' as const, runId } : null;
         if (recipient) vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
@@ -904,13 +1051,18 @@ describe('ApiSessionClient pending queue materialization', () => {
         try {
             const accepted = client.observeProviderInputSettlement({ kind: 'accepted', localId, userMessageSeq: null });
             await vi.advanceTimersByTimeAsync(1_000);
-            await accepted;
+            expect(settlementAttempts).toBe(2);
             expect(client.hasPendingProviderInput(localId)).toBe(true);
             if (target) {
                 await expect(client.reconcilePendingProviderInputCustodyBeforeMaterialization()).resolves.toBe(true);
                 expect(settlementAttempts).toBe(2);
-                await expect(target.reconcilePendingProviderInputCustodyBeforeMaterialization!()).resolves.toBe(true);
-            } else await expect(client.reconcilePendingProviderInputCustodyBeforeMaterialization()).resolves.toBe(true);
+            }
+            // The containing settlement operation retains custody and retries
+            // response loss until it commits or its socket authority retires.
+            // Awaiting it after only the first retry freezes the fake clock and
+            // also strands close() waiting on that same unfinished operation.
+            await vi.advanceTimersByTimeAsync(1_000);
+            await accepted;
             expect(client.hasPendingProviderInput(localId)).toBe(false);
             expect(client.getCommittedUserMessageSeq(localId)).toBe(9);
             expect(client.getPendingQueueState()).toMatchObject({ known: true, pendingCount: 0, pendingVersion: recipient ? 3 : 4 });
@@ -1419,22 +1571,25 @@ describe('ApiSessionClient pending queue materialization', () => {
     it('does not redrive materialization over HTTP after a connected socket ACK is lost', async () => {
         const previousTimeout = process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS;
         process.env.HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS = '5';
-        vi.useFakeTimers();
 
         try {
             const sessionSocket = createApiSessionSocketStub({
                 connected: true,
-                emitWithAck: async () => new Promise<never>(() => {}),
+                // Lose only this operation's ACK. Registration/activity/close
+                // still obey the canonical socket boundary contract.
+                emitWithAck: async (event, payload) => event === 'pending-materialize-next'
+                    ? new Promise<never>(() => {})
+                    : resolveApiSessionSocketDefaultAck(event, payload),
             });
             const userSocket = createApiSessionSocketStub();
 
             bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
 
-            const axiosMod = await import('axios');
-            const axios = axiosMod.default as any;
             const postSpy = vi.spyOn(axios, 'post').mockResolvedValueOnce({ data: { ok: true, didMaterialize: false } });
 
             const client = createClient(createMockSession({ pendingCount: 1, pendingVersion: 3 }));
+            await waitForPendingInputContract(client);
+            vi.useFakeTimers();
             const materializePromise = client.materializeNextPendingMessageSafely().then((value) => ({
                 status: 'resolved' as const,
                 value,

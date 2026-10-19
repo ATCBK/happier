@@ -32,7 +32,6 @@ export type SessionCreateEncryptionModeResolution =
 export async function resolveSessionCreateEncryptionMode(params: Readonly<{
   token: string;
   serverBaseUrl: string;
-  accountTimeoutMs?: number;
   accountEncryptionCurrentness?: AccountEncryptionCurrentnessResponse;
 }>): Promise<SessionCreateEncryptionModeResolution> {
   const featuresSnapshot = await fetchServerFeaturesSnapshot({ serverUrl: params.serverBaseUrl });
@@ -48,9 +47,6 @@ export async function resolveSessionCreateEncryptionMode(params: Readonly<{
       accountEncryptionCurrentness = await fetchAccountEncryptionCurrentness({
         token: params.token,
         serverBaseUrl: params.serverBaseUrl,
-        ...(typeof params.accountTimeoutMs === 'number' && params.accountTimeoutMs > 0
-          ? { timeoutMs: params.accountTimeoutMs }
-          : {}),
       });
     } catch (error) {
       if (error instanceof AccountEncryptionCurrentnessUnavailableError) {

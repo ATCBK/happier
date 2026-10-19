@@ -5,6 +5,16 @@ import { join } from 'node:path';
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { logger } from '@/ui/logger';
+import { createDaemonSessionMutationCustody } from '@/daemon/connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
+import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { SessionMetadataOwnerMigrationPatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { createAccountScopedCryptoMaterialSnapshotV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1, SessionMetadataTuplePatchV1Schema, TranscriptRawRecordV1Schema } from '@happier-dev/protocol';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { readSessionWorkStateV1FromMetadata, type SessionWorkStateV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
+import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { openSessionStoredContent, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import type { StoredCredentials } from '@/persistence';
 
 const { configurationMock } = vi.hoisted(() => ({
     configurationMock: {
@@ -28,6 +38,7 @@ import {
     createTranscriptMessageAppendMutation,
     type DaemonUsageLimitRecoveryFieldMutation,
     type DaemonWorkStateFieldMutation,
+    type TranscriptMessageAppendMutationV1,
 } from './sessionClientDurableMutationTypes';
 import {
     createSessionClientDurableMutationPersistenceContext,
@@ -48,8 +59,41 @@ describe('daemon session client durable mutation outbox', () => {
         await rm(configurationMock.activeServerDir, { recursive: true, force: true });
     });
 
-    it('journals and delivers daemon work-state through the registered field owner', async () => {
-        const deliverWorkState = vi.fn(async () => true);
+    it.each([true, false])('uses only an admitted daemon transcript writer without a socket handle (writer: %s)', async (hasWriter) => {
+        let deliveredLocalId: string | null = null;
+        const outbox = createDaemonSessionClientDurableMutationOutbox({
+            token: 'token', sessionId: 'daemon-transcript',
+            enableExactTurnDelivery: false,
+            getSocket: () => null,
+            requestReconnect: () => {},
+            // The transport callback represents the Home commit; shared handle
+            // selection, transcript admission and the filesystem journal are real.
+            ...(hasWriter ? { deliverTranscriptMessage: async (mutation: TranscriptMessageAppendMutationV1) => {
+                deliveredLocalId = mutation.localId; return true;
+            } } : {}),
+        });
+        try {
+            await expect(outbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({
+                sessionId: 'daemon-transcript', localId: 'native-answer',
+                content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'observed answer' } } },
+                messageRole: 'agent', provenance: { kind: 'non_dependent', source: 'external' },
+            }))).resolves.toMatchObject({ persisted: true, delivered: hasWriter });
+            expect(deliveredLocalId).toBe(hasWriter ? 'native-answer' : null);
+        } finally { await outbox.close(); }
+    });
+
+    it('acknowledges daemon work-state only after the registered field write is visible to readers', async () => {
+        let acknowledge!: () => void;
+        let started!: () => void;
+        const deliveryStarted = new Promise<void>(resolve => { started = resolve; });
+        const delivered = new Promise<void>(resolve => { acknowledge = resolve; });
+        let visibleWorkState: unknown = { items: [{ kind: 'goal', title: 'Old goal' }] };
+        const deliverWorkState = async (mutation: DaemonWorkStateFieldMutation) => {
+            started();
+            await delivered;
+            visibleWorkState = mutation.op.kind === 'set' ? mutation.op.value : null;
+            return true;
+        };
         const outbox = createDaemonSessionClientDurableMutationOutbox({
             token: 'token',
             sessionId: 's1',
@@ -64,7 +108,9 @@ describe('daemon session client durable mutation outbox', () => {
             observedAt: 100,
             op: { kind: 'set', value: { v: 1, backendId: 'codex', updatedAt: 100, items: [] } },
         }) as DaemonWorkStateFieldMutation;
-        await outbox.enqueueWorkState(workState);
+        let settled = false;
+        const staged = outbox.enqueueWorkState(workState).then(() => { settled = true; });
+        await deliveryStarted;
         const paths = resolveSessionClientDurableMutationJournalPaths({
             activeServerDir: configurationMock.activeServerDir,
             custody: 'daemon',
@@ -72,9 +118,226 @@ describe('daemon session client durable mutation outbox', () => {
         });
         const persisted = JSON.parse(await readFile(paths.queuePath, 'utf8')) as { mutations: unknown[] };
         expect(persisted.mutations).toEqual([expect.objectContaining({ payload: workState })]);
-        await outbox.flush('flush');
-        expect(deliverWorkState).toHaveBeenCalledWith(workState);
-        await outbox.close();
+        try {
+            expect(settled).toBe(false);
+        } finally {
+            acknowledge();
+            await staged;
+            await outbox.close();
+        }
+        expect(visibleWorkState).toEqual(workState.op.kind === 'set' ? workState.op.value : null);
+    });
+
+    it('keeps Goal custody pending until the real metadata writer commits', async () => {
+        const rawSession = createSessionRecordFixture({ id: 'goal-custody', encryptionMode: 'plain', metadata: '{}' });
+        const custody = createDaemonSessionMutationCustody({ credentials: { token: 'token', encryption: null } });
+        let acknowledge!: () => void;
+        let started!: () => void;
+        const patchStarted = new Promise<void>(resolve => { started = resolve; });
+        const patchAcknowledged = new Promise<void>(resolve => { acknowledge = resolve; });
+        let committedMetadata: unknown = null;
+        const diagnostics = vi.spyOn(logger, 'debug');
+        // Only HTTP is replaced; custody, journal, field codecs and metadata CAS are real.
+        vi.mocked(axios.get).mockResolvedValue({ status: 200, data: createAccountEncryptionCurrentnessFixture() });
+        vi.mocked(axios.patch).mockImplementation(async (_url, body) => {
+            started();
+            await patchAcknowledged;
+            const patch = SessionMetadataOwnerMigrationPatchV1Schema.parse(body);
+            if (patch.target.ownerMetadata.t !== 'plain') throw new Error('Expected keyless Plain owner metadata');
+            committedMetadata = projectSessionOwnerCompatibilityViewV1({
+                sharedMetadata: JSON.parse(patch.target.sharedMetadata.ciphertext), ownerMetadata: patch.target.ownerMetadata.v,
+            });
+            return { status: 200, data: SessionMetadataTuplePatchSuccessV1Schema.parse({
+                success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 1 },
+            }) };
+        });
+        const mutation = createRegisteredSessionStateFieldMutation({
+            sessionId: rawSession.id, fieldId: 'runtime.workState', source: 'daemon', observedAt: 100,
+            op: { kind: 'set', value: { v: 1, backendId: 'codex', updatedAt: 100, items: [], primaryItemId: null } },
+        }) as DaemonWorkStateFieldMutation;
+        let settled = false;
+        const staged = custody.stageWorkState({ mutation, rawSession }).then(() => { settled = true; });
+        try {
+            await vi.waitFor(() => expect({ patches: vi.mocked(axios.patch).mock.calls.length,
+                failures: diagnostics.mock.calls.filter(call => String(call[0]).includes('delivery failed')) })
+                .toEqual({ patches: 1, failures: [] }));
+            await patchStarted;
+            expect(settled).toBe(false);
+            acknowledge();
+            await vi.waitFor(() => expect({ settled,
+                failures: diagnostics.mock.calls.filter(call => String(call[0]).includes('delivery failed')) })
+                .toEqual({ settled: true, failures: [] }));
+            await staged;
+            expect(committedMetadata).toMatchObject({ sessionWorkStateV1: { items: [] } });
+        } finally {
+            acknowledge();
+            await custody.close();
+            diagnostics.mockRestore();
+        }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('publishes only committed effective daemon Goal changes through transcript custody (%s)', async mode => {
+        const secret = new Uint8Array(32).fill(4);
+        const credentials: StoredCredentials = { token: 'token', encryption: mode === 'plain' ? null : { type: 'legacy', secret } };
+        const context = mode === 'plain' ? { mode, ctx: null } as const
+            : { mode, ctx: { encryptionKey: secret, encryptionVariant: 'legacy' as const } };
+        const tuple = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: mode,
+            metadata: {}, agentState: null,
+            ...(mode === 'plain' ? { storedContentMode: mode } : { storedContentMode: mode, encryptionKey: secret, encryptionVariant: 'legacy' }) });
+        const row = createSessionRecordFixture({ id: 'caaaaaaaaaaaaaaaaaaaaaaaa', encryptionMode: mode,
+            metadataLayoutVersion: 1, metadata: tuple.sharedMetadata.ciphertext, metadataVersion: 1,
+            ownerMetadata: tuple.ownerMetadata, agentState: tuple.agentState, agentStateVersion: 1, share: null });
+        const material = mode === 'e2ee' ? createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: mode,
+            material: { type: 'legacy', secret } }) : null;
+        const currentness = createAccountEncryptionCurrentnessFixture({ mode,
+            contentKeyFingerprint: material ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint) : null });
+        let sessionReadAvailable = false;
+        vi.mocked(axios.get).mockImplementation(async url => {
+            if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: currentness };
+            if (!sessionReadAvailable) throw new Error('Session reads unavailable after the successful Goal commit');
+            return { status: 200, data: { session: row } };
+        });
+        let commitMode: 'success' | 'conflict_equal' | 'refused' = 'success';
+        let refusedObserved = false;
+        vi.mocked(axios.patch).mockImplementation(async (_url, body) => {
+            const patch = SessionMetadataTuplePatchV1Schema.parse(body);
+            if (patch.mode !== 'owner') throw new Error('Expected owner tuple patch');
+            if (commitMode === 'refused') { refusedObserved = true; return { status: 409, data: { code: 'session_publisher_authority_lost' } }; }
+            row.metadata = patch.sharedMetadata.ciphertext;
+            row.ownerMetadata = patch.ownerMetadata;
+            row.metadataVersion += 1;
+            if (patch.agentState) { row.agentState = patch.agentState.ciphertext; row.agentStateVersion = (row.agentStateVersion ?? 0) + 1; }
+            if (commitMode === 'conflict_equal') {
+                commitMode = 'success';
+                return { status: 409, data: { code: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+                    sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } } };
+            }
+            return { status: 200, data: SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+                sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
+        });
+        const originals: { localId: string; content: unknown; goal: SessionWorkStateV1 | null }[] = [];
+        const attempts: string[] = [];
+        let failAppend = true;
+        vi.mocked(axios.post).mockImplementation(async (url, body) => {
+            if (!String(url).endsWith(`/v2/sessions/${row.id}/messages`)) throw new Error(`Unexpected HTTP path: ${url}`);
+            const request = body as { localId: string; content: unknown; messageRole: string };
+            attempts.push(request.localId);
+            if (failAppend) { failAppend = false; throw new Error('Transient append transport failure'); }
+            const content = SessionStoredMessageContentSchema.parse(request.content);
+            const opened = TranscriptRawRecordV1Schema.parse(openSessionStoredContent({ ...context, content }));
+            originals.push({ localId: request.localId, content: opened,
+                goal: readSessionWorkStateV1FromMetadata(tryDecryptSessionOwnerMetadataView({ credentials, rawSession: row,
+                    accountEncryptionMode: mode, recipientEnvelopeReadiness: currentness.recipientEnvelopeReadiness })) });
+            expect(request.messageRole).toBe('event');
+            expect(request.localId).toMatch(/^goal-changed:/);
+            return { status: 200, data: { didWrite: true, message: { id: `message-${originals.length}`, localId: request.localId,
+                seq: originals.length, createdAt: 1, updatedAt: 1, content } } };
+        });
+        const custody = createDaemonSessionMutationCustody({ credentials });
+        const goal: SessionWorkStateV1 = { v: 1, backendId: 'codex', updatedAt: 100, items: [{ id: 'goal', kind: 'goal',
+            origin: 'happier', status: 'active', title: 'Private daemon objective', updatedAt: 100 }] };
+        const stage = (value: SessionWorkStateV1 | null, signal?: AbortSignal) => custody.stageWorkState({ rawSession: { ...row }, signal,
+            mutation: createRegisteredSessionStateFieldMutation({ sessionId: row.id, fieldId: 'runtime.workState', source: 'daemon',
+                observedAt: Date.now(), op: value ? { kind: 'set', value } : { kind: 'clear' } }) as DaemonWorkStateFieldMutation });
+        try {
+            await stage(goal);
+            await vi.waitFor(() => expect(originals).toHaveLength(1), { timeout: 10_000 });
+            expect(attempts.length).toBeGreaterThan(1);
+            expect(new Set(attempts).size).toBe(1);
+            expect(originals[0]?.goal?.items).toMatchObject([{ title: 'Private daemon objective' }]);
+            await stage(goal);
+            await stage({ ...goal, updatedAt: 101, items: [{ ...goal.items[0]!, progress: 0.5, tokensUsed: 10, updatedAt: 101 }] });
+            expect(originals).toHaveLength(1);
+            // A competing writer applies the exact requested change before our CAS.
+            // The final retry sees an equal Goal and must not publish the attempted transition.
+            sessionReadAvailable = true;
+            commitMode = 'conflict_equal';
+            await stage({ ...goal, items: [{ ...goal.items[0]!, title: 'Concurrent objective' }] });
+            expect(originals).toHaveLength(1);
+            await stage(null);
+            await vi.waitFor(() => expect(originals).toHaveLength(2));
+            expect(originals[1]?.goal).toBeNull();
+            await stage(null);
+            expect(originals).toHaveLength(2);
+            for (const original of originals) expect(original.content).toEqual({ role: 'agent',
+                content: { type: 'event', id: original.localId, data: { type: 'goal-changed' } } });
+            expect(JSON.stringify(originals.map(original => original.content))).not.toContain('objective');
+
+            commitMode = 'refused';
+            const refused = new AbortController();
+            const pending = stage(goal, refused.signal).catch((error: unknown) => error);
+            await vi.waitFor(() => expect(refusedObserved).toBe(true));
+            // Drain asynchronous delivery after the observed refused HTTP response.
+            await new Promise<void>(resolve => setImmediate(resolve));
+            refused.abort();
+            await expect(pending).resolves.toMatchObject({ name: 'AbortError' });
+            expect(originals).toHaveLength(2);
+        } finally { await custody.close(); }
+    });
+
+    it('detaches a cancelled Goal caller during delivery while retaining custody and another waiter for replay', async () => {
+        let releaseDelivery!: () => void;
+        let markDeliveryStarted!: () => void;
+        const heldDelivery = new Promise<void>(resolve => { releaseDelivery = resolve; });
+        const deliveryStarted = new Promise<void>(resolve => { markDeliveryStarted = resolve; });
+        let deliveryAvailable = false;
+        let visibleWorkState: unknown = null;
+        const outbox = createDaemonSessionClientDurableMutationOutbox({
+            token: 'token',
+            sessionId: 'cancelled-goal',
+            getSocket: () => null,
+            requestReconnect: () => undefined,
+            deliverWorkState: async mutation => {
+                markDeliveryStarted();
+                await heldDelivery;
+                if (!deliveryAvailable) return false;
+                visibleWorkState = mutation.op.kind === 'set' ? mutation.op.value : null;
+                return true;
+            },
+        });
+        const mutation = createRegisteredSessionStateFieldMutation({
+            sessionId: 'cancelled-goal', fieldId: 'runtime.workState', source: 'daemon', observedAt: 100,
+            op: { kind: 'set', value: { v: 1, backendId: 'codex', updatedAt: 100, items: [] } },
+        }) as DaemonWorkStateFieldMutation;
+        const caller = new AbortController();
+        let callerDisposition = 'pending';
+        const cancelled = outbox.enqueueWorkState(mutation, { signal: caller.signal }).then(
+            () => { callerDisposition = 'fulfilled'; },
+            (error: unknown) => { callerDisposition = error instanceof Error ? error.name : 'unknown'; },
+        );
+        let observerSettled = false;
+        let observer: Promise<void> | undefined;
+        const paths = resolveSessionClientDurableMutationJournalPaths({
+            activeServerDir: configurationMock.activeServerDir, custody: 'daemon', sessionId: mutation.sessionId,
+        });
+        const readCustody = async () => JSON.parse(await readFile(paths.queuePath, 'utf8')) as { mutations: unknown[] };
+        try {
+            await deliveryStarted;
+            expect((await readCustody()).mutations).toEqual([expect.objectContaining({ payload: mutation })]);
+            observer = outbox.enqueueWorkState(mutation).then(() => { observerSettled = true; });
+            caller.abort();
+            // Let the public promise settle without releasing the external delivery boundary.
+            for (let turn = 0; turn < 20; turn++) await new Promise<void>(resolve => setImmediate(resolve));
+            expect(callerDisposition, 'Caller abort must settle before held delivery is released').toBe('AbortError');
+            expect(observerSettled).toBe(false);
+            expect((await readCustody()).mutations).toHaveLength(1);
+
+            releaseDelivery();
+            await outbox.flush('flush');
+            expect(observerSettled).toBe(false);
+            expect((await readCustody()).mutations).toHaveLength(1);
+            deliveryAvailable = true;
+            await outbox.flush('connect');
+            await observer;
+            expect(visibleWorkState).toEqual(mutation.op.kind === 'set' ? mutation.op.value : null);
+            await expect(readFile(paths.queuePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            deliveryAvailable = true;
+            releaseDelivery();
+            await outbox.flush('flush');
+            await Promise.all([cancelled, observer]);
+            await outbox.close();
+        }
     });
 
     it('durably accepts an exact turn end only in the daemon journal', async () => {

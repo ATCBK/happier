@@ -1,13 +1,10 @@
 import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
+import type { SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 import type {
     ACPMessageData,
     ACPProvider,
 } from '../../../sessionMessageTypes';
-import { applyAgentStatePublishedRequest } from '../../../agentStateRecords';
-import {
-    updateAgentStateBestEffort,
-} from '../../../sessionWritesBestEffort';
 import {
     resolveUsageObservationExternalKey,
 } from '../../../outbound/shared';
@@ -23,23 +20,20 @@ function mirrorPublishedPermissionRequest(
     params: Readonly<{
         provider: ACPProvider;
         body: AcpPermissionRequest;
+        createdAt: number;
     }>,
 ): void {
-    updateAgentStateBestEffort(
-        port,
-        (currentState) =>
-            applyAgentStatePublishedRequest({
-                state: currentState,
-                requestId: params.body.permissionId,
-                toolName: params.body.toolName,
-                toolArguments: params.body.options ?? {},
-                createdAtMs: Date.now(),
-                kind: resolveAgentRequestKind(params.body.toolName),
-                source: params.provider,
-            }),
-        '[API]',
-        'mirror_acp_permission_request',
-    );
+    const store = port.getAgentStateRequestStore?.();
+    if (!store) throw new Error('ACP permission publication requires the bound AgentStateRequestStore');
+    store.publishMirroredRequest({
+        requestId: params.body.permissionId,
+        toolName: params.body.toolName,
+        toolInput: params.body.options ?? {},
+        createdAt: params.createdAt,
+        kind: resolveAgentRequestKind(params.body.toolName),
+        source: params.provider,
+        ...(params.body.sidechainId ? { sidechainId: params.body.sidechainId } : {}),
+    });
 }
 
 export function applyAcpPostSendReactions(
@@ -48,12 +42,16 @@ export function applyAcpPostSendReactions(
         provider: ACPProvider;
         normalizedBody: ACPMessageData;
         localId: string;
+        createdAt: number;
+        provenance: SessionTranscriptObservationProvenanceV1;
     }>,
 ): void {
-    if (params.normalizedBody.type === 'permission-request') {
+    if (params.normalizedBody.type === 'permission-request'
+        && params.provenance.source !== 'history' && params.provenance.source !== 'sidechain') {
         mirrorPublishedPermissionRequest(port, {
             provider: params.provider,
             body: params.normalizedBody,
+            createdAt: params.createdAt,
         });
     }
 

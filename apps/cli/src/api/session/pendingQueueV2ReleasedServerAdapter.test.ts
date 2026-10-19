@@ -86,6 +86,20 @@ function transcriptMessage(overrides: Record<string, unknown> = {}) {
 }
 
 describe('released-server Pending-input adapter', () => {
+    it('leaves requester unknown when an old Home supplies only body-authored attribution', async () => {
+        const harness = createHarness();
+        const actionRequestAttributionV1 = {
+            requestRef: 'local-1', requester: { serverId: 'home', accountId: 'mallory' },
+            persona: { serverId: 'home', sessionId: 'session-1' }, origin: null,
+        };
+        axiosGetMock.mockResolvedValueOnce({ status: 200, data: { message: transcriptMessage({
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'old Home' }, actionRequestAttributionV1 } },
+        }) } });
+        await expect(runPendingQueueV2ReleasedServerAdapter(harness.params)).resolves.toMatchObject({ type: 'materialized' });
+        expect(harness.deliverMaterializedUserMessageToAgentQueue.mock.calls[0]?.[0])
+            .toHaveProperty('actionRequestAttributionV1', undefined);
+    });
+
     beforeEach(() => {
         vi.useRealTimers();
         axiosGetMock.mockReset();

@@ -41,6 +41,7 @@ function handle(
 ) {
   return handleSessionNewMessageUpdate({
     update,
+    serverId: 'home',
     sessionId: 'session-1',
     receivedMessageIds: new Set<string>(),
     lastObservedMessageSeq: 0,
@@ -56,21 +57,54 @@ function handle(
 }
 
 describe('handleSessionNewMessageUpdate', () => {
-  it.each(['plain', 'e2ee'] as const)('takes per-input constraints from the server receipt and overwrites body-authored claims in %s sessions', (mode) => {
+  it('stamps the exact authenticated requester and committed origin, ignoring authored attribution', () => {
+    const update = createUserUpdate();
+    if (update.body?.t !== 'new-message' || update.body.message.content.t !== 'plain') throw new Error('unexpected fixture');
+    Object.assign(update.body.message, {
+      messageRole: 'user',
+      inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'bob', sessionRelationship: 'sharedEditor' },
+    });
+    Object.assign(update.body.message.content.v as object, {
+      actionRequestAttributionV1: { requester: { accountId: 'mallory' } },
+    });
+    const emit = vi.fn();
+    handle(update, { emit });
+    expect(emit.mock.calls[0]?.[1]).toMatchObject({
+      actionRequestAttributionV1: {
+        requestRef: 'local-1', requester: { accountId: 'bob' },
+        persona: { sessionId: 'session-1' },
+        origin: { kind: 'session', session: { sessionId: 'session-1' }, messageId: 'message-1' },
+      },
+    });
+    const untrusted = createUserUpdate();
+    if (untrusted.body?.t !== 'new-message' || untrusted.body.message.content.t !== 'plain') throw new Error('unexpected fixture');
+    Object.assign(untrusted.body.message.content.v as object, { actionRequestAttributionV1: { requester: { accountId: 'mallory' } } });
+    const untrustedEmit = vi.fn();
+    handle(untrusted, { emit: untrustedEmit });
+    expect(untrustedEmit.mock.calls[0]?.[1]).toHaveProperty('actionRequestAttributionV1', undefined);
+  });
+
+  it.each([
+    { mode: 'plain', legacy: false },
+    { mode: 'e2ee', legacy: false },
+    { mode: 'plain', legacy: true },
+  ] as const)('takes per-input constraints from the server receipt and overwrites body-authored claims ($mode, legacy: $legacy)', ({ mode, legacy }) => {
     const update = createUserUpdate();
     if (update.body?.t !== 'new-message' || update.body.message.content.t !== 'plain') throw new Error('unexpected fixture');
     const callerInputConstraints = { models: null, permissionModes: ['default' as const] };
     const payload = update.body.message.content.v as Record<string, unknown>;
+    if (legacy) payload.content = 'observation only';
     payload.callerInputConstraints = { models: null, permissionModes: null };
-    Object.assign(update.body.message, { inputAdmissionReceipt: {
+    const inputAdmissionReceipt = {
       v: 1, issuer: 'authenticatedMachine', callerInputConstraints,
-    } });
+    } as const;
+    Object.assign(update.body.message, { inputAdmissionReceipt });
     if (mode === 'e2ee') update.body.message.content = { t: 'encrypted', c: encryptSessionPayload({
       ctx: { encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy' }, payload,
     }) };
     const emit = vi.fn();
     handle(update, { emit, mode });
-    expect(emit).toHaveBeenCalledWith('user-message', expect.objectContaining({ callerInputConstraints }));
+    expect(emit).toHaveBeenCalledWith('user-message', expect.objectContaining({ callerInputConstraints, inputAdmissionReceipt }));
     const untrusted = createUserUpdate();
     if (untrusted.body?.t !== 'new-message' || untrusted.body.message.content.t !== 'plain') throw new Error('unexpected fixture');
     (untrusted.body.message.content.v as Record<string, unknown>).callerInputConstraints = callerInputConstraints;

@@ -27,13 +27,14 @@ type PlainOrEncryptedPayload = string | { t: 'plain'; v: unknown };
 type SessionMessageRole = 'user' | 'agent' | 'event' | 'unknown';
 type SessionEventType = 'ready';
 
-function buildSessionEventContent(event: SessionEventMessage, id?: string): {
+function buildSessionEventContent(event: SessionEventMessage, id?: string, meta?: Record<string, unknown>): {
     role: 'agent';
     content: {
         id: string;
         type: 'event';
         data: SessionEventMessage;
     };
+    meta?: Record<string, unknown>;
 } {
     return {
         role: 'agent',
@@ -42,6 +43,7 @@ function buildSessionEventContent(event: SessionEventMessage, id?: string): {
             type: 'event',
             data: event,
         },
+        ...(meta ? { meta } : {}),
     };
 }
 
@@ -49,6 +51,7 @@ export function prepareSessionEventMessageViaPort(
     port: Pick<SessionClientTranscriptSendPort, 'buildOutboundSessionMessagePayload'>,
     event: SessionEventMessage,
     id?: string,
+    meta?: Record<string, unknown>,
 ): Readonly<{
     payload: PlainOrEncryptedPayload;
     localId: string;
@@ -62,7 +65,7 @@ export function prepareSessionEventMessageViaPort(
         ? { ...event, ownerActivityDelivery: undefined }
         : event;
     return {
-        payload: port.buildOutboundSessionMessagePayload(buildSessionEventContent(transcriptEvent, id)),
+        payload: port.buildOutboundSessionMessagePayload(buildSessionEventContent(transcriptEvent, id, meta)),
         // Backward-compatible authenticated composition sideband: predecessor
         // Homes already accept opaque local ids, while current Homes recognize
         // this bounded prefix without adding a field to the strict v1 wire.
@@ -73,6 +76,8 @@ export function prepareSessionEventMessageViaPort(
             ? `activity-ready-home_required:${randomUUID()}`
             : event.type === 'prompt-composition'
                 ? buildAgentEventLocalId(event.type, [event.composition.evidenceId])
+                : event.type === 'goal-changed' || event.type === 'worker-report'
+                    ? buildAgentEventLocalId(event.type, [id ?? randomUUID()])
                 : randomUUID(),
         messageRole: resolveSessionEventMessageRole(),
         sessionEventType: event.type === 'ready' ? 'ready' : undefined,

@@ -12,6 +12,8 @@ import { readAuthenticationStatus, readHttpStatus } from '@/api/client/httpStatu
 import { isNetworkConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
 import { TranscriptRecoveryCoordinator } from './recovery/TranscriptRecoveryCoordinator';
 import { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
+import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionMessageRoleSchema, type SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 
 const KEEP_ALIVE_HTTP_AGENT = new HttpAgent({ keepAlive: true, maxSockets: 16 });
 const KEEP_ALIVE_HTTPS_AGENT = new HttpsAgent({ keepAlive: true, maxSockets: 16 });
@@ -24,6 +26,8 @@ export type TranscriptMessageLookupResult = {
     createdAt: number;
     updatedAt: number;
     content: SessionMessageContent;
+    messageRole?: SessionMessageRole;
+    inputAdmissionReceipt?: SessionInputAdmissionReceiptV1;
 };
 
 export type TranscriptLookupOutcome =
@@ -135,6 +139,11 @@ function parseTranscriptLookupMessageFromUnknown(found: unknown): TranscriptMess
     if (!record) return null;
     const content = SessionMessageContentSchema.safeParse(record.content);
     if (!content.success) return null;
+    const role = record.messageRole == null ? null : SessionMessageRoleSchema.safeParse(record.messageRole);
+    if (role && !role.success) return null;
+    const receipt = record.inputAdmissionReceipt === undefined ? null
+        : SessionInputAdmissionReceiptV1Schema.safeParse(record.inputAdmissionReceipt);
+    if (receipt && !receipt.success) return null;
     if (typeof record.id !== 'string') return null;
     if (typeof record.seq !== 'number') return null;
     const foundLocalId = typeof record.localId === 'string' ? record.localId : null;
@@ -152,6 +161,8 @@ function parseTranscriptLookupMessageFromUnknown(found: unknown): TranscriptMess
         createdAt: createdAtRaw,
         updatedAt: updatedAtRaw,
         content: content.data,
+        ...(role?.success ? { messageRole: role.data } : {}),
+        ...(receipt?.success ? { inputAdmissionReceipt: receipt.data } : {}),
     };
 }
 
@@ -187,7 +198,7 @@ export async function findTranscriptEncryptedMessageByLocalIdV2(params: {
         }
         const message = asRecord(response?.data)?.message;
         const parsed = parseTranscriptLookupMessageFromUnknown(message);
-        if (!parsed) return { type: 'protocol_error', error: createMalformedTranscriptLookupResponseError() };
+        if (!parsed || parsed.localId !== params.localId) return { type: 'protocol_error', error: createMalformedTranscriptLookupResponseError() };
         return { type: 'found', message: parsed };
     } catch (error) {
         if (isV2MessageNotFoundError(error)) return { type: 'not_found' };

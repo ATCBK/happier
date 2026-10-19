@@ -1205,6 +1205,7 @@ describe('pendingQueueV2Transport', () => {
             socket,
             sessionId: 'session-1',
             localId: 'blocked-local',
+            acceptedTurn: { kind: 'followUp', turnId: 'accepted-new-turn' },
         })).resolves.toEqual({
             didResolve: false,
             pendingQueueState: { known: true, pendingCount: 1, pendingBlockedCount: 1, pendingVersion: 10 },
@@ -1214,6 +1215,7 @@ describe('pendingQueueV2Transport', () => {
             v: 1,
             sessionId: 'session-1',
             localId: 'blocked-local',
+            acceptedTurn: { kind: 'followUp', turnId: 'accepted-new-turn' },
         });
         expect(mockPost).not.toHaveBeenCalled();
     });

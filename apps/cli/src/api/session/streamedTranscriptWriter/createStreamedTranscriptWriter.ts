@@ -69,6 +69,7 @@ function buildFlushSummary(params: {
     sidechainId: segment.sidechainId,
     sawText: segment.accumulatedText.length > 0 || segment.sourceMessageId !== undefined,
     didDurablyFlush: didSegmentDurablyFlush(segment, params.expectedState(segment)),
+    didDeliver: didSegmentDurablyFlush(segment, params.expectedState(segment)) && segment.lastCommittedDelivered,
     lastCommittedState: segment.lastCommittedState,
   }));
 
@@ -94,6 +95,7 @@ function buildFlushSummary(params: {
 export function createStreamedTranscriptWriter(params: {
   provider: ACPProvider;
   session: StreamedTranscriptWriterSession;
+  runtimeTurnId?: string;
   makeLocalId?: () => string;
   initialCheckpointDelayMs?: number | null;
   checkpointIntervalMs?: number | null;
@@ -141,6 +143,7 @@ export function createStreamedTranscriptWriter(params: {
       failureRetryDelayMs: DURABLE_COMMIT_FAILURE_RETRY_DELAY_MS,
       onStreamingCommitFailure: () => scheduleDurableCheckpoint(segment),
       admission: opts.admission,
+      runtimeTurnId: params.runtimeTurnId,
     });
   };
 
@@ -165,6 +168,7 @@ export function createStreamedTranscriptWriter(params: {
       lastCheckpointTextLen: 0,
       lastCommittedTextVersion: 0,
       lastCommittedState: null,
+      lastCommittedDelivered: false,
       lastCommitFailedAtMs: 0,
       durableCommitFailure: null,
       durableRetryNotBeforeMs: 0,

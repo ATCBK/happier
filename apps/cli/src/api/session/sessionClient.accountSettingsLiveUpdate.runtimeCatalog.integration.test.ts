@@ -2,7 +2,12 @@ import { createTestApiSessionClient } from '@/testkit/backends/createTestApiSess
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot,
+    getActiveAccountSettingsSnapshot, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { buildPromptLibraryPhysicalKeyV1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { createMockSession } from '@/testkit/backends/sessionFixtures';
 import { encodeBase64, encrypt } from '../encryption';
 import {
@@ -87,6 +92,61 @@ describe('ApiSessionClient live account settings convergence', () => {
         expect(readCredentialsMock).not.toHaveBeenCalled();
     });
 
+    it('classifies a live Account hint through the changes owner before demanding unrelated catalogs', async () => {
+        const credentials = { token: 'fake-token', encryption: null } as const;
+        readStoredCredentialsMock.mockResolvedValue(credentials);
+        setActiveAccountSettingsSnapshot({ source: 'network', rawSettings: {}, settings: accountSettingsParse({}),
+            settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+            promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+        const firstChangeRead = deferred<void>();
+        let changeReads = 0;
+        let catalogChanged = false;
+        const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/profile') return { status: 200, data: { id: 'account-1' } };
+            if (path === '/v2/changes') {
+                changeReads++;
+                if (changeReads === 1) await firstChangeRead.promise;
+                return { status: 200, data: { nextCursor: catalogChanged ? 5 : 4, changes: [
+                    catalogChanged
+                        ? { cursor: 5, kind: 'account', entityId: buildPromptLibraryPhysicalKeyV1('role-overrides'), changedAt: 2 }
+                        : { cursor: 4, kind: 'session', entityId: 'another-session', changedAt: 1 },
+                ] } };
+            }
+            if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+                mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            if (path === '/v1/account/entity-rows/prompt-library') return { status: 200, data: {
+                status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 2, content: { t: 'plain',
+                    v: key === 'role-overrides' ? { key, value: { v: 1, overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } } }
+                        : emptyPromptLibraryRecordV1(key) } })),
+            } };
+            if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+            if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+            if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+            return { status: 404, data: {} };
+        });
+        const { client, userSocket } = createClient();
+        await vi.waitFor(() => expect((client as never as { currentConnectionState: { phase: string } }).currentConnectionState.phase).toBe('online'));
+        process.env.HAPPY_ENABLE_V2_CHANGES = 'true';
+        userSocket.trigger('update', update({ t: 'account-change' }, 'unrelated-account-hint'));
+        await vi.waitFor(() => expect(get.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v2/changes')).toHaveLength(1));
+        userSocket.trigger('update', update({ t: 'account-change' }, 'overlapping-hint-1'));
+        userSocket.trigger('update', update({ t: 'account-change' }, 'overlapping-hint-2'));
+        firstChangeRead.resolve();
+        await vi.waitFor(() => expect(changeReads).toBe(2));
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(changeReads).toBe(2);
+        expect(get.mock.calls.map(([url]) => new URL(String(url)).pathname)
+            .filter(path => path.includes('/entity-rows/') || path.includes('/settings/history') || path.includes('/encryption/currentness'))).toEqual([]);
+        catalogChanged = true;
+        userSocket.trigger('update', update({ t: 'account-change' }, 'role-catalog-hint'));
+        await vi.waitFor(() => {
+            const snapshot = getActiveAccountSettingsSnapshot();
+            expect(snapshot && readAccountRoleOverridesFromSnapshot(snapshot))
+                .toMatchObject({ status: 'ready', overrides: { builder: { workspaceWrites: 'deny' } } });
+        });
+    });
+
     afterEach(async () => {
         await Promise.allSettled([...clients].map((client) => client.close()));
         clients.clear();
@@ -98,7 +158,8 @@ describe('ApiSessionClient live account settings convergence', () => {
     function createClient() {
         const sessionSocket = createApiSessionSocketStub({ connected: true });
         const userSocket = createApiSessionSocketStub({ connected: true });
-        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket });
+        bindApiSessionSocketPairMock(mockIo, { sessionSocket, userSocket,
+            fallbackSocket: createApiSessionSocketStub({ connected: true }) });
         const client = createTestApiSessionClient(ApiSessionClient, 'fake-token', createMockSession({
             pendingCount: 1,
             pendingVersion: 3,
@@ -174,7 +235,8 @@ describe('ApiSessionClient live account settings convergence', () => {
 
         userSocket.trigger('update', update({ t: 'account-settings-changed', settingsVersion: 3 }, 'older'));
         userSocket.trigger('update', update({ t: 'account-settings-changed', settingsVersion: 4 }, 'newer'));
-        await vi.waitFor(() => expect(axios.get).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(vi.mocked(axios.get).mock.calls
+            .filter(([url]) => String(url).endsWith('/v2/account/settings'))).toHaveLength(2));
 
         newer.resolve({
             status: 200,

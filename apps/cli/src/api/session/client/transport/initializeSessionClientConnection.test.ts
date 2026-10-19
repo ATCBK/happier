@@ -548,7 +548,12 @@ describe('initializeSessionClientConnection diagnostics', () => {
         reason: 'capability_missing_or_unsupported',
       },
     }));
-    expect(socketState.sessionSocket?.emitWithAck).toHaveBeenCalledTimes(1);
+    expect(socketState.sessionSocket?.emitWithAck.mock.calls.filter(
+      ([event]) => event === SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
+    )).toEqual([
+      [SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1, { v: 2, sessionId: 's1' }],
+      [SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1, { v: 1, sessionId: 's1' }],
+    ]);
     expect(flushDurableSessionMutationsOnReconnect).toHaveBeenCalledTimes(1);
   });
 

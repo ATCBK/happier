@@ -4,7 +4,8 @@ import type {
 } from '../types';
 import { SessionMessageContentSchema, UserMessageSchema } from '../types';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
-import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionInputAdmissionReceiptV1Schema, readSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { coerceSessionUserPromptV1 } from '@happier-dev/protocol/sessions/messages/coerceSessionUserPromptV1';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { summarizeValueShapeForLog } from '@/diagnostics/eventShapeForLog';
@@ -68,6 +69,7 @@ function mapSessionTurnLifecycleToConnectedServiceEvent(value: unknown): Connect
 
 export function handleSessionNewMessageUpdate(params: {
     update: Update;
+    serverId: string;
     sessionId: string;
     receivedMessageIds: Set<string>;
     lastObservedMessageSeq: number;
@@ -184,7 +186,19 @@ export function handleSessionNewMessageUpdate(params: {
         && params.consumeLocallyAuthoredTranscriptObservationLocalId?.(localId) === true;
     const bodyWithTransportFields = {
         ...(bodyWithLocalId as any),
+        inputAdmissionReceipt: inputAdmissionReceipt.success ? inputAdmissionReceipt.data : undefined,
         callerInputConstraints: inputAdmissionReceipt.success ? inputAdmissionReceipt.data.callerInputConstraints : undefined,
+        // Authored plaintext/E2EE body fields never establish requester identity.
+        actionRequestAttributionV1: deriveSessionInputActionRequestAttributionV1({
+            requestRef: readPendingLocalId(localId),
+            persona: { serverId: params.serverId, sessionId: params.sessionId },
+            messageRole: params.update.body.message.messageRole,
+            inputAdmissionReceipt: rawInputAdmissionReceipt,
+            inputAuthority: readSessionInputAuthority(body && typeof body === 'object' && 'meta' in body ? body.meta : undefined, 'stored'),
+            origin: hasMessageId && readCommittedUserMessageSeq(msgSeq) !== null
+                ? { kind: 'session', session: { serverId: params.serverId, sessionId: params.sessionId }, messageId }
+                : null,
+        }),
         // Attach server timestamps so downstream consumers can make clock-safe decisions.
         ...(transportCreatedAt === undefined ? {} : {
             createdAt: historyReplayProvenance?.sourceCreatedAt ?? transportCreatedAt,
@@ -245,7 +259,9 @@ export function handleSessionNewMessageUpdate(params: {
         if (coerced) {
             const candidate = {
                 role: 'user' as const,
+                inputAdmissionReceipt: bodyWithTransportFields.inputAdmissionReceipt,
                 callerInputConstraints: bodyWithTransportFields.callerInputConstraints,
+                actionRequestAttributionV1: bodyWithTransportFields.actionRequestAttributionV1,
                 content: { type: 'text' as const, text: coerced.text },
                 createdAt: (bodyWithTransportFields as any).createdAt,
                 localId: (bodyWithTransportFields as any).localId,

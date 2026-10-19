@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadCommittedTranscriptLocalIdBaseline } from './committedTranscriptLocalIdBaseline';
 
 describe('loadCommittedTranscriptLocalIdBaseline', () => {
-  it('collects recent session-global local ids and reports a bounded partial window', async () => {
+  it('collects session-global local ids through the final page', async () => {
     const fetchPage = vi.fn()
       .mockResolvedValueOnce({
         messages: [
@@ -17,20 +17,19 @@ describe('loadCommittedTranscriptLocalIdBaseline', () => {
       })
       .mockResolvedValueOnce({
         messages: [{ seq: 7, localId: 'fact-7', createdAt: 700 }],
-        hasMore: true,
-        nextBeforeSeq: 7,
+        hasMore: false,
+        nextBeforeSeq: null,
         nextAfterSeq: 9,
       });
 
     await expect(loadCommittedTranscriptLocalIdBaseline({
-      take: 3,
       fetchPage,
     })).resolves.toEqual({
       localIds: new Set(['segment-9', 'fact-9', 'fact-8', 'fact-7']),
-      complete: false,
+      complete: true,
     });
     expect(fetchPage).toHaveBeenNthCalledWith(2, {
-      limit: 1,
+      limit: 500,
       beforeSeq: 8,
     });
   });
@@ -51,25 +50,48 @@ describe('loadCommittedTranscriptLocalIdBaseline', () => {
     expect(result.localIds).toEqual(new Set(['segment-1']));
   });
 
-  it('reports an incomplete identity baseline when committed history exceeds 5,000 rows', async () => {
+  it('completes an identity baseline beyond 5,000 rows', async () => {
     let pageIndex = 0;
     const fetchPage = vi.fn(async () => {
       const offset = pageIndex * 500;
       pageIndex += 1;
       return {
-        messages: Array.from({ length: 500 }, (_, index) => ({
-          seq: 5_001 - offset - index,
+        messages: Array.from({ length: Math.min(500, 6_001 - offset) }, (_, index) => ({
+          seq: 6_001 - offset - index,
           localId: `fact-${offset + index}`,
         })),
-        hasMore: true,
-        nextBeforeSeq: 5_001 - pageIndex * 500,
+        hasMore: pageIndex < 13,
+        nextBeforeSeq: pageIndex < 13 ? 6_001 - pageIndex * 500 : null,
       };
     });
 
     const result = await loadCommittedTranscriptLocalIdBaseline({ fetchPage });
 
-    expect(result.complete).toBe(false);
-    expect(result.localIds.size).toBe(5_000);
-    expect(fetchPage).toHaveBeenCalledTimes(10);
+    expect(result.complete).toBe(true);
+    expect(result.localIds.size).toBe(6_001);
+    expect(result.localIds.has('fact-6000')).toBe(true);
+  });
+
+  it.each([8, 9])('refuses a non-progressing older cursor (%s)', async nextBeforeSeq => {
+    const fetchPage = vi.fn()
+      .mockResolvedValueOnce({ messages: [{ localId: 'new' }], hasMore: true, nextBeforeSeq: 8 })
+      .mockResolvedValueOnce({ messages: [{ localId: 'old' }], hasMore: true, nextBeforeSeq })
+      .mockRejectedValue(new Error('must not fetch a stalled cursor'));
+
+    await expect(loadCommittedTranscriptLocalIdBaseline({ fetchPage })).resolves.toMatchObject({ complete: false });
+  });
+
+  it('propagates the containing caller lifetime to every page', async () => {
+    const controller = new AbortController();
+    const deadlineAtMs = Date.now() + 60_000;
+    const fetchPage = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      signal?.throwIfAborted();
+      controller.abort();
+      return { messages: [{ localId: 'new' }], hasMore: true, nextBeforeSeq: 8 };
+    });
+
+    await expect(loadCommittedTranscriptLocalIdBaseline({ fetchPage, signal: controller.signal, deadlineAtMs }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchPage.mock.calls[0]?.[0]).toMatchObject({ limit: 500, signal: controller.signal, deadlineAtMs });
   });
 });

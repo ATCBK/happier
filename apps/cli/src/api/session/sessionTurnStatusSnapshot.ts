@@ -9,6 +9,7 @@ export function readLatestTurnStatusSnapshot(value: unknown): LatestTurnStatusSn
         || value === 'completed'
         || value === 'failed'
         || value === 'cancelled'
+        || value === 'waiting'
     ) {
         return value;
     }
@@ -34,10 +35,11 @@ export function latestTurnStatusForSessionTurnMutationAction(
     if (action === 'touch_active') return 'in_progress';
     if (action === 'complete') return 'completed';
     if (action === 'fail') return 'failed';
+    if (action === 'wait') return 'waiting';
     if (action === 'cancel' || action === 'end_session') return 'cancelled';
     return undefined;
 }
 
 export function isTerminalSessionTurnMutationAction(action: SessionTurnMutationAction): boolean {
-    return action === 'complete' || action === 'fail' || action === 'cancel' || action === 'end_session';
+    return action === 'complete' || action === 'fail' || action === 'cancel' || action === 'end_session' || action === 'wait';
 }

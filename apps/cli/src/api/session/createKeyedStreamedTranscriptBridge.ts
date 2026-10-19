@@ -39,6 +39,7 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
     const writer = createStreamedTranscriptWriter({
       provider: params.provider,
       session: params.createSessionForStream(args),
+      ...(args.foregroundTurnId ? { runtimeTurnId: args.foregroundTurnId } : {}),
       ...(messageId ? { makeLocalId: () => messageId } : {}),
       initialCheckpointDelayMs: params.initialCheckpointDelayMs,
       checkpointIntervalMs: params.checkpointIntervalMs,

@@ -72,7 +72,9 @@ export async function fetchCommittedTranscriptLocalIdBaseline(
     ...(params.deadlineAtMs === undefined ? {} : { deadlineAtMs: params.deadlineAtMs }),
     fetchPage: async (input) => {
       const page = await fetchEncryptedTranscriptMessagesPage({ ...input,
-        token: params.token, sessionId: params.sessionId, scope: 'all', roles: ['user', 'agent', 'event'],
+        // Identity custody includes hidden consumed-source markers (role unknown),
+        // not only displayable conversation rows.
+        token: params.token, sessionId: params.sessionId, scope: 'all',
       });
       return { ...page, messages: page.messages.map((row) => {
         const payload = openTranscriptMessage(row, params);

@@ -266,6 +266,7 @@ describe('sessionMessageCatchUp (stored-content envelopes)', () => {
       afterSeq: 10,
       onUpdate: (update) => {
         handleSessionNewMessageUpdate({
+          serverId: 'home',
           update,
           sessionId: 's1',
           mode: 'plain',

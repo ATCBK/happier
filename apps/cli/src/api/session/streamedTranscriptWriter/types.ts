@@ -30,6 +30,8 @@ export type StreamedTranscriptSegmentFlushSummary = Readonly<{
   sidechainId: string | null;
   sawText: boolean;
   didDurablyFlush: boolean;
+  /** The final snapshot reached Home, rather than only the local durable outbox. */
+  didDeliver: boolean;
   lastCommittedState: StreamedTranscriptSegmentState | null;
 }>;
 

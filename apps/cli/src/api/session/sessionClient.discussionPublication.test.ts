@@ -1,0 +1,230 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { FeaturesResponseSchema, normalizeActionsSettingsV1 } from '@happier-dev/protocol';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPostRequestV1Schema, DiscussionAgentCreateRequestV1Schema } from '@happier-dev/protocol/discussions/api';
+import { createApiSessionSocketStub, createSessionTranscriptHomeStub, createSessionRuntimeActivityHomeStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
+import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
+import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
+import { ApiSessionClient } from './sessionClient';
+import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+
+const clients = new Set<ApiSessionClient>();
+afterEach(async () => {
+  await Promise.allSettled([...clients].map(client => client.close()));
+  clients.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it('publishes an Account Action and binds its protected active reply through the exact current Session publisher', async () => {
+  const sessionId = 'cmv3discussionparticipant';
+  const credentials = { token: 'discussion-owner', encryption: null };
+  const features = { status: 'ready' as const, features: FeaturesResponseSchema.parse({
+    features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+  }) };
+  const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'A participant answer' }] };
+  let terminalReturned = false;
+  let explicitlyReturned = false;
+  const summary = { id: 'discussion-1', ownerAccountId: 'owner', encryptionMode: 'plain', anchor: null,
+    access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId: 'create-1',
+    titleContent: { t: 'plain', v: { v: 1, title: 'Discussion' } },
+    latestMessage: { id: 'question-1', localId: 'question-1', seq: 1, authorAccountId: 'owner',
+      accountActor: { v: 1, accountId: 'owner', profile: null }, producerV1: null, createdAt: 1 }, messageSeq: 1,
+    lastReadSeq: 0, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: [], archivedAt: null,
+    capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true,
+      sendToSession: true, manageAccess: true, leave: false } };
+  // HTTP and Socket.IO are the only replaced boundaries. Action execution,
+  // resource crypto, current-turn matching and the actual client stay real.
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (String(url).endsWith('/messages/by-local-id/original/reply')) return { status: 200, data: {
+      v: 1, status: 'available', progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'turn-1',
+        discussion: { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId },
+        outcome: explicitlyReturned ? { kind: 'answer', publicationRef: { kind: 'discussion',
+          discussion: { serverId: 'discussion-home', discussionId: 'discussion-1' }, messageId: 'committed-explicit' } } : { kind: 'failed' } },
+    } };
+    if (String(url).endsWith('/v1/discussions/discussion-1')) return { status: 200, data: { discussion: summary } };
+    return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, share: null }) } };
+  });
+  const requests: string[] = [];
+  vi.spyOn(axios, 'request').mockImplementation(async config => {
+    requests.push(String(config.url));
+    if (config.method === 'GET' && config.url?.endsWith('/v1/discussions/discussion-1/participants'))
+      return { status: 200, data: { discussionId: summary.id, ownerAccountId: 'owner', access: 'owner', grants: [],
+        participants: [{ participant: { kind: 'session', sessionId }, answerPolicy: 'when_addressed', createdAt: 1 }] } };
+    if (config.method === 'GET' && config.url?.endsWith('/v1/discussions/discussion-1'))
+      return { status: 200, data: { discussion: summary } };
+    if (config.method === 'GET' && config.url?.endsWith('/v1/account/encryption/currentness'))
+      return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    throw new Error('Unexpected Discussion HTTP effect');
+  });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: { session: {
+    pendingInput: { protocolVersion: 1 }, runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 },
+  } } }), { status: 200 })));
+  const publications: unknown[] = [];
+  const home = createSessionTranscriptHomeStub();
+  const activityHome = createSessionRuntimeActivityHomeStub({ machineId: 'participant-machine' });
+  const defaults = createApiSessionSocketStub();
+  const socket = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, payload) => {
+    if (event === DISCUSSION_AGENT_POST_EVENT_V1) {
+      if (payload && typeof payload === 'object' && 'operation' in payload && payload.operation === 'create') {
+        const raw = DiscussionAgentCreateRequestV1Schema.parse(payload);
+        publications.push(payload);
+        return { v: 1, ok: true, value: { discussion: { ...summary, creationLocalId: raw.request.creationLocalId }, firstMessage: {
+          id: 'committed-first', discussionId: summary.id, localId: raw.request.firstMessage.localId, seq: 1,
+          authorAccountId: 'owner', accountActor: { v: 1, accountId: 'owner', profile: null },
+          producerV1: { v: 1, kind: 'agent', sessionId }, content: raw.request.firstMessage.content, mentionedAccountIds: [], createdAt: 1,
+        } } };
+      }
+      const request = DiscussionAgentPostRequestV1Schema.parse(payload);
+      publications.push(request);
+      return { v: 1, ok: true, value: { messageSeq: 2, message: {
+        id: 'committed-answer', discussionId: request.discussionId, localId: request.request.localId, seq: 2,
+        authorAccountId: 'owner', accountActor: { v: 1, accountId: 'owner', profile: null },
+        producerV1: { v: 1, kind: 'agent', sessionId }, content: request.request.content,
+        mentionedAccountIds: [], createdAt: 1,
+      } } };
+    }
+    return home.answer(event, payload) ?? activityHome.answer(event, payload) ?? defaults.emitWithAck(event, payload);
+  } });
+  const fixture = createPlainSessionFixture({ id: sessionId });
+  const client = new ApiSessionClient(credentials.token, { ...fixture, metadata: { ...fixture.metadata, machineId: 'participant-machine' } }, {
+    localMachineId: 'participant-machine',
+    metadataAuthority: { kind: 'owner', credentials },
+    transport: { serverId: 'discussion-home', serverUrl: 'https://discussion-home.test',
+      createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
+  });
+  clients.add(client);
+  const witness = { turnId: 'turn-1', inputId: 'input-1', userMessageSeq: 1, userMessageSeqs: [1],
+    agentStartCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 0 }, workDepth: 0 };
+  let active = true;
+  let currentWitness: AgentInvocationTurnAdmissionWitness = witness;
+  const hostTurnAbort = new AbortController();
+  const runtimeLifetimeAbort = new AbortController();
+  applyRunnerMcpSessionContext(client, {
+    getActiveTurnAdmissionWitness: () => active ? currentWitness : null,
+    getHostTurnAbortSignal: () => hostTurnAbort.signal,
+    getRuntimeLifetimeSignal: () => runtimeLifetimeAbort.signal,
+  });
+  const admittedRequest = DiscussionAgentPostRequestV1Schema.parse({ v: 1, sessionId,
+    discussionId: 'discussion-1', request: { localId: 'answer-1', content: { t: 'plain', v: content }, mentionedAccountIds: [] } });
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: admittedRequest, witness }))
+    .toMatchObject({ ok: true, value: { message: { id: 'committed-answer' } } });
+  for (const invalid of [
+    { request: admittedRequest, witness: { ...witness, turnId: 'unrelated-turn' } },
+    { request: { ...admittedRequest, sessionId: 'foreign-session' }, witness },
+    { request: admittedRequest, witness, producer: { sessionId } },
+  ]) expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', invalid))
+    .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
+  expect(publications).toHaveLength(1);
+  expect(publications[0]).toMatchObject({ sourceSession: { sourceSessionId: sessionId, sourceTurnId: witness.turnId,
+    sourceInputId: witness.inputId, via: 'action' } });
+  const addressing = { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId };
+  currentWitness = { ...witness, discussionAddressing: addressing };
+  const activeReply = { ...admittedRequest,
+    request: { ...admittedRequest.request, replyTarget: { kind: 'message' as const, messageId: addressing.messageId } },
+    replyReturn: { serverId: 'foreign-home', requestLocalId: 'foreign-input', acceptedTurnId: 'foreign-turn' } };
+  publications.length = 0;
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: activeReply, witness: currentWitness }))
+    .toMatchObject({ ok: true });
+  expect(publications[0]).toMatchObject({ replyReturn: { serverId: 'discussion-home', requestLocalId: witness.inputId, acceptedTurnId: witness.turnId } });
+  expect(publications[0]).toMatchObject({ request: { localId: deriveSessionMessageReplyReturnLocalIdV1({
+    sessionId, localId: witness.inputId, acceptedTurnId: witness.turnId,
+  }) } });
+  for (const mismatch of [
+    { ...activeReply, discussionId: 'other-discussion' },
+    { ...activeReply, request: { ...activeReply.request, replyTarget: { kind: 'message', messageId: 'other-parent' } } },
+  ]) {
+    publications.length = 0;
+    expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: mismatch, witness: currentWitness }))
+      .toMatchObject({ ok: true });
+    expect(publications[0]).not.toHaveProperty('replyReturn');
+    expect(publications[0]).toMatchObject({ request: { localId: admittedRequest.request.localId } });
+  }
+  currentWitness = { ...witness, discussionAddressing: { ...addressing, participantSessionId: 'foreign-participant' } };
+  publications.length = 0;
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: activeReply, witness: currentWitness }))
+    .toMatchObject({ ok: true });
+  expect(publications[0]).not.toHaveProperty('replyReturn');
+  currentWitness = witness;
+  publications.length = 0;
+  const execute = createDaemonSessionAccountActionExecutor({
+    serverId: 'discussion-home', serverHttpBaseUrl: 'https://discussion-home.test', token: credentials.token, credentials,
+    postAgentDiscussionMessage: async (request, admittedWitness, options) => await client.rpcHandlerManager.invokeLocal(
+      'discussion.agentPost.v1', { request, witness: admittedWitness }, options,
+    ),
+    createExecutor: (_depth, _current, postAgentDiscussionMessage) => {
+      return createCliActionExecutor({
+      token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'discussion-home', serverHttpBaseUrl: 'https://discussion-home.test',
+      resolveServerFeaturesSnapshot: () => features, postAgentDiscussionMessage,
+      actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { 'discussion.post': ['agent'], 'discussion.create': ['agent'] } }) },
+      });
+    },
+  });
+  const operation = { kind: 'action.execute' as const, requestId: 'tool-1', actionId: 'discussion.post' as const,
+    input: { discussionId: 'discussion-1', localId: 'answer-1', content }, witness };
+  expect(await execute(operation, { sessionId, isCurrent: async () => true })).toMatchObject({
+    ok: true, result: { message: { id: 'committed-answer', content, producerV1: { sessionId } } },
+  });
+  expect(publications).toHaveLength(1);
+  const createInput = { creationLocalId: 'create-by-agent', title: 'Created by actual Session', firstMessage: { localId: 'first-by-agent', content } };
+  expect(await execute({ ...operation, requestId: 'create-tool', actionId: 'discussion.create', input: createInput },
+    { sessionId, isCurrent: async () => true })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+  // This test owns the current Session publisher. Actual approved MCP replay
+  // uses the real Artifact store in sessionClient.discussionApprovalReplay.test.ts.
+  const created = await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+    request: { v: 1, operation: 'create', sessionId, toolCallId: 'create-tool', request: {
+      creationLocalId: createInput.creationLocalId, titleContent: { t: 'plain', v: { v: 1, title: createInput.title } },
+      firstMessage: { localId: createInput.firstMessage.localId, content: { t: 'plain', v: content }, mentionedAccountIds: [] },
+    } }, witness,
+  }, { rpcContext: { callerAuthority: 'present_user' } });
+  expect(created).toMatchObject({ ok: true, value: {
+    firstMessage: { id: 'committed-first', producerV1: { sessionId } },
+  } });
+  expect(publications).toHaveLength(2);
+  expect(requests.every(url => !url.includes('/sessions/'))).toBe(true);
+  active = false;
+  hostTurnAbort.abort();
+  expect(await execute(operation, { sessionId, isCurrent: async () => true })).toMatchObject({ ok: false });
+  expect(publications).toHaveLength(2);
+  const terminalRequest = { ...admittedRequest,
+    request: { ...admittedRequest.request, localId: deriveSessionMessageReplyReturnLocalIdV1({
+      sessionId, localId: 'original', acceptedTurnId: witness.turnId }),
+      replyTarget: { kind: 'message' as const, messageId: 'question-1' } },
+    replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } };
+  // The Account owner can reach this RPC, but cannot author a terminal outcome.
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
+    .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
+  terminalRequest.request.content = { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'The requested session failed.' }] } };
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
+    .toMatchObject({ ok: true, value: { message: { id: 'committed-answer' } } });
+  expect(publications).toHaveLength(3);
+  terminalReturned = true;
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
+    .toMatchObject({ ok: true, value: { message: { id: 'committed-answer' } } });
+  expect(publications).toHaveLength(4);
+  explicitlyReturned = true;
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
+    .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
+  for (const request of [
+    admittedRequest,
+    { ...admittedRequest, replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+    { ...admittedRequest, sessionId: 'foreign-session', request: { ...admittedRequest.request,
+      replyTarget: { kind: 'message', messageId: 'question-1' } },
+      replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+    { ...admittedRequest, request: { ...admittedRequest.request, replyTarget: { kind: 'message', messageId: 'question-1' } },
+      replyReturn: { serverId: 'foreign-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+  ]) expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request }))
+    .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
+  runtimeLifetimeAbort.abort();
+  expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
+    request: { ...admittedRequest, request: { ...admittedRequest.request, replyTarget: { kind: 'message', messageId: 'question-1' } },
+      replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+  })).toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
+  expect(publications).toHaveLength(4);
+});

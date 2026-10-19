@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Update } from '../../../types';
+import type { AgentState, Update } from '../../../types';
 import { createSessionClientUpdateRuntime } from './createSessionClientUpdateRuntime';
+import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
 
 function createRuntime(
   overrides: Partial<Omit<
@@ -10,6 +11,7 @@ function createRuntime(
   >> = {},
 ) {
   return createSessionClientUpdateRuntime({
+    serverId: 'home',
     sessionId: 'session-1',
     getMetadata: () => null,
     setMetadata: vi.fn(),
@@ -30,6 +32,30 @@ function createRuntime(
 }
 
 describe('createSessionClientUpdateRuntime', () => {
+  it('withdraws retained questions when an exact Session archive update reaches its owner', async () => {
+    let archivedAt: number | null = null;
+    let state: AgentState = { requests: { question: { tool: 'AskUserQuestion', kind: 'user_action',
+      arguments: { questions: [{ question: 'Continue?' }] }, createdAt: 1 } }, completedRequests: {} };
+    const session = { sessionId: 'session-1', getAgentStateSnapshot: () => state,
+      getArchivedAtSnapshot: () => archivedAt,
+      updateAgentState: (update: (current: AgentState) => AgentState) => { state = update(state); },
+      updateAgentStateRequestSettlement: async (update: (current: AgentState) => AgentState) => { state = update(state); } };
+    const store = new AgentStateRequestStore({ session, logPrefix: '[Archive update]' });
+    const runtime = createRuntime({ onArchivedAtFromServer: (value) => {
+      archivedAt = value;
+      store.updateSession(session);
+    } });
+    const archive = { id: 'archive', seq: 1, createdAt: 1_000,
+      body: { t: 'update-session', id: 'other-session', archivedAt: 42 } } as Update;
+    runtime.handleUpdate(archive, { source: 'user-scoped' });
+    expect(store.hasOutstandingRequest('question')).toBe(true);
+    runtime.handleUpdate({ ...archive, body: { ...archive.body, id: 'session-1' } } as Update, { source: 'user-scoped' });
+    expect(store.hasOutstandingRequest('question')).toBe(false);
+    await vi.waitFor(() => expect(state.completedRequests?.question)
+      .toMatchObject({ status: 'canceled', reason: 'Session archived' }));
+    store.dispose();
+  });
+
   it('forwards transcript rows as observations without a provider-input consumer dependency', () => {
     const emit = vi.fn();
     const runtime = createRuntime({ emit });

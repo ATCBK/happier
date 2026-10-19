@@ -1,5 +1,6 @@
 import { normalizeToolCallV2, normalizeToolResultV2 } from '@/agent/tools/normalization';
 import { setBoundedMap } from '@/utils/collections/lru';
+import { resolveHappierToolResultObservationProjector } from '@/agent/tools/happierTools/resultObservation';
 
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import {
@@ -7,6 +8,12 @@ import {
   extractPermissionToolCallRawInput,
   getToolCallNameKey,
 } from './toolCallInputHints';
+
+type ToolCallNormalization = {
+  rawToolName: string;
+  canonicalToolName: string;
+  projectObservationOutput?: (output: unknown) => unknown;
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -52,7 +59,7 @@ function setToolCallCacheEntry<K, V>(params: Readonly<{
 
 export function normalizeCodexSessionMessageBody(params: {
   body: any;
-  toolCallCanonicalNameByProviderAndId: Map<string, { rawToolName: string; canonicalToolName: string }>;
+  toolCallCanonicalNameByProviderAndId: Map<string, ToolCallNormalization>;
   maxToolCallCacheEntries?: number | undefined;
   debug: (message: string, data?: Record<string, unknown>) => void;
 }): any {
@@ -75,6 +82,7 @@ export function normalizeCodexSessionMessageBody(params: {
         value: {
           rawToolName,
           canonicalToolName,
+          projectObservationOutput: resolveHappierToolResultObservationProjector(rawToolName, body?.input),
         },
         maxEntries: params.maxToolCallCacheEntries,
       });
@@ -100,7 +108,7 @@ export function normalizeCodexSessionMessageBody(params: {
       provider: 'codex',
       rawToolName,
       canonicalToolName,
-      rawOutput: body?.output,
+      rawOutput: mapping?.projectObservationOutput ? mapping.projectObservationOutput(body?.output) : body?.output,
     });
     return { ...body, output };
   }
@@ -111,7 +119,7 @@ export function normalizeCodexSessionMessageBody(params: {
 export function normalizeAcpSessionMessageBody(params: {
   provider: ACPProvider;
   body: ACPMessageData;
-  toolCallCanonicalNameByProviderAndId: Map<string, { rawToolName: string; canonicalToolName: string }>;
+  toolCallCanonicalNameByProviderAndId: Map<string, ToolCallNormalization>;
   permissionToolCallRawInputByProviderAndId: Map<string, unknown>;
   toolCallInputByProviderAndId: Map<string, unknown>;
   maxToolCallCacheEntries?: number | undefined;
@@ -146,6 +154,7 @@ export function normalizeAcpSessionMessageBody(params: {
       value: {
         rawToolName,
         canonicalToolName,
+        projectObservationOutput: resolveHappierToolResultObservationProjector(rawToolName, hintedRawInput),
       },
       maxEntries: params.maxToolCallCacheEntries,
     });
@@ -201,7 +210,7 @@ export function normalizeAcpSessionMessageBody(params: {
       provider,
       rawToolName,
       canonicalToolName,
-      rawOutput: (body as any).output,
+      rawOutput: mapping?.projectObservationOutput ? mapping.projectObservationOutput(body.output) : body.output,
     });
     const outputWithOpaque = ensureOpaqueAcpToolResultOutputEnvelope(output);
 

@@ -11,6 +11,7 @@ import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfac
 import type { SessionTranscriptSurfaceItemReferenceInputV1, SessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol';
+import type { SessionRoleEdit } from '@/session/roles/sessionRoleEdit';
 
 export type SessionClientDurableMutationDependency = Readonly<{
     mutationId: string;
@@ -145,6 +146,8 @@ export type RegisteredSessionStateFieldMutationV1 = Readonly<{
     observedAt: number;
     dependsOn?: readonly SessionClientDurableMutationDependency[];
     expectedMetadataRevision?: number;
+    /** A Role Action edits one member of the configuration at replay, not a stale snapshot. */
+    sessionRoleEdit?: SessionRoleEdit;
     /** Stored 68edc1dab944 Role queues only; ordinary Role writers cannot author this carrier. */
     retainedSessionContextEntry?: PromptStackEntryV1;
 }>;

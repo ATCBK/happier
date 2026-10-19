@@ -1,6 +1,7 @@
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 
 const runtimeControlKeys = [
+  'readPermissionHandler',
   'readCodingPromptBehavior',
   'readEffectiveInputConfiguration',
   'readAppliedChildSelection',

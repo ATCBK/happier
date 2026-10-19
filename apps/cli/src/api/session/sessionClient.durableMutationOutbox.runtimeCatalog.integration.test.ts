@@ -651,7 +651,27 @@ describe('ApiSessionClient durable mutation outbox', () => {
     await expect(readPersistedOutboxMutationCount('transport-disposal')).resolves.toBe(0);
   });
 
-  it('persists one semantic session end before close and replays it after restart', async () => {
+  it('carries a proven ready original through the actual outbox commit wait without holding publication', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: false });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 'ready-commit-wait' }));
+    try {
+      const publication = await client.enqueueSessionEventCommitted({ type: 'ready', completedTurnId: 'completed-turn' }, 'ready-original');
+      expect(publication).toMatchObject({ persisted: true, delivered: false, localId: expect.any(String) });
+      expect(publication.whenCommitted).toBeInstanceOf(Promise);
+      let settled = false;
+      void publication.whenCommitted!.then(() => { settled = true; });
+      await drainAsyncWork();
+      expect(settled).toBe(false);
+      await client.close();
+      await expect(publication.whenCommitted).resolves.toBeNull();
+      await expect(readPersistedOutboxMutations('ready-commit-wait')).resolves.toContainEqual(expect.objectContaining({
+        kind: 'transcript_message_append', payload: expect.objectContaining({ localId: publication.localId }),
+      }));
+    } finally { await client.close(); }
+  });
+
+  it.each(['delivered', 'resumed'] as const)('persists one semantic session end before close and settles it after restart (%s)', async (outcome) => {
     const axiosPost = await getAxiosPostMock();
     axiosPost.mockRejectedValue(new Error('server offline'));
     sessionSocketStub = createApiSessionSocketStub({ connected: false });
@@ -683,7 +703,24 @@ describe('ApiSessionClient durable mutation outbox', () => {
       mutationId: persistedSessionEnd.mutationId,
     }));
 
-    axiosPost.mockResolvedValue({ status: 200, data: { ok: true } } as never);
+    let resumedPublisherActive = true;
+    if (outcome === 'resumed') {
+      axiosPost.mockRejectedValue({ response: { status: 404 } });
+      const axiosGet = await getAxiosGetMock();
+      axiosGet.mockResolvedValue({ status: 200, data: { session: {
+        id: 'semantic-session-end', active: true,
+        activeAt: persistedSessionEnd.payload.observedAt + 1,
+      } } } as never);
+      sessionSocketStub = createApiSessionSocketStub({
+        connected: true,
+        emitWithAck: async (event: string) => {
+          if (event === 'session-end') resumedPublisherActive = false;
+          return { ok: true, applied: true };
+        },
+      });
+    } else {
+      axiosPost.mockResolvedValue({ status: 200, data: { ok: true } } as never);
+    }
     const restarted = createRuntimeSessionClientDurableMutationOutbox({
       token: 'tok',
       sessionId: 'semantic-session-end',
@@ -694,6 +731,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
     await restarted.flush('startup');
 
     await expect.poll(() => readPersistedOutboxMutationCount('semantic-session-end')).toBe(0);
+    expect(resumedPublisherActive).toBe(true);
     await restarted.close();
   });
 

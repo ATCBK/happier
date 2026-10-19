@@ -45,6 +45,15 @@ export type CommittedTranscriptMessageOptions = Readonly<{
   updatedAt?: number;
   provenance: SessionTranscriptObservationProvenanceV1;
   admission?: CommittedTranscriptAdmission;
+  /** Observe the existing outbox ACK without delaying local publication. */
+  observeCommitSignal?: AbortSignal;
+}>;
+
+export type CommittedTranscriptOriginal = Readonly<{ localId: string; committedSequence: number }>;
+
+/** Native child input observations retain their Run's existing transcript sidechain. */
+export type CommittedTranscriptUserMessageOptions = CommittedTranscriptMessageOptions & Readonly<{
+  sidechainId?: string;
 }>;
 
 export type TranscriptSessionPort = Readonly<{

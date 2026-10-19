@@ -1,4 +1,6 @@
 import { logger } from '@/ui/logger'
+import { registerSessionQuestionAnswerDelivery } from '@/agent/permissions/sessionQuestionAnswerDelivery';
+import { SessionMessageV1Schema, type SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 import { decodeBase64, decrypt } from '@/api/encryption';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import { AgentStateRequestSettlementSchema, applyAgentStateRequestSettlement, buildAgentStateRequestSettlement } from './agentStateRequestSettlement';
@@ -6,6 +8,22 @@ import { registerPluginCatalogSignal } from './client/registerPluginCatalogSigna
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEvent } from '@/agent/permissions/activeForegroundRequests';
+import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
+import type { SessionPersonalFollowCommit } from './sessionClientPort';
+import type { CommittedTranscriptOriginal } from './transcriptPort';
+import { captureSessionFollowRuleSourceEvidence, captureSemanticSessionFollowRuleSourceEvidence, readSessionFollowSemanticSourceEvent } from '@/agent/runtime/session/follow/sessionFollowRuleSourceEvidence';
+import { hasEffectiveSessionGoalChange } from '@/session/goalControls/commitGoalFollowOccurrence';
+import { projectSessionAwarenessV1 } from '@happier-dev/protocol/sessions/awareness/projectV1';
+import { readSessionWorkStateV1FromMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
+import type { FollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { resolveAgentRequestKind } from '@happier-dev/protocol/activity/agentRequestSummary';
+import { isAgentStateRequestCoveredByCompletedRequests, resolveAgentStateRequestCoverageOptions } from '@happier-dev/agents';
+import { SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1, projectSessionFollowRuleSharedSourceEvidenceV1, SessionFollowRuleSourceEvidenceV1Schema, type SessionFollowRuleSourceEvidenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import type { QuestionSessionSnapshot } from '@/agent/permissions/sessionQuestionManager';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
+import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 import { deriveKey } from '@/utils/deriveKey';
 import { createExternalActionAuthorizedRequestHeaders, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { randomUUID } from 'node:crypto'
@@ -59,10 +77,11 @@ import {
     type SessionInputTransformBeforeCommitResult,
 } from './client/transcript/sessionClientTranscriptApi';
 import { findPersistedSessionUserMessageAdmission } from './client/transcript/sessionUserMessageAdmissionRejoin';
+import { observeSessionFollowHumanInputCommit, prepareSessionFollowHumanInputMetadata } from './client/transcript/sessionFollowHumanInputOccurrence';
 import type { SendAgentSessionMediaCommittedRequest } from './client/transcript/sessionMediaBridge';
 import type { SessionStructuredInputAdmissionPolicyV1 } from '@/session/services/admitSessionStructuredInputV1';
 import type { EphemeralSendOutcome } from './client/transcript/ephemeralSendOutcome';
-import type { CommittedTranscriptMessageOptions } from './transcriptPort';
+import type { CommittedTranscriptMessageOptions, CommittedTranscriptUserMessageOptions } from './transcriptPort';
 import type { TurnAssistantTextSnapshotStore } from './turns/assistantTextSnapshot';
 import { createTurnAssistantTextSnapshotStore } from './turns/assistantTextSnapshotStore';
 import { prepareInstalledRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
@@ -86,6 +105,7 @@ import type { LocalServicesRuntimeActionRoutes } from '@/daemon/local/services/a
 import type { DaemonPeerMediationObservabilityRuntimeActionContext } from '@/daemon/peer/mediation/observability/runtimeActionExecutor';
 import type { SimulatorPreviewRoutes } from '@/daemon/devices/simulator/previewRoutes.types';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import {
     createSessionClientExecutionRunService,
@@ -181,15 +201,17 @@ import { SessionActionConfirmationsV1Schema, SessionActionConfirmationResponseTa
 import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import { SessionMessageAcceptedDeliveryFactsV1Schema, type SessionMessageAcceptedDeliveryContentV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 import { SessionRuntimeActivitySnapshotSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
-import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema, type SessionFollowObservePendingRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1, ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1, AccountVoiceFollowObservePendingRequestV1Schema, AccountVoiceFollowObservePendingResponseV1Schema, AccountVoiceFollowAcknowledgeRequestV1Schema, AccountVoiceFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
-import { SESSION_DISCUSSION_AGENT_POST_EVENT_V1, SessionDiscussionAgentPostRequestV1Schema, SessionDiscussionAgentPostResponseV1Schema } from '@happier-dev/protocol/sessions/discussions/api';
-import type { SessionFollowAcknowledgeRequestV1, AccountVoiceFollowAcknowledgeRequestV1, SessionDiscussionAgentPostRequestV1 } from '@happier-dev/protocol';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPublisherPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationInputV1 } from '@happier-dev/protocol/discussions/api';
+import type { SessionFollowAcknowledgeRequestV1, AccountVoiceFollowAcknowledgeRequestV1 } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
 import type {
     SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionEncryptionContext';
+import { openSessionStoredContent } from '@/session/transport/encryption/sessionEncryptionContext';
+import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import {
     applyAccountSettingsV2Update,
     refreshActiveAccountSettingsFromServer,
@@ -197,6 +219,7 @@ import {
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { refreshActivePromptLibraryCatalogAfterChange } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { refreshDemandedActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
 import {
     supportsRuntimeActivityV2,
     supportsSessionPublisherAuthorityCheckV1,
@@ -219,7 +242,17 @@ import {
     fetchSessionByIdCompat,
     fetchSessionTurnsProjection,
 } from '@/session/transport/http/sessionsHttp';
-import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { buildTrustedHostSessionInputAdmissionV1, readSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationV1Schema,
+    SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1, SessionMessageReplySourceTurnReleaseV1Schema,
+    SessionMessageReplySourceTurnReleaseResultV1Schema,
+    SessionMessageReplyMutationResultV1Schema, SessionMessageExplicitReplyV1Schema, deriveSessionMessageReplyAnswerLocalIdV1,
+    type SessionMessageReplyOperationV1, type SessionMessageExplicitReplyV1, type SessionMessageReplyMutationResultV1,
+    type SessionMessageReplyOutcomeV1, type SessionMessageReplySourceTurnReleaseResultV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { readSessionMessageReply, supportsSessionMessageReply } from '@/session/services/sessionMessageReply';
+import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
+import { extractAssistantTextSnapshotFromSessionContent } from './turns/extractAssistantTextSnapshot';
 import { isPendingDeliveryArchivedUncertaintyReasonV1, isPendingDeliveryProviderEffectPossibleV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import type { SessionTurnsProjectionV1 } from '@happier-dev/protocol';
 import {
@@ -492,8 +525,9 @@ export class ApiSessionClient extends EventEmitter {
     private readonly token: string;
     readonly sessionId: string;
     private readonly workDepth: number;
-    private rolePromptOrganization: Pick<import('@happier-dev/protocol').V2SessionByIdResponse['session'], 'reportsTo' | 'origin'>;
+    private rolePromptOrganization: Pick<import('@happier-dev/protocol').V2SessionByIdResponse['session'], 'manager' | 'origin'>;
     private hostCurrentTurnFacts: Readonly<{ turnId: string; facts: import('@happier-dev/protocol').SessionTurnFactsV1 }> | null = null;
+    private questionWaitTurnId: string | null = null;
     private metadata: Metadata | null;
     private metadataLayoutVersion: number;
     private metadataVersion: number;
@@ -512,6 +546,7 @@ export class ApiSessionClient extends EventEmitter {
     private readonly getAccountEncryptionCurrentness: () => Promise<AccountEncryptionCurrentnessResponse>;
     private agentState: AgentState | null;
     private agentStateRequestStore: AgentStateRequestStore | null = null;
+    private questionAnswerDeliveryRegistered = false;
     private sessionActionConfirmationRequestStore: AgentStateRequestStore | null = null;
     private readonly agentStateResponseTargetDispatcher = new AgentStateResponseTargetDispatcher();
     private agentStateVersion: number;
@@ -583,7 +618,10 @@ export class ApiSessionClient extends EventEmitter {
     private readonly pendingProviderInputSettlementWrites = new Set<Promise<void>>();
     private readonly acceptedPendingSettlementWrites = new Set<Promise<void>>();
     // Keep witnessed detail with the existing unresolved settlement custody across reconnects.
-    private readonly acceptedPendingSettlementLocalIds = new Map<string, SessionMessageAcceptedDeliveryContentV1 | undefined>();
+    private readonly acceptedPendingSettlementLocalIds = new Map<string, {
+        acceptedDelivery?: SessionMessageAcceptedDeliveryContentV1;
+        acceptedTurn?: { kind: 'newTurn' | 'followUp' | 'steer'; turnId: string };
+    }>();
     // Archived uncertainty is no longer eligible for queue materialization, but its exact local
     // provider custody must survive until delayed acceptance can settle the canonical server row.
     private readonly nonBlockingArchivedPendingDeliveryLocalIds = new Set<string>();
@@ -606,6 +644,7 @@ export class ApiSessionClient extends EventEmitter {
     declare getBackendTarget?: import('@/mcp/startHappyServer').HappyMcpSessionClient['getBackendTarget'];
     private sessionActionConfirmationAdapter: ReturnType<typeof createSessionActionConfirmationAdapter> | null = null;
     private sessionActionConfirmationRecovery: Promise<void> | null = null;
+    private archivedAt: number | null | undefined;
     private disposeSessionFollowWakeReceiver: (() => void) | null = null;
     private readonly sessionHandlersRegistration: ReturnType<typeof registerSessionClientRuntimeHandlers>;
     readonly subscribeDaemonPluginCatalogChanges: ReturnType<typeof registerPluginCatalogSignal>;
@@ -616,6 +655,21 @@ export class ApiSessionClient extends EventEmitter {
      */
     getAgentStateSnapshot(): AgentState | null {
         return this.agentState;
+    }
+
+    getArchivedAtSnapshot(): number | null | undefined {
+        return this.archivedAt;
+    }
+
+    onArchivedAtChange(listener: (archivedAt: number | null) => void): () => void {
+        this.on('archive-state-updated', listener);
+        return () => { this.off('archive-state-updated', listener); };
+    }
+
+    private applyArchivedAtSnapshot(archivedAt: number | null): void {
+        if (this.archivedAt === archivedAt) return;
+        this.archivedAt = archivedAt;
+        this.emit('archive-state-updated', archivedAt);
     }
 
     /** Refresh through the incumbent snapshot lifecycle before exposing a versioned follow projection. */
@@ -651,6 +705,47 @@ export class ApiSessionClient extends EventEmitter {
     bindAgentStateRequestStore(store: AgentStateRequestStore): void {
         if (this.agentStateRequestStore) store.adoptAppliedCompletions(this.agentStateRequestStore);
         this.agentStateRequestStore = store;
+        if (this.hasOwnerMetadataAuthority() && !this.questionAnswerDeliveryRegistered) {
+            registerSessionQuestionAnswerDelivery({ store, sessionId: this.sessionId,
+                serverUrl: this.transport.serverUrl, readCredentials: () => this.readCurrentOwnerCredentials(),
+                readAdmittedCause: async source => {
+                    // Durable question custody names its own turn, not the currently
+                    // active turn or the manager that eventually supplied the answer.
+                    let original: SessionMessageV1;
+                    if (source.sourceInputId) {
+                        const lookup = await this.readCommittedTranscriptMessageByLocalId(source.sourceInputId,
+                            { signal: this.acceptedPendingSettlementOperationAbortController.signal });
+                        if (lookup.type !== 'found') throw new Error('Question original input custody unavailable');
+                        original = SessionMessageV1Schema.parse(lookup.message);
+                    } else {
+                        const projection = await this.readSessionTurnsProjection();
+                        const turn = projection?.turns.find(candidate => candidate.turnId === source.sourceTurnId);
+                        if (!turn) throw new Error('Question source turn custody unavailable');
+                        // Older/native questions retain only a turn. Do not guess
+                        // among multiple inputs (for example after in-flight steering).
+                        const seqs = turn.transcriptAnchors?.userMessageSeqs;
+                        if (seqs && seqs.length > 1) return undefined;
+                        const seq = turn.transcriptAnchors?.startUserMessageSeq ?? seqs?.[0];
+                        if (seq === undefined) return undefined;
+                        const page = await fetchEncryptedTranscriptMessagesPage({ token: this.token, sessionId: this.sessionId,
+                            scope: 'all', afterSeq: seq - 1, limit: 1,
+                            signal: this.acceptedPendingSettlementOperationAbortController.signal });
+                        const parsed = SessionMessageV1Schema.safeParse(page.messages.find(row => row.seq === seq));
+                        if (!parsed.success) throw new Error('Question original input custody unavailable');
+                        original = parsed.data;
+                    }
+                    if (original.messageRole !== 'user') throw new Error('Question original input custody unavailable');
+                    const body = openSessionMessageContent({ ...this.getStoredContentEncryptionContext(), content: original.content });
+                    const persona = { serverId: this.serverBinding.serverId, sessionId: this.sessionId };
+                    return deriveSessionInputActionRequestAttributionV1({ requestRef: original.localId ?? null, persona,
+                        messageRole: original.messageRole, inputAdmissionReceipt: original.inputAdmissionReceipt,
+                        inputAuthority: readSessionInputAuthority(readRecordProperty(body, 'meta'), 'stored'),
+                        origin: { kind: 'session', session: persona, messageId: original.id } });
+                },
+                ...(this.machineAdmissionTransport ? { machineAdmissionTransport: this.machineAdmissionTransport } : {}),
+                signal: this.acceptedPendingSettlementOperationAbortController.signal });
+            this.questionAnswerDeliveryRegistered = true;
+        }
     }
 
     getAgentStateRequestStore(): AgentStateRequestStore | null {
@@ -1001,9 +1096,10 @@ export class ApiSessionClient extends EventEmitter {
                 serverUrl: options.transport.serverUrl,
             });
 	        this.sessionId = session.id;
+            this.archivedAt = session.archivedAt;
             this.workDepth = session.workDepth ?? 0;
             this.rolePromptOrganization = {
-                ...(session.reportsTo ? { reportsTo: session.reportsTo } : {}),
+                ...(session.manager ? { manager: session.manager } : {}),
                 ...(session.origin ? { origin: session.origin } : {}),
             };
 	        this.initialExecutionRunPendingTargetIds = readPendingExecutionRunIds(session) ?? [];
@@ -1096,7 +1192,9 @@ export class ApiSessionClient extends EventEmitter {
             })(),
         });
         this.updateRuntime = createSessionClientUpdateRuntime({
+            serverId: this.serverBinding.serverId,
             sessionId: this.sessionId,
+            onArchivedAtFromServer: archivedAt => this.applyArchivedAtSnapshot(archivedAt),
             ...this.storedContentCrypto,
             getMetadataLayoutVersion: () => this.metadataLayoutVersion,
             getMetadata: () => this.metadata,
@@ -1232,6 +1330,24 @@ export class ApiSessionClient extends EventEmitter {
                     this.markLocallyAuthoredTranscriptObservationUserLocalId(mutation.localId);
                 }
             },
+            onTranscriptMessageCommitted: async (mutation, seq) => {
+                // Only host-produced agent/event originals carry this reserved
+                // evidence. User metadata and Run sidechains cannot assert a
+                // parent Session occurrence. Producers strip authored evidence
+                // before sealing; never reconstruct historical facts here.
+                if (this.closed || this.metadataAuthorityKind !== 'owner' || mutation.sidechainId
+                    || !mutation.provenance || (mutation.messageRole !== 'agent' && mutation.messageRole !== 'event')) return;
+                const payload = openSessionStoredContent({ ...this.storedContentCrypto,
+                    content: SessionStoredMessageContentSchema.parse(mutation.content) });
+                if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+                    || !('role' in payload) || payload.role !== 'agent' || !('meta' in payload)) return;
+                const meta = payload.meta;
+                if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return;
+                const evidence = SessionFollowRuleSourceEvidenceV1Schema.safeParse(
+                    (meta as Readonly<Record<string, unknown>>)[SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]);
+                if (!evidence.success) return;
+                await this.notifySessionFollowRuleMessageCommitted({ localId: mutation.localId, seq, evidence: evidence.data });
+            },
             deliverAgentStateRequestSettlement: async (mutation) => {
                 let value: unknown;
                 if (mutation.content.t === 'device_local_v1') {
@@ -1351,6 +1467,7 @@ export class ApiSessionClient extends EventEmitter {
             onPresence: (presence) => this.emit('local-presence', presence),
             getMetadataSnapshot: () => this.getMetadataSnapshot(),
             updateAgentState: (handler) => this.updateAgentState(handler),
+            getAgentStateRequestStore: () => this.getAgentStateRequestStore(),
             updateMetadata: (handler) => this.updateMetadata(handler),
             enqueueCommittedTranscriptMessage: (params) =>
                 this.durableMutationOutbox.enqueueTranscriptMessage(
@@ -1366,7 +1483,10 @@ export class ApiSessionClient extends EventEmitter {
                         provenance: params.provenance,
                         ...(params.surfaceItemReference === undefined ? {} : { surfaceItemReference: params.surfaceItemReference }),
                     }),
-                    params.admission === undefined ? undefined : { admission: params.admission },
+                    params.admission === undefined && params.observeCommitSignal === undefined ? undefined : {
+                        ...(params.admission ? { admission: params.admission } : {}),
+                        ...(params.observeCommitSignal ? { observeCommitSignal: params.observeCommitSignal } : {}),
+                    },
                 ),
             enqueueCommittedVoiceAgentTranscriptTurn: (params) => {
                 const user = createTranscriptMessageAppendMutation({
@@ -1408,6 +1528,7 @@ export class ApiSessionClient extends EventEmitter {
             toolCallInputByProviderAndId: this.toolCallInputByProviderAndId,
             maxToolCallCacheEntries: SESSION_CLIENT_TOOL_CALL_CACHE_MAX_ENTRIES,
             transformSessionInputBeforeCommit: options.transformSessionInputBeforeCommit,
+            resolveSessionAttachment: handle => this.sessionHandlersRegistration.resolveSessionAttachment(handle),
             findPersistedSessionUserMessageAdmission: ({ localId }) =>
                 this.runSessionRequest(async () => findPersistedSessionUserMessageAdmission({
                     token: this.token,
@@ -1470,17 +1591,32 @@ export class ApiSessionClient extends EventEmitter {
                             ...request,
                         })
                     : undefined;
+                const protectedAdmission = inputAdmission ?? buildTrustedHostSessionInputAdmissionV1('ui');
+                const sourceEvidence = this.captureSessionFollowRuleEvidence({ kind: 'person_wrote' });
+                const sourceMeta = prepareSessionFollowHumanInputMetadata({ meta, admission: protectedAdmission,
+                    evidence: sourceEvidence });
+                const sourceOccurrence = observeSessionFollowHumanInputCommit({
+                    localId, sessionId: this.sessionId, admission: protectedAdmission, evidence: sourceEvidence,
+                    ...this.storedContentCrypto,
+                    tracker: this.committedUserMessageSeqTracker,
+                    signal: this.acceptedPendingSettlementOperationAbortController.signal,
+                    readOriginal: () => this.readCommittedTranscriptMessageByLocalId(localId, {
+                        signal: this.acceptedPendingSettlementOperationAbortController.signal,
+                    }),
+                    notify: async (original) => { await this.notifySessionFollowRuleMessageCommitted(original); },
+                    onError: (error) => logger.debug('[session-input] Original human Follow evidence unavailable', { localId, error }),
+                });
                 const result = await this.runSessionRequest(async () => sendSessionMessage({
                     ...(callerInputAuthorization ? { callerInputAuthorization } : {}),
                     ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
                     credentials,
                     idOrPrefix: this.sessionId,
                     message: text,
-                    messageMeta: meta,
+                    messageMeta: sourceMeta,
                     localId,
                     requestedAction: requestedAction ?? { v: 1, kind: 'enqueue' },
                     ...(recipient ? { recipient } : {}),
-                    inputAdmission: inputAdmission ?? buildTrustedHostSessionInputAdmissionV1('ui'),
+                    inputAdmission: protectedAdmission,
                     wait: false,
                     timeoutMs: 30_000,
                     ...(options.machineAdmissionTransport
@@ -1492,8 +1628,10 @@ export class ApiSessionClient extends EventEmitter {
                     signal:
                         this.acceptedPendingSettlementOperationAbortController
                             .signal,
-                }));
+                })).catch((error) => { sourceOccurrence.dispose(); throw error; });
                 const admissionResult = result.admissionResult;
+                sourceOccurrence.settle((admissionResult.status === 'accepted' || admissionResult.status === 'alreadyAccepted')
+                    && admissionResult.localId === localId);
                 if (
                     admissionResult.status === 'accepted'
                     || admissionResult.status === 'alreadyAccepted'
@@ -1653,10 +1791,12 @@ export class ApiSessionClient extends EventEmitter {
         });
 
         this.interactionApi = createSessionClientInteractionApi({
+            serverId: this.serverBinding.serverId,
             signal: this.socketAckAbortController.signal,
             serverUrl: this.transport.serverUrl,
             sessionId: this.sessionId,
             token: this.token,
+            readCurrentAutonomousCheckIn: () => this.readCurrentAutonomousCheckIn(),
             getClosed: () => this.closed,
             setClosed: (value) => {
                 this.closed = value;
@@ -1786,7 +1926,9 @@ export class ApiSessionClient extends EventEmitter {
             },
             rpcHandlerManager: this.rpcHandlerManager,
             handleUserScopedUpdate: (data, socket) => this.handleUserScopedUpdate(data, socket),
-            onAccountCatalogInvalidated: () => this.refreshDemandedAccountCatalogs(),
+            // A content-free wake can describe any Session's activity. The
+            // existing changes cursor decides whether catalogs actually changed.
+            onAccountCatalogInvalidated: () => this.recoveryRuntime.syncChangesOnConnect({ reason: 'live' }),
             installSessionSocketEventHandlers: (socket) => this.interactionApi.installSessionSocketEventHandlers(socket),
             classifyTransportErrorToProbeResult,
             onStateChange: (state) => {
@@ -2043,8 +2185,11 @@ export class ApiSessionClient extends EventEmitter {
                         || resolveAccountSettingsScopeKey(credentials) !== account.scopeKey) return;
                     // Runner admission may have hydrated only its private
                     // operation. A missing global catalog is not absent demand.
-                    await refreshActivePromptLibraryCatalogAfterChange({ credentials,
-                        scopeKey: account.scopeKey, lifetimeToken });
+                    await Promise.all([
+                        refreshActivePromptLibraryCatalogAfterChange({ credentials,
+                            scopeKey: account.scopeKey, lifetimeToken }),
+                        refreshDemandedActiveMcpServerCatalog({ token: this.token }),
+                    ]);
                 })(),
             ]);
         });
@@ -2147,6 +2292,41 @@ export class ApiSessionClient extends EventEmitter {
         this.publishSessionGoalControlCapabilities({ forceUnsupportedWrite: hadGoalControls });
     }
 
+    /** End the asking turn without recording a person's explicit Stop. */
+    async yieldQuestionTurn(sourceTurnId: string): Promise<boolean> {
+        if (this.hostCurrentTurnFacts?.turnId !== sourceTurnId) return true;
+        const cancelActiveTurn = this.sessionRuntimeControls.cancelActiveTurn;
+        if (!cancelActiveTurn) return false;
+        // The host lifecycle reads this intent before a native synchronous
+        // completion/cancellation can otherwise publish a terminal outcome.
+        this.questionWaitTurnId = sourceTurnId;
+        try {
+            await cancelActiveTurn();
+        } catch (error) {
+            if (this.hostCurrentTurnFacts?.turnId === sourceTurnId
+                && this.questionWaitTurnId === sourceTurnId) this.questionWaitTurnId = null;
+            throw error;
+        }
+        return true;
+    }
+
+    readQuestionWaitTurnId(): string | null {
+        return this.questionWaitTurnId;
+    }
+
+    async clearQuestionWaitTurn(sourceTurnIds: readonly string[] = []): Promise<void> {
+        const turnIds = new Set(sourceTurnIds);
+        if (this.questionWaitTurnId) turnIds.add(this.questionWaitTurnId);
+        this.questionWaitTurnId = null;
+        // This is called by explicit question withdrawal, never incidental
+        // runtime cleanup. The exact mutation also settles an already ended wait.
+        for (const turnId of turnIds) {
+            await this.enqueueSessionTurnMutation({ v: 1, sessionId: this.sessionId,
+                mutationId: randomUUID(), observedAt: Date.now(), action: 'cancel', turnId,
+                reason: 'explicit_stop' });
+        }
+    }
+
     private publishSessionGoalControlCapabilities(options?: Readonly<{ forceUnsupportedWrite?: boolean }>): void {
         const sessionGoalSetSupported = typeof this.sessionRuntimeControls.setGoal === 'function';
         const sessionGoalClearSupported = typeof this.sessionRuntimeControls.clearGoal === 'function';
@@ -2205,6 +2385,52 @@ export class ApiSessionClient extends EventEmitter {
             : null;
     }
 
+    private supportsSessionFollowWakeAdmission(): boolean {
+        const serverFeatures = this.getServerFeaturesSnapshot();
+        return serverFeatures?.status === 'ready'
+            && readServerEnabledBit(serverFeatures.features, 'sessions.autonomousExchange') === true;
+    }
+
+    private async readCurrentAutonomousCheckIn() {
+        const credentials = await this.readCurrentOwnerCredentials();
+        const snapshot = getActiveAccountSettingsSnapshot();
+        if (!credentials || !snapshot || snapshot.source !== 'network'
+            || !this.supportsSessionFollowWakeAdmission()
+            || this.accountSettingsSyncBarrier !== null
+            || !this.hasOwnerMetadataAuthority()
+            || snapshot.scopeKey !== resolveAccountSettingsScopeKey(credentials)) return null;
+        return snapshot.settings.coordinationAutonomousCheckIn;
+    }
+
+    /** Authenticated owner facts only; the question owner decides manager eligibility. */
+    async readQuestionSessionSnapshot(sessionId: string): Promise<QuestionSessionSnapshot | null> {
+        try {
+            if (this.closed || !sessionId.trim()) return null;
+            const credentials = await this.readCurrentOwnerCredentials();
+            const accountId = credentials ? readAccountIdFromToken(credentials.token) : null;
+            if (!credentials || !accountId) return null;
+            const rawSession = await this.runSessionRequest(() => fetchSessionByIdCompat({
+                token: this.token, sessionId, reason: 'waitForMetadataUpdate',
+            }));
+            if (!rawSession || rawSession.id !== sessionId || rawSession.effectiveAccess?.level !== 'owner') return null;
+            const accountEncryptionCurrentness = await this.runSessionRequest(() => this.getAccountEncryptionCurrentness());
+            const { value: { metadata } } = readSessionMetadataTupleWriterSnapshot({
+                credentials, rawSession, accountEncryptionCurrentness,
+            });
+            return {
+                sessionId: rawSession.id,
+                accountId,
+                managerSessionId: readSessionManagerSessionIdV1(rawSession),
+                // Active is the exact Session runtime's reachability, not a separate Machine presence claim.
+                available: resolveSessionAutoResumeAdmissionV1({ metadata, archivedAt: rawSession.archivedAt,
+                    machineAvailable: rawSession.active === true, authorityAvailable: true }) === 'eligible',
+                answersWorkerQuestions: readSessionAnswersWorkerQuestionsV1(metadata),
+            };
+        } catch {
+            return null;
+        }
+    }
+
     private syncSessionSnapshotFromServer(opts: { reason: SessionSnapshotRefreshReason }): Promise<boolean> {
         if (this.closed) return Promise.resolve(false);
         if (this.snapshotSyncInFlight) return this.snapshotSyncInFlight;
@@ -2234,7 +2460,12 @@ export class ApiSessionClient extends EventEmitter {
                     setOrganizationSnapshot: (organization) => {
                         this.rolePromptOrganization = organization;
                     },
+                    setArchivedAtSnapshot: async archivedAt => {
+                        this.applyArchivedAtSnapshot(archivedAt);
+                        await this.agentStateRequestStore?.reconcileSessionArchive();
+                    },
                     setMetadataSnapshot: (metadata, version, layoutVersion) => {
+                        if (!this.isMetadataSnapshotCurrent(layoutVersion, version)) return;
                         this.openedSharedMetadata = null;
                         this.metadata = metadata;
                         this.metadataLayoutVersion = layoutVersion;
@@ -2242,6 +2473,7 @@ export class ApiSessionClient extends EventEmitter {
                         this.emit('metadata-updated');
                     },
                     setAgentStateSnapshot: (agentState, version) => {
+                        if (version < this.agentStateVersion) return;
                         this.agentState = agentState;
                         this.agentStateVersion = version;
                     },
@@ -2279,7 +2511,10 @@ export class ApiSessionClient extends EventEmitter {
             }
         })();
 
-        const inFlight = p.finally(() => {
+        const inFlight = p.then((synced) => {
+            if (synced && !this.closed) this.agentStateRequestStore?.replayCompletedResponseTargets();
+            return synced;
+        }).finally(() => {
             if (this.snapshotSyncInFlight === inFlight) {
                 this.snapshotSyncInFlight = null;
             }
@@ -2465,7 +2700,7 @@ export class ApiSessionClient extends EventEmitter {
 
     enqueueUserTextMessageCommitted(
         text: string,
-        opts: CommittedTranscriptMessageOptions,
+        opts: CommittedTranscriptUserMessageOptions,
     ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
         const update = this.transcriptApi.enqueueUserTextMessageCommitted(text, opts);
         this.trackPendingUpdate(this.pendingTranscriptMessageUpdates, update);
@@ -2544,12 +2779,133 @@ export class ApiSessionClient extends EventEmitter {
         return await this.transcriptApi.enqueueSessionUserMessageWithDisposition(params);
     }
 
+    private readSessionFollowRuleSourceFacts() {
+        const ownerAccountId = this.metadataAuthorityKind === 'owner' ? readAccountIdFromToken(this.token) : null;
+        if (!ownerAccountId || this.closed) return null;
+        const nowMs = Date.now();
+        const lifecycle = { latestTurnStatus: this.materializationRuntime.getLatestTurnStatus(),
+            latestTurnStatusObservedAtMs: this.materializationRuntime.getLatestTurnStatusObservedAt() };
+        const requests = Object.entries(this.agentState?.requests ?? {}).filter(([requestId, request]) => !isAgentStateRequestCoveredByCompletedRequests({
+            requestId, request, completedRequests: this.agentState?.completedRequests,
+            options: resolveAgentStateRequestCoverageOptions({ kind: 'localPermissionBridge' }),
+        })).map(([, request]) => resolveAgentRequestKind({ toolName: request.tool, requestKind: request.kind }));
+        const awareness = projectSessionAwarenessV1({
+            sessionId: this.sessionId, nowMs, origin: this.rolePromptOrganization.origin,
+            lifecycle,
+            runtime: { presence: 'online', active: true, lastObservedAtMs: nowMs,
+                activityState: this.runtimeActivityProjection.runtimeActivityState,
+                activityActiveCount: this.runtimeActivityProjection.runtimeActivityActiveCount },
+            pending: { hasPendingPermissionRequests: requests.includes('permission'), hasPendingUserActionRequests: requests.includes('user_action'),
+                pendingRequestObservedAtMs: nowMs },
+            work: readSessionWorkStateV1FromMetadata(this.metadata),
+            content: this.storedContentCrypto.mode === 'plain' ? { mode: 'plain' } : { mode: 'e2ee', keyState: 'opened' },
+            currentness: { lifecycle: lifecycle.latestTurnStatus === undefined ? 'unavailable' : 'observed',
+                runtime: 'observed', pending: this.agentState ? 'observed' : 'unavailable', work: 'observed', observedAtMs: nowMs },
+        });
+        return { serverId: this.serverBinding.serverId, ownerAccountId, origin: this.rolePromptOrganization.origin ?? null,
+            awareness };
+    }
+
+    /** Host semantic producers capture only allowlisted original facts, never private organization. */
+    captureSessionFollowRuleEvidence(event: FollowEventV1) {
+        const facts = this.readSessionFollowRuleSourceFacts();
+        return facts ? captureSemanticSessionFollowRuleSourceEvidence({ ...facts, event }) : null;
+    }
+
+    /** Only the original committed owner supplies this identity; notification does not ACK delivery. */
+    async notifySessionFollowRuleMessageCommitted(input: Readonly<{
+        localId: string; seq: number; evidence: SessionFollowRuleSourceEvidenceV1;
+        /** Host-private author from the verified original admission receipt. */
+        authorAccountId?: string;
+    }>): Promise<SessionActivityChangedResult | void> {
+        if (this.closed || this.metadataAuthorityKind !== 'owner' || input.evidence.ownerAccountId !== readAccountIdFromToken(this.token)) return;
+        const sourcePublisher = await this.readCurrentPublisherPrecondition();
+        if (!sourcePublisher || this.closed) return;
+        const { notifyDaemonSessionActivityChanged } = await import('@/daemon/controlClient');
+        const fallback = input.evidence.event.kind === 'finished' || input.evidence.event.kind === 'needs_you' ? null
+            : (await import('@/notifications/activity/personalFollowMessageFallback')).capturePersonalFollowMessageFallback({ credentials: await this.readCurrentOwnerCredentials(),
+            server: this.serverBinding, sessionId: this.sessionId, sourceMessage: { localId: input.localId, seq: input.seq },
+            evidence: input.evidence, authorAccountId: input.authorAccountId,
+            signal: this.acceptedPendingSettlementOperationAbortController.signal,
+            isCurrent: async () => !this.closed && this.metadataAuthorityKind === 'owner'
+                && isDeepStrictEqual(await this.readCurrentPublisherPrecondition(), sourcePublisher),
+        });
+        let result: SessionActivityChangedResult | void = undefined;
+        try {
+            result = await notifyDaemonSessionActivityChanged(this.sessionId, {
+                sourceSessionId: this.sessionId, sourcePublisher,
+                sourceMessage: { localId: input.localId, seq: input.seq }, evidence: input.evidence,
+            });
+        } catch (error) {
+            logger.debug('[API] Follow source unavailable; original personal notification retained', serializeAxiosErrorForLog(error));
+        }
+        if (fallback) await fallback(result);
+        return result;
+    }
+
+    /** One current committed source map, with every original foreground request kept distinct. */
+    async notifySessionFollowRuleRequestCommitted(input: Readonly<{
+        requestId: string; createdAt: number; turnId?: string; evidence: SessionFollowRuleSourceEvidenceV1;
+    }>): Promise<SessionActivityChangedResult | null | void> {
+        if (this.closed || this.metadataAuthorityKind !== 'owner' || input.evidence.ownerAccountId !== readAccountIdFromToken(this.token)) return null;
+        const sourcePublisher = await this.readCurrentPublisherPrecondition();
+        const state = this.agentState;
+        const current = state?.requests?.[input.requestId];
+        if (this.closed || !current || current.createdAt !== input.createdAt || current.turnId !== input.turnId) return null;
+        if (!sourcePublisher) {
+            // Older Homes cannot attest this source extension; preserve their
+            // incumbent explicit alert. A supported publisher rejection is final.
+            return this.sessionSyncPendingInputServerContractResult
+                && supportsSessionPublisherAuthorityCheckV1(this.sessionSyncPendingInputServerContractResult) ? null : undefined;
+        }
+        const active = readActiveForegroundAgentRequests(state);
+        if (!active.some(([requestId]) => requestId === input.requestId) || this.agentStateVersion <= 0) return null;
+        const requestEvidence = active.map(([requestId, request]) => {
+            const evidence = SessionFollowRuleSourceEvidenceV1Schema.safeParse(
+                (request as Readonly<Record<string, unknown>>)[SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]);
+            const event = readForegroundAgentRequestFollowEvent(request);
+            return { requestId, ...(evidence.success && event ? { evidence: { ...evidence.data, event } } : {}) };
+        });
+        const { notifyDaemonSessionActivityChanged } = await import('@/daemon/controlClient');
+        if (this.closed || this.agentState !== state) return null;
+        const result = await notifyDaemonSessionActivityChanged(this.sessionId, { sourceSessionId: this.sessionId, sourcePublisher,
+            sourceRequests: { agentStateVersion: this.agentStateVersion,
+                requests: active.map(([requestId, request]) => ({ requestId, createdAt: request.createdAt,
+                    ...(request.turnId ? { turnId: request.turnId } : {}) })) }, requestEvidence });
+        return !this.closed && this.agentState === state ? result : null;
+    }
+
     enqueueAgentMessageCommitted(
         provider: ACPProvider,
         body: ACPMessageData,
         opts: CommittedTranscriptMessageOptions,
-    ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>> {
-        const update = this.transcriptApi.enqueueAgentMessageCommitted(provider, body, opts);
+    ): Promise<Readonly<{ persisted: boolean; delivered: boolean; committedSequence?: number;
+        whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>> {
+        const facts = this.readSessionFollowRuleSourceFacts();
+        const evidence = facts ? captureSessionFollowRuleSourceEvidence({ ...facts, body }) : null;
+        const { [SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]: _authoredEvidence, ...metadata } = opts.meta ?? {};
+        const sourceOptions = { ...opts, meta: { ...metadata,
+            ...(evidence ? { [SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]: projectSessionFollowRuleSharedSourceEvidenceV1(evidence) } : {}) },
+            ...(body.type === 'task_complete' && evidence?.event.kind === 'finished'
+                ? { observeCommitSignal: this.acceptedPendingSettlementOperationAbortController.signal } : {}),
+        };
+        const update = this.transcriptApi.enqueueAgentMessageCommitted(provider, body, sourceOptions).then((result) => {
+            if (
+                result.persisted
+                && body.type === 'output'
+                && body.data.type === 'progress'
+                && body.data.marker === 'source_fact_consumed'
+                && body.data.reason === 'host_prompt_echo'
+            ) {
+                // Main and Run-sidechain writers share this Session's follow
+                // baseline. Retain consumed echoes before native catch-up can
+                // try to replace their marker with a user row.
+                getSessionCommittedTranscriptLocalIds(this).add(opts.localId);
+            }
+            return { ...result, ...(result.whenCommitted && evidence ? {
+                whenCommitted: result.whenCommitted.then(commit => this.readPersonalFollowCommit(commit, evidence)),
+            } : {}) };
+        });
         this.trackPendingUpdate(this.pendingTranscriptMessageUpdates, update);
         return update;
     }
@@ -2564,8 +2920,19 @@ export class ApiSessionClient extends EventEmitter {
             : await request();
     }
 
+    /** Reuse original protected-input custody at the final native dispatch boundary. */
+    reconcileSessionInputForProviderDispatch(input: Parameters<SessionClientInteractionApi['reconcileSessionInputForProviderDispatch']>[0]) {
+        return this.interactionApi.reconcileSessionInputForProviderDispatch(input);
+    }
+
+    /** Exact committed row lookup for host reply publication and native final outcomes. */
+    async readCommittedTranscriptMessageByLocalId(localId: string, options?: Readonly<{ signal?: AbortSignal }>) {
+        return findTranscriptEncryptedMessageByLocalIdV2({ token: this.token,
+            serverUrl: this.serverBinding.serverUrl, sessionId: this.sessionId, localId,
+            ...(options?.signal ? { signal: options.signal } : {}) });
+    }
+
     async fetchCommittedTranscriptLocalIdBaseline(opts?: {
-        take?: number;
         signal?: AbortSignal;
         deadlineAtMs?: number;
     }) {
@@ -2591,10 +2958,35 @@ export class ApiSessionClient extends EventEmitter {
     enqueueSessionEventCommitted(
         event: SessionEventMessage,
         id?: string,
-    ): Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number }>> {
-        const update = this.transcriptApi.enqueueSessionEventCommitted(event, id);
+    ): Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number;
+        whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>> {
+        const semantic = readSessionFollowSemanticSourceEvent({ type: 'event', data: event });
+        const evidence = semantic ? this.captureSessionFollowRuleEvidence(semantic) : null;
+        const update = this.transcriptApi.enqueueSessionEventCommitted(event, id,
+            evidence ? { [SESSION_FOLLOW_RULE_EVIDENCE_META_KEY_V1]: projectSessionFollowRuleSharedSourceEvidenceV1(evidence) } : undefined,
+            event.type === 'ready' && semantic?.kind === 'finished'
+                ? this.acceptedPendingSettlementOperationAbortController.signal : undefined,
+        ).then(result => ({ ...result, ...(result.whenCommitted && evidence ? {
+            whenCommitted: result.whenCommitted.then(commit => this.readPersonalFollowCommit(commit, evidence)),
+        } : {}) }));
         this.trackPendingUpdate(this.pendingTranscriptMessageUpdates, update);
         return update;
+    }
+
+    private async readPersonalFollowCommit(
+        commit: CommittedTranscriptOriginal | null,
+        evidence: SessionFollowRuleSourceEvidenceV1,
+    ): Promise<SessionPersonalFollowCommit | null> {
+        if (!commit || this.closed || this.metadataAuthorityKind !== 'owner') return null;
+        let result: SessionActivityChangedResult | void;
+        try {
+            result = await this.notifySessionFollowRuleMessageCommitted({
+                localId: commit.localId, seq: commit.committedSequence, evidence,
+            });
+        } catch (error) {
+            logger.debug('[API] Follow source unavailable; original personal notification retained', error);
+        }
+        return this.closed ? null : { ...commit, ...(result?.personalFollow ? { personalFollow: result.personalFollow } : {}) };
     }
 
     setOwnerActivityDelivery(delivery: 'rich_sender' | 'home_required'): void {
@@ -2762,7 +3154,8 @@ export class ApiSessionClient extends EventEmitter {
             let usePreparedValue = true;
             const result = await updateSessionMetadataWithAck({
                 signal: this.socketAckAbortController.signal,
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 ...(this.storedContentCrypto.mode === 'plain'
                     ? { sessionEncryptionMode: 'plain' as const }
@@ -2820,7 +3213,8 @@ export class ApiSessionClient extends EventEmitter {
         let usePreparedValue = true;
         const result = await updateSessionAgentStateWithAck({
             signal: this.socketAckAbortController.signal,
-            socket: this.socket as any,
+            socket: this.socket,
+            getSocket: () => this.socket,
             sessionId: this.sessionId,
             ownerActivityDelivery: this.ownerActivityDelivery,
             ...(this.storedContentCrypto.mode === 'plain'
@@ -2907,6 +3301,56 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private async updateMetadataLocked(
+        handler: (metadata: Metadata) => Metadata,
+        publisherPrecondition?: SessionMetadataPublisherPreconditionV1,
+        expectedMetadataRevision?: number,
+    ): Promise<void> {
+        let goalChanged = false;
+        let goalTransition: Readonly<{
+            before: unknown;
+            after: unknown;
+            updaterStack: string | undefined;
+        }> | undefined;
+        await this.commitMetadataLocked(metadata => {
+            // CAS may re-run the updater. Only its final successful application
+            // describes the committed transition. The client snapshot can still
+            // be stale on an unchanged legacy readback, or advance independently.
+            const previousGoal = readSessionWorkStateV1FromMetadata(metadata);
+            const updated = handler(metadata);
+            const updatedGoal = readSessionWorkStateV1FromMetadata(updated);
+            goalChanged = hasEffectiveSessionGoalChange(
+                previousGoal,
+                updatedGoal,
+            );
+            // Diagnose the actual final transition without logging objectives,
+            // summaries, native payloads or encryption material. A later CAS
+            // application replaces this observation along with the decision.
+            const describeGoals = (work: typeof previousGoal) => (work?.items ?? [])
+                .filter(item => item.kind === 'goal')
+                .map(item => ({ id: item.id, status: item.status,
+                    tokenBudget: item.tokenBudget ?? null, updatedAt: item.updatedAt }));
+            goalTransition = goalChanged ? {
+                before: describeGoals(previousGoal),
+                after: describeGoals(updatedGoal),
+                updaterStack: new Error('Committed Goal updater').stack,
+            } : undefined;
+            return updated;
+        }, publisherPrecondition, expectedMetadataRevision);
+        if (goalChanged) {
+            logger.debug('[Session Follow] Committed Goal transition', {
+                sessionId: this.sessionId,
+                ...goalTransition,
+            });
+            // Existing transcript custody/retry owns this one append. Do not await
+            // it inside metadata/outbox delivery: it may share that delivery queue.
+            // A crash between the state commit and append can lose this notice.
+            void this.enqueueSessionEventCommitted({ type: 'goal-changed' }).catch(error => {
+                logger.debug('[Session Follow] Committed Goal notice append unavailable', error);
+            });
+        }
+    }
+
+    private async commitMetadataLocked(
         handler: (metadata: Metadata) => Metadata,
         publisherPrecondition?: SessionMetadataPublisherPreconditionV1,
         expectedMetadataRevision?: number,
@@ -3042,6 +3486,7 @@ export class ApiSessionClient extends EventEmitter {
     private applySharedMetadataSnapshot(
         snapshot: SessionMetadataSharedEditorSnapshot,
     ): boolean {
+        if (!this.isMetadataSnapshotCurrent(snapshot.metadataLayoutVersion, snapshot.metadataVersion)) return false;
         const changed = this.metadataLayoutVersion !== snapshot.metadataLayoutVersion
             || this.metadataVersion !== snapshot.metadataVersion
             || !isDeepStrictEqual(this.metadata, snapshot.value.metadata);
@@ -3077,6 +3522,7 @@ export class ApiSessionClient extends EventEmitter {
     private applyMetadataEnvelopeTupleSnapshot(
         snapshot: SessionMetadataEnvelopeTupleSnapshot,
     ): boolean {
+        if (!this.isMetadataSnapshotCurrent(snapshot.metadataLayoutVersion, snapshot.metadataVersion)) return false;
         // Fresh tuple admission still runs on every read. Only a changed input wakes the runner.
         const changed = this.metadataLayoutVersion !== snapshot.metadataLayoutVersion
             || this.metadataVersion !== snapshot.metadataVersion
@@ -3092,6 +3538,14 @@ export class ApiSessionClient extends EventEmitter {
         this.agentState = snapshot.value.agentState;
         this.agentStateVersion = snapshot.agentStateVersion;
         return changed;
+    }
+
+    private isMetadataSnapshotCurrent(layoutVersion: number, version: number): boolean {
+        // A refresh admitted before a metadata write can finish after its ACK.
+        // Keep the acknowledged tuple, including after a layout-0 → layout-1 write.
+        // Equal revisions may still repair a missing or incomplete local projection.
+        return layoutVersion > this.metadataLayoutVersion
+            || (layoutVersion === this.metadataLayoutVersion && version >= this.metadataVersion);
     }
 
     private getTranscriptQueryContext(): Readonly<
@@ -3155,7 +3609,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     /** Current server-owned worker/origin projection, never role metadata lineage. */
-    async readRolePromptOrganization(signal?: AbortSignal): Promise<Pick<import('@happier-dev/protocol').V2SessionByIdResponse['session'], 'reportsTo' | 'origin'>> {
+    async readRolePromptOrganization(signal?: AbortSignal): Promise<Pick<import('@happier-dev/protocol').V2SessionByIdResponse['session'], 'manager' | 'origin'>> {
         signal?.throwIfAborted();
         if (this.snapshotSyncInFlight) await this.snapshotSyncInFlight;
         signal?.throwIfAborted();
@@ -3164,7 +3618,10 @@ export class ApiSessionClient extends EventEmitter {
 
     /** Projection of the host lifecycle's exact begin facts for Action/MCP callers. */
     observeHostTurnFacts(input: Readonly<{ turnId: string; facts: import('@happier-dev/protocol').SessionTurnFactsV1 | null }>): void {
-        if (input.facts) this.hostCurrentTurnFacts = { turnId: input.turnId, facts: input.facts };
+        if (input.facts) {
+            this.questionWaitTurnId = null;
+            this.hostCurrentTurnFacts = { turnId: input.turnId, facts: input.facts };
+        }
         else if (this.hostCurrentTurnFacts?.turnId === input.turnId) this.hostCurrentTurnFacts = null;
     }
 
@@ -3882,18 +4339,149 @@ export class ApiSessionClient extends EventEmitter {
         return (await this.readCurrentPublisherPrecondition()) !== null;
     }
 
+    /** Publish for one original obligation from its actual admitted receiving turn. */
+    async publishSessionMessageReply(input: Readonly<{
+        requestLocalId: string;
+        reply: SessionMessageExplicitReplyV1;
+        /** Host-derived Action witness, including a Session-owned Run's native turn. */
+        sourceTurnId?: string;
+    }>, options?: Readonly<{ signal?: AbortSignal }>): Promise<SessionMessageReplyMutationResultV1> {
+        const reply = SessionMessageExplicitReplyV1Schema.parse(input.reply);
+        const signal = options?.signal ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+            : this.socketAckAbortController.signal;
+        const actorTurnId = input.sourceTurnId ?? this.hostCurrentTurnFacts?.turnId;
+        const isCurrent = () => !this.closed && !signal.aborted
+            && (input.sourceTurnId !== undefined || this.hostCurrentTurnFacts?.turnId === actorTurnId);
+        if (!actorTurnId || !isCurrent()) return { v: 1, ok: false, error: 'conflict' };
+        const original = await this.runSessionRequest(() => readSessionMessageReply({ credentials: { token: this.token },
+            sessionId: this.sessionId, localId: input.requestLocalId, signal }));
+        if (original.status !== 'available') return { v: 1, ok: false, error: 'unavailable' };
+        const { progress } = original;
+        if (progress.acceptedTurnId !== actorTurnId || !isCurrent()) return { v: 1, ok: false, error: 'conflict' };
+        if (original.recipient && !original.sidechainId) return { v: 1, ok: false, error: 'unavailable' };
+        let outcome: SessionMessageReplyOutcomeV1;
+        if (reply.kind === 'pass') {
+            outcome = { kind: 'pass' };
+        } else {
+            const localId = deriveSessionMessageReplyAnswerLocalIdV1({ sessionId: this.sessionId,
+                localId: input.requestLocalId, acceptedTurnId: actorTurnId });
+            const lookup = () => this.readCommittedTranscriptMessageByLocalId(localId, { signal });
+            let committed = await lookup();
+            if (committed.type === 'not_found') {
+                if (progress.outcome || !isCurrent()) return { v: 1, ok: false, error: 'conflict' };
+                const requestMessage = await this.readCommittedTranscriptMessageByLocalId(input.requestLocalId, { signal });
+                if (requestMessage.type !== 'found') return { v: 1, ok: false, error: 'unavailable' };
+                const requestContent = openSessionMessageContent({ ...this.getStoredContentEncryptionContext(), content: requestMessage.message.content });
+                const requestMeta = readRecordProperty(requestContent, 'meta');
+                const persona = { serverId: this.serverBinding.serverId, sessionId: this.sessionId };
+                const attribution = deriveSessionInputActionRequestAttributionV1({
+                    requestRef: requestMessage.message.localId, persona,
+                    messageRole: requestMessage.message.messageRole,
+                    inputAdmissionReceipt: requestMessage.message.inputAdmissionReceipt,
+                    inputAuthority: readSessionInputAuthority(requestMeta, 'stored'),
+                    origin: { kind: 'session', session: persona, messageId: requestMessage.message.id },
+                });
+                const publication = await this.enqueueAgentMessageCommitted('happier', {
+                    type: 'message', message: reply.message,
+                    ...(original.sidechainId ? { sidechainId: original.sidechainId } : {}),
+                }, { localId, provenance: { kind: 'non_dependent', source: 'external' },
+                    ...(attribution ? { meta: { actionRequestAttributionV1: attribution } } : {}),
+                    admission: { signal, requireDelivery: true } });
+                if (!publication.persisted || !publication.delivered) return { v: 1, ok: false, error: 'unavailable' };
+                committed = await lookup();
+            }
+            if (committed.type !== 'found') return { v: 1, ok: false, error: 'unavailable' };
+            const content = openSessionMessageContent({ ...this.getStoredContentEncryptionContext(), content: committed.message.content });
+            const answer = extractAssistantTextSnapshotFromSessionContent(content);
+            if (!answer || answer.text !== reply.message.trim() || committed.message.sidechainId !== (original.sidechainId ?? null)) {
+                return { v: 1, ok: false, error: 'conflict' };
+            }
+            outcome = { kind: 'answer', result: { sessionId: this.sessionId, messageId: committed.message.id } };
+        }
+        if (!isCurrent()) return { v: 1, ok: false, error: 'conflict' };
+        return this.mutateSessionMessageReply({ requestSessionId: this.sessionId, requestLocalId: input.requestLocalId,
+            operation: { kind: 'fulfill', turnId: actorTurnId, outcome } }, { signal });
+    }
+
+    /** Release only obligations admitted from this Session's exact source input and turn. */
+    async releaseSessionMessageReplySourceTurn(input: Readonly<{
+        sourceTurnId: string;
+        sourceInputId: string;
+    }>, options?: Readonly<{ signal?: AbortSignal }>): Promise<SessionMessageReplySourceTurnReleaseResultV1> {
+        const signal = options?.signal
+            ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+            : this.socketAckAbortController.signal;
+        if (this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
+        const supported = await this.runSessionRequest(() => supportsSessionMessageReply({
+            credentials: { token: this.token }, sessionId: this.sessionId, signal,
+        }));
+        if (!supported || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
+        const raw = await emitSocketWithAck<unknown>({
+            socket: this.socket,
+            event: SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1,
+            timeoutMs: null,
+            signal,
+            payload: SessionMessageReplySourceTurnReleaseV1Schema.parse({ ...input, v: 1, sessionId: this.sessionId }),
+        });
+        return SessionMessageReplySourceTurnReleaseResultV1Schema.parse(raw);
+    }
+
+    /** Mutate only the original input through this authenticated Session publisher. */
+    async mutateSessionMessageReply(input: Readonly<{
+        requestSessionId: string;
+        requestLocalId: string;
+        operation: SessionMessageReplyOperationV1;
+    }>, options?: Readonly<{ signal?: AbortSignal }>): Promise<SessionMessageReplyMutationResultV1> {
+        const signal = options?.signal
+            ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+            : this.socketAckAbortController.signal;
+        if (this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
+        const supported = await this.runSessionRequest(() => supportsSessionMessageReply({
+            credentials: { token: this.token }, sessionId: this.sessionId, signal,
+        }));
+        if (!supported || this.closed || signal.aborted) return { v: 1, ok: false, error: 'unavailable' };
+        const raw = await emitSocketWithAck<unknown>({
+            socket: this.socket,
+            event: SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1,
+            timeoutMs: null,
+            signal,
+            payload: SessionMessageReplyMutationV1Schema.parse({ ...input, v: 1, sessionId: this.sessionId }),
+        });
+        return SessionMessageReplyMutationResultV1Schema.parse(raw);
+    }
+
     /** Observe content-free Follow progress for this authenticated destination Session. */
-    async observePendingSessionFollow() {
+    async observePendingSessionFollow(options?: Readonly<{
+        signal?: AbortSignal;
+        inputLocalIds?: SessionFollowObservePendingRequestV1['inputLocalIds'];
+        wakeAdmission?: Omit<NonNullable<SessionFollowObservePendingRequestV1['wakeAdmission']>, 'autonomousCheckIn'>;
+    }>) {
+        const supportsWakeAdmission = this.supportsSessionFollowWakeAdmission();
+        // Older strict Homes may not understand the new field. Their ordinary
+        // Follow observation remains usable, but a wake must hold before effect.
+        if (options?.wakeAdmission && !supportsWakeAdmission) {
+            throw new Error('session_follow_wake_admission_unavailable');
+        }
+        const autonomousCheckIn = options?.wakeAdmission
+            ? await this.readCurrentAutonomousCheckIn() : null;
         const request = SessionFollowObservePendingRequestV1Schema.parse({
             v: 1,
             sessionId: this.sessionId,
-            includeReportsTo: true,
+            includeManager: true,
+            ...(options?.inputLocalIds?.length ? { inputLocalIds: options.inputLocalIds } : {}),
+            ...(supportsWakeAdmission ? { supportsWakeAdmission: true } : {}),
+            ...(options?.wakeAdmission ? { wakeAdmission: {
+                ...options.wakeAdmission,
+                ...(autonomousCheckIn ? { autonomousCheckIn } : {}),
+            } } : {}),
         });
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
             event: SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
             timeoutMs: null,
-            signal: this.socketAckAbortController.signal,
+            signal: options?.signal
+                ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+                : this.socketAckAbortController.signal,
             payload: request,
         });
         return SessionFollowObservePendingResponseV1Schema.parse(raw);
@@ -3918,7 +4506,8 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     /** Acknowledge one exact Follow frontier after provider acceptance. */
-    async acknowledgeSessionFollow(input: Omit<SessionFollowAcknowledgeRequestV1, 'v' | 'destinationSessionId'>) {
+    async acknowledgeSessionFollow(input: SessionFollowAcknowledgeRequestV1 extends infer Request
+        ? Request extends unknown ? Omit<Request, 'v' | 'destinationSessionId'> : never : never) {
         const request = SessionFollowAcknowledgeRequestV1Schema.parse({
             ...input,
             v: 1,
@@ -3935,7 +4524,7 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     /** Observe Account Follow sources selected for this bound Voice Session. */
-    async observePendingAccountVoiceFollow(input: Readonly<{ executionRunId: string }>) {
+    async observePendingAccountVoiceFollow(input: Readonly<{ executionRunId: string }>, options?: Readonly<{ signal?: AbortSignal }>) {
         const request = AccountVoiceFollowObservePendingRequestV1Schema.parse({
             v: 1,
             voiceSessionId: this.sessionId,
@@ -3945,7 +4534,9 @@ export class ApiSessionClient extends EventEmitter {
             socket: this.socket as any,
             event: ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1,
             timeoutMs: null,
-            signal: this.socketAckAbortController.signal,
+            signal: options?.signal
+                ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+                : this.socketAckAbortController.signal,
             payload: request,
         });
         return AccountVoiceFollowObservePendingResponseV1Schema.parse(raw);
@@ -3974,18 +4565,18 @@ export class ApiSessionClient extends EventEmitter {
      * callers cannot supply a producer projection.
      */
     async postAgentDiscussionMessage(
-        input: Omit<SessionDiscussionAgentPostRequestV1, 'v' | 'sessionId'>,
+        input: DiscussionAgentPublisherPublicationInputV1,
         options?: Readonly<{ signal?: AbortSignal }>,
     ) {
         options?.signal?.throwIfAborted();
-        const request = SessionDiscussionAgentPostRequestV1Schema.parse({
+        const request = DiscussionAgentPublisherPublicationV1Schema.parse({
             ...input,
             v: 1,
             sessionId: this.sessionId,
         });
         const raw = await emitSocketWithAck<unknown>({
             socket: this.socket as any,
-            event: SESSION_DISCUSSION_AGENT_POST_EVENT_V1,
+            event: DISCUSSION_AGENT_POST_EVENT_V1,
             timeoutMs: null,
             payload: request,
             signal: options?.signal
@@ -3993,7 +4584,7 @@ export class ApiSessionClient extends EventEmitter {
                 : this.socketAckAbortController.signal,
         });
         options?.signal?.throwIfAborted();
-        return SessionDiscussionAgentPostResponseV1Schema.parse(raw);
+        return DiscussionAgentPublisherResponseV1Schema.parse(raw);
     }
 
     private async closeRegisteredRuntimeActivityPublisher(): Promise<void> {
@@ -4063,6 +4654,10 @@ export class ApiSessionClient extends EventEmitter {
         }
     }
 
+    async disposeExecutionRuns(): Promise<void> {
+        await this.sessionHandlersRegistration.disposeExecutionRuns();
+    }
+
     async close() {
         // Withdraw native controls before asynchronous disposal so startup
         // observers can produce their terminal unsupported response while the
@@ -4095,6 +4690,10 @@ export class ApiSessionClient extends EventEmitter {
                     error: serializeAxiosErrorForLog(error),
                 });
             });
+            // Runtime withdrawal settles startup controls first. Cancel remaining
+            // observers before draining so a long-lived RPC cannot hold close.
+            this.closed = true;
+            this.rpcHandlerManager.cancelTransportRequests();
             this.socketAckAbortController.abort();
             await this.interactionApi.close();
             await this.durableMutationOutbox.close();
@@ -4395,21 +4994,25 @@ export class ApiSessionClient extends EventEmitter {
         if (this.acceptedPendingSettlementLocalIdsInFlight.has(localId)) return;
         this.acceptedPendingSettlementLocalIdsInFlight.add(localId);
         try {
-            for (let attempt = 0; attempt < 2; attempt += 1) {
+            // Keep the accepted localId in one settlement operation until commit or authority ends.
+            // Retrying settlement never invokes provider input.
+            for (let attempt = 0; ; attempt += 1) {
                 if (!this.isAcceptedPendingSettlementOperationCurrent(authority, localId)) return;
                 try {
-                    const acceptedDelivery = this.acceptedPendingSettlementLocalIds.get(localId);
+                    const accepted = this.acceptedPendingSettlementLocalIds.get(localId);
                     const result = authority.executionRun ? await resolveAcceptedPendingExecutionRunDelivery({
                         socket: authority.socket, sessionId: this.sessionId, localId,
                         signal: authority.abortSignal,
                         recipient: authority.executionRun.recipient, sidechainId: authority.executionRun.sidechainId,
-                        ...(acceptedDelivery === undefined ? {} : { acceptedDelivery }),
+                        ...(accepted?.acceptedDelivery === undefined ? {} : { acceptedDelivery: accepted.acceptedDelivery }),
+                        ...(accepted?.acceptedTurn === undefined ? {} : { acceptedTurn: accepted.acceptedTurn }),
                     }) : await resolveAcceptedPendingQueueV2Delivery({
                         socket: authority.socket,
                         sessionId: this.sessionId,
                         localId,
                         signal: authority.abortSignal,
-                        ...(acceptedDelivery === undefined ? {} : { acceptedDelivery }),
+                        ...(accepted?.acceptedDelivery === undefined ? {} : { acceptedDelivery: accepted.acceptedDelivery }),
+                        ...(accepted?.acceptedTurn === undefined ? {} : { acceptedTurn: accepted.acceptedTurn }),
                     });
                     if (!this.isAcceptedPendingSettlementOperationCurrent(authority, localId)) return;
                     if (!authority.executionRun && result.pendingQueueState && this.materializationRuntime.applyPendingQueueState(result.pendingQueueState)) {
@@ -4446,19 +5049,11 @@ export class ApiSessionClient extends EventEmitter {
                         error: serializedError,
                     });
                     if (!this.isAcceptedPendingSettlementOperationCurrent(authority, localId)) return;
-                    if (attempt > 0) {
-                        logger.infoFile('[pendingQueue] accepted provider-input settlement remains unresolved', {
-                            sessionId: this.sessionId,
-                            localId,
-                            reason: 'settlement_error',
-                            attempt: attempt + 1,
-                            error: serializedError,
-                        });
-                        return;
-                    }
                     const retryDirective = readAcceptedPendingQueueV2DeliveryRetryDirective(error);
                     const isResponseLoss = isAcceptedPendingQueueV2DeliveryAckResponseLoss(error);
-                    if (!retryDirective && !isResponseLoss) {
+                    const isInternalFailure = error instanceof PendingQueueAcceptedSettlementError
+                        && error.settlementError === 'internal';
+                    if (!retryDirective && !isResponseLoss && !isInternalFailure) {
                         logger.infoFile('[pendingQueue] accepted provider-input settlement remains unresolved', {
                             sessionId: this.sessionId,
                             localId,
@@ -4471,6 +5066,13 @@ export class ApiSessionClient extends EventEmitter {
                     const retryAfterMs = retryDirective
                         ? Math.min(60_000, Math.max(250, retryDirective.retryAfterMs))
                         : 1_000;
+                    logger.infoFile('[pendingQueue] accepted provider-input settlement retry scheduled', {
+                        sessionId: this.sessionId,
+                        localId,
+                        attempt: attempt + 1,
+                        retryAfterMs,
+                        error: serializedError,
+                    });
                     await delayUnrefAbortable(retryAfterMs, authority.abortSignal);
                 }
             }
@@ -4577,7 +5179,10 @@ export class ApiSessionClient extends EventEmitter {
                             ? { t: 'encrypted', c: payload }
                             : { t: 'plain', v: facts.data };
                     }
-                    this.acceptedPendingSettlementLocalIds.set(localId, acceptedDelivery);
+                    this.acceptedPendingSettlementLocalIds.set(localId, {
+                        ...(acceptedDelivery === undefined ? {} : { acceptedDelivery }),
+                        ...(facts.success ? { acceptedTurn: facts.data.delivery } : {}),
+                    });
                 }
                 if (outcome.appliedModel && !executionRun) {
                     const appliedModel = SessionAppliedModelV1Schema.parse({

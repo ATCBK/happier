@@ -77,18 +77,34 @@ function isUnsupportedHttpError(error: unknown): boolean {
     return status === 404 || status === 405 || status === 501;
 }
 
-function isInactiveSessionRecord(value: unknown, sessionId: string): boolean {
-    if (!value || typeof value !== 'object') return false;
+type SessionEndDisposition = 'settled' | 'current' | 'unavailable';
+
+function readSessionEndDisposition(value: unknown, mutation: SessionEndMutationV1): SessionEndDisposition {
+    if (!value || typeof value !== 'object') return 'unavailable';
     const record = value as Record<string, unknown>;
-    return record.id === sessionId && record.active === false;
+    if (record.id !== mutation.sessionId) return 'unavailable';
+    if (record.active === false) return 'settled';
+    if (record.active !== true || typeof record.activeAt !== 'number'
+        || !Number.isSafeInteger(record.activeAt) || record.activeAt < 0) return 'unavailable';
+    // A retained end belongs to the publisher that authored it. Resuming after
+    // that observation supersedes it; a refreshed legacy timestamp must never
+    // turn it into an end of the new publisher.
+    return record.activeAt > mutation.observedAt ? 'settled' : 'current';
 }
 
-function readInactiveSessionProof(body: unknown, sessionId: string): boolean {
-    if (!body || typeof body !== 'object') return false;
+function readSessionEndProof(body: unknown, mutation: SessionEndMutationV1): SessionEndDisposition {
+    if (!body || typeof body !== 'object') return 'unavailable';
     const record = body as Record<string, unknown>;
-    if (isInactiveSessionRecord(record.session, sessionId)) return true;
+    const direct = readSessionEndDisposition(record.session, mutation);
+    if (direct !== 'unavailable') return direct;
     const sessions = record.sessions;
-    return Array.isArray(sessions) && sessions.some((session) => isInactiveSessionRecord(session, sessionId));
+    if (Array.isArray(sessions)) {
+        for (const session of sessions) {
+            const disposition = readSessionEndDisposition(session, mutation);
+            if (disposition !== 'unavailable') return disposition;
+        }
+    }
+    return 'unavailable';
 }
 
 async function trySocketAckSessionEnd(params: Readonly<{
@@ -114,15 +130,15 @@ async function trySocketAckSessionEnd(params: Readonly<{
 async function fetchSessionEndProof(params: Readonly<{
     serverUrl: string;
     token: string;
-    sessionId: string;
-}>): Promise<boolean> {
+    mutation: SessionEndMutationV1;
+}>): Promise<SessionEndDisposition> {
     const headers = {
         ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
         Authorization: `Bearer ${params.token}`,
         'X-Happier-Request-Purpose': 'session-detail:legacy-compat-proof',
     };
     const urls = [
-        `${params.serverUrl}/v2/sessions/${encodeURIComponent(params.sessionId)}`,
+        `${params.serverUrl}/v2/sessions/${encodeURIComponent(params.mutation.sessionId)}`,
         `${params.serverUrl}/v1/sessions`,
     ];
     for (const url of urls) {
@@ -131,14 +147,13 @@ async function fetchSessionEndProof(params: Readonly<{
                 headers,
                 timeout: 10_000,
             });
-            if (readInactiveSessionProof(response?.data, params.sessionId)) {
-                return true;
-            }
+            const disposition = readSessionEndProof(response?.data, params.mutation);
+            if (disposition !== 'unavailable') return disposition;
         } catch (error) {
             if (isAuthenticationError(error)) throw error;
         }
     }
-    return false;
+    return 'unavailable';
 }
 
 export async function deliverSessionEndMutation(params: Readonly<{
@@ -170,6 +185,10 @@ export async function deliverSessionEndMutation(params: Readonly<{
         } catch (error) {
             if (isAuthenticationError(error)) throw error;
             if (isUnsupportedHttpError(error)) {
+                const proof = { serverUrl, token: params.token, mutation: params.mutation };
+                const disposition = await fetchSessionEndProof(proof);
+                if (disposition === 'settled') return true;
+                if (disposition !== 'current') return false;
                 // Released v0.2.1 accepts this unacknowledged compatibility event only
                 // within a bounded wall-clock window. Keep the durable observation
                 // immutable, but timestamp each legacy delivery attempt so it remains
@@ -184,11 +203,7 @@ export async function deliverSessionEndMutation(params: Readonly<{
                         return true;
                     }
                     params.socket.emit('session-end', payload);
-                    return await fetchSessionEndProof({
-                        serverUrl,
-                        token: params.token,
-                        sessionId: params.mutation.sessionId,
-                    });
+                    return await fetchSessionEndProof(proof) === 'settled';
                 }
                 return false;
             }

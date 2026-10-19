@@ -3,6 +3,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { createKeyedStreamedTranscriptBridge } from './createKeyedStreamedTranscriptBridge';
 
 describe('keyed transcript recovery', () => {
+  it('retains the exact foreground turn on a named final and an unnamed final checkpoint', async () => {
+    const committed: { localId: string; turnId: unknown }[] = [];
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex',
+      initialCheckpointDelayMs: 60_000,
+      createSessionForStream: () => ({
+        enqueueAgentMessageCommitted: async (_provider, _body, options) => {
+          committed.push({ localId: options.localId, turnId: options.meta?.runtimeTurnId });
+          return { persisted: true, delivered: true };
+        },
+      }),
+    });
+    try {
+      bridge.appendAssistantDelta({ streamKey: 'first', sidechainId: null, foregroundTurnId: 'first-turn', messageId: 'first-message', deltaText: 'First' });
+      bridge.appendAssistantDelta({ streamKey: 'second', sidechainId: null, foregroundTurnId: 'second-turn', deltaText: 'Second' });
+      await bridge.flushAll({ reason: 'turn-end' });
+      expect([...new Map(committed.map(row => [row.localId, row])).values()]).toEqual([
+        { localId: 'first-message', turnId: 'first-turn' },
+        { localId: expect.any(String), turnId: 'second-turn' },
+      ]);
+    } finally { bridge.clear(); }
+  });
+
   it('flushes only selected stream scope and leaves child text open for later deltas', async () => {
     vi.useFakeTimers();
     const stored: unknown[] = [];

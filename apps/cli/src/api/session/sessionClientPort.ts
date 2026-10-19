@@ -1,4 +1,5 @@
 import type { RpcHandlerManagerLike } from '@/api/rpc/types';
+import type { QuestionSessionSnapshot } from '@/agent/permissions/sessionQuestionManager';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
 import type { AgentState, Metadata } from '../types';
 import type {
@@ -11,7 +12,7 @@ import type {
   SessionPermissionMediationRecordStored,
   SessionPermissionMediationRecordWriteRequest,
 } from '@happier-dev/protocol';
-import type { CommittedTranscriptMessageOptions } from './transcriptPort';
+import type { CommittedTranscriptMessageOptions, CommittedTranscriptUserMessageOptions } from './transcriptPort';
 import type {
   SessionEncryptionContext,
   SessionStoredContentEncryptionMode,
@@ -26,6 +27,11 @@ import type {
 } from './pendingQueueV2Transport';
 import type { CommittedUserMessageSeqListener } from './committedUserMessageSeqTracker';
 import type { CommittedTranscriptLocalIdBaseline } from './client/transcript/committedTranscriptLocalIdBaseline';
+import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
+
+/** Source-local notification continuation; the outbox still owns commit and cancellation. */
+export type SessionPersonalFollowCommit = Readonly<{ localId: string; committedSequence: number;
+  personalFollow?: SessionActivityChangedResult['personalFollow'] }>;
 
 export type MaterializeNextPendingResult =
   | {
@@ -74,23 +80,28 @@ export type UserMessageLocalConsumptionQuery = Readonly<{
 export interface SessionClientPort {
   sessionId: string;
   rpcHandlerManager: RpcHandlerManagerLike;
+  readQuestionSessionSnapshot?(sessionId: string): Promise<QuestionSessionSnapshot | null>;
+  yieldQuestionTurn?(sourceTurnId: string): Promise<boolean>;
+  readQuestionWaitTurnId?(): string | null;
+  clearQuestionWaitTurn?(sourceTurnIds?: readonly string[]): void | Promise<void>;
 
   enqueueSessionEventCommitted?(
     event: SessionEventMessage,
     id?: string,
-  ): Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number }>>;
+  ): Promise<Readonly<{ persisted: boolean; delivered: boolean; localId?: string; committedSequence?: number;
+    personalFollow?: SessionActivityChangedResult['personalFollow']; whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>>;
   enqueueUserTextMessageCommitted?(
     text: string,
-    opts: CommittedTranscriptMessageOptions,
+    opts: CommittedTranscriptUserMessageOptions,
   ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
   enqueueAgentMessageCommitted?(
     provider: ACPProvider,
     body: ACPMessageData,
     opts: CommittedTranscriptMessageOptions,
-  ): Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
+  ): Promise<Readonly<{ persisted: boolean; delivered: boolean; committedSequence?: number;
+    personalFollow?: SessionActivityChangedResult['personalFollow']; whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>>;
   fetchCommittedTranscriptLocalIdBaseline?(
     opts?: {
-      take?: number;
       signal?: AbortSignal;
       deadlineAtMs?: number;
     },

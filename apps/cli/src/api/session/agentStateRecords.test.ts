@@ -2,20 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentState } from '@/api/types';
 
-import { applyAgentStatePublishedRequest, applyAgentStateRequestPushNotifiedAt, cloneStringKeyedRecordToNullProto } from './agentStateRecords';
+import { applyAgentStateRequestPushNotifiedAt, cloneStringKeyedRecordToNullProto } from './agentStateRecords';
 
 describe('agentStateRecords', () => {
-  it('keeps the request creation time when a permission request is mirrored again', () => {
-    const first = applyAgentStatePublishedRequest({
-      state: {}, requestId: 'permission-1', toolName: 'Read', toolArguments: {},
-      createdAtMs: 10, kind: 'read', source: 'acp',
-    });
-    const second = applyAgentStatePublishedRequest({
-      state: first, requestId: 'permission-1', toolName: 'Read', toolArguments: {},
-      createdAtMs: 20, kind: 'read', source: 'acp',
-    });
-    expect(second.requests?.['permission-1']?.createdAt).toBe(10);
-  });
   it('clones records to null-prototype objects (including __proto__ keys)', () => {
     const input = JSON.parse('{"a":1,"__proto__":{"polluted":true}}') as Record<string, unknown>;
     const cloned = cloneStringKeyedRecordToNullProto(input);

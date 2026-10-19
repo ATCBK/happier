@@ -8,6 +8,19 @@ const LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE = localPermissionBridgeCoverageOpti
 const LOCAL_PERMISSION_BRIDGE_STOPPED_REASON = localPermissionBridgeCoverageOptions.equivalentCompletedReasons?.[0] ?? '';
 
 describe('deriveActivitySummaryFromAgentState', () => {
+  it('projects question delivery intent without disclosing its assumption or manager identity', () => {
+    const question = { tool: 'AskUserQuestion', kind: 'user_action' as const,
+      arguments: {}, createdAt: 200, turnId: 'turn_1',
+      questionV1: { mode: 'continue' as const, assumption: 'private fallback', lasting: false, type: 'blocked' as const },
+      currentHandler: { kind: 'session' as const, sessionId: 'private-manager' } };
+    const summary = deriveActivitySummaryFromAgentState({ requests: { question } });
+    expect(summary.newUserActionRequiredOccurrences).toEqual([{
+      requestId: 'question', sourceTurnId: 'turn_1', requestKind: 'user_action', occurredAt: 200,
+      followEvent: { kind: 'needs_you', type: 'blocked', mode: 'continue', handling: 'manager' },
+    }]);
+    expect(JSON.stringify(summary)).not.toContain('private fallback');
+    expect(JSON.stringify(summary)).not.toContain('private-manager');
+  });
   it('counts Action confirmations as approval attention without changing their user-action shape', () => {
     const confirmation = { tool: 'Happier Action confirmation', kind: 'user_action' as const,
       source: 'happier_action', arguments: {}, createdAt: 100 };

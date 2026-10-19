@@ -35,6 +35,8 @@ function readCanonicalUserTextMessage(params: Readonly<{
     if (content.type !== 'text' || typeof content.text !== 'string') return null;
     const parsed = UserMessageSchema.safeParse({
         ...body,
+        // This released carrier has no authenticated requester receipt.
+        actionRequestAttributionV1: undefined,
         localId: params.localId,
         createdAt: params.createdAt,
     });

@@ -4,12 +4,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { buildBackendTargetKeyV2, FeaturesResponseSchema, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { ApiMachineClient } from '@/api/apiMachine';
+import { ApiSessionClient } from '@/api/session/sessionClient';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createPlainSessionFixture } from '@/testkit/backends/sessionFixtures';
+import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
+import { createWorkspaceWritesPolicyPreparation } from '@/session/roles/workspaceWritesPolicyPreparation';
+import { RoleActionOutputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
 import { configuration } from '@/configuration';
 import * as persistence from '@/persistence';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -28,6 +36,7 @@ import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { registerSessionClientRuntimeHandlers } from './registerSessionClientRuntimeHandlers';
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
+import { logger } from '@/ui/logger';
 
 const homes: Server[] = [];
 
@@ -46,18 +55,28 @@ afterEach(async () => {
   })));
 });
 
-async function home(settingsVersion: number, rawSettings: Readonly<Record<string, unknown>>, roleCatalog = false) {
+async function home(settingsVersion: number, rawSettings: Readonly<Record<string, unknown>>, roleCatalog = false, usageLimitRecovery?: boolean,
+  onStalledMutation?: () => void) {
   const settingsResponse = AccountSettingsV2GetResponseSchema.parse({
     version: settingsVersion, content: { t: 'plain', v: rawSettings },
   });
   const requests: Array<Readonly<{ method: string | undefined; path: string | undefined;
     authorization: string | undefined; settingsResponse?: typeof settingsResponse }>> = [];
   const server = createServer((request, response) => {
+    if (onStalledMutation && request.method === 'POST' && request.url === '/v2/sessions/access-grants/set') {
+      request.resume();
+      request.on('end', onStalledMutation);
+      return;
+    }
     const isSettingsRead = request.method === 'GET' && request.url === '/v2/account/settings';
     requests.push({ method: request.method, path: request.url, authorization: request.headers.authorization,
       ...(isSettingsRead ? { settingsResponse } : {}) });
     response.setHeader('Content-Type', 'application/json');
-    if (isSettingsRead) {
+    if (usageLimitRecovery !== undefined && request.url === '/v1/features') {
+      response.end(JSON.stringify(FeaturesResponseSchema.parse({ features: { sessions: {
+        enabled: true, usageLimitRecovery: { enabled: usageLimitRecovery },
+      } } })));
+    } else if (isSettingsRead) {
       response.once('finish', () => server.emit('settings-read'));
       response.end(JSON.stringify(settingsResponse));
     }
@@ -82,10 +101,148 @@ async function home(settingsVersion: number, rawSettings: Readonly<Record<string
   await once(server, 'listening');
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Missing Home loopback address');
-  return { url: `http://127.0.0.1:${address.port}`, requests, settingsResponse, settingsRead };
+  return { url: `http://127.0.0.1:${address.port}`, requests, settingsResponse, settingsRead, server };
 }
 
 describe('Session RPC owner Home Settings custody', () => {
+  it.each(['invocation', 'retirement'] as const)('cancels an issued Team visibility mutation on %s and preserves uncertainty', async lifetime => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    let accepted!: () => void;
+    const mutationAccepted = new Promise<void>(resolve => { accepted = resolve; });
+    let mutationIssued = false;
+    const credentials = { token: accountToken('team-owner'), encryption: null } as const;
+    const owner = await home(11, {}, false, undefined, () => { mutationIssued = true; accepted(); });
+    const sessionId = 'team-owner-session';
+    const metadata = createTestMetadata({});
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
+    const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+    const registration = registerSessionClientRuntimeHandlers({
+      rpcHandlerManager: rpc, token: credentials.token, serverId: 'team-home', serverUrl: owner.url,
+      readOwnerAccountCredentials: async () => credentials,
+      metadataPath: metadata.path, metadata, sessionId, getSessionMetadata: () => metadata,
+      enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
+      enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
+      sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    const controller = new AbortController();
+    const selection = { kind: 'team_credential_provider_model' as const, resourceId: 'resource', teamId: 'team',
+      expectedResourceRevision: 7, agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }),
+      modelId: 'team-model', deliveryMode: 'brokered' };
+    const pending = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {
+      sessionId,
+      intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, instructions: 'Delegate.',
+      permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+      modelId: selection.modelId, teamCredentialModel: selection,
+      teamCredentialSessionBindingConsent: { v: 1, sessionId, teamId: selection.teamId,
+        resourceId: selection.resourceId, expectedResourceRevision: selection.expectedResourceRevision },
+    }, { signal: controller.signal, verifiedPeerAuthority: 'present_user' });
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([pending, mutationAccepted.then(async () => {
+        if (lifetime === 'invocation') controller.abort();
+        else void registration.dispose();
+        return await pending;
+      }), new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('Team visibility cancellation did not settle HTTP')), 2000);
+      })]);
+      expect(mutationIssued).toBe(true);
+      expect(result).toMatchObject({ ok: false, errorCode: 'outcome_unknown',
+        details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+    } finally {
+      clearTimeout(watchdog);
+      owner.server.closeAllConnections();
+      await pending;
+      await registration.dispose();
+    }
+  });
+  it.each([true, false])('uses the captured Home usage-limit feature decision when the focused Home disagrees (owner enabled=%s)', async ownerEnabled => {
+    vi.stubEnv('HAPPIER_BUILD_FEATURES_ALLOW', 'sessions,sessions.usageLimitRecovery');
+    vi.stubEnv('HAPPIER_BUILD_FEATURES_DENY', '');
+    const ownerCredentials = { token: accountToken('usage-feature-owner'), encryption: null } as const;
+    const owner = await home(11, {}, false, ownerEnabled);
+    const focused = await home(99, {}, false, !ownerEnabled);
+    const sessionId = 'usage-feature-owner-session';
+    const metadata = createTestMetadata({ machineId: 'usage-feature-owner-machine',
+      sessionUsageLimitRecoveryV1: SessionUsageLimitRecoveryV1Schema.parse({
+        v: 1, status: 'waiting', resumePromptMode: 'standard', issueFingerprint: 'usage-limit:feature-owner',
+        armedAtMs: 1_000, resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0,
+        maxAttempts: 3, lastProbeError: null, selectedAuth: { kind: 'native' },
+        runtimeAuthRecoveryAttemptId: 'runtime-auth-attempt:feature-owner',
+      }),
+    });
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
+    const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+    const registration = registerSessionClientRuntimeHandlers({
+      rpcHandlerManager: rpc, token: ownerCredentials.token, serverId: 'usage-feature-owner-home', serverUrl: owner.url,
+      readOwnerAccountCredentials: async () => ownerCredentials,
+      metadataPath: metadata.path, metadata, sessionId, getSessionMetadata: () => metadata,
+      enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
+      enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
+      sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    try {
+      await runWithServerHttpBaseUrl(focused.url, async () => {
+        await expect(rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, { sessionId }))
+          .resolves.toMatchObject({ ok: false, errorCode: ownerEnabled
+            ? 'session_usage_limit_recovery_control_target_machine_unavailable' : 'feature_disabled' });
+        expect(owner.requests).toContainEqual({ method: 'GET', path: '/v1/features', authorization: undefined });
+        const machineRequests = owner.requests.filter(request => request.path?.startsWith('/v1/machines/'));
+        expect(machineRequests).toEqual(ownerEnabled ? [{ method: 'GET', path: '/v1/machines/usage-feature-owner-machine',
+          authorization: `Bearer ${ownerCredentials.token}` }] : []);
+        expect(focused.requests).toEqual([]);
+      });
+    } finally { await registration.dispose(); }
+  });
+  it('routes a live usage-limit check with current owner credentials to its captured Home', async () => {
+    vi.stubEnv('HAPPIER_BUILD_FEATURES_ALLOW', 'sessions,sessions.usageLimitRecovery');
+    vi.stubEnv('HAPPIER_BUILD_FEATURES_DENY', '');
+    const ownerCredentials = { token: accountToken('usage-owner'), encryption: null } as const;
+    const owner = await home(11, {}, false, true);
+    const focused = await home(99, {}, false, true);
+    const sessionId = 'usage-owner-session';
+    const metadata = createTestMetadata({ machineId: 'usage-owner-machine',
+      sessionUsageLimitRecoveryV1: SessionUsageLimitRecoveryV1Schema.parse({
+        v: 1, status: 'waiting', resumePromptMode: 'standard', issueFingerprint: 'usage-limit:owner',
+        armedAtMs: 1_000, resetAtMs: 5_000, nextCheckAtMs: 5_000, attemptCount: 0,
+        maxAttempts: 3, lastProbeError: null, selectedAuth: { kind: 'native' },
+        runtimeAuthRecoveryAttemptId: 'runtime-auth-attempt:owner',
+      }),
+    });
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
+    let credentialsCurrent = true;
+    const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
+    const registration = registerSessionClientRuntimeHandlers({
+      rpcHandlerManager: rpc, token: ownerCredentials.token, serverId: 'usage-owner-home', serverUrl: owner.url,
+      readOwnerAccountCredentials: async () => credentialsCurrent ? ownerCredentials : null,
+      metadataPath: metadata.path, metadata, sessionId, getSessionMetadata: () => metadata,
+      enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
+      enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
+      sendAgentMessageEphemeral: () => { throw new Error('Unexpected ephemeral write'); },
+      getTranscriptQueryContext: () => ({ encryptionMode: 'plain' }),
+      persistVoiceAgentRunMetadataFromPublicRun: () => {}, socketEmitExecutionRunUpdated: () => {},
+    });
+    const check = () => rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, { sessionId });
+    try {
+      await runWithServerHttpBaseUrl(focused.url, async () => {
+        // The genuine HTTP boundary refuses the unavailable Machine. Its request
+        // still proves the registered route retained the Session's Home and owner.
+        await expect(check()).resolves.toMatchObject({ ok: false,
+          errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' });
+        expect(owner.requests).toContainEqual({ method: 'GET', path: '/v1/machines/usage-owner-machine',
+          authorization: `Bearer ${ownerCredentials.token}` });
+        expect(focused.requests.filter(request => request.path?.startsWith('/v1/machines/'))).toEqual([]);
+        const ownerRequestCount = owner.requests.length;
+        credentialsCurrent = false;
+        await expect(check()).resolves.toMatchObject({ ok: false,
+          errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' });
+        expect(owner.requests).toHaveLength(ownerRequestCount);
+      });
+    } finally { await registration.dispose(); }
+  });
   it('keeps an attached agentDefault start Account refusal typed without caller Machine context', async () => {
     vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
     const sessionId = 'default-child-owner-session';
@@ -113,6 +270,7 @@ describe('Session RPC owner Home Settings custody', () => {
     } finally { await registration.dispose(); }
   });
   it('sets a live Session role from its private owner without borrowing the focused Account catalog', async () => {
+    const diagnostics = vi.spyOn(logger, 'infoFile');
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
     vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_TTL_MS', '0');
     const ownerCredentials = { token: accountToken('role-owner-account'), encryption: null } as const;
@@ -129,6 +287,13 @@ describe('Session RPC owner Home Settings custody', () => {
         const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
         const sessionId = 'role-owner-session';
         const metadata = createTestMetadata({ path: directory, machineId: 'role-owner-machine' });
+        const socket = createApiSessionSocketStub();
+        const parent = new ApiSessionClient(ownerCredentials.token, createPlainSessionFixture({ id: sessionId, metadata }), {
+          metadataAuthority: { kind: 'owner', credentials: ownerCredentials },
+          transport: { serverId: 'role-owner-home', serverUrl: owner.url,
+            // Socket.IO is the external transport boundary; the Session and Role registration remain real.
+            createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
+        });
         const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
         const queued: RegisteredSessionStateFieldMutationV1[] = [];
         const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };
@@ -149,6 +314,7 @@ describe('Session RPC owner Home Settings custody', () => {
             },
           }),
           metadataPath: directory, metadata, sessionId, getSessionMetadata: () => metadata,
+          session: parent,
           enqueueRegisteredSessionStateFieldMutation: async mutation => { queued.push(mutation); },
           enqueueSessionUserMessage: unexpectedWrite, enqueueUserTextMessageCommitted: unexpectedWrite,
           enqueueAgentMessageCommitted: unexpectedWrite, enqueueVoiceAgentTranscriptTurnCommitted: unexpectedWrite,
@@ -164,20 +330,44 @@ describe('Session RPC owner Home Settings custody', () => {
           expect(focused.requests).toEqual([]);
           expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
           expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetime);
+          let nativeWorkspaceWrites: 'allow' | 'deny' = 'allow';
+          const runtimeSession = applyRunnerMcpSessionContext(parent, {
+            prepareWorkspaceWritesPolicy: createWorkspaceWritesPolicyPreparation({
+              // Native Agent configuration is the external boundary installed after Session RPC registration.
+              update: async workspaceWrites => {
+                nativeWorkspaceWrites = workspaceWrites;
+                return { status: 'applied', timing: 'current_window' };
+              },
+            }),
+          });
+          const tightened = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
+            params: { sessionId, roleId: 'scout' }, callerAuthority: 'present_user' });
+          expect(tightened).toEqual({ updated: true });
+          expect(RoleActionOutputSchemasV1['session.role.set'].parse(tightened)).toEqual({ updated: true });
+          expect(nativeWorkspaceWrites).toBe('deny');
+          expect(queued.at(-1)).toMatchObject({ sessionId, fieldId: 'intent.role', op: { kind: 'set', value: 'scout' } });
+          runtimeSession.prepareWorkspaceWritesPolicy = undefined;
+          const missingRuntime = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
+            params: { sessionId, roleId: 'scout' }, callerAuthority: 'present_user' });
+          expect(missingRuntime).toMatchObject({ ok: false, errorCode: 'role_policy_unenforceable' });
+          expect(queued).toHaveLength(2);
           const unavailableRole = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
             params: { sessionId, roleId: 'missing-role' }, callerAuthority: 'present_user' });
           expect(unavailableRole).toEqual({ ok: false, errorCode: 'role_target_unavailable',
             error: 'role_target_unavailable' });
-          expect(queued).toHaveLength(1);
+          expect(queued).toHaveLength(2);
           ownerCurrent = false;
           const retired = await rpc.handleRequest({ method: `${sessionId}:session.role.set`,
             params: { sessionId, roleId: 'scout' }, callerAuthority: 'present_user' });
           expect(retired).toEqual({ ok: false, errorCode: 'account_role_overrides_unavailable',
             error: 'account_role_overrides_unavailable' });
-          expect(queued).toHaveLength(1);
+          expect(diagnostics.mock.calls.filter(([message]) => message === '[Session] Role Action refused')).toContainEqual([
+            '[Session] Role Action refused', { originalCode: 'account_role_overrides_unavailable', reason: 'credentials-unavailable', contextSource: 'account_lifetime' },
+          ]);
+          expect(queued).toHaveLength(2);
           expect(focused.requests).toEqual([]);
           expect(getActiveAccountSettingsSnapshot()).toBe(incumbent);
-        } finally { await registration.dispose(); }
+        } finally { await registration.dispose(); await parent.close(); }
       });
     });
   });

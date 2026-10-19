@@ -23,6 +23,7 @@ export type SessionClientUpdateRuntime = Readonly<{
 
 export function createSessionClientUpdateRuntime(
     deps: Readonly<{
+        serverId: string;
         sessionId: string;
         getMetadataLayoutVersion?: () => number;
         getMetadata: () => Metadata | null;
@@ -49,6 +50,7 @@ export function createSessionClientUpdateRuntime(
         consumeLocallyAuthoredTranscriptObservationLocalId?: (localId: string) => boolean;
         turnAssistantTextSnapshotStore?: TurnAssistantTextSnapshotStore;
         onRuntimeActivityProjectionFromServer?: (projection: PendingQueueRuntimeActivityProjection) => void;
+        onArchivedAtFromServer?: (archivedAt: number | null) => void;
     }> & SessionStoredContentCryptoContext,
 ): SessionClientUpdateRuntime {
     const receivedMessageIds = new Set<string>();
@@ -89,6 +91,7 @@ export function createSessionClientUpdateRuntime(
 
                 const newMessageHandlingResult = handleSessionNewMessageUpdate({
                     update: data,
+                    serverId: deps.serverId,
                     sessionId: deps.sessionId,
                     ...(deps.mode === 'plain'
                         ? { mode: 'plain' as const, ctx: null }
@@ -164,6 +167,9 @@ export function createSessionClientUpdateRuntime(
                     deps.setMetadataVersion(stateUpdateResult.metadataVersion);
                     deps.setAgentState(stateUpdateResult.agentState);
                     deps.setAgentStateVersion(stateUpdateResult.agentStateVersion);
+                    if (body.t === 'update-session' && body.id === deps.sessionId && body.archivedAt !== undefined) {
+                        deps.onArchivedAtFromServer?.(body.archivedAt);
+                    }
                     pendingWakeSeq = stateUpdateResult.pendingWakeSeq;
                     if (stateUpdateResult.pendingQueueState) {
                         shouldEmitMetadataUpdated = deps.applyPendingQueueState(stateUpdateResult.pendingQueueState) || shouldEmitMetadataUpdated;
@@ -203,6 +209,9 @@ export function createSessionClientUpdateRuntime(
                     return;
                 }
 
+                if (body.t === 'update-session' && body.id === deps.sessionId && body.archivedAt !== undefined) {
+                    deps.onArchivedAtFromServer?.(body.archivedAt);
+                }
                 deps.emit('message', data.body);
             } catch (error) {
                 logger.debug('[SOCKET] [UPDATE] [ERROR] Error handling update', { error });

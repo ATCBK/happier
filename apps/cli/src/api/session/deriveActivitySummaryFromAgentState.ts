@@ -7,6 +7,8 @@ import { resolveAgentRequestKind } from '@/agent/permissions/requestKind';
 import { SessionUserActionRequiredOccurrenceV1Schema } from '@happier-dev/protocol/sessions/userActionRequiredOccurrenceV1';
 import { resolvePendingRequestAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import type { SessionUserActionRequiredOccurrenceV1 } from '@happier-dev/protocol';
+import { SessionQuestionContextV1Schema, SessionQuestionHandlerV1Schema } from '@happier-dev/protocol/sessions/permissions/questionV1';
+import { resolveRequestFollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 type ActivitySummary = Readonly<{
   pendingPermissionRequestCount: number;
@@ -72,7 +74,8 @@ export function deriveActivitySummaryFromAgentState(
       ? request.kind
       : resolveAgentRequestKind(toolName);
 
-    if (resolvePendingRequestAttentionReasonV1({ kind, source: request.source }) === 'user_action_required') {
+    const attentionReason = resolvePendingRequestAttentionReasonV1({ kind, source: request.source });
+    if (attentionReason === 'user_action_required') {
       pendingUserActionRequestCount += 1;
     } else {
       pendingPermissionRequestCount += 1;
@@ -94,11 +97,19 @@ export function deriveActivitySummaryFromAgentState(
       && typeof requestRecord.subagentRef === 'undefined'
       && typeof requestRecord.sidechainId !== 'string'
     ) {
+      const question = SessionQuestionContextV1Schema.safeParse(request.questionV1);
+      const handler = SessionQuestionHandlerV1Schema.safeParse(request.currentHandler);
+      if (request.questionV1 !== undefined && !question.success
+        || request.currentHandler !== undefined && !handler.success) continue;
       const occurrence = SessionUserActionRequiredOccurrenceV1Schema.safeParse({
         requestId,
         sourceTurnId: requestRecord.turnId,
         requestKind: kind,
         occurredAt: createdAt,
+        followEvent: resolveRequestFollowEventV1({
+          requestKind: attentionReason === 'permission_required' ? 'permission' : 'user_action',
+          questionV1: question.data, currentHandler: handler.data,
+        }),
       });
       if (occurrence.success) {
         newUserActionRequiredOccurrences.push(occurrence.data);

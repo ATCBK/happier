@@ -6,6 +6,7 @@ import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/librar
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { SkillReadResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillReadV1';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -45,6 +46,8 @@ it('reads the real index plan through the owning Session RPC and strict skill co
       || path === '/v1/account/entity-rows/registry-sources/transfer') response.end(JSON.stringify({ status: 'absent' }));
     else if (path === '/v1/artifacts') response.end(JSON.stringify([artifact]));
     else if (path === '/v1/artifacts/selected') response.end(JSON.stringify(artifact));
+    else if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) response.end(JSON.stringify(
+      ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] })));
     else if (path === '/v2/account/settings') response.end(JSON.stringify({ version: 1, content: { t: 'plain', v: { schemaVersion: 6 } } }));
     else { response.statusCode = 404; response.end('{}'); }
   });
@@ -70,7 +73,8 @@ it('reads the real index plan through the owning Session RPC and strict skill co
               enabled: true, createdAt: 1, updatedAt: 1 }] } } }], tombstones: [], diagnostics: [] } },
       }, { artifacts: createCredentialedAccountArtifactStore(credentials) }));
       expect(plan.plan.plan).toBe('index');
-      expect(plan.indexItems).toEqual([expect.objectContaining({ skillId: 'selected', name: 'review' })]);
+      expect(plan.indexItems, JSON.stringify({ plan: plan.plan, unavailableReason: plan.unavailableReason }))
+        .toEqual([expect.objectContaining({ skillId: 'selected', name: 'review' })]);
       let current = true;
       const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain', logger: () => {} });
       const unexpectedWrite = async (): Promise<never> => { throw new Error('Unexpected transcript write'); };

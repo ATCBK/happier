@@ -19,6 +19,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   failureRetryDelayMs?: number;
   onStreamingCommitFailure?: () => void;
   admission?: CommittedTranscriptAdmission;
+  runtimeTurnId?: string;
 }) {
   const { provider, session, segment, state, interruptedReason } = params;
 
@@ -35,15 +36,19 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   const commitTextLen = commitText.length;
   const durableLocalId = segment.segmentLocalId;
   const body = buildStreamedTranscriptSegmentSnapshotBody(segment);
-  const meta = buildStreamedTranscriptSegmentSnapshotMeta({ segment, state, interruptedReason, nowMs });
+  const meta = {
+    ...buildStreamedTranscriptSegmentSnapshotMeta({ segment, state, interruptedReason, nowMs }),
+    ...(params.runtimeTurnId ? { runtimeTurnId: params.runtimeTurnId } : {}),
+  };
 
-  const markDurablyPersisted = () => {
+  const markDurablyPersisted = (delivered: boolean) => {
     segment.didWriteDurable = true;
     segment.lastDurableText = commitText;
     segment.lastCheckpointAtMs = Date.now();
     segment.lastCheckpointTextLen = commitTextLen;
     segment.lastCommittedTextVersion = commitVersion;
     segment.lastCommittedState = state;
+    segment.lastCommittedDelivered = delivered;
     segment.appendOnlySinceLastDurableSnapshot = true;
     segment.durableRetryNotBeforeMs = 0;
     const recovered = segment.durableCommitFailure;
@@ -74,7 +79,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
           },
         })
         .then((result) => {
-          if (result.persisted && (!params.admission?.requireDelivery || result.delivered)) markDurablyPersisted();
+          if (result.persisted && (!params.admission?.requireDelivery || result.delivered)) markDurablyPersisted(result.delivered);
         });
     } else {
       throw new Error('enqueueAgentMessageCommitted unavailable');
@@ -130,6 +135,7 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
           failureRetryDelayMs: params.failureRetryDelayMs,
           onStreamingCommitFailure: params.onStreamingCommitFailure,
           admission: params.admission,
+          runtimeTurnId: params.runtimeTurnId,
         });
         return;
       }

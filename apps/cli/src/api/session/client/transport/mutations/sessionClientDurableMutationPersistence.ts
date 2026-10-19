@@ -1,9 +1,10 @@
-import { z as zClassic } from 'zod';
+import * as z from 'zod/mini';
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { join } from 'node:path';
 
 import { configuration } from '@/configuration';
+import { SessionRoleEditSchema, type SessionRoleEdit } from '@/session/roles/sessionRoleEdit';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 import { getSessionStateFieldDescriptor } from '@happier-dev/agents';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -606,6 +607,13 @@ function parseRegisteredSessionStateFieldPayload(value: unknown, stored: boolean
     }
 
     let op: RegisteredSessionStateFieldMutationV1['op'] | null = null;
+    let sessionRoleEdit: SessionRoleEdit | undefined;
+    if (value.sessionRoleEdit !== undefined) {
+        if (fieldId.data !== 'intent.sessionRoles' || value.op.kind !== 'set') return null;
+        const parsed = SessionRoleEditSchema.safeParse(value.sessionRoleEdit);
+        if (!parsed.success || parsed.data.input.sessionId !== value.sessionId) return null;
+        sessionRoleEdit = parsed.data;
+    }
     let retainedSessionContextEntry: RegisteredSessionStateFieldMutationV1['retainedSessionContextEntry'];
     if (value.retainedSessionContextEntry !== undefined) {
         if (fieldId.data !== 'intent.sessionRoles' || value.op.kind !== 'set') return null;
@@ -665,6 +673,7 @@ function parseRegisteredSessionStateFieldPayload(value: unknown, stored: boolean
         ...(typeof value.expectedMetadataRevision === 'number' ? { expectedMetadataRevision: value.expectedMetadataRevision } : {}),
         ...(dependencies.length > 0 ? { dependsOn: dependencies } : {}),
         ...(retainedSessionContextEntry ? { retainedSessionContextEntry } : {}),
+        ...(sessionRoleEdit ? { sessionRoleEdit } : {}),
     };
 }
 
@@ -679,7 +688,7 @@ function parseRegisteredSessionStateFieldValue(
     }
     if (fieldId === 'intent.memoryEnabled') return typeof value === 'boolean' ? { ok: true, value } : { ok: false };
     if (fieldId === 'intent.voicePreference') {
-        const parsed = zClassic.nullable(StoredSessionVoicePreferenceV1Schema).safeParse(value);
+        const parsed = z.nullable(StoredSessionVoicePreferenceV1Schema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'identity.runtimeDescriptor') {

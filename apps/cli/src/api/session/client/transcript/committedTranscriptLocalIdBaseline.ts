@@ -28,7 +28,6 @@ type TranscriptLocalIdBaselinePage = Readonly<{
 }>;
 
 export async function loadCommittedTranscriptLocalIdBaseline(params: Readonly<{
-  take?: number;
   localIds?: Set<string>;
   signal?: AbortSignal;
   deadlineAtMs?: number;
@@ -39,17 +38,16 @@ export async function loadCommittedTranscriptLocalIdBaseline(params: Readonly<{
     deadlineAtMs?: number;
   }>): Promise<TranscriptLocalIdBaselinePage>;
 }>): Promise<CommittedTranscriptLocalIdBaseline> {
-  const take = typeof params.take === 'number' && Number.isFinite(params.take) && params.take > 0
-    ? Math.trunc(params.take)
-    : 5_000;
   const localIds = params.localIds ?? new Set<string>();
-  let remaining = take;
   let beforeSeq: number | undefined;
   let complete = true;
 
-  while (remaining > 0) {
+  // Completeness belongs to the containing follow admission, not a total-row
+  // cutoff. Keep only identities and discard each transport page after reading.
+  for (;;) {
+    params.signal?.throwIfAborted();
     const page = await params.fetchPage({
-      limit: Math.min(500, remaining),
+      limit: 500,
       ...(beforeSeq === undefined ? {} : { beforeSeq }),
       ...(params.signal === undefined ? {} : { signal: params.signal }),
       ...(params.deadlineAtMs === undefined
@@ -63,12 +61,11 @@ export async function loadCommittedTranscriptLocalIdBaseline(params: Readonly<{
         if (sourceMessageId) localIds.add(sourceMessageId);
       }
     }
-    remaining -= page.messages.length;
     if (!page.hasMore) break;
     if (
       page.messages.length === 0
       || page.nextBeforeSeq === null
-      || remaining <= 0
+      || (beforeSeq !== undefined && page.nextBeforeSeq >= beforeSeq)
     ) {
       complete = false;
       break;
