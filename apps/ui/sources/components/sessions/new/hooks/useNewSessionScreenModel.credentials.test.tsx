@@ -45,6 +45,7 @@ import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/co
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { LMSTUDIO_PROVIDER_CONTRIBUTION } from '../../../../../../../packages/plugins/lmstudio/src/provider/contribution';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { randomUUID } from '@/platform/randomUUID';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -307,7 +308,7 @@ describe('New Session selected credential launch gate', () => {
             if (method === 'capabilities.detect') return { protocolVersion: 1, results: { 'cli.claude': { ok: true, checkedAt: Date.now(), data: nativeFacts(nativeStatus) } } };
             return { jobs: [] };
         });
-        const draftId = `credential-${scenario.native}-${scenario.connected}-${scenario.selected}`;
+        const draftId = randomUUID();
         const connectedDraft = {
             input: 'hello', selectedMachineId: machine.id, selectedPath: '/repo', targetServerId: scope.serverId,
             agentType: 'claude', acpSessionModeId: null, selectedProfileId: null, selectedSecretId: null,

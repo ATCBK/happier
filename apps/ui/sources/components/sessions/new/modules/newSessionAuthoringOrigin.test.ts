@@ -7,6 +7,7 @@ import {
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { randomUUID } from '@/platform/randomUUID';
 import { updateSessionMetadataWithRetry } from '@/sync/domains/session/metadata/updateSessionMetadataWithRetry';
 import { persistCreatedSessionAuthoringOrigin } from './newSessionAuthoringOrigin';
 
@@ -16,10 +17,11 @@ describe('created Session authoring origin', () => {
     it.each(['files', { kind: 'plugin', destination: { pluginId: 'acme.preview', localId: 'project-review' }, instanceKey: 'review-a' }] as const)
         ('hands the reopened original destination to the real owner tuple without replacing unrelated work or publishing it to recipients (%j)', async companion => {
         const scope = { serverId: 'server-a', accountId: 'account-a' };
+        const draftId = randomUUID();
         const origin = { kind: 'project', purpose: 'session', accountId: scope.accountId, page: 'overview', layoutId: 'release-dashboard',
             surface: 'tabs', companion, resource: { kind: 'file', path: 'src/a.ts' },
             workspace: { serverId: scope.serverId, workspaceId: 'workspace-a', machineId: 'original-machine', rootPath: '/original' } } as const;
-        writeNewSessionDraftToRepository({ scope, draftId: 'authoring-send', draft: {
+        writeNewSessionDraftToRepository({ scope, draftId, draft: {
             input: 'Review the changes', selectedMachineId: 'edited-machine', selectedPath: '/edited',
             targetServerId: 'server-b', selectedProfileId: null, selectedSecretId: null,
             agentType: 'codex', permissionMode: 'default', acpSessionModeId: null, updatedAt: 1,
@@ -27,7 +29,7 @@ describe('created Session authoring origin', () => {
             authoringOrigin: origin,
         } });
         resetSessionDraftRepositoryForTests();
-        const recovered = readNewSessionDraftFromRepository({ scope, draftId: 'authoring-send' });
+        const recovered = readNewSessionDraftFromRepository({ scope, draftId });
         if (!recovered?.authoringOrigin) throw new Error('Expected the reopened authoring origin');
         const metadata: Metadata = { path: '/edited', host: 'target-host', machineId: 'edited-machine',
             work: { memoryEnabled: false, viewPreferences: { showToolCalls: true } } };
