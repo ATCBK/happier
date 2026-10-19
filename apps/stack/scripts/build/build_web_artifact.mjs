@@ -213,7 +213,7 @@ export async function buildWebArtifact({
     return { artifactDir, manifest: existing };
   }
 
-  const uiDir = getComponentDir(rootDir, 'happier-ui');
+  const uiDir = getComponentDir(rootDir, 'happier-ui', env);
   await requireDir('happier-ui', uiDir);
   await ensureWebUiDependencies({ uiDir, env, ensureDepsInstalledImpl, runUiPostinstallImpl });
 

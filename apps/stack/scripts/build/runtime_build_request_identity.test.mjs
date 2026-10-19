@@ -365,6 +365,21 @@ test('server-only request identity has no web artifact dependency', async () => 
   assert.equal(result.snapshotId, null);
 });
 
+test('workspace capture admits npm glob shipped files by matching them, not by refusing the package', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-shipped-glob-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourceDir = join(root, 'source');
+  const captureDir = join(root, 'capture');
+  await mkdir(join(sourceDir, 'native'), { recursive: true });
+  await writeFile(join(sourceDir, 'package.json'), JSON.stringify({ files: ['dist', 'native/*.node'] }));
+  await writeFile(join(sourceDir, 'native/addon.linux-x64.node'), 'binary');
+  await writeFile(join(sourceDir, 'native/build.log'), 'not shipped');
+  const { files: captured } = await captureBuildInputFiles({ sourceDir, captureDir,
+    readPaths: () => readWorkspaceBuildInputs(sourceDir, { includeShippedFiles: true }),
+  });
+  assert.deepEqual(captured, ['native/addon.linux-x64.node', 'package.json']);
+});
+
 test('workspace capture includes authored root declarations without admitting tests or generated outputs', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'workspace-root-declarations-'));
   t.after(() => rm(root, { recursive: true, force: true }));

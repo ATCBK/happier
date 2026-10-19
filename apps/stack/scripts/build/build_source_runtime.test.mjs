@@ -24,12 +24,72 @@ import { resolveServerRuntimeLaunchSpec } from '../runtime/launch/resolveServerR
 import { matchesNativeTypeScriptInputVersion, resolveTypeScriptCliInvocation } from '../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 import { withWorkspaceBundleLock } from '../../../../packages/cli-common/workspaceBundleLock.mjs';
 import { isJsonOwnerFileLockActive } from '../utils/proc/jsonOwnerFileLock.mjs';
-import { readWorkspaceBuildInputs } from '../utils/fs/workspaceBuildInputs.mjs';
+import { readWorkspaceBuildInputs, readSourceComponentBuildInputs } from '../utils/fs/workspaceBuildInputs.mjs';
+import { readCliSourceEntries, readWorkspacePackages, createWorkspaceSourceResolver } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 import { captureBuildInputFiles } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs';
 import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
+
+test('component capture includes newly discovered bundled plugins and their workspace dependencies', async t => {
+  const { build, transform } = createRequire(import.meta.url)('esbuild');
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-plugin-inputs-' });
+  const repoDir = fixture.path('repo');
+  const cliDir = join(repoDir, 'apps/cli');
+  const locatorDir = join(cliDir, 'src/plugins/projection/registry/sources');
+  await mkdir(locatorDir, { recursive: true });
+  // The generated catalog has admitted a plugin absent from CLI dependencies.
+  await writeFile(join(cliDir, 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
+  await writeFile(join(cliDir, 'src/index.ts'), 'export const cli = true;');
+  for (const [directory, manifest] of [
+    ['packages/plugins/new-plugin', { name: '@happier-dev/plugins-new-plugin',
+      exports: { '.': { 'happier-source': './src/index.ts' } },
+      dependencies: { '@happier-dev/plugin-support': '0.0.0' } }],
+    ['packages/plugin-support', { name: '@happier-dev/plugin-support',
+      exports: { '.': { 'happier-source': './src/index.ts' } } }],
+    ['packages/plugins/reserved', { name: '@happier-dev/plugins-reserved',
+      happier: { pluginScaffold: { shipping: 'reservation_only' } } }],
+  ]) {
+    const root = join(repoDir, directory);
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'package.json'), JSON.stringify(manifest));
+    await writeFile(join(root, 'src/index.ts'), 'export const value = 1;');
+  }
+  await writeFile(join(repoDir, 'packages/plugins/new-plugin/src/manifest.ts'), 'export const manifest = {};');
+  await writeFile(join(repoDir, 'packages/plugins/new-plugin/src/index.ts'), 'export { value } from "@happier-dev/plugin-support";');
+  await writeFile(join(locatorDir, 'generatedBundledPluginManifests.ts'),
+    `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS = ${JSON.stringify([{
+      sourceSpec: { locator: '@happier-dev/plugins-new-plugin' },
+      daemonEntryPath: null, manifest: { runtime: {} },
+    }])};`);
+
+  for (const component of ['daemon', 'expo']) {
+    const inputs = await readSourceComponentBuildInputs({ repoDir, component });
+    assert.ok(inputs.files.includes('packages/plugins/new-plugin/src/index.ts'), component);
+    assert.ok(inputs.files.includes('packages/plugin-support/src/index.ts'), 'plugin dependency closure');
+    assert.ok(inputs.watchPaths.includes(join(repoDir, 'packages/plugins/new-plugin/src')), 'watcher shares capture membership');
+    assert.equal(inputs.files.includes('packages/plugins/reserved/src/index.ts'), false, 'reservation-only packages stay excluded');
+    const captureDir = fixture.path(component);
+    await captureBuildInputFiles({ sourceDir: repoDir, captureDir, readPaths: async () => inputs.files });
+    if (component === 'daemon') {
+      const { entries } = await readCliSourceEntries({ repoDir: captureDir, manifest: {}, transform });
+      for (const path of Object.values(entries)) {
+        assert.ok((await readFile(path, 'utf8')).length, `captured entry: ${relative(captureDir, path)}`);
+      }
+      const bundled = await build({ entryPoints: entries, outdir: fixture.path('bundled'),
+        bundle: true, write: false, platform: 'node', format: 'esm', metafile: true,
+        plugins: [createWorkspaceSourceResolver({
+          workspacePackages: await readWorkspacePackages(captureDir),
+          requireFromProject: createRequire(join(captureDir, 'apps/cli/package.json')),
+        })] });
+      assert.ok(Object.keys(bundled.metafile.inputs).some(path => path.endsWith('/packages/plugin-support/src/index.ts')));
+    }
+    assert.equal(await readFile(join(captureDir, 'packages/plugin-support/src/index.ts'), 'utf8'), 'export const value = 1;');
+  }
+  const serverInputs = await readSourceComponentBuildInputs({ repoDir, component: 'server' });
+  assert.equal(serverInputs.files.includes('packages/plugins/new-plugin/src/index.ts'), false, 'server has no bundled CLI plugin consumer');
+});
 
 test('source plugin UI publication admits complete directories to real Metro', {
   skip: process.platform === 'darwin', // macOS selects Metro's recursive native watcher, not this fallback boundary.
@@ -905,13 +965,13 @@ test('source web capture retains consumed publication policy and authored packag
   await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
   await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
     name: '@happier-dev/plugins-fixture', type: 'module', files: ['assets', '.happier-plugin'],
-    exports: { './manifest': './src/plugin.mjs' },
+    exports: { './manifest': './src/manifest.ts' },
   }));
   const manifest = {
     brand: { iconResourceId: 'brand-icon' },
     contributes: { resources: [{ id: 'brand-icon', kind: 'asset', contentType: 'image/png', path: 'assets/brand.png' }] },
   };
-  await writeFile(join(pluginRoot, 'src/plugin.mjs'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
+  await writeFile(join(pluginRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
   await writeFile(join(pluginRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
   const brandBytes = new Uint8Array([137, 80, 78, 71]);
   await writeFile(join(pluginRoot, 'assets/brand.png'), brandBytes);
@@ -922,7 +982,7 @@ test('source web capture retains consumed publication policy and authored packag
   assert.deepEqual(resolveCliPublicationBuildSteps({ repoRoot: captured.repoDir }).map(step => step.name), ['shared-deps', 'dist']);
   await assert.rejects(access(join(captured.repoDir, 'apps/cli/src/index.ts')), { code: 'ENOENT' });
   const capturedPluginRoot = join(captured.repoDir, 'packages/plugins/fixture');
-  const { PLUGIN_MANIFEST } = await import(pathToFileURL(join(capturedPluginRoot, 'src/plugin.mjs')));
+  const { PLUGIN_MANIFEST } = await import(pathToFileURL(join(capturedPluginRoot, 'src/manifest.ts')));
   const resource = PLUGIN_MANIFEST.contributes.resources.find(entry => entry.id === PLUGIN_MANIFEST.brand.iconResourceId);
   assert.deepEqual(new Uint8Array(await readFile(join(capturedPluginRoot, resource.path))), brandBytes);
   await assert.rejects(access(join(capturedPluginRoot, '.happier-plugin/plugin.json')), { code: 'ENOENT' });
@@ -1545,6 +1605,7 @@ test('source daemon stages its bundled CPX executable from captured current sour
     type: 'module', exports: { '.': { 'happier-source': './src/index.ts', default: './dist/index.js' } },
     scripts: { 'managed-runtime:build': managedBuildScript } }));
   await writeFile(join(pluginDir, 'src/index.ts'), 'export function activate() {}');
+  await writeFile(join(pluginDir, 'src/manifest.ts'), 'export const PLUGIN_MANIFEST = {};');
   await mkdir(join(cliDir, 'src/plugins/projection/registry/sources'), { recursive: true });
   await writeFile(join(cliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'),
     `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS=${JSON.stringify([{ daemonEntryPath: './dist/index.js',
@@ -1732,6 +1793,7 @@ test('source daemon owns its UI graph and bytes after checkout artifacts change'
   await writeFile(join(cliDir,'src/index.ts'),'export const ready = true; if (process.env.HAPPIER_TEST_RETAIN_SOURCE_UI === "1") { console.log("ready"); setInterval(() => {}, 1000); }');
   const manifest = {schemaVersion:2,id:'happier.fixture',version:'0.0.0',displayName:'Fixture',runtime:{apiVersion:1},hostAccess:{required:[],optional:[]},
     entrypoints:{daemon:'./dist/index.js'},contributes:{ui:{renderers:[{id:'panel',kind:'reactNative',artifact:'panel'}]}}};
+  await writeFile(join(pluginDir, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
   await writeFile(join(pluginDir,'package.json'),JSON.stringify({name:'@happier-dev/plugins-fixture',version:'0.0.0',type:'module',exports:{
     '.':{'happier-source':'./src/index.ts',default:'./dist/index.js'},
     './happier-plugin-ui/panel':{'happier-source':'./src/panel.ts',default:'./dist/happier-plugin-ui/react-native/panel/entry.cjs.bundle'},
@@ -2296,6 +2358,17 @@ test('source CLI commands preserve a pending start selection across source chang
   const command = await resolveStackRuntimeLaunchContext({ argv: ['--runtime=source'], env });
   assert.equal(command.cliLaunchSpec.entrypoint, pending.entrypoint);
   assert.equal(await readFile(selectionPath, 'utf8'), selection);
+  const remoteState = { placement: { daemon: 'remote-host' },
+    remoteTargets: { 'remote-host': { services: { daemon: true } } },
+    sourceRuntimeIdentities: { daemon: { selected: 'remote-code', loaded: 'remote-code' } } };
+  const controller = await resolveStackRuntimeLaunchContext({ argv: ['--runtime=source'], env,
+    activeRuntimeState: remoteState });
+  assert.equal(controller.cliLaunchSpec.entrypoint, pending.entrypoint,
+    'a remote daemon identity must not prevent controller CLI selection');
+  assert.equal(await readFile(selectionPath, 'utf8'), selection);
+  await assert.rejects(resolveStackRuntimeLaunchContext({ argv: ['--runtime=source'], env,
+    activeRuntimeState: { ...remoteState, placement: { daemon: 'local' } } }), /loaded source CLI.*unavailable/i,
+    'stale remote-target metadata must not bypass the local loaded-daemon guard');
   const peer = await native.build({ ...options, stackBaseDir: fixture.path('stacks/peer') });
   await access(pending.entrypoint);
   assert.equal((await import(pathToFileURL(command.cliLaunchSpec.entrypoint))).ready, 1);
@@ -2640,7 +2713,13 @@ test('source bundle freezes source exports and a lazy entry without consuming di
     exports: { './lib': { 'happier-source': './src/library.ts', default: './dist/lib.mjs' } } }));
   await writeFile(join(cliDir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { paths: { '@/*': ['./src/*'] } } }));
   await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@happier-dev/example', type: 'module', exports: { '.': { 'happier-source': './src/index.ts', default: './dist/index.js' } } }));
-  await writeFile(join(packageDir, 'src/index.ts'), "export const value = 'frozen';\n");
+  const unicodeLicense = '/*! @license Fixture 日本語 © 2026 */';
+  await writeFile(join(packageDir, 'src/index.ts'), "export { value, unicode, namedUnicodeFailure } from './雪';\n");
+  await writeFile(join(packageDir, 'src/雪.ts'), `${unicodeLicense}
+export const value = 'frozen';
+export const unicode = { literal: '雪 😀', raw: String.raw\`雪\\n\`, pattern: /\\u96ea/u.test('雪') };
+export function namedUnicodeFailure() { throw new Error('雪 😀'); }
+`);
   await mkdir(join(unscopedDir, 'src'), { recursive: true });
   await mkdir(join(unscopedDir, 'dist'), { recursive: true });
   await writeFile(join(unscopedDir, 'package.json'), JSON.stringify({ name: 'unscoped-first-party', type: 'module', exports: { import: { 'happier-source': './src/index.ts', default: './dist/index.js' } } }));
@@ -2666,11 +2745,12 @@ test('source bundle freezes source exports and a lazy entry without consuming di
   await writeFile(join(shadowProtocolDir, 'src/index.ts'), "export { value } from './missing-bundled-source';\n");
   await symlink(sdkDir, join(repoDir, 'node_modules/@happier-dev/sdk'), process.platform === 'win32' ? 'junction' : 'dir');
   await symlink(protocolDir, join(repoDir, 'node_modules/@happier-dev/protocol'), process.platform === 'win32' ? 'junction' : 'dir');
-  await writeFile(join(cliDir, 'src/index.ts'), "import {value} from '@happier-dev/example'; import {value as unscoped} from 'unscoped-first-party'; import {value as sdk} from '@happier-dev/sdk'; export const read = async () => value + (await import('./lazy')).value + unscoped + sdk;\n");
+  await writeFile(join(cliDir, 'src/index.ts'), "import {value} from '@happier-dev/example'; export {unicode,namedUnicodeFailure} from '@happier-dev/example'; import {value as unscoped} from 'unscoped-first-party'; import {value as sdk} from '@happier-dev/sdk'; export const read = async () => value + (await import('./lazy')).value + unscoped + sdk;\n");
   await writeFile(join(cliDir, 'src/lazy.ts'), "export const value = '-lazy';\n");
   await writeFile(join(cliDir, 'src/library.ts'), "export const value = 'frozen-library';\n");
   await mkdir(join(cliDir, 'scripts'), { recursive: true });
   await writeFile(join(cliDir, 'scripts/process_tree.cjs'), "exports.read = async () => (await import('@happier-dev/example')).value;\n");
+  await writeFile(join(cliDir, 'scripts/statusline_forwarder.cjs'), `${unicodeLicense}\nexports.read = () => String.raw\`雪\\n\`;`);
   await symlink(packageDir, join(repoDir, 'node_modules/@happier-dev/example'), process.platform === 'win32' ? 'junction' : 'dir');
   await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(repoDir, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
   await symlink(dirname(createRequire(import.meta.url).resolve('tsx/package.json')), join(repoDir, 'node_modules/tsx'), process.platform === 'win32' ? 'junction' : 'dir');
@@ -2709,7 +2789,7 @@ test('source bundle freezes source exports and a lazy entry without consuming di
     if (buildEnv.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN) assert.equal(admitted.token,
       buildEnv.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN, 'finite source preparation reuses its authenticated containing reservation');
   }
-  await writeFile(join(packageDir, 'src/index.ts'), "export const value = 'changed';\n");
+  await writeFile(join(packageDir, 'src/index.ts'), "export { unicode, namedUnicodeFailure } from './雪'; export const value = 'changed';\n");
   await writeFile(join(cliDir, 'src/lazy.ts'), "throw new Error('moving source was loaded');\n");
   await writeFile(join(unscopedDir, 'src/index.ts'), "throw new Error('moving unscoped source was loaded');\n");
   assert.equal(await (await import(pathToFileURL(result.entrypoint).href)).read(), 'frozen-lazy-unscoped-canonical-protocol');
@@ -2719,6 +2799,23 @@ test('source bundle freezes source exports and a lazy entry without consuming di
   assert.match(result.identity, /^[a-f0-9]{16}$/);
   const metafile = JSON.parse(await readFile(join(result.runtimeDir, 'metafile.json'), 'utf8'));
   assert.equal(Object.keys(metafile.inputs).some((file) => file.includes('/dist/')), false);
+  const emitted = await import(pathToFileURL(result.entrypoint).href);
+  assert.deepEqual(emitted.unicode, { literal: '雪 😀', raw: '雪\\n', pattern: true });
+  const standaloneSidecar = join(result.cliDir, 'scripts/statusline_forwarder.cjs');
+  assert.equal(createRequire(import.meta.url)(standaloneSidecar).read(), '雪\\n');
+  assert.doesNotMatch(await readFile(standaloneSidecar, 'utf8'), /[^\x00-\xFF]/u);
+  assert.throws(emitted.namedUnicodeFailure, error => {
+    assert.equal(error.message, '雪 😀');
+    assert.match(error.stack, /namedUnicodeFailure .*\.js:\d+:\d+/);
+    return true;
+  });
+  const outputPaths = Object.keys(metafile.outputs).map(path => resolve(repoDir, 'output/workspace', path));
+  for (const path of outputPaths.filter(path => /\.[cm]?js$/.test(path))) {
+    assert.doesNotMatch(await readFile(path, 'utf8'), /[^\x00-\xFF]/u,
+      `emitted JavaScript must retain one-byte V8 source strings: ${path}`);
+  }
+  const notices = await Promise.all(outputPaths.filter(path => path.endsWith('.LEGAL.txt')).map(path => readFile(path, 'utf8')));
+  assert.ok(notices.some(text => text.includes(unicodeLicense)), 'retain the exact Unicode license outside executable source');
   // The emitted-import probe refuses the deliberately throwing live graph.
   // Repair it before testing adoption of a different valid source view.
   await writeFile(join(cliDir, 'src/lazy.ts'), "export const value = '-changed-lazy';\n");

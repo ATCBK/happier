@@ -1,14 +1,51 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import { mkdtemp, mkdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  createWatchSourceObserver,
   isDevRuntimeReloadIgnoredPath,
   readDevReloadWatchChangeSignature,
   readDevReloadWatchChangeSignatureAsync,
 } from './watchSignature.mjs';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+
+test('native source observations invalidate retained content on a coarse filesystem clock', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-native-source-digest-' });
+  const sourceDir = fixture.path('src');
+  const nestedDir = join(sourceDir, 'nested');
+  const source = join(nestedDir, 'index.ts');
+  await mkdir(nestedDir, { recursive: true });
+  await writeFile(source, 'export const value = 0;');
+  const admittedStat = await fs.lstat(source, { bigint: true });
+  const originalLstat = fs.lstat;
+  // Only the OS metadata boundary is substituted; file writes and digests are real.
+  t.mock.method(fs, 'lstat', async (...args) => args[0] === source ? admittedStat : originalLstat(...args));
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const observer = createWatchSourceObserver([sourceDir]);
+  t.after(() => observer.close());
+  let before = await readDevReloadWatchChangeSignatureAsync([sourceDir]);
+  for (const [index, event] of [
+    { eventType: 'change', watchPath: nestedDir, filename: 'index.ts' },
+    { eventType: 'rename', watchPath: sourceDir, filename: 'nested' },
+    { eventType: 'change', watchPath: sourceDir, filename: null },
+    { eventType: 'recrawl' },
+  ].entries()) {
+    await writeFile(source, `export const value = ${index + 1};`);
+    observer.observe(event);
+    const after = await readDevReloadWatchChangeSignatureAsync([sourceDir]);
+    assert.notEqual(after, before, `${event.eventType}/${event.filename ?? 'unknown'} must expose changed content`);
+    observer.observe(event);
+    assert.equal(await readDevReloadWatchChangeSignatureAsync([sourceDir]), after,
+      'unchanged content must not cause a false source transition');
+    before = after;
+  }
+});
 
 test('runtime reload ignore matching is separator-safe and limited to canonical test and scratch conventions', () => {
   for (const path of [

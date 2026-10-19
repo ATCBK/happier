@@ -13,8 +13,8 @@ import { runInNewContext } from 'node:vm';
 import { run } from '../utils/proc/proc.mjs';
 import { exportSourceWebUi } from './build_source_web_ui.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
-import { captureSourceWebBuildInputs, readWorkspacePackages, resolveWorkspaceSource, setBundleReadOnly, withSourceBundlePublication } from './build_source_runtime.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
+import { captureSourceWebBuildInputs, readWorkspacePackages, setBundleReadOnly, withSourceBundlePublication } from './build_source_runtime.mjs';
 import { ensureExpoWorkspacePrepared, hasUsableExpoWorkspaceLastGreen, withExpoPreparationEnv } from '../utils/expo/command.mjs';
 import { runNodeCapture } from '../testkit/core/run_node_capture.mjs';
 import { sanitizeStackTestRunnerEnv } from '../utils/test/test_env.mjs';
@@ -105,10 +105,7 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
   const { exportSourceWebUi: exportShared, publishSourceWebUi: selectShared } = await import(pathToFileURL(publicOwner));
   pending = await beginPendingSourceStart({ stackBaseDir });
   const exports = async () => Number(await readFile(counter, 'utf8'));
-  const env = { ...process.env, EXPO_PUBLIC_DEBUG: '0' };
-  if (native) for (const key of Object.keys(env)) {
-    if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_') || key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')) delete env[key];
-  }
+  const env = { ...(native ? buildNativeAdmissionFixtureEnv() : process.env), EXPO_PUBLIC_DEBUG: '0' };
   const options = { repoDir, stackBaseDir, pending, baseDir: fixture.path('state'),
     env };
   const otherStackBaseDir = fixture.path('stacks/independent');
@@ -442,9 +439,6 @@ test('cold Expo source preparation needs no workspace dist build or materializat
     .filter(({ root }) => relative(sourceRepo, root).startsWith('packages')
       || ['apps/ui', 'apps/stack'].includes(relative(sourceRepo, root).replaceAll('\\', '/')));
   await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
-  // The app's callable preflight imports its postinstall verification tooling;
-  // that tooling is not a served web input and is deliberately not captured.
-  await cp(join(sourceRepo, 'apps/ui/tools'), join(repoDir, 'apps/ui/tools'), { recursive: true });
   await cp(join(sourceRepo, 'apps/stack/bin'), join(repoDir, 'apps/stack/bin'), { recursive: true });
   for (const { root } of owners) {
     const path = join(repoDir, relative(sourceRepo, root), 'package.json');
@@ -717,8 +711,7 @@ export async function resolveExpoBin() {
     });
     await writeFile(publicOwner, source);
     const { exportSourceWebUi: exportWithOsFixture } = await import(pathToFileURL(publicOwner));
-    const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
-    for (const key of Object.keys(env)) if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete env[key];
+    const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
     await mkdir(join(native.admissionRoot, 'waiters'), { recursive: true });
     await mkdir(join(native.admissionRoot, 'owners'), { recursive: true });
     const watcher = watch(join(native.admissionRoot, 'waiters'));
