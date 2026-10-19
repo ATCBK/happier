@@ -434,6 +434,11 @@ Endpoint validation rejects credentials in URLs, unsafe metadata destinations, a
 
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
 
+In development source, transient Account catalog reads and an exhausted catalog
+admission or managed-establishment budget return retryable
+`provider_catalog_unavailable`. These failures precede an endpoint response and
+do not establish an endpoint outage or invalid saved configuration.
+
 ## Account scope and machine grants
 
 Public provider connections can be enabled account-wide. Loopback and private-network endpoints are machine-scoped by default because `localhost` and RFC1918 addresses identify different services on different machines.
@@ -521,6 +526,13 @@ The connection stores optional `gatewayPlacement`: omitted or
 prove hub readiness or local/private model inference. Shared gateway execution
 and hub transport are integrated by the daemon managed-services owner; this
 configuration contract alone is not evidence that that live journey ran.
+
+In development source, explicit probes and saved model lists on an enabled peer
+use the selected hub through the existing Account-scoped Machine RPC transport.
+The peer admits its current grant before dispatch and revalidates that admission
+before returning the hub's response. The hub retains physical probe execution,
+its own grant checks and catalog ownership; the peer does not start a local
+Gateway or copy the hub's runtime catalog into its own cache.
 
 The development managed-runtime declaration can opt into
 `sharing: 'connectionMachine'`. The daemon's existing managed-services owner

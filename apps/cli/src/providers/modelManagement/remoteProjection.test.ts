@@ -10,7 +10,7 @@ const transport = vi.hoisted(() => ({ call: vi.fn() }));
 // The authenticated Machine RPC transport is the genuine network boundary.
 vi.mock('@/session/transport/rpc/machineRpc', () => ({ callExactMachineRpc: transport.call }));
 
-import { createAccountScopedProviderModelProjectionReader } from './remoteProjection';
+import { createAccountScopedProviderCatalogReader, createAccountScopedProviderModelProjectionReader } from './remoteProjection';
 
 const request = {
   machineId: 'hub-exact', agentTargetKey: 'agent:happier.agent.codex/codex', mode: 'management',
@@ -26,6 +26,25 @@ const snapshot: ActiveAccountSettingsSnapshot = {
 };
 
 describe('Account-scoped remote Provider projection transport', () => {
+  it('validates explicit hub catalog responses without falling back to another connection or Machine', async () => {
+    transport.call.mockReset().mockResolvedValue({ status: 'success', connectionId: 'other-connection',
+      connectionRevision: 1, manualModelPolicy: 'catalog-only', modelLoadAction: 'descriptor_absent', models: [] });
+    const read = createAccountScopedProviderCatalogReader({ serverUrl: 'https://home.example.test',
+      readCredentials: async () => credentials, readAccountSettingsSnapshot: async () => snapshot, isCurrent: () => true });
+    const target = { machineId: 'hub-exact', connectionId: 'requested-connection' };
+    await expect(read.models(target, new AbortController().signal)).resolves.toMatchObject({
+      status: 'error', error: { code: 'provider_rpc_response_invalid' },
+    });
+    transport.call.mockResolvedValueOnce({ status: 'success', models: [] });
+    await expect(read.probe(target, new AbortController().signal)).resolves.toMatchObject({
+      status: 'error', error: { code: 'provider_rpc_response_invalid' },
+    });
+    expect(transport.call.mock.calls.map(([input]) => input.method)).toEqual([
+      'daemon.providers.models', 'daemon.providers.probe',
+    ]);
+    expect(transport.call.mock.calls.every(([input]) => input.machineId === target.machineId)).toBe(true);
+  });
+
   it('identifies transport cancellation without recording private transport failure content', async () => {
     const logs = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const controller = new AbortController();

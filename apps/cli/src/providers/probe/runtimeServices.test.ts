@@ -125,6 +125,25 @@ function grantedSettings(providerRegistry = registry) {
 }
 
 describe('runtime provider services', () => {
+  it.each(['models', 'probe'] as const)('reports transient Account catalog failure before %s without blaming the endpoint', async operation => {
+    const credentials = { token: 'provider-catalog-transient', encryption: null };
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    setActiveAccountSettingsSnapshot({ ...providerSnapshot(grantedSettings()),
+      scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/entity-rows/provider-connections') return { status: 503, data: { error: 'server_unavailable' } };
+      throw new Error(`Unexpected failed catalog read: ${path}`);
+    });
+    const services = createRuntimeProviderServices({ machineId: 'machine-a', registry,
+      featureGate: { isEnabled: () => true } });
+    expect(await services[operation]({ connectionId, machineId: 'machine-a' })).toMatchObject({
+      status: 'error', error: { code: 'provider_catalog_unavailable', retryable: true, action: 'retry' },
+    });
+  });
+
   it.each(['models', 'probe'] as const)('opens current Account row authority for an explicit ambient %s request before its change hint', async operation => {
     const credentials = { token: 'current-provider-read', encryption: null };
     vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
@@ -200,7 +219,7 @@ describe('runtime provider services', () => {
     try {
       await rowEntered.promise;
       await vi.advanceTimersByTimeAsync(26);
-      expect(observed).toMatchObject({ status: 'error', error: { code: 'provider_endpoint_unavailable' } });
+      expect(observed).toMatchObject({ status: 'error', error: { code: 'provider_catalog_unavailable' } });
     } finally {
       releaseRow.resolve();
       await pending;
