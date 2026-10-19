@@ -233,6 +233,63 @@ describe('ApiMachineClient updates', () => {
     } finally { await client.shutdown(); }
   });
 
+  it.each(['http503', 'network', 'unopenable-key'] as const)('keeps RPC authority across snapshot refresh failure only without contrary key evidence (%s)', async (failure) => {
+    vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
+      capabilities: { serverIdentity: { serverIdentityId: 'fixture-home' } } })));
+    const accountKey = new Uint8Array(32).fill(11);
+    const key = new Uint8Array(32).fill(19);
+    const publicKey = tweetnacl.box.keyPair.fromSecretKey(accountKey).publicKey;
+    const row = { id: 'machine-1', storageMode: 'e2ee',
+      dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: key,
+        recipientPublicKey: publicKey, randomBytes: getRandomBytes })),
+      metadata: null, metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
+    let failRead = false;
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'fixture-owner' } };
+      if (url.endsWith('/v1/machines/machine-1')) {
+        if (failRead && failure === 'http503') throw new axios.AxiosError('Snapshot busy', 'ERR_BAD_RESPONSE', undefined, undefined,
+          { status: 503, statusText: 'Service Unavailable', data: {}, headers: {}, config: { headers: new axios.AxiosHeaders() } });
+        if (failRead && failure === 'network') throw new axios.AxiosError('Connection reset', 'ECONNRESET');
+        return { status: 200, data: { machine: failRead ? { ...row,
+          dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(29),
+            recipientPublicKey: tweetnacl.box.keyPair().publicKey, randomBytes: getRandomBytes })),
+          metadataVersion: 2 } : row } };
+      }
+      return { status: 404, data: {} };
+    });
+    const { ApiClient } = await import('./api');
+    const { RpcHandlerManager } = await import('./rpc/RpcHandlerManager');
+    const api = await ApiClient.create({ token: 'token', encryption: { type: 'dataKey', machineKey: accountKey, publicKey } });
+    const initial = await api.getMachine(row.id);
+    if (!initial) throw new Error('Expected admitted Machine');
+    const client = api.machineSyncClient(initial);
+    const manager: unknown = Reflect.get(client, 'rpcHandlerManager');
+    const refresh: unknown = Reflect.get(client, 'refreshMachineFromServer');
+    if (!(manager instanceof RpcHandlerManager) || typeof refresh !== 'function') throw new Error('Missing Machine RPC owner');
+    manager.registerHandler('context.read', () => ({ current: true }));
+    const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+      encryptRaw: async value => encodeBase64(encrypt(key, 'dataKey', value)),
+      decryptRaw: async value => decrypt(key, 'dataKey', decodeBase64(value)),
+    } };
+    const callId = '0123456789abcdef0123456789abcdef';
+    const request = async () => manager.handleRequest({ method: 'machine-1:context.read',
+      params: await socketRpcCodec.encodeParams(content, {}, { method: 'machine-1:context.read', callId }) });
+    const decode = async (result: unknown) => socketRpcCodec.decodeResult(content, { ok: true, result }, callId);
+    try {
+      expect(await decode(await request())).toEqual({ current: true });
+      failRead = true;
+      await Reflect.apply(refresh, client, []);
+      const afterFailure = await request();
+      if (failure === 'unopenable-key') expect(afterFailure).toMatchObject({ errorCode: 'UPDATE_REQUIRED' });
+      else expect(await decode(afterFailure)).toEqual({ current: true });
+      failRead = false;
+      await Reflect.apply(refresh, client, []);
+      expect(await decode(await request())).toEqual({ current: true });
+    } finally { await client.shutdown(); }
+  });
+
   it.each(['hint', 'held-ack', 'key-mismatch', 'stale-refresh'] as const)('adopts a committed Machine context for subsequent RPC and versioned writes (%s)', async (admission) => {
     // The real connection supervisor probes Home with fetch, independently of Axios.
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
