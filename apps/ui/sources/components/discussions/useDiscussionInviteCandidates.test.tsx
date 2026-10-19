@@ -14,6 +14,8 @@ import { buildSessionListRenderableFromSession } from '@/sync/domains/session/li
 import { storage } from '@/sync/domains/state/storageStore';
 import { getSessionName, getSessionWorkContext } from '@/utils/sessions/sessionUtils';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
+import { t } from '@/text';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -45,10 +47,13 @@ describe('Discussion Invite source composition', () => {
         if (!selected) throw new Error('Invalid selected model fixture');
         const choose = vi.fn();
         const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
-            modelOptions: [selected], sessionSubtitle: 'Answers with its own setup', onChoose: choose }));
+            modelOptions: [selected], sessionsContext: 'Answers with its own setup', onChoose: choose }));
         const option = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
             .find(option => option.id === 'model:offline-target');
         expect(option).toMatchObject({ readiness: { status: 'offline', machineId: 'offline-target' }, repair: null });
+        // Listed and selectable, with its one cause instead of the usual hint; never hidden.
+        expect(option?.subtitle).toBe(t('session.collaboration.readiness.cause.machineOffline'));
+        expect(option?.disabled).toBe(false);
         const configured = hook.getCurrent().flatMap(section => section.options).find(option => option.label === selected.label)!;
         expect(configured.readiness).toBe(selected.readiness);
         expect(configured.repair).toBe(selected.repair);
@@ -62,11 +67,11 @@ describe('Discussion Invite source composition', () => {
         boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
         const choose = vi.fn();
         const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
-            sessionSubtitle: 'Answers with its own setup', onChoose: choose }));
+            sessionsContext: 'Answers with its own setup', onChoose: choose }));
         await vi.waitFor(() => expect(hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
             .some(option => option.id === 'session:same-id')).toBe(true));
         const session = createSessionFixture({ id: 'same-id', serverId: home, encryptionMode: 'e2ee', metadataLayoutVersion: 1,
-            metadata: { path: '', host: '', agentPresentation: { agentId: 'codex' } },
+            metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'codex' } }, 1),
             ownerMetadataView: { name: 'Release review', host: 'review-box', path: '/release' } });
         const row = buildSessionListRenderableFromSession(session);
         await act(async () => { storage.setState(state => ({
@@ -79,8 +84,10 @@ describe('Discussion Invite source composition', () => {
             .find(option => option.id === 'session:same-id')!;
         expect(option.label).toBe(getSessionName(row, home));
         expect(option.label).toBe('Release review');
-        expect(option.subtitle).toContain(getSessionWorkContext(row, home));
+        expect(option.subtitle).toContain('Codex');
         expect(option.subtitle).toContain('review-box');
+        // How a session takes part is said once, beside the section title, not repeated on every row.
+        expect(option.subtitle).not.toContain('Answers with its own setup');
         option.onSelect?.();
         expect(choose).toHaveBeenCalledWith({ kind: 'session', session: { serverId: home, sessionId: 'same-id' } });
         // When no Agent/Machine identity is recorded, the list's public recency still distinguishes rows.

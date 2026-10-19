@@ -5453,8 +5453,8 @@ const pt: MachineAgentsTranslation = {
     installYourself: 'Instale você mesmo',
     unsupportedOs: 'Não funciona neste sistema',
     unsupportedArch: 'Sem versão para este processador',
-    installing: 'Instalando…',
     unsupported: 'Não pode ser executado aqui',
+    installing: 'Instalando…',
     progress: ({ done, total }) => `${done} de ${total}`,
     checking: 'Verificando…',
     offlineSignedIn: 'Última vez conectado · máquina offline',
@@ -14233,7 +14233,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "pt"> = { pt: { ...workflowRunRoleTranslations.pt, ...workflowRunCompositionTranslations.pt, runPattern: 'Executar…', runPatternTitle: 'Executar um padrão', anotherRound: 'Outra rodada', participantTitle: 'Escolher quem participa', participantSearch: 'Procurar uma sessão ou um modelo', participantSession: 'A tua sessão · responde com a sua configuração', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nova sessão ${agent} em ${machine}`, participantDone: 'Concluído', shortcutStarts: 'inicia', neededNamed: ({ name }) => `Entradas · falta ${name}`, addToStart: ({ name }) => `Adicione ${name} para iniciar`, workflow: 'Fluxo de trabalho', inputs: 'Entradas', start: 'Iniciar', starting: 'Iniciando…', stillStarting: 'Ainda iniciando…', needed: ({ count }) => `Entradas · faltam ${count}`, required: 'Necessário para iniciar', preview: 'O que será feito', unsaved: 'Inclui alterações não salvas', remove: 'Voltar a uma sessão normal', search: 'Encontrar um fluxo', builtin: 'Integrados', library: 'Sua biblioteca', noInputs: 'Nenhuma entrada necessária', asksFor: ({ names }) => `Solicita ${names}`, optional: 'Opcional — deixado vazio', defaultValue: ({ value }) => `Padrão: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "pt"> = { pt: { ...workflowRunRoleTranslations.pt, ...workflowRunCompositionTranslations.pt, runPattern: 'Executar…', runPatternTitle: 'Executar um padrão', anotherRound: 'Outra rodada', participantTitle: 'Escolher quem participa', participantSearch: 'Procurar uma sessão ou um modelo', participantSession: 'Cada uma responde com a sua configuração', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nova sessão ${agent} em ${machine}`, participantDone: 'Concluído', choicesFailed: 'Não foi possível carregar as opções', shortcutStarts: 'inicia', neededNamed: ({ name }) => `Entradas · falta ${name}`, addToStart: ({ name }) => `Adicione ${name} para iniciar`, workflow: 'Fluxo de trabalho', inputs: 'Entradas', start: 'Iniciar', starting: 'Iniciando…', stillStarting: 'Ainda iniciando…', needed: ({ count }) => `Entradas · faltam ${count}`, required: 'Necessário para iniciar', preview: 'O que será feito', unsaved: 'Inclui alterações não salvas', remove: 'Voltar a uma sessão normal', search: 'Encontrar um fluxo', builtin: 'Integrados', library: 'Sua biblioteca', noInputs: 'Nenhuma entrada necessária', asksFor: ({ names }) => `Solicita ${names}`, optional: 'Opcional — deixado vazio', defaultValue: ({ value }) => `Padrão: ${value}` } };
 
 return { workflowStartTranslations };
 })();

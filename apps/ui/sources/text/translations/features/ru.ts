@@ -5480,8 +5480,8 @@ const ru: MachineAgentsTranslation = {
     installYourself: 'Установите вручную',
     unsupportedOs: 'Не работает на этой системе',
     unsupportedArch: 'Нет сборки для этого процессора',
-    installing: 'Установка…',
     unsupported: 'Здесь не запускается',
+    installing: 'Установка…',
     progress: ({ done, total }) => `${done} из ${total}`,
     checking: 'Проверка…',
     offlineSignedIn: 'Последний раз: вход выполнен · машина офлайн',
@@ -14264,7 +14264,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ru"> = { ru: { ...workflowRunRoleTranslations.ru, ...workflowRunCompositionTranslations.ru, runPattern: 'Запустить…', runPatternTitle: 'Запустить шаблон', anotherRound: 'Ещё раунд', participantTitle: 'Выберите участников', participantSearch: 'Найти сессию или модель', participantSession: 'Ваша сессия · отвечает со своими настройками', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Новая сессия ${agent} на ${machine}`, participantDone: 'Готово', shortcutStarts: 'запускает', neededNamed: ({ name }) => `Входные данные · нужно: ${name}`, addToStart: ({ name }) => `Добавьте ${name}, чтобы запустить`, workflow: 'Рабочий процесс', inputs: 'Входные данные', start: 'Запустить', starting: 'Запуск…', stillStarting: 'Запуск ещё продолжается…', needed: ({ count }) => `Входные данные · не хватает ${count}`, required: 'Нужно для запуска', preview: 'Что будет сделано', unsaved: 'Включает несохранённые изменения', remove: 'Вернуться к обычной сессии', search: 'Найти рабочий процесс', builtin: 'Встроенные', library: 'Ваша библиотека', noInputs: 'Входные данные не нужны', asksFor: ({ names }) => `Запрашивает: ${names}`, optional: 'Необязательно — оставлено пустым', defaultValue: ({ value }) => `По умолчанию: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "ru"> = { ru: { ...workflowRunRoleTranslations.ru, ...workflowRunCompositionTranslations.ru, runPattern: 'Запустить…', runPatternTitle: 'Запустить шаблон', anotherRound: 'Ещё раунд', participantTitle: 'Выберите участников', participantSearch: 'Найти сессию или модель', participantSession: 'Каждая отвечает со своими настройками', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Новая сессия ${agent} на ${machine}`, participantDone: 'Готово', choicesFailed: 'Не удалось загрузить варианты', shortcutStarts: 'запускает', neededNamed: ({ name }) => `Входные данные · нужно: ${name}`, addToStart: ({ name }) => `Добавьте ${name}, чтобы запустить`, workflow: 'Рабочий процесс', inputs: 'Входные данные', start: 'Запустить', starting: 'Запуск…', stillStarting: 'Запуск ещё продолжается…', needed: ({ count }) => `Входные данные · не хватает ${count}`, required: 'Нужно для запуска', preview: 'Что будет сделано', unsaved: 'Включает несохранённые изменения', remove: 'Вернуться к обычной сессии', search: 'Найти рабочий процесс', builtin: 'Встроенные', library: 'Ваша библиотека', noInputs: 'Входные данные не нужны', asksFor: ({ names }) => `Запрашивает: ${names}`, optional: 'Необязательно — оставлено пустым', defaultValue: ({ value }) => `По умолчанию: ${value}` } };
 
 return { workflowStartTranslations };
 })();

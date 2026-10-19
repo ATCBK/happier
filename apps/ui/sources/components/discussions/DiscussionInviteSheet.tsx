@@ -480,7 +480,7 @@ function DiscussionInviteSheetWithAgents(
     accountLifetime: props.accountLifetime,
     roster: props.roster,
     busy: operation.kind === 'working',
-    sessionSubtitle: t('session.collaboration.discussion.manage.sessionCandidate'),
+    sessionsContext: t('session.collaboration.discussion.manage.sessionCandidate'),
     onChoose,
     enabled: props.controller.model.editable,
     query: props.controller.model.directory.query,

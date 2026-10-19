@@ -5453,8 +5453,8 @@ const it: MachineAgentsTranslation = {
     installYourself: 'Da installare manualmente',
     unsupportedOs: 'Non funziona su questo sistema',
     unsupportedArch: 'Nessuna build per questo processore',
-    installing: 'Installazione…',
     unsupported: 'Non può funzionare qui',
+    installing: 'Installazione…',
     progress: ({ done, total }) => `${done} di ${total}`,
     checking: 'Verifica…',
     offlineSignedIn: 'Ultimo stato: accesso eseguito · macchina offline',
@@ -14233,7 +14233,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "it"> = { it: { ...workflowRunRoleTranslations.it, ...workflowRunCompositionTranslations.it, runPattern: 'Esegui…', runPatternTitle: 'Esegui uno schema', anotherRound: 'Un altro giro', participantTitle: 'Scegli chi partecipa', participantSearch: 'Cerca una sessione o un modello', participantSession: 'La tua sessione · risponde con la sua configurazione', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nuova sessione ${agent} su ${machine}`, participantDone: 'Fatto', shortcutStarts: 'avvia', neededNamed: ({ name }) => `Input · manca ${name}`, addToStart: ({ name }) => `Aggiungi ${name} per avviare`, workflow: 'Workflow', inputs: 'Input', start: 'Avvia', starting: 'Avvio…', stillStarting: 'Avvio ancora in corso…', needed: ({ count }) => `Input · ne mancano ${count}`, required: 'Necessario per avviare', preview: 'Cosa farà', unsaved: 'Include modifiche non salvate', remove: 'Torna a una sessione normale', search: 'Trova un workflow', builtin: 'Integrati', library: 'La tua libreria', noInputs: 'Nessun input necessario', asksFor: ({ names }) => `Richiede ${names}`, optional: 'Facoltativo — lasciato vuoto', defaultValue: ({ value }) => `Predefinito: ${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "it"> = { it: { ...workflowRunRoleTranslations.it, ...workflowRunCompositionTranslations.it, runPattern: 'Esegui…', runPatternTitle: 'Esegui uno schema', anotherRound: 'Un altro giro', participantTitle: 'Scegli chi partecipa', participantSearch: 'Cerca una sessione o un modello', participantSession: 'Ognuna risponde con la sua configurazione', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `Nuova sessione ${agent} su ${machine}`, participantDone: 'Fatto', choicesFailed: 'Impossibile caricare le opzioni', shortcutStarts: 'avvia', neededNamed: ({ name }) => `Input · manca ${name}`, addToStart: ({ name }) => `Aggiungi ${name} per avviare`, workflow: 'Workflow', inputs: 'Input', start: 'Avvia', starting: 'Avvio…', stillStarting: 'Avvio ancora in corso…', needed: ({ count }) => `Input · ne mancano ${count}`, required: 'Necessario per avviare', preview: 'Cosa farà', unsaved: 'Include modifiche non salvate', remove: 'Torna a una sessione normale', search: 'Trova un workflow', builtin: 'Integrati', library: 'La tua libreria', noInputs: 'Nessun input necessario', asksFor: ({ names }) => `Richiede ${names}`, optional: 'Facoltativo — lasciato vuoto', defaultValue: ({ value }) => `Predefinito: ${value}` } };
 
 return { workflowStartTranslations };
 })();

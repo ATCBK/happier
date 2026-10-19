@@ -74,7 +74,7 @@ function ExecutableParticipantPicker(
   const sections = useExecutableParticipantSections({
     accountLifetime: props.accountLifetime,
     enabled: true,
-    sessionSubtitle: t('workflows.start.participantSession'),
+    sessionsContext: t('workflows.start.participantSession'),
     onChoose,
   });
   const rootStep = React.useMemo<SelectionListStep>(

@@ -9,6 +9,8 @@ import {
 import { SessionServerStartSpawnDraftV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import type { SelectionListOption, SelectionListSectionDescriptor } from '@/components/ui/selectionList';
 import type { SessionReadinessRepairV1, SessionReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
@@ -20,6 +22,20 @@ import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
 import { t } from '@/text';
+import { describeMachineReadinessCause, presentSessionReadiness } from '@/components/sessions/model/sessionReadinessPresentation';
+
+/**
+ * A not-ready choice stays listed and selectable with its one cause in place of the usual hint
+ * (C7): an offline Bot or Machine is never hidden, and unknown never reads as ready.
+ */
+function readinessSubtitle(readiness: ExecutableParticipantSectionOption['readiness'], fallback: string): string {
+  if (!readiness) return fallback;
+  if ('v' in readiness) {
+    const presented = presentSessionReadiness({ readiness, repair: null, demanded: true, loading: false, unavailableReason: null });
+    return presented.tone === 'attention' ? (presented.cause ?? presented.title) : fallback;
+  }
+  return describeMachineReadinessCause(readiness) ?? fallback;
+}
 
 export type ExecutableParticipantSectionOption = SelectionListOption & Readonly<{
   /** A selected launch/Session has full facts; a not-yet-configured model target has Machine facts only. */
@@ -56,8 +72,8 @@ export function useExecutableParticipantSections(
     busy?: boolean;
     readinessSessionId?: string | null;
     modelOptions?: readonly ExecutableParticipantPickerOption[];
-    /** How an existing session takes part here, beneath its name. */
-    sessionSubtitle: string;
+    /** How the viewer's sessions take part here; said once beside the section title, not on every row. */
+    sessionsContext: string;
     onChoose: (selection: ExecutableParticipantSelectionV1) => void;
   }>,
 ): readonly ExecutableParticipantSection[] {
@@ -72,7 +88,7 @@ export function useExecutableParticipantSections(
     modelOptions: input.modelOptions,
   });
   const machines = useMachineListForServer(serverId, input.enabled);
-  const { onChoose, sessionSubtitle } = input;
+  const { onChoose, sessionsContext } = input;
   const busy = input.busy === true;
   const query = input.query ?? '';
   return React.useMemo(() => {
@@ -106,8 +122,7 @@ export function useExecutableParticipantSections(
               label:
                 candidate.label ??
                 t('session.collaboration.discussion.participants.session'),
-              subtitle: [candidate.contextLabel ?? (candidate.lastActivityAt == null ? null : formatAsOfTime(candidate.lastActivityAt)),
-                sessionSubtitle].filter(Boolean).join(' · '),
+              subtitle: readinessSubtitle(candidate.readiness, candidate.contextLabel ?? (candidate.lastActivityAt == null ? '' : formatAsOfTime(candidate.lastActivityAt))),
               icon: sessionMark,
               disabled: busy,
               readiness: candidate.readiness,
@@ -149,22 +164,23 @@ export function useExecutableParticipantSections(
         ),
     );
     const models: ExecutableParticipantSectionOption[] = candidates.candidates.flatMap(candidate => candidate.kind === 'model' && matches(candidate.label)
-      ? [{ id: candidate.key, label: candidate.label, icon: modelMark, disabled: busy,
+      ? [{ id: candidate.key, label: candidate.label, subtitle: readinessSubtitle(candidate.readiness, ''), icon: modelMark, disabled: busy,
           readiness: candidate.readiness, repair: candidate.repair, onSelect: () => onChoose(candidate.selection) }] : []);
     models.push(...matchingMachines.map((machine) => {
       const name =
         getMachineDisplayName(machine, inventory) ??
         t('session.collaboration.unnamed');
+      const readiness = resolveMachineSpawnReadiness({ machine, selectedMachineId: machine.id, scope: input.accountLifetime.scope });
       return {
         id: `model:${machine.id}`,
         testID: `discussion-invite-model-${machine.id}`,
         label: t('session.collaboration.discussion.manage.modelOn', {
           machine: name,
         }),
-        subtitle: t('session.collaboration.discussion.manage.modelCandidate'),
         icon: modelMark,
         disabled: busy,
-        readiness: resolveMachineSpawnReadiness({ machine, selectedMachineId: machine.id, scope: input.accountLifetime.scope }),
+        readiness,
+        subtitle: readinessSubtitle(readiness, t('session.collaboration.discussion.manage.modelCandidate')),
         repair: null,
         onSelect: () => {
           void (async () => {
@@ -192,6 +208,11 @@ export function useExecutableParticipantSections(
         kind: 'static',
         id: 'agents-sessions',
         title: t('session.collaboration.discussion.manage.sessionsGroup'),
+        rightAccessory: (
+          <Text numberOfLines={1} style={{ ...Typography.variant('meta'), color: theme.colors.text.tertiary }}>
+            {sessionsContext}
+          </Text>
+        ),
         options: sessions,
       });
     if (models.length)
@@ -212,7 +233,7 @@ export function useExecutableParticipantSections(
     onChoose,
     machines,
     serverId,
-    sessionSubtitle,
+    sessionsContext,
     theme.colors.text.secondary,
     theme.colors.text.tertiary,
   ]);

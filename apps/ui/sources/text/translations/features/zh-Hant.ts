@@ -5443,8 +5443,8 @@ const zhHant: MachineAgentsTranslation = {
     installYourself: '需自行安裝',
     unsupportedOs: '無法在此系統上執行',
     unsupportedArch: '沒有適用於此處理器的版本',
-    installing: '正在安裝…',
     unsupported: '無法在此執行',
+    installing: '正在安裝…',
     progress: ({ done, total }) => `${done} / ${total}`,
     checking: '正在檢查…',
     offlineSignedIn: '上次已登入 · 機器離線',
@@ -14216,7 +14216,7 @@ const workflowRunCompositionTranslations = {...Domain_workflowRunCompositionTran
 
 const en = Shared_workflowStartTranslations.en;
 
-const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHant"> = { zhHant: { ...workflowRunRoleTranslations.zhHant, ...workflowRunCompositionTranslations.zhHant, runPattern: '執行…', runPatternTitle: '執行模式', anotherRound: '再來一輪', participantTitle: '選擇參與者', participantSearch: '尋找工作階段或模型', participantSession: '你的工作階段 · 依自身設定回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 工作階段`, participantDone: '完成', shortcutStarts: '開始', neededNamed: ({ name }) => `輸入 · 需要${name}`, addToStart: ({ name }) => `新增${name}後即可開始`, workflow: '工作流程', inputs: '輸入', start: '開始', starting: '正在開始…', stillStarting: '仍在開始…', needed: ({ count }) => `輸入 · 還需 ${count} 項`, required: '開始前必填', preview: '將執行的內容', unsaved: '包含未儲存的變更', remove: '返回一般工作階段', search: '尋找工作流程', builtin: '內建', library: '你的程式庫', noInputs: '無需輸入', asksFor: ({ names }) => `需要：${names}`, optional: '選填 — 留空', defaultValue: ({ value }) => `預設值：${value}` } };
+const workflowStartTranslations: Pick<Record<'en'|'de'|'es'|'fr'|'it'|'pt'|'ca'|'pl'|'ru'|'ja'|'zhHans'|'zhHant', Copy>, "zhHant"> = { zhHant: { ...workflowRunRoleTranslations.zhHant, ...workflowRunCompositionTranslations.zhHant, runPattern: '執行…', runPatternTitle: '執行模式', anotherRound: '再來一輪', participantTitle: '選擇參與者', participantSearch: '尋找工作階段或模型', participantSession: '各自依自身設定回答', participantModel: ({ agent, machine }: { agent: string; machine: string }) => `${machine} 上的新 ${agent} 工作階段`, participantDone: '完成', choicesFailed: '無法載入選項', shortcutStarts: '開始', neededNamed: ({ name }) => `輸入 · 需要${name}`, addToStart: ({ name }) => `新增${name}後即可開始`, workflow: '工作流程', inputs: '輸入', start: '開始', starting: '正在開始…', stillStarting: '仍在開始…', needed: ({ count }) => `輸入 · 還需 ${count} 項`, required: '開始前必填', preview: '將執行的內容', unsaved: '包含未儲存的變更', remove: '返回一般工作階段', search: '尋找工作流程', builtin: '內建', library: '你的程式庫', noInputs: '無需輸入', asksFor: ({ names }) => `需要：${names}`, optional: '選填 — 留空', defaultValue: ({ value }) => `預設值：${value}` } };
 
 return { workflowStartTranslations };
 })();
