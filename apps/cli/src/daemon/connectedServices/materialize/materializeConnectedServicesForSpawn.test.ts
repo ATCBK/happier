@@ -2,12 +2,14 @@ import { existsSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { reloadConfiguration } from '@/configuration';
+import { logger } from '@/utils/logger';
 import { retainExecutionRunState } from '@/daemon/executionRunRegistry';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
@@ -34,23 +36,76 @@ type MaterializeParams = Parameters<typeof materializeConnectedServicesForSpawnP
 
 let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
 
+function isMaterializationPhase(fields: unknown, materializationKey: string, phase: string, status: string): boolean {
+  return typeof fields === 'object' && fields !== null
+    && 'materializationKey' in fields && fields.materializationKey === materializationKey
+    && 'phase' in fields && fields.phase === phase
+    && 'status' in fields && fields.status === status;
+}
+
 it('prepares an isolated requester Agent home without a Connected Account for Provider or API-key authentication', async () => {
   const baseDir = await mkdtemp(join(tmpdir(), 'requester-native-only-'));
   try {
     const aliceHome = join(baseDir, 'alice-native');
     await mkdir(aliceHome);
     await writeFile(join(aliceHome, 'auth.json'), JSON.stringify({ access_token: 'alice-login' }));
+    let requesterVerifications = 0;
     const materialized = await materializeConnectedServicesForSpawnProduction({
       agentId: 'codex', materializationKey: 'bob-session', activeServerDir: baseDir,
       baseDir: join(baseDir, 'bob-materialized'), recordsByServiceId: new Map(), allowNativeAccountState: false,
-      processEnv: { CODEX_HOME: aliceHome }, isAccountRuntimeCurrent: async () => true,
+      processEnv: { CODEX_HOME: aliceHome }, isAccountRuntimeCurrent: async () => {
+        requesterVerifications++;
+        return true;
+      },
     });
     expect(materialized?.env.CODEX_HOME).toBe(materialized?.targetMaterializedRoot);
     expect(materialized?.env.CODEX_HOME).toBeTruthy();
     expect(existsSync(join(materialized!.env.CODEX_HOME!, 'auth.json'))).toBe(false);
     expect(await readFile(join(aliceHome, 'auth.json'), 'utf8')).toContain('alice-login');
+    // This no-credential launch has five artifact effects: staging,
+    // native-home preparation, staging/target finalization and promotion. Each
+    // retains fresh entry/exit authority; individual preparation files must
+    // not add another Home round trip around the same preparation.
+    expect(requesterVerifications).toBe(10);
     await materialized?.cleanupOnExit?.();
   } finally { await rm(baseDir, { recursive: true, force: true }); }
+});
+
+it.each(['revocation', 'cancellation'] as const)('refuses native-home publication after %s during preparation', async (failure) => {
+  const baseDir = await mkdtemp(join(tmpdir(), 'requester-native-preparation-'));
+  const materializationKey = 'refused-native-preparation';
+  const materializedBase = join(baseDir, 'materialized');
+  const rootDir = resolveConnectedServiceMaterializedRootDir({
+    baseDir: materializedBase, agentId: 'codex', materializationKey,
+  });
+  let current = true;
+  let interrupted = false;
+  const cancellation = new AbortController();
+  const originalLog = logger.infoFile.bind(logger);
+  // File logging is the system boundary: retire authority after real native
+  // state preparation, keeping the filesystem and materializer owners real.
+  const log = vi.spyOn(logger, 'infoFile').mockImplementation((message, fields) => {
+    originalLog(message, fields);
+    if (message === '[CONNECTED ACCOUNT] Materialization phase'
+      && isMaterializationPhase(fields, materializationKey, 'native_home_state', 'completed')) {
+      interrupted = true;
+      if (failure === 'revocation') current = false;
+      else cancellation.abort(new Error('fixture_materialization_cancelled'));
+    }
+  });
+  try {
+    await expect(materializeConnectedServicesForSpawnProduction({
+      agentId: 'codex', materializationKey, activeServerDir: baseDir,
+      baseDir: materializedBase, recordsByServiceId: new Map(), allowNativeAccountState: false,
+      signal: cancellation.signal, isAccountRuntimeCurrent: async () => current,
+    })).rejects.toThrow(failure === 'revocation'
+      ? 'requester_account_context_unavailable' : 'fixture_materialization_cancelled');
+    expect(interrupted).toBe(true);
+    expect(existsSync(rootDir)).toBe(false);
+  } finally {
+    log.mockRestore();
+    await rm(baseDir, { recursive: true, force: true });
+  }
 });
 
 beforeAll(async () => {
@@ -124,6 +179,8 @@ const LEGACY_UNFENCED_ONE_SHOT_MATERIALIZATION_AUTHORITY = {
 
 describe('materializeConnectedServicesForSpawn', () => {
   it('keeps qualified account native state separate from each Session request-auth capability root', async () => {
+    // File logging is the diagnostic boundary; binding, plugin serialization, queues and disk stay real.
+    const log = vi.spyOn(logger, 'infoFile');
     const root = await mkdtemp(join(tmpdir(), 'happier-qualified-native-home-'));
     const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
       agentId: 'codex', contributions: runtimeFixture!.registry.contributes,
@@ -158,7 +215,7 @@ describe('materializeConnectedServicesForSpawn', () => {
         record, request: input.request, signal: input.signal,
       }),
     });
-    const leases = ['qualified-first', 'qualified-second', 'qualified-after-rotation'].map(sessionId => owner.activateSessionPurposeBindings({
+    const leases = ['qualified-first', 'qualified-second', 'qualified-after-rotation', 'qualified-refused'].map(sessionId => owner.activateSessionPurposeBindings({
       sessionId, purposes: declaration.purposes, bindings: [binding],
     }));
     try {
@@ -195,28 +252,79 @@ describe('materializeConnectedServicesForSpawn', () => {
       await homeEntered;
       const accountCaptured = new Promise<void>(resolve => { capturedAccount = resolve; });
       const capturedRecord = record;
+      let measuredTime = 0;
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => measuredTime);
       const queued = materializeConnectedServicesForSpawnProduction({
         ...params, materializationKey: 'qualified-after-rotation', purposeBindingSessionId: 'qualified-after-rotation',
         recordsByServiceId: new Map([['openai-codex', capturedRecord]]),
       });
       try {
         await accountCaptured;
+        await vi.waitFor(() => expect(log).toHaveBeenCalledWith(
+          '[CONNECTED ACCOUNT] Materialization phase',
+          expect.objectContaining({ materializationKey: 'qualified-after-rotation', phase: 'native_home_queue', status: 'started' }),
+        ));
+        expect(log.mock.calls.some(([message, fields]) => message === '[CONNECTED ACCOUNT] Materialization phase'
+          && isMaterializationPhase(fields, 'qualified-after-rotation', 'native_home_queue', 'completed'))).toBe(false);
         record = buildConnectedServiceCredentialRecord({
           now: 20, serviceId: 'openai-codex', profileId: account.accountId, kind: 'oauth', expiresAt: 100000,
           oauth: { accessToken: 'newest-access', refreshToken: 'newest-refresh', idToken: 'newest-id',
             scope: null, tokenType: null, providerAccountId: 'fixture-account', providerEmail: null },
         });
       } finally {
+        measuredTime = 250_000;
         releaseHome();
+        // An assertion failure must still settle the live writer before retiring its fixture authority.
+        try {
+          await heldHome;
+          await queued;
+        } finally {
+          clock.mockRestore();
+        }
       }
       await heldHome;
       const rotated = await queued;
       expect(rotated!.env.CODEX_HOME).toBe(second!.env.CODEX_HOME);
       expect(await readFile(join(rotated!.env.CODEX_HOME!, 'auth.json'), 'utf8')).toContain('newest-access');
       expect(await readFile(join(rotated!.env.CODEX_HOME!, 'auth.json'), 'utf8')).not.toContain('fixture-access');
+      for (const phase of ['native_home_queue', 'native_home_state', 'native_home_credentials']) {
+        expect(log).toHaveBeenCalledWith('[CONNECTED ACCOUNT] Materialization phase', expect.objectContaining({
+          materializationKey: 'qualified-after-rotation', phase, status: 'completed',
+          durationMs: phase === 'native_home_queue' ? 250_000 : 0,
+        }));
+      }
+      const credentialReadError = new Error('fixture-private-credential-error');
+      capturedAccount = () => { throw credentialReadError; };
+      await expect(materializeConnectedServicesForSpawnProduction({
+        ...params, materializationKey: 'qualified-refused', purposeBindingSessionId: 'qualified-refused',
+      })).rejects.toBe(credentialReadError);
+      expect(log).toHaveBeenCalledWith('[CONNECTED ACCOUNT] Materialization phase', expect.objectContaining({
+        materializationKey: 'qualified-refused', phase: 'binding_read', status: 'failed', durationMs: expect.any(Number),
+      }));
+      const diagnostics = log.mock.calls.filter(([message]) => message === '[CONNECTED ACCOUNT] Materialization phase');
+      expect(diagnostics.length).toBeGreaterThan(0);
+      expect(diagnostics).toContainEqual(['[CONNECTED ACCOUNT] Materialization phase', expect.objectContaining({
+        materializationKey: 'qualified-after-rotation', phase: 'native_home_credentials', status: 'completed',
+        service: account.service,
+      })]);
+      for (const phase of ['materialization_binding_before', 'materialization_invoke', 'materialization_binding_after']) {
+        expect(diagnostics).toContainEqual(['[CONNECTED ACCOUNT] Materialization phase', expect.objectContaining({
+          materializationKey: 'qualified-after-rotation', phase, status: 'completed', parentPhaseId: expect.any(String),
+          service: account.service,
+        })]);
+      }
+      for (const [, fields] of diagnostics) {
+        expect(Object.keys(fields!).sort()).toEqual(
+          ['agentId', 'durationMs', 'materializationKey', 'phase', 'phaseId', 'status',
+            ...(Object.hasOwn(fields!, 'service') ? ['service'] : []),
+            ...(Object.hasOwn(fields!, 'parentPhaseId') ? ['parentPhaseId'] : [])].sort(),
+        );
+      }
+      expect(JSON.stringify(diagnostics)).not.toMatch(/fixture-access|fixture-refresh|newest-access|newest-refresh|fixture-private-credential-error/);
       await rotated!.cleanupOnExit!();
       await second!.cleanupOnExit!();
     } finally {
+      log.mockRestore();
       for (const lease of leases) lease.dispose();
       await rm(root, { recursive: true, force: true });
     }
@@ -476,6 +584,14 @@ describe('materializeConnectedServicesForSpawn', () => {
       const first = await materializeConnectedServicesForSpawnProduction(params);
       expect(first).not.toBeNull();
       const home = first!.env[environmentKey]!;
+      const expectedBinding = sourcePresent ? {
+        agentId, pluginId: `happier.agent.${agentId}`,
+        sourceCustody: runtimeFixture!.registry.readPluginSourceCustody!(`happier.agent.${agentId}`),
+        nativeHomeRoot: await realpath(home),
+        entries: [{ entryPath: stateEntry, sourceEntryRoot: await realpath(join(nativeHome, stateEntry)),
+          materializedEntryPath: join(await realpath(home), stateEntry) }],
+      } : undefined;
+      expect(first!.materializedStateObservationBinding).toEqual(expectedBinding);
       const transcript = join(home, stateEntry, '-tmp', 's.jsonl');
       await mkdir(join(home, stateEntry, '-tmp'), { recursive: true });
       await writeFile(transcript, '{"sessionId":"s"}\n');
@@ -490,6 +606,7 @@ describe('materializeConnectedServicesForSpawn', () => {
       // The first launch remains live: refresh uses this same staged replacement owner.
       const refreshed = await materializeConnectedServicesForSpawnProduction(params);
       expect(refreshed!.env[environmentKey]).toBe(home);
+      expect(refreshed!.materializedStateObservationBinding).toEqual(expectedBinding);
       expect(await readFile(transcript, 'utf8')).toBe('{"sessionId":"s"}\n');
       expect((await lstat(join(home, stateEntry))).isSymbolicLink()).toBe(sourcePresent);
       const manifest = await readConnectedServiceStateSharingManifest(home);

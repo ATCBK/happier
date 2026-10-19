@@ -92,7 +92,7 @@ describe('runtimeAuthFailureReportOutboxDrain', () => {
         resumePromptMode: 'custom',
         classification: expect.objectContaining({
           kind: 'auth_expired',
-          serviceId: 'claude-subscription',
+          serviceId: 'happier.agent.claude/claude-subscription',
           profileId: 'leeroy_new',
           groupId: 'claude-group',
         }),

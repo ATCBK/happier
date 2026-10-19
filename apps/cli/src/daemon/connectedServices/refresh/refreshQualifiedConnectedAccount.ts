@@ -31,6 +31,17 @@ type PluginConnectedAccountRefreshResult = Awaited<
   ReturnType<PluginConnectedAccountRuntime['refresh']>
 >;
 
+export class QualifiedConnectedAccountRefreshLeaseError extends Error {
+  constructor(readonly code:
+    | 'connected_account_refresh_lease_not_acquired'
+    | 'connected_account_refresh_lease_owner_mismatch'
+    | 'connected_account_refresh_lease_revision_mismatch',
+  ) {
+    super('Qualified Connected Account refresh lease was not acquired for the exact credential revision');
+    this.name = 'QualifiedConnectedAccountRefreshLeaseError';
+  }
+}
+
 export type QualifiedConnectedAccountRefreshSettlement =
   | Readonly<{
       status: 'refreshed';
@@ -170,8 +181,12 @@ export async function refreshQualifiedConnectedAccount(input: Readonly<{
     || lease.ownerId !== ownerId
     || lease.credentialRevision !== expectedCredential.credentialRevision
   ) {
-    throw new Error(
-      'Qualified Connected Account refresh lease was not acquired for the exact credential revision',
+    throw new QualifiedConnectedAccountRefreshLeaseError(
+      lease.credentialRevision !== expectedCredential.credentialRevision
+        ? 'connected_account_refresh_lease_revision_mismatch'
+        : lease.ownerId !== ownerId
+          ? 'connected_account_refresh_lease_owner_mismatch'
+          : 'connected_account_refresh_lease_not_acquired',
     );
   }
 

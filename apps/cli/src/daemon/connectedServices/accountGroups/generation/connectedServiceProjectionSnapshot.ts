@@ -31,25 +31,33 @@ export type ConnectedServiceProjectedCredentialPresence =
 export async function fetchConnectedServiceProjectionForSession(input: Readonly<{
   token: string;
   sessionId?: string;
-  resolveSessionAccountContext?: (sessionId: string) => Promise<RequesterSessionRuntimeContext | null>;
+  withSessionAccountContext?: <T>(sessionId: string | null, operation: (context: RequesterSessionRuntimeContext | null) => Promise<T>) => Promise<T>;
   assertSessionAccountCurrent?: (sessionId: string, context: RequesterSessionRuntimeContext | null) => Promise<void>;
   signal?: AbortSignal;
 }>): Promise<Readonly<{ snapshot: ConnectedServiceProjectionSnapshot; requester: boolean }>> {
   input.signal?.throwIfAborted();
-  if (input.sessionId && !input.resolveSessionAccountContext) throw new Error('requester_session_not_current');
-  const context = input.sessionId ? await input.resolveSessionAccountContext?.(input.sessionId) ?? null : null;
-  const assertCurrent = async () => {
-    input.signal?.throwIfAborted();
-    if (input.sessionId) await input.assertSessionAccountCurrent?.(input.sessionId, context);
-    if (context && !await context.isCurrent()) throw new Error('requester_session_not_current');
+  const readProjection = async (context: RequesterSessionRuntimeContext | null) => {
+    const assertCurrent = async () => {
+      input.signal?.throwIfAborted();
+      if (input.sessionId && input.assertSessionAccountCurrent) {
+        await input.assertSessionAccountCurrent(input.sessionId, context);
+      } else if (context && !await context.isCurrent()) {
+        throw new Error('requester_session_not_current');
+      }
+    };
+    await assertCurrent();
+    const read = () => fetchAccountProfile({ token: context?.bootstrap.credentials.token ?? input.token,
+      ...(input.signal ? { signal: input.signal } : {}) });
+    const profile = await (context ? runWithServerHttpBaseUrl(context.bootstrap.serverHttpBaseUrl, read) : read());
+    await assertCurrent();
+    return { snapshot: parseConnectedServiceProjectionSnapshot({ connectedServicesV2: profile.connectedServicesV2,
+      connectedServiceCredentialRevisionsV1: profile.connectedServiceCredentialRevisionsV1 }), requester: context !== null };
   };
-  await assertCurrent();
-  const read = () => fetchAccountProfile({ token: context?.bootstrap.credentials.token ?? input.token,
-    ...(input.signal ? { signal: input.signal } : {}) });
-  const profile = await (context ? runWithServerHttpBaseUrl(context.bootstrap.serverHttpBaseUrl, read) : read());
-  await assertCurrent();
-  return { snapshot: parseConnectedServiceProjectionSnapshot({ connectedServicesV2: profile.connectedServicesV2,
-    connectedServiceCredentialRevisionsV1: profile.connectedServiceCredentialRevisionsV1 }), requester: context !== null };
+  if (input.sessionId) {
+    if (!input.withSessionAccountContext) throw new Error('requester_session_not_current');
+    return await input.withSessionAccountContext(input.sessionId, readProjection);
+  }
+  return await readProjection(null);
 }
 
 /**

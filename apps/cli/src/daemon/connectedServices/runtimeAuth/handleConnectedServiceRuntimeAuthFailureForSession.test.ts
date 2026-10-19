@@ -928,7 +928,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             excluded: [],
         }));
         const refreshDiagnostic = {
-            serviceId: 'happier.agent.claude/claude-subscription' as const,
+            serviceId: 'claude-subscription' as const,
             profileId: 'primary',
             reason: 'runtime_auth_failure' as const,
             status: 'refreshed' as const,
@@ -1033,7 +1033,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refresh_failed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'happier.agent.codex/openai-codex' as const,
+                serviceId: 'openai-codex' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refresh_failed' as const,
@@ -1104,7 +1104,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             credential: null,
             runtimeAuthDisposition: 'superseded_by_current_group' as const,
             diagnostic: {
-                serviceId: 'happier.agent.claude/claude-subscription' as const,
+                serviceId: 'claude-subscription' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refreshed' as const,
@@ -1181,7 +1181,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refresh_failed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'happier.agent.codex/openai-codex' as const,
+                serviceId: 'openai-codex' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refresh_failed' as const,
@@ -1258,7 +1258,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refreshed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'happier.agent.claude/claude-subscription' as const,
+                serviceId: 'claude-subscription' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refreshed' as const,
@@ -1360,7 +1360,7 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
             status: 'refreshed' as const,
             credential: null,
             diagnostic: {
-                serviceId: 'happier.agent.claude/claude-subscription' as const,
+                serviceId: 'claude-subscription' as const,
                 profileId: 'primary',
                 reason: 'runtime_auth_failure' as const,
                 status: 'refreshed' as const,

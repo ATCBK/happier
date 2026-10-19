@@ -14,7 +14,7 @@ import {
   subscribeActiveAccountSettingsSnapshotChanges,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 
 import { createDaemonConnectedAccountPurposeBindingRuntime } from './purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
 
@@ -103,6 +103,8 @@ describe('Account Settings publication consumers', () => {
       loadedAtMs: 1,
       settingsSecretsReadKeys: [],
       scopeKey: resolveAccountSettingsScopeKeyForToken(token),
+      connectedPurposeCatalog: { status: 'ready', revision: 1,
+        record: { key: 'purposes', value: { v: 1, bindings: [] } } },
     });
   });
 
@@ -110,7 +112,7 @@ describe('Account Settings publication consumers', () => {
     resetActiveAccountSettingsSnapshotForTests();
   });
 
-  it('restarts a watching Session for a real catalog revocation but not for an unchanged refresh or a projection it already receives', async () => {
+  it('keeps an unbound Session watch unchanged across unrelated catalog refreshes and revocation', async () => {
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [sharedRow] } });
     await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
 
@@ -141,9 +143,9 @@ describe('Account Settings publication consumers', () => {
       vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [] } });
       await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
 
-      await vi.waitFor(() => expect(requestSessionRestart).toHaveBeenCalledOnce());
-      expect(resync).toHaveBeenCalledOnce();
-      expect(requestSessionRestart).toHaveBeenCalledWith({ sessionId: 'session-1', purpose });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(resync).not.toHaveBeenCalled();
+      expect(requestSessionRestart).not.toHaveBeenCalled();
     } finally {
       watch.dispose();
     }

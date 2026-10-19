@@ -36,11 +36,14 @@ export async function getConnectedServiceMaterializedHomeFreshness(
     entry.getConnectedServiceMaterializedHomeFreshness?.() ?? Promise.resolve(null));
 }
 
+/** Pure layout projection from the caller's acquired executable catalog facts. */
 export function resolveConnectedServiceMaterializedHomeRoot(
   agentId: CatalogAgentId,
   params: Omit<ConnectedServiceMaterializedHomeRootParams, 'agentId'>,
+  catalogEntry: AgentCatalogEntry | null,
 ): string | null {
-  const entry = AGENTS[agentId];
+  const entry = catalogEntry;
+  if (entry?.id !== agentId) return null;
   const nativeHome = entry?.connectedAccountNativeHome;
   const service = resolveQualifiedConnectedAccountServiceForIngressServiceId(params.serviceId);
   if (!nativeHome || !service

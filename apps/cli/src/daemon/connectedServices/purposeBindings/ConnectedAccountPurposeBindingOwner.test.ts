@@ -1451,9 +1451,9 @@ describe('ConnectedAccountPurposeBindingOwner', () => {
     }));
   });
 
-  it('fails materialization closed when unbound and forwards binding/projection invalidations', async () => {
+  it('fails materialization closed when unbound and watches only changes to its own purpose', async () => {
     const store = memoryStore();
-    const { owner } = createOwner({ store });
+    const { owner } = createOwner({ store, resolveCredentialRevision: async () => 'csr_abcdefghijklmnopqrstuv' });
     const listener = vi.fn();
     const subscription = owner.watch({ ...authorized, listener });
 
@@ -1464,6 +1464,15 @@ describe('ConnectedAccountPurposeBindingOwner', () => {
     })).rejects.toMatchObject({ code: 'plugin_host_access_resource_not_selected' });
 
     store.invalidate();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(listener).not.toHaveBeenCalled();
+    await owner.requestSelection({ ...authorized, reason: 'Select account', signal: new AbortController().signal });
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce());
+    await store.update(current => ({ ...current, bindings: [...current.bindings, {
+      purpose: { ...purpose, purpose: 'another-purpose' },
+      target: { kind: 'account', account: { service, accountId: 'other' } },
+    }] }));
+    await new Promise<void>(resolve => setImmediate(resolve));
     expect(listener).toHaveBeenCalledOnce();
     subscription.dispose();
     store.invalidate();

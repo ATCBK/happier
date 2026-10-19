@@ -10,6 +10,21 @@ import { createConnectedAccountPurposeBindingOwner } from './ConnectedAccountPur
 
 const roots: string[] = [];
 
+function createPurposeBindingFixture(onDispose: () => void = () => {}) {
+  const unexpected = async (): Promise<never> => { throw new Error('Unexpected account transport'); };
+  const owner = createConnectedAccountPurposeBindingOwner({
+    store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected, subscribe: () => ({ dispose() {} }) },
+    selectTarget: unexpected, resolveTarget: unexpected, materializeAccount: unexpected,
+    projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+  });
+  return {
+    activatePurposeBindings: vi.fn((input: Parameters<typeof owner.activatePurposeBindings>[0]) => {
+      const lease = owner.activatePurposeBindings(input);
+      return { ...lease, dispose() { lease.dispose(); onDispose(); } };
+    }),
+  };
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(async (root) => {
     await rm(root, { recursive: true, force: true });
@@ -73,16 +88,6 @@ describe('managed Provider operation authority', () => {
         },
       },
     };
-    const createPurposeBindingOwner = () => ({
-      activatePurposeBindings: () => Object.freeze({
-        subjectId:
-          'managed-provider-operation:session-provider-claim/provider:acme.provider/managed',
-        isCurrent: () => true,
-        resolvePurposeBinding: () => binding,
-        listPurposeBindings: () => [binding],
-        dispose() {},
-      }),
-    });
     const registryA = createConnectedAccountRequestAuthSubjectRegistry();
     const registryB = createConnectedAccountRequestAuthSubjectRegistry();
     const createAuthority = (
@@ -90,7 +95,7 @@ describe('managed Provider operation authority', () => {
       httpPort: number,
     ) => createManagedProviderOperationAuthority({
       materializationBaseDir: baseDir,
-      purposeBindingOwner: createPurposeBindingOwner(),
+      purposeBindingOwner: createPurposeBindingFixture(),
       requestAuthRegistry,
       resolveRequestAuthHttpPort: () => httpPort,
       createRedactionLease: () => Object.freeze({ add() {}, close() {} }),
@@ -165,20 +170,8 @@ describe('managed Provider operation authority', () => {
         },
       },
     };
-    let leaseCurrent = true;
-    const disposeLease = vi.fn(() => {
-      leaseCurrent = false;
-    });
-    const activatePurposeBindings = vi.fn(() => Object.freeze({
-      subjectId:
-        'managed-provider-operation:operation-1/provider:acme.provider/managed',
-      isCurrent: () => leaseCurrent,
-      resolvePurposeBinding: (candidate: typeof purpose) => (
-        JSON.stringify(candidate) === JSON.stringify(purpose) ? binding : null
-      ),
-      listPurposeBindings: () => leaseCurrent ? [binding] : [],
-      dispose: disposeLease,
-    }));
+    const disposeLease = vi.fn();
+    const { activatePurposeBindings } = createPurposeBindingFixture(disposeLease);
     const requestAuthRegistry = createConnectedAccountRequestAuthSubjectRegistry();
     const retireRequestAuth = vi.spyOn(requestAuthRegistry, 'retire');
     const closeRedaction = vi.fn();
@@ -266,15 +259,7 @@ describe('managed Provider operation authority', () => {
       .mockImplementation(registry.retire);
     const authority = createManagedProviderOperationAuthority({
       materializationBaseDir: baseDir,
-      purposeBindingOwner: {
-        activatePurposeBindings: () => Object.freeze({
-          subjectId: 'managed-provider-operation:retry-cleanup',
-          isCurrent: () => true,
-          resolvePurposeBinding: () => binding,
-          listPurposeBindings: () => [binding],
-          dispose: disposeLease,
-        }),
-      },
+      purposeBindingOwner: createPurposeBindingFixture(disposeLease),
       requestAuthRegistry: {
         activate: registry.activate,
         retire,
@@ -323,18 +308,10 @@ describe('managed Provider operation authority', () => {
       consumer: { pluginId: 'happier.provider.cliproxyapi', localId: 'managed' },
       purpose: 'upstream',
     } as const;
-    const exactLease = Object.freeze({
-      subjectId: 'optional-unbound-provider',
-      isCurrent: () => true,
-      resolvePurposeBinding: () => null,
-      listPurposeBindings: () => Object.freeze([]),
-      dispose() {},
-    });
+    const purposeBindingOwner = createPurposeBindingFixture();
     const authority = createManagedProviderOperationAuthority({
       materializationBaseDir: baseDir,
-      purposeBindingOwner: {
-        activatePurposeBindings: vi.fn(() => exactLease),
-      },
+      purposeBindingOwner,
       requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(),
       resolveRequestAuthHttpPort: () => 43123,
       createRedactionLease: () => Object.freeze({ add() {}, close() {} }),
@@ -356,7 +333,9 @@ describe('managed Provider operation authority', () => {
       isCurrent: () => true,
     });
 
-    expect(exactLease.resolvePurposeBinding()).toBeNull();
+    const exactLease = purposeBindingOwner.activatePurposeBindings.mock.results[0]?.value;
+    if (!exactLease) throw new Error('Expected the exact activated purpose lease');
+    expect(exactLease.resolvePurposeBinding(purpose)).toBeNull();
     expect(exactLease.listPurposeBindings()).toEqual([]);
     expect(activation.requestAuth).not.toBeNull();
     expect(activation.requestAuth?.qualifiedRequestAuthUses).toEqual([]);

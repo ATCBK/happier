@@ -3,6 +3,7 @@ import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@h
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES } from '@happier-dev/protocol/connect/connectedServiceUxDiagnostics';
 import type { AccountSettings, ConnectedAccountServiceKey, BuiltInLegacyConnectedAccountOperation, ConnectedServiceCredentialHealthV1, ConnectedServiceCredentialRecordV1, ConnectedServiceCredentialRevisionBoundaryV1, ConnectedServiceCredentialRevisionV1, ConnectedServiceExecutionAuthorityV1, ConnectedServiceId, QualifiedConnectedAccountPurposeBindingV1, QualifiedConnectedAccountCredentialSnapshotV4, QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type { ConnectedAccountHealthResult as PluginConnectedAccountHealthResult } from '@happier-dev/plugin-sdk/connected-accounts';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -18,6 +19,7 @@ import type {
 } from '@/api/client/qualifiedConnectedAccountApi';
 import { mutateQualifiedConnectedAccountCredentialHealthV4, QualifiedConnectedAccountCompatibilityError } from '@/api/client/qualifiedConnectedAccountApi';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
+import { readCurrentCatalogHook } from '@/agent/catalog/runtimeEntry';
 import type { StoredCredentials } from '@/persistence';
 import { logger } from '@/ui/logger';
 
@@ -81,6 +83,8 @@ import type {
 } from '../qualifiedConnectedAccountV4Support';
 import {
   refreshQualifiedConnectedAccount,
+  QualifiedConnectedAccountRefreshLeaseError,
+  type QualifiedConnectedAccountRefreshSettlement,
 } from './refreshQualifiedConnectedAccount';
 import { sanitizeConnectedServiceDiagnosticError } from '../runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 import type { ConnectedServiceDaemonAuthBridgeRefreshResult } from '../daemonAuthBridgeTypes';
@@ -234,6 +238,7 @@ export type ConnectedServiceCredentialRefreshResult = Readonly<{
 
 export type QualifiedConnectedAccountSpawnPreflightResult = Readonly<{
   status: 'ready' | 'reconnect_required' | 'refresh_failed';
+  reason?: QualifiedConnectedAccountRefreshLeaseError['code'] | 'project_requester_home_unavailable';
 }>;
 
 export type ConnectedServiceAuthGroupCandidatePreparationResult =
@@ -627,8 +632,12 @@ async function readCredentialForRefresh(params: Readonly<{
 export class ConnectedServiceRefreshCoordinator {
   private readonly runtimeRegistry: ConnectedServiceRuntimeRegistry;
   private readonly inFlightRefreshes = new Map<string, Readonly<{
+    kind: 'binding';
     credentialReady: Promise<ConnectedServiceCredentialRefreshResult>;
     completion: Promise<ConnectedServiceCredentialRefreshResult>;
+  }> | Readonly<{
+    kind: 'qualified';
+    completion: Promise<QualifiedConnectedAccountRefreshSettlement>;
   }>>();
   private readonly inFlightRefreshRematerializations = new Map<string, Promise<RematerializedTargetsResult>>();
   private readonly inFlightRefreshAuthUpdatedNotifications = new Map<string, Promise<void>>();
@@ -960,11 +969,10 @@ export class ConnectedServiceRefreshCoordinator {
       ReturnType<typeof refreshQualifiedConnectedAccount>
     >;
     try {
-      settlement = await refreshQualifiedConnectedAccount({
+      settlement = await this.refreshQualifiedAccount({
         account: input.account,
         token: this.params.credentials.token,
-        ownerId:
-          `${ownerBase.slice(0, 208)}:configuration:${randomBytes(16).toString('hex')}`,
+        ownerId: ownerBase,
         leaseMs: this.params.refreshLeaseMs,
         operationId: randomBytes(16).toString('hex'),
         expectedCredential,
@@ -1090,7 +1098,8 @@ export class ConnectedServiceRefreshCoordinator {
           const retryAt = this.credentialHealthReprobeState.get(key)?.nextProbeAt;
           let nextProbeAt = retryAt
             ?? (this.params.qualifiedConnectedAccountRuntime && this.isOperationAvailable(binding, 'credential_health')
-              ? now + (this.params.healthProbeIntervalMs ?? 30_000) : undefined);
+              // Slow Home reads must not consume the next observation's interval.
+              ? this.params.now() + (this.params.healthProbeIntervalMs ?? 30_000) : undefined);
           const expiryDeadline = result.diagnostic.expiresAt === null ? null
             : result.diagnostic.expiresAt - this.params.refreshWindowMs;
           if (retryAt === undefined && expiryDeadline !== null && expiryDeadline > now) {
@@ -1124,7 +1133,7 @@ export class ConnectedServiceRefreshCoordinator {
         if (probeAt === undefined || probeAt <= now || expiryDue) {
           await this.maybeRefreshScheduledQualifiedAccount(profile, now);
           if (this.shouldRunQualifiedOperation(profile.ref, 'credential_health')) {
-            this.scheduledHealthProbeAtByKey.set(key, now + (this.params.healthProbeIntervalMs ?? 30_000));
+            this.scheduledHealthProbeAtByKey.set(key, this.params.now() + (this.params.healthProbeIntervalMs ?? 30_000));
           }
         }
         scheduleAt(this.credentialHealthReprobeState.get(key)?.nextProbeAt
@@ -1164,9 +1173,12 @@ export class ConnectedServiceRefreshCoordinator {
     const previous = this.credentialHealthReprobeState.get(key);
     if (previous && now < previous.nextProbeAt) return;
     const armBackoff = (): void => {
-      this.armQualifiedConnectedAccountHealthBackoff(profile.ref, now);
+      this.armQualifiedConnectedAccountHealthBackoff(profile.ref);
     };
     try {
+      // Reconnecting replaces the credential revision and clears this status.
+      // An expiry-only status probe cannot rehabilitate a rejected refresh grant.
+      if (isReconnectRequiredProfileStatus(profile.status)) return;
       const statusInvocation =
         await runtime.establishedRuntimeOwner.invokeWithReceipt({
           account: profile.ref,
@@ -1237,7 +1249,7 @@ export class ConnectedServiceRefreshCoordinator {
         armBackoff();
         return;
       }
-      const settlement = await refreshQualifiedConnectedAccount({
+      const settlement = await this.refreshQualifiedAccount({
         account: profile.ref,
         token: this.params.credentials.token,
         ownerId,
@@ -1291,14 +1303,13 @@ export class ConnectedServiceRefreshCoordinator {
 
   private armQualifiedConnectedAccountHealthBackoff(
     account: QualifiedConnectedAccountRef,
-    now = this.params.now(),
   ): void {
     const key = `qualified:${qualifiedAccountKey(account)}`;
     const failureCount =
       (this.credentialHealthReprobeState.get(key)?.failureCount ?? 0) + 1;
     this.credentialHealthReprobeState.set(key, {
       failureCount,
-      nextProbeAt: now + credentialHealthReprobeDelayMs(failureCount - 1),
+      nextProbeAt: this.params.now() + credentialHealthReprobeDelayMs(failureCount - 1),
     });
   }
 
@@ -1526,7 +1537,7 @@ export class ConnectedServiceRefreshCoordinator {
     account: QualifiedConnectedAccountRef;
     expectedCredentialRevision: ConnectedServiceCredentialRevisionV1;
   }>): Promise<boolean> {
-    return await this.refreshQualifiedCredential(input) === 'refreshed';
+    return (await this.refreshQualifiedCredential(input)).status === 'refreshed';
   }
 
   async refreshQualifiedConnectedAccountCredentialForSpawnPreflight(input: Readonly<{
@@ -1537,23 +1548,79 @@ export class ConnectedServiceRefreshCoordinator {
     if (profile.revisionSemantics !== 'revisioned') return { status: 'refresh_failed' };
     // Qualified metadata drives the same coordinator-owned refresh window as
     // legacy spawn. Never reverse-project a device/OAuth mode into a V2 record.
-    if (typeof profile.expiresAt !== 'number'
-      || !Number.isFinite(profile.expiresAt)
-      || profile.expiresAt - this.params.now() > this.params.refreshWindowMs) {
+    const expiresAt = typeof profile.expiresAt === 'number' && Number.isFinite(profile.expiresAt)
+      ? profile.expiresAt : null;
+    let refreshNeeded = expiresAt !== null && expiresAt - this.params.now() <= this.params.refreshWindowMs;
+    if (expiresAt === null || profile.status === 'refresh_failed_retryable') {
+      const runtime = this.params.qualifiedConnectedAccountRuntime;
+      if (!runtime || !this.shouldRunQualifiedOperation(profile.ref, 'credential_health')) {
+        return { status: 'refresh_failed' };
+      }
+      try {
+        if (await this.isQualifiedReconnectRequired(profile.ref, profile.credentialRevision)) {
+          return { status: 'reconnect_required' };
+        }
+        // Native OAuth profiles need not project their expiry into metadata.
+        // The established plugin status still observes that exact credential.
+        const invocation = await runtime.establishedRuntimeOwner.invokeWithReceipt({
+          account: profile.ref,
+          expectedCredentialRevision: profile.credentialRevision,
+          operation: Object.freeze({ kind: 'status' as const }),
+        });
+        if (invocation.basis.credentialRevision !== profile.credentialRevision
+          || invocation.basis.credentialConfigurationRevision !== profile.configurationRevision
+          || !invocation.basis.isCurrent()) {
+          return { status: 'refresh_failed' };
+        }
+        const health = buildCredentialHealthFromPluginStatus(invocation.result);
+        refreshNeeded = refreshNeeded || invocation.result.status === 'expired';
+        // Expiry is an input to refresh, not its outcome. An intermediate
+        // health write must not prevent the provider exchange from running.
+        if (!refreshNeeded) {
+          try {
+            await this.settleQualifiedConnectedAccountHealth({ account: profile.ref, basis: invocation.basis, health });
+          } catch (error) {
+            if (!health.reconnectRequired || !invocation.basis.isCurrent()) throw error;
+            logger.warn('[DAEMON RUN] Qualified Connected Account rejection health did not settle', {
+              service: profile.ref.service,
+              error: sanitizeConnectedServiceDiagnosticError(error, { redactedValues: [profile.ref.accountId] }),
+            });
+          }
+        }
+        if (health.reconnectRequired) return { status: 'reconnect_required' };
+        if (!refreshNeeded && health.status !== 'connected') return { status: 'refresh_failed' };
+      } catch (error) {
+        this.armQualifiedConnectedAccountHealthBackoff(profile.ref);
+        logger.warn('[DAEMON RUN] Qualified Connected Account spawn status did not settle', {
+          service: profile.ref.service,
+          error: sanitizeConnectedServiceDiagnosticError(error, { redactedValues: [profile.ref.accountId] }),
+        });
+        return { status: 'refresh_failed',
+          ...(isPluginError(error) && error.code === 'project_requester_home_unavailable'
+            ? { reason: error.code } : {}),
+        };
+      }
+    }
+    if (!refreshNeeded) {
       return { status: 'ready' };
     }
-    const status = await this.refreshQualifiedCredential({
+    const result = await this.refreshQualifiedCredential({
       account: profile.ref,
       expectedCredentialRevision: profile.credentialRevision,
     });
-    return { status: status === 'refreshed' || status === 'unchanged'
-      ? 'ready' : status === 'reconnect_required' ? status : 'refresh_failed' };
+    return { status: result.status === 'refreshed' || result.status === 'unchanged'
+      ? 'ready' : result.status === 'reconnect_required' ? result.status : 'refresh_failed',
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
   }
 
   private async refreshQualifiedCredential(input: Readonly<{
     account: QualifiedConnectedAccountRef;
     expectedCredentialRevision: ConnectedServiceCredentialRevisionV1;
-  }>): Promise<'refreshed' | 'unchanged' | 'reconnect_required' | 'refresh_failed'> {
+  }>): Promise<Readonly<{
+    status: 'refreshed' | 'unchanged' | 'reconnect_required' | 'refresh_failed';
+    reason?: QualifiedConnectedAccountRefreshLeaseError['code'];
+  }>> {
     const runtime = this.params.qualifiedConnectedAccountRuntime;
     if (
       !runtime
@@ -1562,7 +1629,7 @@ export class ConnectedServiceRefreshCoordinator {
       || !this.shouldRunQualifiedOperation(input.account, 'refresh_lease')
       || !this.shouldRunQualifiedOperation(input.account, 'credential_write')
     ) {
-      return 'refresh_failed';
+      return { status: 'refresh_failed' };
     }
     const expectedCredential = await runtime.readCredential({
       token: this.params.credentials.token,
@@ -1576,14 +1643,17 @@ export class ConnectedServiceRefreshCoordinator {
       || expectedCredential.credentialRevision
         !== input.expectedCredentialRevision
     ) {
-      return 'refresh_failed';
+      return { status: 'refresh_failed' };
     }
     const ownerId =
       this.params.ownerIdProvider?.()?.trim()
       || this.params.machineIdProvider().trim();
-    if (!ownerId) return 'refresh_failed';
+    if (!ownerId) return { status: 'refresh_failed' };
     try {
-      const settlement = await refreshQualifiedConnectedAccount({
+      if (await this.isQualifiedReconnectRequired(input.account, input.expectedCredentialRevision)) {
+        return { status: 'reconnect_required' };
+      }
+      const settlement = await this.refreshQualifiedAccount({
         account: input.account,
         token: this.params.credentials.token,
         ownerId,
@@ -1601,16 +1671,7 @@ export class ConnectedServiceRefreshCoordinator {
           !== input.expectedCredentialRevision
         || !settlement.basis.isCurrent()
       ) {
-        return 'refresh_failed';
-      }
-      if (settlement.status === 'refreshed') {
-        this.resetQualifiedConnectedAccountHealthBackoff(input.account);
-        await runtime.onCredentialUpdated?.(input.account);
-        return 'refreshed';
-      }
-      if (settlement.status === 'unchanged') {
-        this.resetQualifiedConnectedAccountHealthBackoff(input.account);
-        return 'unchanged';
+        return { status: 'refresh_failed' };
       }
       const health = settlement.status === 'outcome_unknown'
         ? {
@@ -1621,13 +1682,34 @@ export class ConnectedServiceRefreshCoordinator {
               settlement.result.diagnostic.code.trim().slice(0, 128),
           }
         : buildCredentialHealthFromPluginStatus(settlement.result);
-      await this.settleQualifiedConnectedAccountHealth({
-        account: input.account,
-        basis: settlement.basis,
-        health,
-      });
+      try {
+        await this.settleQualifiedConnectedAccountHealth({
+          account: input.account,
+          basis: settlement.basis,
+          health,
+          ...(settlement.status === 'refreshed'
+            ? { settledCredentialRevision: settlement.credentialRevision } : {}),
+        });
+      } catch (error) {
+        // Diagnostic persistence cannot change the observed provider outcome.
+        // The health CAS targets the exact revision returned by credential settlement.
+        logger.warn('[DAEMON RUN] Qualified Connected Account refresh health did not settle', {
+          service: input.account.service,
+          error: sanitizeConnectedServiceDiagnosticError(error, { redactedValues: [input.account.accountId] }),
+        });
+        if (!settlement.basis.isCurrent()) return { status: 'refresh_failed' };
+      }
+      if (settlement.status === 'refreshed') {
+        this.resetQualifiedConnectedAccountHealthBackoff(input.account);
+        await runtime.onCredentialUpdated?.(input.account);
+        return { status: 'refreshed' };
+      }
+      if (settlement.status === 'unchanged') {
+        this.resetQualifiedConnectedAccountHealthBackoff(input.account);
+        return { status: 'unchanged' };
+      }
       this.armQualifiedConnectedAccountHealthBackoff(input.account);
-      return health.reconnectRequired ? 'reconnect_required' : 'refresh_failed';
+      return { status: health.reconnectRequired ? 'reconnect_required' : 'refresh_failed' };
     } catch (error) {
       this.armQualifiedConnectedAccountHealthBackoff(input.account);
       logger.warn(
@@ -1639,7 +1721,9 @@ export class ConnectedServiceRefreshCoordinator {
           }),
         },
       );
-      return 'refresh_failed';
+      return { status: 'refresh_failed',
+        ...(error instanceof QualifiedConnectedAccountRefreshLeaseError ? { reason: error.code } : {}),
+      };
     }
   }
 
@@ -2018,7 +2102,7 @@ export class ConnectedServiceRefreshCoordinator {
         agentId: target.agentId,
         materializationKey: target.materializationKey,
       });
-      const materializedRootDir = this.resolveMaterializedHomeRootForTarget({
+      const materializedRootDir = await this.resolveMaterializedHomeRootForTarget({
         target,
         binding: targetBinding,
       }) ?? fallbackMaterializedRootDir;
@@ -2069,7 +2153,7 @@ export class ConnectedServiceRefreshCoordinator {
     const key = bindingKey(binding);
     while (true) {
       const existing = this.inFlightRefreshes.get(key);
-      if (existing) {
+      if (existing?.kind === 'binding') {
         // A rejecting credential rotation represents an attempt that re-running concurrently would
         // not improve; every joiner adopts the same rejection rather than firing a duplicate refresh.
         const observed = await existing.credentialReady;
@@ -2091,7 +2175,7 @@ export class ConnectedServiceRefreshCoordinator {
         binding,
         result,
       ));
-      const inFlight = { credentialReady, completion } as const;
+      const inFlight = { kind: 'binding', credentialReady, completion } as const;
       this.inFlightRefreshes.set(key, inFlight);
       try {
         const result = await completion;
@@ -2103,6 +2187,37 @@ export class ConnectedServiceRefreshCoordinator {
         }
       }
     }
+  }
+
+  private async refreshQualifiedAccount(
+    input: Parameters<typeof refreshQualifiedConnectedAccount>[0],
+  ): Promise<QualifiedConnectedAccountRefreshSettlement> {
+    // Every qualified entry point (including a legacy binding) joins the same
+    // provider exchange and CAS. Binding completion still owns distribution;
+    // it must not hold up credential-ready spawn preflights that join here.
+    const key = JSON.stringify(['qualified', qualifiedAccountKey(input.account), input.expectedCredential.credentialRevision]);
+    const existing = this.inFlightRefreshes.get(key);
+    if (existing?.kind === 'qualified') return await existing.completion;
+    const completion = refreshQualifiedConnectedAccount(input);
+    const inFlight = { kind: 'qualified', completion } as const;
+    this.inFlightRefreshes.set(key, inFlight);
+    try {
+      return await completion;
+    } finally {
+      if (this.inFlightRefreshes.get(key) === inFlight) {
+        this.inFlightRefreshes.delete(key);
+      }
+    }
+  }
+
+  private async isQualifiedReconnectRequired(
+    account: QualifiedConnectedAccountRef,
+    credentialRevision?: ConnectedServiceCredentialRevisionV1,
+  ): Promise<boolean> {
+    const profiles = await this.params.qualifiedConnectedAccountRuntime?.listScheduledAccounts?.();
+    return profiles?.some((profile) => qualifiedAccountKey(profile.ref) === qualifiedAccountKey(account)
+      && (!credentialRevision || (profile.revisionSemantics === 'revisioned' && profile.credentialRevision === credentialRevision))
+      && isReconnectRequiredProfileStatus(profile.status)) === true;
   }
 
   private shouldDeferCredentialHealthReprobe(
@@ -2119,13 +2234,13 @@ export class ConnectedServiceRefreshCoordinator {
     this.credentialHealthReprobeState.delete(bindingKey(binding));
   }
 
-  private armCredentialHealthReprobeBackoff(binding: BoundProfile, now: number): void {
+  private armCredentialHealthReprobeBackoff(binding: BoundProfile): void {
     const key = bindingKey(binding);
     const previous = this.credentialHealthReprobeState.get(key);
     const failureCount = (previous?.failureCount ?? 0) + 1;
     this.credentialHealthReprobeState.set(key, {
       failureCount,
-      nextProbeAt: now + credentialHealthReprobeDelayMs(failureCount - 1),
+      nextProbeAt: this.params.now() + credentialHealthReprobeDelayMs(failureCount - 1),
     });
   }
 
@@ -2173,6 +2288,10 @@ export class ConnectedServiceRefreshCoordinator {
       return { status: 'unavailable' };
     }
     try {
+      if (await this.isQualifiedReconnectRequired(account, options.expectedCredentialRevision)) {
+        this.armCredentialHealthReprobeBackoff(binding);
+        return { status: 'settled', reconnectRequired: true };
+      }
       const invocation = await runtime.establishedRuntimeOwner.invokeWithReceipt({
         account,
         operation: Object.freeze({ kind: 'status' as const }),
@@ -2211,11 +2330,11 @@ export class ConnectedServiceRefreshCoordinator {
         );
       }
       if (health.reconnectRequired) {
-        this.armCredentialHealthReprobeBackoff(binding, now);
+        this.armCredentialHealthReprobeBackoff(binding);
       } else if (health.status === 'connected') {
         this.resetCredentialHealthReprobe(binding);
       } else {
-        this.armCredentialHealthReprobeBackoff(binding, now);
+        this.armCredentialHealthReprobeBackoff(binding);
       }
       return {
         status: 'settled',
@@ -2228,7 +2347,7 @@ export class ConnectedServiceRefreshCoordinator {
       ) {
         throw error;
       }
-      this.armCredentialHealthReprobeBackoff(binding, now);
+      this.armCredentialHealthReprobeBackoff(binding);
       logger.warn(
         '[DAEMON RUN] Qualified Connected Account status probe did not settle',
         {
@@ -2245,6 +2364,8 @@ export class ConnectedServiceRefreshCoordinator {
 
   private async settleQualifiedConnectedAccountHealth(input: Readonly<{
     account: QualifiedConnectedAccountRef;
+    /** Only a successful credential CAS can supply a replacement revision. */
+    settledCredentialRevision?: ConnectedServiceCredentialRevisionV1;
     basis: Awaited<
       ReturnType<
         QualifiedConnectedAccountEstablishedRuntimeOwner['invokeWithReceipt']
@@ -2267,17 +2388,18 @@ export class ConnectedServiceRefreshCoordinator {
     }
     const expectedConfigurationRevision =
       input.basis.credentialConfigurationRevision;
+    const expectedCredentialRevision = input.settledCredentialRevision ?? input.basis.credentialRevision;
     const mutation = await runtime.mutateCredentialHealth({
       token: this.params.credentials.token,
       patch: Object.freeze({
         ref: input.account,
-        expectedCredentialRevision: input.basis.credentialRevision,
+        expectedCredentialRevision,
         expectedConfigurationRevision,
         health: input.health,
       }),
     });
     if (
-      mutation.credentialRevision !== input.basis.credentialRevision
+      mutation.credentialRevision !== expectedCredentialRevision
       || mutation.configurationRevision !== expectedConfigurationRevision
       || !input.basis.isCurrent()
     ) {
@@ -2427,7 +2549,7 @@ export class ConnectedServiceRefreshCoordinator {
       };
     }
     try {
-      const settlement = await refreshQualifiedConnectedAccount({
+      const settlement = await this.refreshQualifiedAccount({
         account,
         token: this.params.credentials.token,
         ownerId,
@@ -2508,7 +2630,7 @@ export class ConnectedServiceRefreshCoordinator {
         basis: settlement.basis,
         health,
       });
-      if (health.reconnectRequired) this.armCredentialHealthReprobeBackoff(binding, now);
+      if (health.reconnectRequired) this.armCredentialHealthReprobeBackoff(binding);
       const result: ConnectedServiceCredentialRefreshResult = {
         status: health.reconnectRequired
           ? 'blocked_by_credential_health'
@@ -2723,7 +2845,7 @@ export class ConnectedServiceRefreshCoordinator {
       finalizedResult.status === 'refresh_failed'
       && isReauthRequiredFailure(finalizedResult.diagnostic.category ?? 'unknown')
     ) {
-      this.armCredentialHealthReprobeBackoff(binding, this.params.now());
+      this.armCredentialHealthReprobeBackoff(binding);
     }
     const healthSettled = await this.persistCredentialHealthForRefreshResult(finalizedResult);
     if (healthSettled) {
@@ -3228,22 +3350,22 @@ export class ConnectedServiceRefreshCoordinator {
       }));
   }
 
-  private resolveMaterializedHomeRootForTarget(input: Readonly<{
+  private async resolveMaterializedHomeRootForTarget(input: Readonly<{
     target: SpawnTarget;
     binding: BoundProfile;
-  }>): string | null {
+  }>): Promise<string | null> {
     const selection = [...(input.target.childSelectionsByServiceId?.values() ?? [])]
       .find((candidate) => (
         resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey(
           candidate.serviceId,
         ) === input.binding.serviceId
       )) ?? null;
-    return resolveConnectedServiceMaterializedHomeRoot(input.target.agentId, {
+    return await readCurrentCatalogHook(input.target.agentId, entry => resolveConnectedServiceMaterializedHomeRoot(input.target.agentId, {
       activeServerDir: this.params.activeServerDir,
       serviceId: input.binding.serviceId,
       profileId: input.binding.profileId,
       selection,
-    });
+    }, entry));
   }
 
   private async resolveCanonicalGroupStateForRefresh(

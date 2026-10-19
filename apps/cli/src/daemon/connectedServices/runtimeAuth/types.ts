@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   AGENT_CONNECTED_ACCOUNT_RUNTIME_AUTH_FAILURE_KINDS,
   type AgentConnectedAccountProviderOutcomeInputV1,

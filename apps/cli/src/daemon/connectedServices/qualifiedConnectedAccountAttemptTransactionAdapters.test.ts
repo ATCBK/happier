@@ -295,11 +295,15 @@ describe('qualified Connected Account attempt transaction adapters', () => {
         service: { ...initial.service, retiredServiceField: true },
         sourceCustody: { ...initial.sourceCustody, retiredCustodyField: true } },
     } } });
-    if (kind === 'oauth') await expect(owner.oauth!.read(initial.attemptId)).resolves.toMatchObject({ snapshot: initial });
+    if (kind === 'oauth') {
+      const read = owner.oauth?.read;
+      if (!read) throw new Error('Expected the retained OAuth transaction reader');
+      await expect(read(initial.attemptId)).resolves.toMatchObject({ snapshot: initial });
+    }
     else await expect(owner.device!.read(initial.attemptId)).resolves.toEqual(initial);
     const freshWithUnknown = { ...deviceSnapshot(), retiredSnapshotField: true };
     await expect(owner.device!.acknowledge(freshWithUnknown))
-      .rejects.toMatchObject({ name: 'ZodError' });
+      .rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ code: 'unrecognized_keys', path: ['snapshot'], keys: ['retiredSnapshotField'] })]) });
   });
 
   it.each([

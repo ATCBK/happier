@@ -158,8 +158,8 @@ it('prepares selected Antigravity account homes and preserves copied config and 
       expect(new Uint8Array(await readFile(join(accountAHome, 'antigravity-acp', path)))).toEqual(bytes);
       expect(new Uint8Array(await readFile(join(nativeRoot, 'antigravity-acp', path)))).toEqual(bytes);
     }
-    expect(await realpath(join(accountAHome, 'antigravity-acp', 'conversations'))).toBe(join(nativeRoot, 'antigravity-acp', 'conversations'));
-    expect(await realpath(join(accountAHome, 'antigravity-acp', 'brain'))).toBe(join(nativeRoot, 'antigravity-acp', 'brain'));
+    expect(await realpath(join(accountAHome, 'antigravity-acp', 'conversations'))).toBe(await realpath(join(nativeRoot, 'antigravity-acp', 'conversations')));
+    expect(await realpath(join(accountAHome, 'antigravity-acp', 'brain'))).toBe(await realpath(join(nativeRoot, 'antigravity-acp', 'brain')));
     expect(await readFile(join(nativeRoot, 'antigravity-acp', 'acp_token.json'), 'utf8')).toBe('native credential');
     expect(existsSync(join(nativeRoot, 'antigravity-acp', 'unknown-private.json'))).toBe(false);
     expect(await readFile(join(accountAHome, 'antigravity-acp', 'acp_token.json'), 'utf8')).toContain('access-account-a');

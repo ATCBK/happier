@@ -63,6 +63,15 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage material fingerprint', () => {
+    it('ignores per-request HTTP clocks and headers without hiding refresh failures', async () => {
+        const module = await loadFingerprintModule();
+        const key = new Uint8Array(32).fill(7);
+        const reading = (at: number) => createSnapshot({ observedAtMs: at, fetchedAtMs: at,
+            diagnostics: [{ kind: 'provider_http', status: 200, observedAtMs: at,
+                headers: { 'x-request-id': `request-${at}`, date: String(at) } }] });
+        expect(module!.computeProviderAccountUsageSnapshotFingerprint(reading(2000), key))
+            .toBe(module!.computeProviderAccountUsageSnapshotFingerprint(reading(3000), key));
+    });
     it('keeps timestamp-only reset phases while coalescing observations within a phase', async () => {
         const module = await loadFingerprintModule();
         expect(module).not.toBeNull();

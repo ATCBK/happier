@@ -44,7 +44,7 @@ describe('daemon requester request-auth Account callbacks', () => {
         const accounts = new Map(['alice', 'bob'].map(accountId => {
             const credentials = { token: `${accountId}-token`, encryption: null };
             const persistence = createQualifiedConnectedAccountDaemonPersistence({ credentials,
-                getAccountEncryptionMode: async () => 'plain', readAccountSettings: () => ({}),
+                getAccountEncryptionMode: async () => 'plain',
                 secrets: createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: resolveAccountSettingsScopeKey(credentials) }) });
             const established = createQualifiedConnectedAccountEstablishedRuntimeOwner({ credentials,
                 reloadController: pluginReloadController, getAccountEncryptionMode: async () => 'plain', configuration: persistence.configuration });
@@ -116,9 +116,7 @@ describe('daemon requester request-auth Account callbacks', () => {
                     materializeRequestAuthBearer: bob.materializeRequestAuthBearer,
                 };
                 const callbacks = createDaemonQualifiedRequestAuthCallbacks({
-                    resolveCurrentRequestAuthBinding: accounts.get('alice')!.resolveCurrentRequestAuthBinding,
-                    materializeRequestAuthBearer: accounts.get('alice')!.materializeRequestAuthBearer,
-                    resolveSessionAccountContext: async sessionId => sessionId === 'bob-session' && current ? context : null,
+                    withSessionAccountContext: async (sessionId, operation) => await operation(sessionId === 'bob-session' && current ? context : null),
                     assertSessionAccountCurrent: async () => { if (!current) throw new Error('requester_session_not_current'); },
                 });
                 const subject = scopeConnectedAccountPurposeBindingLease({ lease, subjectId: lease.subjectId,
@@ -143,7 +141,7 @@ describe('daemon requester request-auth Account callbacks', () => {
                     const registry = createConnectedAccountRequestAuthSubjectRegistry();
                     const app = createDaemonControlApp({ getChildren: () => [], machineId: 'requester-machine',
                         stopSession: async () => ({ status: 'not_found' }),
-                        spawnSession: async () => ({ type: 'error', errorCode: 'unexpected', errorMessage: 'unused' }),
+                        spawnSession: async () => ({ type: 'error', errorCode: 'UNEXPECTED', errorMessage: 'unused' }),
                         requestShutdown: () => undefined, onHappySessionWebhook: () => undefined, controlToken: 'control-fixture',
                         connectedAccountRequestAuth: { authenticate: registry.authenticate, ...owner } });
                     await app.listen({ host: '127.0.0.1', port: 0 });
@@ -167,7 +165,7 @@ describe('daemon requester request-auth Account callbacks', () => {
                     await expect(client.lookupConnectedAccountRequestAuth({ purpose })).resolves.toMatchObject({ accessToken: 'bob-subscription' });
                     grantResource = 'https://mcp.example.test/other';
                     await expect(client.lookupConnectedAccountRequestAuth({ purpose })).rejects.toThrow('request_auth_not_active');
-                    await expect(issueMcpRequestAuthCapability({ serverId: 'work', resource: 'https://mcp.example.test/path', materializationId: 'mismatched-bob' }, issuanceContext, signal)).rejects.toThrow('mcp_request_auth_not_active');
+                    await expect(issueMcpRequestAuthCapability({ serverId: 'work', resource: 'https://mcp.example.test/path', materializationId: 'mismatched-bob' }, issuanceContext, signal)).rejects.toThrow('mcp_resource_mismatch');
                     grantResource = 'https://mcp.example.test/path';
                     // The Session RPC response is the external Home boundary; the issuer's
                     // exact Run/occurrence/parent checks and both account owners stay real.

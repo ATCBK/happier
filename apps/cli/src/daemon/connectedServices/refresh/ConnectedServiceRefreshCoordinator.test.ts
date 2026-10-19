@@ -24,6 +24,8 @@ import type {
 import type { Credentials, StoredCredentials } from '@/persistence';
 import type { ApiClient } from '@/api/api';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
+import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
+import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
 import type { materializeConnectedServicesForSpawn } from '../materialize/materializeConnectedServicesForSpawn';
 import { logger } from '@/ui/logger';
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
@@ -48,6 +50,7 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
+import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 let pluginLease: PluginRuntimeRegistryLease;
 beforeAll(async () => {
@@ -2068,13 +2071,16 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     });
     if (!purposeSnapshot) throw new Error('fixture purpose snapshot unavailable');
     const disposePurposeBinding = vi.fn();
-    const activatePurposeBindings = vi.fn(() => ({
-      subjectId: 'operation:successor-daemon-credential-projection',
-      isCurrent: () => true,
-      resolvePurposeBinding: () => purposeSnapshot.bindings[0] ?? null,
-      listPurposeBindings: () => purposeSnapshot.bindings,
-      dispose: disposePurposeBinding,
-    }));
+    const unexpected = async (): Promise<never> => { throw new Error('Unexpected Account boundary during activation'); };
+    const purposeOwner = createConnectedAccountPurposeBindingOwner({
+      store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unexpected, resolveTarget: unexpected, materializeAccount: unexpected,
+      projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+    });
+    const activatePurposeBindings = vi.fn((input: Parameters<typeof purposeOwner.activatePurposeBindings>[0]) => {
+      const lease = purposeOwner.activatePurposeBindings(input);
+      return { ...lease, dispose() { lease.dispose(); disposePurposeBinding(); } };
+    });
     const onAuthUpdated = vi.fn();
     const coordinator = createRefreshCoordinator({
       api,
@@ -2105,10 +2111,12 @@ describe('ConnectedServiceRefreshCoordinator', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
+    const activatedLease = activatePurposeBindings.mock.results[0]?.value;
+    if (!activatedLease) throw new Error('Expected the activated purpose lease');
     expect(materializer).toHaveBeenCalledWith(expect.objectContaining({
       rootDir: expect.any(String),
       recordsByServiceId: expect.any(Map),
-      exactPurposeBindingSubjectId: 'operation:successor-daemon-credential-projection',
+      exactPurposeBindingSubjectId: activatedLease.subjectId,
     }));
     expect(activatePurposeBindings).toHaveBeenCalledWith(expect.objectContaining({
       subject: expect.objectContaining({
@@ -2462,11 +2470,9 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
     expect(isMaterializedHomeStale).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
-      materializedRootDir: resolveConnectedServiceMaterializedRootDir({
-        baseDir,
-        agentId: 'codex',
-        materializationKey,
-      }),
+      materializedRootDir: await readRegistryCatalogHook(pluginLease.registry, 'codex', entry =>
+        resolveConnectedServiceMaterializedHomeRoot('codex', { activeServerDir,
+          serviceId: 'openai-codex', profileId: 'work' }, entry)),
       record: expect.objectContaining({
         kind: 'oauth',
         oauth: expect.objectContaining({ accessToken: 'fresh-store-access' }),

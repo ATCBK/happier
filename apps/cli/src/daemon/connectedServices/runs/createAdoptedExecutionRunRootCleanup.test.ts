@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { resolveConnectedServiceMaterializedRootDir } from '../materialize/resolveConnectedServiceMaterializedRootDir';
 import { createAdoptedExecutionRunRootCleanup } from './createAdoptedExecutionRunRootCleanup';
-import { reloadConfiguration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
 import { retainExecutionRunState } from '@/daemon/executionRunRegistry';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import type { ExecutionRunState } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
@@ -41,6 +41,36 @@ describe('createAdoptedExecutionRunRootCleanup', () => {
             await rm(join(home, 'sessions'), { recursive: true });
             await cleanup?.();
             expect(removeRoot).toHaveBeenCalledWith(home);
+        } finally {
+            envScope.restore(); reloadConfiguration(); await rm(sandbox, { recursive: true, force: true });
+        }
+    });
+
+    it('releases an adopted home with proven Run retention despite unavailable unrelated custody', async () => {
+        const sandbox = await mkdtemp(join(tmpdir(), 'happier-adopted-home-unrelated-'));
+        const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+        try {
+            envScope.patch({ HAPPIER_HOME_DIR: join(sandbox, 'cli') });
+            reloadConfiguration();
+            const state: ExecutionRunState = {
+                runId: 'current-run', callId: 'call', sidechainId: 'side', sessionId: null, depth: 0,
+                intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+                instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable',
+                runClass: 'bounded', ioMode: 'request_response', status: 'running', startedAtMs: 1,
+            };
+            await retainExecutionRunState(state);
+            await writeFile(join(configuration.happyHomeDir, 'tmp', 'daemon-execution-runs', 'state-unrelated.sealed'), 'unreadable');
+            const base = join(sandbox, 'managed');
+            const home = resolveConnectedServiceMaterializedRootDir({ baseDir: base, agentId: 'codex', materializationKey: state.runId });
+            await mkdir(home, { recursive: true });
+            const removeRoot = vi.fn(async () => undefined);
+            const cleanup = createAdoptedExecutionRunRootCleanup({ materializationBaseDir: base,
+                materializedRoot: home, agentId: 'codex', materializationKey: state.runId, removeRoot });
+            await expect(cleanup!()).resolves.toBeUndefined();
+            expect(removeRoot).not.toHaveBeenCalled();
+            await retainExecutionRunState({ ...state, status: 'failed', finishedAtMs: 2 });
+            await expect(cleanup!()).rejects.toMatchObject({ code: 'execution_run_home_retention_unavailable' });
+            expect(removeRoot).not.toHaveBeenCalled();
         } finally {
             envScope.restore(); reloadConfiguration(); await rm(sandbox, { recursive: true, force: true });
         }

@@ -30,7 +30,7 @@ async function listSourceFiles(dir: string): Promise<string[]> {
     const fullPath = `${dir}${sep}${entry.name}`;
     if (entry.isDirectory()) return await listSourceFiles(fullPath);
     if (!entry.isFile()) return [];
-    if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts') || entry.name.endsWith('.testkit.ts')) return [];
+    if (!entry.name.endsWith('.ts') || /\.(?:test|testkit|test-support)\.ts$/u.test(entry.name)) return [];
     return [fullPath];
   }));
   return files.flat();

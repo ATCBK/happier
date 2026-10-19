@@ -1,6 +1,9 @@
 import { ConnectedServiceCredentialRevisionV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
 import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import type { DurableBackoffRecoveryStore } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 import type { RecoveryIntentFileStore } from '../recoveryScheduler/recoveryIntentFileStore';
@@ -99,7 +102,10 @@ function readPredecessorPendingVisibleEvents(
 /**
  * Converts the exact runtime-auth V2 persistence vector introduced by
  * remote-dev at 6e6ecb42e7f9ab8607b5710547563bbc9c232728 and still written by
- * the moving predecessor origin/dev@fbdd5d9cb07391eb839eab313c5ba60fe77ce20b.
+ * the moving predecessor at 0f39da362c026525cbce7e3ff82e5aa5a1d8c47e, including
+ * its current on-disk RuntimeAuthRecoveryScheduler and recovery-key producers.
+ * Scalar service ids enter the canonical qualified identity through Protocol;
+ * the transcript reader performs that same normalization for retained events.
  *
  * Only passive waiting custody is accepted. In-flight/terminal/future records
  * fail closed because dev cannot prove their process/effect ownership. Remove
@@ -112,7 +118,7 @@ function normalizePredecessorRuntimeAuthRecoveryIntent(value: unknown): RuntimeA
   if (record.status !== 'waiting' && record.status !== 'resumed_awaiting_proof') return null;
 
   const sessionId = readString(record.sessionId);
-  const serviceId = readString(record.serviceId);
+  const serviceId = readBuiltInLegacyConnectedAccountServiceKeyIngress(readString(record.serviceId));
   const profileId = readNullableString(record.profileId);
   const groupId = readNullableString(record.groupId);
   const attemptId = readString(record.attemptId);
@@ -259,9 +265,14 @@ function normalizePredecessorRuntimeAuthRecoveryIntent(value: unknown): RuntimeA
 }
 
 function buildPredecessorRuntimeAuthRecoveryKey(intent: RuntimeAuthRecoveryPhysicalKeyParts): string {
+  // Storage also admits predecessor-only ids such as Antigravity; peer-operation
+  // membership must not decide which retained physical owner holds their custody.
+  const serviceId = Object.entries(BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID)
+    .find(([, compatibility]) => buildQualifiedPluginContributionKey(compatibility.service) === intent.serviceId)?.[0]
+    ?? intent.serviceId;
   return `${PREDECESSOR_RUNTIME_AUTH_RECOVERY_KEY_PREFIX}${Buffer.from(JSON.stringify([
     intent.sessionId,
-    intent.serviceId,
+    serviceId,
     intent.groupId ? null : intent.profileId,
     intent.groupId,
   ]), 'utf8').toString('base64url')}`;

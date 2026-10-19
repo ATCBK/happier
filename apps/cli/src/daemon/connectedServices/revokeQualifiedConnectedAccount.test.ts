@@ -2,18 +2,21 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import {
   sealQualifiedConnectedAccountContentEnvelope,
 } from '@happier-dev/protocol';
+import { QualifiedConnectedAccountCredentialDeleteV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 import type { Credentials } from '@/persistence';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import type { PreparedPluginDevelopmentActivationGraph } from '@/plugins/authoring/sourceModule';
 import { listQualifiedConnectedAccountsV4, QualifiedConnectedAccountCredentialConflictError, type deleteQualifiedConnectedAccountCredentialV4 } from '@/api/client/qualifiedConnectedAccountApi';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from './qualifiedConnectedAccountEstablishedRuntimeOwner';
 import type {
@@ -124,6 +127,52 @@ async function createHarness() {
 }
 
 describe('revokeQualifiedConnectedAccount', () => {
+  it.each(['timeout', 'internal', 'rollback'] as const)('preserves the actual credential-delete disposition after %s at the Home HTTP boundary', async failure => {
+    const harness = await createHarness();
+    let localCredentialPresent = true;
+    let reviewCount = 0;
+    let deletionCount = 0;
+    const server = createServer((request, response) => {
+      const url = new URL(request.url ?? '/', 'http://fixture');
+      expect(request.method).toBe('DELETE');
+      expect(url.pathname).toBe('/v4/connect/qualified/credential');
+      expect(JSON.parse(url.searchParams.get('ref') ?? 'null')).toEqual(account);
+      expect(url.searchParams.get('expectedCredentialRevision')).toBe(credentialRevision);
+      request.resume();
+      if (url.searchParams.get('reviewOnly') === 'true') {
+        reviewCount++;
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ status: 'ready' }));
+        return;
+      }
+      deletionCount++;
+      if (failure !== 'rollback') localCredentialPresent = false;
+      if (failure === 'timeout') return; // The Home commits, then its acknowledgement is lost.
+      response.writeHead(failure === 'internal' ? 500 : 503, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ error: failure === 'internal' ? 'internal' : 'database_transaction_conflict_exhausted' }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing HTTP fixture address');
+    vi.stubEnv('HAPPIER_CONNECTED_SERVICES_API_TIMEOUT_MS', '1000');
+    try {
+      const pending = runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => revokeQualifiedConnectedAccount({
+        account, cleanupGroupReferences: true, token: harness.credentials.token,
+        resolveV4Support: () => 'advertised', resolveRemovalReviewSupport: () => 'advertised',
+        establishedRuntimeOwner: harness.owner,
+      }));
+      if (failure === 'rollback') await expect(pending).rejects.toMatchObject({ code: 'database_transaction_conflict_exhausted' });
+      else await expect(pending).resolves.toEqual({ status: 'outcome_unknown' });
+      expect(localCredentialPresent).toBe(failure === 'rollback');
+      expect(reviewCount).toBe(1);
+      expect(deletionCount).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
   it('refuses replacement of the presented credential revision while revocation waits for approval', async () => {
     const harness = await createHarness();
     // The public profile HTTP read is the boundary. Its production parser
@@ -204,7 +253,7 @@ describe('revokeQualifiedConnectedAccount', () => {
     const reviewError = new QualifiedConnectedAccountCredentialConflictError('managed_resources_review_required', resources);
     const deleteCredential = vi.fn(async (input: Parameters<typeof deleteQualifiedConnectedAccountCredentialV4>[0]) => {
       if (retainedResourceAppeared) throw reviewError;
-      if (input.deletion.reviewOnly) return { status: 'ready' as const };
+      if (QualifiedConnectedAccountCredentialDeleteV4Schema.parse(input.deletion).reviewOnly) return { status: 'ready' as const };
       localCredentialPresent = false;
       return { success: true as const };
     });

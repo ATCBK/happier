@@ -10,7 +10,7 @@ describe('createConnectedServicePredictiveSwitchGuard', () => {
       const guard = createConnectedServicePredictiveSwitchGuard({
         // Current admission is an authenticated Home boundary; capability and policy remain real.
         isSessionCurrent: async () => false,
-        resolvePredictiveSoftSwitchMode: async () => 'supported_in_turn',
+        resolvePredictiveSoftSwitchMode: async () => 'supported_in_turn' as const,
       });
 
       await expect(guard({
@@ -26,7 +26,7 @@ describe('createConnectedServicePredictiveSwitchGuard', () => {
       isSessionCurrent: async () => current,
       resolvePredictiveSoftSwitchMode: async () => {
         current = false;
-        return 'supported_in_turn';
+        return 'supported_in_turn' as const;
       },
     });
 

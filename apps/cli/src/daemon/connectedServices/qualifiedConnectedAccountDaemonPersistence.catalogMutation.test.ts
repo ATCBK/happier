@@ -59,6 +59,7 @@ describe('service configuration canonical catalog settlement', () => {
         secrets: createActiveAccountSettingsConnectedAccountSecrets({ expectedScopeKey: scopeKey }),
         createConfigurationRevision: () => 'configuration-5' });
       const result = await owner.configuration.replace({ target: { kind: 'service', service, modeId: 'api-key' },
+        occurrenceId: 'configuration-fixture', sourceCustody: { kind: 'development', registeredRootId: 'configuration-fixture' },
         expectedRevision: 'configuration-1', replacement: { values: { endpoint: 'https://new.example.test' }, secretRefs: {} } });
       expect(result).toMatchObject(outcome === 'updated' ? { status: 'committed', record: { revision: 'configuration-5',
         values: { endpoint: 'https://new.example.test' }, secretRefs: {} } } : outcome === 'conflict'

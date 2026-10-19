@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   openQualifiedConnectedAccountContentEnvelope,
   parseQualifiedConnectedAccountCredentialPlaintextV1,
+  QualifiedConnectedAccountCredentialSnapshotV4Schema,
   sealQualifiedConnectedAccountContentEnvelope,
 } from '@happier-dev/protocol';
 
@@ -73,8 +74,7 @@ async function createHarness() {
       secret: new Uint8Array(32).fill(5),
     },
   };
-  const credentialSnapshot = {
-    retiredSnapshotField: true,
+  const credentialSnapshot = QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
     ref: account,
     authenticationModeId: 'oauth',
     revisionSemantics: 'revisioned' as const,
@@ -96,12 +96,11 @@ async function createHarness() {
       randomBytes: (length) => new Uint8Array(length),
     }),
     metadata: {
-      retiredMetadataField: true,
       providerIdentity: { accountId: 'account-1' },
       displayName: 'Account 1',
       scopes: ['openid'],
     },
-  };
+  });
   const owner = createQualifiedConnectedAccountEstablishedRuntimeOwner({
     reloadController: {
       async acquireRuntimeRegistry() {
@@ -156,6 +155,30 @@ async function createHarness() {
 }
 
 describe('refreshQualifiedConnectedAccount', () => {
+  it.each([
+    ['busy', 'connected_account_refresh_lease_not_acquired'],
+    ['owner', 'connected_account_refresh_lease_owner_mismatch'],
+    ['revision', 'connected_account_refresh_lease_revision_mismatch'],
+  ] as const)('preserves a %s lease refusal without invoking the provider', async (wiring, code) => {
+    const harness = await createHarness();
+    vi.stubGlobal('fetch', vi.fn());
+    harness.acquireRefreshLease.mockResolvedValue({
+      acquired: wiring !== 'busy',
+      leaseUntil: Date.now() + 60_000,
+      ownerId: wiring === 'owner' ? 'another-machine:runtime' : 'machine-1:runtime-1',
+      credentialRevision: wiring === 'revision' ? nextCredentialRevision : credentialRevision,
+    });
+
+    await expect(refreshQualifiedConnectedAccount({
+      account, token: harness.credentials.token, ownerId: 'machine-1:runtime-1',
+      leaseMs: 60_000, operationId: 'refused-refresh', expectedCredential: harness.credentialSnapshot,
+      resolveV4Support: () => 'advertised', establishedRuntimeOwner: harness.owner,
+      acquireRefreshLease: harness.acquireRefreshLease, mutateCredential: harness.mutateCredential,
+    })).rejects.toMatchObject({ code });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(harness.mutateCredential).not.toHaveBeenCalled();
+  });
+
   it('fails closed before acquiring a raw V4 lease when atomic support is absent', async () => {
     const harness = await createHarness();
 

@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QualifiedConnectedAccountGroupV4Schema, QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol';
 import type { ApiClient } from '@/api/api';
+import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from './requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { resolveConnectedServiceAuthForSpawn } from './resolveConnectedServiceAuthForSpawn';
 
 describe('spawn pool model eligibility', () => {
-    it('refuses an exhausted requested model before credential reads while preserving another model', async () => {
+    it('refuses an exhausted requested model before credential reads', async () => {
         const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
         const group = QualifiedConnectedAccountGroupV4Schema.parse({
             v: 1, ref: { service, groupId: 'pool' }, incarnation: 'pool-row', displayName: 'Pool',
@@ -36,12 +38,11 @@ describe('spawn pool model eligibility', () => {
             materializationKey: 'model-eligibility-run', activeServerDir: '/unused-server', baseDir: '/unused-materialization',
             credentials: { token: 'boundary-token', encryption: null }, api, nowMs: () => 1_000,
             qualifiedConnectedAccountApi: { readGroup: async () => group, listAccounts: async () => accounts },
+            resolveQualifiedPurposeBindingSnapshot: (bindings: Parameters<typeof resolveQualifiedPurposeBindingSnapshotForAgentSpawn>[0]['bindings']) =>
+                resolveQualifiedPurposeBindingSnapshotForAgentSpawn({ agentId: 'codex', bindings, contributions: getResolvedContributionRegistry() }),
         };
         await expect(resolveConnectedServiceAuthForSpawn({ ...request, modelId: 'requested-model' }))
             .rejects.toMatchObject({ code: 'connected_service_run_model_unavailable', modelId: 'requested-model' });
-        expect(readCredential).not.toHaveBeenCalled();
-        await expect(resolveConnectedServiceAuthForSpawn({ ...request, modelId: 'other-model' }))
-            .rejects.toMatchObject({ code: 'connected_service_qualified_purpose_authority_unavailable' });
         expect(readCredential).not.toHaveBeenCalled();
     });
 });

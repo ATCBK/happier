@@ -49,6 +49,7 @@ export function createDaemonMcpRequestAuthForTest(params: Readonly<{
       activatePurposeBindings: params.activatePurposeBindings,
       registry: params.registry, httpPort: params.getHttpPort(),
       readAccountSettingsSnapshot: readSnapshot, isCurrent, assertCurrent,
+      ...(operationContext ? { operationContext } : {}),
       registerLifetimeCleanup: cleanup => { retire = cleanup; return () => undefined; },
     }, signal);
     return { ...capability, cleanup: async () => { await retire?.(); } };

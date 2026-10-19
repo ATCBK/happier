@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES } from '@happier-dev/protocol/connect/connectedServiceUxDiagnostics';
 import { ConnectedServiceCredentialRevisionV1Schema, type ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -38,29 +38,28 @@ export type SessionConnectedServiceRuntimeAuthRefreshResult = Readonly<
     }
 >;
 
-const ConnectedServiceDaemonAuthBridgeRefreshProofResultSchema = z.record(z.string(), z.unknown())
-  .refine((value) => !Object.prototype.hasOwnProperty.call(value, 'status'));
+const ConnectedServiceDaemonAuthBridgeRefreshProofResultSchema = z.record(z.string(), z.unknown()).check(z.refine((value) => !Object.prototype.hasOwnProperty.call(value, 'status')));
 
 export const ConnectedServiceDaemonAuthBridgeRefreshResultSchema:
-  z.ZodType<ConnectedServiceDaemonAuthBridgeRefreshResult> =
+  z.ZodMiniType<ConnectedServiceDaemonAuthBridgeRefreshResult> =
   z.discriminatedUnion('status', [
-    z.object({
+    z.strictObject({
       status: z.literal('refreshed'),
       result: ConnectedServiceDaemonAuthBridgeRefreshProofResultSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('pending'),
-      refreshAttemptId: z.string().trim().min(1),
-    }).strict(),
-    z.object({
+      refreshAttemptId: z.string().check(z.trim(), z.minLength(1)),
+    }),
+    z.strictObject({
       status: z.literal('unavailable'),
-      reason: z.string().trim().min(1),
-    }).strict(),
-    z.object({
+      reason: z.string().check(z.trim(), z.minLength(1)),
+    }),
+    z.strictObject({
       status: z.literal('failed'),
-      reason: z.string().trim().min(1),
-      error: z.unknown().optional(),
-    }).strict(),
+      reason: z.string().check(z.trim(), z.minLength(1)),
+      error: z.optional(z.unknown()),
+    }),
   ]);
 
 function parseDaemonAuthBridgeRefreshSettlement(

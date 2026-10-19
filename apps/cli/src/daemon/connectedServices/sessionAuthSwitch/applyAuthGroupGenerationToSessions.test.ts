@@ -49,7 +49,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
     decisionId: 'manual-7',
     provenance: 'manual',
     decisionCommittedTarget: {
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'team',
       profileId: 'next',
       generation: 7,
@@ -61,7 +61,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'decision-once',
       provenance: 'hard_limit',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'next',
         generation: 2,
@@ -127,7 +127,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'decision-b',
       provenance: 'hard_limit',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'backup-b',
         generation: 2,
@@ -138,7 +138,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'decision-c',
       provenance: 'reconciliation',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'backup-c',
         generation: 3,
@@ -184,11 +184,11 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'decision-b-after-projection-c',
       provenance: 'hard_limit',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex', groupId: 'team', profileId: 'backup-b', generation: 2, credentialRevision,
+        serviceId: 'happier.agent.codex/openai-codex', groupId: 'team', profileId: 'backup-b', generation: 2, credentialRevision,
       },
     });
     const authoritativeState = {
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'team',
       activeProfileId: 'backup-c',
       generation: 3,
@@ -215,12 +215,12 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
           mode: 'hot_apply' as const,
           providerApplication: 'applied' as const,
           verificationByServiceId: {
-            'openai-codex': {
+            'happier.agent.codex/openai-codex': {
               status: 'verified' as const,
               proofStrength: 'exact' as const,
               providerAccountId: activeProfileId,
               generationApplication: {
-                serviceId: 'openai-codex' as const,
+                serviceId: 'happier.agent.codex/openai-codex' as const,
                 groupId: 'team',
                 profileId: activeProfileId,
                 generation,
@@ -263,7 +263,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'revision-a',
       provenance: 'reconciliation',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'work',
         generation: 2,
@@ -274,7 +274,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'revision-b',
       provenance: 'reconciliation',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'work',
         generation: 2,
@@ -556,7 +556,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
     }>) => {
       expect(applicationOwnerId).toBe('claude');
       expect(committedGeneration.decisionCommittedTarget).toEqual({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'next',
         generation: 7,
@@ -657,7 +657,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
       decisionId: 'decision-1',
       provenance: 'hard_limit',
       decisionCommittedTarget: {
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'team',
         profileId: 'profile-1',
         generation: 1,
@@ -679,7 +679,7 @@ describe('applyConnectedServiceAuthGroupGenerationToSessions', () => {
             decisionId: `decision-${generation}`,
             provenance: 'reconciliation',
             decisionCommittedTarget: {
-              serviceId: 'openai-codex',
+              serviceId: 'happier.agent.codex/openai-codex',
               groupId: 'team',
               profileId: `profile-${generation}`,
               generation,

@@ -18,11 +18,15 @@ describe('connected purpose row mutation', () => {
 
   const concurrentBinding = { ...binding, purpose: { ...purpose,
     consumer: { pluginId: 'happier.voice.other', localId: 'speech' } } };
-  function boundary(disposition: 'updated' | 'conflict' | 'lost-response' | 'updated-and-retired' | 'concurrent-reconciliation') {
+  function boundary(disposition: 'updated' | 'conflict' | 'lost-response' | 'updated-and-retired' | 'concurrent-reconciliation'
+    | 'reconciliation-lost-response' | 'reconciliation-unknown' | 'reconciliation-read-unreachable') {
+    const unknownReconciliation = disposition.startsWith('reconciliation-');
     let record: ConnectedAccountCatalogRecordV1 = { key: 'purposes', value: { v: 1,
-      bindings: disposition === 'concurrent-reconciliation' ? [binding] : [] } };
+      bindings: unknownReconciliation ? [binding, concurrentBinding] : disposition === 'concurrent-reconciliation' ? [binding] : [] } };
     let revision = 3;
     let concurrentWrite = disposition === 'concurrent-reconciliation';
+    let unknownWrite = unknownReconciliation;
+    let readUnavailable = false;
     const raw = { themePreference: 'dark' };
     setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
       settings: accountSettingsParse(raw), rawSettings: raw, settingsVersion: 7,
@@ -34,8 +38,9 @@ describe('connected purpose row mutation', () => {
       if (path.endsWith('/currentness')) return { status: 200, data: {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (path.endsWith('/connected-accounts/purposes')) return { status: 200, data: {
-        status: 'present', revision, content: { t: 'plain', v: record } } };
+      if (path.endsWith('/connected-accounts/purposes')) return readUnavailable
+        ? { status: 503, data: { error: 'unavailable' } }
+        : { status: 200, data: { status: 'present', revision, content: { t: 'plain', v: record } } };
       if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: raw } } };
       return { status: 404, data: { error: 'unsupported' } };
     });
@@ -51,6 +56,16 @@ describe('connected purpose row mutation', () => {
       }
       if (disposition === 'conflict' || mutation.expectedRevision !== revision) return { status: 409, data: { status: 'conflict', revision: 4 } };
       if (mutation.content?.t !== 'plain') throw new Error('Expected the actual Plain Account envelope');
+      if (unknownWrite) {
+        unknownWrite = false;
+        if (disposition === 'reconciliation-lost-response') {
+          record = mutation.content.v;
+          revision += 1;
+          throw new Error('Response lost after durable reconciliation');
+        }
+        readUnavailable = disposition === 'reconciliation-read-unreachable';
+        return { status: 500, data: { error: 'internal' } };
+      }
       record = mutation.content.v;
       revision += 1;
       if (disposition === 'lost-response') throw new Error('Response lost after durable commit');
@@ -105,15 +120,72 @@ describe('connected purpose row mutation', () => {
 
   it('keeps a lost mutation response outcome unknown even when the row actually committed', async () => {
     const server = boundary('lost-response');
-    await expect(createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials }).update(current => ({
-      ...current, bindings: [binding],
-    }))).rejects.toMatchObject({ code: 'plugin_connected_account_settings_outcome_unknown' });
+    const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials });
+    let intentRuns = 0;
+    await expect(store.update(current => {
+      intentRuns += 1;
+      return { ...current, bindings: [binding] };
+    })).rejects.toMatchObject({ code: 'plugin_connected_account_settings_outcome_unknown' });
+    expect(intentRuns).toBe(1);
     expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [binding] } });
+    await expect(store.read()).resolves.toEqual({ v: 1, bindings: [binding] });
+  });
+
+  it.each(['reconciliation-lost-response', 'reconciliation-unknown'] as const)(
+    'rereads an unknown startup write before publication and converges on the next publication (%s)', async disposition => {
+      const server = boundary(disposition);
+      const unexpected = async (): Promise<never> => { throw new Error('Reconciliation must not select or materialize accounts'); };
+      const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials });
+      const owner = createConnectedAccountPurposeBindingOwner({
+        store, selectTarget: unexpected, resolveTarget: unexpected, materializeAccount: unexpected,
+        projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+      });
+      let published = false;
+      const reconcile = () => owner.reconcileAuthorizedPurposes({
+        consumerScopes: [{ consumer: purpose.consumer, authorizedPurposes: [] }],
+        signal: new AbortController().signal,
+        publish: () => {
+          expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({
+            status: 'ready', record: server.read().record, revision: server.read().revision,
+          });
+          published = true;
+        },
+      });
+      await expect(reconcile()).resolves.toBeUndefined();
+      expect(published).toBe(true);
+      expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1,
+        bindings: disposition === 'reconciliation-lost-response' ? [concurrentBinding] : [binding, concurrentBinding] } });
+      await expect(store.read()).resolves.toEqual(server.read().record.value);
+      await expect(reconcile()).resolves.toBeUndefined();
+      expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [concurrentBinding] } });
+      expect(server.read().raw).toEqual({ themePreference: 'dark' });
+    },
+  );
+
+  it('defers startup pruning when an unknown write cannot be reread', async () => {
+    const server = boundary('reconciliation-read-unreachable');
+    const unexpected = async (): Promise<never> => { throw new Error('No credential selection or materialization'); };
+    const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials });
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store, selectTarget: unexpected, resolveTarget: unexpected, materializeAccount: unexpected,
+      projectTargetAccounts: unexpected, assertTargetAccountMaterializable: unexpected,
+    });
+    let published = false;
+    await expect(owner.reconcileAuthorizedPurposes({
+      consumerScopes: [{ consumer: purpose.consumer, authorizedPurposes: [] }],
+      signal: new AbortController().signal, publish: () => { published = true; },
+    })).resolves.toBeUndefined();
+    expect(published).toBe(true);
+    expect(getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog).toMatchObject({
+      status: 'unavailable', reason: 'unreachable',
+    });
+    await expect(store.read()).rejects.toMatchObject({ code: 'plugin_connected_account_settings_unavailable' });
+    expect(server.read().record).toEqual({ key: 'purposes', value: { v: 1, bindings: [binding, concurrentBinding] } });
   });
 
   it('publishes startup reconciliation when the purpose-row write is temporarily unreachable, retaining explicit bindings', async () => {
     const server = boundary('concurrent-reconciliation');
-    vi.mocked(axios.post).mockResolvedValue({ status: 503, data: { error: 'unavailable' } });
+    vi.mocked(axios.post).mockResolvedValue({ status: 429, data: { error: 'unavailable' } });
     const unexpected = async (): Promise<never> => { throw new Error('Reconciliation must not select or materialize accounts'); };
     const store = createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials });
     const owner = createConnectedAccountPurposeBindingOwner({

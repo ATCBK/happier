@@ -53,6 +53,7 @@ import type {
   TeamCredentialDirectMaterialOperationFailure,
   TeamCredentialDirectMaterialUnavailableReason,
 } from '../directMaterial/teamCredentialDirectMaterialClient';
+import type { ConnectedServiceSwitchTarget } from '../sessionAuthSwitch/connectedServiceSwitchDeferralQueue';
 
 type QualifiedConnectedAccountMaterializationOwner = Pick<
   QualifiedConnectedAccountEstablishedRuntimeOwner,
@@ -151,6 +152,7 @@ export type DaemonConnectedAccountPurposeSessionRestartOwner = (
   input: Readonly<{
     sessionId: string;
     purpose: Parameters<StablePluginConnectedAccountsOwner['watch']>[0]['purpose'];
+    target: ConnectedServiceSwitchTarget;
   }>,
 ) => void;
 
@@ -276,7 +278,6 @@ function listedQualifiedConnectedAccountState(
   authentication: PluginConnectedAccountAuthenticationV2,
 ): PluginConnectedAccountListedState {
   if (profile.status === 'needs_reauth') return 'reconnectRequired';
-  if (profile.status !== 'connected') return 'unavailable';
   if (!isQualifiedConnectedAccountProfileActiveV4(profile, Date.now())) {
     return typeof profile.expiresAt === 'number' && profile.expiresAt <= Date.now()
       ? 'expired'
@@ -579,6 +580,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
         service: Object.freeze({ ...profile.ref.service }),
         accountId: profile.ref.accountId,
       }),
+      observation: Object.freeze({ profiles: Object.freeze([profile]) }),
     });
   };
 
@@ -609,6 +611,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       now: Date.now(),
     });
     if (!activeAccount) return null;
+    const memberIds = new Set(group.members.map(member => member.connectedAccountId));
     return Object.freeze({
       displayName: group.displayName ?? group.ref.groupId,
       account: Object.freeze({
@@ -618,6 +621,14 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       group: Object.freeze({
         groupId: group.ref.groupId,
         generation: group.generation,
+      }),
+      observation: Object.freeze({
+        group,
+        profiles: Object.freeze(accountResult.accounts.filter(profile => (
+          memberIds.has(profile.ref.accountId)
+          && profile.ref.service.pluginId === target.service.pluginId
+          && profile.ref.service.localId === target.service.localId
+        ))),
       }),
     });
   };
@@ -1207,11 +1218,11 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       let restartPending = false;
       const subscription = bindingOwner.watch({
         ...input,
-        async listener() {
+        async listener(change) {
           const delivered = Promise.resolve()
             .then(() => input.listener())
             .catch(() => undefined);
-          if (!input.sessionId || !sessionRestartOwner || restartPending) {
+          if (!input.sessionId || !sessionRestartOwner || restartPending || !change?.account) {
             await delivered;
             return;
           }
@@ -1222,6 +1233,12 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
             sessionRestartOwner?.({
               sessionId: input.sessionId,
               purpose: input.purpose,
+              target: {
+                serviceId: qualifiedContributionKey(change.account.service),
+                profileId: change.account.accountId,
+                groupId: change.group?.groupId ?? '',
+                generation: change.group?.generation ?? 0,
+              },
             });
           } finally {
             restartPending = false;

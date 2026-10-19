@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,16 +33,20 @@ import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '../requestA
 import { createLazyExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/hostRuntime/lazy';
 import { createNativeAgentExecutionRunContextLeaseFactory, createNativeAgentExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/nativeAgentExecutionRun';
 import { resolveBackendEngineAdapterResolution, resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
+import { resolveEngineAdapterResolutionFromRegistry } from '@/agent/runtime/registry/engineRegistry/resolution';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
 import type { NativeAgentSessionInteractionHostBinding } from '@/agent/runtime/registry/engineRegistryTypes';
 import { createExecutionRunRuntime } from '@/agent/runtime/bridges/executionRun/runtime/create';
 import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
 import { reloadConfiguration } from '@/configuration';
 import { writeDaemonState } from '@/persistence';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { ExecutionRunRejectedStartError } from '@/agent/runtime/bridges/executionRun/errors';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { createUnavailablePluginServices, PLUGIN_SERVICE_UNAVAILABLE_CODE } from '@/plugins/runtime/invocation/services/unavailable';
 import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { createConnectedAccountRequestAuthSubjectRegistry } from '../requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
@@ -58,7 +63,7 @@ import { createSessionConnectedServiceRuntimeAuthRefreshHandler } from '../sessi
 import { ConnectedServiceRuntimeAuthRefreshSelectionSchema } from '../runtimeAuthRefreshAuthorization';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createDaemonControlApp } from '@/daemon/controlServer';
-import { requestExecutionRunConnectedServiceRuntimeAuthRefresh } from '@/daemon/controlClient';
+import { requestExecutionRunConnectedServicesMaterialization, requestExecutionRunConnectedServiceRuntimeAuthRefresh } from '@/daemon/controlClient';
 import { deriveConnectedServiceRunMaterializeToken } from './capabilityToken';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 import * as runtimeRecovery from '../runtimeAuth/handleConnectedServiceRuntimeAuthFailure';
@@ -79,6 +84,7 @@ type Materialization = Extract<ConnectedServiceRunMaterializationHandlerResult, 
 function createCodexProcessBoundary(rejectStart: boolean) {
     const rpcRequests: Array<{ method: string; params: unknown }> = [];
     const listeners = new Set<Parameters<PluginJsonRpcClient['onNotification']>[0]>();
+    let activeAccountId: string | null = null;
     const result: PluginProcessResult = { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
         stdout: new TextEncoder().encode('realtime_conversation under development false\n'), stderr: new Uint8Array(),
         stdoutTruncated: false, stderrTruncated: false };
@@ -95,7 +101,15 @@ function createCodexProcessBoundary(rejectStart: boolean) {
             }
             if (method === 'turn/start') return { turnId: 'provider-turn' };
             if (method === 'model/list' || method === 'collaborationMode/list' || method === 'experimentalFeature/list') return { data: [] };
-            if (method === 'account/read') return { account: null };
+            if (method === 'account/login/start') {
+                if (!params || typeof params !== 'object' || Array.isArray(params)
+                    || !('type' in params) || params.type !== 'chatgptAuthTokens'
+                    || !('accessToken' in params) || typeof params.accessToken !== 'string'
+                    || !('chatgptAccountId' in params) || typeof params.chatgptAccountId !== 'string') throw new Error('Unexpected fixture login request');
+                activeAccountId = params.chatgptAccountId;
+                return { type: 'chatgptAuthTokens' };
+            }
+            if (method === 'account/read') return { account: activeAccountId ? { id: activeAccountId } : null };
             if (method === 'account/rateLimits/read') return { rateLimits: {} };
             return {};
         },
@@ -162,6 +176,7 @@ async function createScenario() {
     })]));
     const initialRecords = new Map(records);
     const credentialReads: QualifiedConnectedAccountRef[] = [];
+    let credentialGate: Readonly<{ entered(signal?: AbortSignal): Promise<void> }> | null = null;
     const credentialRevisions = new Map(memberIds.map((profileId) => [profileId, revision]));
     const credentialMetadata = new Map<string, QualifiedConnectedAccountCredentialMetadataV4>(
         memberIds.map((profileId) => [profileId, { scopes: [] }]));
@@ -175,8 +190,9 @@ async function createScenario() {
                 content: { t: 'plain', v: records.get(input.profileId) } };
         },
     } as unknown as ApiClient;
-    const readCredential = async ({ ref }: { ref: QualifiedConnectedAccountRef }) => {
+    const readCredential = async ({ ref, signal }: { ref: QualifiedConnectedAccountRef; signal?: AbortSignal }) => {
         credentialReads.push(QualifiedConnectedAccountRefSchema.parse(ref));
+        await credentialGate?.entered(signal);
         return QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
             ref, authenticationModeId: 'oauth', revisionSemantics: 'revisioned',
             credentialRevision: credentialRevisions.get(ref.accountId), configurationRevision: null,
@@ -238,10 +254,12 @@ async function createScenario() {
         }),
     });
     const commits: string[] = [];
-    const authAdapter = await getConnectedServiceRuntimeAuthAdapter('codex');
-    if (!authAdapter) throw new Error('Admitted Codex classifier unavailable');
+    // Resolve the runtime before another Connected Account consumer warms its
+    // catalog, as detached admission does on a cold daemon.
     const engine = await resolveBackendEngineAdapterResolution('codex');
     if (!engine) throw new Error('Admitted Codex engine unavailable');
+    const authAdapter = await getConnectedServiceRuntimeAuthAdapter('codex');
+    if (!authAdapter) throw new Error('Admitted Codex classifier unavailable');
     const coordinator = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({
         token: credentials.token, quotaFreshnessMs: 60_000, nowMs: () => nowMs,
         api: {
@@ -336,7 +354,9 @@ async function createScenario() {
         resolveDaemonAuthBridge,
         resolveRunMaterializedRoot: ({ runKey, agentId }) => resolveConnectedServiceMaterializedRootDir({ baseDir, agentId, materializationKey: runKey }),
         createAdoptedRootCleanup: () => null,
-        captureRunnerIdentity: () => ({ identity: runnerIdentity, parentSessionId: 'actual-parent-session', isCurrent: () => runnerCurrent }),
+        captureRunnerIdentity: ({ runId: requestedRunId }) => requestedRunId
+            ? { identity: runnerIdentity, parentSessionId: null, isCurrent: () => runnerCurrent }
+            : null,
         acquireAgentPurposeContributions: async ({ agentId }) => {
             const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
             return { contributions: lease.registry.contributes, isCurrent: () => pluginReloadController.isRuntimeRegistryCurrent(lease.registry),
@@ -346,12 +366,13 @@ async function createScenario() {
                     return identity && sourceCustody ? { ...identity, sourceCustody } : null;
                 } };
         },
-        purposeBindingOwner: purposeOwner, requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(),
+        purposeBindingOwner: { activatePurposeBindings: async input => ({ lease: await purposeOwner.activatePurposeBindings(input) }) },
+        requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(),
         resolveRequestAuthHttpPort: () => 42427, createRedactionLease: () => ({ add() {}, close() {} }),
         clearTerminalCleanupReceipt: async () => undefined,
     });
     const materialize = async (requestedRunId = runId): Promise<Materialization> => {
-        const result = await bridge.materialize({ runId: requestedRunId, runnerPid, agentId: 'codex', cwd: root, modelId,
+        const result = await bridge.materialize({ activationId: randomUUID(), runId: requestedRunId, runnerPid, agentId: 'codex', cwd: root, modelId,
             connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } } });
         if (!result.ok) throw Object.assign(new Error(result.errorMessage), { executionRunErrorCode: result.errorCode });
         return result;
@@ -376,6 +397,22 @@ async function createScenario() {
         qualifiedConnectedAccountApi: { readGroup: async () => currentGroup, listAccounts: async () => accounts },
         setRefreshCoordinator: (value: ConnectedServiceRefreshCoordinator) => { nativeRefreshCoordinator = value; },
         providerExchanges: () => providerExchanges,
+        holdCredentialRead() {
+            let reportEntered!: (signal?: AbortSignal) => void;
+            let resume!: () => void;
+            const entered = new Promise<AbortSignal | undefined>(resolve => { reportEntered = resolve; });
+            const pending = new Promise<void>(resolve => { resume = resolve; });
+            credentialGate = { async entered(signal) {
+                reportEntered(signal);
+                await new Promise<void>((resolve, reject) => {
+                    const aborted = () => reject(signal?.reason);
+                    signal?.addEventListener('abort', aborted, { once: true });
+                    if (signal?.aborted) aborted();
+                    pending.then(resolve).finally(() => signal?.removeEventListener('abort', aborted));
+                });
+            } };
+            return { entered, resume() { credentialGate = null; resume(); } };
+        },
         holdProviderExchange() {
             let resume!: () => void;
             const entered = new Promise<void>((resolve) => { providerEntered = resolve; });
@@ -393,6 +430,7 @@ async function createScenario() {
         group: () => currentGroup, revokeRunner: () => { runnerCurrent = false; },
         advanceGroupGeneration() { currentGroup = QualifiedConnectedAccountGroupV4Schema.parse({ ...currentGroup, generation: currentGroup.generation + 1 }); },
         reset() {
+            credentialGate = null;
             nowMs = 1_000; reportArmed = null;
             recoveryResumePromptMode = 'standard'; recoveryCustomResumePrompt = null;
             currentGroup = initialGroup; runnerCurrent = true; commits.length = 0; credentialReads.length = 0;
@@ -463,8 +501,8 @@ describe('composed finite Run model recovery', () => {
             } }, new AbortController().signal);
         expect(result).toEqual({ status: 'continue', input: 'Usage limits are lifted. Continue where you left off.', rematerialize: true });
         expect(scenario.commits).toEqual(['second']);
-        const replaced = await scenario.bridge.materialize({ runId, runnerPid, agentId: 'codex', cwd: scenario.root, modelId,
-            connectedServices: first.connectedServicesBindings,
+        const replaced = await scenario.bridge.materialize({ activationId: randomUUID(), runId, runnerPid, agentId: 'codex', cwd: scenario.root, modelId,
+            connectedServices: ConnectedServiceBindingsV2Schema.parse(first.connectedServicesBindings),
             recovery: { activationId: first.activationId, nativeResumeId } });
         expect(replaced.ok).toBe(true);
         if (!replaced.ok) throw new Error(replaced.errorMessage);
@@ -550,6 +588,292 @@ describe('composed finite Run model recovery', () => {
         expect(scenario.group().generation).toBe(7);
     });
 
+    it('preserves the typed materialization refusal through real daemon HTTP and the control client', async () => {
+        scenario.revokeRunner();
+        const responses: Array<{ path: string; status: number }> = [];
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'refusal-control',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {},
+            verifyRunMaterializeToken: token => token === deriveConnectedServiceRunMaterializeToken('refusal-control'),
+            materializeConnectedServicesForExecutionRun: scenario.bridge.materialize,
+            releaseConnectedServicesForExecutionRun: scenario.bridge.release,
+        });
+        app.addHook('onResponse', async (request, reply) => {
+            responses.push({ path: request.routeOptions.url ?? request.url, status: reply.statusCode });
+        });
+        vi.stubEnv('HAPPIER_HOME_DIR', scenario.root);
+        reloadConfiguration();
+        try {
+            const address = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+            writeDaemonState({ pid: process.pid, httpPort: Number(address.port), controlToken: 'refusal-control',
+                startedAt: 1, startedWithCliVersion: '0.3.0' });
+            const result = await requestExecutionRunConnectedServicesMaterialization({
+                runId, runnerPid, agentId: 'codex', cwd: scenario.root,
+                connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } },
+            });
+            expect(result).toMatchObject({ ok: false, errorCode: 'connected_service_run_materialization_blocked',
+                errorMessage: 'Execution-run connected services runner identity is not current' });
+            expect(responses).toEqual([
+                { path: '/connected-service-run/materialize', status: 403 },
+                { path: '/connected-service-run/release', status: 200 },
+            ]);
+            expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).toBeNull();
+        } finally {
+            await app.close();
+            vi.unstubAllEnvs();
+            reloadConfiguration();
+        }
+    });
+
+    it('cancels credential materialization through the real Run runtime and daemon HTTP lifetime', async () => {
+        const cancelledRunId = 'cancel-materializing-run';
+        let materializationSettled!: () => void;
+        const settled = new Promise<void>(resolve => { materializationSettled = resolve; });
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'cancel-control',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {},
+            verifyRunMaterializeToken: token => token === deriveConnectedServiceRunMaterializeToken('cancel-control'),
+            materializeConnectedServicesForExecutionRun: async (...args) => {
+                try { return await scenario.bridge.materialize(...args); }
+                finally { materializationSettled(); }
+            },
+            releaseConnectedServicesForExecutionRun: scenario.bridge.release,
+        });
+        const held = scenario.holdCredentialRead();
+        let host: ReturnType<typeof createExecutionRunRuntime> | undefined;
+        let resolving: Promise<unknown> | undefined;
+        vi.stubEnv('HAPPIER_HOME_DIR', scenario.root);
+        reloadConfiguration();
+        try {
+            const address = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+            writeDaemonState({ pid: process.pid, httpPort: Number(address.port), controlToken: 'cancel-control',
+                startedAt: 1, startedWithCliVersion: '0.3.0' });
+            host = createExecutionRunRuntime({ cwd: scenario.root, runId: cancelledRunId, scope: 'session_owned',
+                backendId: 'codex', engineRegistry: await resolveCliEngineRegistry({ backendId: 'codex', happyHomeDir: scenario.root }),
+                happyHomeDir: scenario.root, permissionMode: 'read_only', modelId,
+                connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } },
+                start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
+            });
+            resolving = host.readResumeSupport().catch(error => error);
+            const credentialSignal = await held.entered;
+            await host.dispose();
+            // Crossing the event loop lets the real HTTP disconnect reach Fastify.
+            await vi.waitFor(() => expect(credentialSignal?.aborted).toBe(true));
+            held.resume();
+            await resolving;
+            await settled;
+            expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(cancelledRunId)).toBeNull();
+            const root = resolveConnectedServiceMaterializedRootDir({ baseDir: scenario.baseDir, agentId: 'codex', materializationKey: cancelledRunId });
+            await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally {
+            held.resume();
+            await resolving;
+            await host?.dispose();
+            await app.close();
+            vi.unstubAllEnvs();
+            reloadConfiguration();
+        }
+    });
+
+    it('releases a returned activation when its materialization signal is cancelled', async () => {
+        const controller = new AbortController();
+        const result = await scenario.bridge.materialize({ activationId: randomUUID(), runId, runnerPid, agentId: 'codex', cwd: scenario.root, modelId,
+            connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } },
+        }, controller.signal);
+        expect(result.ok).toBe(true);
+        expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).not.toBeNull();
+        controller.abort();
+        await vi.waitFor(() => expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).toBeNull());
+        const root = resolveConnectedServiceMaterializedRootDir({ baseDir: scenario.baseDir, agentId: 'codex', materializationKey: runId });
+        await vi.waitFor(async () => { await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' }); });
+    });
+
+    it('does not let queued cancellation retire a replacement activation', async () => {
+        const controller = new AbortController();
+        const request = { runId, runnerPid, agentId: 'codex', cwd: scenario.root, modelId,
+            connectedServices: ConnectedServiceBindingsV2Schema.parse({ v: 2,
+                bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } }),
+        };
+        const first = await scenario.bridge.materialize({ ...request, activationId: randomUUID() }, controller.signal);
+        expect(first.ok).toBe(true);
+        // The replacement holds the incumbent mutation owner ahead of the old
+        // request's cancellation. That cancellation must not unregister its successor.
+        const replacing = scenario.bridge.materialize({ ...request, activationId: randomUUID() });
+        controller.abort();
+        const replacement = await replacing;
+        expect(replacement.ok).toBe(true);
+        if (!replacement.ok) throw new Error(replacement.errorMessage);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).not.toBeNull();
+        expect(await scenario.bridge.release({ runId, runnerPid, activationId: replacement.activationId })).toEqual({ ok: true, released: true });
+    });
+
+    it.each(['bridge return', 'response delivery', 'server finish'] as const)('releases exact materialization cancelled during %s', async (phase) => {
+        const cancelledRunId = `late-cancel-${phase.replace(' ', '-')}`;
+        let notifyBoundary!: () => void;
+        const boundary = new Promise<void>(resolve => { notifyBoundary = resolve; });
+        let resumeResponse!: () => void;
+        const responseGate = new Promise<void>(resolve => { resumeResponse = resolve; });
+        let admitted: Materialization | undefined;
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'cancel-control',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {},
+            verifyRunMaterializeToken: token => token === deriveConnectedServiceRunMaterializeToken('cancel-control'),
+            materializeConnectedServicesForExecutionRun: async (...args) => {
+                const result = await scenario.bridge.materialize(...args);
+                if (result.ok) {
+                    admitted = result;
+                    if (phase === 'bridge return') { notifyBoundary(); await responseGate; }
+                }
+                return result;
+            },
+            releaseConnectedServicesForExecutionRun: scenario.bridge.release,
+        });
+        app.addHook('onSend', async (request, reply, payload) => {
+            if (phase === 'server finish' && request.url.includes('materialize') && reply.statusCode === 200) {
+                reply.raw.once('finish', () => { cancellation = host?.dispose(); notifyBoundary(); });
+            }
+            if (phase === 'response delivery' && request.url.includes('materialize') && reply.statusCode === 200) {
+                notifyBoundary();
+                await responseGate;
+            }
+            return payload;
+        });
+        let host: ReturnType<typeof createExecutionRunRuntime> | undefined;
+        let cancellation: Promise<void> | undefined;
+        let resolving: Promise<unknown> | undefined;
+        vi.stubEnv('HAPPIER_HOME_DIR', scenario.root);
+        reloadConfiguration();
+        try {
+            const address = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+            writeDaemonState({ pid: process.pid, httpPort: Number(address.port), controlToken: 'cancel-control',
+                startedAt: 1, startedWithCliVersion: '0.3.0' });
+            host = createExecutionRunRuntime({ cwd: scenario.root, runId: cancelledRunId, scope: 'session_owned',
+                backendId: 'codex', engineRegistry: await resolveCliEngineRegistry({ backendId: 'codex', happyHomeDir: scenario.root }),
+                happyHomeDir: scenario.root, permissionMode: 'read_only', modelId,
+                connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } },
+                start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
+            });
+            resolving = host.readResumeSupport().catch(error => error);
+            await boundary;
+            expect(admitted?.ok).toBe(true);
+            if (phase !== 'server finish') expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(cancelledRunId)).not.toBeNull();
+            await cancellation;
+            await host.dispose();
+            await resolving;
+            resumeResponse();
+            await vi.waitFor(() => expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(cancelledRunId)).toBeNull());
+            const root = resolveConnectedServiceMaterializedRootDir({ baseDir: scenario.baseDir, agentId: 'codex', materializationKey: cancelledRunId });
+            await vi.waitFor(async () => { await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' }); });
+        } finally {
+            resumeResponse();
+            await resolving;
+            await host?.dispose();
+            if (admitted) await scenario.bridge.release({ runId: cancelledRunId, runnerPid: process.pid, activationId: admitted.activationId });
+            await app.close();
+            vi.unstubAllEnvs();
+            reloadConfiguration();
+        }
+    });
+
+    it('retains delivered materialization until exact caller release', async () => {
+        let admitted: Materialization | undefined;
+        const app = createDaemonControlApp({ getChildren: () => [], machineId: 'fixture-machine', controlToken: 'master',
+            stopSession: async () => ({ status: 'not_found' }),
+            spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED, errorMessage: 'unused' }),
+            requestShutdown() {}, onHappySessionWebhook() {}, verifyRunMaterializeToken: token => token === 'run-token',
+            materializeConnectedServicesForExecutionRun: async (...args) => {
+                const result = await scenario.bridge.materialize(...args);
+                if (result.ok) admitted = result;
+                return result;
+            }, releaseConnectedServicesForExecutionRun: scenario.bridge.release,
+        });
+        const controller = new AbortController();
+        try {
+            const address = await app.listen({ host: '127.0.0.1', port: 0 });
+            const response = await fetch(`${address}/connected-service-run/materialize`, { method: 'POST',
+                headers: { 'content-type': 'application/json', 'x-happier-daemon-token': 'run-token' }, signal: controller.signal,
+                body: JSON.stringify({ activationId: randomUUID(), runId, runnerPid, agentId: 'codex', cwd: scenario.root, modelId,
+                    connectedServices: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'group', groupId: 'pool' } } } }),
+            });
+            expect(response.status).toBe(200);
+            expect(await response.json()).toMatchObject({ ok: true, result: { activationId: admitted?.activationId } });
+            const target = scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId);
+            expect(target).not.toBeNull();
+            controller.abort();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).toBe(target);
+            expect(await scenario.bridge.release({ runId, runnerPid, activationId: '00000000-0000-4000-8000-000000000000' }))
+                .toEqual({ ok: true, released: false });
+            expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).toBe(target);
+            expect(await scenario.bridge.release({ runId, runnerPid, activationId: admitted!.activationId })).toEqual({ ok: true, released: true });
+            expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it.each(['activated', 'declaration'] as const)('opens connected detached Codex from %s engine composition with materialized native auth', async (catalogBasis) => {
+        const materialization = await scenario.materialize();
+        const processBoundary = createCodexProcessBoundary(false);
+        const unsupportedAuthDiagnostics: unknown[] = [];
+        const captureDiagnostic = (...args: readonly unknown[]) => {
+            for (const value of args) {
+                if (value && typeof value === 'object'
+                    && Reflect.get(value, 'errorCode') === 'codex_refresh_free_auth_unsupported') {
+                    unsupportedAuthDiagnostics.push(value);
+                }
+            }
+        };
+        const createServices = scenario.runtimeRegistry.createAgentInvocationServices;
+        if (!createServices) throw new Error('Admitted Codex invocation services unavailable');
+        const runtimeRegistry = {
+            ...scenario.runtimeRegistry,
+            // Keep the actual host services and native composition; replace only the
+            // external Agent process/JSON-RPC transport with synthetic credentials.
+            createAgentInvocationServices: async (input: Parameters<typeof createServices>[0]) => {
+                const services = await createServices.call(scenario.runtimeRegistry, input);
+                return { ...services, exec: processBoundary.exec,
+                    logger: { ...services.logger, debug: captureDiagnostic, warn: captureDiagnostic } };
+            },
+        };
+        const contribution = scenario.engine.agent;
+        if (!contribution.richDefinition || !contribution.identity) throw new Error('Codex declaration unavailable');
+        const declarations = createResolvedContributionRegistry({ agents: [projectManifestAgentContribution({
+            definition: contribution.richDefinition.definition, pluginId: contribution.identity.pluginId,
+            provenance: contribution.provenance, source: contribution.source,
+            ...(contribution.hostAccess ? { hostAccess: contribution.hostAccess } : {}),
+        })] });
+        const engine = catalogBasis === 'activated'
+            ? await resolveBackendEngineAdapterResolution('codex', { runtimeRegistry })
+            : await resolveEngineAdapterResolutionFromRegistry({ backendId: 'codex',
+                contributions: declarations, runtimeRegistry });
+        if (!engine) throw new Error('Admitted Codex engine unavailable');
+        const host = engine.engineAdapter.runtimeCore.createExecutionRunBackend({
+            cwd: scenario.root, scope: 'detached', backendId: 'codex', runId,
+            controllerOccurrenceId: 'connected-controller', callId: 'connected-call', sidechainId: 'connected-sidechain',
+            machineId: 'fixture-machine', permissionMode: 'read_only', modelId,
+            isolation: { env: materialization.env },
+            connectedServiceRuntimeAuthRefresh: request => scenario.bridge.refreshRuntimeAuth({
+                ...request, runId, runnerPid, activationId: materialization.activationId,
+                selection: ConnectedServiceRuntimeAuthRefreshSelectionSchema.parse(request.selection),
+            }),
+            configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: modelId, updatedAtMs: 0 },
+                permissionIntent: { value: 'read-only', updatedAtMs: 0 }, options: {} },
+            start: { intent: 'delegate', runClass: 'bounded', retentionPolicy: 'ephemeral', ioMode: 'streaming' },
+        });
+        try {
+            await host.provisionRuntime({ initialPrompt: 'synthetic connected input' });
+            expect(unsupportedAuthDiagnostics).toEqual([]);
+            const login = processBoundary.rpcRequests.find(request => request.method === 'account/login/start');
+            expect(login?.params).toMatchObject({ type: 'chatgptAuthTokens', accessToken: 'test-access-first', chatgptAccountId: 'test-account-first' });
+            expect(processBoundary.rpcRequests.some(request => request.method === 'thread/start')).toBe(true);
+            await processBoundary.finish(false);
+            await host.waitForTurnCompletion?.();
+        } finally { await host.dispose(); }
+    });
+
     it('binds retained Run creation to daemon capacity recovery and continues partial work without replay', async () => {
         const composedRunId = 'composed-create-recovery';
         const opened: AgentSessionOpenRequest[] = [];
@@ -562,7 +886,7 @@ describe('composed finite Run model recovery', () => {
         const nativeRuntime: AgentRuntime = { sessions: { async open(request, context) {
             expect(context.services.sessions.current).toBeNull();
             expect(context.services.availability('sessions').status).toBe('unavailable');
-            await expect(async () => context.services.sessions.get('unrelated-session')).rejects.toMatchObject({ code: 'plugin_host_access_declaration_missing' });
+            await expect(async () => context.services.sessions.get('unrelated-session')).rejects.toMatchObject({ code: PLUGIN_SERVICE_UNAVAILABLE_CODE });
             expect(context.session.services.auth).toBeDefined();
             await expect(context.session.services.auth!.services.refreshRuntimeAuth({ serviceId: 'openai-codex' }))
                 .resolves.toMatchObject({ status: 'unavailable', reason: 'runtime_auth_selection_unavailable' });
@@ -593,7 +917,7 @@ describe('composed finite Run model recovery', () => {
                     return { status: 'admitted' as const };
                 },
                 async cancel({ turnId }) { publish({ kind: 'turn-cancelled', turnId, cause: 'user' }); return { status: 'requested' as const, turnId }; },
-                async updateConfiguration() { return { status: 'applied' as const }; },
+                async updateConfiguration() { return { status: 'applied' as const, changed: [] }; },
                 async compact() { return { status: 'admitted' as const }; },
                 async dispose() {},
             };
@@ -619,7 +943,7 @@ describe('composed finite Run model recovery', () => {
             },
         });
         const parentSession: NativeAgentSessionInteractionHostBinding['session'] = {
-            sessionId: 'actual-parent-session', getMetadataSnapshot: () => ({ path: scenario.root, machineId: 'fixture-machine' }),
+            sessionId: 'actual-parent-session', getMetadataSnapshot: () => createTestMetadata({ path: scenario.root, machineId: 'fixture-machine' }),
             updateMetadata: vi.fn<NativeAgentSessionInteractionHostBinding['session']['updateMetadata']>(),
             updateAgentState: vi.fn<NativeAgentSessionInteractionHostBinding['session']['updateAgentState']>(),
             enqueueAgentMessageCommitted: vi.fn<NativeAgentSessionInteractionHostBinding['session']['enqueueAgentMessageCommitted']>(),
@@ -993,6 +1317,7 @@ describe('composed finite Run model recovery', () => {
         expect(scenario.providerExchanges()).toBe(1);
         expect(await scenario.bridge.refreshRuntimeAuth({ ...request, refreshAttemptId: 'unadmitted-old-basis' })).toMatchObject({ status: 'unavailable' });
         const { expectedCredentialRevision: _expectedRevision, ...missingRevision } = request;
+        // @ts-expect-error The untrusted request deliberately omits its required credential fence.
         expect(await scenario.bridge.refreshRuntimeAuth(missingRevision)).toMatchObject({ status: 'unavailable' });
         expect(await scenario.bridge.refreshRuntimeAuth({ ...request, refreshAttemptId: 'native-proof-2', expectedCredentialRevision: updatedRevision }))
             .toEqual({ status: 'refreshed', result: {

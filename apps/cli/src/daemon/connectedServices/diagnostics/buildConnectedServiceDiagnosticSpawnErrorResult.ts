@@ -17,6 +17,7 @@ type ConnectedServiceCredentialRefreshSpawnError = Readonly<{
   serviceId?: unknown;
   profileId?: unknown;
   diagnostic?: unknown;
+  reason?: unknown;
 }>;
 
 type ConnectedServiceCredentialMissingSpawnError = Readonly<{
@@ -123,12 +124,22 @@ export function buildConnectedServiceCredentialRefreshSpawnErrorResult(input: Re
   const serviceId = readString(error.serviceId) || readStringField(diagnostic, 'serviceId');
   const profileId = readString(error.profileId) || readStringField(diagnostic, 'profileId');
   const status = readString(error.status) || readStringField(diagnostic, 'status');
-  const reason = readStringField(diagnostic, 'reason') || (
+  const reason = boundConnectedServiceMaterializationDiagnosticValue(readString(error.reason))
+    || readStringField(diagnostic, 'reason') || (
     readString(error.kind) === 'profile_action_required' ? 'profile_action_required' : 'spawn_preflight'
   );
   const refreshStatus = status || null;
   const refreshCategory = readStringField(diagnostic, 'category') || null;
   const retryable = readString(error.kind) === 'transient_refresh_failed';
+  if (retryable && reason === 'project_requester_home_unavailable') {
+    const message = 'Requester Home is temporarily unavailable. Retry when it is available.';
+    return {
+      type: 'error',
+      errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      errorMessage: message,
+      errorDetail: { kind: 'launch_error', code: reason, message },
+    };
+  }
   const code = retryable
     ? CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialRefreshUnavailable
     : CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired;

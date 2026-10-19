@@ -1,4 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
 import { PluginError, type Disposable } from '@happier-dev/plugin-sdk';
+import type { QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountGroupV4 } from '@happier-dev/protocol';
 import type {
   ConnectedAccountMetadataList as PluginConnectedAccountMetadataList,
   ConnectedAccountMaterializationRequest,
@@ -34,6 +36,7 @@ import type {
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import type { PermissionRequestOwner } from '@/agent/permissions/permissionRequestOwner';
 import { logger } from '@/ui/logger';
+import { observeCurrentConnectedServiceMaterializationPhase as observeMaterializationPhase } from '../materialize/materializationPhase';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import type {
   ConnectedAccountMaterializationCredentialRevisionBasis,
@@ -45,6 +48,7 @@ import {
   type ConnectedAccountRequestAuthResolvedBinding,
   type ConnectedAccountRequestAuthPurposeUse,
   type ConnectedAccountRequestAuthSubject,
+  type ConnectedAccountRequestAuthBindingAuthority,
 } from '../requestAuth/ConnectedAccountRequestAuthService';
 import {
   parseHttpHeadersRequestAuthBearer,
@@ -69,6 +73,11 @@ export type ConnectedAccountPurposeResolvedTarget = Readonly<{
   group?: Readonly<{
     groupId: string;
     generation: number;
+  }>;
+  /** Credential-free source facts that also drive purpose-scoped account listings. */
+  observation?: Readonly<{
+    profiles: readonly QualifiedConnectedAccountProfileV4[];
+    group?: QualifiedConnectedAccountGroupV4;
   }>;
 }>;
 
@@ -221,6 +230,7 @@ export type ConnectedAccountPurposeBindingSubject =
 
 export type ConnectedAccountPurposeBindingLease = Readonly<{
   subjectId: string;
+  requestAuth: ConnectedAccountRequestAuthBindingAuthority;
   isCurrent(): boolean;
   resolvePurposeBinding(
     purpose: QualifiedConnectedAccountPurposeV1,
@@ -377,6 +387,7 @@ export function scopeConnectedAccountPurposeBindingLease(input: Readonly<{
   const isCurrent = (): boolean => input.lease.isCurrent();
   return Object.freeze({
     subjectId,
+    bindingAuthority: input.lease.requestAuth,
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
     ...(input.validateCurrent ? { validateCurrent: input.validateCurrent } : {}),
     ...(input.legacyServiceKeyedCompatibility === true
@@ -585,12 +596,13 @@ function bindingOutOfScope(): PluginError {
 }
 
 /**
- * Recognizes the one refusal that startup reconciliation degrades on rather than
- * escalating. Every other CAS outcome stays terminal for its caller.
+ * Automatic pruning can defer an unavailable boundary or an uncertain effect.
+ * Explicit user mutations still surface both outcomes through the store.
  */
-function isAccountSettingsBoundaryUnavailable(error: unknown): error is PluginError {
+function isPurposeReconciliationDeferred(error: unknown): error is PluginError {
   return error instanceof PluginError
-    && error.code === 'plugin_connected_account_settings_unavailable';
+    && (error.code === 'plugin_connected_account_settings_unavailable'
+      || error.code === 'plugin_connected_account_settings_outcome_unknown');
 }
 
 function assertTargetAuthorized(
@@ -1092,6 +1104,16 @@ export function createConnectedAccountPurposeBindingOwner(
     };
     return Object.freeze({
       subjectId: state.subjectId,
+      requestAuth: Object.freeze({
+        resolveCurrentBinding: async (request: Parameters<ConnectedAccountRequestAuthBindingAuthority['resolveCurrentBinding']>[0]) => {
+          if (!isCurrent()) return null;
+          return await resolveCurrentRequestAuthBinding({ ...request, subjectId: state.subjectId });
+        },
+        materializeBearer: async (request: Parameters<ConnectedAccountRequestAuthBindingAuthority['materializeBearer']>[0]) => {
+          if (!isCurrent()) throw new ConnectedAccountRequestAuthError('request_auth_not_active');
+          return await materializeRequestAuthBearer({ ...request, subjectId: state.subjectId });
+        },
+      }),
       isCurrent,
       resolvePurposeBinding(rawPurpose) {
         if (!isCurrent()) return null;
@@ -1346,7 +1368,7 @@ export function createConnectedAccountPurposeBindingOwner(
         || readPurposeTeamResourceSelection(durable, input.purpose) !== null;
     };
     const readMaterializationTarget = async () => await readAuthorizedResolved(authorizationInput);
-    const before = input.nativeService
+    const before = await observeMaterializationPhase('materialization_binding_before', async () => input.nativeService
       ? await withSerializedConsumerMutations(
           [contributionKey(input.purpose.consumer)],
           async () => ({
@@ -1354,7 +1376,7 @@ export function createConnectedAccountPurposeBindingOwner(
             resolved: await readAuthorizedResolvedLocked(authorizationInput),
           }),
         )
-      : { explicit: false, resolved: await readMaterializationTarget() };
+      : { explicit: false, resolved: await readMaterializationTarget() });
     const resolved = before.resolved;
     if (!resolved) {
       if (before.explicit || !input.nativeService || !dependencies.materializeNative) throw resourceNotSelected(input.purpose);
@@ -1383,7 +1405,7 @@ export function createConnectedAccountPurposeBindingOwner(
           },
         })
       : null;
-    const materialization = resolved.directMaterialOrigin
+    const materialization = await observeMaterializationPhase('materialization_invoke', async () => resolved.directMaterialOrigin
       ? await (() => {
           if (!dependencies.materializeTeamDirect) throw bindingOutOfScope();
           return dependencies.materializeTeamDirect({
@@ -1401,9 +1423,9 @@ export function createConnectedAccountPurposeBindingOwner(
           ...(credentialRevisionBasis ? { credentialRevisionBasis } : {}),
           request: input.request,
           signal: input.signal,
-        });
+        }));
     input.signal.throwIfAborted();
-    const current = await readMaterializationTarget();
+    const current = await observeMaterializationPhase('materialization_binding_after', readMaterializationTarget);
     if (
       !current
       || targetKey(current.target) !== targetKey(resolved.target)
@@ -1809,7 +1831,7 @@ export function createConnectedAccountPurposeBindingOwner(
         input.publish();
         release();
       } catch (error) {
-        if (!isAccountSettingsBoundaryUnavailable(error)) {
+        if (!isPurposeReconciliationDeferred(error)) {
           release();
           throw error;
         }
@@ -1834,7 +1856,7 @@ export function createConnectedAccountPurposeBindingOwner(
             retryable: error.retryable,
             // The flag decides the operator's next move, so it is stated rather
             // than left for them to infer from the code.
-            recovery: error.retryable
+            recovery: error.retryable || error.code === 'plugin_connected_account_settings_outcome_unknown'
               ? 'the prune re-runs on the next registry publication'
               : 'the boundary will not recover without operator action',
           },
@@ -1893,8 +1915,57 @@ export function createConnectedAccountPurposeBindingOwner(
     watch(input) {
       QualifiedConnectedAccountPurposeV1Schema.parse(input.purpose);
       let disposed = false;
-      const notify = () => {
-        if (!disposed) input.listener();
+      const controller = new AbortController();
+      const read = async () => {
+        try {
+          const resolved = await readAuthorizedResolved({ ...input, signal: controller.signal });
+          const profile = resolved?.resolved.observation?.profiles.find(profile => (
+            sameQualifiedConnectedAccountRef(profile.ref, resolved.resolved.account)
+          ));
+          const credentialRevision = resolved && !resolved.directMaterialOrigin
+            ? profile ? profile.credentialRevision
+              : await dependencies.resolveCredentialRevision?.(resolved.resolved.account, controller.signal)
+            : undefined;
+          const configurationRevision = resolved && !resolved.directMaterialOrigin
+            ? profile ? profile.configurationRevision
+              : await dependencies.resolveCredentialConfigurationRevision?.(resolved.resolved.account, controller.signal)
+            : undefined;
+          return { ok: true as const, resolved, credentialRevision, configurationRevision };
+        } catch {
+          // A failed read cannot establish unchanged authority. Preserve fail-closed delivery.
+          return { ok: false as const };
+        }
+      };
+      let observation = read();
+      const notify = (): Promise<void> => {
+        const next = observation.then(async previous => {
+          if (disposed) return previous;
+          const current = await read();
+          if (disposed) return current;
+          const unchanged = previous.ok && current.ok && (
+            !previous.resolved && !current.resolved
+            || previous.resolved && current.resolved
+              && !previous.resolved.directMaterialOrigin && !current.resolved.directMaterialOrigin
+              && sameResolvedTarget(previous.resolved, current.resolved)
+              && previous.resolved.resolved.displayName === current.resolved.resolved.displayName
+              && typeof previous.credentialRevision === 'string'
+              && (previous.resolved.resolved.observation?.profiles.every(profile => profile.revisionSemantics === 'revisioned') ?? true)
+              && previous.credentialRevision === current.credentialRevision
+              && previous.configurationRevision === current.configurationRevision
+              && isDeepStrictEqual(previous.resolved.resolved.observation, current.resolved.resolved.observation)
+          );
+          if (!unchanged) {
+            const affected = (current.ok ? current.resolved : null)
+              ?? (previous.ok ? previous.resolved : null);
+            await Promise.resolve().then(() => input.listener({
+              account: affected?.resolved.account ?? null,
+              ...(affected?.resolved.group ? { group: affected.resolved.group } : {}),
+            })).catch(() => undefined);
+          }
+          return current;
+        });
+        observation = next;
+        return next.then(() => undefined);
       };
       const storeSubscription = dependencies.store.subscribe(notify);
       const projectionSubscription = dependencies.subscribeInvalidations?.(notify);
@@ -1909,6 +1980,7 @@ export function createConnectedAccountPurposeBindingOwner(
         dispose() {
           if (disposed) return;
           disposed = true;
+          controller.abort();
           storeSubscription.dispose();
           projectionSubscription?.dispose();
           if (input.sessionId && sessionListeners) {
@@ -1981,10 +2053,17 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
       const credentials = await credentialsForOperation(operation);
       operation.assertCurrent();
       const transport = createCliConnectedAccountCatalogStore({ credentials, signal, operationContext: input.operationContext });
-      const result = await transport.writeRecord({ record: { key: 'purposes', value }, expectedRevision: current.revision }).catch((error: unknown) => {
+      const result = await transport.writeRecord({ record: { key: 'purposes', value }, expectedRevision: current.revision }).catch(async (error: unknown) => {
         const code = error instanceof Error && 'code' in error ? error.code : undefined;
-        if (code === 'outcome_unknown') throw new PluginError({ code: 'plugin_connected_account_settings_outcome_unknown',
-          message: 'Connected Account purpose mutation outcome is unknown' });
+        if (code === 'outcome_unknown') {
+          // The write may have committed. Reobserve before automatic pruning
+          // publishes or a later mutation derives intent from this snapshot;
+          // readback cannot turn an uncertain user mutation into an ACK.
+          await refreshActiveConnectedAccountCatalog({ credentials, key: 'purposes', signal,
+            operationContext: input.operationContext }, true);
+          throw new PluginError({ code: 'plugin_connected_account_settings_outcome_unknown',
+            message: 'Connected Account purpose mutation outcome is unknown' });
+        }
         if (code === 'scope-retired') throw unavailable('scope-retired');
         if (code === 'unreachable') throw unavailable('unreachable', true);
         throw error;

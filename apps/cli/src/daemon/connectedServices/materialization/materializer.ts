@@ -4,7 +4,21 @@ import type {
   ConnectedServiceCredentialRevisionV1,
   ConnectedAccountServiceKey,
   QualifiedConnectedAccountPurposeBindingV1,
+  PluginSourceCustodyV1,
 } from '@happier-dev/protocol';
+
+/** Host-private custody captured from verified native state links during materialization. */
+export type ConnectedServiceMaterializedStateObservationBinding = Readonly<{
+  agentId: string;
+  pluginId: string;
+  sourceCustody: PluginSourceCustodyV1;
+  nativeHomeRoot: string;
+  entries: readonly Readonly<{
+    entryPath: string;
+    sourceEntryRoot: string;
+    materializedEntryPath: string;
+  }>[];
+}>;
 
 export type ConnectedServiceResolvedSelection =
   | Readonly<{
@@ -29,6 +43,7 @@ export type ConnectedServicesMaterialization = Readonly<{
   unsetEnvKeys?: readonly string[];
   targetMaterializedRoot?: string | null;
   requestAuthMaterializedRoot?: string | null;
+  materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
   cleanupOnFailure: (() => void | Promise<void>) | null;
   cleanupOnExit: (() => void | Promise<void>) | null;
   diagnostics?: readonly ConnectedServicesMaterializationDiagnostic[];

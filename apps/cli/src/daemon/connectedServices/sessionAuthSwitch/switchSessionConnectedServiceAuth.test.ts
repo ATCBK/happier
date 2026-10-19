@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -42,6 +42,13 @@ import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/Co
 import { canResumeFromMaterializedState } from '../stateSharing/canResumeFromMaterializedState';
 import { materializeSessionConnectedServiceRuntimeAuthSelection } from './materializeSessionConnectedServiceRuntimeAuthSelection';
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from './resolveTrackedConnectedServiceSwitchContinuityContext';
+
+let catalogRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+  catalogRuntime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.claude', 'happier.agent.codex', 'happier.agent.gemini'] } });
+});
+afterAll(async () => { await catalogRuntime?.dispose(); });
 
 async function readCodexRuntimeAuthAdapterRegistration() {
   let captured: unknown;
@@ -369,12 +376,14 @@ describe('switchSessionConnectedServiceAuth', () => {
     const purposeOwner = createConnectedAccountPurposeBindingOwner({
       store: { read: unexpectedAccountBoundary, update: unexpectedAccountBoundary, subscribe: () => ({ dispose() {} }) },
       selectTarget: unexpectedAccountBoundary,
+      projectTargetAccounts: unexpectedAccountBoundary,
+      assertTargetAccountMaterializable: unexpectedAccountBoundary,
       resolveTarget: async target => target.kind === 'account'
         ? { displayName: target.account.accountId, account: target.account }
         : { displayName: target.groupId, account: { service: target.service, accountId: 'backup' } },
       materializeAccount: unexpectedAccountBoundary,
     });
-    const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    const runtime = await createAdmittedPluginRuntimeFixture({
       runtimeOptions: { pluginIds: ['happier.agent.codex'], connectedAccounts: purposeOwner } });
     const vendorResumeId = '019c1234-1234-7123-8123-123456789abc';
     const serviceId = 'happier.agent.codex/openai-codex';
@@ -396,12 +405,15 @@ describe('switchSessionConnectedServiceAuth', () => {
       }), 'codex-home');
       await mkdir(join(target, 'sessions'), { recursive: true });
       await writeFile(join(target, 'sessions', `rollout-2026-10-11T12-00-00-${vendorResumeId}.jsonl`), '{}\n');
+      const materializationIdentity = ConnectedServiceMaterializationIdentityV1Schema.parse({ v: 1, id: 'csm_inactive_target', createdAt: 0 });
+      const runtimeTargets = new ConnectedServiceRuntimeRegistry();
+      const { commitConnectedServiceHotApplyRuntimeTarget } = await import('@/daemon/startup/startDaemonSessionControlRuntime');
       const persistSessionBindings = vi.fn();
       const result = await switchSessionConnectedServiceAuth({
         core: createConnectedServiceSessionAuthSwitchCore({ locks: new ConnectedServiceSessionAuthSwitchLockRegistry() }),
         dryRun: true, getChildren: () => [], api: accountApi,
         resolveInactiveSession: async () => ({ agentId: 'codex', connectedServices: codexBindings('old'),
-          connectedServiceMaterializationIdentityV1: { v: 1, id: 'csm_inactive_target', createdAtMs: 0 }, vendorResumeId, cwd: root,
+          connectedServiceMaterializationIdentityV1: materializationIdentity, vendorResumeId, cwd: root,
           metadata: { path: root, runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: { providerSessionId: vendorResumeId } } } }),
         materializeRuntimeAuthSelection: async (input) => await materializeSessionConnectedServiceRuntimeAuthSelection({
           credentials: { token: 'synthetic-account-token', encryption: null }, api: accountApi as unknown as ApiClient,
@@ -422,6 +434,9 @@ describe('switchSessionConnectedServiceAuth', () => {
           });
           return reachable.ok ? { mode: 'restart_rematerialize' } : { mode: 'unsupported', reason: 'provider_session_state_unavailable_for_resume', errorCode: 'provider_session_state_unavailable_for_resume' };
         },
+        registerHotApplyTargets: input => commitConnectedServiceHotApplyRuntimeTarget({
+          ...input, agentId: 'codex', materializationIdentity, registry: runtimeTargets,
+        }),
         persistSessionBindings, emitSessionEvent: async () => {},
         restartSession: async () => { throw new Error('inactive preflight cannot restart'); },
         hotApply: async () => { throw new Error('inactive preflight cannot hot-apply'); },
@@ -429,6 +444,7 @@ describe('switchSessionConnectedServiceAuth', () => {
       });
       expect(result).toMatchObject({ ok: true, action: 'metadata_updated' });
       expect(persistSessionBindings).not.toHaveBeenCalled();
+      expect(runtimeTargets.getBySessionId('inactive')).toBeNull();
       expect(await stat(join(target, 'auth.json')).catch(() => null)).toBeNull();
     } finally { transport.mockRestore(); await runtime.dispose(); await rm(root, { recursive: true, force: true }); }
   });

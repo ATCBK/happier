@@ -13,7 +13,7 @@ import type { ConnectedServiceRuntimeFailureClassification } from './types';
 
 const classification: ConnectedServiceRuntimeFailureClassification = {
   kind: 'usage_limit',
-  serviceId: 'openai-codex',
+  serviceId: 'happier.agent.codex/openai-codex',
   profileId: 'primary',
   groupId: 'team',
   resetsAtMs: null,
@@ -26,7 +26,7 @@ const predecessorRecoveryKey =
   'runtime-auth:v1:WyJzZXNzaW9uLXByZWRlY2Vzc29yIiwib3BlbmFpLWNvZGV4IixudWxsLCJ0ZWFtIl0';
 const currentRecoveryKey = buildRuntimeAuthRecoveryKey({
   sessionId: 'session-predecessor',
-  serviceId: 'openai-codex',
+  serviceId: classification.serviceId,
   profileId: 'primary',
   groupId: 'team',
   failingAccessTokenFingerprint: 'sha256:abcdef12',
@@ -50,7 +50,8 @@ function buildPredecessorRecoveryKey(input: Readonly<{
 
 // Exact V2 intent shape and four-part key introduced at
 // 6e6ecb42e7f9ab8607b5710547563bbc9c232728 and revalidated against the moving
-// predecessor origin/dev@fbdd5d9cb07391eb839eab313c5ba60fe77ce20b.
+// predecessor 0f39da362c026525cbce7e3ff82e5aa5a1d8c47e's current on-disk
+// RuntimeAuthRecoveryScheduler and recoveryKey/runtimeAuthRecoveryKey producers.
 function predecessorV2Intent(overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> {
   return {
     v: 2,
@@ -98,6 +99,7 @@ function predecessorV2Intent(overrides: Readonly<Record<string, unknown>> = {}):
     switchesThisTurn: 0,
     classification: {
       ...classification,
+      serviceId: 'openai-codex',
       credentialRevision: predecessorCredentialRevision,
       groupGeneration: 7,
       failingAccessTokenFingerprint: 'sha256:abcdef12',
@@ -130,10 +132,10 @@ async function seedRuntimeAuthRecoveryFile(
 }
 
 describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
-  it('retains pending event custody with retired fields when the stored recovery identity is canonical', async () => {
+  it('retains predecessor pending event custody with retired fields and normalizes its service identity', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-runtime-auth-retired-event-'));
-    const serviceId = 'happier.agent.codex/openai-codex';
-    const identity = { sessionId: 'session-retained-event', serviceId, profileId: 'primary', groupId: 'team' };
+    const identity = { sessionId: 'session-retained-event', serviceId: 'openai-codex', profileId: 'primary', groupId: 'team' };
+    const { serviceId } = identity;
     const key = buildPredecessorRecoveryKey(identity);
     const invalidIdentity = { ...identity, sessionId: 'session-mismatched-event' };
     const invalidKey = buildPredecessorRecoveryKey(invalidIdentity);
@@ -158,13 +160,14 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
           } }],
         }),
       });
-      scheduler = createRuntimeAuthRecoverySchedulerForDaemon({ activeServerDir, nowMs: () => -60_000 });
+      scheduler = createRuntimeAuthRecoverySchedulerForDaemon({ activeServerDir, nowMs: () => -60_000,
+        recover: async () => { throw new Error('Retained event delivery must not attempt recovery'); } });
       expect(scheduler.readForSession(identity.sessionId)).toHaveLength(1);
       expect(scheduler.readForSession(invalidIdentity.sessionId)).toEqual([]);
       const delivered: unknown[] = [];
       await expect(scheduler.drainPendingVisibleEvents(async delivery => { delivered.push(delivery.transcriptEvent); }))
         .resolves.toBe(1);
-      expect(delivered[0]).toMatchObject({ type: 'connected-service-runtime-auth-recovery', serviceId });
+      expect(delivered[0]).toMatchObject({ type: 'connected-service-runtime-auth-recovery', serviceId: classification.serviceId });
       expect(delivered[0]).not.toHaveProperty('retiredEventField');
       expect(delivered[0]).not.toHaveProperty('diagnostic.retiredDiagnosticField');
     } finally {
@@ -185,6 +188,7 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
             groupId: 'codex-main',
             classification: {
               ...classification,
+              serviceId: 'openai-codex',
               groupId: 'codex-main',
               credentialRevision: predecessorCredentialRevision,
             },
@@ -223,10 +227,12 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
       expect(scheduler.readForSession('session-predecessor')).toEqual([
         expect.objectContaining({
           v: 1,
+          serviceId: classification.serviceId,
           attemptId: predecessorAttemptId,
           status: 'waiting',
           nextRetryAtMs: 2_000,
           classification: expect.objectContaining({
+            serviceId: classification.serviceId,
             expectedCredentialRevision: predecessorCredentialRevision,
             groupGeneration: 7,
             failingAccessTokenFingerprint: 'sha256:abcdef12',
@@ -273,29 +279,85 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
     }
   });
 
+  it('adopts predecessor Antigravity custody through the storage mapping without a legacy peer operation', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-runtime-auth-predecessor-antigravity-'));
+    const identity = {
+      sessionId: 'session-predecessor-antigravity',
+      serviceId: 'happier.agent.antigravity/antigravity-account',
+      profileId: 'primary',
+      groupId: 'team',
+      failingAccessTokenFingerprint: 'sha256:abcdef12',
+    } as const;
+    // The moving predecessor's backends/agy/connectedServices/classifyAgyRuntimeQuotaFailure
+    // emits this storage-only scalar; it has no member in the legacy peer-operation enum.
+    const oldKey = buildPredecessorRecoveryKey({ ...identity, serviceId: 'antigravity' });
+    const currentKey = buildRuntimeAuthRecoveryKey(identity);
+    let scheduler: ReturnType<typeof createRuntimeAuthRecoverySchedulerForDaemon> | undefined;
+    try {
+      const filePath = await seedRuntimeAuthRecoveryFile(activeServerDir, {
+        [oldKey]: predecessorV2Intent({
+          sessionId: identity.sessionId,
+          serviceId: 'antigravity',
+          classification: {
+            ...classification,
+            serviceId: 'antigravity',
+            credentialRevision: predecessorCredentialRevision,
+            failingAccessTokenFingerprint: identity.failingAccessTokenFingerprint,
+            source: 'stable_provider_message',
+          },
+          pendingVisibleEvents: [],
+        }),
+      });
+      scheduler = createRuntimeAuthRecoverySchedulerForDaemon({ activeServerDir, nowMs: () => 1_500,
+        recover: async () => { throw new Error('Cancelling retained recovery must not attempt recovery'); } });
+      expect(scheduler.readForSession(identity.sessionId)).toEqual([
+        expect.objectContaining({ serviceId: identity.serviceId }),
+      ]);
+
+      await expect(scheduler.cancelByKey(identity)).resolves.toMatchObject({ status: 'cancelled' });
+
+      const persisted = JSON.parse(await readFile(filePath, 'utf8')) as {
+        intentsBySessionId: Record<string, unknown>;
+      };
+      expect(persisted.intentsBySessionId).not.toHaveProperty(oldKey);
+      expect(persisted.intentsBySessionId[currentKey]).toMatchObject({
+        v: 1,
+        serviceId: identity.serviceId,
+        status: 'cancelled',
+        classification: { serviceId: identity.serviceId },
+      });
+    } finally {
+      scheduler?.dispose();
+      await rm(activeServerDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 10 });
+    }
+  });
+
   it('keeps V1 accepted and fails closed for malformed or future predecessor state', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-runtime-auth-compat-filter-'));
     const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));
     try {
       await seedRuntimeAuthRecoveryFile(activeServerDir, {
-        'future-version': predecessorV2Intent({ v: 3, sessionId: 'session-future' }),
-        'unsafe-checking': predecessorV2Intent({ status: 'checking', sessionId: 'session-checking' }),
-        'malformed-next-retry': predecessorV2Intent({
+        [buildPredecessorRecoveryKey({ ...classification, serviceId: 'openai-codex', sessionId: 'session-future' })]:
+          predecessorV2Intent({ v: 3, sessionId: 'session-future' }),
+        [buildPredecessorRecoveryKey({ ...classification, serviceId: 'openai-codex', sessionId: 'session-checking' })]:
+          predecessorV2Intent({ status: 'checking', sessionId: 'session-checking' }),
+        [buildPredecessorRecoveryKey({ ...classification, serviceId: 'openai-codex', sessionId: 'session-malformed-next-retry' })]: predecessorV2Intent({
           sessionId: 'session-malformed-next-retry',
           nextRetryAtMs: '2_000',
         }),
-        'mismatched-classification': predecessorV2Intent({
+        [buildPredecessorRecoveryKey({ ...classification, serviceId: 'openai-codex', sessionId: 'session-mismatch' })]: predecessorV2Intent({
           sessionId: 'session-mismatch',
           classification: {
             ...classification,
-            serviceId: 'anthropic-claude',
+            serviceId: 'anthropic',
             credentialRevision: predecessorCredentialRevision,
           },
         }),
-        'runtime-auth:v1:WyJzZXNzaW9uLXYxIiwib3BlbmFpLWNvZGV4IixudWxsLCJ0ZWFtIixudWxsXQ': {
+        [buildRuntimeAuthRecoveryKey({ sessionId: 'session-v1', ...classification })]: {
           ...predecessorV2Intent({
             v: 1,
             sessionId: 'session-v1',
+            serviceId: classification.serviceId,
             classification: {
               ...classification,
               expectedCredentialRevision: predecessorCredentialRevision,
@@ -343,17 +405,18 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
       };
       const ownerKeyParts = {
         sessionId: 'session-future-owner',
-        serviceId: 'openai-codex',
+        serviceId: classification.serviceId,
         profileId: 'primary',
         groupId: 'team',
         failingAccessTokenFingerprint: 'sha256:future-owner',
       } as const;
       const currentOwnerKey = buildRuntimeAuthRecoveryKey(ownerKeyParts);
-      const predecessorOwnerKey = buildPredecessorRecoveryKey(ownerKeyParts);
+      const predecessorOwnerKey = buildPredecessorRecoveryKey({ ...ownerKeyParts, serviceId: 'openai-codex' });
       const occupiedOwnerKey = ownerKeyKind === 'current' ? currentOwnerKey : predecessorOwnerKey;
       const baseOwnedIntent = predecessorV2Intent({
         v: 1,
         sessionId: ownerKeyParts.sessionId,
+        serviceId: classification.serviceId,
         classification: {
           ...futureClassification,
           expectedCredentialRevision: predecessorCredentialRevision,
@@ -428,12 +491,12 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
 
         const unrelatedOwnerParts = {
           sessionId: 'session-unrelated-owner',
-          serviceId: 'openai-codex',
+          serviceId: classification.serviceId,
           profileId: 'primary',
           groupId: 'other-team',
         } as const;
         const unrelatedCurrentKey = buildRuntimeAuthRecoveryKey(unrelatedOwnerParts);
-        const unrelatedPredecessorKey = buildPredecessorRecoveryKey(unrelatedOwnerParts);
+        const unrelatedPredecessorKey = buildPredecessorRecoveryKey({ ...unrelatedOwnerParts, serviceId: 'openai-codex' });
         const persisted = JSON.parse(await readFile(filePath, 'utf8')) as {
           intentsBySessionId: Record<string, unknown>;
           effectClaimsByRecoveryKey?: Record<string, string>;
@@ -460,7 +523,7 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
     };
     const currentOwnerKey = buildRuntimeAuthRecoveryKey({
       sessionId: 'session-predecessor',
-      serviceId: 'openai-codex',
+      serviceId: classification.serviceId,
       profileId: 'primary',
       groupId: 'team',
       failingAccessTokenFingerprint: 'sha256:abcdef12',
@@ -521,7 +584,7 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
     const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));
     const currentOwnerKey = buildRuntimeAuthRecoveryKey({
       sessionId: 'session-predecessor',
-      serviceId: 'openai-codex',
+      serviceId: classification.serviceId,
       profileId: 'primary',
       groupId: 'team',
       failingAccessTokenFingerprint: 'sha256:abcdef12',
@@ -594,7 +657,7 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
     const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));
     const currentOwnerKey = buildRuntimeAuthRecoveryKey({
       sessionId: 'session-predecessor',
-      serviceId: 'openai-codex',
+      serviceId: classification.serviceId,
       profileId: 'primary',
       groupId: 'team',
       failingAccessTokenFingerprint: 'sha256:abcdef12',
@@ -655,7 +718,7 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
     const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));
     const identity = {
       sessionId: 'session-current-fingerprint-owner',
-      serviceId: 'openai-codex',
+      serviceId: classification.serviceId,
       profileId: 'primary',
       groupId: 'team',
     } as const;
@@ -669,15 +732,17 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
       ...identity,
       failingAccessTokenFingerprint: fingerprintB,
     });
-    const predecessorOwnerKey = buildPredecessorRecoveryKey(identity);
+    const predecessorOwnerKey = buildPredecessorRecoveryKey({ ...identity, serviceId: 'openai-codex' });
     const currentOwnerIntent = predecessorV2Intent({
       v: 1,
       sessionId: identity.sessionId,
+      serviceId: classification.serviceId,
       classification: {
         ...classification,
         expectedCredentialRevision: predecessorCredentialRevision,
         failingAccessTokenFingerprint: fingerprintA,
       },
+      pendingVisibleEvents: [],
     });
     const unrelatedOpaqueIntent = {
       v: 3,
@@ -739,13 +804,13 @@ describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
     const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));
     const identity = {
       sessionId: 'session-fingerprint-owner',
-      serviceId: 'openai-codex',
+      serviceId: classification.serviceId,
       profileId: 'primary',
       groupId: 'team',
     } as const;
     const fingerprintA = 'sha256:fingerprint-a';
     const fingerprintB = 'sha256:fingerprint-b';
-    const predecessorOwnerKey = buildPredecessorRecoveryKey(identity);
+    const predecessorOwnerKey = buildPredecessorRecoveryKey({ ...identity, serviceId: 'openai-codex' });
     const currentOwnerKeyA = buildRuntimeAuthRecoveryKey({
       ...identity,
       failingAccessTokenFingerprint: fingerprintA,

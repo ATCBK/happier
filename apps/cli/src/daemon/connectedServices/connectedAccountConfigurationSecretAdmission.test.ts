@@ -1,12 +1,21 @@
 import axios from 'axios';
+import { isDeepStrictEqual } from 'node:util';
 import {
   AccountSettingsSchema,
-  CONNECTED_ACCOUNT_SERVICE_CONFIGURATIONS_SETTINGS_KEY,
   FeaturesResponseSchema,
   PluginConnectedAccountAuthenticationModeV2Schema,
   formatSavedSecretCatalogReferenceV1,
   sealSavedSecretResourceStoredContentV1,
 } from '@happier-dev/protocol';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, sealConnectedAccountCatalogContentV1, type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -17,9 +26,12 @@ import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
   subscribeActiveAccountSettingsSnapshot,
+  type ActiveAccountSettingsSnapshotListener,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/accountSettings/accountSettingsHistoryNormalization';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 
 import {
   createActiveAccountSettingsConnectedAccountSecrets,
@@ -41,13 +53,6 @@ const persistenceMocks = vi.hoisted(() => ({
 vi.mock('@/persistence', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: persistenceMocks.readStoredCredentials,
-}));
-
-vi.mock('@/features/serverFeaturesClient', () => ({
-  fetchServerFeaturesSnapshot: vi.fn(async () => ({
-    status: 'ready' as const,
-    features: FeaturesResponseSchema.parse({ features: { teams: { enabled: true } }, capabilities: {} }),
-  })),
 }));
 
 const token = 'account-token';
@@ -106,6 +111,40 @@ const sharedRow = {
   recipientEnvelope: null,
 };
 const teamsEnabled = FeaturesResponseSchema.parse({ features: { teams: { enabled: true } }, capabilities: {} });
+const configurationRecord: ConnectedAccountCatalogRecordV1 = { key: 'configurations', value: { v: 1, entries: [{
+  service, modeId: 'oauth', revision: 'configuration-1',
+  values: { endpoint: 'https://api.example.test' }, secretRefs: { clientSecret: sharedRef },
+}] } };
+
+function mockHomeGet(resources: readonly typeof sharedRow[]) {
+  const emptyPrivateCatalogPaths = new Set([
+    PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ACP_CATALOG_ROWS_ROUTE_V1, MCP_SERVER_CATALOG_ROWS_ROUTE_V1,
+    `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`, CONNECTED_PRESENTATION_ROWS_ROUTE_V1,
+    CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, NOTIFICATION_CHANNELS_ROUTE_V1, REMOTE_HOST_ROWS_ROUTE_V1,
+  ]);
+  vi.mocked(axios.get).mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/currentness')) return { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`) return { status: 200, data: {
+      status: 'present', revision: 1,
+      content: sealConnectedAccountCatalogContentV1({ mode: 'plain', material: null, record: configurationRecord }),
+    } };
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+    if (path === PROFILE_TRANSFER_ROUTE_V1 || emptyPrivateCatalogPaths.has(path)) return { status: 200, data: { status: 'absent' } };
+    if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: PromptLibraryRowsListResponseV1Schema.parse({
+      status: 'listed', rows: [],
+    }) };
+    if (path === '/v1/account/saved-secrets/resources/materials') return { status: 200, data: { resources } };
+    throw new Error(`Unexpected Home read: ${path}`);
+  });
+}
+
+function savedSecretReadCount() {
+  return vi.mocked(axios.get).mock.calls.filter(([input]) =>
+    new URL(String(input)).pathname === '/v1/account/saved-secrets/resources/materials').length;
+}
 
 function createConfigurationOwner() {
   const persistence = createQualifiedConnectedAccountDaemonPersistence({
@@ -129,20 +168,13 @@ describe('Connected Account service configuration admits its shared Saved Secret
     vi.mocked(axios.get).mockReset();
     persistenceMocks.readStoredCredentials.mockReset();
     persistenceMocks.readStoredCredentials.mockResolvedValue({ token, encryption: null });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json(teamsEnabled)));
     setActiveAccountSettingsSnapshot({
       source: 'network',
-      settings: AccountSettingsSchema.parse({
-        [CONNECTED_ACCOUNT_SERVICE_CONFIGURATIONS_SETTINGS_KEY]: {
-          v: 1,
-          entries: [{
-            service,
-            modeId: 'oauth',
-            revision: 'configuration-1',
-            values: { endpoint: 'https://api.example.test' },
-            secretRefs: { clientSecret: sharedRef },
-          }],
-        },
-      }),
+      settings: AccountSettingsSchema.parse({}),
+      rawSettings: {},
+      connectedConfigurationCatalog: { status: 'ready', revision: 1, record: configurationRecord,
+        cleanup: { status: 'complete' } },
       settingsVersion: 1,
       loadedAtMs: 1,
       settingsSecretsReadKeys: [],
@@ -152,13 +184,14 @@ describe('Connected Account service configuration admits its shared Saved Secret
 
   afterEach(() => {
     resetActiveAccountSettingsSnapshotForTests();
+    vi.unstubAllGlobals();
   });
 
   it('refuses a new operation after a revocation whose AccountChange hint was missed', async () => {
-    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [sharedRow] } });
+    mockHomeGet([sharedRow]);
     await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
     // The Home revokes the grant; the daemon never receives the hint.
-    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [] } });
+    mockHomeGet([]);
 
     await expect(createConfigurationOwner().admit({
       intent: 'connect',
@@ -166,13 +199,19 @@ describe('Connected Account service configuration admits its shared Saved Secret
       mode,
       ...generation,
     })).rejects.toBeInstanceOf(ConnectedAccountConfigurationError);
-    expect(axios.get).toHaveBeenCalledTimes(2);
+    expect(savedSecretReadCount()).toBe(2);
   });
 
   it('admits a still-authorized ref without waking any Account Settings consumer', async () => {
-    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [sharedRow] } });
+    mockHomeGet([sharedRow]);
+    // Establish the clean-Home precondition through the real cleanup owner so
+    // an invalid transport fixture cannot masquerade as a publication defect.
+    await expect(normalizeCliAccountSettingsHistoryAfterTransfer({
+      credentials: { token, encryption: null }, serverBaseUrl: resolveServerHttpBaseUrl(),
+      isCurrent: () => true, destinationAuthority: { activeTransferredRoots: [] },
+    })).resolves.toEqual({ status: 'complete' });
     await hydrateSavedSecretCatalog({ token, serverFeatures: teamsEnabled });
-    const publications = vi.fn();
+    const publications = vi.fn<ActiveAccountSettingsSnapshotListener>();
     const unsubscribe = subscribeActiveAccountSettingsSnapshot(publications);
     try {
       const admitted = await createConfigurationOwner().admit({
@@ -184,10 +223,15 @@ describe('Connected Account service configuration admits its shared Saved Secret
 
       if (admitted.status !== 'ready') throw new Error(`expected ready admission, got ${admitted.status}`);
       await expect(admitted.snapshot.getSecret('clientSecret')).resolves.toBe('shared-client-secret');
-      expect(axios.get).toHaveBeenCalledTimes(2);
+      expect(savedSecretReadCount()).toBe(2);
       // Admission re-observed an unchanged catalog, so no purpose watch or
       // direct reconciler is woken by the operation's own admission.
-      expect(publications).not.toHaveBeenCalled();
+      expect(publications.mock.calls.map(([previous, next]) => ({
+        changedFields: [...new Set([...Object.keys(previous ?? {}), ...Object.keys(next ?? {})])]
+          .filter(key => !isDeepStrictEqual(Reflect.get(previous ?? {}, key), Reflect.get(next ?? {}, key))),
+        previousCatalog: previous?.connectedConfigurationCatalog,
+        nextCatalog: next?.connectedConfigurationCatalog,
+      }))).toEqual([]);
     } finally {
       unsubscribe();
     }

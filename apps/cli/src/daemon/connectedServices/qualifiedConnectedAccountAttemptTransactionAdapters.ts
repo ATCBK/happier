@@ -8,7 +8,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { openQualifiedConnectedAccountContentEnvelope, sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol/connect/qualifiedConnectedAccountContentEnvelope';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { StoredJsonContentEnvelope } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   createConnectedAccountAttemptTransactionApi,
@@ -38,96 +38,96 @@ import type {
 const DEFAULT_TRANSACTION_TTL_MS = 15 * 60_000;
 const MAX_TRANSACTION_TTL_MS = 24 * 60 * 60_000;
 
-const BoundedIdSchema = z.string().min(1).max(256);
-const BoundedValueSchema = z.string().max(64 * 1024);
-const SafeTimestampSchema = z.number().int().nonnegative();
-const ServiceSchema = z.object({
+const BoundedIdSchema = z.string().check(z.minLength(1), z.maxLength(256));
+const BoundedValueSchema = z.string().check(z.maxLength(64 * 1024));
+const SafeTimestampSchema = z.number().check(z.int(), z.nonnegative());
+const ServiceSchema = z.strictObject({
   pluginId: BoundedIdSchema,
   localId: BoundedIdSchema,
-}).strict();
-const AccountSchema = z.object({
+});
+const AccountSchema = z.strictObject({
   service: ServiceSchema,
   accountId: BoundedIdSchema,
-}).strict();
+});
 const StagedCredentialsSchema = z.record(
-  z.string().min(1).max(128),
+  z.string().check(z.minLength(1), z.maxLength(128)),
   BoundedValueSchema,
 );
-const ProviderIdentitySchema = z.object({
-  accountId: BoundedIdSchema.optional(),
-  email: z.string().min(1).max(4_096).optional(),
-}).strict();
+const ProviderIdentitySchema = z.strictObject({
+  accountId: z.optional(BoundedIdSchema),
+  email: z.optional(z.string().check(z.minLength(1), z.maxLength(4_096))),
+});
 const PreparedSettlementShape = {
   intent: z.enum(['connect', 'reconnect']),
   service: ServiceSchema,
   accountId: BoundedIdSchema,
   authenticationModeId: BoundedIdSchema,
-  directExportContract: z.literal(CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1).nullable().optional(),
-  expectedCredentialRevision: z.string().max(4_096).nullable(),
+  directExportContract: z.optional(z.nullable(z.literal(CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1))),
+  expectedCredentialRevision: z.nullable(z.string().check(z.maxLength(4_096))),
   expectedCredentialConfigurationRevision:
-    z.string().min(1).max(4_096).nullable(),
-  expectedConfigurationRevision: z.string().min(1).max(4_096),
+    z.nullable(z.string().check(z.minLength(1), z.maxLength(4_096))),
+  expectedConfigurationRevision: z.string().check(z.minLength(1), z.maxLength(4_096)),
   stagedCredentials: StagedCredentialsSchema,
-  stagedAccountConfigurationContent: z.unknown().optional(),
-  providerIdentity: ProviderIdentitySchema.optional(),
-  displayName: z.string().max(4_096),
-  scopes: z.array(z.string().max(4_096)).max(256),
+  stagedAccountConfigurationContent: z.optional(z.unknown()),
+  providerIdentity: z.optional(ProviderIdentitySchema),
+  displayName: z.string().check(z.maxLength(4_096)),
+  scopes: z.array(z.string().check(z.maxLength(4_096))).check(z.maxLength(256)),
 } as const;
-const PreparedSettlementSchema = z.object({
+const PreparedSettlementSchema = z.strictObject({
   ...PreparedSettlementShape,
   sourceCustody: ConnectedAccountSourceCustodyV1Schema,
-}).strict();
+});
 const SnapshotCommonShape = {
   attemptId: BoundedIdSchema,
   createdAtMs: SafeTimestampSchema,
   intent: z.enum(['connect', 'reconnect']),
   service: ServiceSchema,
-  account: AccountSchema.optional(),
+  account: z.optional(AccountSchema),
   modeId: BoundedIdSchema,
-  expectedCredentialRevision: z.string().max(4_096).nullable(),
+  expectedCredentialRevision: z.nullable(z.string().check(z.maxLength(4_096))),
   expectedCredentialConfigurationRevision:
-    z.string().min(1).max(4_096).nullable(),
-  expectedConfigurationRevision: z.string().min(1).max(4_096),
+    z.nullable(z.string().check(z.minLength(1), z.maxLength(4_096))),
+  expectedConfigurationRevision: z.string().check(z.minLength(1), z.maxLength(4_096)),
   stagedCredentials: StagedCredentialsSchema,
-  stagedAccountConfigurationContent: z.unknown().optional(),
+  stagedAccountConfigurationContent: z.optional(z.unknown()),
 } as const;
 const SnapshotBaseShape = {
   ...SnapshotCommonShape,
   sourceCustody: ConnectedAccountSourceCustodyV1Schema,
-  preparedSettlement: PreparedSettlementSchema.optional(),
+  preparedSettlement: z.optional(PreparedSettlementSchema),
 } as const;
-const OAuthSnapshotSchema = z.object({
+const OAuthSnapshotSchema = z.strictObject({
   ...SnapshotBaseShape,
   phase: z.enum(['starting', 'awaitingOAuth', 'outcomeUnknown']),
-  authorizationUrl: z.string().min(1).max(8_192).optional(),
-  issuer: z.string().min(1).optional(),
-  issuerResponseParameterRequired: z.boolean().optional(),
-  expiresAtMs: SafeTimestampSchema.optional(),
-}).strict();
-const DeviceSnapshotSchema = z.object({
+  authorizationUrl: z.optional(z.string().check(z.minLength(1), z.maxLength(8_192))),
+  issuer: z.optional(z.string().check(z.minLength(1))),
+  issuerResponseParameterRequired: z.optional(z.boolean()),
+  expiresAtMs: z.optional(SafeTimestampSchema),
+});
+const DeviceSnapshotSchema = z.strictObject({
   ...SnapshotBaseShape,
   expiresAtMs: SafeTimestampSchema,
-  pollIntervalMs: z.number().int().positive(),
+  pollIntervalMs: z.number().check(z.int(), z.positive()),
   nextPollAtMs: SafeTimestampSchema,
-  verificationUri: z.string().min(1).max(8_192),
-  verificationUriComplete: z.string().min(1).max(8_192).optional(),
-  userCode: z.string().min(1).max(4_096),
-}).strict();
-const OAuthPayloadSchema = z.object({
+  verificationUri: z.string().check(z.minLength(1), z.maxLength(8_192)),
+  verificationUriComplete: z.optional(z.string().check(z.minLength(1), z.maxLength(8_192))),
+  userCode: z.string().check(z.minLength(1), z.maxLength(4_096)),
+});
+const OAuthPayloadSchema = z.strictObject({
   version: z.literal(2),
   kind: z.literal('oauth'),
   snapshot: OAuthSnapshotSchema,
-  state: z.string().min(32).max(4_096),
-  challenge: z.string().min(32).max(256),
-  verifier: z.string().min(43).max(128),
-  callbackUrl: z.string().min(1).max(8_192),
+  state: z.string().check(z.minLength(32), z.maxLength(4_096)),
+  challenge: z.string().check(z.minLength(32), z.maxLength(256)),
+  verifier: z.string().check(z.minLength(43), z.maxLength(128)),
+  callbackUrl: z.string().check(z.minLength(1), z.maxLength(8_192)),
   consumed: z.boolean(),
-}).strict();
-const DevicePayloadSchema = z.object({
+});
+const DevicePayloadSchema = z.strictObject({
   version: z.literal(2),
   kind: z.literal('device'),
   snapshot: DeviceSnapshotSchema,
-}).strict();
+});
 type OAuthPayload = z.infer<typeof OAuthPayloadSchema>;
 type DevicePayload = z.infer<typeof DevicePayloadSchema>;
 

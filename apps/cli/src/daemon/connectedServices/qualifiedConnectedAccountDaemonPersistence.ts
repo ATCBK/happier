@@ -3,7 +3,7 @@ import {
   randomUUID,
 } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedConfigurationCatalogV1Schema, openConnectedAccountCatalogContentV1,
   type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -47,8 +47,8 @@ import {
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { promoteSavedSecretsWithConnectedAccountCatalog, refreshSavedSecretCatalogForOperation,
-  type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { promoteSavedSecretsWithConnectedAccountCatalog, refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import {
   createSavedSecretMaterializerFromSnapshotV1,
 } from '@/settings/secrets/savedSecretCatalog';

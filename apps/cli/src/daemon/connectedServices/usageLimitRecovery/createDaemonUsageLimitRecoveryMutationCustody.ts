@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   createDaemonSessionClientDurableMutationOutbox,
   type DaemonSessionClientDurableMutationOutbox,
@@ -6,8 +8,10 @@ import type { StoredCredentials } from '@/persistence';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { commitSessionStoredMessage } from '@/session/transport/http/sessionsHttp';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import { sealSessionStoredContent } from '@/session/transport/encryption/sessionEncryptionContext';
+import { sealSessionStoredContent, resolveSessionStoredContentEncryptionMode, resolveSessionEncryptionContextFromCredentials } from '@/session/transport/encryption/sessionEncryptionContext';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
+import { hasEffectiveSessionGoalChange } from '@/session/goalControls/commitGoalFollowOccurrence';
+import { logger } from '@/ui/logger';
 import { persistUsageLimitRecoveryFieldDurably } from '@/session/usageLimitRecoveryControls/persistUsageLimitRecoveryFieldDurably';
 import {
   createTranscriptMessageAppendMutation,
@@ -16,7 +20,8 @@ import {
 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import { AccountEncryptionMaterialUnavailableError } from '@/api/client/encryptionKey';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
-import { SessionWorkStateV1Schema as SessionStateWorkStateValueSchema, writeSessionWorkStateV1ToMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
+import { SessionWorkStateV1Schema as SessionStateWorkStateValueSchema, readSessionWorkStateV1FromMetadata, writeSessionWorkStateV1ToMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
+import { buildAgentEventLocalId } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import type { SessionUsageLimitRecoveryV1, SessionStoredMessageContent } from '@happier-dev/protocol';
 
@@ -37,6 +42,7 @@ export type DaemonSessionMutationCustody = Readonly<{
   stageWorkState(input: Readonly<{
     mutation: DaemonWorkStateFieldMutation;
     rawSession: RawSessionRecord;
+    signal?: AbortSignal;
   }>): Promise<void>;
   stageTranscriptEvent(input: Readonly<{
     sessionId: string;
@@ -102,16 +108,47 @@ export function createDaemonSessionMutationCustody(params: Readonly<{
         return true;
       },
       deliverWorkState: async (mutation) => {
-        await updateSessionMetadataWithRetry({
+        const rawSession = custody.rawSession;
+        let previous: Record<string, unknown> | undefined;
+        const committed = await updateSessionMetadataWithRetry({
           token: params.credentials.token,
           credentials: params.credentials,
           sessionId,
-          rawSession: custody.rawSession,
-          updater: (metadata) => writeSessionWorkStateV1ToMetadata(
-            metadata,
-            mutation.op.kind === 'clear' ? null : SessionStateWorkStateValueSchema.parse(mutation.op.value),
-          ),
+          rawSession,
+          updater: (metadata) => {
+            // A CAS retry can observe a concurrent writer's effective Goal.
+            // Only the final successful updater describes this transition.
+            previous = metadata;
+            return writeSessionWorkStateV1ToMetadata(
+              metadata,
+              mutation.op.kind === 'clear' ? null : SessionStateWorkStateValueSchema.parse(mutation.op.value),
+            );
+          },
         });
+        if (previous && hasEffectiveSessionGoalChange(
+          readSessionWorkStateV1FromMetadata(previous),
+          readSessionWorkStateV1FromMetadata(committed.metadata),
+        )) {
+          const eventId = buildAgentEventLocalId('goal-changed', [randomUUID()]);
+          // The append shares this outbox, so it must not block field delivery.
+          // Existing transcript custody owns retry; commit-to-append crash loss
+          // is accepted, as at the Session client's metadata publication owner.
+          const payload = { role: 'agent', content: { type: 'event', id: eventId, data: { type: 'goal-changed' } } };
+          const mode = resolveSessionStoredContentEncryptionMode(rawSession);
+          let content: SessionStoredMessageContent;
+          if (mode === 'plain') {
+            content = sealSessionStoredContent({ mode, ctx: null, payload });
+          } else {
+            const ctx = resolveSessionEncryptionContextFromCredentials(params.credentials, rawSession);
+            if (!ctx) throw new AccountEncryptionMaterialUnavailableError();
+            content = sealSessionStoredContent({ mode, ctx, payload });
+          }
+          // The successful metadata write already admitted this Session material.
+          // A second HTTP lookup must not lose the original before journal admission.
+          void enqueueTranscriptMessage(custody, { sessionId, localId: eventId, messageRole: 'event', content }).catch(error => {
+            logger.debug('[Session Follow] Committed daemon Goal notice append unavailable', error);
+          });
+        }
         return true;
       },
       deliverTranscriptMessage: async (mutation) => {
@@ -129,6 +166,26 @@ export function createDaemonSessionMutationCustody(params: Readonly<{
     sessions.set(sessionId, custody);
     return custody;
   };
+
+  async function enqueueTranscriptMessage(custody: SessionCustody, input: Readonly<{
+    sessionId: string;
+    localId: string;
+    messageRole: 'user' | 'agent' | 'event';
+    content: SessionStoredMessageContent;
+    observedAt?: number;
+  }>): Promise<Readonly<{ persisted: true; delivered: boolean }>> {
+    const result = await custody.outbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({
+      sessionId: input.sessionId,
+      localId: input.localId,
+      messageRole: input.messageRole,
+      content: input.content,
+      createdAt: input.observedAt,
+      updatedAt: input.observedAt,
+      provenance: { kind: 'non_dependent', source: 'background' },
+    }));
+    if (!result.persisted) throw new Error('daemon_session_mutation_journal_admission_failed');
+    return { persisted: true, delivered: result.delivered };
+  }
 
   async function stageTranscriptMessage({ sessionId: rawSessionId, localId: rawLocalId, payload, messageRole, observedAt, usageLimitRecovery }: Readonly<{
     sessionId: string;
@@ -173,21 +230,7 @@ export function createDaemonSessionMutationCustody(params: Readonly<{
           stageUsageLimitRecoveryMutation: (mutation) => custody.outbox.enqueueUsageLimitRecovery(mutation),
         });
       }
-      const result = await custody.outbox.enqueueTranscriptMessage(
-        createTranscriptMessageAppendMutation({
-          sessionId,
-          localId,
-          messageRole,
-          content,
-          createdAt: observedAt,
-          updatedAt: observedAt,
-          provenance: { kind: 'non_dependent', source: 'background' },
-        }),
-      );
-      if (!result.persisted) {
-        throw new Error('daemon_session_mutation_journal_admission_failed');
-      }
-      return { persisted: true, delivered: result.delivered };
+      return await enqueueTranscriptMessage(custody, { sessionId, localId, messageRole, content, observedAt });
   }
 
   return {
@@ -200,14 +243,14 @@ export function createDaemonSessionMutationCustody(params: Readonly<{
       retainedSessionIds.delete(sessionId);
       await resolveSessionCustody(sessionId, rawSession).outbox.enqueueUsageLimitRecovery(mutation);
     },
-    async stageWorkState({ mutation, rawSession }) {
+    async stageWorkState({ mutation, rawSession, signal }) {
       if (closed) throw new Error('daemon_session_mutation_custody_closed');
       const sessionId = mutation.sessionId.trim();
       if (!sessionId || rawSession.id !== sessionId) {
         throw new Error('daemon_work_state_session_mismatch');
       }
       retainedSessionIds.delete(sessionId);
-      await resolveSessionCustody(sessionId, rawSession).outbox.enqueueWorkState(mutation);
+      await resolveSessionCustody(sessionId, rawSession).outbox.enqueueWorkState(mutation, { signal });
     },
     stageTranscriptMessage,
     async stageTranscriptEvent({ sessionId, eventId, data, observedAt, usageLimitRecovery }) {

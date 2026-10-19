@@ -41,6 +41,41 @@ function createDescriptor(params: Readonly<{
 }
 
 describe('applyConnectedServiceStateSharingDescriptor', () => {
+  it('captures only verified shared links, resolving the native target at materialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-state-observation-binding-'));
+    const sourceRoot = join(root, 'source');
+    const targetRoot = join(root, 'target');
+    const sharedProjects = join(root, 'shared-projects');
+    const preservedState = join(root, 'preserved-state');
+    try {
+      await mkdir(sourceRoot);
+      await mkdir(sharedProjects);
+      await mkdir(join(sourceRoot, 'copied'));
+      await mkdir(targetRoot);
+      await mkdir(preservedState);
+      await writeFile(join(preservedState, 'private.jsonl'), 'private');
+      await symlink(preservedState, join(targetRoot, 'missing'), process.platform === 'win32' ? 'junction' : 'dir');
+      await symlink(sharedProjects, join(sourceRoot, 'projects'), process.platform === 'win32' ? 'junction' : 'dir');
+      const input = {
+        descriptor: createDescriptor({ stateEntries: [
+          { path: 'projects', mode: 'linked' }, { path: 'copied', mode: 'copied' },
+          { path: 'missing', mode: 'linked' }, { path: 'redirect', mode: 'env_redirect', envVar: 'STATE_DIR' },
+        ] }),
+        nativeSourceContext: { sourceRoot, sourceEnv: {} },
+        target: { targetMaterializedRoot: targetRoot, targetMaterializedEnv: {} },
+        configMode: 'isolated', requestedStateMode: 'shared', effectiveStateMode: 'shared', cwd: root,
+        preserveDestinationWhenStateSourceMissing: () => true,
+      } as const;
+      const first = await applyConnectedServiceStateSharingDescriptor(input);
+      const expected = [{ entryPath: 'projects', sourceEntryRoot: await realpath(sharedProjects),
+        materializedEntryPath: join(targetRoot, 'projects') }];
+      expect(first.linkedStateEntries).toEqual(expected);
+      const repeated = await applyConnectedServiceStateSharingDescriptor({ ...input, existingManifest: first.manifest });
+      expect(repeated.linkedStateEntries).toEqual(expected);
+      expect(await readFile(join(targetRoot, 'missing', 'private.jsonl'), 'utf8')).toBe('private');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('keeps unchanged copied config and shared links in place across repeated preparation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-state-sharing-repeat-'));
     const sourceRoot = join(root, 'source');
@@ -180,7 +215,7 @@ describe('applyConnectedServiceStateSharingDescriptor', () => {
         configMode: 'isolated', requestedStateMode: stateMode, effectiveStateMode: stateMode, cwd: root,
       });
       if (stateMode === 'shared') {
-        expect(await realpath(join(targetRoot, entries[0].path))).toBe(join(sourceRoot, entries[0].path));
+        expect(await realpath(join(targetRoot, entries[0].path))).toBe(await realpath(join(sourceRoot, entries[0].path)));
         expect((await lstat(join(targetRoot, 'antigravity-acp'))).isSymbolicLink()).toBe(false);
       } else {
         await expect(lstat(sourceRoot)).rejects.toMatchObject({ code: 'ENOENT' });

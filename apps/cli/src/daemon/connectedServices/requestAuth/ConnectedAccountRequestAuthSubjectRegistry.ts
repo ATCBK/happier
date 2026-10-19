@@ -285,6 +285,7 @@ export function createConnectedAccountRequestAuthSubjectRegistry(
         );
         return Object.freeze({
             subjectId: record.subject.subjectId,
+            ...(record.subject.bindingAuthority ? { bindingAuthority: record.subject.bindingAuthority } : {}),
             ...(record.subject.parentSessionId ? { parentSessionId: record.subject.parentSessionId } : {}),
             ...(record.subject.legacyServiceKeyedCompatibility === true
                 ? { legacyServiceKeyedCompatibility: true as const }

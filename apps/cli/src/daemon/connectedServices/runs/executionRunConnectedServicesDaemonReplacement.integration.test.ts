@@ -1,4 +1,5 @@
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -302,7 +303,7 @@ function startReplacementHarness(modules: LoadedModules, input: Readonly<{
         purposeBindingOwner: {
             activatePurposeBindings: (activation: Readonly<{
                 subject: Readonly<{ isCurrent(): boolean }>;
-            }>) => ({
+            }>) => ({ lease: {
                 subjectId: 'execution-run-harness',
                 isCurrent: () => activation.subject.isCurrent(),
                 resolvePurposeBinding: () => null,
@@ -310,7 +311,7 @@ function startReplacementHarness(modules: LoadedModules, input: Readonly<{
                 dispose: () => {
                     purposeLeaseDisposals.push('disposed');
                 },
-            }),
+            } }),
         } as never,
         requestAuthRegistry: {
             activate: (async () => {
@@ -437,6 +438,7 @@ describe('execution-run Connected Services across daemon control-owner replaceme
 
         // 1. The runner materializes its run-scoped Connected Services authority on daemon A.
         const materialize = await daemonA.postAsRunner('/connected-service-run/materialize', {
+            activationId: randomUUID(),
             runId: RUN_ID,
             runnerPid: runner.pid,
             agentId: 'codex',
@@ -535,6 +537,7 @@ describe('execution-run Connected Services across daemon control-owner replaceme
         const staleToken = modules.deriveConnectedServiceRunMaterializeToken('replacement-control-token-a');
         expect(staleToken).not.toBe(daemonB.scopedToken());
         await expect(daemonB.postAsRunner('/connected-service-run/materialize', {
+            activationId: randomUUID(),
             runId: RUN_ID,
             runnerPid: runner.pid,
             agentId: 'codex',
@@ -634,6 +637,7 @@ describe('execution-run Connected Services across daemon control-owner replaceme
 
         const daemonA = startReplacementHarness(modules, { controlToken: 'replacement-control-token-a2', runner });
         const materialize = await daemonA.postAsRunner('/connected-service-run/materialize', {
+            activationId: randomUUID(),
             runId: RUN_ID,
             runnerPid: runner.pid,
             agentId: 'codex',

@@ -4,12 +4,9 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  ConnectedServiceMaterializationTailStuckError,
-  runSerializedMaterialization,
-} from './materializeConnectedServicesForSpawn';
+import { runSerializedMaterialization } from './materializeConnectedServicesForSpawn';
 
-describe('materialization root-tail backstop (RR-3)', () => {
+describe('materialization root-tail lifetime', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -17,26 +14,35 @@ describe('materialization root-tail backstop (RR-3)', () => {
     vi.useRealTimers();
   });
 
-  it('bounds a joiner behind a never-settling predecessor and self-heals the queue', async () => {
+  it('keeps queued work pending until a slow live predecessor settles, without admitting a later overlapping writer', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'happier-materialize-tail-backstop-'));
 
-    // Predecessor that never settles: a pathological leaf that escaped its own bounds.
-    const stuck = runSerializedMaterialization(rootDir, () => new Promise<never>(() => {}));
-    void stuck.catch(() => {});
-
-    // A joiner must NOT wait forever: it fails loudly with the typed backstop error.
-    const joiner = runSerializedMaterialization(rootDir, async () => 'joined');
-    const joinerOutcome = joiner.then(
-      () => 'resolved' as const,
-      (error: unknown) => (error instanceof ConnectedServiceMaterializationTailStuckError ? 'backstopped' as const : 'other' as const),
-    );
+    let releaseFirst!: () => void;
+    let firstStarted!: () => void;
+    const started = new Promise<void>(resolve => { firstStarted = resolve; });
+    const order: string[] = [];
+    const first = runSerializedMaterialization(rootDir, async () => {
+      order.push('first:start');
+      firstStarted();
+      await new Promise<void>(resolve => { releaseFirst = resolve; });
+      order.push('first:end');
+    });
+    await started;
+    let settled = false;
+    const joiner = runSerializedMaterialization(rootDir, async () => { order.push('second'); });
+    const outcome = joiner.then(() => { settled = true; }, () => { settled = true; });
     await vi.advanceTimersByTimeAsync(6 * 60_000 + 1_000);
-    expect(await joinerOutcome).toBe('backstopped');
-
-    // The stuck tail was dropped from the map: a FRESH attempt proceeds immediately.
-    const fresh = runSerializedMaterialization(rootDir, async () => 'fresh');
-    await vi.advanceTimersByTimeAsync(6 * 60_000 + 1_000);
-    await expect(fresh).resolves.toBe('fresh');
+    const third = runSerializedMaterialization(rootDir, async () => { order.push('third'); });
+    await vi.advanceTimersByTimeAsync(1);
+    try {
+      expect(settled).toBe(false);
+      expect(order).toEqual(['first:start']);
+    } finally {
+      releaseFirst();
+      await Promise.all([first, outcome, third]);
+    }
+    await expect(joiner).resolves.toBeUndefined();
+    expect(order).toEqual(['first:start', 'first:end', 'second', 'third']);
   });
 
   it('keeps normal serialization intact (second segment runs after the first settles)', async () => {

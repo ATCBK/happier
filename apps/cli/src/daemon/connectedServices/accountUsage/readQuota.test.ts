@@ -18,7 +18,7 @@ describe('qualified quota read', () => {
         : { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 250, staleAfterMs: 1000, status: 'ok' }, sources: [source] } }));
     const pendingHttp = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { entries: [] } });
     try {
-      const result = await readProviderAccountUsageQuotaV4({ source }, { credentials: { token: 'token' }, accountMode: 'plain', nowMs: 500,
+      const result = await readProviderAccountUsageQuotaV4({ source }, { credentials: { token: 'token', encryption: null }, accountMode: 'plain', nowMs: 500,
         ...{ includePendingWork: false } });
       expect(result.current).toEqual(snapshot);
       expect(pendingHttp).not.toHaveBeenCalled();
@@ -47,7 +47,7 @@ describe('qualified quota read', () => {
       if (held === 'pending') await waitAtBoundary();
       return { status: 200, data: { entries: [{ sessionId: 'session', localId: 'held', reset: { source, recordId: witness.recordId, meterId: 'weekly', witness: { id: 'accepted', observedAtMs: 500 } }, authorityCurrent: true }] } };
     });
-    const options = { credentials: { token: 'token' }, accountMode: 'plain' as const };
+    const options = { credentials: { token: 'token', encryption: null }, accountMode: 'plain' as const };
     try {
       const reading = readProviderAccountUsageQuotaV4({ source }, options);
       await responseEntered;
@@ -75,7 +75,7 @@ describe('qualified quota read', () => {
     });
     const pendingHttp = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { entries: [] } });
     const input = { source, history: { range: { startAtMs: 0, endAtMs: 500 }, pageSize: 1 } };
-    const options = { credentials: { token: 'token' }, accountMode: 'plain' as const, nowMs: 500 };
+    const options = { credentials: { token: 'token', encryption: null }, accountMode: 'plain' as const, nowMs: 500 };
     try {
       await expect(readProviderAccountUsageQuotaV4(input, options)).rejects.toMatchObject({ code: 'provider_account_usage_content_unavailable' });
       historyAvailable = true;
@@ -92,7 +92,7 @@ describe('qualified quota read', () => {
     const pendingHttp = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { entries: [], unboundEntries } });
     try {
       const targets = [{ id: 'personal', scope: { kind: 'personal' as const }, utilizationFraction: 1.2 }];
-      const result = await readProviderAccountUsageQuotaV4({ source }, { credentials: { token: 'token' }, accountMode: 'plain', nowMs: 500, targets });
+      const result = await readProviderAccountUsageQuotaV4({ source }, { credentials: { token: 'token', encryption: null }, accountMode: 'plain', nowMs: 500, targets });
       expect(result.current).toEqual(snapshot);
       expect(result.pace).toMatchObject([{ meterId: 'weekly', value: { status: 'available', pace: 2 } }]);
       expect(result.targets).toEqual(targets);

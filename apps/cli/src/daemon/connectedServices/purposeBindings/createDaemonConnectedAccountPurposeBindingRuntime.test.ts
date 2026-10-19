@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_INTERACTION_TRANSIENT_CHOICES_V1,
   PluginConnectedAccountAuthenticationV2Schema,
+  QualifiedConnectedAccountProfileV4Schema,
   sealQualifiedConnectedAccountContentEnvelope,
   type PluginConnectedAccountAuthenticationV2,
   type QualifiedConnectedAccountGroupV4,
@@ -517,18 +518,18 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     for (const cleanup of coordinatorCleanups.splice(0)) await cleanup();
   });
 
-  async function coordinatorFixture(observed = true) {
+  async function coordinatorFixture(observed = true, serviceRef: QualifiedConnectedAccountProfileV4['ref']['service'] = openAiService) {
     const qualifiedApi = testQualifiedApi();
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-coordinator-inventory-'));
     const resolveRegistry = () => resolveExecutablePluginRuntimeRegistry({
       happyHomeDir,
-      pluginIds: [openAiService.pluginId],
+      pluginIds: [serviceRef.pluginId],
       resolveDevelopmentSourceAuthority,
     });
     const reloadController = createPluginReloadController({ happyHomeDir, resolveRuntimeRegistry: resolveRegistry });
     const inventoryReads = vi.fn(async (service: QualifiedConnectedAccountProfileV4['ref']['service']) => {
       // HTTP boundary: other real registry services have no saved profiles.
-      return service.pluginId === openAiService.pluginId && service.localId === openAiService.localId
+      return service.pluginId === serviceRef.pluginId && service.localId === serviceRef.localId
         ? await qualifiedApi.listAccounts()
         : { service, accounts: [] };
     });
@@ -553,12 +554,35 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     return { runtime, qualifiedApi, inventoryReads, setObserved: (value: boolean) => { observed = value; }, replaceRegistry: async () => {
       const result = await reloadController.adoptPreparedRuntimeRegistry({
         registry: await resolveRegistry(),
-        changedPluginIds: [openAiService.pluginId],
+        changedPluginIds: [serviceRef.pluginId],
         runningSessionDisposition: 'retainRunningSessions',
       });
       expect(result.ok).toBe(true);
     } };
   }
+
+  it('offers the real saved Email profile after a retryable refresh failure through the declared service inventory', async () => {
+    const service = { pluginId: 'happier.channel.email', localId: 'email-imap-smtp' };
+    const { runtime, qualifiedApi } = await coordinatorFixture(true, service);
+    // FIX-LIVE3: copied credential-free profile facts from the live QA Account.
+    // The registry resolves authentication from the actual bundled Email manifest.
+    const profile = QualifiedConnectedAccountProfileV4Schema.parse({
+      ref: { service, accountId: 'wilson@test.local' }, status: 'refresh_failed_retryable',
+      authenticationModeId: 'password', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_FnS1ntP-z0kzYA9uadRAVifp7mo6tiOB',
+      configurationRevision: 'cscr_rweHXZ4CLrKLH_f328DltcGSmoL6KFoB',
+      configurationReady: true, expiresAt: null, kind: null, scopes: [],
+    });
+    qualifiedApi.listAccounts.mockResolvedValue({ service, accounts: [profile] });
+    const request = { purpose: { consumer: { pluginId: service.pluginId, localId: 'channel/setup-v1' }, purpose: 'email-mailbox' },
+      serviceRefs: [service], signal: new AbortController().signal };
+    expect(await runtime.listActionFormConnectedAccountOptions(request)).toEqual([{
+      value: profile.ref, label: 'wilson@test.local',
+    }]);
+    // A permanent reconnect requirement must still withdraw the same choice.
+    qualifiedApi.listAccounts.mockResolvedValue({ service, accounts: [{ ...profile, status: 'needs_reauth' }] });
+    expect(await runtime.listActionFormConnectedAccountOptions(request)).toEqual([]);
+  });
 
   it('shares the observed coordinator inventory until an owner invalidation, including empty inventories', async () => {
     const { runtime, qualifiedApi, inventoryReads } = await coordinatorFixture();
@@ -1258,6 +1282,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
 
   it('materializes the exact selected qualified OpenAI account through the current plugin generation', async () => {
     const listeners = new Set<() => void>();
+    const store = selectedStore();
     let generationCurrent = true;
     const invokeWithReceipt = vi.fn(async () => ({
       result: { kind: 'environment' as const, env: { OPENAI_API_KEY: 'sk-standard' } },
@@ -1271,7 +1296,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
         'invokeWithReceipt' | 'invokeDirectMaterial'
       >,
       qualifiedApi: testQualifiedApi(),
-      store: selectedStore(),
+      store,
       runtimeRegistry: {
         subscribe(listener) {
           listeners.add(listener);
@@ -1354,6 +1379,15 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     await Promise.resolve();
 
     runtimeOwner.invalidate();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(requestSessionRestart).not.toHaveBeenCalled();
+
+    // Removing the selected purpose must retire the old account authority,
+    // including its qualified restart target even though getBinding is now null.
+    const selected = store.current();
+    await store.update(() => ({ v: 1, bindings: [] }));
+    runtimeOwner.invalidate();
     for (const listener of listeners) listener();
     await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(2));
     expect(requestSessionRestart).not.toHaveBeenCalled();
@@ -1362,8 +1396,15 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     expect(requestSessionRestart).toHaveBeenCalledWith({
       sessionId: 'session-1',
       purpose,
+      target: {
+        serviceId: 'happier.voice.openai/openai',
+        profileId: 'standard-openai',
+        groupId: '',
+        generation: 0,
+      },
     });
     watch.dispose();
+    await store.update(() => selected);
 
     generationCurrent = false;
     await expect(runtimeOwner.owner.materialize({
@@ -2584,7 +2625,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
     })).resolves.toBeNull();
   });
 
-  it('reports honest non-connected states instead of silently omitting accounts', async () => {
+  it('reports retained account availability while keeping refreshing credentials usable', async () => {
     const group = testQualifiedGroup({
       activeAccountId: 'standard-openai',
       members: [
@@ -2617,7 +2658,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       .toEqual([
         ['expired', 'expired'],
         ['reauth', 'reconnectRequired'],
-        ['refreshing', 'unavailable'],
+        ['refreshing', 'connected'],
         ['standard-openai', 'connected'],
       ]);
   });

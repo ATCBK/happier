@@ -1,11 +1,11 @@
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 
 import { parse, stringify, TomlError, type TomlTable, type TomlValue } from 'smol-toml';
 import type { AgentConnectedAccountSharedStateFileMergeV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { ConnectedServiceStateSharingDescriptor, ConnectedServiceStateSharingDescriptorEntry } from '@/agent/catalog/types';
-import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialization/materializer';
+import type { ConnectedServiceMaterializedStateObservationBinding, ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialization/materializer';
 import { logger } from '@/ui/logger';
 import type {
   ConnectedServiceStateSharingManifestV1,
@@ -75,6 +75,7 @@ export type ApplyConnectedServiceStateSharingDescriptorResult = Readonly<{
   diagnostics: readonly ConnectedServicesMaterializationDiagnostic[];
   manifest: ConnectedServiceStateSharingManifestV1;
   importedSessionFileMappings: readonly ConnectedServiceStateSharingSessionFileMappingV1[];
+  linkedStateEntries: ConnectedServiceMaterializedStateObservationBinding['entries'];
 }>;
 
 function isWin32ShapedPath(path: string): boolean {
@@ -549,6 +550,7 @@ export async function applyConnectedServiceStateSharingDescriptor(
   let stateEntries: string[] = [];
   let effectiveStateMode = input.effectiveStateMode;
   let importedSessionFileMappings: ConnectedServiceStateSharingSessionFileMappingV1[] = [];
+  const linkedStateEntries: Array<ConnectedServiceMaterializedStateObservationBinding['entries'][number]> = [];
 
   await mkdir(targetRoot, { recursive: true });
 
@@ -726,6 +728,12 @@ export async function applyConnectedServiceStateSharingDescriptor(
             input.preserveDestinationWhenStateSourceMissing?.(entryName) ?? false,
         })) continue;
         stateEntries.push(entryName);
+        const [sourceEntryRoot, materializedEntryRoot] = await Promise.all([
+          realpath(sourcePath), realpath(destinationPath),
+        ]);
+        if (resolvePathForComparison(sourceEntryRoot) === resolvePathForComparison(materializedEntryRoot)) {
+          linkedStateEntries.push({ entryPath: entryName, sourceEntryRoot, materializedEntryPath: destinationPath });
+        }
       }
     }
   } else {
@@ -751,5 +759,6 @@ export async function applyConnectedServiceStateSharingDescriptor(
     diagnostics,
     manifest,
     importedSessionFileMappings,
+    linkedStateEntries,
   };
 }

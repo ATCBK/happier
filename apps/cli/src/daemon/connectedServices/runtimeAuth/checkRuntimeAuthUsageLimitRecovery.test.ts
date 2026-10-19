@@ -30,6 +30,7 @@ describe('checkRuntimeAuthUsageLimitRecovery', () => {
       const attempt = await scheduler.beginClassifiedFailure({
         reportId: 'manual-proof-report', sessionId, switchesThisTurn: 0, classification,
       });
+      if (attempt.status !== 'scheduled') throw new Error('Expected a scheduled recovery attempt');
       expect(attempt.attemptId).toBeTruthy();
       await expect(checkRuntimeAuthUsageLimitRecovery({
         scheduler, sessionId, attemptId: attempt.attemptId!,

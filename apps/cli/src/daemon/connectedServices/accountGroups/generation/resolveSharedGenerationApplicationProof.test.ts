@@ -1,20 +1,28 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol';
 
-vi.mock('@/daemon/connectedServices/catalogHooks', () => ({
-  getConnectedServiceStateSharingDescriptor: async () => ({
-    authIsolation: {
-      secretEntries: [
-        '.credentials.json',
-        '.happier-claude-connected-service-home.json',
-      ],
-    },
-  }),
-}));
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
+import { getConnectedServiceRuntimeAuthAdapter } from '../../catalogHooks';
+import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '../../connectedServiceChildEnvironment';
 import { buildConnectedServiceAuthGroupCommittedGenerationFact } from '../../sessionAuthSwitch/connectedServiceAuthSwitchOutcome';
 import type { ConnectedServiceProviderRuntimeAuthAdapter } from '../../runtimeAuth/types';
 import { resolveSharedGenerationApplicationProof } from './resolveSharedGenerationApplicationProof';
+
+const targetMaterializedEnv = {
+  CLAUDE_CONFIG_DIR: '/tmp/claude-coders',
+  [HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]: '/tmp/claude-coders',
+};
+
+async function runtimeAuthAdapterWithVerification(
+  verifyActiveAccount: NonNullable<ConnectedServiceProviderRuntimeAuthAdapter['verifyActiveAccount']>,
+): Promise<ConnectedServiceProviderRuntimeAuthAdapter> {
+  const adapter = await getConnectedServiceRuntimeAuthAdapter('claude');
+  if (!adapter) throw new Error('Claude runtime auth adapter was not admitted');
+  // Provider-native account verification is the external boundary under test.
+  return { ...adapter, verifyActiveAccount };
+}
 
 const record: ConnectedServiceCredentialRecordV1 = {
   v: 1,
@@ -43,7 +51,7 @@ function committedGeneration(credentialRevision = 'csr_aaaaaaaaaaaaaaaaaaaaaa') 
     provenance: 'reconciliation',
     requestedTarget: { profileId: 'team' },
     decisionCommittedTarget: {
-      serviceId: 'claude-subscription',
+      serviceId: 'happier.agent.claude/claude-subscription',
       groupId: 'coders',
       profileId: 'team',
       generation: 12,
@@ -53,6 +61,20 @@ function committedGeneration(credentialRevision = 'csr_aaaaaaaaaaaaaaaaaaaaaa') 
 }
 
 describe('resolveSharedGenerationApplicationProof', () => {
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+
+  beforeAll(async () => {
+    runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.claude'] },
+    });
+  });
+
+  afterAll(async () => {
+    await runtime?.dispose();
+    await pluginReloadController.shutdown();
+  });
+
   it('relays provider-owned exact generation provenance without strengthening desired bytes', async () => {
     const verifyActiveAccount = vi.fn<
       NonNullable<ConnectedServiceProviderRuntimeAuthAdapter['verifyActiveAccount']>
@@ -65,7 +87,7 @@ describe('resolveSharedGenerationApplicationProof', () => {
       source: 'shared_group_auth_surface',
       reason: 'claude_shared_group_auth_surface_rewritten',
       generationApplication: {
-        serviceId: 'claude-subscription' as const,
+        serviceId: 'happier.agent.claude/claude-subscription' as const,
         groupId: 'coders',
         profileId: 'team',
         generation: 12,
@@ -76,15 +98,15 @@ describe('resolveSharedGenerationApplicationProof', () => {
 
     await expect(resolveSharedGenerationApplicationProof({
       agentId: 'claude',
-      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/claude-coders' },
+      targetMaterializedEnv,
       committedGeneration: committedGeneration(),
       resolveCredentialResolution: async () => ({
         record,
         credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
       }),
-      resolveRuntimeAuthAdapter: async () => ({ verifyActiveAccount } as never),
+      resolveRuntimeAuthAdapter: async () => runtimeAuthAdapterWithVerification(verifyActiveAccount),
     })).resolves.toEqual({
-      serviceId: 'claude-subscription',
+      serviceId: 'happier.agent.claude/claude-subscription',
       groupId: 'coders',
       profileId: 'team',
       generation: 12,
@@ -102,7 +124,7 @@ describe('resolveSharedGenerationApplicationProof', () => {
     expect(verifyActiveAccount).toHaveBeenCalledWith({
       target: { agentId: 'claude' },
       selection: {
-        serviceId: 'claude-subscription',
+        serviceId: 'happier.agent.claude/claude-subscription',
         groupId: 'coders',
         activeProfileId: 'team',
         profileId: 'team',
@@ -114,7 +136,6 @@ describe('resolveSharedGenerationApplicationProof', () => {
         readFiles: expect.any(Function),
         replaceFiles: expect.any(Function),
       },
-      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/claude-coders' },
     });
     expect(verifyActiveAccount.mock.calls[0]?.[0]).not.toHaveProperty('nativeHome.root');
   });
@@ -122,18 +143,16 @@ describe('resolveSharedGenerationApplicationProof', () => {
   it('does not upgrade weak byte equality to the requested generation epoch', async () => {
     await expect(resolveSharedGenerationApplicationProof({
       agentId: 'claude',
-      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/claude-coders' },
+      targetMaterializedEnv,
       committedGeneration: committedGeneration(),
       resolveCredentialResolution: async () => ({ record, credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa' }),
-      resolveRuntimeAuthAdapter: async () => ({
-        verifyActiveAccount: async () => ({
-          status: 'weakly_verified',
-          sharedAuthSurfaceId: 'coders',
-          proofStrength: 'weak',
-          source: 'shared_group_auth_surface',
-          reason: 'bytes_match_without_epoch_provenance',
-        }),
-      } as never),
+      resolveRuntimeAuthAdapter: async () => runtimeAuthAdapterWithVerification(async () => ({
+        status: 'weakly_verified',
+        sharedAuthSurfaceId: 'coders',
+        proofStrength: 'weak',
+        source: 'shared_group_auth_surface',
+        reason: 'bytes_match_without_epoch_provenance',
+      })),
     })).resolves.toBeNull();
   });
 
@@ -141,13 +160,13 @@ describe('resolveSharedGenerationApplicationProof', () => {
     const verifyActiveAccount = vi.fn();
     await expect(resolveSharedGenerationApplicationProof({
       agentId: 'claude',
-      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/claude-coders' },
+      targetMaterializedEnv,
       committedGeneration: committedGeneration(),
       resolveCredentialResolution: async () => ({
         record,
         credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
       }),
-      resolveRuntimeAuthAdapter: async () => ({ verifyActiveAccount } as never),
+      resolveRuntimeAuthAdapter: async () => runtimeAuthAdapterWithVerification(verifyActiveAccount),
     })).resolves.toBeNull();
     expect(verifyActiveAccount).not.toHaveBeenCalled();
   });
@@ -155,28 +174,26 @@ describe('resolveSharedGenerationApplicationProof', () => {
   it('does not upgrade a weak proof from a different source or auth surface', async () => {
     await expect(resolveSharedGenerationApplicationProof({
       agentId: 'claude',
-      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/claude-coders' },
+      targetMaterializedEnv,
       committedGeneration: committedGeneration(),
       resolveCredentialResolution: async () => ({
         record,
         credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
       }),
-      resolveRuntimeAuthAdapter: async () => ({
-        verifyActiveAccount: async () => ({
-          status: 'weakly_verified',
-          sharedAuthSurfaceId: 'other-group',
-          proofStrength: 'weak',
-          source: 'account_identity',
-          reason: 'unrelated',
-        }),
-      } as never),
+      resolveRuntimeAuthAdapter: async () => runtimeAuthAdapterWithVerification(async () => ({
+        status: 'weakly_verified',
+        sharedAuthSurfaceId: 'other-group',
+        proofStrength: 'weak',
+        source: 'account_identity',
+        reason: 'unrelated',
+      })),
     })).resolves.toBeNull();
   });
 
   it('treats unavailable canonical or provider verification as no replay proof so a normal apply can proceed', async () => {
     await expect(resolveSharedGenerationApplicationProof({
       agentId: 'claude',
-      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: '/tmp/claude-coders' },
+      targetMaterializedEnv,
       committedGeneration: committedGeneration(),
       resolveCredentialResolution: async () => {
         throw new Error('credential API unavailable');

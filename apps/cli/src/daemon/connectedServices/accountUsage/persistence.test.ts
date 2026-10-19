@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
 import type { StoredCredentials } from '@/persistence';
+import { QualifiedProviderAccountUsageWriteV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 
 import {
     createProviderAccountUsagePersistenceScheduler,
@@ -72,6 +73,60 @@ const plainCredentials = {
 } satisfies StoredCredentials;
 
 describe('provider account usage persistence scheduler', () => {
+    it.each(['plain', 'e2ee'] as const)('rereads %s current content after conflict exhaustion instead of blindly rewriting it', async mode => {
+        const snapshot = createSnapshot();
+        const target = createTarget();
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const { sealProviderAccountUsageSnapshot } = await import('@happier-dev/protocol/connect/accountUsage');
+        const sealed = sealProviderAccountUsageSnapshot({ snapshot, material, randomBytes: length => new Uint8Array(length).fill(9) });
+        const post = vi.spyOn(axios, 'post').mockRejectedValue({ response: { status: 503, data: { error: 'database_transaction_conflict_exhausted' } } });
+        const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+            content: mode === 'plain' ? { t: 'plain', v: snapshot } : { t: 'encrypted', c: sealed.ciphertext },
+            metadata: { fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs, status: 'ok' }, sources: [target.source],
+        } });
+        const scheduler = createProviderAccountUsagePersistenceScheduler({
+            api: { getAccountEncryptionMode: async () => mode },
+            credentials: mode === 'plain' ? plainCredentials : { token: 'token', encryption: material },
+            now: () => 1_500, randomBytes: length => new Uint8Array(length).fill(9),
+        });
+        try {
+            await scheduler.recordInBandSnapshot(snapshot, { targets: [target] });
+            await scheduler.flush(1_000);
+            expect(get).toHaveBeenCalledTimes(1);
+            expect(get.mock.calls[0]?.[0]).toContain('/provider-account-usage/record?');
+            expect(post).toHaveBeenCalledTimes(1);
+            expect(post.mock.calls[0]?.[1]).not.toHaveProperty('material');
+            expect(await scheduler.recordInBandSnapshot(snapshot, { targets: [target] })).toMatchObject({ status: 'already_persisted' });
+        } finally { scheduler.dispose(); post.mockRestore(); get.mockRestore(); }
+    });
+
+    it('coalesces unchanged observations arriving during a write and still publishes changed material', async () => {
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const post = vi.spyOn(axios, 'post').mockImplementation(async () => {
+            await held;
+            return { status: 200, data: { success: true, source: { status: 'linked' } } };
+        });
+        const scheduler = createProviderAccountUsagePersistenceScheduler({
+            api: { getAccountEncryptionMode: async () => 'plain' }, credentials: plainCredentials,
+            now: () => 1_500, fingerprintKey: new Uint8Array(32).fill(3),
+        });
+        const snapshot = createSnapshot();
+        const targets = [createTarget()];
+        try {
+            await scheduler.recordInBandSnapshot(snapshot, { targets });
+            await expect.poll(() => post.mock.calls.length).toBe(1);
+            for (let index = 0; index < 10; index++) await scheduler.recordInBandSnapshot(snapshot, { targets });
+            release();
+            await scheduler.flush(1_000);
+            expect(post).toHaveBeenCalledTimes(1);
+            await scheduler.recordInBandSnapshot({ ...snapshot, planLabel: 'changed' }, { targets });
+            await scheduler.flush(1_000);
+            expect(post).toHaveBeenCalledTimes(2);
+            expect(post.mock.calls[1]?.[1]).toMatchObject({ snapshot: { planLabel: 'changed' } });
+        } finally { release(); scheduler.dispose(); post.mockRestore(); }
+    });
+
     it.each(['plain', 'e2ee'] as const)('publishes recovery-detail updates through the real V4 writer for %s accounts', async (mode) => {
         const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { success: true, source: { status: 'linked' } } });
         const encryption = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
@@ -93,7 +148,7 @@ describe('provider account usage persistence scheduler', () => {
             if (mode === 'plain') {
                 expect(write).toMatchObject({ snapshot: { recoveryCreditDetails: changed.recoveryCreditDetails } });
             } else {
-                const sealed = SealedProviderAccountUsageSnapshotV1Schema.parse(write.sealedPayload);
+                const sealed = SealedProviderAccountUsageSnapshotV1Schema.parse(QualifiedProviderAccountUsageWriteV4Schema.parse(write).sealedPayload);
                 expect(openSealedProviderAccountUsageSnapshot({ material: encryption, sealed })?.recoveryCreditDetails).toEqual(changed.recoveryCreditDetails);
                 expect(write).not.toHaveProperty('snapshot');
             }
@@ -114,7 +169,7 @@ describe('provider account usage persistence scheduler', () => {
             await scheduler.flush(1_000);
             expect(await scheduler.recordInBandSnapshot(refreshed, { targets })).toMatchObject({ status: 'enqueued' });
             await scheduler.flush(1_000);
-            const first = writeQualifiedProviderAccountUsage.mock.calls[0]![0].write;
+            const first = QualifiedProviderAccountUsageWriteV4Schema.parse(writeQualifiedProviderAccountUsage.mock.calls[0]![0].write);
             const latest = writeQualifiedProviderAccountUsage.mock.calls[1]![0].write;
             expect(latest).toMatchObject({ fetchedAt: 1_000, snapshot: { subscription: { observedAtMs: 950 } }, metadata: { materialFingerprint: first.metadata?.materialFingerprint } });
             expect(await scheduler.recordInBandSnapshot(previous, { targets })).toMatchObject({ status: 'already_persisted', reason: 'unchanged_fresh' });
@@ -277,6 +332,7 @@ describe('provider account usage persistence scheduler', () => {
 
             expect(writeQualifiedProviderAccountUsage).toHaveBeenCalledWith({
                 token: 'token',
+                material: credentials.encryption,
                 write: expect.objectContaining({
                     payloadMode: 'sealed_account_scoped_v1',
                     sealedPayload: {

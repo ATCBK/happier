@@ -1,22 +1,22 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ConnectedAccountServiceKey } from '@happier-dev/protocol';
 import { ConnectedServiceAuthGroupIdSchema, ConnectedServiceProfileIdSchema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import type { ConnectedServiceRuntimeTarget } from './runtimeRegistry/registry';
 
-export const ConnectedServiceRuntimeAuthRefreshServiceIdSchema = z.string().trim().min(1).transform((value, ctx) => {
+export const ConnectedServiceRuntimeAuthRefreshServiceIdSchema = z.pipe(z.string().check(z.trim(), z.minLength(1)), z.transform((value, ctx) => {
   const serviceId = readBuiltInLegacyConnectedAccountServiceKeyIngress(value);
   if (serviceId) return serviceId;
-  ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service identity' });
+  ctx.issues.push({ code: "custom", message: 'Invalid connected service identity', input: ctx.value });
   return z.NEVER;
-});
+}));
 
 export const ConnectedServiceRuntimeAuthRefreshSelectionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('profile'), serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
-    profileId: ConnectedServiceProfileIdSchema }).strict(),
-  z.object({ kind: z.literal('group'), serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
+  z.strictObject({ kind: z.literal('profile'), serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
+    profileId: ConnectedServiceProfileIdSchema }),
+  z.strictObject({ kind: z.literal('group'), serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
     groupId: ConnectedServiceAuthGroupIdSchema, activeProfileId: ConnectedServiceProfileIdSchema,
-    fallbackProfileId: ConnectedServiceProfileIdSchema, generation: z.number().int().nonnegative() }).strict(),
+    fallbackProfileId: ConnectedServiceProfileIdSchema, generation: z.number().check(z.int(), z.nonnegative()) }),
 ]);
 
 export type ConnectedServiceRuntimeAuthRefreshSelection = Readonly<
