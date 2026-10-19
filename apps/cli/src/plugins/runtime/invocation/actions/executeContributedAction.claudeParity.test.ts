@@ -121,7 +121,7 @@ describe('Claude native team Action surface parity', () => {
             })).toMatchObject({ matched: true, result: { ok: false, errorCode: 'plugin_action_unavailable', actionHandlerInvocation: 'notStarted' } });
             expect(await executor.execute('action.invoke', {
                 action: { pluginId, localId: 'subagent-team-launch' }, input: { teamId: 'unbound' },
-            }, { surface })).toMatchObject({ ok: false, errorCode: 'plugin_action_execution_failed' });
+            }, { surface })).toMatchObject({ ok: false, errorCode: 'plugin_action_session_required' });
             expect(admissions).toHaveLength(2);
         } finally {
             await fixture?.dispose();
