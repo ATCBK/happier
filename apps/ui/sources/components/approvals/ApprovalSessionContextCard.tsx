@@ -127,7 +127,7 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
                     {sessionResolving ? (
                         <HappierSkeletonBlock testID="approvals.requester-title-resolving" width={180}
                             height={REQUESTER_TITLE_LINE_PX} color={theme.colors.surface.skeleton} />
-                    ) : mainLine ? <Text testID="approvals.requester-title" style={styles.title}>{mainLine}</Text> : null}
+                    ) : mainLine ? <Text testID="approvals.requester-title" numberOfLines={2} style={styles.title}>{mainLine}</Text> : null}
                     {machineLabel || pathLabel ? (
                         <View style={mainLine || sessionResolving ? styles.contextChips : null}>
                             <SessionContextChips machineLabel={machineLabel} pathLabel={pathLabel} />

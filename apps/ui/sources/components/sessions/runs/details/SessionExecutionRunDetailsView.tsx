@@ -1002,7 +1002,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         />
                     ) : null}
                     {canShowSendComposer && leadTitle ? (
-                        <Text testID="session-run-details-replies-foot" style={{ color: theme.colors.text.secondary, fontSize: 12 }}>
+                        <Text testID="session-run-details-replies-foot" numberOfLines={2} style={{ color: theme.colors.text.secondary, fontSize: 12 }}>
                             {t('agentStart.pane.repliesGoTo', { session: leadTitle })}
                         </Text>
                     ) : null}

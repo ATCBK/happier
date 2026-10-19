@@ -51,6 +51,17 @@ describe('Requested by main line', () => {
     });
 });
 
+describe('Requested by a session titled by its whole first prompt', () => {
+    it('stops the title at two lines and keeps the whole prompt as its text', async () => {
+        const prompt = 'Use Happier Action tools only: action_options_resolve and action_execute with {"controllerMachineId":"58f6e63a-cd69-4302-83f1-325d10da7ec3"}';
+        const screen = await renderScreen(<ApprovalSessionContextCard session={null} sessionName={prompt} machine={null} serverId="home"
+            context={null} homeName="Studio Mac" requesterSessionId="session-1" requesterAgentId={null} requesterSurface="cli" />);
+        const title = screen.findByTestId('approvals.requester-title');
+        expect(title?.props.numberOfLines).toBe(2);
+        expect(title?.props.children).toBe(prompt);
+    });
+});
+
 describe('Requested by while the asking session resolves', () => {
     it('holds the session line as a neutral placeholder, never claiming the session is elsewhere or promoting the Home', async () => {
         const screen = await renderScreen(<ApprovalSessionContextCard session={null} sessionName={null} machine={null} serverId="home"

@@ -64,6 +64,14 @@ describe('PageHeader title and navigation chrome (R2)', () => {
         expect(screen.root.findAllByType('BackArrow' as never)).toHaveLength(1);
     });
 
+    it('stops a title named by data at two lines while its whole text stays in the heading', async () => {
+        const longTitle = 'Use Happier Action tools only: action_options_resolve and action_execute (workspace.sync.relationship.terminate) with input {"controllerMachineId":"58f6e63a-cd69-4302-83f1-325d10da7ec3"}';
+        const screen = await renderScreen(<PageHeader title={longTitle} />);
+        const heading = screen.root.find((node: ReactTestInstance) => typeof node.type === 'string' && node.props.accessibilityRole === 'header');
+        expect(heading.props.numberOfLines).toBe(2);
+        expect(heading.props.children).toBe(longTitle);
+    });
+
     it('shows only the purpose when the native header already shows the title', async () => {
         const screen = await renderHeader({ chromeShowsTitle: true, description: 'Where your models come from.' });
         expect(headings(screen)).toEqual([]);

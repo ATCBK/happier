@@ -246,10 +246,16 @@ function PageHeaderActionButton(props: Readonly<{ action: PageHeaderPrimaryActio
     );
 }
 
+/** The most lines a page title takes before it ends in an ellipsis. */
+const PAGE_TITLE_MAX_LINES = 2;
+
 /** Core's text owner for the shared header (font families and text scaling), for hosts drawing it directly. */
 export const renderPageHeaderText: HappierPageHeaderTextRender = (input) => (
     <Text
         accessibilityRole={input.header ? 'header' : undefined}
+        // An entity named by data (a Session titled by its first prompt) can be any length: the title
+        // stops at two lines, and the DOM text and screen readers still carry all of it.
+        numberOfLines={input.role === 'pageTitle' || input.role === 'heroTitle' ? PAGE_TITLE_MAX_LINES : undefined}
         style={input.role === 'heroTitle' ? stylesheet.heroTitle : input.role === 'pageTitle' ? stylesheet.title
             : input.role === 'meta' ? (input.mono ? [stylesheet.metaText, stylesheet.metaMono] : stylesheet.metaText) : stylesheet.description}
     >
