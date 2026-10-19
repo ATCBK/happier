@@ -21,7 +21,7 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-vi.mock('@/text', () => ({ t: (key: string) => key }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 const fields = z.array(PluginConfigurationSettingFieldV2Schema).parse([
     {
@@ -212,43 +212,46 @@ describe('ConnectedAccountConfigurationForm', () => {
         expect(getActiveUnsavedChangesGuard()?.isDirtyRef.current).toBe(true);
     });
 
-    it('clears configuration drafts when a same-route descriptor/configuration update replaces the form contract', async () => {
+    it('retains edited values and secrets through option/read refreshes until the caller retires the target revision', async () => {
         const { ConnectedAccountConfigurationForm } = await import('./ConnectedAccountConfigurationForm');
+        const onSubmit = vi.fn();
+        const initialValues = { endpoint: 'https://old.example', enabled: false, region: 'eu' };
+        const form = (key: string, refreshed: boolean) => <ConnectedAccountConfigurationForm
+            key={key}
+            title="Configuration"
+            fields={refreshed ? fields.map(field => field.id === 'region' ? {
+                ...field, schema: { ...field.schema, enum: ['eu', 'us', 'ap'] },
+                presentation: { ...field.presentation, options: [
+                    ...field.presentation!.options!, { value: 'ap', title: 'Asia Pacific' },
+                ] },
+            } : field) : fields}
+            values={refreshed ? { ...initialValues, endpoint: 'https://updated.example' } : initialValues}
+            configuredSecretFieldIds={['clientSecret']}
+            saving={false}
+            onSubmit={onSubmit}
+        />;
         const screen = await renderScreen(
-            <ConnectedAccountConfigurationForm
-                title="Configuration"
-                fields={fields}
-                values={{ endpoint: 'https://old.example', enabled: false, region: 'eu' }}
-                configuredSecretFieldIds={['clientSecret']}
-                saving={false}
-                onSubmit={vi.fn()}
-            />,
+            form('target:revision-1', false),
         );
-
         await act(async () => {
-            screen.tree.find(
-                (node) => node.type === ('TextInput' as never) && node.props.testID === 'connected-account-configuration:clientSecret',
-            ).props.onChangeText('replacement-secret');
+            screen.changeTextByTestId('connected-account-configuration:endpoint', 'https://unsaved.example');
+            screen.changeTextByTestId('connected-account-configuration:clientSecret', 'replacement-secret');
         });
+        await screen.update(form('target:revision-1', true));
+        expect(screen.findHostByTestId('connected-account-configuration:endpoint')?.props.value).toBe('https://unsaved.example');
+        expect(screen.findHostByTestId('connected-account-configuration:clientSecret')?.props.value).toBe('replacement-secret');
         await act(async () => {
-            screen.tree.update(
-                <ConnectedAccountConfigurationForm
-                    title="Configuration"
-                    fields={fields}
-                    values={{ endpoint: 'https://updated.example', enabled: true, region: 'us' }}
-                    configuredSecretFieldIds={['clientSecret']}
-                    saving={false}
-                    onSubmit={vi.fn()}
-                />,
-            );
+            screen.tree.find(node => node.props.testID === 'connected-account-configuration:region').props.onSelect(JSON.stringify('ap'));
         });
-
-        expect(screen.tree.find(
-            (node) => node.type === ('TextInput' as never) && node.props.testID === 'connected-account-configuration:clientSecret',
-        ).props.value).toBe('');
-        expect(screen.tree.find(
-            (node) => node.type === ('TextInput' as never) && node.props.testID === 'connected-account-configuration:endpoint',
-        ).props.value).toBe('https://updated.example');
+        await screen.pressByTestIdAsync('connected-account-configuration:save');
+        expect(onSubmit).toHaveBeenCalledWith({ values: {
+            endpoint: 'https://unsaved.example', enabled: false, region: 'ap',
+        }, secretValues: { clientSecret: 'replacement-secret' } });
+        // The controller keys this form by configuration target/revision. A real
+        // retirement must still clear secrets and seed the new read values.
+        await screen.update(form('target:revision-2', true));
+        expect(screen.findHostByTestId('connected-account-configuration:clientSecret')?.props.value).toBe('');
+        expect(screen.findHostByTestId('connected-account-configuration:endpoint')?.props.value).toBe('https://updated.example');
         const { getActiveUnsavedChangesGuard } = await import('@/utils/navigation/runGuardedNavigation');
         expect(getActiveUnsavedChangesGuard()?.isDirtyRef.current ?? false).toBe(false);
     });
