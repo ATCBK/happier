@@ -114,6 +114,15 @@ export function buildActivityNotificationContent(
     ? null
     : event.sessionTitle;
   const includePreview = options.previewBehavior === undefined || options.previewBehavior === 'include_preview';
+  if (event.topic === 'follow_update') {
+    const descriptions = { finished: 'Session finished', failed_or_stopped: 'Session failed or stopped',
+      stalled: 'Session stalled', update_posted: 'Session posted an update', person_wrote: 'A person wrote in the session',
+      goal_changed: 'Session goal changed', message: 'Session has a new message', needs_you: 'Session needs you' };
+    return { title: descriptions[event.follow.event.kind], body: '', data: { sessionId: event.sessionId,
+      ...(event.follow.sourceMessage ? { activityEventLocalId: event.follow.sourceMessage.localId } : {}),
+      ...(event.follow.sourceRequests?.requests.length === 1 ? { requestId: event.follow.sourceRequests.requests[0]!.requestId } : {}),
+    } };
+  }
   if (event.topic === 'resource_limit') {
     const notice = MachineVitalsNotificationV1Schema.parse(event);
     const minutes = (notice.at - notice.since) / 60_000;

@@ -5,6 +5,7 @@ import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/ac
 import type { AccountSettings, NotificationChannelV1 } from '@happier-dev/protocol';
 import { createSavedSecretMaterializerV1, type SavedSecretCatalogResourceInputV1 } from '@/settings/secrets/savedSecretCatalog';
 import { deriveExpoPushNotificationChannelFromLegacySettings } from '@happier-dev/protocol/account/settings/notificationChannels';
+import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const authoredChannelsBySettings = new WeakMap<AccountSettings, readonly NotificationChannelV1[]>();
 
@@ -40,6 +41,16 @@ export function notificationCatalogFixture(settings: AccountSettings, keys: read
       ? `happier:shared-secret:v1:${channel.id}` : null });
   });
   return { notificationChannelCatalog: { status: 'ready', channels, revision: 1, diagnostics: [] } satisfies NotificationChannelCatalogSnapshotV1,
+    savedSecretResources: resources,
     savedSecretMaterializer: createSavedSecretMaterializerV1({ accountSettings: {}, settingsSecretsReadKeys: [], resources,
       resourceCatalogState: 'ready' }) };
+}
+
+/** A hydrated Account boundary for callers which capture the active notification catalog. */
+export function notificationSettingsSnapshotFixture(raw: Readonly<Record<string, unknown>>): AccountSettings {
+  const settings = notificationSettingsFixture(raw);
+  const { notificationChannelCatalog, savedSecretResources } = notificationCatalogFixture(settings);
+  setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: Date.now(),
+    settingsSecretsReadKeys: [], notificationChannelCatalog, savedSecretResources, savedSecretCatalogState: 'ready' });
+  return settings;
 }

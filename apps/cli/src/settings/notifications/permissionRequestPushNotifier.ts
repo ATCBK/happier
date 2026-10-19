@@ -7,6 +7,12 @@ import { setBoundedMap } from '@/utils/collections/lru';
 
 import { summarizeToolInputForNotification } from '@happier-dev/protocol/activity/agentRequestSummary';
 import { sendAgentRequestPushNotificationAsync, type PermissionRequestPushSender } from './permissionRequestPush';
+import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+
+type RequestNotificationAdmission = Readonly<{
+  admittedRulePolicies?: readonly FollowPolicyV1[];
+  isCurrent: () => boolean;
+}>;
 
 type Entry = {
   state: 'idle' | 'sending' | 'retrying' | 'sent';
@@ -31,6 +37,8 @@ export class PermissionRequestPushNotifier {
   private readonly maxEntries: number;
   private readonly nowMs: () => number;
   private readonly onNotifiedAt: (permissionId: string, notifiedAtMs: number) => void;
+  private readonly getRequestFollowEvent: (requestId: string) => FollowEventV1 | null | undefined;
+  private readonly prepareRequestNotification?: (requestId: string) => Promise<RequestNotificationAdmission | null>;
 
   private readonly entries = new Map<string, Entry>();
 
@@ -47,6 +55,8 @@ export class PermissionRequestPushNotifier {
     maxEntries?: number;
     nowMs?: () => number;
     onNotifiedAt?: (permissionId: string, notifiedAtMs: number) => void;
+    getRequestFollowEvent?: (requestId: string) => FollowEventV1 | null | undefined;
+    prepareRequestNotification?: (requestId: string) => Promise<RequestNotificationAdmission | null>;
   }) {
     this.pushSender = params.pushSender;
     this.getSettings = params.getSettings;
@@ -62,6 +72,8 @@ export class PermissionRequestPushNotifier {
     this.maxEntries = Math.max(1, Math.floor(params.maxEntries ?? configuration.permissionRequestPushDedupeMaxEntries));
     this.nowMs = params.nowMs ?? (() => Date.now());
     this.onNotifiedAt = params.onNotifiedAt ?? (() => {});
+    this.getRequestFollowEvent = params.getRequestFollowEvent ?? (() => undefined);
+    this.prepareRequestNotification = params.prepareRequestNotification;
   }
 
   dispose(): void {
@@ -150,9 +162,17 @@ export class PermissionRequestPushNotifier {
       return;
     }
 
-    const settings = this.getSettings();
     const nextEntry: Entry = { ...entry, state: 'sending', attempts: entry.attempts + 1, timer: null };
     setBoundedMap(this.entries, permissionId, nextEntry, this.maxEntries);
+    const admission = this.prepareRequestNotification ? await this.prepareRequestNotification(permissionId) : undefined;
+    if (this.entries.get(permissionId) !== nextEntry) return;
+    // The original request may settle or pass to a manager while source policy is read.
+    const followEvent = this.getRequestFollowEvent(permissionId);
+    if (admission === null || admission?.isCurrent() === false || followEvent === null) {
+      this.entries.delete(permissionId);
+      return;
+    }
+    const settings = this.getSettings();
     const result = await sendAgentRequestPushNotificationAsync({
       pushSender: this.pushSender,
       sessionId: this.sessionId,
@@ -164,6 +184,9 @@ export class PermissionRequestPushNotifier {
       settings,
       settingsSecretsReadKeys: this.getSettingsSecretsReadKeys(),
       toolDetails: entry.toolDetails,
+      followEvent,
+      admittedRulePolicies: admission?.admittedRulePolicies,
+      isCurrent: admission?.isCurrent,
     });
 
     const after = this.entries.get(permissionId) ?? null;

@@ -3,8 +3,10 @@ import type { ConnectedServiceUsageNotificationV1 } from '@happier-dev/protocol/
 import type { GuardStopWarningNotificationV1, GuardAttentionNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import type { MachineGuardActivityNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import type { MachineVitalsNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import type { SessionFollowUpdateNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 
 export type ActivityNotificationEvent =
+  | SessionFollowUpdateNotificationV1
   | ConnectedServiceUsageNotificationV1
   | WorkflowRunUpdateNotificationV1
   | GuardStopWarningNotificationV1

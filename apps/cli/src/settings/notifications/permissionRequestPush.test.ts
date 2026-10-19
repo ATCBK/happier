@@ -3,11 +3,11 @@ import { createSessionNotificationContextFixture } from '@/testkit/backends/sess
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { accountSettingsParse, type LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol';
+import { type LiveActivityRemoteUpdateRequestV1 } from '@happier-dev/protocol';
+import { notificationSettingsSnapshotFixture as accountSettingsParse } from '@/notifications/activity/activityNotification.testkit';
 import { logger } from '@/ui/logger';
 import {
   resetActiveAccountSettingsSnapshotForTests,
-  setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import {
@@ -32,7 +32,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     });
 
     await sendPermissionRequestPushNotificationAsync({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       sessionId: 's1',
       sessionTitle: 'Fix prod issue',
       agentDisplayName: 'Claude',
@@ -60,7 +60,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     });
 
     await sendPermissionRequestPushNotificationAsync({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       sessionId: 's1',
       sessionTitle: 'Fix prod issue',
       agentDisplayName: 'Claude',
@@ -79,7 +79,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     });
 
     await sendPermissionRequestPushNotificationAsync({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       sessionId: 's1',
       sessionTitle: 'Fix prod issue',
       agentDisplayName: 'Claude',
@@ -99,19 +99,12 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
 
   it('notifies for an actual safe-yolo permission request instead of predicting Auto approval', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
-    const settings = accountSettingsParse({
+    accountSettingsParse({
       notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
-    });
-    setActiveAccountSettingsSnapshot({
-      source: 'network',
-      settings,
-      settingsVersion: 1,
-      loadedAtMs: Date.now(),
-      settingsSecretsReadKeys: [],
     });
 
     sendPermissionRequestPushNotificationForActiveAccount({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       sessionId: 's-auto',
       permissionId: 'p-auto',
       toolName: 'Read',
@@ -138,7 +131,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     });
 
     await expect(sendPermissionRequestPushNotificationAsync({
-      pushSender: { fetchSessionNotificationContext,
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
         serverId: 'server-a',
         sendToAllDevicesAsync,
         sendLiveActivityRemoteUpdateAsync,
@@ -181,7 +174,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     try {
       await expect(
         sendPermissionRequestPushNotificationAsync({
-          pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+          pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
           sessionId: 's1',
           permissionId: 'p1',
           toolName: 'Read',
@@ -243,7 +236,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
     });
 
     await expect(sendPermissionRequestPushNotificationAsync({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       sessionId: 's1',
       permissionId: 'p1',
       toolName: 'Read',
@@ -265,7 +258,7 @@ describe('sendPermissionRequestPushNotificationAsync', () => {
 
     await expect(
       sendPermissionRequestPushNotificationAsync({
-        pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+        pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
         sessionId: 's1',
         permissionId: 'p1',
         toolName: 'Read',
