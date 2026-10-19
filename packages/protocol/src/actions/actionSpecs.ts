@@ -2508,8 +2508,8 @@ const ActionOptionsResolveInputSchema = lazyZodSchema(() => z.looseObject({
   if (!optionsSourceId && !(actionId && fieldPath) && !(value.consumer && fieldPath)) {
     ctx.addIssue({
       code: "custom",
-      message: 'actionId + fieldPath or optionsSourceId is required',
-      path: ['actionId'],
+      message: 'Provide actionId + fieldPath, consumer + fieldPath, or optionsSourceId',
+      path: ['fieldPath'],
     });
   }
 })));
@@ -6033,7 +6033,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     id: 'action.options.resolve', approval: {result: 'required'},
     title: 'Resolve action options',
     sideEffectClass: 'read',
-    description: 'Resolve valid options for an action field, including dynamic options sources.',
+    description: 'Resolve valid options for one Action field or one declared workflow/widget input. Provide actionId and fieldPath, consumer and fieldPath, or a direct optionsSourceId. A consumer always requires fieldPath.',
     safety: 'safe',
     placements: ['voice_panel'],
     bindings: { voiceClientToolName: 'resolveActionOptions', mcpToolName: 'action_options_resolve', rpcMethod: 'action.options.resolve' },
@@ -6050,10 +6050,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     },
     inputHints: {
       title: 'Resolve action options',
-      description: 'Use this when an action field has static options or an optionsSourceId.',
+      description: 'Resolve choices for a specific input with static options, an optionsSourceId, or an input type. For a workflow consumer, fieldPath is the declared input name; it is not the inputs container.',
       fields: [
-        { path: 'actionId', title: 'Action id', description: 'Optional when optionsSourceId is provided directly.', widget: 'text' },
-        { path: 'fieldPath', title: 'Field path', description: 'Dot-path for the action input field.', widget: 'text' },
+        { path: 'actionId', title: 'Action id', description: 'Optional when consumer or optionsSourceId is provided directly.', widget: 'text' },
+        { path: 'consumer', title: 'Input consumer', description: 'The schema-defined workflow or widget consumer reference. Workflow consumers identify kind workflow and a workflow reference; supply that workflow input name in fieldPath.', widget: 'json' },
+        { path: 'fieldPath', title: 'Field path', description: 'Required with actionId or consumer. Use the Action input dot-path, or the declared workflow input name without an inputs prefix. A known workflow with an unknown name returns availableFields in its refusal details.', widget: 'text' },
         { path: 'optionsSourceId', title: 'Options source id', description: 'Direct options source lookup when known.', widget: 'text' },
         { path: 'sessionId', title: 'Session id', prompt: 'Which session?', description: 'Omit to use the current invoking Session. Set only for an intentional authorized cross-Session target.', widget: 'text' },
         { path: 'draftInput', title: 'Partial action input', description: 'Partial input for dependent options, for example {"backendTargetKeys":["agent:pi"]} when resolving a model, configuration, or connected service.', widget: 'json' },

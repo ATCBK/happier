@@ -93,5 +93,8 @@ export async function resolveInputOptionsConsumerField(params: Readonly<{
   if (!ref || !resolved) return null;
   const definition = WorkflowDefinitionV1Schema.parse(resolved.definition);
   const input = definition.inputs.find(input => input.name === fieldPath);
-  return input ? workflowInputToFieldHint(input) : null;
+  return input ? workflowInputToFieldHint(input) : {
+    ok: false, errorCode: 'input_type_consumer_unavailable', error: 'input_type_consumer_unavailable',
+    details: { fieldPath, availableFields: definition.inputs.map(input => input.name) },
+  };
 }
