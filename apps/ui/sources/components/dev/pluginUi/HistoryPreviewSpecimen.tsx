@@ -13,7 +13,7 @@ const HIGHLIGHT: ConversationHighlight = {
     key: 'dev-hit',
     title: 'Stabilise CI on the release branch',
     meta: 'Claude Code · ~/happier · MacBook Pro · 3w ago',
-    agentLabel: 'Claude Code',
+    agentId: 'claude',
     candidate: { remoteSessionId: 'dev-hit', title: 'Stabilise CI on the release branch', updatedAtMs: 1,
         match: { snippet: '…the flaky e2e is the settings sheet: it remounts when the viewport changes, so the test sometimes types into a sheet that is about to be replaced.',
             sourceItemId: 'dev-item', messageIndex: 41 } },
@@ -28,8 +28,8 @@ export function HistoryPreviewSpecimen() {
             <Text style={styles.cellTitle}>H1r · Conversations preview</Text>
             <Text style={styles.cellDescription}>The highlighted hit’s exchange, read on demand; Open in Happier lands on the match with Find.</Text>
             <View style={styles.row}>
-                <View style={styles.panel}><ConversationPreview highlight={HIGHLIGHT} query={QUERY} disabled={false} exchange={{ failed: false, messages: [
-                    { kind: 'user-text', id: 'dev-prompt', localId: null, createdAt: 1, text: 'The flaky e2e fails one run in five. Find out why.' },
+                <View style={styles.panel}><ConversationPreview highlight={HIGHLIGHT} query={QUERY} disabled={false} exchange={{ failed: false, matchedMessageId: 'dev-item', elidedMessageCount: 43, messages: [
+                    { kind: 'user-text', id: 'dev-prompt', localId: null, createdAt: 1, text: 'The flaky e2e fails one run in five. Find out why, and keep the fix small: the release branch is cut on Friday and I would rather not touch the settings sheet unless it is the cause. Start from the last red run on main and work backwards through what changed in the viewport handling.' },
                     { kind: 'agent-text', id: 'dev-item', realID: 'dev-item', localId: null, createdAt: 2, text: 'The flaky e2e is the settings sheet: it remounts when the viewport changes, so the test sometimes types into a sheet that is about to be replaced.' },
                 ] }} /></View>
                 <View style={styles.panel}><ConversationPreview highlight={null} query={QUERY} disabled={false} /></View>

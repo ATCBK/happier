@@ -30,6 +30,25 @@ describe('describeConversationSearchCoverage', () => {
         ].join(' · '));
     });
 
+    it('counts machines by id once a list of names stops helping, since many share one display name', () => {
+        const line = describeConversationSearchCoverage({
+            machines: ['m1', 'm2', 'm3', 'm4', 'm5'].map(id => machine(id, 'offline')),
+            machineName: () => 'Studio',
+        });
+        expect(line).toBe('conversationSearch.coverageOffline:{"machines":"conversationSearch.coverageMachineCount:{\\"count\\":5}"}');
+        // The same id listed twice is one machine; two ids with one name are not collapsed by name.
+        expect(describeConversationSearchCoverage({ machines: [machine('a', 'offline'), machine('a', 'offline')], machineName }))
+            .toBe('conversationSearch.coverageOffline:{"machines":"MacBook Pro"}');
+        expect(describeConversationSearchCoverage({ machines: [machine('a', 'offline'), machine('b', 'offline')], machineName: () => 'Studio' }))
+            .toBe('conversationSearch.coverageOffline:{"machines":"conversationSearch.coverageMachineCount:{\\"count\\":2}"}');
+    });
+
+    it('says once that some sources could not be searched, whatever their number', () => {
+        const failure = (machineId: string, sourceKey: string) => ({ machineId, agentId: 'codex', sourceKey, errorCode: 'agent_error' as const, retryable: true });
+        expect(describeConversationSearchCoverage({ machines: [], failures: [failure('a', 'x'), failure('a', 'y')], machineName }))
+            .toBe('conversationSearch.coverageSourcesFailed');
+    });
+
     it('leaves out a gap the surface does not report, and still reports an unavailable Home', () => {
         const line = describeConversationSearchCoverage({
             machines: [machine('a', 'disabled-by-settings'), machine('b', 'ok')],

@@ -406,7 +406,7 @@ describe('composer suggestion picker — host wiring', () => {
         });
     });
 
-    it('offers Account mentions to a human discussion through its adapter, and no agent kind', async () => {
+    it('offers Account mentions to a human discussion through its admitted roster, and no agent tools', async () => {
         const search = vi.fn<ComposerAccountMentionSource['search']>(async () => ({
             candidates: [{
                 accountId: 'account-alice',
@@ -419,13 +419,14 @@ describe('composer suggestion picker — host wiring', () => {
         searchFilesMock.mockResolvedValue([file('alice.ts')]);
         const { getSuggestions } = await import('./suggestions');
 
-        // `SessionDiscussionComposer`'s handler: no session, its own kind list, its Account search.
+        // The Discussion handler carries its admitted Session catalog, never the global inventory.
         const hook = await renderComposerPickerWithHandler({
             initialText: '@al',
             kinds: DISCUSSION_COMPOSER_SUGGESTION_KINDS,
             handler: (query, signal) => getSuggestions(null, query, {
                 kinds: DISCUSSION_COMPOSER_SUGGESTION_KINDS,
                 accountMentions,
+                catalogs: { sessions: [] },
                 signal,
             }),
         });

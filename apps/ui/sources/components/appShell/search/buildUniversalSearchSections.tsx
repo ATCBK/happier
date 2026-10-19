@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { rankHappierQueryMatches } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { FileIcon } from '@/components/ui/media/FileIcon';
@@ -13,7 +14,8 @@ import { Text } from '@/components/ui/text/Text';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import { ConversationHitSummary } from '@/components/sessions/external/browse/ConversationHitSummary';
+import { ConversationHitSummary, resolveConversationHitSnippet } from '@/components/sessions/external/browse/ConversationHitSummary';
+import { stripMarkdown } from '@/utils/sessions/messageUtils';
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { splitKeybindingLabel, useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
@@ -22,6 +24,7 @@ import { SelectionListOptionStateContext } from '@/components/ui/selectionList/S
 import { SelectionListDetailPaneContext } from '@/components/ui/selectionList';
 import { useCodeTextFile } from '@/components/projects/files/code/useCodeTextFile';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { boundedReplyHints } from './searchBoundedReplyHints';
 
 const EMPTY_WORKSPACE_SCOPE: WorkspaceScopeBase = { serverId: '', machineId: '', rootPath: '' };
 
@@ -111,7 +114,12 @@ export type UniversalSearchDynamicSource = Readonly<{
     resolverKey: string;
     /** Calm source-owned coverage/truncation context rendered by SelectionList. */
     resultHint?: string;
-    resolve: (query: string, signal: AbortSignal) => Promise<
+    resolve: (query: string, signal: AbortSignal, onProgress?: (page: Readonly<{
+        results: readonly UniversalSearchResult[];
+        emptyHint?: string;
+        resultHint?: string;
+        hasMore?: boolean;
+    }>) => void) => Promise<
         readonly UniversalSearchResult[]
         | Readonly<{
             results: readonly UniversalSearchResult[];
@@ -438,6 +446,8 @@ function toOption(
     iconName: IconName,
     onCommit: (result: UniversalSearchResult) => void,
     fileLine?: FileContentLine,
+    /** The typed query: a row whose title is the text that matched tints it. */
+    titleQuery?: string,
 ): SelectionListOption {
     return {
         id: buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id),
@@ -445,19 +455,24 @@ function toOption(
         label: result.target.kind === 'workspaceFile' && !result.fileContent && result.target.anchor && 'startLine' in result.target.anchor
             // A `path:line` hit says where it lands.
             ? `${result.title}:${result.target.anchor.startLine}`
-            : result.title,
+            : result.conversation ? stripMarkdown(result.title) : result.title,
         ...(result.subtitle ? { subtitle: result.subtitle } : {}),
+        ...(titleQuery && !result.conversation && !result.fileContent ? { labelHighlightQuery: titleQuery } : {}),
         ...(result.fileContent ? {
             subtitleContent: () => <FileContentSubtitle match={fileLine ?? { ...result.fileContent!, columns: [result.fileContent!] }} />,
             detailContent: () => <FileContentDetail match={fileLine ?? { ...result.fileContent!, columns: [result.fileContent!] }}
                 scope={result.target.kind === 'workspaceFile' ? result.target.scope : null} />,
         } : {}),
         ...(result.conversation ? {
-            subtitle: result.conversation.snippet,
-            subtitleContent: () => <ConversationHitSummary snippet={result.conversation!.snippet} query={result.conversation!.query}
+            contentAlign: 'start' as const,
+            labelHighlightQuery: result.conversation.query.trim() || undefined,
+            subtitle: stripMarkdown(result.conversation.snippet),
+            subtitleContent: () => <ConversationHitSummary
+                snippet={resolveConversationHitSnippet({ title: result.title, snippet: result.conversation!.snippet, query: result.conversation!.query })}
+                query={result.conversation!.query}
                 where={result.conversation!.machineLabel} atMs={result.conversation!.atMs} />,
             // The row's spoken name is what it shows: the conversation, what matched, where.
-            accessibilityLabel: [result.title, result.conversation.snippet, result.conversation.machineLabel].filter(Boolean).join(', '),
+            accessibilityLabel: [stripMarkdown(result.title), stripMarkdown(result.conversation.snippet), result.conversation.machineLabel].filter(Boolean).join(', '),
         } : {}),
         ...(result.searchText ? { searchText: result.searchText } : {}),
         ...(result.exactSearchText ? { exactSearchText: result.exactSearchText } : {}),
@@ -521,94 +536,99 @@ function buildDynamicSection(
         // placeholder bars taller than the results that replace them.
         loadingHint: t('universalSearch.searchingGroup'),
         errorHint: t('universalSearch.groupFailed', { group: input.title }),
+        retryLabel: t('common.retry'),
         resultTransition: 'none',
-        resolve: async (seed, signal) => {
-            const resolved = await source.resolve(input.preserveQuery ? seed : seed.trim(), signal);
-            const page = isUniversalSearchResolvePage(resolved)
-                ? resolved
-                : { results: resolved, emptyHint: undefined };
-            // Hits arrive grouped by file; each row is one matching line and names its `path:line` (Find lab G1)
-            // so any row read alone, spoken or scrolled to, still says where it lands.
-            const lines = groupFileContentLines(page.results);
-            const options: SelectionListOption[] = lines.length === 0
-                ? page.results.slice(0, input.rowLimit).map((result) => toOption(result, input.iconName, input.onCommit))
-                : input.groupByFile
-                    ? (() => {
-                        // One gutter per file, as wide as its last shown line number.
-                        const gutterDigitsByPath = new Map<string, number>();
-                        for (const { line } of lines) {
-                            gutterDigitsByPath.set(line.path, Math.max(gutterDigitsByPath.get(line.path) ?? 1, String(line.line + line.after.length).length));
-                        }
-                        return lines.flatMap(({ result, line }, index): SelectionListOption[] => {
-                        const location = `${line.path}:${line.line}`;
-                        const lineOption: SelectionListOption = {
-                            ...toOption(result, input.iconName, input.onCommit, line),
-                            label: location,
-                            labelContent: () => <FileContentLineLabel match={line} gutterDigits={gutterDigitsByPath.get(line.path) ?? 1} />,
-                            // The code is the row's title here; the file heading above says where.
-                            subtitle: undefined, subtitleContent: undefined,
-                            // An empty mark slot keeps the code on the file name's edge.
-                            icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
-                            accessibilityLabel: `${location} ${line.text.trim()}`,
-                        };
-                        if (index > 0 && lines[index - 1]!.line.path === line.path) return [lineOption];
-                        const matches = lines.filter((entry) => entry.line.path === line.path)
-                            .reduce((count, entry) => count + entry.line.columns.length, 0);
-                        return [{
-                            id: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}:file:${line.path}`,
-                            label: line.path,
-                            // A heading, not a choice: it reads at full strength and the keyboard passes over it.
-                            disabled: true,
-                            content: <FileContentGroupHeader path={line.path} matches={matches} />,
-                        }, lineOption];
+        resolve: async (seed, signal, onProgress) => {
+            const project = (resolved: Awaited<ReturnType<typeof source.resolve>>) => {
+                const page = isUniversalSearchResolvePage(resolved)
+                    ? resolved
+                    : { results: resolved, emptyHint: undefined };
+                // Hits arrive grouped by file; each row is one matching line and names its `path:line` (Find lab G1)
+                // so any row read alone, spoken or scrolled to, still says where it lands.
+                const lines = groupFileContentLines(page.results);
+                const options: SelectionListOption[] = lines.length === 0
+                    ? page.results.slice(0, input.rowLimit).map((result) => toOption(result, input.iconName, input.onCommit, undefined, seed.trim() || undefined))
+                    : input.groupByFile
+                        ? (() => {
+                            // One gutter per file, as wide as its last shown line number.
+                            const gutterDigitsByPath = new Map<string, number>();
+                            for (const { line } of lines) {
+                                gutterDigitsByPath.set(line.path, Math.max(gutterDigitsByPath.get(line.path) ?? 1, String(line.line + line.after.length).length));
+                            }
+                            return lines.flatMap(({ result, line }, index): SelectionListOption[] => {
+                            const location = `${line.path}:${line.line}`;
+                            const lineOption: SelectionListOption = {
+                                ...toOption(result, input.iconName, input.onCommit, line),
+                                label: location,
+                                labelContent: () => <FileContentLineLabel match={line} gutterDigits={gutterDigitsByPath.get(line.path) ?? 1} />,
+                                // The code is the row's title here; the file heading above says where.
+                                subtitle: undefined, subtitleContent: undefined,
+                                // An empty mark slot keeps the code on the file name's edge.
+                                icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
+                                accessibilityLabel: `${location} ${line.text.trim()}`,
+                            };
+                            if (index > 0 && lines[index - 1]!.line.path === line.path) return [lineOption];
+                            const matches = lines.filter((entry) => entry.line.path === line.path)
+                                .reduce((count, entry) => count + entry.line.columns.length, 0);
+                            return [{
+                                id: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}:file:${line.path}`,
+                                label: line.path,
+                                // A heading, not a choice: it reads at full strength and the keyboard passes over it.
+                                disabled: true,
+                                content: <FileContentGroupHeader path={line.path} matches={matches} />,
+                            }, lineOption];
+                        });
+                        })()
+                        : lines.slice(0, input.rowLimit).map(({ result, line }) => {
+                            const location = `${line.path}:${line.line}`;
+                            return {
+                                ...toOption(result, input.iconName, input.onCommit, line),
+                                label: location,
+                                labelContent: () => <FileContentLabel match={line} />,
+                                labelEllipsizeMode: 'head' as const,
+                                accessibilityLabel: `${location} ${line.text.trim()}`,
+                            };
+                        });
+                if (input.sourceId === UNIVERSAL_SEARCH_SOURCE_IDS.fileContent && !input.groupByFile && input.onShowAll && (options.length > 0 || page.hasMore)) {
+                    const files = new Set(page.results.filter(result => result.fileContent).map(result => result.fileContent!.path)).size;
+                    options.push({
+                        id: ALL_FILE_MATCHES_OPTION_ID,
+                        testID: 'universal-search:all-file-matches',
+                        label: page.hasMore ? t('universalSearch.content.moreMatches')
+                            : t('universalSearch.content.allMatches', { matches: page.results.length, files }),
+                        // A summary, not a hit: set at the meta step in quiet ink, like the lab's "All 11 matches in 4 files".
+                        labelContent: () => <AllMatchesLabel label={page.hasMore ? t('universalSearch.content.moreMatches')
+                            : t('universalSearch.content.allMatches', { matches: page.results.length, files })} />,
+                        rightAccessory: () => <TextInFilesShortcut />,
+                        // An empty mark slot puts "All N matches" on the text column of the lines above (lab G1).
+                        icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
+                        onSelect: input.onShowAll,
                     });
-                    })()
-                    : lines.slice(0, input.rowLimit).map(({ result, line }) => {
-                        const location = `${line.path}:${line.line}`;
-                        return {
-                            ...toOption(result, input.iconName, input.onCommit, line),
-                            label: location,
-                            labelContent: () => <FileContentLabel match={line} />,
-                            labelEllipsizeMode: 'head' as const,
-                            accessibilityLabel: `${location} ${line.text.trim()}`,
-                        };
+                }
+                if (input.groupByFile && lines.length > 0) {
+                    // The scope's status line (lab G1s): how much was found; the Text in files token says where.
+                    options.unshift({
+                        id: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}:status`,
+                        label: t('universalSearch.content.matchesInFiles', { matches: page.results.length, files: new Set(lines.map((entry) => entry.line.path)).size }),
+                        disabled: true,
+                        content: <FileContentScopeStatus label={t('universalSearch.content.matchesInFiles', { matches: page.results.length, files: new Set(lines.map((entry) => entry.line.path)).size })} />,
                     });
-            if (input.sourceId === UNIVERSAL_SEARCH_SOURCE_IDS.fileContent && !input.groupByFile && input.onShowAll && (options.length > 0 || page.hasMore)) {
-                const files = new Set(page.results.filter(result => result.fileContent).map(result => result.fileContent!.path)).size;
-                options.push({
-                    id: ALL_FILE_MATCHES_OPTION_ID,
-                    testID: 'universal-search:all-file-matches',
-                    label: page.hasMore ? t('universalSearch.content.moreMatches')
-                        : t('universalSearch.content.allMatches', { matches: page.results.length, files }),
-                    // A summary, not a hit: set at the meta step in quiet ink, like the lab's "All 11 matches in 4 files".
-                    labelContent: () => <AllMatchesLabel label={page.hasMore ? t('universalSearch.content.moreMatches')
-                        : t('universalSearch.content.allMatches', { matches: page.results.length, files })} />,
-                    rightAccessory: () => <TextInFilesShortcut />,
-                    // An empty mark slot puts "All N matches" on the text column of the lines above (lab G1).
-                    icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
-                    onSelect: input.onShowAll,
-                });
-            }
-            if (input.groupByFile && lines.length > 0) {
-                // The scope's status line (lab G1s): how much was found; the token and chip already say where.
-                options.unshift({
-                    id: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}:status`,
-                    label: t('universalSearch.content.matchesInFiles', { matches: page.results.length, files: new Set(lines.map((entry) => entry.line.path)).size }),
-                    disabled: true,
-                    content: <FileContentScopeStatus label={t('universalSearch.content.matchesInFiles', { matches: page.results.length, files: new Set(lines.map((entry) => entry.line.path)).size })} />,
-                });
-            }
-            // Inside the Text in files scope there is nowhere further to go: an incomplete page says so.
-            const scopeHint = input.groupByFile && page.hasMore ? t('universalSearch.moreResultsAvailable') : undefined;
-            const resultHint = page.resultHint ?? scopeHint ?? source.resultHint;
-            // Coverage still describes the searched corpus when it yields no rows.
-            // SelectionList needs its empty-state hint to retain that section.
-            const emptyHint = page.emptyHint ?? (options.length === 0 ? resultHint : undefined);
-            return {
-                options,
-                ...(emptyHint !== undefined ? { emptyHint } : {}),
-                ...(resultHint !== undefined ? { resultHint } : {}),
+                }
+                // Inside the Text in files scope there is nowhere further to go: an incomplete page says so.
+                const scopeHints = input.groupByFile ? boundedReplyHints({ rowCount: lines.length, incomplete: page.hasMore === true }) : {};
+                const resultHint = page.resultHint ?? scopeHints.resultHint ?? source.resultHint;
+                // Coverage still describes the searched corpus when it yields no rows.
+                // SelectionList needs its empty-state hint to retain that section.
+                const emptyHint = page.emptyHint ?? scopeHints.emptyHint ?? (options.length === 0 ? resultHint : undefined);
+                return {
+                    options,
+                    ...(emptyHint !== undefined ? { emptyHint } : {}),
+                    ...(resultHint !== undefined ? { resultHint } : {}),
+                };
             };
+            const resolved = await source.resolve(input.preserveQuery ? seed : seed.trim(), signal,
+                onProgress ? page => onProgress(project(page)) : undefined);
+            return project(resolved);
         },
     }];
 }
@@ -700,15 +720,13 @@ export function buildUniversalSearchSections(
                     serverId: session.serverId,
                     accountId: session.accountId,
                 },
-            }, 'chats-circle', onCommit)),
+            }, 'chats-circle', onCommit, undefined, query || undefined)),
             ...(sessionInventoryHint ? { resultHint: sessionInventoryHint } : {}),
         }
         : null;
 
-    // Settings pages come pre-ranked by the settings catalog's own Fuse owner,
-    // which matches keywords and ancestor titles the row never displays. It is a
-    // local corpus, so it resolves with no debounce; it is provider-filtered so
-    // a keyword-only match is not thrown away by the host matcher.
+    // The Settings catalog ranks and admits literal matches or title typos. Its shared row projection
+    // shows the description/keyword when it explains the hit; preserve that provider order.
     const settingsPages = query.length > 0 ? input.searchSettingsPages(query).slice(0, rowLimit) : [];
     const settingsSection: SelectionListSectionDescriptor | null = settingsPages.length > 0
         ? {
@@ -775,7 +793,7 @@ export function buildUniversalSearchSections(
                     machineId: project.machineId,
                     rootPath: project.rootPath,
                 },
-            }, 'folder-open', onCommit)),
+            }, 'folder-open', onCommit, undefined, query || undefined)),
         });
     }
 
@@ -843,10 +861,20 @@ export function buildUniversalSearchSections(
             loadingHint: t('universalSearch.searchingGroup'),
             // A failing provider says so in host copy, like every built-in group; its message stays in logs.
             errorHint: t('universalSearch.groupFailed', { group: section.title ?? section.id }),
+            retryLabel: t('common.retry'),
             resultTransition: 'none',
         });
     }
 
+    // A named Session or Project is the reader's content. Keep its group ahead
+    // of settings/commands matched by descriptions or catalog keywords, using
+    // the same title matcher as SelectionList rather than another score.
+    if (query.length > 0) {
+        const titleMatches = new Set(sections.filter(section => section.kind === 'static'
+            && (section.id === UNIVERSAL_SEARCH_SOURCE_IDS.sessions || section.id === UNIVERSAL_SEARCH_SOURCE_IDS.projects)
+            && rankHappierQueryMatches(section.options, query, option => ({ label: option.label })).length > 0));
+        return [...sections.filter(section => titleMatches.has(section)), ...sections.filter(section => !titleMatches.has(section))];
+    }
     return sections;
 }
 

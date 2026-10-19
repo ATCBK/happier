@@ -6,7 +6,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { isHappierPageRowNarrow, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { Text } from '@/components/ui/text/Text';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -49,6 +49,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+/**
+ * On a phone-width footer the Escape hint is left out: the hints would not fit one line, and the surface
+ * already carries a visible way out (its Cancel or back control) that a keyboard hint only repeats.
+ */
+function isEscapeHint(hint: SelectionListKeyboardHint): boolean {
+    return hint.label.trim().toLowerCase() === 'esc';
+}
+
 function buildHintsKey(hints: ReadonlyArray<SelectionListKeyboardHint>): string {
     if (hints.length === 0) return '';
     const parts: string[] = [];
@@ -77,6 +85,7 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
     const styles = stylesheet;
     const reducedMotion = useReducedMotionPreference();
     const keyboardAvailable = props.hardwareKeyboardAvailable ?? true;
+    const [narrow, setNarrow] = React.useState(false);
 
     // Track the currently rendered hints so we can keep painting the previous
     // set while the cross-fade animation runs. When the incoming `props.hints`
@@ -120,12 +129,16 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
     if (!keyboardAvailable) return null;
     if (renderedHints.length === 0 && props.hints.length === 0) return null;
     return (
-        <View testID={props.testID} style={[styles.container, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }]}>
+        <View
+            testID={props.testID}
+            onLayout={(event) => setNarrow(isHappierPageRowNarrow(event.nativeEvent.layout.width))}
+            style={[styles.container, { backgroundColor: paintColor(theme.colors.surface.base, 'transparent') }]}
+        >
             <Animated.View
                 testID={selectionListTestId(props.testID, 'hints-animator')}
                 style={[styles.animator, animatedStyle]}
             >
-                {renderedHints.map((hint) => (
+                {renderedHints.filter((hint) => !(narrow && isEscapeHint(hint))).map((hint) => (
                     <View
                         key={hint.id}
                         testID={selectionListTestId(props.testID, 'hint', hint.id)}

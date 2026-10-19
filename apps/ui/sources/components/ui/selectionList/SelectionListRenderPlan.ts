@@ -27,6 +27,8 @@ import type {
 import { SelectionListSectionFailure } from './selectionListSectionFailure';
 import type { DynamicSectionState } from './useSelectionListDynamicSections';
 
+const EMPTY_OPTIONS: readonly SelectionListOption[] = Object.freeze([]);
+
 export type SectionRenderPlan = Readonly<{
     id: string;
     title?: string;
@@ -197,6 +199,10 @@ export function synthesizeSelectionListRenderPlan(
         }
         const state = dynamicSectionStates.get(descriptor.id);
         if (!state) continue;
+        const retainedOptions = state.status === 'idle' || state.status === 'loading'
+            ? state.lastSuccessOptions ?? EMPTY_OPTIONS
+            : state.options;
+        const options = descriptor.projectOptions?.(retainedOptions) ?? retainedOptions;
         const baseEntry = {
             id: descriptor.id,
             title: descriptor.title,
@@ -211,7 +217,7 @@ export function synthesizeSelectionListRenderPlan(
                 // `lastSuccessOptions`, surface those rows as stale so the
                 // user sees the cached results immediately on popover
                 // reopen instead of a one-frame empty flash.
-                const cachedStale = state.lastSuccessOptions ?? [];
+                const cachedStale = options;
                 if (cachedStale.length === 0) {
                     if (descriptor.showSkeletonsOnFirstLoad !== true) continue;
                     plan.push({
@@ -242,7 +248,7 @@ export function synthesizeSelectionListRenderPlan(
                 // only surface on first load (no prior data) — otherwise
                 // they cause a visible flicker between consecutive fetches
                 // (e.g. typing "d" then "de" briefly empties the list).
-                const stale = state.lastSuccessOptions ?? [];
+                const stale = options;
                 const hasStale = stale.length > 0;
                 // RUX-11.2: on a TRUE first load (no stale cache), hide the
                 // section entirely UNLESS the descriptor opts into eager
@@ -269,14 +275,14 @@ export function synthesizeSelectionListRenderPlan(
                 const failure = state.error instanceof SelectionListSectionFailure ? state.error : undefined;
                 plan.push({
                     ...baseEntry,
-                    options: state.options,
+                    options,
                     dynamicState: 'error',
                     // Resolver errors can contain transport details, paths, or
                     // credentials. Keep the Error available to diagnostics in
                     // the dynamic-state owner, but present only the canonical
                     // localized fallback (or the section owner's own host copy) at this user-visible boundary.
                     hint: failure?.hint ?? descriptor.errorHint,
-                    isStale: state.options.length > 0,
+                    isStale: options.length > 0,
                     ...(failure?.causeKey !== undefined ? { failureCauseKey: failure.causeKey } : {}),
                     ...(descriptor.retryLabel !== undefined && failure?.retryable !== false && state.retry !== undefined
                         ? { retry: { label: descriptor.retryLabel, onPress: state.retry } }
@@ -302,9 +308,9 @@ export function synthesizeSelectionListRenderPlan(
                 // drop relevant rows (a transcript excerpt need not repeat the
                 // query in its title) and reorder provider relevance.
                 const filteredOptions = descriptor.resultFiltering === 'provider'
-                    ? state.options
+                    ? options
                     : filterDynamicOptionsByQuery(
-                        state.options,
+                        options,
                         filterQuery,
                         descriptor.disableSubtitleRanking === true,
                     );

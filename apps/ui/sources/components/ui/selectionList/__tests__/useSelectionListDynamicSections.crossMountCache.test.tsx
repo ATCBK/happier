@@ -69,6 +69,36 @@ function lastState(): Capture {
 }
 
 describe('useSelectionListDynamicSections — cross-mount cache (RUX-11.1)', () => {
+    it('keeps progress uncached and drops publication from a retired request', async () => {
+        const publications: Array<NonNullable<Parameters<SelectionListDynamicSection['resolve']>[2]>> = [];
+        const completions: Array<(result: Awaited<ReturnType<SelectionListDynamicSection['resolve']>>) => void> = [];
+        const section: SelectionListDynamicSection = {
+            id: 'progress', resolverKey: 'exact-account', debounceMs: 0,
+            resolve: async (_query, _signal, publish) => {
+                if (publish) publications.push(publish);
+                return new Promise(resolve => { completions.push(resolve); });
+            },
+        };
+        await act(async () => {
+            renderer = createRenderer(<HostHarness dynamicSections={[section]} inputValue="old" onState={onState} />);
+        });
+        await act(async () => { publications[0]!({ options: [{ id: 'partial', label: 'Current match' }] }); });
+        expect(lastState().get('progress')).toMatchObject({ status: 'loading', options: [{ id: 'partial' }] });
+        expect(__getDynamicSectionCacheSizeForTests()).toBe(0);
+        await act(async () => {
+            renderer!.update(<HostHarness dynamicSections={[section]} inputValue="new" onState={onState} />);
+        });
+        await act(async () => {
+            publications[0]!({ options: [{ id: 'late', label: 'Retired match' }] });
+            completions[0]!({ options: [{ id: 'old-final', label: 'Retired final' }] });
+        });
+        expect(lastState().get('progress')?.options).not.toContainEqual(expect.objectContaining({ id: 'late' }));
+        expect(__getDynamicSectionCacheSizeForTests()).toBe(0);
+        await act(async () => { completions[1]!({ options: [{ id: 'final', label: 'Final match' }] }); });
+        await act(async () => { publications[1]!({ options: [{ id: 'after-final', label: 'Late progress' }] }); });
+        expect(lastState().get('progress')).toMatchObject({ status: 'success', options: [{ id: 'final' }] });
+        expect(__getDynamicSectionCacheSizeForTests()).toBe(1);
+    });
     it('seeds the new mount with the last-successful options after unmount + remount with the same id+resolverKey+seed', async () => {
         const resolver = vi.fn(async () => ({
             options: [{ id: 'a', label: 'Apple' }],

@@ -12,18 +12,27 @@ export { sliceFindRanges } from '@happier-dev/plugin-ui/presentation';
  * mode. On the web the mark is drawn a hair past the glyphs (rounded, ringed, the current one lifted); native
  * nested text can only take the fill.
  */
+/**
+ * The mark's ring reaches a hair past the glyphs on the sides only. A spread ring also lifts a pixel above and
+ * below the mark, and in a line-clamped snippet a hit on a hidden line then paints that pixel into the last
+ * visible line as a stray underline.
+ */
+function horizontalRing(widthPx: number, color: string): string {
+    return `${widthPx}px 0 0 0 ${color}, -${widthPx}px 0 0 0 ${color}`;
+}
+
 function resolveFindMarkStyles(theme: ReturnType<typeof useUnistyles>['theme']): Readonly<{ all: FindMarkStyle; current: FindMarkStyle }> {
     const { matchAll, matchCurrent, matchCurrentForeground } = theme.colors.find;
     if (Platform.OS !== 'web') {
         return { all: { backgroundColor: matchAll }, current: { backgroundColor: matchCurrent, color: matchCurrentForeground } };
     }
     return {
-        all: { backgroundColor: matchAll, borderRadius: 3, boxShadow: `0 0 0 1px ${matchAll}` },
+        all: { backgroundColor: matchAll, borderRadius: 3, boxShadow: horizontalRing(1, matchAll) },
         current: {
             backgroundColor: matchCurrent,
             color: matchCurrentForeground,
             borderRadius: 3,
-            boxShadow: `0 0 0 1.5px ${matchCurrent}, ${theme.colors.shadowLevels[2].boxShadow}`,
+            boxShadow: `${horizontalRing(1.5, matchCurrent)}, ${theme.colors.shadowLevels[2].boxShadow}`,
         },
     };
 }

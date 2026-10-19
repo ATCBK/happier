@@ -68,6 +68,10 @@ type SelectionListOptionBase = Readonly<{
     labelContent?: SelectionListLazyVisual;
     /** An inline mark after the label, such as "· via DeepSeek"; rendered by the row's `Item`. */
     titleAccessory?: SelectionListLazyVisual;
+    /** Whether the leading mark and trailing accessory centre on a multi-line row (default) or sit level with the label (`Item.contentAlign`). */
+    contentAlign?: 'center' | 'start';
+    /** Tints this query's matches in the label: a search hit whose label is the very text that matched. */
+    labelHighlightQuery?: string;
     /**
      * Additional canonical plain-text metadata used only for matching. It is
      * ranked after visible label and subtitle matches and is never rendered.
@@ -226,6 +230,8 @@ export type SelectionListVirtualizedOptionSourceItem =
 export type SelectionListVirtualizedOptionSourceHeader = Readonly<{
     id: string;
     title?: string;
+    /** The title is a path or identifier, set in the mono role. */
+    monoTitle?: boolean;
     count?: number;
     rightAccessory?: SelectionListLazyVisual;
 }>;
@@ -351,7 +357,16 @@ export type SelectionListDynamicSection = Readonly<{
     resolve: (
         seed: string,
         abortSignal: AbortSignal,
+        /** Current results while the same request is still resolving; never cached as final. */
+        onProgress?: (result: SelectionListDynamicSectionResolveResult) => void,
     ) => Promise<SelectionListDynamicSectionResolveResult>;
+    /**
+     * Binds resolved or retained row data to this descriptor's current presentation
+     * and actions. Runs before matching and activation, including while cached
+     * results refresh or a request fails. Keep unchanged projected rows stable;
+     * changing this binding does not invalidate or repeat the resolver request.
+     */
+    projectOptions?: (options: readonly SelectionListOption[]) => readonly SelectionListOption[];
     /** Debounce window in ms; default 120ms. */
     debounceMs?: number;
     /** Skeleton row count while loading; default 3. Pass 0 to collapse during load. */
@@ -366,6 +381,11 @@ export type SelectionListDynamicSection = Readonly<{
      * diagnostics; without this the generic localized fallback shows.
      */
     errorHint?: string;
+    /**
+     * Opt-in Retry link on this section's failure line (already-translated label). It re-runs this section's
+     * resolver; a `SelectionListSectionFailure` marked `retryable: false` still shows no link.
+     */
+    retryLabel?: string;
     /** Hide this section entirely when input doesn't satisfy this predicate. */
     visibleWhen?: (input: string) => boolean;
     /**
@@ -599,6 +619,10 @@ export type SelectionListPagination = Readonly<{
     moreLabel: string;
     retryLabel: string;
     endReachedLabel: string;
+    /** A quiet line above the "more" control: what the last page added (nothing new), while more remains. */
+    moreNotice?: string | null;
+    /** `edge`: the closing line sits on the rows' edge as a quiet status line (default: a centred end marker). */
+    endReachedPlacement?: 'centered' | 'edge';
 }>;
 
 /**
@@ -707,6 +731,11 @@ export type SelectionListFilter = Readonly<{
     label: string;
     /** The chip text; defaults to the selected option's label. */
     valueLabel?: string;
+    /**
+     * A shorter chip text for the chip row beneath the field (a phone's width), where a long value
+     * would be cut. The accessible name and the chip beside the field keep `valueLabel`.
+     */
+    rowValueLabel?: string;
     /** The chip's leading glyph; defaults to the selected option's icon. */
     icon?: React.ReactNode;
     /**
@@ -719,6 +748,17 @@ export type SelectionListFilter = Readonly<{
      * the viewer, not chosen by them). Never a count or a state; omit it for a value the viewer chose.
      */
     note?: string;
+    /**
+     * The part of the value that tells it apart from a same-named sibling (a Machine's short id). It stays whole
+     * and visible while `valueLabel` shortens, and joins the value in the accessibility label.
+     */
+    valueQualifier?: string;
+    /**
+     * Draw only the leading glyph (with the presence dot and the open caret) where the room is not
+     * the chip's: a phone's navigation header beside the page title and its action. The accessible
+     * name and the popover keep the whole value. A filter without a glyph keeps its text.
+     */
+    iconOnly?: boolean;
     /** Draw the filter's name, quieter, before its value ("Agents  Claude, Codex"). */
     showLabel?: boolean;
     /** The filter narrows what is shown: the chip takes the accent edge so a narrowed view is never missed. */

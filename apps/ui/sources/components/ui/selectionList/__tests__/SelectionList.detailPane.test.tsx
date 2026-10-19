@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, findAllHostTestInstances } from '@/dev/testkit';
 
 import { SelectionList } from '../SelectionList';
 import { SelectionListDetailPaneContext } from '../SelectionListDetailPaneContext';
@@ -47,10 +47,10 @@ describe('SelectionList detail pane', () => {
         await layout(screen, 1000);
         expect(screen.findByTestId('detail-a')).not.toBeNull();
         expect(screen.findByTestId('detail-b')).toBeNull();
-        expect(screen.findAll((node) => node.type === 'RowLine')[0]?.props.inPane).toBe(true);
+        expect(findAllHostTestInstances(screen.root, (node) => node.type === 'RowLine')[0]?.props.inPane).toBe(true);
 
         await layout(screen, 500);
         expect(screen.findByTestId('detail-a')).toBeNull();
-        expect(screen.findAll((node) => node.type === 'RowLine')[0]?.props.inPane).toBe(false);
+        expect(findAllHostTestInstances(screen.root, (node) => node.type === 'RowLine')[0]?.props.inPane).toBe(false);
     });
 });

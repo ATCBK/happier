@@ -46,6 +46,23 @@ type ActiveSuggestionState = Readonly<{
     selectionPending: boolean;
 }>;
 
+/** The next row the user can take from `from` in `step` direction (wrapping when asked), or -1 when none. */
+function stepToEnabled(
+    suggestions: readonly AutocompleteSuggestion[],
+    from: number,
+    step: 1 | -1,
+    wrapAround: boolean,
+): number {
+    const count = suggestions.length;
+    for (let taken = 1; taken <= count; taken += 1) {
+        const raw = from + step * taken;
+        if (!wrapAround && (raw < 0 || raw >= count)) return -1;
+        const index = ((raw % count) + count) % count;
+        if (suggestions[index]?.disabled !== true) return index;
+    }
+    return -1;
+}
+
 function sameSuggestionSnapshot(
     left: readonly AutocompleteSuggestion[],
     right: readonly AutocompleteSuggestion[],
@@ -105,11 +122,13 @@ function reconcileSuggestionSnapshot(params: Readonly<{
     // Within one query the previous position is still meaningful; across a query
     // change the list restarts at the best match.
     const previousSelected = previous.query === query ? previous.selected : -1;
-    const selected = Math.min(previousSelected, suggestions.length - 1);
+    const nearest = Math.min(previousSelected, suggestions.length - 1);
+    const selected = nearest >= 0 && suggestions[nearest]?.disabled === true
+        ? stepToEnabled(suggestions, nearest, 1, true) : nearest;
     return unchangedSuggestionState(previous, {
         query,
         suggestions,
-        selected: selected < 0 && suggestions.length > 0 && autoSelectFirst ? 0 : selected,
+        selected: selected < 0 && suggestions.length > 0 && autoSelectFirst ? stepToEnabled(suggestions, -1, 1, false) : selected,
         pinnedKey: null,
         selectionPending: false,
     });
@@ -142,10 +161,10 @@ export function useActiveSuggestions(
         const previous = stateRef.current;
         if (previous.suggestions.length === 0) return;
 
-        // At top or nothing selected: wrap to the bottom, or stay on the first row.
-        const selected = previous.selected <= 0
-            ? (wrapAround ? previous.suggestions.length - 1 : 0)
-            : previous.selected - 1;
+        // Moves onto the previous row the user can take; at the top (or with nothing selected) it wraps to
+        // the bottom, or stays when wrapping is off.
+        const moved = stepToEnabled(previous.suggestions, Math.max(previous.selected, 0), -1, wrapAround);
+        const selected = moved === -1 ? previous.selected : moved;
         const next: ActiveSuggestionState = {
             ...previous,
             selected,
@@ -162,10 +181,10 @@ export function useActiveSuggestions(
         const previous = stateRef.current;
         if (previous.suggestions.length === 0) return;
 
-        // At bottom: wrap to the top, or stay on the last row. Nothing selected: select first.
-        const selected = previous.selected >= previous.suggestions.length - 1
-            ? (wrapAround ? 0 : previous.suggestions.length - 1)
-            : previous.selected < 0 ? 0 : previous.selected + 1;
+        // Moves onto the next row the user can take; at the bottom it wraps to the top, or stays when
+        // wrapping is off. Nothing selected: the first row the user can take.
+        const moved = stepToEnabled(previous.suggestions, previous.selected, 1, wrapAround);
+        const selected = moved === -1 ? previous.selected : moved;
         const next: ActiveSuggestionState = {
             ...previous,
             selected,

@@ -68,6 +68,28 @@ function staticOptionIds(
 }
 
 describe('buildUniversalSearchSections', () => {
+    it.each(['cedar', 'A cedar', 'A cedar choice'])('puts content title matches ahead of settings and commands for %s', (query) => {
+        const sections = buildUniversalSearchSections(input({ query,
+            sessions: [{ ...sessionEntity('cedar', 1), title: 'A cedar choice' }],
+            projects: [{ workspaceRefId: 'cedar-project', accountId: 'account-home-a', serverId: 'home-a',
+                machineId: 'machine-a', rootPath: '/cedar', title: 'A cedar project', lastOpenedAtMs: 1 }],
+            commands: [{ id: 'theme', title: 'Dark mode', subtitle: 'cedar', action: () => {} }],
+            searchSettingsPages: () => [{ id: 'appearance', route: '/settings/appearance', title: 'Appearance' }],
+        }));
+        const ids = sections.map(section => section.id);
+        expect(ids.indexOf('sessions')).toBeLessThan(ids.indexOf('commands:0'));
+        expect(ids.indexOf('sessions')).toBeLessThan(ids.indexOf('settings'));
+        if (query !== 'A cedar choice') expect(ids.indexOf('projects')).toBeLessThan(ids.indexOf('settings'));
+    });
+
+    it('does not promote a content section on hidden metadata alone', () => {
+        const sections = buildUniversalSearchSections(input({ query: 'cedar',
+            sessions: [{ ...sessionEntity('other', 1), searchText: 'cedar' }],
+            searchSettingsPages: () => [{ id: 'appearance', route: '/settings/appearance', title: 'Appearance' }],
+        }));
+        const ids = sections.map(section => section.id);
+        expect(ids.indexOf('settings')).toBeLessThan(ids.indexOf('sessions'));
+    });
     it('omits the explicit scan row when standard search is disabled', () => {
         const sections = buildUniversalSearchSections(input({ query: 'quartz', externalConversationSearch: {
             machineLabel: 'Laptop', standardSearchEnabled: false, onSearch: () => {},
@@ -94,10 +116,11 @@ describe('buildUniversalSearchSections', () => {
         expect(content.visibleWhen?.(' ')).toBe(true);
         expect(content.visibleWhen?.('ne')).toBe(true);
         expect(content.visibleWhen?.(' a')).toBe(true);
-        // Inside the scope, an incomplete page says so (lab ST "Too many") rather than offering the scope again.
+        // An empty incomplete page names only what was searched (r11 F2); it cannot promise more hits.
         const page = await content.resolve('needle', new AbortController().signal);
         expect(page.options).toHaveLength(0);
-        expect(page.resultHint).toBe('universalSearch.moreResultsAvailable');
+        expect(page.emptyHint).toBe('universalSearch.noMatchesInSearchedResults');
+        expect(page.resultHint).toBeUndefined();
         // Inline, the incomplete group leads into the scope.
         const inline = dynamicSections(buildUniversalSearchSections(input({ query: 'needle', fileContent: source, onShowAllFileMatches })))
             .find((section) => section.id === 'fileContent')!;
@@ -269,10 +292,11 @@ describe('buildUniversalSearchSections', () => {
                 hit('Claude Code', { snippet: 'the flaky e2e is the settings sheet', query: 'flaky', agentId: 'claude', machineLabel: 'Studio', atMs: 1 }),
                 hit('Docs search index', { snippet: 'skip the flaky e2e for now', query: 'flaky' }),
                 { ...hit('Plain', undefined), subtitle: 'plain subtitle' },
+                hit('**flaky** title', { snippet: '**flaky** title', query: 'flaky' }),
             ] },
         }));
         const page = await dynamicSections(sections).find((section) => section.id === 'transcript')!.resolve('flaky', new AbortController().signal);
-        const [native, session, plain] = page.options;
+        const [native, session, plain, titleHit] = page.options;
         // The matched text is the row's searchable subtitle and its spoken name, with the machine it lives on.
         expect(native?.subtitle).toBe('the flaky e2e is the settings sheet');
         expect(native?.accessibilityLabel).toBe('Claude Code, the flaky e2e is the settings sheet, Studio');
@@ -283,6 +307,57 @@ describe('buildUniversalSearchSections', () => {
         expect(plain?.subtitle).toBe('plain subtitle');
         expect(plain?.subtitleContent).toBeUndefined();
         expect(plain?.accessibilityLabel).toBeUndefined();
+        if (!titleHit) throw new Error('Missing title hit');
+        expect(titleHit.label).toBe('flaky title');
+        const row = await renderScreen(<PlanOptionRow option={titleHit} stepId="root" rootTestID="palette"
+            isSelected={false} isFocused={false} onSelect={() => {}} onPushStep={() => {}} />);
+        // The duplicate snippet is suppressed, so the visible title must carry the only match.
+        expect(row.findAllHostsByTestId('find-match-all').map(mark => mark.children.join(''))).toEqual(['flaky']);
+    });
+
+    it('renders indexed role-labelled Markdown as plain message text without changing its raw search target', async () => {
+        const summary = 'User: # A harbor note\n**violet harbor lantern** and [the link](https://example.test)\nAssistant: ## Keep issue #42 and C# literal';
+        const result: UniversalSearchResult = {
+            id: 'indexed-message', scopeKey: 'home', sourceId: 'transcript', kind: 'session', title: 'A conversation',
+            conversation: { snippet: summary, query: 'violet harbor lantern' },
+            target: { kind: 'session', serverId: 'home', accountId: 'account', sessionId: 'indexed-message' },
+        };
+        const sections = buildUniversalSearchSections(input({ query: 'violet harbor lantern',
+            transcript: { status: 'ready', resolverKey: 'indexed', resolve: async () => [result] } }));
+        const page = await dynamicSections(sections).find(section => section.id === 'transcript')!
+            .resolve('violet harbor lantern', new AbortController().signal);
+        const option = page.options[0]!;
+        const plain = 'A harbor note violet harbor lantern and the link Keep issue #42 and C# literal';
+        expect(option.subtitle).toBe(plain);
+        expect(option.accessibilityLabel).toBe(`A conversation, ${plain}`);
+        const row = await renderScreen(<PlanOptionRow option={option} stepId="root" rootTestID="palette"
+            isSelected={false} isFocused={false} onSelect={() => {}} onPushStep={() => {}} />);
+        expect(row.findAllHostsByTestId('find-match-all').map(mark => mark.children.join(''))).toEqual(['violet harbor lantern']);
+        expect(result.conversation?.snippet).toBe(summary);
+        expect(result.target).toEqual({ kind: 'session', serverId: 'home', accountId: 'account', sessionId: 'indexed-message' });
+    });
+
+    it('keeps a late numbered-message match visible through excerpt and Markdown presentation', async () => {
+        const { createMemorySearchSnippet } = await import('@happier-dev/protocol/memory/memorySearchText');
+        const text = `${'Amber orchard and silver meadow observations. '.repeat(80)}\n554. Keep the matching observation visible.\n${'More observations. '.repeat(30)}`;
+        const summary = createMemorySearchSnippet(text, '554', 240);
+        expect(summary).toContain('554.');
+        expect(summary.startsWith('…')).toBe(true);
+        expect(summary.endsWith('…')).toBe(true);
+        const result: UniversalSearchResult = {
+            id: 'numbered-message', scopeKey: 'home', sourceId: 'transcript', kind: 'message', title: 'Orchard and meadow',
+            conversation: { snippet: summary, query: '554' },
+            target: { kind: 'session', serverId: 'home', accountId: 'account', sessionId: 'numbered-message' },
+        };
+        const sections = buildUniversalSearchSections(input({ query: '554',
+            transcript: { status: 'ready', resolverKey: 'numbered', resolve: async () => [result] } }));
+        const page = await dynamicSections(sections).find(section => section.id === 'transcript')!
+            .resolve('554', new AbortController().signal);
+        const row = await renderScreen(<PlanOptionRow option={page.options[0]!} stepId="root" rootTestID="palette"
+            isSelected={false} isFocused={false} onSelect={() => {}} onPushStep={() => {}} />);
+        expect(row.findAllHostsByTestId('find-match-all').map(mark => mark.children.join(''))).toEqual(['554']);
+        expect(page.options[0]?.accessibilityLabel).toContain('554');
+        expect(result.conversation?.snippet).toBe(summary);
     });
 
     it('projects complete-inventory progress and failure through the real Sessions section', () => {
@@ -353,6 +428,39 @@ describe('buildUniversalSearchSections', () => {
         const files = dynamicSections(sections).find((section) => section.id === 'files');
         const resolvedFiles = await files!.resolve('repo', new AbortController().signal);
         expect(resolvedFiles.options[0]?.subtitleEllipsizeMode).toBe('head');
+    });
+
+    it('tints the typed query in every row whose title is the text that matched', async () => {
+        const sections = buildUniversalSearchSections(input({
+            query: ' cedar ',
+            sessions: [{ ...sessionEntity('cedar', 1), title: 'A cedar choice' }],
+            projects: [{ workspaceRefId: 'cedar-project', accountId: 'account-home-a', serverId: 'home-a',
+                machineId: 'machine-a', rootPath: '/cedar', title: 'A cedar project', lastOpenedAtMs: 1 }],
+            files: {
+                status: 'ready',
+                resolverKey: 'workspace-a',
+                resolve: async () => [{
+                    id: 'src/cedar.ts',
+                    scopeKey: buildUniversalSearchScopeKey(['home-a', 'machine-a', '/repo']),
+                    sourceId: 'files',
+                    kind: 'workspaceFile',
+                    title: 'cedar.ts',
+                    subtitle: 'src/cedar.ts',
+                    target: { kind: 'workspaceFile', scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' },
+                        path: 'src/cedar.ts', workspaceRefId: 'workspace-a', sessionId: null, serverId: 'home-a', accountId: 'account-a' },
+                }],
+            },
+        }));
+        const staticOptions = (id: string) => {
+            const section = sections.find((candidate) => candidate.id === id);
+            if (!section || section.kind !== 'static') throw new Error(`${id} section missing`);
+            return section.options;
+        };
+        expect(staticOptions('sessions')[0]?.labelHighlightQuery).toBe('cedar');
+        expect(staticOptions('projects')[0]?.labelHighlightQuery).toBe('cedar');
+        const files = dynamicSections(sections).find((section) => section.id === 'files');
+        const resolved = await files!.resolve('cedar', new AbortController().signal);
+        expect(resolved.options[0]?.labelHighlightQuery).toBe('cedar');
     });
 
     it('issues no remote request on an empty query: every corpus section is gated off', () => {
@@ -755,6 +863,8 @@ describe('buildUniversalSearchSections', () => {
         expect(projected?.resultTransition).toBe('none');
         // A plugin group that fails says so in host copy, like every built-in group (no plugin branch).
         expect(projected?.errorHint).toBe('universalSearch.groupFailed(group=Acme issues)');
+        // Its failure line offers a real Retry, like every built-in group's.
+        expect(projected?.retryLabel).toBe('common.retry');
     });
 
     it('uses truthful first-load status without applying directory-drill motion to typed queries', () => {

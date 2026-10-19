@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
+import { renderScreen, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 
 import { SelectionList } from '../SelectionList';
 import type { SelectionListFilter, SelectionListProps, SelectionListStep } from '../_types';
@@ -44,6 +44,13 @@ function props(overrides: Partial<SelectionListProps> = {}): SelectionListProps 
 
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
 
+// Test Renderer has no DOM geometry for the real popover's anchor measurement.
+const renderOptions = {
+    createNodeMock: () => ({
+        getBoundingClientRect: () => ({ left: 20, top: 40, width: 100, height: 32 }),
+    }),
+};
+
 function isExpanded(screen: Screen, testID: string): boolean | undefined {
     const chip = screen.findHostByTestId(testID);
     return chip?.props.accessibilityState?.expanded ?? chip?.props['aria-expanded'];
@@ -61,7 +68,7 @@ async function layoutRoot(screen: Screen, width: number) {
 describe('SelectionList filters', () => {
     it('shows each filter as a chip naming its value, and a chosen option reaches the consumer', () => withPopoverWebGlobals(async () => {
         const onChange = vi.fn();
-        const screen = await renderScreen(<SelectionList {...props({ filters: [agentFilter({ onChange })] })} />);
+        const screen = await renderScreen(<SelectionList {...props({ filters: [agentFilter({ onChange })] })} />, renderOptions);
 
         const chip = screen.findHostByTestId('filter.agent');
         expect(chip).not.toBeNull();
@@ -70,6 +77,7 @@ describe('SelectionList filters', () => {
 
         await screen.pressByTestIdAsync('filter.agent');
         expect(screen.findHostByTestId('filter.agent.list')).not.toBeNull();
+        await act(async () => reportPopoverContentLayout(screen.tree, { width: 280, height: 160 }));
 
         await screen.pressByTestIdAsync('filter.agent:claude');
         expect(onChange).toHaveBeenCalledWith('claude');
@@ -90,6 +98,27 @@ describe('SelectionList filters', () => {
         // The row is part of the header zone, never the scrolling results.
         const header = screen.findByTestId('sl:headerFrame');
         expect(header?.findAll((node) => node.props?.testID === 'sl:filters-row').length).toBeGreaterThan(0);
+    });
+
+    it('draws the short value in the chip row while the accessible name and the wide chip keep the whole value', async () => {
+        const scope = { id: 'source', label: 'Search', valueLabel: 'Text in happier · MacBook Pro', rowValueLabel: 'Text in happier',
+            onClear: vi.fn(), testID: 'filter.source' };
+        const screen = await renderScreen(<SelectionList {...props({ filters: [scope] })} />);
+        const chipText = () => screen.getTextContent();
+        const accessibleName = () => {
+            const chip = screen.findHostByTestId('filter.source');
+            return chip?.props.accessibilityLabel ?? chip?.props['aria-label'];
+        };
+
+        await layoutRoot(screen, 900);
+        expect(chipText()).toContain('Text in happier · MacBook Pro');
+        expect(accessibleName()).toContain('Text in happier · MacBook Pro');
+
+        await layoutRoot(screen, 390);
+        expect(screen.findByTestId('sl:filters-row')).not.toBeNull();
+        expect(chipText()).toContain('Text in happier');
+        expect(chipText()).not.toContain('MacBook Pro');
+        expect(accessibleName()).toContain('Text in happier · MacBook Pro');
     });
 
     it('moves chips to their own row when the band controls would squeeze the field, on a wide list too', async () => {
@@ -113,7 +142,7 @@ describe('SelectionList filters', () => {
     it('recomposes filters that arrive after the list was laid out without replacing the query input', () => withPopoverWebGlobals(async () => {
         const listProps = props({ inputValue: 'Row', onChangeInputValue: vi.fn() });
         const onChange = vi.fn();
-        const screen = await renderScreen(<SelectionList {...listProps} />);
+        const screen = await renderScreen(<SelectionList {...listProps} />, renderOptions);
         const input = screen.findHostByTestId('sl:header:input');
 
         // Scope choices can hydrate after Search has mounted. React Native Web
@@ -130,6 +159,7 @@ describe('SelectionList filters', () => {
         expect(listProps.onChangeInputValue).toHaveBeenCalledWith('Row A');
 
         await screen.pressByTestIdAsync('filter.agent');
+        await act(async () => reportPopoverContentLayout(screen.tree, { width: 280, height: 160 }));
         await screen.pressByTestIdAsync('filter.agent:claude');
         expect(onChange).toHaveBeenCalledWith('claude');
 

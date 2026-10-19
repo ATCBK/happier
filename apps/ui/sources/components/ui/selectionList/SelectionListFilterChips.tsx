@@ -21,6 +21,8 @@ import { SelectionList } from './SelectionList';
  */
 export const SelectionListFilterChip = React.memo(function SelectionListFilterChip(props: Readonly<{
     filter: SelectionListFilter;
+    /** Where the chip is drawn: the chip row beneath the field draws `rowValueLabel` when the filter has one. */
+    placement?: 'inline' | 'row';
 }>) {
     const { filter } = props;
     const { theme } = useUnistyles();
@@ -43,6 +45,7 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
     const valueLabel = filter.valueLabel ?? selected?.label ?? '';
     const leading = filter.icon ?? selected?.icon
         ?? (filter.onToggle && filter.selected ? <Icon name="check" size={12} color={theme.colors.text.primary} /> : null);
+    const iconOnly = filter.iconOnly === true && leading !== null;
     const hasChooser = filter.renderPopoverContent !== undefined
         || (filter.options !== undefined && filter.options.length > 0 && filter.onChange !== undefined);
     const canOpen = hasChooser && filter.disabled !== true;
@@ -80,14 +83,14 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
     return (
         <>
             {/* The anchor is a plain view: the popover measures it, the pressable owns interaction. */}
-            <View ref={anchorRef} style={[styles.anchor, stackedInRow ? styles.anchorStacked : null]}>
+            <View ref={anchorRef} style={[styles.anchor, stackedInRow ? styles.anchorStacked : null, iconOnly ? styles.anchorIconOnly : null]}>
                 <HappierPressable
                     testID={testID}
                     accessibilityRole={toggleable ? 'checkbox' : 'button'}
                     {...(toggleable ? { checked: filter.selected === true } : {})}
                     accessibilityLabel={clearable
                         ? [valueLabel, filter.count, filter.clearAccessibilityLabel].filter(Boolean).join(', ')
-                        : `${filter.label}: ${valueLabel}`}
+                        : [`${filter.label}: ${[valueLabel, filter.valueQualifier].filter(Boolean).join(' · ')}`, filter.note].filter(Boolean).join(', ')}
                     {...(filter.accessibilityHint === undefined ? {} : { accessibilityHint: filter.accessibilityHint })}
                     expanded={canOpen ? open : undefined}
                     hasPopup={canOpen ? 'dialog' : undefined}
@@ -106,10 +109,14 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
                     ]}
                 >
                     {leading}
+                    {iconOnly ? null : <>
                     {filter.showLabel ? <Text style={[styles.label, styles.labelMuted, styles.name]} numberOfLines={1}>{filter.label}</Text> : null}
-                    <Text style={[styles.label, filter.muted || (toggleable && !toggledOn) ? styles.labelMuted : null, filter.active ? { color: theme.colors.text.link } : null]} numberOfLines={1}>{valueLabel}</Text>
+                    <Text style={[styles.label, filter.muted || (toggleable && !toggledOn) ? styles.labelMuted : null, filter.active ? { color: theme.colors.text.link } : null]} numberOfLines={1}>{props.placement === 'row' ? filter.rowValueLabel ?? valueLabel : valueLabel}</Text>
+                    {filter.valueQualifier ? <Text style={[styles.label, filter.muted ? styles.labelMuted : null, filter.active ? { color: theme.colors.text.link } : null, styles.qualifier]} numberOfLines={1}>{`· ${filter.valueQualifier}`}</Text> : null}
+                    {filter.note ? <Text style={[styles.label, styles.labelMuted, styles.note]} numberOfLines={1}>{filter.note}</Text> : null}
                     {filter.count !== undefined || filter.reserveCount
                         ? <Text style={[styles.label, styles.labelMuted, styles.count]}>{filter.reserveCount ? reserveCountSlot(filter.count ?? '') : filter.count}</Text> : null}
+                    </>}
                     {filter.presence || filter.reservePresence ? (
                         <View
                             style={[styles.dot, !filter.presence ? styles.dotReserved : null, filter.presence ? {
@@ -121,7 +128,7 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
                             } : null]}
                         />
                     ) : null}
-                    {canOpen ? <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.secondary} /> : null}
+                    {canOpen && !iconOnly ? <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.secondary} /> : null}
                     {clearable ? <Icon name="x" size={12} color={theme.colors.text.secondary} /> : null}
                 </HappierPressable>
             </View>
@@ -177,7 +184,7 @@ export function SelectionListFilterChips(props: Readonly<{
 }>): React.ReactElement | null {
     const styles = stylesheet;
     if (props.filters.length === 0) return null;
-    const chips = props.filters.map((filter) => <SelectionListFilterChip key={filter.id} filter={filter} />);
+    const chips = props.filters.map((filter) => <SelectionListFilterChip key={filter.id} filter={filter} placement={props.placement} />);
     if (props.placement === 'inline') {
         return <View style={styles.inline}>{chips}</View>;
     }
@@ -211,6 +218,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     anchorStacked: {
         alignSelf: 'flex-start',
     },
+    // A glyph is as wide as it is: a squeezed row never shrinks it into the control beside it.
+    anchorIconOnly: {
+        flexShrink: 0,
+    },
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -243,6 +254,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     name: {
         flexShrink: 0,
         ...Typography.default(),
+    },
+    // Quieter than the value it follows: secondary ink at the regular weight, like the filter's name.
+    note: {
+        flexShrink: 0,
+        ...Typography.default(),
+    },
+    // The telling suffix never shortens: the value before it gives way instead. It reads as the value's own
+    // second word, so it closes the chip's gap to one word space.
+    qualifier: {
+        flexShrink: 0,
+        marginLeft: -theme.space.s2,
     },
     count: {
         flexShrink: 0,

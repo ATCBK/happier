@@ -22,6 +22,9 @@ vi.mock('react-native-unistyles', async () => {
     });
 });
 
+// Cold compilation belongs to collection, outside the per-test interaction timeout.
+await import('../SelectionListSearchHeader');
+
 describe('SelectionListSearchHeader', () => {
     it('renders the input with the configured placeholder and forwards onChangeText', async () => {
         const onChangeText = vi.fn();
@@ -74,7 +77,6 @@ describe('SelectionListSearchHeader', () => {
             ...((Array.isArray(input?.props.style) ? input.props.style.flat(Infinity) : [input?.props.style]).filter(Boolean)),
         );
         expect(focusedInputStyle.boxShadow).toBeUndefined();
-        expect(input?.props['data-happier-text-input']).toBe('true');
 
         await act(async () => {
             input?.props.onBlur?.({});

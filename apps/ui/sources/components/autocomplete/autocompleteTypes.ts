@@ -29,6 +29,16 @@ export type AutocompleteSuggestion = Readonly<{
      */
     structuredInput?: ComposerStructuredInputMentionPayload;
     promptInvocation?: PromptInvocationSuggestionMetadata;
+    /**
+     * The row is shown but cannot be taken: `description` carries the reason, the picker announces it
+     * disabled, keyboard movement skips it and no selection path acts on it.
+     */
+    disabled?: true;
+    /**
+     * The producing kind's own write before the token is inserted (a `$` library pick turns the skill on
+     * for the Session). A refusal keeps the user's text and inserts nothing.
+     */
+    selectionEffect?: () => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; message: string }>>;
     /** An already controller-admitted external Action, never a local command handler. */
     pluginContributedAction?: PluginContributedActionDescriptor;
     /**

@@ -77,7 +77,7 @@ describe('CommandMenu (native tap commit)', () => {
         const screen = await renderScreen(<CommandMenu {...defaultProps({ onSelect })}
             leadingEmptyGroup={{ title: 'Favorites', hint: 'Star a prompt to keep it here' }} />);
         const list = screen.findByTestId('cmd-menu:list');
-        expect(list?.findAll((node) => node.props.children === 'Star a prompt to keep it here').length).toBeGreaterThan(0);
+        expect(list?.findAll((node) => node.children.includes('Star a prompt to keep it here')).length).toBeGreaterThan(0);
         screen.pressByTestId('cmd-menu:list:command-menu-root:option:heading1');
         expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'heading1' }), 0);
     });

@@ -71,6 +71,7 @@ interface CommandMenuSurfaceProps {
     flip?: boolean;
     gap?: number;
     boundaryRef?: React.RefObject<any> | null;
+    clearanceRef?: React.RefObject<any>;
     keyboardBottomInset?: number;
     edgePadding?: number | Readonly<{ horizontal?: number; vertical?: number }>;
     backdrop?: PopoverBackdropOptions;
@@ -133,6 +134,7 @@ export const CommandMenuSurface = React.memo((props: CommandMenuSurfaceProps) =>
             accessibilityLabel={props.phoneSheetTitle}
             maxWidthCap={maxWidth}
             boundaryRef={boundaryRef}
+            clearanceRef={props.clearanceRef}
             keyboardBottomInset={keyboardBottomInset}
             edgePadding={edgePadding}
             containerStyle={containerStyle}

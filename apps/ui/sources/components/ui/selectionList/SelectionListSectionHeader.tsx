@@ -37,6 +37,8 @@ export type SelectionListSectionHeaderProps = Readonly<{
      * width stays stable as numbers tick.
      */
     count?: number;
+    /** The title is a path or identifier, set in the mono role. */
+    monoTitle?: boolean;
     /** Optional section-owned action rendered at the trailing edge. */
     rightAccessory?: React.ReactNode;
     /** The section's one quiet destination, drawn as a text link at the trailing edge. */
@@ -108,6 +110,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     sectionLabel: {
         ...Typography.variant('body', 'medium'),
     },
+    // Paths are mono (DESIGN.md), one step quieter than the proportional label.
+    monoLabel: {
+        ...Typography.mono(),
+    },
     count: {
         color: theme.colors.text.tertiary,
         fontSize: Platform.select({ ios: 13, default: 12 }),
@@ -145,7 +151,7 @@ export function SelectionListSectionHeader(
             style={[styles.container, isCard ? styles.cardContainer : null, presentation === 'section' ? styles.sectionContainer : null, props.containerStyle]}
             {...(gridAria === null ? {} : (gridAria.cell as unknown as Record<string, never>))}
         >
-            <Text style={[styles.label, presentation === 'section' ? styles.sectionLabel : null]}>{title}</Text>
+            <Text style={[styles.label, presentation === 'section' ? styles.sectionLabel : null, props.monoTitle ? styles.monoLabel : null]}>{title}</Text>
             {typeof props.count === 'number' ? (
                 <Text style={[styles.count, Typography.tabular()]}>{String(props.count)}</Text>
             ) : null}

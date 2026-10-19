@@ -79,6 +79,108 @@ describe('pre-session composer catalog snapshot', () => {
         expect(machineRpc).toHaveBeenCalledTimes(5);
     });
 
+    it('reads current launch settings on discovery intent and refreshes only when their produced inputs change', async () => {
+        const { createPreflightComposerSuggestionCatalogSource } = await import('./composerSuggestionCatalogs');
+        let nativeHome = '/first';
+        let settingsReads = 0;
+        const refreshed = createDeferred<unknown>();
+        machineRpc.mockResolvedValueOnce({ ok: true, result: nativeCatalogs }).mockReturnValueOnce(refreshed.promise);
+        const load = createPreflightComposerSuggestionCatalogSource({
+            ...scope,
+            capabilityParams: () => {
+                settingsReads++;
+                return { ...scope.capabilityParams, environmentVariables: { CODEX_HOME: nativeHome } };
+            },
+        });
+        const observed: unknown[] = [];
+        const unsubscribe = load.subscribe(() => observed.push(load.getSnapshot()));
+        expect(settingsReads).toBe(0);
+        const first = await load();
+        expect(observed.at(-1)).toBe(first);
+        nativeHome = '/second';
+        expect(settingsReads).toBe(1);
+        expect(await load.read()).toEqual({});
+        expect(load.getSnapshot()).toBeUndefined();
+        expect(observed.at(-1)).toBeUndefined();
+        refreshed.resolve({ ok: true, result: nativeCatalogs });
+        const second = await load();
+        expect(machineRpc).toHaveBeenCalledTimes(2);
+        expect(machineRpc).toHaveBeenLastCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ params: expect.objectContaining({ environmentVariables: { CODEX_HOME: '/second' } }) }),
+        }));
+        expect(second).not.toBe(first);
+        expect(await load()).toBe(second);
+        expect(machineRpc).toHaveBeenCalledTimes(2);
+        expect(observed).toEqual([first, undefined, second]);
+        unsubscribe();
+    });
+
+    it('withdraws catalogs when current launch inputs cannot be built and ignores an earlier in-flight result', async () => {
+        const { createPreflightComposerSuggestionCatalogSource } = await import('./composerSuggestionCatalogs');
+        let cwd = '/first';
+        let unavailable = false;
+        const pending = createDeferred<unknown>();
+        machineRpc.mockResolvedValueOnce({ ok: true, result: nativeCatalogs })
+            .mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ ok: true, result: nativeCatalogs });
+        const source = createPreflightComposerSuggestionCatalogSource({
+            ...scope, capabilityParams: () => {
+                if (unavailable) throw new Error('Launch settings unavailable');
+                return { ...scope.capabilityParams, cwd };
+            },
+        });
+        await source();
+        const observed: unknown[] = [source.getSnapshot()];
+        const unsubscribe = source.subscribe(() => observed.push(source.getSnapshot()));
+        unavailable = true;
+        expect(await source.read()).toEqual({});
+        expect(source.getSnapshot()).toBeUndefined();
+        expect(observed.at(-1)).toBeUndefined();
+        unavailable = false;
+        cwd = '/second';
+        const oldRequest = source();
+        await flushHookEffects();
+        unavailable = true;
+        expect(await source.read()).toEqual({});
+        expect(source.getSnapshot()).toBeUndefined();
+        expect(observed.at(-1)).toBeUndefined();
+        pending.resolve({ ok: true, result: nativeCatalogs });
+        await oldRequest;
+        expect(source.getSnapshot()).toBeUndefined();
+        unavailable = false;
+        const recovered = await source();
+        expect(source.getSnapshot()).toBe(recovered);
+        expect(recovered.commands).toEqual(nativeCatalogs.commands.items);
+        expect(machineRpc).toHaveBeenCalledTimes(3);
+        unsubscribe();
+    });
+
+    it('refreshes lazy inputs on reads and keeps a superseded request from replacing the current snapshot', async () => {
+        const { createPreflightComposerSuggestionCatalogSource } = await import('./composerSuggestionCatalogs');
+        let cwd = '/old';
+        const old = createDeferred<unknown>();
+        const latest = createDeferred<unknown>();
+        machineRpc.mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise);
+        const source = createPreflightComposerSuggestionCatalogSource({
+            ...scope, capabilityParams: () => ({ ...scope.capabilityParams, cwd }),
+        });
+        const oldRequest = source();
+        await flushHookEffects();
+        cwd = '/current';
+        expect(await source.read()).toEqual({});
+        await flushHookEffects();
+        expect(machineRpc).toHaveBeenCalledTimes(2);
+        const currentCatalogs = { ...nativeCatalogs,
+            commands: { supported: true, items: [{ command: 'current-project' }] } };
+        latest.resolve({ ok: true, result: currentCatalogs });
+        const current = await source();
+        expect(current.commands).toEqual(currentCatalogs.commands.items);
+        old.resolve({ ok: true, result: nativeCatalogs });
+        await oldRequest;
+        expect(source.getSnapshot()).toBe(current);
+        expect(await source.read()).toBe(current);
+        expect(machineRpc).toHaveBeenCalledTimes(2);
+    });
+
     it('discovers native commands and carries a selected native skill into first-input metadata', async () => {
         const { createPreflightComposerSuggestionCatalogSource } = await import('./composerSuggestionCatalogs');
         const { getSuggestions } = await import('./suggestions');
