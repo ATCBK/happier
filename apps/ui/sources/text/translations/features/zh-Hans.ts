@@ -9182,8 +9182,8 @@ const sessionBoardTranslations = { 'zh-Hans': {
                 chart: '图表',
                 table: '表格',
                 interactiveView: '交互视图',
+                snapshot: '快照',
                 pluginMissing: ({ pluginId }) => `来自 ${pluginId} · 未安装`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {

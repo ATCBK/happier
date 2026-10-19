@@ -9198,8 +9198,8 @@ const sessionBoardTranslations = { fr: {
                 chart: 'Graphique',
                 table: 'Tableau',
                 interactiveView: 'Vue interactive',
+                snapshot: 'Instantané',
                 pluginMissing: ({ pluginId }) => `De ${pluginId} · non installé`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {

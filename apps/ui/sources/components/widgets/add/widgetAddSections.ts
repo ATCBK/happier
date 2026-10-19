@@ -259,7 +259,7 @@ export function buildCompanionWidgetAddSections(input: Readonly<{
         return {
             id: `board-${row.widgetId}`,
             title: row.title,
-            subtitle: resolveBoardWidgetProvenance(source, input.pluginProjection).label,
+            subtitle: resolveBoardWidgetProvenance(source, input.pluginProjection, { snapshot: row.snapshot === true }).label,
             icon: source.kind === 'declarative' ? 'note' : 'squares-four',
             added: row.added,
             ...notePreview,

@@ -9187,8 +9187,8 @@ const sessionBoardTranslations = { ja: {
                 chart: 'グラフ',
                 table: '表',
                 interactiveView: 'インタラクティブビュー',
+                snapshot: 'スナップショット',
                 pluginMissing: ({ pluginId }) => `${pluginId} · 未インストール`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {

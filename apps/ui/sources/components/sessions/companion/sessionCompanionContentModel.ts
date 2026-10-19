@@ -20,6 +20,8 @@ export type SessionCompanionAddableItem = Readonly<{
     widgetId: string;
     title: string;
     source: SessionSurfaceItemV1['source'];
+    /** A posted snapshot: frozen content that reads as a snapshot, not as the note it is stored as. */
+    snapshot?: true;
     /** Already kept in this Companion: shown in place, marked, never re-added. */
     added: boolean;
 }>;
@@ -47,6 +49,7 @@ export function resolveSessionCompanionAddableItems(input: Readonly<{
             widgetId,
             title: resolveSessionBoardItemTitle(item.state),
             source: item.state.item.source,
+            ...(item.state.item.snapshot !== undefined ? { snapshot: true as const } : {}),
             added: selected.has(widgetId),
         }));
     }

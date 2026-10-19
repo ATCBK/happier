@@ -260,6 +260,7 @@ function itemProvenance(
     return resolveBoardWidgetProvenance(
         item.state.item.source,
         runtime?.pluginUiProjection ?? null,
+        { snapshot: item.state.item.snapshot !== undefined },
     );
 }
 

@@ -9217,8 +9217,8 @@ const sessionBoardTranslations = { ru: {
                 chart: 'График',
                 table: 'Таблица',
                 interactiveView: 'Интерактивный вид',
+                snapshot: 'Снимок',
                 pluginMissing: ({ pluginId }) => `Из ${pluginId} · не установлен`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {

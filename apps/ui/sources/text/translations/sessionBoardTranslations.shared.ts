@@ -99,10 +99,10 @@ export type SessionBoardTranslation = Readonly<{
             chart: string;
             table: string;
             interactiveView: string;
+            snapshot: string;
             /** The plugin is absent from this device's projection; its id beats "a plugin". */
             pluginMissing: (params: Readonly<{ pluginId: string }>) => string;
             /** The contribution's own title beside the installed plugin's display name. */
-            pluginSurface: (params: Readonly<{ plugin: string; surface: string }>) => string;
             /** Assistive disambiguation when two installed plugins share a display name. */
             pluginQualified: (params: Readonly<{ label: string; pluginId: string }>) => string;
         }>;
@@ -371,8 +371,8 @@ export const sessionBoardTranslationsEnglish = { en: {
                 chart: 'Chart',
                 table: 'Table',
                 interactiveView: 'Interactive view',
+                snapshot: 'Snapshot',
                 pluginMissing: ({ pluginId }) => `From ${pluginId} · not installed`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {

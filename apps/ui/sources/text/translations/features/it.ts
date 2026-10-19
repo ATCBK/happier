@@ -9197,8 +9197,8 @@ const sessionBoardTranslations = { it: {
                 chart: 'Grafico',
                 table: 'Tabella',
                 interactiveView: 'Vista interattiva',
+                snapshot: 'Istantanea',
                 pluginMissing: ({ pluginId }) => `Da ${pluginId} · non installato`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {

@@ -9182,8 +9182,8 @@ const sessionBoardTranslations = { 'zh-Hant': {
                 chart: '圖表',
                 table: '表格',
                 interactiveView: '互動檢視',
+                snapshot: '快照',
                 pluginMissing: ({ pluginId }) => `來自 ${pluginId} · 未安裝`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {
