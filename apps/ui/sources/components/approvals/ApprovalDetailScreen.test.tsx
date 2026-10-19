@@ -1434,7 +1434,7 @@ describe('ApprovalDetailScreen', () => {
     expect(screen.findByTestId('approvals.actions')).toBeNull();
   });
 
-  it('refuses a target requester decision from a different Account with the same View grant', async () => {
+  it('shows another Account who can confirm a requester-bound request instead of a decision it cannot make', async () => {
     currentArtifact = await createRequesterTargetApprovalArtifact('another-requester');
     includeExactApprovalMachine = false;
     machineFixtures = {};
@@ -1444,14 +1444,25 @@ describe('ApprovalDetailScreen', () => {
     const received = homes.artifacts(account.serverId).readPlainBody('requester-target');
     expect(storage.getState().artifacts['requester-target']?.access).toBe('view');
 
-    await screen.pressByTestIdAsync('approvals.approve');
-
+    expect(screen.findByTestId('approvals.requester-confirmation.waiting')).not.toBeNull();
+    expect(screen.findByTestId('approvals.actions')).toBeNull();
+    expect(screen.findByTestId('approvals.approve')).toBeNull();
     expect(daemonDecisions()).toHaveLength(0);
     expect(artifactWrites()).toHaveLength(0);
     expect(homes.artifacts(account.serverId).readPlainBody('requester-target')).toBe(received);
-    expect(screen.findByTestId('approvals.actions')).not.toBeNull();
-    const { Modal } = await import('@/modal');
-    expect(Modal.alert).toHaveBeenCalled();
+  });
+
+  it('offers the requester-bound decision only to the Account that asked', async () => {
+    currentArtifact = await createRequesterTargetApprovalArtifact();
+    includeExactApprovalMachine = false;
+    machineFixtures = {};
+    machineFixturesByServerId = {};
+    const { ApprovalDetailScreen } = await import('./ApprovalDetailScreen');
+    const screen = await renderScreen(<ApprovalDetailScreen artifactId="requester-target" serverId="ui-A" />);
+
+    expect(screen.findByTestId('approvals.requester-confirmation')).not.toBeNull();
+    expect(screen.findByTestId('approvals.requester-confirmation.waiting')).toBeNull();
+    expect(screen.findByTestId('approvals.approve')).not.toBeNull();
   });
 
   it('routes an API target-action approval to its stamped daemon instead of mutating the Artifact locally', async () => {

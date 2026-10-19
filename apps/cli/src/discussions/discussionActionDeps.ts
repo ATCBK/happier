@@ -30,6 +30,7 @@ import { DiscussionSecondOpinionStartInputV1Schema } from '@happier-dev/protocol
 import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinionPreviewResponseV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { DiscussionCandidatesListInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 
 function failure(code: string) {
   return { ok: false as const, errorCode: code, error: code };
@@ -134,8 +135,11 @@ export function createDiscussionActionDeps(options: Readonly<{
       return DiscussionOpenedSummaryV1Schema.parse({ ...row, ...first, title: title.success ? title.data.title : null });
     }
 
+    const root = SignedRootActionIdSchema.safeParse(context.externalActionExecutionAuthorization?.binding.actionId);
+    const effectActionId = actionId === 'discussion.participants.list' && root.success && getActionSpec(root.data).sessionTarget
+      ? root.data : actionId;
     const authorizationFor = (method: string, path: string, body?: unknown) => resolveExternalActionServerRequestHeaders({
-      context, effectActionId: actionId, method, path, ...(body === undefined ? {} : { body }),
+      context, effectActionId, method, path, ...(body === undefined ? {} : { body }),
       daemonToken: options.credentials.token, serverIdentityId: options.serverIdentityId,
       ...(options.externalActionMachineRequestPrivateKey ? { privateKey: options.externalActionMachineRequestPrivateKey } : {}),
       ...(options.externalActionMachineInstallationId ? { installationId: options.externalActionMachineInstallationId } : {}),

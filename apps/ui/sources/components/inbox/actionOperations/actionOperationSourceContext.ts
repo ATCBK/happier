@@ -36,6 +36,11 @@ export function projectActionOperationSourceContext(params: Readonly<{
     snapshot: ActionOperationSnapshotV1;
     session: SessionListRenderableSession | null;
     machine: Machine | null;
+    /**
+     * The managed guest's name when the operation concerns one. Such an operation runs on its controller, so
+     * `machine` is the controller; the guest is who it is about.
+     */
+    managedMachineName?: string | null;
     serverProfile: ServerProfile | null;
     audienceScope?: ServerAccountScope | null;
     /**
@@ -58,7 +63,7 @@ export function projectActionOperationSourceContext(params: Readonly<{
         };
     }
 
-    const machineTitle = getMachineDisplayName(params.machine);
+    const machineTitle = params.managedMachineName || getMachineDisplayName(params.machine);
     if (!address) {
         const homeName = resolveHomeDisplayName(params.serverProfile);
         return {

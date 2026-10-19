@@ -1592,6 +1592,7 @@ describe('authenticated finite Project Action owner', () => {
         let result: unknown;
         if (scenario === 'workspace') {
             const serverIdentityId = 'home-identity';
+            const installation = nacl.sign.keyPair();
             const installed = ExternalActionMachineBootstrapV1Schema.parse({ id: 'machine', installationId: 'installation',
                 active: true, revokedAt: null, replacedByMachineId: null, kind: 'persistent',
                 access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
@@ -1607,7 +1608,8 @@ describe('authenticated finite Project Action owner', () => {
             h.get.mockImplementation(async url => {
                 if (String(url) === 'https://home.example/v1/machines') return { status: 200, data: machineRows };
                 const machine = machineRows.find(row => String(url) === `https://home.example/v1/machines/${row.id}`);
-                if (machine) return { status: 200, data: { machine } };
+                if (machine) return { status: 200, data: { machine: { ...machine,
+                    installationPublicKey: Buffer.from(installation.publicKey).toString('base64') } } };
                 if (String(url) === 'https://home.example/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
                 throw new Error(`Unexpected pool Home read: ${url}`);
             });
@@ -1615,22 +1617,30 @@ describe('authenticated finite Project Action owner', () => {
             if (!homePost) throw new Error('Expected existing Home HTTP fixture');
             h.post.mockImplementation(async (url, body, config) => {
                 if (String(url) === 'https://home.example/v1/actions/projects.worker.status') {
-                    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+                    const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                    const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+                    expect(request.executionAuthorization?.binding).toMatchObject({ serverIdentityId,
+                        machineId: installed.id, installationId: installed.installationId, actionId: 'projects.worker.status',
+                        requestId: envelope.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+                        target: envelope.target });
                     const result = await worker({ actionId: 'projects.worker.status', input: ProjectWorkerStatusInputV1Schema.parse(envelope.input),
                         context: { surface: 'rpc', serverId: 'home', runtimeAccountId: 'owner', authority: 'account_automation' } });
                     return { status: 200, data: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.worker.status',
                         requestId: envelope.requestId, execution: { ok: true, result } }) };
                 }
-                const inspected = String(url) === `https://home.example${bindExternalActionExecutionAuthorizationHttpPathV1('projects.inspect')}`;
-                if (inspected || String(url) === `https://home.example${bindExternalActionExecutionAuthorizationHttpPathV1('projects.script.run')}`) {
+                // Original worker observations need the same Home Machine admission
+                // as inspection and finite execution, including on an own Machine.
+                const authorizationAction = (['projects.inspect', 'projects.script.run', 'projects.worker.status'] as const)
+                    .find(actionId => String(url) === `https://home.example${bindExternalActionExecutionAuthorizationHttpPathV1(actionId)}`);
+                if (authorizationAction) {
                     expect(config?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
                     const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
-                    const targetMachine = inspected ? sourcePublished : installed;
+                    const targetMachine = authorizationAction === 'projects.inspect' ? sourcePublished : installed;
                     expect(request.machineId).toBe(targetMachine.id);
                     const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-finite-authorization',
                         binding: { accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 1 }, serverIdentityId,
                             machineId: targetMachine.id, custodianAccountId: 'owner', installationId: targetMachine.installationId,
-                            accountEncryptionMode: 'plain', actionId: inspected ? 'projects.inspect' : 'projects.script.run', requestId: request.envelope.requestId,
+                            accountEncryptionMode: 'plain', actionId: authorizationAction, requestId: request.envelope.requestId,
                             requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target: request.envelope.target,
                         } });
                     return { status: 200, data: authorization };

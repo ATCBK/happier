@@ -50,13 +50,18 @@ import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/f
 import type { ChangeEntry } from '@happier-dev/protocol/changes';
 import { DELIVERY_MUTE_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 
+// HTTP substitutes authentication; the real Account owners still inspect the subject.
+function accountToken(accountId: string) {
+  return `e30.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 0,
+    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`;
+}
+
 it('returns installed Account personal ready policy through startup and refuses retired or foreign custody', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'installed-personal-follow-'));
   const home = 'https://installed-personal.test';
   const serverId = 'installed-personal-home';
   const sessionId = 'c555555555555555555555555';
-  const token = `e30.${Buffer.from(JSON.stringify({ sub: 'installed', tokenEpoch: 0,
-    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`;
+  const token = accountToken('installed');
   const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
   const tracked: TrackedSession = { pid: process.pid, startedBy: 'daemon', happySessionId: sessionId,
     spawnOptions: { directory } };
@@ -204,8 +209,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   const requesterSessionId = surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' ? 'c123456789012345678901234' : 'bob-session';
   const followDestinationId = surface === 'follow-receiver' ? requesterSessionId : 'c222222222222222222222222';
   const followSourceId = surface === 'follow-receiver' ? 'c333333333333333333333333' : requesterSessionId;
-  const requesterToken = `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 0,
-    provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`;
+  const requesterToken = accountToken('bob');
   const control: { routes?: Parameters<typeof controlServer.startDaemonControlServer>[0] } = {};
   // The loopback HTTP server is the boundary; retain the real startup Action factory.
   const controlBoundary = actionPolicySurface || surface === 'follow-source' ? vi.spyOn(controlServer, 'startDaemonControlServer')
@@ -238,10 +242,7 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
   const followReads: string[] = [];
   const record = ProfileRecordV1Schema.parse({ v: 1, id: 'bob-profile', enabled: true, promptStack: [], secretBindings: {},
     definition: { kind: 'legacy', profile: { id: 'bob-profile', name: 'Bob native', createdAt: 1, updatedAt: 2 } } });
-  const aliceCredentials = { token: actionPolicySurface || surface === 'follow-wake'
-    ? `e30.${Buffer.from(JSON.stringify({ sub: 'alice', tokenEpoch: 0,
-      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`
-    : 'alice', encryption: null };
+  const aliceCredentials = { token: accountToken('alice'), encryption: null };
   await runWithServerHttpBaseUrl('https://alice-home.test', async () => {
     setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
       loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(aliceCredentials) });
@@ -954,12 +955,14 @@ it.each(['refresh', 'untracked-lifetime', 'profile-unavailable', 'action-policy'
 
 it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps requester %s effects under Bob Home and credentials without consuming Alice authority', async (surface) => {
   const directory = await mkdtemp(join(tmpdir(), 'requester-usage-'));
+  const aliceToken = accountToken('alice');
+  const bobToken = accountToken('bob');
   let current = true;
   // Account admission, encryption mode and durable usage writes are genuine HTTP boundaries.
   const get = vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => ({ status: 200,
-    data: url.endsWith('/profile') ? { id: config?.headers?.Authorization === 'Bearer alice' ? 'alice' : 'bob',
+    data: url.endsWith('/profile') ? { id: config?.headers?.Authorization === `Bearer ${aliceToken}` ? 'alice' : 'bob',
       connectedServicesV2: [{ serviceId: 'openai-codex', profiles: [{ profileId: 'work', status: 'connected' }],
-        groups: [{ groupId: 'main', activeProfileId: 'work', generation: config?.headers?.Authorization === 'Bearer alice' ? 1 : 2,
+        groups: [{ groupId: 'main', activeProfileId: 'work', generation: config?.headers?.Authorization === `Bearer ${aliceToken}` ? 1 : 2,
           memberProfileIds: ['work'] }] }],
       connectedServiceCredentialRevisionsV1: [{ serviceId: 'openai-codex', profileId: 'work', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' }] }
       : url.endsWith('/currentness')
@@ -970,22 +973,23 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
   const writes: Array<{ url: string; token: unknown; data: unknown }> = [];
   let bobUnavailable = surface === 'reconnect';
   const post = vi.spyOn(axios, 'post').mockImplementation(async (url, data, config) => {
-    if (bobUnavailable && config?.headers?.Authorization === 'Bearer bob') return { status: 503, data: null };
+    if (bobUnavailable && config?.headers?.Authorization === `Bearer ${bobToken}`) return { status: 503, data: null };
     writes.push({ url, token: config?.headers?.Authorization, data });
     return { status: 200, data: { success: true, source: { status: 'linked' } } };
   });
-  const alice = createProviderAccountUsagePersistenceScheduler({ credentials: { token: 'alice', encryption: null },
+  const alice = createProviderAccountUsagePersistenceScheduler({ credentials: { token: aliceToken, encryption: null },
     api: { getAccountEncryptionMode: async () => 'plain' }, now: () => Date.now() });
   let runtime: Awaited<ReturnType<typeof createRequesterSessionRuntimeContext>> = null;
   let host: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | null = null;
+  let admitted: Awaited<ReturnType<typeof admitRequesterSessionBootstrap>> = null;
   const registry = new ConnectedServiceRuntimeRegistry();
   const trackedSessions = new Map<number, TrackedSession>();
   try {
     host = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: directory, activeServerDir: directory,
       serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', machineId: 'machine', custodianAccountId: 'alice',
-      credentials: { token: 'alice', encryption: null }, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
+      credentials: { token: aliceToken, encryption: null }, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
       registry, trackedSessions, getRequester: () => runtime, resolveQualifiedConnectedAccountV4Support: () => 'indeterminate' });
-    const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: 'bob' } },
+    admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: bobToken } },
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' },
@@ -1027,7 +1031,7 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
     }
     if (surface === 'generation') {
       const exactRuntime = runtime;
-      const input = { token: 'alice', sessionId: 'bob-session',
+      const input = { token: aliceToken, sessionId: 'bob-session',
         withSessionAccountContext: async <T>(_sessionId: string | null, operation: (context: typeof exactRuntime | null) => Promise<T>) => await operation(exactRuntime),
         assertSessionAccountCurrent: async () => { if (!await exactRuntime.isCurrent()) throw new Error('requester_session_not_current'); } };
       const before = get.mock.calls.length;
@@ -1037,11 +1041,11 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
       expect(projection.snapshot.groups).toEqual([{ serviceId: 'happier.agent.codex/openai-codex', groupId: 'main', activeProfileId: 'work', generation: 2 }]);
       expect(projection.requester).toBe(true);
       const bobProfileUrls = new Set(get.mock.calls.filter(([url, config]) => String(url).endsWith('/profile')
-        && config?.headers?.Authorization === 'Bearer bob').map(([url]) => url));
+        && config?.headers?.Authorization === `Bearer ${bobToken}`).map(([url]) => url));
       expect([...bobProfileUrls]).toEqual(['https://bob-home.test/v1/account/profile']);
       current = false;
       await expect(fetchConnectedServiceProjectionForSession(input)).rejects.toThrow('requester_session_not_current');
-      const owned = await runWithServerHttpBaseUrl('https://alice-home.test', () => fetchConnectedServiceProjectionForSession({ token: 'alice' }));
+      const owned = await runWithServerHttpBaseUrl('https://alice-home.test', () => fetchConnectedServiceProjectionForSession({ token: aliceToken }));
       expect(owned.snapshot.groups[0]?.generation).toBe(1);
       expect(owned.requester).toBe(false);
       return;
@@ -1065,7 +1069,7 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
         trackedSessions: [{ happySessionId: 'bob-session' }, { happySessionId: 'bob-session' }],
         withSessionAccountContext: async (_sessionId, operation) => await operation(exactRuntime), timeoutMs: 1_000 });
       await runWithServerHttpBaseUrl('https://alice-home.test', reconnect);
-      expect(writes).toEqual([{ url: 'https://bob-home.test/v4/connect/qualified/provider-account-usage', token: 'Bearer bob',
+      expect(writes).toEqual([{ url: 'https://bob-home.test/v4/connect/qualified/provider-account-usage', token: `Bearer ${bobToken}`,
         data: expect.objectContaining({ snapshot }) }]);
       current = false;
       await runtime.providerAccountUsagePersistence.recordInBandSnapshot({ ...snapshot, fetchedAtMs: 2_000 }, { targets });
@@ -1075,11 +1079,11 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
         await reconnect();
       });
       expect(writes).toHaveLength(2);
-      expect(writes[1]).toEqual({ url: 'https://alice-home.test/v4/connect/qualified/provider-account-usage', token: 'Bearer alice',
+      expect(writes[1]).toEqual({ url: 'https://alice-home.test/v4/connect/qualified/provider-account-usage', token: `Bearer ${aliceToken}`,
         data: expect.objectContaining({ snapshot }) });
       return;
     }
-    expect(writes).toEqual([{ url: 'https://bob-home.test/v4/connect/qualified/provider-account-usage', token: 'Bearer bob',
+    expect(writes).toEqual([{ url: 'https://bob-home.test/v4/connect/qualified/provider-account-usage', token: `Bearer ${bobToken}`,
       data: expect.objectContaining({ source: targets[0].source, snapshot, payloadMode: 'plain_json_v1' }) }]);
     current = false;
     await runtime.providerAccountUsagePersistence.recordInBandSnapshot({ ...snapshot, fetchedAtMs: 2_000 }, { targets });
@@ -1089,11 +1093,11 @@ it.each(['generation', 'usage', 'reconnect', 'run_custody'] as const)('keeps req
       await alice.recordInBandSnapshot(snapshot, { targets });
       await alice.flush(1_000);
     });
-    expect(writes[1]).toEqual({ url: 'https://alice-home.test/v4/connect/qualified/provider-account-usage', token: 'Bearer alice',
+    expect(writes[1]).toEqual({ url: 'https://alice-home.test/v4/connect/qualified/provider-account-usage', token: `Bearer ${aliceToken}`,
       data: expect.objectContaining({ snapshot }) });
   } finally {
     try {
-      await runtime?.dispose();
+      try { await runtime?.dispose(); } finally { await admitted?.cleanupOnFailure(); }
     } finally {
       try {
         await host?.dispose();
@@ -1131,14 +1135,15 @@ it.each(['retired', 'pending_release'] as const)('keeps requester runtime %s und
   });
   let runtime: Awaited<ReturnType<typeof createRequesterSessionRuntimeContext>> = null;
   let host: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | null = null;
+  let admitted: Awaited<ReturnType<typeof admitRequesterSessionBootstrap>> = null;
   try {
     const registry = new ConnectedServiceRuntimeRegistry();
     const trackedSessions = new Map<number, TrackedSession>();
     host = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: directory, activeServerDir: directory,
       serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', machineId: 'machine', custodianAccountId: 'alice',
-      credentials: { token: 'alice', encryption: null }, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
+      credentials: { token: accountToken('alice'), encryption: null }, connectedServicesMaterializationBaseDir: join(directory, 'materialized'),
       registry, trackedSessions, getRequester: () => runtime, resolveQualifiedConnectedAccountV4Support: () => 'indeterminate' });
-    const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: 'bob' } },
+    admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: accountToken('bob') } },
       existingSessionId: 'bob-session',
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
@@ -1159,7 +1164,7 @@ it.each(['retired', 'pending_release'] as const)('keeps requester runtime %s und
     if (surface === 'pending_release') {
       const captured = runtime;
       const emittedAt: number[] = [];
-      const ports = createPendingResetStartRecoveryPorts({ credentials: { token: 'alice', encryption: null }, machineId: 'machine',
+      const ports = createPendingResetStartRecoveryPorts({ credentials: { token: accountToken('alice'), encryption: null }, machineId: 'machine',
         isCurrent: () => true, resolveRequesterSessionRuntimeContext: async () => captured,
         releaseRequesterSessionRuntimeContext: context => context.dispose(),
         // Installed Machine transport is the boundary; the scoped requester adapter remains real.
@@ -1207,7 +1212,7 @@ it.each(['retired', 'pending_release'] as const)('keeps requester runtime %s und
     releaseCurrentness?.();
     vi.useRealTimers();
     try {
-      await runtime?.dispose();
+      try { await runtime?.dispose(); } finally { await admitted?.cleanupOnFailure(); }
     } finally {
       try {
         await host?.dispose();

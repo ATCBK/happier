@@ -107,6 +107,27 @@ describe('Home Discussion resource transport', () => {
     });
   });
 
+  it('feeds admitted executable participants through the SessionTarget front door without starting model slots', async () => {
+    const requests: string[] = [];
+    axiosRequest.mockImplementation(async (request: { url: string; method: string }) => {
+      requests.push(request.url);
+      return { status: 200, data: { discussionId: 'discussion-1', ownerAccountId: 'account-1', access: 'owner',
+        grants: [], participants: [{ participant: { kind: 'session', sessionId: 'participant-session' },
+          answerPolicy: 'when_addressed', createdAt: 1 }] } };
+    });
+    const received: string[] = [];
+    const executor = createActionExecutor({ discussionAction: action(),
+      sessionSendMessage: async ({ sessionId }) => { received.push(sessionId); return { status: 'accepted', localId: 'input-1' }; },
+      isActionApprovalRequired: () => false,
+    });
+    expect(await executor.execute('session.message.send', { sessionId: { selector: 'discussion', discussionId: 'discussion-1' },
+      message: 'Question' }, { ...context, defaultSessionId: 'origin-session' }))
+      .toMatchObject({ ok: true, result: { kind: 'fanout', results: [{ target: { serverId: 'server-1', sessionId: 'participant-session' },
+        result: { ok: true, result: { status: 'accepted' } } }] } });
+    expect(received).toEqual(['participant-session']);
+    expect(requests).toEqual(['https://home.example.test/v1/discussions/discussion-1/participants']);
+  });
+
   it('runs the registered people candidate Action through the captured HTTP boundary and native pager', async () => {
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
     const profiles = ['account-1', 'candidate'].map(id => ({ id, name: id, username: id, firstName: id,
@@ -121,6 +142,46 @@ describe('Home Discussion resource transport', () => {
     expect(await executor.execute('discussion.candidates.list', { source: 'people', query: 'candidate' },
       { ...context, serverId: 'other-home' })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
     expect(axiosRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs selector participant and uncached feature reads with the original SessionTarget root', async () => {
+    const keyPair = tweetnacl.sign.keyPair();
+    const target = { kind: 'machine' as const, machineId: 'machine-1' };
+    const authorization = { v: 1, token: 'selector-proof', binding: {
+      serverIdentityId: 'server-1', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
+      grant: API_TOKEN_FULL_GRANT_V1, machineId: 'machine-1', actionId: 'session.status.get', requestId: 'selector-request',
+      custodianAccountId: 'account-1', installationId: 'installation-1', requestEnvelopeDigest: 'd'.repeat(43), target,
+    } } satisfies ExternalActionExecutionAuthorizationV1;
+    const proofs: { path: string; bearer: string | null; effectActionId: string | null; valid: boolean }[] = [];
+    const verify = (headers: Headers, path: string) => {
+      proofs.push({ path, bearer: headers.get('authorization'), effectActionId: headers.get(EXTERNAL_ACTION_EFFECT_ACTION_HEADER),
+        valid: verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token,
+        effectActionId: 'session.status.get', target, installationId: 'installation-1', requestId: 'selector-request',
+        method: 'GET', path, publicKey: keyPair.publicKey,
+        signature: headers.get(EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER)! }) });
+    };
+    vi.stubGlobal('fetch', async (_url: string | URL | Request, init?: RequestInit) => {
+      verify(new Headers(init?.headers), '/v1/features');
+      return Response.json(features.features);
+    });
+    axiosRequest.mockImplementation(async (request: { url: string; headers: Record<string, string> }) => {
+      verify(new Headers(request.headers), '/v1/discussions/discussion-1/participants');
+      return { status: 200, data: { discussionId: 'discussion-1', ownerAccountId: 'account-1', access: 'owner',
+        grants: [], participants: [] } };
+    });
+    try {
+      expect(await action({ resolveServerFeaturesSnapshot: undefined,
+        credentials: { token: 'daemon-token', encryption: null }, serverIdentityId: 'server-1',
+        externalActionMachineRequestPrivateKey: keyPair.secretKey, externalActionMachineInstallationId: 'installation-1',
+      })({ actionId: 'discussion.participants.list', input: { discussionId: 'discussion-1' }, context: {
+        serverId: 'server-1', surface: 'agent', authority: 'account_automation',
+        externalActionCredential: { accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1 },
+        externalActionExecutionAuthorization: authorization, externalActionTarget: target,
+      } })).toMatchObject({ discussionId: 'discussion-1', participants: [] });
+      expect(proofs).toEqual(['/v1/features', '/v1/discussions/discussion-1/participants'].map(path => ({
+        path, bearer: null, effectActionId: 'session.status.get', valid: true,
+      })));
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('uses the signed candidate root for an uncached feature read as well as its directory request', async () => {

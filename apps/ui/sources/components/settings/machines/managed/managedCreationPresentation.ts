@@ -47,7 +47,11 @@ export function managedCreationState(machine: ManagedMachineV1, context: Managed
     }
     if (machine.submittedNativeEffect?.intent === 'delete') return { kind: 'cleanupPending' };
     if (machine.submittedNativeEffect?.intent === 'stop' && machine.observation?.power !== 'stopped') return { kind: 'stopPending' };
-    const pendingIntent = machine.submittedNativeEffect?.intent;
+    // A committed Start whose native submission is unconfirmed has no submitted effect yet (QB118), but the
+    // guest is still observed asleep: the request stands, so the page must not read as a machine at rest.
+    const retainedPowerIntent = machine.desired === 'start' && machine.observation?.power === 'stopped' ? 'start'
+        : machine.desired === 'resume' && machine.observation?.power === 'suspended' ? 'resume' : undefined;
+    const pendingIntent = machine.submittedNativeEffect?.intent ?? retainedPowerIntent;
     if ((pendingIntent === 'start' || pendingIntent === 'resume') && machine.observation?.power !== 'running'
         || pendingIntent === 'suspend' && machine.observation?.power !== 'suspended') {
         return { kind: 'powerPending', provider: context.provider ?? t('common.machine'), state: t(`managedMachines.actions.${pendingIntent}`) };

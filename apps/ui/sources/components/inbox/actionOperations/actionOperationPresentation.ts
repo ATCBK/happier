@@ -15,7 +15,7 @@ export type ActionOperationSection = 'inProgress' | 'needsAttention' | 'recent';
 export type ActionOperationStatusTone = 'active' | 'success' | 'danger' | 'muted';
 export type ActionOperationStatusLabel =
     | Readonly<{ kind: 'producer'; value: string }>
-    | Readonly<{ kind: 'host'; value: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'reconnecting' | 'unavailable' | 'needs_review' }>;
+    | Readonly<{ kind: 'host'; value: 'accepted' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'reconnecting' | 'unavailable' | 'needs_review' | 'outcome_uncertain' }>;
 
 /** One label owner for operation detail, Activity and Session Work. */
 export function describeActionOperationStatusLabel(label: ActionOperationStatusLabel): string {
@@ -29,6 +29,7 @@ export function describeActionOperationStatusLabel(label: ActionOperationStatusL
         case 'reconnecting': return t('inbox.actionOperations.observation.reconnecting');
         case 'unavailable': return t('inbox.actionOperations.observation.unavailable');
         case 'needs_review': return t('inbox.needsYou');
+        case 'outcome_uncertain': return t('inbox.actionOperations.status.outcomeUncertain');
     }
 }
 
@@ -63,6 +64,8 @@ export function resolveActionOperationStatus(
     if (snapshot.state === 'cancelled') return { tone: 'muted', label: { kind: 'host', value: 'cancelled' } };
     if (snapshot.state === 'succeeded') return { tone: 'success', label: { kind: 'host', value: 'succeeded' } };
     if (snapshot.setupReview) return { tone: 'muted', label: { kind: 'host', value: 'needs_review' } };
+    // The owner submitted the work and lost its acknowledgement: neither running nor failed, and never a guess.
+    if (snapshot.observation?.kind === 'outcome_uncertain') return { tone: 'muted', label: { kind: 'host', value: 'outcome_uncertain' } };
     observation = resolveActionOperationObservation(snapshot, observation);
     if (observation === 'reconnecting') return { tone: 'muted', label: { kind: 'host', value: 'reconnecting' } };
     if (observation === 'unavailable') return { tone: 'muted', label: { kind: 'host', value: 'unavailable' } };

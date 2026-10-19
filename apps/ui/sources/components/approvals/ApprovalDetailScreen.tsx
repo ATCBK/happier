@@ -8,6 +8,7 @@ import { approvalArtifactBodyMatchesHeaderV1, buildExecutionRunHostActionApprova
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { ExecutionRunHostActionApprovalRequestV1Schema, type ExecutionRunHostActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/executionRunHostActionApprovalRequestV1';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
+import { ApprovalRequesterConfirmationV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { WorkspaceSyncConflictResolutionResultV1Schema, WorkspaceSyncConflictResolutionV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 import { Text } from '@/components/ui/text/Text';
@@ -34,6 +35,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { ApprovalSessionContextCard } from './ApprovalSessionContextCard';
+import { ApprovalRequesterConfirmationSection, useApprovalRequesterViewer } from './ApprovalRequesterConfirmationSection';
 import { resolveApprovalHomeName } from './approvalRequesterLabels';
 import { BrowserOpenOperationStatusRow } from './BrowserOpenOperationStatus';
 import { ActionApprovalFieldsCard, ApprovalTechnicalDetails } from './ActionApprovalFieldsCard';
@@ -279,6 +281,13 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
     sessionId,
     approvalServerId,
   );
+  // C7: a shared Bot's outward request waits for the one person who asked; others read who can act.
+  const requesterConfirmation = React.useMemo(() => {
+    const subject = ApprovalRequesterConfirmationV1Schema.safeParse(parsed?.kind === 'target'
+      || parsed?.kind === 'built_in' && parsed.request.v === 2 ? parsed.request.requesterConfirmation : undefined);
+    return subject.success ? subject.data : null;
+  }, [parsed]);
+  const requesterMayDecide = useApprovalRequesterViewer(requesterConfirmation);
   // An agent's cleanup or stop proposal reads as the same card body as in the transcript (AGW-6).
   const proposal = useResourceProposalCheck(parsed?.kind === 'built_in' ? parsed.request : null, approvalServerId, props.artifactId);
   const proposalLabels = proposal ? resolveResourceProposalLabels(proposal) : null;
@@ -744,6 +753,17 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         requesterSurface={requesterSurface}
       />
 
+      {requesterConfirmation ? (
+        <ApprovalRequesterConfirmationSection
+          subject={requesterConfirmation}
+          open={parsed.request.status === 'open' && !answeredWhileOpen}
+          decision={parsed.request.decision
+            ? { kind: parsed.request.decision.kind, decidingAccountId: 'decidingAccountId' in parsed.request.decision
+              && typeof parsed.request.decision.decidingAccountId === 'string' ? parsed.request.decision.decidingAccountId : undefined }
+            : null}
+        />
+      ) : null}
+
       {parsed.kind === 'host_action' && parsed.request.proposalPreview.length > 0 ? (
         <ItemGroup
           title={t('approvals.proposedComments', { count: parsed.request.proposalCount })}
@@ -773,7 +793,8 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
             serverId={approvalServerId ?? null} disabled={isDeciding || approvalRouteUnavailable}
             onDismiss={() => { void decide('cancel'); }} />
         </ItemGroup>
-      ) : parsed.request.status === 'open' && !answeredWhileOpen && !confidentialApproval ? (
+      ) : parsed.request.status === 'open' && !answeredWhileOpen && !confidentialApproval
+        && (!requesterConfirmation || requesterMayDecide) ? (
         <ItemGroup surface="none">
           {/* Dismiss closes without an answer; Reject answers no. Consent remains with decide. */}
           <ApprovalDecisionBar testID="approvals.actions" busy={isDeciding && !homeUnavailable}
