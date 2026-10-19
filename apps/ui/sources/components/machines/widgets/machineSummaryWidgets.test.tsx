@@ -52,7 +52,15 @@ vi.mock('@/text', async () =>
 // The scoped machine RPC transport is the external boundary; the resource store, its demand and the strip stay real.
 vi.mock(
   '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
-  () => ({ machineRpcWithServerScope: boundary.rpc }),
+  async () => {
+    const { createServerScopedMachineRpcBoundaryMock } =
+      await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock((input) => {
+      // Invocation is dispatch at this network boundary; parked replies settle later.
+      input.onDispatched?.();
+      return boundary.rpc(input);
+    });
+  },
 );
 vi.mock(
   'expo-router',
@@ -501,9 +509,11 @@ describe('Vitals widget (lab rw V, VS)', () => {
     expect(screen.findByTestId('machines.summary.stale')).toBeNull();
     const release = machineResourceStore.demand(key);
     try {
-      await vi.waitFor(() =>
-        expect(machineResourceStore.getState(key).status).toBe('slow'),
-      );
+      await act(async () => {
+        await vi.waitFor(() =>
+          expect(machineResourceStore.getState(key).status).toBe('slow'),
+        );
+      });
       // The first failed watch keeps every value and says only that the machine is slow.
       expect(machineResourceStore.getState(key).summary).not.toBeNull();
       expect(screen.getTextContent()).toContain('machineSummary.slowReason');
