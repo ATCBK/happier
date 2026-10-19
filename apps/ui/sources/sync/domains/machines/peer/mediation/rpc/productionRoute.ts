@@ -325,6 +325,23 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
         return fallback('topology_unavailable');
     }
 
+    // Prove the advertised endpoint is reachable before asking Home for a
+    // grant. A remote browser's loopback may be unavailable; grant latency for
+    // that unusable route must not consume the relay's entire setup budget.
+    // This existing harmless probe also distinguishes an unsent request from
+    // a lost POST reply, which browsers expose as the same network TypeError.
+    const readinessTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
+    if (readinessTimeoutMs !== undefined && readinessTimeoutMs <= 0) return fallback('topology_unavailable');
+    try {
+        await fetchJson({ url: resolveDirectRpcUrl(endpoint.url), init: { method: 'OPTIONS' },
+            timeoutMs: readinessTimeoutMs, signal: input.signal });
+    } catch (error) {
+        if (input.signal?.aborted) throw error;
+        recordMachineRequestFailed(routeScope);
+        return fallback('topology_unavailable');
+    }
+    recordMachineRequestSucceeded(routeScope);
+
     {
         const proofHandle = createEphemeralPeerRouteProofHandleV2({ randomBytes: getRandomBytes });
         try {
@@ -340,20 +357,6 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
                 timeoutMs: grantTimeoutMs,
             });
             if (!grant.ok) return fallback(grant.reasonCode);
-            // Browsers expose the same network TypeError for a refused connection
-            // and a lost POST reply. Test the existing harmless OPTIONS ingress
-            // before issuing the RPC, so only a proven unsent call may use relay.
-            const readinessTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
-            if (readinessTimeoutMs !== undefined && readinessTimeoutMs <= 0) return fallback('topology_unavailable');
-            try {
-                await fetchJson({ url: resolveDirectRpcUrl(endpoint.url), init: { method: 'OPTIONS' },
-                    timeoutMs: readinessTimeoutMs, signal: input.signal });
-            } catch (error) {
-                if (input.signal?.aborted) throw error;
-                recordMachineRequestFailed(routeScope);
-                return fallback('topology_unavailable');
-            }
-            recordMachineRequestSucceeded(routeScope);
             const proof = proofHandle.sign(grant.value);
             return {
                 kind: 'selected',

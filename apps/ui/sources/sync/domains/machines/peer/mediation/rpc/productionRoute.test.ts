@@ -387,7 +387,11 @@ describe('production peer mediation machine RPC route adapter', () => {
         getCredentialsForServerUrlSpy
             .mockResolvedValueOnce({ token: TOKEN_A, secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64') })
             .mockResolvedValue({ token: replacementToken, secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64') });
-        const fetchSpy = vi.fn();
+        // Reachability is checked before the authenticated grant boundary.
+        const fetchSpy = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'OPTIONS') return new Response(null, { status: 204 });
+            throw new Error('Unexpected grant request');
+        });
         vi.stubGlobal('fetch', fetchSpy);
 
         const module = await importProductionRoute();
@@ -403,7 +407,7 @@ describe('production peer mediation machine RPC route adapter', () => {
             receipt: PEER_MEDIATION_RECEIPTS.routeFallback,
             reasonCode: 'grant_missing',
         });
-        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(fetchSpy.mock.calls.map(([, init]) => init?.method)).toEqual(['OPTIONS']);
     });
 
 
