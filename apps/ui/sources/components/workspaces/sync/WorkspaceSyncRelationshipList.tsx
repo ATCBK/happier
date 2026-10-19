@@ -14,6 +14,7 @@ import {
     terminateWorkspaceSyncRelationship,
 } from '@/sync/ops/actions/workspaceSyncRelationshipActions';
 import {
+    presentWorkspaceSyncFailure,
     resolveWorkspaceSyncErrorTranslationKey,
     formatWorkspaceSyncRelationshipTitle,
     resolveWorkspaceSyncModeTranslationKey,
@@ -92,27 +93,28 @@ export const WorkspaceSyncRelationshipRow = React.memo(function WorkspaceSyncRel
     const runAction = React.useCallback(async (action: 'sync' | 'disable' | 'enable' | 'terminate') => {
         setPendingAction(action);
         setMenuOpen(false);
+        const settled = <T extends Readonly<{ ok: boolean }>>(result: T): Extract<T, { ok: true }> => {
+            if (result.ok) return result as Extract<T, { ok: true }>;
+            const failure = result as unknown as Readonly<{ errorCode?: string; error?: string }>;
+            throw Object.assign(new Error(failure.error), { code: failure.errorCode });
+        };
         try {
             if (action === 'sync') {
-                const result = await flushWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                const result = settled(await flushWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
                 if ('status' in result) setWorkspaceSyncStatus(scope, result.status);
                 return;
             }
             if (action === 'terminate') {
-                const result = await terminateWorkspaceSyncRelationship(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                settled(await terminateWorkspaceSyncRelationship(actionInput, null, actionExecution.execute));
                 return;
             }
             if (action === 'disable') {
-                const result = await disableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                settled(await disableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
             } else {
-                const result = await enableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute);
-                if (!result.ok) throw new Error(result.error);
+                settled(await enableWorkspaceSyncRelationshipAction(actionInput, null, actionExecution.execute));
             }
-        } catch {
-            Modal.alert(t('common.error'), t('errors.operationFailed'));
+        } catch (caught) {
+            Modal.alert(t('common.error'), presentWorkspaceSyncFailure(caught) ?? t('errors.operationFailed'));
         } finally {
             setPendingAction(null);
         }
