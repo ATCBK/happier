@@ -1,6 +1,7 @@
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { getActionSpec, type PublicActionInputById, type PublicActionResultById } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 
 import { randomUUID } from '@/platform/randomUUID';
 
@@ -53,6 +54,13 @@ export async function runWidgetDefinitionCommand<Id extends CommandId>(
     input: PublicActionInputById[Id] | (() => PublicActionInputById[Id]),
     target: WidgetCommandTarget,
     signal?: AbortSignal,
+    widgetAreaContext?: ActionExecutorContext['widgetAreaContext'],
+    /**
+     * The screen itself was the person's confirmation of this exact Action (a preview they read and
+     * pressed). It satisfies the policy's default UI confirmation once, so no second dialog follows; an
+     * approval configured in Settings → Actions still applies, and agents never carry it.
+     */
+    confirmation?: ActionExecutorContext['presentUserConfirmation'],
 ): Promise<WidgetDefinitionCommandOutcome<PublicActionResultById[Id]>> {
     try {
         // Preparing widget inputs can fail at the platform or validation boundary too.
@@ -63,6 +71,8 @@ export async function runWidgetDefinitionCommand<Id extends CommandId>(
         const result = await createDefaultActionExecutor().execute(actionId, preparedInput, {
             surface: 'ui', authority: 'present_user', serverId: target.serverId, expectedAccountId: target.accountId,
             actionRequestId: randomUUID(), ...(signal ? { signal } : {}),
+            ...(widgetAreaContext ? { widgetAreaContext } : {}),
+            ...(confirmation ? { presentUserConfirmation: confirmation } : {}),
         });
         return classifyWidgetDefinitionCommandResult(actionId, result);
     } catch (error) {
