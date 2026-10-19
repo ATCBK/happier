@@ -20,6 +20,7 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
   machineId: string;
   sourceSessionId: string;
   destinationSessionId: string;
+  localInputId?: string;
   sourceDataEncryptionKey: Uint8Array | null;
   serverUrl?: string;
   signal?: AbortSignal;
@@ -33,6 +34,7 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
   const material = input.sourceDataEncryptionKey ? buildSessionFollowSourceKeyPrepareRequestV1({
     sourceSessionId: input.sourceSessionId,
     destinationSessionId: input.destinationSessionId,
+    ...(input.localInputId !== undefined ? { localInputId: input.localInputId } : {}),
     sourceDataEncryptionKeyBase64: encodeBase64(input.sourceDataEncryptionKey),
   }) : null;
   const sourceKeyUnavailable = new Error('Standalone source Session key is unavailable');

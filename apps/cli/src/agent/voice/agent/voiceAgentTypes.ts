@@ -135,6 +135,7 @@ export type VoiceAgentTurnStreamState = {
   run: Promise<void>;
   completedHistory: boolean;
   cancelled: boolean;
+  preparationAbortController: AbortController;
   deltaHold: string;
   outputSpeechBuffer: string;
   outputSpeechText: string;

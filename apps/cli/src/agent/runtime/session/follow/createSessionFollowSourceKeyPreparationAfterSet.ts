@@ -18,6 +18,8 @@ import { prepareSessionFollowSourceKey } from './prepareSessionFollowSourceKey';
 export type SessionFollowSourceKeyPreparationAfterSet = (input: Readonly<{
   sourceSessionId: string;
   destinationSessionId: string;
+  /** Exact existing Pending/materialized input; private witnesses stay server-side. */
+  localInputId?: string;
   context: ActionExecutorContext;
   signal?: AbortSignal;
 }>) => Promise<SessionFollowSourceKeyPreparationResultV1>;
@@ -30,7 +32,7 @@ export type SessionFollowSourceKeyPreparationAfterSet = (input: Readonly<{
  */
 export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<{
   credentials: StoredCredentials;
-  effectActionId?: 'session.follow.sources.set' | 'session.reports_to.set' | 'session.spawn_new';
+  effectActionId?: 'follow.set' | 'session.manager.set' | 'session.spawn_new';
   serverHttpBaseUrl?: string;
   serverIdentityId?: string;
   resolveServerFeaturesSnapshot?: () =>
@@ -41,9 +43,9 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
   externalActionMachineInstallationId?: string;
 }>): SessionFollowSourceKeyPreparationAfterSet {
   const serverHttpBaseUrl = normalizeServerHttpBaseUrl(input.serverHttpBaseUrl ?? resolveServerHttpBaseUrl());
-  const effectActionId = input.effectActionId ?? 'session.follow.sources.set';
+  const effectActionId = input.effectActionId ?? 'follow.set';
 
-  return async ({ sourceSessionId, destinationSessionId, context, signal }) => await runWithServerHttpBaseUrl(
+  return async ({ sourceSessionId, destinationSessionId, localInputId, context, signal }) => await runWithServerHttpBaseUrl(
     serverHttpBaseUrl,
     async () => {
       // Active-Home Action composition enriches the invocation context from
@@ -160,6 +162,7 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
             machineId: destinationMachine.machineId,
             sourceSessionId,
             destinationSessionId,
+            ...(localInputId !== undefined ? { localInputId } : {}),
             sourceDataEncryptionKey,
             serverUrl: serverHttpBaseUrl,
             ...(signal ? { signal } : {}),

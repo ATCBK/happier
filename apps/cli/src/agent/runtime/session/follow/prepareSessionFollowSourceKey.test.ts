@@ -69,6 +69,19 @@ describe('prepareSessionFollowSourceKey', () => {
     expect(callExactMachineRpc).not.toHaveBeenCalled();
   });
 
+  it('carries exact admitted input custody in both sides of the encrypted Machine call', async () => {
+    callExactMachineRpc.mockResolvedValue({ v: 1, outcome: 'installed' });
+    expect(await prepareSessionFollowSourceKey({
+      credentials, homeServerIdentityId: 'home-1', machineId: 'machine-1',
+      sourceSessionId: 'source', destinationSessionId: 'destination',
+      sourceDataEncryptionKey: new Uint8Array(32).fill(9), localInputId: 'admitted-original',
+    })).toEqual({ kind: 'prepared' });
+    expect(callExactMachineRpc).toHaveBeenCalledWith(expect.objectContaining({
+      authorization: expect.objectContaining({ localInputId: 'admitted-original' }),
+      request: expect.objectContaining({ localInputId: 'admitted-original' }),
+    }));
+  });
+
   it('prepares with DataKey credentials through the same independently trusted Runner scope', async () => {
     // The verifier identity is the creator-sealed fact on the published
     // binding, so a DataKey daemon reaches the same proof a legacy one does.
@@ -154,7 +167,7 @@ describe('prepareSessionFollowSourceKey', () => {
       sourceDataEncryptionKey: new Uint8Array(32).fill(9),
       externalAction: {
         context,
-        effectActionId: 'session.follow.sources.set',
+        effectActionId: 'follow.set',
         installationId: 'relay-installation',
         privateKey,
       },
@@ -165,7 +178,7 @@ describe('prepareSessionFollowSourceKey', () => {
       method: RPC_METHODS.DAEMON_SESSION_FOLLOW_SOURCE_KEY_PREPARE,
       externalAction: {
         context,
-        effectActionId: 'session.follow.sources.set',
+        effectActionId: 'follow.set',
         installationId: 'relay-installation',
         privateKey,
       },

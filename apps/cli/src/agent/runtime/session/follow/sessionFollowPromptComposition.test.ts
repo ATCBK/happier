@@ -19,7 +19,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
   it('prepares a context-only wake only for authoritative human source input', async () => {
     const acknowledgeSessionFollow = vi.fn().mockResolvedValue({ ok: true });
     const observation = {
-      sourceSessionId: 'source', destinationSessionId: 'destination', mode: 'wake_on_human_change' as const,
+      sourceSessionId: 'source', destinationSessionId: 'destination', policy: { preset: 'custom' as const, events: { person_wrote: { delivery: 'interrupt' as const }, message: { delivery: 'quiet' as const } } },
       delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null }, observed: frontier,
     };
     const session = {
@@ -45,7 +45,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
     const wakeEventLocalId = deriveSessionFollowWakeEventLocalIdV1({
       destinationSessionId: 'destination',
       publisherGeneration: '7',
-      observations: [{ sourceSessionId: 'source', expected: observation.delivered, consumed: frontier }],
+      observations: [{ policy: observation.policy, sourceSessionId: 'source', expected: observation.delivered, consumed: frontier }],
     });
     expect(prepared?.wakeEventLocalId).toBe(wakeEventLocalId);
     prepared?.acknowledgeAccepted({ kind: 'context_only_wake', eventLocalId: wakeEventLocalId });
@@ -54,7 +54,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
       acceptance: {
         kind: 'context_only_wake',
         eventLocalId: wakeEventLocalId,
-        observations: [{ sourceSessionId: 'source', expected: observation.delivered, consumed: frontier }],
+        observations: [{ policy: observation.policy, sourceSessionId: 'source', relation: 'follower', expected: observation.delivered, consumed: frontier }],
       },
     }));
   });
@@ -63,17 +63,17 @@ describe('Session Follow prompt composition through the canonical owner', () => 
     const acknowledgeSessionFollow = vi.fn().mockResolvedValue({
       ok: true, v: 1, destinationSessionId: 'destination', sourceSessionId: 'source', delivered: frontier,
     });
+    const observation = {
+      sourceSessionId: 'source', destinationSessionId: 'destination',
+      delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
+      observed: frontier,
+      policy: { preset: 'quiet' as const },
+    };
     const session = {
       sessionId: 'destination',
       observePendingSessionFollow: vi.fn().mockResolvedValue({
         ok: true, v: 1, sessionId: 'destination', publisherGeneration: '7',
-        observations: [{
-          sourceSessionId: 'source',
-          destinationSessionId: 'destination',
-          delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
-          observed: frontier,
-          mode: 'next_turn',
-        }],
+        observations: [observation],
       }),
       acknowledgeSessionFollow,
     } as unknown as ApiSessionClient;
@@ -122,7 +122,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
 
     prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'input-1', userMessageSeq: 2 });
     await Promise.resolve();
-    expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({
+    expect(acknowledgeSessionFollow).toHaveBeenCalledWith(expect.objectContaining({ policy: observation.policy,
       sourceSessionId: 'source',
       expected: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
       consumed: frontier,

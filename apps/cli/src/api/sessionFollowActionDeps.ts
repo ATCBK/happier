@@ -1,10 +1,21 @@
 import axios from 'axios';
 import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { resolveSessionFollowActionRequest, parseSessionFollowActionResponse } from '@happier-dev/protocol/sessions/follow/actionTransport';
-import { SessionFollowSourcesErrorResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
-import { ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
+import { ListSessionFollowSourcesResponseSchema, SessionFollowSourcesErrorResponseSchema, SetSessionFollowSourceResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { DeliveryMuteErrorResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { ListAccountSessionFollowsResponseV1Schema, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
 import { projectSessionFollowSourceKeyPreparationAfterSetV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
+import { FollowRuleSetActionInputV1Schema, SessionFollowActionInputSchemasV1 } from '@happier-dev/protocol/sessions/follow/actions';
+import { equalFollowRuleReceiverV1, GetSessionFollowRuleResponseV1Schema, ListSessionFollowRulesResponseV1Schema,
+  SessionFollowRuleErrorResponseV1Schema,
+  SessionFollowRuleDefinitionV1Schema, SetSessionFollowRuleResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1,
+  type SessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { openSessionFollowRuleContentV1, sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
 import type { SessionFollowSourceKeyPreparationResultV1, ActionExecutorDeps } from '@happier-dev/protocol';
+import type { StoredCredentials } from '@/persistence';
+import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
 import { createAuthenticationHttpStatusError, createHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
@@ -20,6 +31,8 @@ type SessionFollowActionFixedHome =
 /** One endpoint and credential are captured for the lifetime of this executor. */
 export function createSessionFollowActionDeps(input: Readonly<{
   token: string;
+  credentials?: StoredCredentials;
+  isCredentialCurrent?: () => boolean | Promise<boolean>;
   serverHttpBaseUrl?: string;
   /** Lane 09 supplies this only after Lane 13 verifies the scoped Machine carrier. */
   prepareSourceKeyAfterSet?: (input: Readonly<{
@@ -33,7 +46,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
     context: Parameters<NonNullable<ActionExecutorDeps['sessionTargetTrackedSet']>>[0]['context'];
     sessionIds: readonly string[];
     signal?: AbortSignal;
-  }>) => Promise<Readonly<{ ok: boolean }>>;
+  }>) => Promise<Readonly<{ ok: true; sessionIds: readonly string[] }> | Readonly<{ ok: false }>>;
 }> {
   if (
     (input.serverId === undefined) !== (input.serverHttpBaseUrl === undefined)
@@ -68,17 +81,26 @@ export function createSessionFollowActionDeps(input: Readonly<{
         ...(signal ? { signal } : {}),
         validateStatus: () => true,
       });
-      return response.status >= 200 && response.status < 300
-        && ReplaceSessionVoiceInclusionsResponseSchema.safeParse(response.data).success
-        ? { ok: true }
+      const parsed = ReplaceSessionVoiceInclusionsResponseSchema.safeParse(response.data);
+      return response.status >= 200 && response.status < 300 && parsed.success
+        ? { ok: true, sessionIds: parsed.data.sessionIds }
         : { ok: false };
     },
     sessionFollowAction: async ({ context, actionId, input: actionInput, serverId: requestedServerId, signal }) => {
       if (requestedServerId && requestedServerId !== serverId) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
-      const request = resolveSessionFollowActionRequest(actionId, actionInput);
-      const authorization = resolveExternalActionServerRequestHeaders({
+      const parsedInput = SessionFollowActionInputSchemasV1[actionId].parse(actionInput);
+      const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
+      const privateRuleOperation = 'source' in parsedInput && parsedInput.source.kind === 'rule'
+        || 'direction' in parsedInput && parsedInput.direction === 'following';
+      const assertCurrent = async () => {
+        signal?.throwIfAborted();
+        if (privateRuleOperation && (requester ? !await requester.isCurrent() : input.isCredentialCurrent && !await input.isCredentialCurrent())) {
+          throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
+        }
+      };
+      const authorize = (request: Readonly<{ method: 'GET' | 'PUT' | 'DELETE'; path: string; body?: unknown }>) => resolveExternalActionServerRequestHeaders({
         context,
         effectActionId: actionId,
         method: request.method,
@@ -93,9 +115,38 @@ export function createSessionFollowActionDeps(input: Readonly<{
           ? { installationId: input.externalActionMachineInstallationId }
           : {}),
       });
+      const captureRuleStorage = async () => {
+        await assertCurrent();
+        const credentials = requester?.credentials ?? input.credentials;
+        const requesterAccountId = context.externalActionExecutionAuthorization?.binding.accountId;
+        if (!credentials || context.externalActionCredential && !requester
+          || context.runtimeAccountId && readAccountIdFromToken(credentials.token) !== context.runtimeAccountId
+          || (requesterAccountId ? !requester || readAccountIdFromToken(credentials.token) !== requesterAccountId
+          || requester.serverHttpBaseUrl.replace(/\/+$/, '') !== serverHttpBaseUrl.replace(/\/+$/, '')
+          : credentials.token !== input.token)) {
+          throw Object.assign(new Error('follow_rule_account_scope_unavailable'), { code: 'follow_rule_account_scope_unavailable' });
+        }
+        const authorization = authorize({ method: 'GET', path: '/v1/account/encryption/currentness' });
+        if (!authorization.ok) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+        const admitted = await resolveCliAccountStorageContext({ credentials, serverBaseUrl: serverHttpBaseUrl,
+          authorizationHeaders: authorization.headers, ...(signal ? { signal } : {}) });
+        await assertCurrent();
+        return admitted;
+      };
+      const ruleTarget = 'source' in parsedInput && 'receiver' in parsedInput && parsedInput.source.kind === 'rule'
+        ? { ruleId: parsedInput.source.ruleId, receiver: parsedInput.receiver } : null;
+      const storage = ruleTarget && actionId !== 'follow.remove' ? await captureRuleStorage() : null;
+      const ruleSet = ruleTarget && actionId === 'follow.set' ? FollowRuleSetActionInputV1Schema.parse(actionInput) : null;
+      const ruleContent = ruleSet && storage
+        ? sealSessionFollowRuleContentV1({ ruleId: ruleSet.source.ruleId, receiver: ruleSet.receiver,
+          definition: SessionFollowRuleDefinitionV1Schema.parse({ ...ruleSet.ruleDefinition, policy: ruleSet.policy }),
+          mode: storage.mode, material: storage.material }) : undefined;
+      const request = resolveSessionFollowActionRequest(actionId, actionInput, { ...(ruleContent ? { ruleContent } : {}) });
+      const authorization = authorize(request);
       if (!authorization.ok) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      await assertCurrent();
       const response = await axios.request<unknown>({
         url: `${serverHttpBaseUrl}${request.path}`,
         method: request.method,
@@ -104,25 +155,59 @@ export function createSessionFollowActionDeps(input: Readonly<{
         ...(signal ? { signal } : {}),
         validateStatus: () => true,
       });
+      await assertCurrent();
       if (response.status < 200 || response.status >= 300) {
         const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
         if (scopeDenial) return scopeDenial;
-        const failure = SessionFollowSourcesErrorResponseSchema.safeParse(response.data);
+        const failure = ruleTarget ? SessionFollowRuleErrorResponseV1Schema.safeParse(response.data) : actionId.startsWith('session.delivery.mute.')
+          ? DeliveryMuteErrorResponseV1Schema.safeParse(response.data)
+          : SessionFollowSourcesErrorResponseSchema.safeParse(response.data);
         if (failure.success) return { ok: false, errorCode: failure.data.error, error: failure.data.error };
         if ([404, 405, 501].includes(response.status)) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
         if (isAuthenticationStatus(response.status)) throw createAuthenticationHttpStatusError(response.status, 'Follow Action authentication failed');
         throw createHttpStatusError(response.status, 'Follow Action request failed');
       }
-      if (actionId === 'session.follow.sources.set') {
-        const parsed = parseSessionFollowActionResponse(actionId, actionInput, response.data);
-        const setInput = actionInput as Readonly<{ sourceSessionId: string; destinationSessionId: string }>;
+      const openRule = (rule: SessionFollowRuleV1, admitted: Awaited<ReturnType<typeof captureRuleStorage>>) => {
+        const opened = openSessionFollowRuleContentV1({ ruleId: rule.ruleId, receiver: rule.receiver,
+          content: rule.content, mode: admitted.mode, material: admitted.material });
+        if (opened.status !== 'opened') throw Object.assign(new Error(opened.reason), { code: opened.reason });
+        return { ruleId: rule.ruleId, receiver: rule.receiver, version: rule.version, definition: opened.definition };
+      };
+      if (ruleTarget && storage && (actionId === 'follow.get' || actionId === 'follow.set')) {
+        const rule = actionId === 'follow.get' ? GetSessionFollowRuleResponseV1Schema.parse(response.data).rule
+          : SetSessionFollowRuleResponseV1Schema.parse(response.data).rule;
+        if (rule && (rule.ruleId !== ruleTarget.ruleId
+          || !equalFollowRuleReceiverV1(rule.receiver, ruleTarget.receiver))) throw new Error('session_follow_response_target_mismatch');
+        return parseSessionFollowActionResponse(actionId, actionInput, { rule: rule ? openRule(rule, storage) : null });
+      }
+      const listInput = actionId === 'follow.list' ? SessionFollowActionInputSchemasV1['follow.list'].parse(actionInput) : null;
+      if (listInput?.direction === 'following') {
+        const admitted = await captureRuleStorage();
+        const ruleRequest = { method: 'GET' as const, path: SESSION_FOLLOW_RULES_ROUTE_V1 };
+        const ruleAuthorization = authorize(ruleRequest);
+        if (!ruleAuthorization.ok) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+        await assertCurrent();
+        const ruleResponse = await axios.request<unknown>({ url: `${serverHttpBaseUrl}${ruleRequest.path}`, method: 'GET',
+          headers: ruleAuthorization.headers, ...(signal ? { signal } : {}), validateStatus: () => true });
+        await assertCurrent();
+        if (ruleResponse.status < 200 || ruleResponse.status >= 300) throw createHttpStatusError(ruleResponse.status, 'Follow rule list failed');
+        const rules = ListSessionFollowRulesResponseV1Schema.parse(ruleResponse.data).rules
+          .filter(rule => equalFollowRuleReceiverV1(rule.receiver, listInput.receiver)).map(rule => openRule(rule, admitted));
+        const rows = listInput.receiver.kind === 'account'
+          ? { follows: ListAccountSessionFollowsResponseV1Schema.parse(response.data).follows, sources: [] }
+          : { follows: [], sources: ListSessionFollowSourcesResponseSchema.parse(response.data).sources };
+        return parseSessionFollowActionResponse('follow.list', actionInput, { ...rows, rules, coverage: 'complete' });
+      }
+      const setInput = actionId === 'follow.set' ? SessionFollowActionInputSchemasV1['follow.set'].parse(actionInput) : null;
+      if (setInput?.source.kind === 'session' && setInput.receiver.kind === 'session') {
+        const parsed = SetSessionFollowSourceResponseSchema.parse(parseSessionFollowActionResponse(actionId, actionInput, response.data));
         const prepare = input.prepareSourceKeyAfterSet;
         if (prepare) {
           let preparation: SessionFollowSourceKeyPreparationResultV1;
           try {
             preparation = await prepare({
-              sourceSessionId: setInput.sourceSessionId,
-              destinationSessionId: setInput.destinationSessionId,
+              sourceSessionId: setInput.source.sessionId,
+              destinationSessionId: setInput.receiver.sessionId,
               context,
               ...(signal ? { signal } : {}),
             });
@@ -145,11 +230,7 @@ export function createSessionFollowActionDeps(input: Readonly<{
  * every eligibility write delegates to canonical exact-Home Account Follow. */
 export function createSessionTrackedTargetCompatibilityDep(input: Readonly<{
   serverId: string;
-  replaceSessionVoiceInclusions: (args: Readonly<{
-    context: Parameters<NonNullable<ActionExecutorDeps['sessionTargetTrackedSet']>>[0]['context'];
-    sessionIds: readonly string[];
-    signal?: AbortSignal;
-  }>) => Promise<Readonly<{ ok: boolean }>>;
+  replaceSessionVoiceInclusions: ReturnType<typeof createSessionFollowActionDeps>['replaceSessionVoiceInclusions'];
 }>): Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'> {
   return {
     sessionTargetTrackedSet: async (targets) => {
@@ -182,8 +263,8 @@ export function createSessionTrackedTargetCompatibilityDep(input: Readonly<{
       return {
         ok: true as const,
         status: 'ok' as const,
-        sessionIds: addresses.map((address) => address.sessionId),
-        sessionAddresses: addresses,
+        sessionIds: [...replaced.sessionIds],
+        sessionAddresses: replaced.sessionIds.map(sessionId => ({ serverId: input.serverId, sessionId })),
         sessions: [],
       };
     },

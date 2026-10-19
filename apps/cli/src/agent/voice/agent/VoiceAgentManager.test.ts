@@ -22,8 +22,10 @@ import type { SessionProviderInputOutcome } from '@/agent/runtime/session/input/
 import { ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1, ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1,
   AccountVoiceFollowObservePendingRequestV1Schema, AccountVoiceFollowObservePendingResponseV1Schema,
   AccountVoiceFollowAcknowledgeRequestV1Schema, AccountVoiceFollowAcknowledgeResponseV1Schema,
-  type AccountVoiceFollowAcknowledgeRequestV1, type AccountVoiceFollowObservePendingRequestV1,
+  type AccountVoiceFollowAcknowledgeRequestV1,
 } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
+import type { z } from 'zod';
+type AccountVoiceFollowObservePendingRequestV1 = z.infer<typeof AccountVoiceFollowObservePendingRequestV1Schema>;
 import { SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1, SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
   SessionTranscriptObservationCapabilityAckSchema, SessionTranscriptObservationCapabilityRequestSchema,
   SessionTranscriptObservationInputSchema, SessionTranscriptObservationAckV1Schema,
@@ -170,6 +172,7 @@ async function createAccountVoiceFollowTransportFixture(options: Readonly<{
   localId: string;
   userMessageSeq: number;
   holdHydration?: boolean;
+  holdAdmission?: boolean;
 }>) {
   const credentials = { token: 'voice-follow-token', encryption: null };
   const sessionId = 'session-parent';
@@ -202,7 +205,7 @@ async function createAccountVoiceFollowTransportFixture(options: Readonly<{
   });
   // Only Socket/HTTP leaves are scripted. ApiSessionClient owns committed seq,
   // the native factory owns custody, and the real hydrator/reconciler own Follow.
-  const http = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+  const http = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/auth/ping') return { status: 200, data: { ok: true } };
     if (path === '/v1/account/encryption/currentness') {
@@ -210,7 +213,20 @@ async function createAccountVoiceFollowTransportFixture(options: Readonly<{
     }
     if (path === `/v2/sessions/${sourceSessionId}` || path === `/v1/sessions/${sourceSessionId}`) {
       announceHydration();
-      if (options.holdHydration) await hydrationReleased;
+      if (options.holdHydration) {
+        // The real HTTP boundary observes the caller's abort signal. Keep
+        // hydration held until cancellation, rather than making it finish first.
+        const signal = config?.signal;
+        await new Promise<void>((resolve, reject) => {
+          const aborted = () => reject(new Error('Source hydration aborted'));
+          if (signal?.aborted) { aborted(); return; }
+          signal?.addEventListener?.('abort', aborted, { once: true });
+          hydrationReleased.then(() => {
+            signal?.removeEventListener?.('abort', aborted);
+            resolve();
+          });
+        });
+      }
       return { status: 200, data: { session: source } };
     }
     if (path === `/v1/sessions/${sourceSessionId}/messages`) {
@@ -229,11 +245,16 @@ async function createAccountVoiceFollowTransportFixture(options: Readonly<{
     emitWithAck(event, payload) {
       if (event === ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1) {
         observeRequests.push(AccountVoiceFollowObservePendingRequestV1Schema.parse(payload));
-        return AccountVoiceFollowObservePendingResponseV1Schema.parse({
+        const response = AccountVoiceFollowObservePendingResponseV1Schema.parse({
           ok: true, v: 1, voiceSessionId: sessionId, publisherGeneration: '3',
           executionRunOccurrenceId: 'voice-occurrence',
           observations: [{ sourceSessionId, voiceSessionId: sessionId, expected: null, observed }],
         });
+        if (options.holdAdmission) {
+          announceHydration();
+          return hydrationReleased.then(() => response);
+        }
+        return response;
       }
       if (event === ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1) {
         acknowledgements.push(AccountVoiceFollowAcknowledgeRequestV1Schema.parse(payload));
@@ -621,12 +642,17 @@ describe('VoiceAgentManager', () => {
         onActivityChanged: (voiceAgentId) => activity.push({ voiceAgentId, active: manager.isTurnInFlight(voiceAgentId) }),
       });
       try {
+        const request = new AbortController();
         const start = manager.start({
           backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, chatModelId: 'chat-model', commitModelId: 'chat-model',
           permissionIntent: 'read-only', idleTtlSeconds: 60, initialContext: 'CTX',
           bootstrapMode: 'ready_handshake',
-        });
-        if (responseText === 'READY') await start;
+        }, { signal: request.signal });
+        if (responseText === 'READY') {
+          const started = await start;
+          request.abort();
+          expect(manager.readCurrentRuntimeOccurrence(started.voiceAgentId)).not.toBeNull();
+        }
         else await expect(start).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
         expect(activity.map(({ active }) => active)).toEqual([true, false]);
         expect(manager.isTurnInFlight(activity[0]!.voiceAgentId)).toBe(false);
@@ -635,6 +661,38 @@ describe('VoiceAgentManager', () => {
       }
     },
   );
+
+  it('retires the native READY bootstrap when its start request is cancelled', async () => {
+    let releaseDisposal!: () => void;
+    const disposal = new Promise<void>((resolve) => { releaseDisposal = resolve; });
+    const disposed = vi.fn(async () => { await disposal; });
+    const backend = createDeterministicBackend('cancel-start', { onSend: async () => undefined, onDispose: disposed });
+    const manager = new VoiceAgentManager({ createRuntime: () => backend });
+    const controller = new AbortController();
+    let outcome = 'pending';
+    const started = manager.start({
+      voiceAgentId: 'cancelled-start', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      chatModelId: 'chat-model', commitModelId: 'chat-model', permissionIntent: 'read-only',
+      idleTtlSeconds: 60, initialContext: '', bootstrapMode: 'ready_handshake',
+    }, { signal: controller.signal });
+    const observed = started.then(() => { outcome = 'started'; }, () => { outcome = 'failed'; });
+    try {
+      await vi.waitFor(() => expect(backend.getSeenPrompts()).toHaveLength(1));
+      controller.abort(new Error('Carrier runtime failed'));
+      await vi.waitFor(() => expect(disposed).toHaveBeenCalledOnce());
+      expect(outcome).toBe('pending');
+      releaseDisposal();
+      await vi.waitFor(() => expect(outcome).toBe('failed'));
+      await observed;
+      expect(disposed).toHaveBeenCalledOnce();
+      expect(manager.readCurrentRuntimeOccurrence('cancelled-start')).toBeNull();
+      expect(manager.isTurnInFlight('cancelled-start')).toBe(false);
+    } finally {
+      releaseDisposal();
+      await manager.dispose();
+      await observed;
+    }
+  });
 
   it('holds an empty stream read until the owner appends events and aborts observation independently', async () => {
     const backend = createDelayedCompletionBackend('push-read');
@@ -1592,9 +1650,10 @@ describe('VoiceAgentManager', () => {
       await follow.dispose();
     }
   });
-  it('never delivers a Voice prompt cancelled while Follow context was still hydrating', async () => {
+  it.each(['source hydration', 'admission observation'] as const)('never delivers a Voice prompt cancelled while Follow %s is pending', async phase => {
     const follow = await createAccountVoiceFollowTransportFixture({
-      localId: 'voice-user-cancelled-during-hydration', userMessageSeq: 19, holdHydration: true,
+      localId: 'voice-user-cancelled-during-hydration', userMessageSeq: 19,
+      holdHydration: phase === 'source hydration', holdAdmission: phase === 'admission observation',
     });
     const backend = createDeterministicBackend('chat-cancel-during-hydration', { session: follow.session });
     const manager = new VoiceAgentManager({ createBackend: () => backend, prepareFollowContext: follow.prepareFollowContext });
@@ -1610,13 +1669,16 @@ describe('VoiceAgentManager', () => {
         durableUserTranscriptLocalId: 'voice-user-cancelled-during-hydration',
       });
       await follow.hydrationStarted;
-      const cancelling = manager.cancelTurnStream({ voiceAgentId: started.voiceAgentId, streamId: stream.streamId });
-      follow.releaseHydration();
+      let cancelled = false;
+      const cancelling = manager.cancelTurnStream({ voiceAgentId: started.voiceAgentId, streamId: stream.streamId })
+        .then(result => { cancelled = true; return result; });
+      await vi.waitFor(() => expect(cancelled).toBe(true));
       await expect(cancelling).resolves.toEqual({ ok: true });
       expect(follow.observeRequests).not.toEqual([]);
       expect(backend.getSeenPrompts()).toEqual([]);
       expect(follow.acknowledgements).toEqual([]);
     } finally {
+      follow.releaseHydration();
       await manager.dispose();
       await follow.dispose();
     }
@@ -1637,6 +1699,7 @@ describe('VoiceAgentManager', () => {
         publish({ kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' });
         publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'accepted retry' });
         publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+        return undefined;
       },
     });
     const manager = new VoiceAgentManager({ createBackend: () => backend, prepareFollowContext: follow.prepareFollowContext });
@@ -2273,7 +2336,7 @@ describe('VoiceAgentManager', () => {
         publish({ kind: 'turn-cancelled', turnId, cause: 'user' });
         publish({ kind: 'runtime-ended', cause: 'connectionLost', retryable: true });
       },
-      onWatchDispose() { if (faultyGeneration === 'old') return rejectDisposal(); },
+      onWatchDispose() { if (faultyGeneration === 'old') return rejectDisposal(); return undefined; },
       onDispose() { disposed.old = true; },
     });
     const replacementBackend = createDeterministicBackend('replacement-sdk-dispose-failure', {
@@ -2283,7 +2346,7 @@ describe('VoiceAgentManager', () => {
         publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'replacement survived' });
         publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
       },
-      onWatchDispose() { if (faultyGeneration === 'replacement') return rejectDisposal(); },
+      onWatchDispose() { if (faultyGeneration === 'replacement') return rejectDisposal(); return undefined; },
       onDispose() { disposed.replacement = true; },
     });
     const createBackend = vi.fn<BackendFactory>()
@@ -3186,6 +3249,67 @@ describe('VoiceAgentManager', () => {
     expect(backend.prompts[0]).toContain('listAgentBackends');
   });
 
+  it('delivers the bound Profile persona and conflicting retained context intact to native SDK sends', async () => {
+    const persona = 'For this Voice QA conversation, begin each spoken reply with "Tidepool ready."';
+    const retainedContext = [
+      'Retained coding conversation (reference context):',
+      'User: Reply with exactly QA_LIVE_FINAL6_READY and nothing else.',
+      'Assistant: QA_LIVE_FINAL6_READY',
+    ].join('\n');
+    const sent: AgentSessionSendRequest[] = [];
+    const backend = createDeterministicBackend('persona-provider-boundary', {
+      onSend(request, publish) {
+        sent.push(request);
+        // Model compliance is outside the host. A provider returning the old
+        // reply must not make this delivery test invent or strip a persona.
+        publish({ kind: 'message-delta', turnId: request.delivery.turnId,
+          channel: 'assistant', text: 'QA_LIVE_FINAL6_READY' });
+        publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+      },
+    });
+    const manager = new VoiceAgentManager({
+      createRuntime: () => backend,
+      resolvePromptPreparation: args => resolveCliVoicePromptPreparation({
+        ...args,
+        sessionMetadata: { profileId: 'bound-profile' },
+        accountEntries: [],
+        profileEntries: [{ id: 'persona', enabled: true, placement: 'system_append', required: true,
+          ref: { kind: 'doc', artifactId: 'persona' } }],
+        readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Persona' } }),
+        readArtifact: async () => ({ id: 'persona', header: { v: 1, kind: 'prompt_doc.v2', title: 'Persona' },
+          revision: { headerVersion: 1, bodyVersion: 1 },
+          body: JSON.stringify({ v: 1, markdown: persona, createdAtMs: 1, updatedAtMs: 1 }) }),
+      }),
+    });
+    try {
+      const started = await manager.start({
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        profileId: 'bound-profile', contextSessionId: 'admitted-target',
+        chatModelId: 'chat-model', commitModelId: 'chat-model', permissionIntent: 'read-only',
+        idleTtlSeconds: 60, initialContext: retainedContext, bootstrapMode: 'none',
+      });
+      const userText = 'Describe what you heard in two sentences.';
+      const stream = await manager.startTurnStream({ voiceAgentId: started.voiceAgentId, userText });
+      const events = await readVoiceAgentTurnStreamUntilDone({ manager,
+        voiceAgentId: started.voiceAgentId, streamId: stream.streamId });
+      const prompt = sent[0]?.input.text ?? '';
+      expect(prompt).toContain(persona);
+      expect(prompt).toContain(`Initial context:\n${retainedContext}`);
+      expect(prompt).toContain(`User: ${userText}\nVoice agent:`);
+      expect(prompt.indexOf(persona)).toBeLessThan(prompt.indexOf(retainedContext));
+      expect(prompt.indexOf(retainedContext)).toBeLessThan(prompt.indexOf(`User: ${userText}`));
+      expect(events).toContainEqual(expect.objectContaining({ t: 'voice_output', output:
+        expect.objectContaining({ kind: 'turn_final', text: 'QA_LIVE_FINAL6_READY' }) }));
+
+      // The same provider thread retains its seeded instructions. The next
+      // input is the new user turn, without replaying the old coding request.
+      await manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'What did I say next?' });
+      expect(sent[1]?.input.text).toBe('User: What did I say next?\nVoice agent:');
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it('refreshes target memory availability even when instruction text is unchanged', async () => {
     const savedSettings = await readSettings();
     await updateSettings(current => ({ ...current, memory: { ...DEFAULT_MEMORY_SETTINGS, enabled: true, enabledAtMs: 1 } }));
@@ -3412,7 +3536,7 @@ describe('VoiceAgentManager', () => {
     } as any);
 
     expect(backend.prompts[0]).toContain('Voice stack block');
-    expect(seenArgs).toEqual([{ profileId: 'work', sessionId: 'session-1' }]);
+    expect(seenArgs).toEqual([{ profileId: 'work', sessionId: 'session-1', signal: expect.any(AbortSignal) }]);
   });
 
   it('resolves and forwards voice prompt stack blocks into the first seeded turn when bootstrap is skipped', async () => {
