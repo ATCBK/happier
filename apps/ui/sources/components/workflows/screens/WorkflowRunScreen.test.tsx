@@ -849,6 +849,38 @@ describe('WorkflowRunScreen', () => {
         await screen.pressByTestIdAsync('workflow-run-see-failures');
         expect(readContentProps()?.selectedInvocationId).toBe(leaf.id);
     });
+    it.each(['recorded', 'absent', 'miswired'] as const)('keeps R5 failure facts through stored producer → page → See failures (%s)', async evidence => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled',
+            finishedAt: '2026-10-19T04:58:00.000Z' });
+        const failed = createWorkflowInvocationIndexFixture({ lifecycle: 'failed', createdAt: '2026-10-19T03:42:00.000Z',
+            updatedAt: run.finishedAt! });
+        const machine = storeState.state.machines[run.machineId]!;
+        getStorage().setState({ machines: { [machine.id]: { ...machine, active: false,
+            activeAt: Date.parse('2026-10-19T10:28:00.000Z') } } });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'root',
+            attempt: failed.attempt, logicalInvocationRecordId: failed.id, invocationPath: { blockId: '$root', scope: [] },
+            timing: { startedAt: failed.createdAt, finishedAt: run.finishedAt },
+            ...(evidence === 'absent' ? {} : { reason: { code: 'plugin_failed', message: 'Review process exited with an error' } }),
+        });
+        const screen = await renderRunScreen({ run, invocations: [], failedInvocation: failed, failedInvocationDetails: [{
+            index: evidence === 'miswired' ? { ...failed, id: '88888888-8888-4888-8888-888888888888' } : failed,
+            progress, parentRevision: run.revision,
+        }] });
+        if (evidence === 'miswired') {
+            expect(readContentProps()?.failurePresentation).toBeNull();
+            expect(screen.getTextContent()).not.toContain('Review process exited with an error');
+            return;
+        }
+        const cause = evidence === 'absent' ? { kind: 'cause_not_recorded' }
+            : { kind: 'reported_failure', code: 'plugin_failed', message: 'Review process exited with an error' };
+        expect(readContentProps()?.failurePresentation?.recovery.failureCause).toMatchObject(cause);
+        expect(screen.getTextContent()).not.toContain('Lost contact');
+        await screen.pressByTestIdAsync('workflow-run-see-failures');
+        const inspector = screen.findAllByType(WorkflowInvocationDetail)[0];
+        expect(inspector?.props.recovery).toBe(readContentProps()?.failurePresentation?.recovery);
+        expect(inspector?.props.recovery.failureCause).toMatchObject(cause);
+        expect(screen.getTextContent()).not.toContain('Lost contact');
+    });
     it('opens the Run on Map and closes a query-selected step back to that exact Run', async () => {
         Object.assign(platformViewport, { width: 390, height: 844 });
         const replace = vi.fn();

@@ -11,7 +11,6 @@ import type {
 } from '@happier-dev/protocol';
 
 import { t } from '@/text';
-import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { formatWorkflowConversationProblem } from '@/components/workflows/presentation/workflowProblemPresentation';
 import type { WorkflowInvocationStructureEntry } from './workflowInvocationStructure';
 import { findWorkflowBlock, findWorkflowBlockListRef, getWorkflowBlockList } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
@@ -130,7 +129,7 @@ export type WorkflowInvocationRecoveryPresentation = Readonly<{
         runtimeIssue?: SessionRuntimeIssueV1 | null;
         reset?: string | null;
         at: string | null;
-    }> | Readonly<{ kind: 'lost_contact'; machine: string; lastSeenAt: number | null }> | null;
+    }> | Readonly<{ kind: 'cause_not_recorded' }> | null;
     /** Connectivity is separate from the recorded failure and exact recovery eligibility. */
     unavailableMachine?: Readonly<{ name: string; lastSeenAt: number | null }> | null;
     canInspectExecution: boolean;
@@ -257,9 +256,8 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
             message: issue.message ?? params.progress.reason.message ?? null, reset: issue.reset,
             runtimeIssue: params.progress.reason.runtimeIssueV1 ?? null,
             at: params.progress.timing?.finishedAt ?? null }
-        : invocation !== null && (failed || POSSIBLY_ACTIVE_INVOCATION_LIFECYCLES.has(invocation.lifecycle))
-            && (params.run.state === 'interrupted' || params.run.state === 'failed') && unavailableMachine
-            ? { kind: 'lost_contact', machine: unavailableMachine.name, lastSeenAt: unavailableMachine.lastSeenAt }
+        : invocation?.lifecycle === 'failed'
+            ? { kind: 'cause_not_recorded' }
             : null;
 
     return {
@@ -314,31 +312,17 @@ export type WorkflowRunFailurePresentation = Readonly<{
     recovery: WorkflowInvocationRecoveryPresentation;
 }>;
 
-/** "Lost contact with <Machine> at <time>": one wording for the Run page and its recovery card. */
-export function formatWorkflowLostContact(machine: string, lastSeenAt: number | null): string {
-    return lastSeenAt === null
-        ? t('workflows.recovery.lostContact', { machine })
-        : t('workflows.recovery.lostContactAt', { machine, time: formatAsOfTime(lastSeenAt) });
-}
-
 /**
  * Why a Run failed, as the one quiet line under its outcome: the failed step's ordinal (the number
- * its Map row carries), what happened in the provider's words or the lost Machine and when, and when
- * a usage limit resets. Null when nothing is known beyond the outcome sentence.
+ * its Map row carries), the recorded failure and any reported usage-limit reset.
+ * Current connectivity never supplies historical cause, even when its timestamp precedes failure.
  */
 export function formatWorkflowRunFailureCauseLine(
     failure: WorkflowRunFailurePresentation,
-    /** When the Run settled: a Machine last seen after it cannot be why it failed, so the line does not blame it. */
-    finishedAtMs?: number | null,
 ): string | null {
     const cause = failure.recovery.failureCause ?? null;
-    const unavailable = failure.recovery.unavailableMachine ?? null;
-    const lostBeforeFinish = (lastSeenAt: number | null) => lastSeenAt === null || finishedAtMs === null
-        || finishedAtMs === undefined || !Number.isFinite(finishedAtMs) || lastSeenAt <= finishedAtMs;
     const headline = cause?.kind === 'reported_failure' ? cause.message
-        : cause?.kind === 'lost_contact' ? lostBeforeFinish(cause.lastSeenAt) ? formatWorkflowLostContact(cause.machine, cause.lastSeenAt) : null
-            : unavailable !== null && lostBeforeFinish(unavailable.lastSeenAt)
-                ? formatWorkflowLostContact(unavailable.name, unavailable.lastSeenAt) : null;
+        : cause?.kind === 'cause_not_recorded' ? t('workflows.recovery.causeNotRecorded') : null;
     if (headline === null || headline === undefined || headline === '') return null;
     const reset = cause?.kind === 'reported_failure' ? cause.reset ?? null : null;
     const ordinal = failure.step?.ordinal ?? null;

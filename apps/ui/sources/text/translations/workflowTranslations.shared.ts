@@ -636,6 +636,7 @@ export const en = {
         lostContact: ({ machine }: { machine: string }) => `Lost contact with ${machine}`,
         lostContactAt: ({ machine, time }: { machine: string; time: string }) => `Lost contact with ${machine} at ${time}`,
         didNotFinish: 'This step did not finish',
+        causeNotRecorded: 'The failure cause was not recorded',
         keptBody: 'Completed steps are kept. Nothing finished is repeated.',
         choicesOnReconnect: ({ machine }: { machine: string }) => `Recovery choices appear when ${machine} reconnects.`,
         noChoices: 'This step cannot be continued from here.',

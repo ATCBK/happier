@@ -33,10 +33,32 @@ import {
     projectWorkflowRunFailure,
     selectWorkflowRunFailureInvocation,
     formatWorkflowRunFailureCauseLine,
-    formatWorkflowLostContact,
 } from './workflowRunDetailPresentation';
 
 describe('managed workflow Run presentation', () => {
+    it('never assigns a failure cause from later Machine reachability (R5 03:42–04:58 / 10:28)', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', finishedAt: '2026-10-19T04:58:00.000Z' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed', createdAt: '2026-10-19T03:42:00.000Z',
+            updatedAt: '2026-10-19T04:58:00.000Z' });
+        const lastSeenAt = Date.parse('2026-10-19T10:28:00.000Z');
+        const recovery = projectWorkflowInvocationRecovery({ run, invocation, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Review box', reachable: false, lastSeenAt } });
+        expect(recovery.failureCause).toEqual({ kind: 'cause_not_recorded' });
+        expect(recovery.unavailableMachine).toEqual({ name: 'Review box', lastSeenAt });
+        expect(formatWorkflowRunFailureCauseLine({ invocationId: invocation.id, step: null, recovery }))
+            .toBe(t('workflows.recovery.causeNotRecorded'));
+        const online = projectWorkflowInvocationRecovery({ run, invocation, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Review box', reachable: true, lastSeenAt } });
+        expect(online.failureCause).toEqual(recovery.failureCause);
+        for (const lifecycle of ['completed', 'running', 'needs_attention', 'outcome_uncertain'] as const) {
+            expect(projectWorkflowInvocationRecovery({ run, invocation: { ...invocation, lifecycle }, progress: null,
+                machineHomeDirectory: null, machine: { name: 'Review box', reachable: false, lastSeenAt } }).failureCause).toBeNull();
+        }
+        // Even contact lost before the Run ended proves only current availability, never its cause.
+        expect(projectWorkflowInvocationRecovery({ run, invocation, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Review box', reachable: false, lastSeenAt: Date.parse(invocation.createdAt) - 1 } }).failureCause)
+            .toEqual(recovery.failureCause);
+    });
     it('does not replace authoritative empty or unresolved failure discovery with a different loaded failure', () => {
         const loaded = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
         const structure = new Map([[loaded.id, { invocationId: loaded.id, nodeId: 'work', blockId: 'work',
@@ -66,7 +88,7 @@ describe('managed workflow Run presentation', () => {
         expect(projectWorkflowRunFailure({ run: { ...run, id: 'another-run' }, invocation: failed.index, progress: failed.progress,
             structure, projection: projectWorkflowFlow(scene.definition), machineHomeDirectory: null })).toBeNull();
     });
-    it('keeps lost contact on the failed Run root without blaming its completed child (R4)', () => {
+    it('keeps a structural failure unrecorded without blaming its completed child or current Machine (R4)', () => {
         const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' });
         const root = createWorkflowInvocationIndexFixture({ id: 'root', lifecycle: 'failed' });
         const child = createWorkflowInvocationIndexFixture({ id: 'child', lifecycle: 'completed', parentRecordId: root.id, sequence: '1' });
@@ -77,16 +99,10 @@ describe('managed workflow Run presentation', () => {
             machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 },
             structure: projectWorkflowInvocationStructure({ definition, invocations: [root, child] }), projection: projectWorkflowFlow(definition) };
         expect(projectWorkflowRunFailure(params)).toMatchObject({ invocationId: root.id, step: null,
-            recovery: { failureCause: { kind: 'lost_contact', machine: 'Build box', lastSeenAt: 1791633660000 } } });
+            recovery: { failureCause: { kind: 'cause_not_recorded' } } });
         expect(projectWorkflowRunFailure({ ...params, invocation: child })).toBeNull();
-        // Without a failed step the line names no number; it says which Machine was lost and when.
         expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!))
-            .toBe(formatWorkflowLostContact('Build box', 1791633660000));
-        expect(formatWorkflowLostContact('Build box', 1791633660000)).toContain('Build box');
-        // A Machine last seen after the Run settled was not why it failed: the line does not blame it.
-        expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!, 1791633660000 - 60_000)).toBeNull();
-        expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!, 1791633660000 + 60_000))
-            .toBe(formatWorkflowLostContact('Build box', 1791633660000));
+            .toBe(t('workflows.recovery.causeNotRecorded'));
     });
     it.each([1_900_000_000_000, null])('presents the source runtime issue and only a reported reset (%s)', resetAtMs => {
         const run = createWorkflowRunSummaryFixture({ state: 'interrupted' });
@@ -129,7 +145,7 @@ describe('managed workflow Run presentation', () => {
         });
         expect(projectWorkflowInvocationRecovery({ run, invocation, progress: { ...progress, reason: undefined }, machineHomeDirectory: null,
             machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 } }).failureCause)
-            .toMatchObject({ kind: 'lost_contact', machine: 'Build box', lastSeenAt: 1791633660000 });
+            .toMatchObject({ kind: 'cause_not_recorded' });
         expect(projectWorkflowInvocationRecovery({ run, invocation: { ...invocation, lifecycle: 'completed' }, progress,
             machineHomeDirectory: null, machine: { name: 'Build box', reachable: false } }).failureCause).toBeNull();
         expect(projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null,

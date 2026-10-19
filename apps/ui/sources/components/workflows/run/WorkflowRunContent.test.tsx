@@ -2594,9 +2594,9 @@ describe('WorkflowRunContent', () => {
     const cause = screen
       .findAllByType(Item)
       .find((item) => item.props.testID === 'workflow-run-recovery-cause');
-    expect(cause?.props.title).toContain('workflows.recovery.lostContact');
+    expect(cause?.props.title).toBe('workflows.recovery.causeNotRecorded');
     const text = screen.getTextContent();
-    expect(text).toContain('workflows.recovery.lostContact');
+    expect(text).not.toContain('workflows.recovery.lostContact');
     expect(text).toContain('workflows.recovery.choicesOnReconnect');
     // Said once: the card owns "when choices appear", so the outcome region does not repeat it.
     expect(screen.findByTestId('workflow-run-machine-unavailable')).toBeNull();
@@ -2607,7 +2607,7 @@ describe('WorkflowRunContent', () => {
     expect(text).not.toContain('"references"');
   });
 
-  it('heads an uncertain step with what that means for it, and a plain failed step keeps the generic line', async () => {
+  it('heads an uncertain step with its effects and an unexplained failed step with cause not recorded', async () => {
     const render = async (lifecycle: 'outcome_uncertain' | 'failed') => {
       const invocation = createWorkflowInvocationIndexFixture({
         id: 'inv-1',
@@ -2660,7 +2660,7 @@ describe('WorkflowRunContent', () => {
     );
     expect(uncertain.acknowledgement?.props.subtitle).toBeUndefined();
     expect((await render('failed')).head).toBe(
-      'workflows.recovery.didNotFinish',
+      'workflows.recovery.causeNotRecorded',
     );
   });
 

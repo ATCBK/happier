@@ -38,7 +38,6 @@ import { WorkflowReviewValue } from './WorkflowReviewCard';
 import { useAnsweredByLabel } from './workflowAnsweredBy';
 
 import { workflowRunStyles as styles } from './workflowRunStyles';
-import { formatWorkflowLostContact } from './workflowRunDetailPresentation';
 import type {
     WorkflowInvocationRecoveryPresentation,
     WorkflowRecoveryContinuation,
@@ -308,20 +307,15 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     ] as const).filter(([, offered]) => offered).map(([choice]) => choice);
     const choiceDisplay = (choice: (typeof offeredChoices)[number]) => offeredChoices[0] === choice ? 'default' as const : 'secondary' as const;
     const choiceOffered = offeredChoices.length > 0 || replacementOffered;
-    // What happened comes from the recovery owner's typed cause (FF-D17FUNC): a reported failure in the
-    // provider's words, or lost contact with its Machine and when.
+    // Only this attempt's recorded failure explains what happened. Connectivity only affects recovery.
     const failureCause = recovery.failureCause ?? null;
     const unavailableMachine = recovery.unavailableMachine ?? null;
     const showRecoveryCard = choiceOffered || recovery.workspaceUnavailable || failureCause !== null
         || props.lifecycle === 'failed' || props.lifecycle === 'outcome_uncertain';
-    const lostContactHeadline = formatWorkflowLostContact;
-    // A failure reported in words leads with them. Without words, an unreachable Machine is the cause the
-    // person can act on ("Lost contact with … at 14:58"), never a bare reason code.
     const reportedMessage = failureCause?.kind === 'reported_failure' ? failureCause.message : null;
     const causeHeadline = reportedMessage
-        ?? (failureCause?.kind === 'lost_contact' ? lostContactHeadline(failureCause.machine, failureCause.lastSeenAt) : null)
         ?? props.cause
-        ?? (unavailableMachine !== null ? lostContactHeadline(unavailableMachine.name, unavailableMachine.lastSeenAt) : null)
+        ?? (failureCause?.kind === 'cause_not_recorded' ? t('workflows.recovery.causeNotRecorded') : null)
         ?? t('workflows.recovery.didNotFinish');
     // With choices, the description says what they keep; without, the one sentence saying when they
     // appear is the sheet's content, so the card never draws an empty tinted sheet under its title.
@@ -334,7 +328,7 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
     // An interruption needs you; only a reported failure reads as failed (lab run-A_failed / _interrupted).
     // With nothing to choose yet nothing needs you, so the card stays quiet (DESIGN-18 R1b).
     const recoveryTone = !choiceOffered ? 'neutral' as const
-        : reportedMessage === null && (failureCause?.kind === 'lost_contact' || unavailableMachine !== null)
+        : reportedMessage === null && unavailableMachine !== null
             || props.lifecycle !== 'failed' ? 'attention' as const : 'danger' as const;
     // The acknowledgement row explains itself unless the card's head already says it (an uncertain step).
     const headSaysEffects = props.lifecycle === 'outcome_uncertain' && props.cause != null && causeHeadline === props.cause;

@@ -783,12 +783,11 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
     const failedStepLabel = props.run.state === 'failed' ? failurePresentation?.step?.name ?? null : null;
     // Why the Run failed is said once: here, unless the inspector beside the header is open on that step and its
     // recovery card already heads with it. A phone pushes the step to its own page, so its header keeps the line.
-    // The line names the failed step's number, what happened (the provider's words or the lost Machine and when)
+    // The line names the failed step's number, what the attempt recorded
     // and a usage limit's reset, so the page says why without opening See failures (FIN-DESIGN-C4 R5).
     const failureReason = props.run.state !== 'failed' || failurePresentation == null
         || (!phone && props.selectedInvocationId === failurePresentation.invocationId) ? null
-        : formatWorkflowRunFailureCauseLine(failurePresentation,
-            props.run.finishedAt == null ? null : Date.parse(props.run.finishedAt));
+        : formatWorkflowRunFailureCauseLine(failurePresentation);
     const outcomeWord = formatWorkflowRunOutcomeLabel({
         state: props.run.state,
         workflowCustodyState: props.run.workflowCustodyState,
