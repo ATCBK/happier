@@ -1,8 +1,7 @@
 import type { ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { inTx, type Tx } from "@/storage/inTx";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
-import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from "@/app/teams/teamChanges";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import {
@@ -90,7 +89,8 @@ async function mutateConnectedServiceCredentialForModeInTx(
     if (params.expectedCredentialRevision === undefined) {
         return { status: "revision_required" };
     }
-    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [params.accountId], "exclusive");
+    const recheckAudience = await acquireAccountCredentialSourceTeamAdmissionInTx(tx,
+        { accountId: params.accountId, intent: "exclusive" });
     const account = await tx.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -203,6 +203,7 @@ async function mutateConnectedServiceCredentialForModeInTx(
                 },
                 legacyExpiresAt: params.expiresAt,
             };
+    await recheckAudience();
     const result =
         accountEncryptionTransitionMode
             ? await migrateQualifiedConnectedServiceCredentialInTx(
@@ -239,7 +240,6 @@ export async function mutateConnectedServiceCredential(
     params: ConnectedServiceCredentialMutationParams,
 ): Promise<ConnectedServiceCredentialMutationResult> {
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true, intent: "exclusive" });
         const result = await mutateConnectedServiceCredentialInTx(tx, params);
         if (result.status === "written") {
             await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId });

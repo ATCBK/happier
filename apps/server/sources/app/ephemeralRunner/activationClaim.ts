@@ -6,6 +6,7 @@ import { db } from '@/storage/db';
 import { publishRunnerActivationChangedInTx } from './activationChanges';
 import { readRunnerCreatorCurrentnessInTx, reconcileRunnerActivationCurrentnessInTx } from './activationCurrentness';
 import { runnerActivationBinding } from './activationService';
+import { acquireRunnerActivationLockInTx } from './activationLock';
 
 export type ClaimEphemeralRunnerActivationResult =
     | Readonly<{ status: 'claimed'; claim: RunnerClaimV1 }>
@@ -25,11 +26,12 @@ export async function claimEphemeralRunnerActivation(
         const initial = await tx.ephemeralRunnerActivation.findUnique({ where: { id: params.activationId }, select: { creatorAccountId: true } });
         if (!initial) return { status: 'unavailable' };
         try {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId, "content");
         } catch (error) {
             if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) return { status: 'unavailable' };
             throw error;
         }
+        await acquireRunnerActivationLockInTx(tx, params.activationId);
         const row = await tx.ephemeralRunnerActivation.findUnique({ where: { id: params.activationId } });
         if (!row || row.homeServerIdentityId !== options.homeServerIdentityId || row.state === 'closed' || row.state === 'materialized') return { status: 'unavailable' };
         const binding = runnerActivationBinding(row);

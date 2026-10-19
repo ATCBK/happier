@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { AccountEncryptionMigrateConnectedServicesDirectiveSchema, type AccountEncryptionMigrateConnectedServicesDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 
 import type { Tx } from "@/storage/inTx";
-import { acquireAccountSessionOwnerMetadataFencesInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from "@/app/teams/teamChanges";
 
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import {
@@ -432,7 +432,8 @@ export async function migrateConnectedServicesAccountEncryptionInTx(
         directive: unknown;
     }>,
 ): Promise<ConnectedServicesAccountEncryptionMigrationResult> {
-    await acquireAccountSessionOwnerMetadataFencesInTx(params.tx, [params.accountId], "exclusive");
+    const recheckAudience = await acquireAccountCredentialSourceTeamAdmissionInTx(params.tx,
+        { accountId: params.accountId, intent: "exclusive" });
     const parsed =
         AccountEncryptionMigrateConnectedServicesDirectiveSchema.safeParse(
             params.directive,
@@ -482,6 +483,7 @@ export async function migrateConnectedServicesAccountEncryptionInTx(
             : [];
     if (!preparedLegacy) return { status: "invalid_content" };
 
+    await recheckAudience();
     let changed = false;
     if (
         params.currentMode !== params.toMode
@@ -582,6 +584,7 @@ export async function migrateConnectedServicesAccountEncryptionInTx(
         }
     }
 
+    await recheckAudience();
     const accountVersion =
         changed
             ? await recordConnectedServiceAccountProfileChange({

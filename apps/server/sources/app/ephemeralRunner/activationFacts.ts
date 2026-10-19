@@ -7,12 +7,13 @@ import { db } from '@/storage/db';
 import { publishRunnerActivationChangedInTx } from './activationChanges';
 import { readRunnerCreatorCurrentnessInTx, reconcileRunnerActivationCurrentnessInTx } from './activationCurrentness';
 import { runnerActivationBinding } from './activationService';
+import { acquireRunnerActivationLockInTx } from './activationLock';
 
 export type StoreRunnerEndpointFactsResult =
     | Readonly<{ status: 'stored'; endpointFacts: RunnerEndpointFactsV1 }>
     | Readonly<{ status: 'unavailable' | 'content_mode_mismatch' | 'conflict' }>;
 
-/** The claimed installation publishes its exact signed facts through the existing Account fence. */
+/** The claimed installation publishes exact signed facts under admission and the activation lock. */
 export async function storeRunnerEndpointFacts(
     params: Readonly<{ activationId: string; endpointFacts: unknown }>,
     options: Readonly<{ homeServerIdentityId: string }>,
@@ -26,11 +27,12 @@ export async function storeRunnerEndpointFacts(
         const initial = await tx.ephemeralRunnerActivation.findUnique({ where: { id: params.activationId }, select: { creatorAccountId: true } });
         if (!initial) return { status: 'unavailable' };
         try {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId, "content");
         } catch (error) {
             if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) return { status: 'unavailable' };
             throw error;
         }
+        await acquireRunnerActivationLockInTx(tx, params.activationId);
         const row = await tx.ephemeralRunnerActivation.findUnique({ where: { id: params.activationId } });
         if (!row || row.homeServerIdentityId !== options.homeServerIdentityId
             || (row.state !== 'claimed' && row.state !== 'consented')) return { status: 'unavailable' };

@@ -14,7 +14,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
-import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from '@/app/teams/teamChanges';
 import { db } from "@/storage/db";
 import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import {
@@ -801,6 +801,7 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
     preparedCreate: QualifiedConnectedAccountPreparedCreate | null,
     accountEncryptionTransitionMode?: "plain" | "e2ee",
 ): Promise<QualifiedConnectedServiceCredentialMutationResult> {
+    const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'exclusive' });
     if (params.expectedCredentialRevision === null) {
         if (params.expectedConfigurationRevision !== undefined) {
             throw new Error(
@@ -1005,6 +1006,7 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
                     : {}),
             },
         });
+        await recheckAdmission();
         return {
             status: "written",
             credentialRevision,
@@ -1039,6 +1041,7 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
             configurationRevision: latest?.configurationRevision ?? null,
         };
     }
+    await recheckAdmission();
     return {
         status: "written",
         credentialRevision,
@@ -1250,7 +1253,6 @@ export async function settlePreparedQualifiedConnectedServiceCredentialCreate(
 ): Promise<QualifiedConnectedServiceCredentialMutationResult> {
     try {
         return await inTx(async (tx) => {
-            await acquireAccountChangePublicationLocksInTx(tx, [prepared.params.accountId], { includeSingleAccount: true, intent: "exclusive" });
             const result =
                 await mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
                     tx,
@@ -1323,7 +1325,6 @@ export async function mutateQualifiedConnectedServiceCredential(
     const canonicalParams =
         canonicalizeQualifiedCredentialMutation(params);
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [canonicalParams.accountId], { includeSingleAccount: true, intent: "exclusive" });
         const result =
             await mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
                 tx,
@@ -1454,6 +1455,7 @@ async function mutateQualifiedConnectedAccountConfigurationForModeInTx(
     params: QualifiedConnectedAccountConfigurationMutationParams,
     accountEncryptionTransitionMode?: "plain" | "e2ee",
 ): Promise<QualifiedConnectedAccountConfigurationMutationResult> {
+    const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
     const account = await tx.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -1550,6 +1552,7 @@ async function mutateQualifiedConnectedAccountConfigurationForModeInTx(
             configurationRevision: latest.configurationRevision,
         };
     }
+    await recheckAdmission();
     return {
         status: "written",
         credentialRevision,
@@ -1570,7 +1573,6 @@ export async function mutateQualifiedConnectedAccountConfiguration(
         ),
     };
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         const result =
             await mutateQualifiedConnectedAccountConfigurationInTx(
                 tx,
@@ -2111,7 +2113,7 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
     });
     if (observed.status !== "change_required") return observed;
     return await inTx(async (tx) => {
-        await acquireAccountChangePublicationLocksInTx(tx, [canonical.accountId], { includeSingleAccount: true });
+        const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: canonical.accountId, intent: 'content' });
         // A real publication still admits mode, credential/configuration CAS
         // and equality after the Account fence; the earlier read grants nothing.
         const admitted = await readQualifiedCredentialHealthMutationInTx(tx, canonical);
@@ -2151,6 +2153,7 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
                 configurationRevision: latest.configurationRevision,
             };
         }
+        await recheckAdmission();
         await recordConnectedServiceAccountProfileChange({
             tx,
             accountId: canonical.accountId,
@@ -2543,6 +2546,7 @@ export async function deleteQualifiedConnectedServiceCredential(
     const ref = QualifiedConnectedAccountRefSchema.parse(params.ref);
     try {
         return await inTx(async (tx) => {
+            const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'exclusive' });
             // Fence before the first credential/dependency read. This shares
             // the Account-mode and managed-resource publication boundary;
             // ordinary Account cursor traffic must not invalidate deletion.
@@ -2715,6 +2719,7 @@ export async function deleteQualifiedConnectedServiceCredential(
                 }
             }
 
+            await recheckAdmission();
             if (memberships.length > 0) {
                 const groups = new Map<
                     string,
