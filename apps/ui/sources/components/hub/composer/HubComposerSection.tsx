@@ -24,11 +24,15 @@ import { HubComposerSuggestions, type HomeComposerSuggestionFill } from './sugge
  */
 export const HubComposerSection = React.memo(function HubComposerSection(props: Readonly<{
     /**
+     * How the suggestions stand: `tiles` on the plain page; under Home's atmosphere they step back to
+     * links or pills, wherever the composer sits (Home decides this once for both of its paths).
+     */
+    suggestions: 'tiles' | 'links' | 'pills';
+    /**
      * `hero`: under Home's atmosphere the composer stands in the hero's own column (it supplies the
-     * width and rhythm), and the suggestions step back to links or pills. Refs let the hero measure it.
+     * width and rhythm). Refs let the hero measure it.
      */
     hero?: Readonly<{
-        suggestions: 'links' | 'pills';
         composerRef: React.Ref<View>;
         suggestionsRef: React.Ref<View>;
         onLayout: () => void;
@@ -75,16 +79,16 @@ export const HubComposerSection = React.memo(function HubComposerSection(props: 
             <View testID="hub-composer" style={styles.heroStack}>
                 {composer}
                 <View ref={hero.suggestionsRef} onLayout={hero.onLayout}>
-                    <HubComposerSuggestions onFill={fill} presentation={hero.suggestions} />
+                    <HubComposerSuggestions onFill={fill} presentation={props.suggestions} />
                 </View>
             </View>
         );
     }
     return (
         <ItemGroup surface="none">
-            <View testID="hub-composer" style={styles.stack}>
+            <View testID="hub-composer" style={props.suggestions === 'tiles' ? styles.stack : styles.heroStack}>
                 {composer}
-                <HubComposerSuggestions onFill={fill} />
+                <HubComposerSuggestions onFill={fill} presentation={props.suggestions} />
             </View>
         </ItemGroup>
     );

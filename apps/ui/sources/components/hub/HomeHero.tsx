@@ -223,12 +223,11 @@ export function HomeHero(
   }), [frame.measure, frame.onComposerFocusChange]);
   const composerHero = React.useMemo(
     () => ({
-      suggestions: props.suggestions,
       composerRef: frame.composerRef,
       suggestionsRef: frame.suggestionsRef,
       onLayout: frame.measure,
     }),
-    [frame.composerRef, frame.measure, frame.suggestionsRef, props.suggestions],
+    [frame.composerRef, frame.measure, frame.suggestionsRef],
   );
   return (
     <View
@@ -244,7 +243,7 @@ export function HomeHero(
         {props.showComposer ? (
           <View style={props.phone ? styles.composerPhone : styles.composer}>
             <AtmosphereBandBoundary.Provider value={atmosphereBoundary}>
-            <HubComposerSection hero={composerHero} />
+            <HubComposerSection hero={composerHero} suggestions={props.suggestions} />
             </AtmosphereBandBoundary.Provider>
           </View>
         ) : null}

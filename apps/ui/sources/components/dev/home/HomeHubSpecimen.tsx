@@ -200,7 +200,7 @@ export function HomeHubSpecimen(props: Readonly<{ machines: boolean; firstRun?: 
                     const testID = `home-hub.section.${section.id}`;
                     switch (section.id) {
                         case 'start':
-                            return <React.Fragment key={section.id}><HubComposerSection /></React.Fragment>;
+                            return <React.Fragment key={section.id}><HubComposerSection suggestions="tiles" /></React.Fragment>;
                         case 'attention':
                             return <React.Fragment key={section.id}><HubAttentionList items={labAttention(theme.colors.text.secondary)} /></React.Fragment>;
                         case 'setup':

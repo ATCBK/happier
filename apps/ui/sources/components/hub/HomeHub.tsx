@@ -98,6 +98,7 @@ type SlotProps = Readonly<{
     topLevelIds: readonly string[];
     onCustomize: () => void;
     placeholder: string;
+    composerSuggestions: 'tiles' | 'links' | 'pills';
     tracker: NearViewportTracker;
     homeSurface: WidgetSurfaceRefV1 | null;
     widgetDrag: Pick<SessionSurfaceEntityBinding, 'scope' | 'isCurrent' | 'admitWidgetMovement'> | null;
@@ -148,7 +149,7 @@ function HubBuiltinSlot(props: SlotProps & Readonly<{
     );
     return (
         <View testID={`home-hub.section.${props.section.id}`} style={definition.card ? styles.card : undefined} {...hover.hoverProps}>
-            {definition.render({ menu, placeholder: props.placeholder, frameStyle })}
+            {definition.render({ menu, placeholder: props.placeholder, frameStyle, composerSuggestions: props.composerSuggestions })}
         </View>
     );
 }
@@ -535,7 +536,12 @@ export const HomeHub = React.memo(function HomeHub() {
         return framed(<SessionGettingStartedGuidance variant="primaryPane" accessory={HOME_GUIDANCE_ACCESSORY} />);
     }
 
-    const slotProps = { layout, topLevelIds, onCustomize: openCustomize, placeholder: greeting.subtitle, tracker, widgetDrag,
+    // Under the atmosphere the composer's suggestions step back so it stays the one hero (quiet links over
+    // Horizon, glass pills over a Wallpaper and Rise), wherever the composer sits; tiles only on the plain page.
+    const wallpaper = atmosphere.source === 'picture' && atmosphere.picture.layout === 'wallpaper';
+    const atmosphereSuggestions = wallpaper || (planetSource && placement === 'rise') ? 'pills' as const : 'links' as const;
+    const composerSuggestions = heroActive ? atmosphereSuggestions : 'tiles' as const;
+    const slotProps = { layout, topLevelIds, onCustomize: openCustomize, placeholder: greeting.subtitle, composerSuggestions, tracker, widgetDrag,
         customizing: customizeOpen, showGrips: customizeOpen, groupOperations, movementSourceItem: movement.sourceItem, homeSurface: surface };
     // Under the atmosphere the composer leads Home unless the person moved it lower. While the layout is
     // still loading the hero keeps the composer's room (the default places it first), so the status line
@@ -588,7 +594,6 @@ export const HomeHub = React.memo(function HomeHub() {
     );
 
     if (heroActive) {
-        const wallpaper = atmosphere.source === 'picture' && atmosphere.picture.layout === 'wallpaper';
         return framed(
             <View ref={heroFrame.paneRef} style={styles.pane} onLayout={heroFrame.measure} collapsable={false}>
                 <ItemList
@@ -621,7 +626,7 @@ export const HomeHub = React.memo(function HomeHub() {
                     <AtmosphereTopChips picture={atmosphere.source === 'picture' ? atmosphere.builtinPicture : null}
                         lookTarget={HOME_LOOK_TARGET} />
                     <HomeHero title={title} phone={phone} paneHeight={heroFrame.pane.height} frame={heroFrame}
-                        rise={planetSource && placement === 'rise'} suggestions={wallpaper || (planetSource && placement === 'rise') ? 'pills' : 'links'}
+                        rise={planetSource && placement === 'rise'} suggestions={atmosphereSuggestions}
                         showComposer={heroComposer} />
                     <ItemGroup surface="none">
                         <View ref={heroFrame.nextRef} onLayout={heroFrame.measure} style={styles.statusRow}>

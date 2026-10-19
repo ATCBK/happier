@@ -61,6 +61,7 @@ const widgets = vi.hoisted(() => ({
     bodyMounts: {} as Record<string, number>,
     hubRenders: 0,
     setupRenders: 0,
+    composerSuggestions: [] as (string | undefined)[],
     focused: true,
     focusListeners: new Set<() => void>(),
 }));
@@ -148,7 +149,13 @@ vi.mock('expo-router', async () => {
 });
 
 // Each section is its own owner with its own tests; the home decides only which show, and where.
-vi.mock('./composer/HubComposerSection', () => ({ HubComposerSection: () => 'section:start' }));
+vi.mock('./composer/HubComposerSection', () => ({
+    // Records how its suggestions are presented; the composer itself is its own suite's.
+    HubComposerSection: (props: { suggestions?: string }) => {
+        widgets.composerSuggestions.push(props.suggestions);
+        return 'section:start';
+    },
+}));
 vi.mock('./HubAttentionSection', () => ({ HubAttentionSection: () => 'section:attention' }));
 vi.mock('./HubSetupSection', () => ({
     HubSetupSection: () => {
@@ -211,6 +218,7 @@ afterEach(async () => {
     widgets.bodyMounts = {};
     widgets.hubRenders = 0;
     widgets.setupRenders = 0;
+    widgets.composerSuggestions = [];
     widgets.focused = true;
     widgets.focusListeners.clear();
 });
@@ -393,6 +401,18 @@ describe('HomeHub', () => {
         expect(moved.findByTestId('home-hero')).toBeTruthy();
         expect(shownSections(moved.getTextContent())).toEqual(['automations', 'start', 'attention', 'setup']);
         expect(holdsText(moved.findByTestId('home-hero')!, 'section:start')).toBe(false);
+        // Moved lower it still stands over the atmosphere: its suggestions keep the hero's presentation,
+        // never the plain page's tiles.
+        expect(widgets.composerSuggestions.at(-1)).toBe('links');
+    });
+
+    it('presents the composer\'s suggestions as tiles only on the plain page', async () => {
+        settings.layout = { order: ['automations', 'start'], hidden: [] };
+        const screen = await renderHome();
+        await screen.pressByTestIdAsync('look-chip');
+        await screen.pressByTestIdAsync('look-source:none');
+        expect(screen.findByTestId('home-hero')).toBeNull();
+        expect(widgets.composerSuggestions.at(-1)).toBe('tiles');
     });
 
     it('opens Customize over the live page: switches, keyboard moves and reset write the Account layout', async () => {
