@@ -183,7 +183,9 @@ export async function setHomeGovernancePolicy(input: Readonly<{
         if (result.status === "applied") {
             const minimumEligibilityMayChange = input.patch.teamCreationPolicy !== undefined
                 || input.patch.teamsVisibleToMembers !== undefined
-                || input.patch.authenticationPolicy !== undefined;
+                || input.patch.authenticationPolicy !== undefined
+                || input.patch.teamProviderPolicy !== undefined
+                || input.patch.identityNetworkPolicy !== undefined;
             await publishHomeGovernanceChangedInTx(tx, {
                 audience: minimumEligibilityMayChange ? "all_active_accounts" : "administrators",
             });
