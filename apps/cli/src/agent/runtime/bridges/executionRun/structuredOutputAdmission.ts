@@ -7,11 +7,21 @@ import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { CreateAgentInvocationServices } from '@/plugins/runtime/invocation/services/types';
+import { readExecutionRunErrorCode } from './errors';
 
 type ModelAdmissionParams = Pick<ExecutionRunManagerStartParams,
   'backendTarget' | 'modelId' | 'modelSelection' | 'teamCredentialModel' | 'cwd'
   | 'accountSettings' | 'promptCredentials' | 'runtimeDescriptorV1' | 'readNativeOfferedModel'
   | 'connectedServices' | 'secretReferenceOverlay'>;
+
+function modelCatalogUnavailable(modelId: string, reason: string, causeCode?: string): Error {
+  const code = 'model_catalog_unavailable';
+  return Object.assign(new Error('The selected model catalog could not be read.'), {
+    code,
+    rpcErrorCode: code,
+    details: { modelId, reason, ...(causeCode ? { causeCode } : {}) },
+  });
+}
 
 /** One probe owner serves both daemon-retained and ordinary native admission. */
 export async function readNativeExecutionRunOfferedModel(params: Parameters<NonNullable<ExecutionRunManagerStartParams['readNativeOfferedModel']>>[0]
@@ -43,10 +53,20 @@ export async function readNativeExecutionRunOfferedModel(params: Parameters<NonN
     createAgentInvocationServices: params.createAgentInvocationServices,
     isAgentRegistryCurrent: params.isCurrent,
   }, { signal: params.signal });
-  if (!response.ok) return undefined;
+  if (!response.ok) throw modelCatalogUnavailable(params.modelId, 'preflight_failed', response.error.code);
   const catalog = AgentModelsProbeObservationSchema.safeParse(response.result);
-  return !catalog.success || catalog.data.agentId !== agentId || catalog.data.source === 'unavailable'
-    ? undefined : catalog.data.availableModels.find(model => model.id === params.modelId);
+  if (!catalog.success || catalog.data.agentId !== agentId) {
+    throw modelCatalogUnavailable(params.modelId, 'invalid_catalog');
+  }
+  if (catalog.data.source === 'unavailable') throw modelCatalogUnavailable(params.modelId, 'catalog_unavailable');
+  const model = catalog.data.availableModels.find(model => model.id === params.modelId);
+  // Keep usable last-good capability evidence, as the picker does. A failed
+  // refresh without that evidence cannot establish that a model is unsupported.
+  if (catalog.data.refreshError && (!model || !model.capabilities?.structuredOutput
+    || model.capabilities.structuredOutput === 'unknown')) {
+    throw modelCatalogUnavailable(params.modelId, 'catalog_refresh_failed');
+  }
+  return model;
 }
 
 /** Admission consumes the same actual offered-model truth published by the probe. */
@@ -68,9 +88,9 @@ export async function readExecutionRunOfferedModel(params: ModelAdmissionParams)
       return await withAgentPreflightCatalog({ agentId }, context => readNativeExecutionRunOfferedModel({
         ...params, ...request, ...context,
       }));
-    } catch {
-      // An unavailable catalog is not evidence of structured publication support.
-      return undefined;
+    } catch (error) {
+      if (readExecutionRunErrorCode(error) || (error instanceof Error && error.name === 'AbortError')) throw error;
+      throw modelCatalogUnavailable(modelId, 'catalog_read_failed');
     }
   }
   return undefined;

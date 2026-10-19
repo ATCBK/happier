@@ -464,8 +464,12 @@ In development source, native execution-run structured-output admission uses tha
 with the Run's Connected Account selection and Saved Secret overlay. A retained
 Run probes under its requester Account and plugin occurrence, rather than the
 daemon's foreground credentials. The host-private offered-model request carries
-those selections; an unavailable catalog still supplies no structured-output
-support evidence. A launch profile used only for prompt composition does not
+those selections. A failed or unreadable catalog returns `model_catalog_unavailable`,
+and typed snapshot or transport failures retain their cause; these failures are
+not reported as `model_structured_output_unsupported`. A successful observation
+still requires supported structured output for the selected model. Failed refreshes
+can retain usable last-good capability evidence, as the picker does.
+A launch profile used only for prompt composition does not
 become an independent environment selection for this probe.
 
 In development source, an Agent's optional `preflightSessionControls.prepareLaunchEnvironment`
