@@ -28,7 +28,7 @@ import { applyResourceRecipientKeyEnvelopesInTx, mayManageResourceGrants, projec
     type ResourceRecipientEnvelopeStorageAdapter } from "@/app/teams/resourceGrantAccess";
 import { inTx, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
-import { discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, resolveDiscussionAudienceInTx,
+import { acquireDiscussionMutationAccountsInTx, discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, resolveDiscussionAudienceInTx,
     resolveDiscussionContextInTx, type DiscussionStorageMode } from "./access";
 import { discussionFailure, discussionSuccess, type DiscussionResult } from "./serviceTypes";
 import { initializeDiscussionCursorsOnGrantEntryInTx } from "./trackingEntry";
@@ -151,6 +151,8 @@ async function mutationResultInTx(tx: Tx, input: DiscussionActorInput, ownerAcco
 
 /** Only shared resource policy decides management authority and eligible principals. */
 export async function setDiscussionGrantInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionAccessGrantSetRequestV1 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalGrantPrincipal: input.request.principal });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access, input.request.accessLevel)) return discussionFailure("discussion_access_forbidden");
@@ -190,6 +192,8 @@ async function deleteDiscussionGrantInTx(tx: Tx, discussionId: string, principal
 
 /** A revoked caller receives no roster; grants and private key/cursor retirement commit together. */
 export async function removeDiscussionGrantInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionAccessGrantRemoveRequestV1 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalAccountIds: input.request.principal.kind === 'account' ? [input.request.principal.accountId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -211,6 +215,8 @@ export async function inviteDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (request.participant.kind === "account") {
         return setDiscussionGrantInTx(tx, { ...input, request: { principal: request.participant, accessLevel: "edit" } });
     }
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalSessionIds: request.participant.kind === 'session' ? [request.participant.sessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -278,6 +284,8 @@ export async function setDiscussionParticipantPolicyInTx(tx: Tx, input: Discussi
 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
     const parsed = DiscussionParticipantPolicySetRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure("discussion_invalid_content");
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalSessionIds: parsed.data.participant.kind === 'session' ? [parsed.data.participant.sessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId,
         accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
@@ -304,6 +312,8 @@ export async function removeDiscussionParticipantInTx(tx: Tx, input: DiscussionA
     if (!parsed.success) return discussionFailure("discussion_invalid_content");
     const participant = parsed.data.participant;
     if (participant.kind === "account") return removeDiscussionGrantInTx(tx, { ...input, request: { principal: participant } });
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalSessionIds: participant.kind === 'session' ? [participant.sessionId] : [] });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (!mayManageResourceGrants(context.access)) return discussionFailure("discussion_access_forbidden");
@@ -382,6 +392,7 @@ export interface ValidatedDiscussionParticipantBirth {
 /** Ordinary Session birth consumes the reserved setup; the public ref alone grants no authority. */
 export async function validateDiscussionParticipantBirthInTx(tx: Tx, input: DiscussionParticipantBirthInput): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
     const { discussionId, participantSlotId } = input.discussionParticipant;
+    await acquireDiscussionMutationAccountsInTx(tx, { discussionId, actorAccountId: input.accountId });
     const context = await resolveDiscussionContextInTx(tx, { discussionId, accountId: input.accountId,
         authentication: input.authentication ?? backgroundDeliveryAuthentication() });
     if (!context) return discussionFailure("discussion_not_found");
@@ -401,6 +412,8 @@ export async function validateDiscussionParticipantBirthInTx(tx: Tx, input: Disc
 
 /** Bind inside the creator's transaction, after live runtime/disclosure admission and before commit. */
 export async function bindDiscussionParticipantSessionInTx(tx: Tx, input: DiscussionParticipantBirthInput & Readonly<{ sessionId: string }>): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { discussionId: input.discussionParticipant.discussionId,
+        actorAccountId: input.accountId, additionalSessionIds: [input.sessionId] });
     const admitted = await validateDiscussionParticipantBirthInTx(tx, input);
     if (!admitted.ok) return admitted;
     if (admitted.value.sessionId && admitted.value.sessionId !== input.sessionId) return discussionFailure("discussion_idempotency_conflict");
@@ -429,6 +442,7 @@ export async function bindDiscussionParticipantSessionInTx(tx: Tx, input: Discus
 
 /** Own-row removal is idempotent and never discloses a resource owner or roster to an outsider. */
 export async function leaveDiscussionInTx(tx: Tx, input: DiscussionActorInput): Promise<DiscussionResult<DiscussionLeaveResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, input);
     if (input.authentication.authority !== "present_user" || input.authentication.sessionRuntimePrincipal) return discussionFailure("discussion_access_forbidden");
     if (!await isDiscussionAccountCredentialAdmittedInTx(tx, { accountId: input.actorAccountId, authentication: input.authentication })) return discussionFailure("discussion_not_found");
     const row = await tx.discussion.findUnique({ where: { id: input.discussionId }, select: { ownerAccountId: true } });
@@ -442,6 +456,7 @@ export async function leaveDiscussionInTx(tx: Tx, input: DiscussionActorInput): 
 
 /** Transfer reuses an already entitled recipient's current envelope, without changing the content key. */
 export async function transferDiscussionOwnerInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionOwnerTransferRequestV1 }>): Promise<DiscussionResult<DiscussionAccessGrantMutationResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input, additionalAccountIds: [input.request.accountId] });
     if (input.authentication.authority !== "present_user" || input.authentication.sessionRuntimePrincipal) return discussionFailure("discussion_access_forbidden");
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
@@ -512,6 +527,8 @@ export async function readDiscussionRecipientCensusInTx(tx: Tx, input: Discussio
 
 /** Key commits use the shared owner-key fence and recipient-currentness admission. */
 export async function commitDiscussionRecipientKeyEnvelopesInTx(tx: Tx, input: DiscussionActorInput & Readonly<{ request: DiscussionRecipientKeyEnvelopeCommitInputV1 }>): Promise<DiscussionResult<DiscussionRecipientKeyEnvelopeCommitResponseV1>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input,
+        additionalAccountIds: input.request.recipientKeyEnvelopes.map(envelope => envelope.recipientAccountId) });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
     if (!context) return discussionFailure("discussion_not_found");
     if (context.storageMode === "plain") return discussionFailure("data_key_not_required");
@@ -523,15 +540,34 @@ export async function commitDiscussionRecipientKeyEnvelopesInTx(tx: Tx, input: D
         { resourceId: input.discussionId, recipientKeyEnvelopes: input.request.recipientKeyEnvelopes }));
 }
 
+async function readDiscussionGrantAudienceRowsForTeamsInTx(tx: Tx, teamIds: readonly string[]) {
+    if (teamIds.length === 0) return [];
+    return await tx.discussion.findMany({ where: { OR: [
+        { teamGrants: { some: { teamId: { in: [...teamIds] } } } },
+        { groupGrants: { some: { teamGroup: { teamId: { in: [...teamIds] } } } } },
+    ] }, select: { id: true, readStates: { select: { accountId: true } }, keyEnvelopes: { select: { recipientAccountId: true } } } });
+}
+
+/** Read the complete current and retained publication audience without mutating grants. */
+export async function readDiscussionGrantAudienceForTeamsInTx(tx: Tx, input: Readonly<{
+    teamIds: readonly string[]; additionalAccountIds?: readonly string[];
+}>): Promise<readonly string[]> {
+    const rows = await readDiscussionGrantAudienceRowsForTeamsInTx(tx, input.teamIds);
+    const accountIds = new Set<string>();
+    for (const row of rows) {
+        for (const accountId of await resolveDiscussionAudienceInTx(tx, row.id)) accountIds.add(accountId);
+        for (const state of row.readStates) accountIds.add(state.accountId);
+        for (const envelope of row.keyEnvelopes) accountIds.add(envelope.recipientAccountId);
+        for (const accountId of input.additionalAccountIds ?? []) accountIds.add(accountId);
+    }
+    return [...accountIds].sort();
+}
+
 /** Existing Team/Group lifecycle publication consumes this resource-owned audience transition. */
 export async function reconcileDiscussionGrantAudienceForTeamsInTx(tx: Tx, input: Readonly<{
     teamIds: readonly string[]; additionalAccountIds?: readonly string[];
 }>): Promise<void> {
-    if (input.teamIds.length === 0) return;
-    const rows = await tx.discussion.findMany({ where: { OR: [
-        { teamGrants: { some: { teamId: { in: [...input.teamIds] } } } },
-        { groupGrants: { some: { teamGroup: { teamId: { in: [...input.teamIds] } } } } },
-    ] }, select: { id: true, readStates: { select: { accountId: true } }, keyEnvelopes: { select: { recipientAccountId: true } } } });
+    const rows = await readDiscussionGrantAudienceRowsForTeamsInTx(tx, input.teamIds);
     for (const row of rows) {
         const previous = [...new Set([...row.readStates.map(state => state.accountId), ...row.keyEnvelopes.map(envelope => envelope.recipientAccountId),
             ...input.additionalAccountIds ?? []])];

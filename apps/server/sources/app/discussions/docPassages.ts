@@ -10,6 +10,13 @@ import { discussionFailure, discussionSuccess, type DiscussionResult } from './s
 
 export type DiscussionDocSource = DiscussionDocPassageReplyTargetV1['doc'];
 
+/** Source identity discovery precedes Account admission; disclosure still uses the Artifact reader below. */
+export async function readDiscussionDocSourceAuthorityAccountIdsInTx(tx: Tx, source: DiscussionDocSource | null): Promise<string[]> {
+    if (!source) return [];
+    const artifact = await tx.artifact.findUnique({ where: { id: source.ref.artifactId }, select: { accountId: true } });
+    return artifact ? [artifact.accountId] : [];
+}
+
 /** New posts resolve the existing parent rather than inventing a pending message identity. */
 export async function resolveDiscussionDocTargetInTx(tx: Tx, input: Readonly<{
     discussionId: string; replyTarget?: ReturnType<typeof DiscussionReplyTargetV1Schema.parse>;

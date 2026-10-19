@@ -4,14 +4,25 @@ import type { SessionAccessAuthentication } from '@/app/session/access/sessionAc
 import type { Tx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/prisma';
 import { readDiscussionMessageInTx } from './queries';
-import { resolveDiscussionDocTargetInTx, type DiscussionDocSource } from './docPassages';
+import { resolveDiscussionDocSourcesInTx, resolveDiscussionDocTargetInTx, type DiscussionDocSource } from './docPassages';
 import { markDiscussionReadersChangedInTx, scheduleDiscussionBadgeRefreshInTx } from './changes';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
-import { acquireDiscussionMutationAccountsInTx } from './access';
 
 export interface StoredDocEditProposal {
     message: DiscussionMessageV1;
     source: DiscussionDocSource;
+}
+
+/** Discover immutable reply ancestry before C5 admits either resource's Accounts. */
+export async function discoverDocEditProposalSourceInTx(tx: Tx, proposalRef: DiscussionMessageRefV1): Promise<DiscussionDocSource | null> {
+    const message = await tx.discussionMessage.findFirst({ where: {
+        id: proposalRef.messageId, discussionId: proposalRef.discussion.discussionId,
+    }, select: { id: true, replyTargetV1: true } });
+    if (!message) return null;
+    const sources = await resolveDiscussionDocSourcesInTx(tx, {
+        discussionId: proposalRef.discussion.discussionId, messages: [message],
+    });
+    return sources.ok ? sources.value.get(message.id) ?? null : null;
 }
 
 /** Lock the existing immutable message row; SQLite's containing writer transaction owns serialization. */
@@ -27,11 +38,10 @@ async function lockProposalMessageInTx(tx: Tx, proposalRef: DiscussionMessageRef
     }
 }
 
-/** C5 reads the exact admitted message and inherited Doc on its containing transaction, including settled retries. */
+/** C5 owns complete Account admission before this exact message/resource lock, including settled retries. */
 export async function readDocEditProposalInTx(tx: Tx, input: Readonly<{
     actorAccountId: string; authentication: SessionAccessAuthentication; proposalRef: DiscussionMessageRefV1;
 }>): Promise<DiscussionResult<StoredDocEditProposal>> {
-    await acquireDiscussionMutationAccountsInTx(tx, { actorAccountId: input.actorAccountId, discussionId: input.proposalRef.discussion.discussionId });
     await lockProposalMessageInTx(tx, input.proposalRef);
     const read = await readDiscussionMessageInTx(tx, { actorAccountId: input.actorAccountId, authentication: input.authentication,
         discussionId: input.proposalRef.discussion.discussionId, messageId: input.proposalRef.messageId });
@@ -50,7 +60,6 @@ export async function setDocEditProposalDispositionInTx(tx: Tx, input: Readonly<
     proposalRef: DiscussionMessageRefV1; expectedDisposition: 'open';
     disposition: Exclude<DocEditProposalDispositionV1, { state: 'open' }>;
 }>): Promise<boolean> {
-    await acquireDiscussionMutationAccountsInTx(tx, { discussionId: input.proposalRef.discussion.discussionId });
     const disposition = DocEditProposalDispositionV1Schema.safeParse(input.disposition);
     if (!disposition.success || disposition.data.state === 'open') return false;
     const changed = await tx.discussionMessage.updateMany({

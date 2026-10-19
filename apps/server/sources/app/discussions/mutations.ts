@@ -7,20 +7,22 @@ import { computeSessionMutationEqualityPlainDigestV1, SessionMutationEqualityEvi
 import type { StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { inTx, type Tx } from '@/storage/inTx';
-import { isDiscussionCredentialCurrentInTx, resolveDiscussionContextInTx, filterAccountsWithCurrentDiscussionReadAccessInTx, discussionContextStorageAdapter, newDiscussionContextStorageAdapter, type DiscussionContext } from './access';
-import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, resolveDiscussionDocTargetInTx, validateDiscussionDocContentSource } from './docPassages';
+import { acquireDiscussionMutationAccountsInTx, isDiscussionCredentialCurrentInTx, resolveDiscussionContextInTx, filterAccountsWithCurrentDiscussionReadAccessInTx, discussionContextStorageAdapter, newDiscussionContextStorageAdapter, type DiscussionContext } from './access';
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
+import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { admitDiscussionDocSourceInTx, readDiscussionDocSourceAuthorityAccountIdsInTx, resolveDiscussionDocSourcesInTx, resolveDiscussionDocTargetInTx, validateDiscussionDocContentSource } from './docPassages';
 import { admitDiscussionSecondOpinionSourceInTx } from './secondOpinion';
-import { validateInitialDiscussionGrantsInTx, applyInitialDiscussionGrantsInTx } from './accessService';
+import { validateInitialDiscussionGrantsInTx, applyInitialDiscussionGrantsInTx, inviteDiscussionParticipantInTx } from './accessService';
 import { markDiscussionReadersChangedInTx, scheduleDiscussionBadgeRefreshInTx } from './changes';
 import { detachDiscussionFollowSourceInTx, attachDiscussionFollowSourceInTx, invalidateDiscussionFollowDestinationsInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { withdrawDiscussionInputRepliesInTx } from '@/app/session/messages/sessionMessageReply';
 import { DISCUSSION_MESSAGE_SELECT, projectDiscussionAccountActorsInTx, projectDiscussionMessageV1, validateDiscussionStoredContent, validateDiscussionStoredMessage, type DiscussionMessageRow } from './projection';
 import { projectDiscussionForViewerInTx, readDiscussionRowInTx } from './queries';
 import { initializeDiscussionReadBaselinesInTx } from './readState';
-import { reconcileDiscussionCreationIdentityRace } from './createIdentityReconciliation';
+import { DiscussionCreationRejectedError, reconcileDiscussionCreationIdentityRace } from './createIdentityReconciliation';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
 import { readSessionInputDiscussionReplyReturnInTx, settleSessionInputDiscussionReplyReturnInTx } from '@/app/session/messages/sessionMessageReply';
-import { SessionMessageDiscussionReplyReturnV1Schema, type SessionMessageDiscussionReplyReturnV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { SessionMessageDiscussionReplyReturnV1Schema, type SessionMessageDiscussionReplyReturnV1, type SessionMessageReplyProgressV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 type Actor = Readonly<{ actorAccountId: string; authentication: SessionAccessAuthentication }>;
 type ExactDiscussion = Actor & Readonly<{ discussionId: string }>;
@@ -120,6 +122,16 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
     const parsed = DiscussionCreateRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure('discussion_invalid_content');
     const request = parsed.data;
+    const admissionSessionIds = [input.producer?.sessionId, input.authentication.sessionRuntimePrincipal?.sessionId,
+        ...(request.anchor?.kind === 'session' ? [request.anchor.sessionId] : []),
+        ...(request.firstMessage.mentionedSessionIds ?? []),
+        ...(request.participants ?? []).flatMap(participant => participant.kind === 'session' ? [participant.sessionId] : []),
+    ].filter((id): id is string => typeof id === 'string');
+    const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionIds, [input.actorAccountId,
+        ...(request.participants ?? []).flatMap(participant => participant.kind === 'account' ? [participant.accountId] : []),
+        ...await readDiscussionDocSourceAuthorityAccountIdsInTx(tx,
+            request.firstMessage.replyTarget?.kind === 'doc_passage' ? request.firstMessage.replyTarget.doc : null)]);
+    await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
     if (!await isDiscussionCredentialCurrentInTx(tx, { accountId: input.actorAccountId, authentication: input.authentication })) {
         return discussionFailure('discussion_post_denied');
     }
@@ -207,6 +219,14 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
             ...(request.anchor.kind === 'session' ? { anchorSessionId: request.anchor.sessionId } : {}) } : {}),
     }, select: { id: true } });
     await applyInitialDiscussionGrantsInTx(tx, { actorAccountId: input.actorAccountId, discussionId: row.id, initial: initial.value });
+    // Bind through the same current control/disclosure/key owner as a later Invite.
+    // A typed decline unwinds this entire transaction, including earlier slots.
+    for (const participant of request.participants ?? []) {
+        if (participant.kind !== 'session') continue;
+        const invited = await inviteDiscussionParticipantInTx(tx, { actorAccountId: input.actorAccountId,
+            authentication: creatorAuthentication, discussionId: row.id, request: { participant } });
+        if (!invited.ok) throw new DiscussionCreationRejectedError(invited.error);
+    }
     const first = await insertMessageInTx(tx, { discussionId: row.id, actorAccountId: input.actorAccountId, seq: 1, intent, producer, at: now });
     await initializeDiscussionReadBaselinesInTx(tx, { discussionId: row.id, accountIds: [...readers], lastReadSeq: 0 });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: row.id, accountId: input.actorAccountId, authentication: creatorAuthentication });
@@ -227,9 +247,10 @@ export async function createDiscussion(input: Parameters<typeof createDiscussion
     return reconcileDiscussionCreationIdentityRace(() => inTx(tx => createDiscussionInTx(tx, input), { isolationLevel: 'Serializable' }));
 }
 
-/** Trusted runtime provenance still requires a live invited Session with actual Account custody. */
+/** Ordinary runtime provenance requires membership; a validated Workflow original authorizes its exact execution Session. */
 async function admitProducerInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     producer?: DiscussionProducerV1; draftReview?: { artifactId: string; decidingAccountId: string };
+    workflowReply?: SessionMessageReplyProgressV1;
 }>): Promise<DiscussionResult<DiscussionProducerV1 | undefined>> {
     const runtime = input.authentication.sessionRuntimePrincipal;
     const producer = input.producer ?? (runtime ? { v: 1 as const, kind: 'agent' as const, sessionId: runtime.sessionId } : undefined);
@@ -239,6 +260,8 @@ async function admitProducerInTx(tx: Tx, input: ExactDiscussion & Readonly<{
     if (!parsed.success || parsed.data.replyReturn !== undefined || parsed.data.actionRequestAttributionV1 !== undefined
         || (runtime && runtime.sessionId !== parsed.data.sessionId)) return discussionFailure('discussion_post_denied');
     const participant = await tx.discussionParticipant.findUnique({ where: { discussionId_sessionId: { discussionId: input.discussionId, sessionId: parsed.data.sessionId } }, select: { answerPolicy: true, removedAt: true, session: { select: { accountId: true } } } });
+    if (!participant && input.workflowReply?.workflow
+        && input.workflowReply.discussion?.participantSessionId === parsed.data.sessionId) return discussionSuccess(parsed.data);
     if (!participant || participant.removedAt || participant.session?.accountId !== input.actorAccountId) return discussionFailure('discussion_post_denied');
     if (participant.answerPolicy === 'drafts_for_approval') {
         // Only the trusted publisher transport can assert the private V2
@@ -300,25 +323,44 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
 }>): Promise<DiscussionResult<DiscussionPostResponseV1>> {
     const parsed = DiscussionPostRequestV1Schema.safeParse(input.request);
     if (!parsed.success) return discussionFailure('discussion_invalid_content');
-    const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
+    const sourceIdentity = await resolveDiscussionDocTargetInTx(tx, { discussionId: input.discussionId, replyTarget: parsed.data.replyTarget });
+    await acquireDiscussionMutationAccountsInTx(tx, { ...input, includeParticipantSessions: true,
+        additionalAccountIds: await readDiscussionDocSourceAuthorityAccountIdsInTx(tx, sourceIdentity.ok ? sourceIdentity.value : null),
+        additionalSessionIds: [input.producer?.sessionId, input.authentication.sessionRuntimePrincipal?.sessionId,
+            ...(parsed.data.mentionedSessionIds ?? [])].filter((id): id is string => typeof id === 'string') });
+    const returned = input.replyReturn === undefined ? undefined : SessionMessageDiscussionReplyReturnV1Schema.safeParse(input.replyReturn);
+    const runtime = input.authentication.sessionRuntimePrincipal;
+    const candidateProducer = input.producer ?? (runtime ? { v: 1 as const, kind: 'agent' as const, sessionId: runtime.sessionId } : undefined);
+    if (returned && (!returned.success || !candidateProducer || parsed.data.replyTarget?.kind !== 'message'
+        || runtime && runtime.sessionId !== candidateProducer.sessionId)) return discussionFailure('discussion_post_denied');
+    const returnProgress = returned?.success && candidateProducer && parsed.data.replyTarget?.kind === 'message'
+        ? await readSessionInputDiscussionReplyReturnInTx(tx, { accountId: input.actorAccountId, sessionId: candidateProducer.sessionId,
+            ...returned.data, discussionId: input.discussionId, parentMessageId: parsed.data.replyTarget.messageId, localId: parsed.data.localId }) : null;
+    if (returned && !returnProgress) return discussionFailure('discussion_post_denied');
+    let authentication = input.authentication;
+    if (returnProgress?.workflow && runtime) {
+        if (!await isDiscussionCredentialCurrentInTx(tx, {
+            accountId: input.actorAccountId, authentication: input.authentication,
+        })) return discussionFailure('discussion_post_denied');
+        // This exact protected original grants publication, not general runtime
+        // membership or access to another Discussion operation.
+        const { sessionRuntimePrincipal: _principal, ...accountAuthentication } = authentication;
+        authentication = accountAuthentication;
+    }
+    const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication });
     if (!context) return discussionFailure('discussion_post_denied');
     const discussion = await readDiscussionRowInTx(tx, input);
     if (!discussion) return discussionFailure('discussion_not_found');
-    const admitted = await admitProducerInTx(tx, input);
+    const admitted = await admitProducerInTx(tx, { ...input, authentication, ...(returnProgress?.workflow ? { workflowReply: returnProgress } : {}) });
     if (!admitted.ok) return admitted;
     let producer = admitted.value;
     const intent = messageIntent(context.storageMode, parsed.data);
     if ('error' in intent) return discussionFailure(intent.error);
-    const returned = input.replyReturn === undefined ? undefined : SessionMessageDiscussionReplyReturnV1Schema.safeParse(input.replyReturn);
-    if (returned && (!returned.success || !producer || intent.replyTarget?.kind !== 'message')) return discussionFailure('discussion_post_denied');
-    const returnProgress = returned?.success && producer && intent.replyTarget?.kind === 'message'
-        ? await readSessionInputDiscussionReplyReturnInTx(tx, { accountId: input.actorAccountId, sessionId: producer.sessionId,
-            ...returned.data, discussionId: input.discussionId, parentMessageId: intent.replyTarget.messageId, localId: intent.localId }) : null;
-    if (returned && !returnProgress) return discussionFailure('discussion_post_denied');
     // Decline releases the original return; it is never a public reply outcome.
     const returnOutcome = returnProgress?.outcome?.kind;
     if (returnOutcome === 'declined') return discussionFailure('discussion_post_denied');
     if (returned?.success && producer && returnProgress) producer = { ...producer,
+        ...(returnProgress.workflow ? { runId: returnProgress.workflow.runId } : {}),
         ...(returnProgress.actionRequestAttributionV1 ? { actionRequestAttributionV1: returnProgress.actionRequestAttributionV1 } : {}),
         ...(returned.data.acceptedTurnId ? { sourceSession: { sourceSessionId: producer.sessionId,
             sourceTurnId: returned.data.acceptedTurnId, sourceInputId: returned.data.requestLocalId, via: 'action' as const } } : {}),
@@ -330,7 +372,7 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
     if (!validateDiscussionDocContentSource({ content: intent.content, source: source.value, root: intent.replyTarget?.kind === 'doc_passage' })) {
         return discussionFailure('discussion_invalid_reply_target');
     }
-    const sourceAdmission = await admitDiscussionDocSourceInTx(tx, { ...input, source: source.value,
+    const sourceAdmission = await admitDiscussionDocSourceInTx(tx, { ...input, authentication, source: source.value,
         destination: { kind: 'resource', resourceId: discussion.id, adapter: discussionContextStorageAdapter } });
     if (!sourceAdmission.ok) return sourceAdmission;
     if (existing) {
@@ -343,7 +385,7 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
         // authority for disclosing the already committed message on retry.
         const storedSources = await resolveDiscussionDocSourcesInTx(tx, { discussionId: discussion.id, messages: [existing] });
         if (!storedSources.ok) return storedSources;
-        const storedAdmission = await admitDiscussionDocSourceInTx(tx, { ...input, source: storedSources.value.get(existing.id) ?? null,
+        const storedAdmission = await admitDiscussionDocSourceInTx(tx, { ...input, authentication, source: storedSources.value.get(existing.id) ?? null,
             destination: { kind: 'resource', resourceId: discussion.id, adapter: discussionContextStorageAdapter } });
         if (!storedAdmission.ok) return storedAdmission;
         const actors = await projectDiscussionAccountActorsInTx(tx, [existing]);
@@ -355,12 +397,12 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
     if (discussion.archivedAt) return discussionFailure('discussion_archived');
     const readable = await filterAccountsWithCurrentDiscussionReadAccessInTx(tx, { discussionId: discussion.id, accountIds: intent.mentionedAccountIds });
     if (intent.mentionedAccountIds.some(id => !readable.has(id))) return discussionFailure('discussion_invalid_mention');
-    const addressed = await admitAddressedParticipantsInTx(tx, { ...input, producer, intent, informationalReturn: returnProgress !== null });
+    const addressed = await admitAddressedParticipantsInTx(tx, { ...input, authentication, producer, intent, informationalReturn: returnProgress !== null });
     if (!addressed.ok) return addressed;
     // New addressed questions disclose the source again; ordinary chat and
     // historic reads retain the Discussion's independent lifecycle.
     if (addressed.value.addressedSessionIds.length > 0) {
-        const sourceQuote = await admitDiscussionSecondOpinionSourceInTx(tx, { ...input, anchor: discussion.anchorV1,
+        const sourceQuote = await admitDiscussionSecondOpinionSourceInTx(tx, { ...input, authentication, anchor: discussion.anchorV1,
             destination: { kind: 'resource', resourceId: discussion.id, adapter: discussionContextStorageAdapter } });
         if (!sourceQuote.ok) return sourceQuote;
     }
@@ -371,6 +413,7 @@ export async function postDiscussionMessageInTx(tx: Tx, input: ExactDiscussion &
     if (returned?.success && producer && !await settleSessionInputDiscussionReplyReturnInTx(tx, {
         accountId: input.actorAccountId, sessionId: producer.sessionId, requestLocalId: returned.data.requestLocalId,
         acceptedTurnId: returned.data.acceptedTurnId, localId: intent.localId,
+        workflow: returned.data.workflow,
         publicationRef: { kind: 'discussion', discussion: { serverId: returned.data.serverId, discussionId: discussion.id }, messageId: message.id },
     })) throw new Error('Discussion publication lost its original reply custody');
     await publishChangedInTx(tx, discussion.id);
@@ -388,6 +431,7 @@ async function manageDiscussion(input: ExactDiscussion & Readonly<{
     intent: 'rename' | 'archive' | 'restore'; titleContent?: StrictSessionStoredMessageContentEnvelope;
 }>): Promise<DiscussionResult<DiscussionDetailsResponseV1>> {
     return inTx(async tx => {
+        await acquireDiscussionMutationAccountsInTx(tx, { ...input, includeParticipantSessions: input.intent !== 'rename' });
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         if (context.access.level !== 'owner' && context.access.level !== 'admin') return discussionFailure('discussion_manage_denied');
