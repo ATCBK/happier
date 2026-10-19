@@ -68,8 +68,13 @@ Voice enabled bit. An unavailable or disabled dependency still closes the path.
 Enabling the daemon policy creates the inference handle and registers its RPCs;
 it does not download speech models, load a native model or spawn an inference
 process. Model installation is explicit, and runtime loading remains demand-driven.
-The client-side **Voice daemon inference** experimental preference remains a
-separate, default-off user opt-in; it does not determine the daemon's local policy.
+The Account-level **Voice agent** and **Machine speech** preferences are
+standard and enabled by default in 0.3 development. Their switches remain in
+Settings → Features, independent of Experiments, and stored explicit choices
+are preserved. They do not determine the daemon's local policy. Effective use
+still requires the catalog dependencies: Voice Agent requires Voice and Subagents
+(`execution.runs`), and Machine speech requires Voice Agent. Subagents remains
+experimental and opt-in.
 
 ### Browser automation capability ids
 
@@ -236,7 +241,7 @@ admission.
 
 `sessions.following` is the one boundary for durable per-Account Follow of an
 accessible Session, its notification and Voice preferences, and the four
-auto-follow defaults (`assigned`, `direct`, `team`, `group`). It is
+relationship default rules (`assigned`, `direct`, `team`, `group`). It is
 server-represented, `defaultFailMode: 'fail_closed'`, and depends only on
 `sessions` in the Protocol catalog — not on `sharing.session`, because
 following a Session you can already read is not a Team capability.
@@ -256,6 +261,23 @@ is `AccountSessionReadState`, owned by
 `apps/server/sources/app/session/personal/readState.ts` and reachable for any
 Account holding `readTranscript`; see
 [session-collaboration.md](session-collaboration.md).
+
+### Autonomous exchange accepted-start contract (0.3 development)
+
+`sessions.autonomousExchange` is the server-represented, default-on Home
+capability for an exact host-stamped starting input on a Session Turn. It is
+fail-closed and depends on `sessions`. A current Home advertises it through
+`resolveSessionAutonomousExchangeFeature`; an older Home omits the bit. The
+current CLI only sends `startingInputId` when
+`readServerEnabledBit(features, 'sessions.autonomousExchange') === true`.
+Missing or malformed support holds a countable autonomous input before a
+provider effect; it does not change ordinary human Turn begin.
+
+This bit is a wire-contract boundary, not a second check-in policy. The
+original accepted input and its Account setting remain the canonical exchange
+owner, and the exact accepted input/Turn-start join determines whether a new
+turn is counted. The bit alone grants neither Session access nor permission to
+act for another Account.
 
 ### Filtered Session listing feature id
 
