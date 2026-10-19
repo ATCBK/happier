@@ -1,4 +1,5 @@
-import { CurrentUiContextSnapshotV1Schema, type CurrentUiContextSnapshotV1, type SessionAuthoringOpenResultV1 } from '@happier-dev/protocol/plugins/ui';
+import { CurrentUiContextSnapshotV1Schema, type CurrentUiContextSnapshotV1 } from '@happier-dev/protocol/plugins/ui/currentUiContext';
+import type { SessionAuthoringOpenResultV1 } from '@happier-dev/protocol/plugins/ui';
 import { buildSessionInstructionsContextIntentV1 } from '@happier-dev/protocol/actions/sessionStateFieldActions';
 import { SessionPromptStackV1Schema, writeSessionContextIntentV1ToMetadata } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { PromptDocArtifactRefV1Schema, type PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';

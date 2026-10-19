@@ -5,7 +5,7 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { CurrentUiContextVoiceToolPort } from './currentUiContextVoiceToolPort';
 import type { PluginSurfaceActionInvocationSurface, PluginSurfaceHostActionBinding } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
-import { CurrentUiContextSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { CurrentUiContextSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui/currentUiContext';
 import type { CurrentUiContextReader } from './CurrentUiContextProvider';
 import type { CurrentUiContextMountedCommand } from './currentUiContextModel';
 import { isVoiceDictationActionId } from '@happier-dev/protocol/actions/voiceConversationActionFamily';

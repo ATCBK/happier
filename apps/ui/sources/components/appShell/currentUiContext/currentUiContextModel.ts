@@ -17,7 +17,7 @@ import { redactVoicePathLikeString } from '@/voice/shared/redactVoicePathLikeDat
 import {
     CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
     CurrentUiContextSnapshotV1Schema,
-} from '@happier-dev/protocol/plugins/ui';
+} from '@happier-dev/protocol/plugins/ui/currentUiContext';
 import type {
     CurrentUiCommandDescriptorV1,
     CurrentUiContextSnapshotV1,
