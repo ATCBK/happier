@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import { Platform, StyleSheet } from 'react-native';
-import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
+import { Svg, Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import type { HappierSurfaceGradient } from './material.js';
 
 /** One native paint layer. Web draws the same stops on its existing surface element. */
