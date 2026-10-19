@@ -13,6 +13,7 @@ import { createLinuxVitalsFixture } from './readers/linux.testkit';
 import type { MachineVitalsReader } from './readers/types';
 import { MachineVitalsSampleV1Schema, type MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 import { MachineVitalsMinuteRecordV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
+import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 
 interface CounterFixture {
     busy: number;
@@ -149,7 +150,7 @@ describe('createMachineVitalsSampler', () => {
         expect(sampler.latest()?.sampledAt).toBe(initialTime + 60_000);
     });
 
-    it.each(['idle', 'summary', 'processes', 'guard', 'overview'] as const)('enforces the Darwin %s spawn budget: hidden means zero VM requests', async (view) => {
+    it.each(['idle', 'summary', 'processes', 'guard', 'overview', 'on_power', 'scheduled_scan', 'scan_disabled'] as const)('enforces the Darwin %s tool spawn budget', async (view) => {
         let usedBytes = 80_000;
         let wiredPages = 1;
         const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => ({ stdout: command === '/helper'
@@ -157,15 +158,22 @@ describe('createMachineVitalsSampler', () => {
                 memory: { totalBytes: 100_000, availableBytes: 100_000 - usedBytes, pressureLevel: 'calm', pressureSource: 'kernel_level' },
                 volumes: [], interfaces: [],
             } }) : command === '/usr/bin/vm_stat'
-                ? `Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages wired down: ${wiredPages}.\nPages occupied by compressor: 1.\nFile-backed pages: 1.\n` : '', stderr: '' }));
+                ? `Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages wired down: ${wiredPages}.\nPages occupied by compressor: 1.\nFile-backed pages: 1.\n`
+                : command === '/usr/bin/pmset' ? "Now drawing from 'AC Power'\n" : '', stderr: '' }));
         const readers = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile, readCpuTimes: () => [{ user: 1, system: 1, idle: 1 }] });
         const historyStore = await createMinuteHistoryStore({ directory: join(directory, 'darwin-history'), nowMs: Date.now });
-        const sampler = createMachineVitalsSampler({ readers, historyStore, monotonicMs: () => Date.now() - initialTime });
+        // A due scan is an enabled power-dependent policy even without a viewed tab.
+        let policy = MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { keepAwake: view === 'on_power' ? 'on_power' : 'off' },
+            storage: { wholeDiskEnabled: view === 'scheduled_scan', scheduledScan: view === 'scheduled_scan' || view === 'scan_disabled'
+                ? { weekday: new Date(initialTime).getDay(), time: '00:00', onlyOnPower: true } : null } });
+        const needsPolicyPower = view === 'on_power' || view === 'scheduled_scan';
+        const sampler = createMachineVitalsSampler({ readers, historyStore, monotonicMs: () => Date.now() - initialTime, readPolicy: () => policy });
         const count = (command: string, arg?: string) => execFile.mock.calls.filter(([name, args]) => name === command && (arg === undefined || args[1] === arg)).length;
         await sampler.start();
         expect(count('/usr/bin/vm_stat')).toBe(0);
+        expect(count('/usr/bin/pmset', 'batt')).toBe(needsPolicyPower ? 1 : 0);
         const release = view === 'overview' ? sampler.demandOverview()
-            : view === 'idle' ? () => {} : sampler.demand(view === 'processes' ? 'live' : 'summary');
+            : view === 'processes' ? sampler.demand('live') : view === 'summary' || view === 'guard' ? sampler.demand('summary') : () => {};
         try {
             await vi.advanceTimersByTimeAsync(0);
             await sampler.start();
@@ -187,12 +195,14 @@ describe('createMachineVitalsSampler', () => {
             }
             expect(count('/usr/bin/vm_stat')).toBe(view === 'overview' ? 8 : 0);
             expect(count('/usr/bin/pmset', 'therm')).toBe(view === 'overview' ? 1 : 0);
+            expect(count('/usr/bin/pmset', 'batt')).toBe(view === 'overview' || needsPolicyPower ? 1 : 0);
             expect(count('/usr/sbin/ioreg')).toBe(view === 'overview' ? 1 : 0);
             expect(count('/helper')).toBe(view === 'overview' ? 9 : view === 'processes' ? 8 : 1);
             await vi.advanceTimersByTimeAsync(1_000);
             await sampler.start();
             expect(count('/usr/bin/vm_stat')).toBe(view === 'overview' ? 9 : 0);
             expect(count('/usr/bin/pmset', 'therm')).toBe(view === 'overview' ? 2 : 0);
+            expect(count('/usr/bin/pmset', 'batt')).toBe(view === 'overview' ? 2 : needsPolicyPower ? 1 : 0);
             expect(count('/usr/sbin/ioreg')).toBe(view === 'overview' ? 2 : 0);
             releaseSecond();
             releaseSummary();
@@ -204,6 +214,16 @@ describe('createMachineVitalsSampler', () => {
             expect(count('/usr/bin/vm_stat')).toBe(vmRequests);
             expect(sampler.latest()?.memory).not.toHaveProperty('composition');
             releaseProcesses();
+            await vi.advanceTimersByTimeAsync(43_000);
+            await sampler.start();
+            expect(count('/usr/bin/pmset', 'batt')).toBe(needsPolicyPower || view === 'overview' ? 2 : 0);
+            if (needsPolicyPower) expect(sampler.latest()?.power).toEqual({ onAC: true });
+            policy = MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { keepAwake: 'on' } });
+            const batteryReads = count('/usr/bin/pmset', 'batt');
+            await vi.advanceTimersByTimeAsync(60_000);
+            await sampler.start();
+            expect(count('/usr/bin/pmset', 'batt')).toBe(batteryReads);
+            expect(sampler.latest()?.power).toBeUndefined();
         } finally {
             release();
             await sampler.stop();

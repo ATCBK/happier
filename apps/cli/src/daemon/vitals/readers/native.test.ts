@@ -52,13 +52,25 @@ describe('native vitals reader contract', () => {
         if (hidden.state === 'reporting') expect(hidden.sample.memory).not.toHaveProperty('composition');
         expect(execFile.mock.calls.filter(([command]) => command === '/usr/bin/vm_stat')).toHaveLength(4);
     });
-    it('reads macOS AC power on the canonical tick without exposing battery extras', async () => {
+    it.each([2_000, 15_000, 60_000])('spawns no macOS battery tool without a power consumer at %s ms cadence', async (intervalMs) => {
+        const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => ({
+            stdout: command === '/helper' ? output(0) : "Now drawing from 'AC Power'\n", stderr: '',
+        }));
+        const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
+        for (const t of [0, intervalMs, 60_000, 120_000]) {
+            const result = await reader.read({ sampledAt: t, monotonicMs: t, intervalMs, overviewExtras: false });
+            expect(result.state).toBe('reporting');
+            if (result.state === 'reporting') expect(result.sample.power).toBeUndefined();
+        }
+        expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(0);
+    });
+    it('reads demanded macOS AC power on the canonical tick without exposing battery extras', async () => {
         let power = "Now drawing from 'AC Power'\n";
         const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => ({
             stdout: command === '/helper' ? output(0) : command === '/usr/bin/pmset' ? power : '', stderr: '',
         }));
         const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
-        const read = (t: number) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs: 60_000, overviewExtras: false });
+        const read = (t: number) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs: 60_000, power: true, overviewExtras: false });
         expect(await read(0)).toMatchObject({ state: 'reporting', sample: { power: { onAC: true } } });
         power = "Now drawing from 'Battery Power'\n -InternalBattery-0 80%; discharging; 2:00 remaining\n";
         const result = await read(60_000);
@@ -74,7 +86,7 @@ describe('native vitals reader contract', () => {
             stdout: command === '/helper' ? output(0) : command === '/usr/bin/pmset' ? power : '', stderr: '',
         }));
         const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
-        const read = (t: number, overviewExtras = false) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs, overviewExtras });
+        const read = (t: number, power = true) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs, power, overviewExtras: false });
         for (let t = 0; t < 60_000; t += intervalMs) {
             expect(await read(t)).toMatchObject({ state: 'reporting', sample: { power: { onAC: true } } });
         }
@@ -82,6 +94,11 @@ describe('native vitals reader contract', () => {
         power = "Now drawing from 'Battery Power'\n -InternalBattery-0 80%; discharging; 2:00 remaining\n";
         expect(await read(60_000)).toMatchObject({ state: 'reporting', sample: { power: { onAC: false } } });
         expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(2);
+        const undemanded = await read(120_000, false);
+        if (undemanded.state === 'reporting') expect(undemanded.sample.power).toBeUndefined();
+        expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(2);
+        expect(await read(120_000)).toMatchObject({ state: 'reporting', sample: { power: { onAC: false } } });
+        expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(3);
     });
     it('shares Overview battery reads with the existing extras cadence and reports the next power edge', async () => {
         let power = "Now drawing from 'AC Power'\n -InternalBattery-0 80%; charging; 1:00 remaining\n";
