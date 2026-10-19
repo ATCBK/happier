@@ -8,8 +8,8 @@ import type {
   PermissionModeQueuedPromptMode,
 } from '@/agent/runtime/permissions/queuedPrompt';
 import { combinePermissionModeQueuedPrompts } from '@/agent/runtime/permissions/queuedPrompt';
-import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, settleSessionInputRequestV1,
-  withSessionInputAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, SessionInputRequestV2Schema, settleSessionInputRequestV1, settleSessionInputRequestV2,
+  withSessionInputAuthorityV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import {
   ProviderConnectionIdSchema,
@@ -54,7 +54,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     expect(JSON.stringify(queued)).not.toContain('private-rule');
   });
 
-  it('dequeues two admitted Discussion questions as separate native prompts before a later peer answer', async () => {
+  it.each([1, 2] as const)('dequeues two admitted V%s Discussion questions as separate native prompts before a later peer answer', async version => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'same-provider-mode', {
       batcher: combinePermissionModeQueuedPrompts,
     });
@@ -63,13 +63,17 @@ describe('registerPermissionModeMessageQueueBinding', () => {
       getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => {} });
     for (const [index, text] of ['first-question', 'second-question'].entries()) {
       const discussionAddressing = { discussionId: 'discussion', messageId: `question-${index}`, throughSeq: index + 2, participantSessionId: 'receiver' };
-      const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
-        discussionAddressing, replyIntent: { mode: 'return' } });
+      const request = version === 1 ? SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+        discussionAddressing, replyIntent: { mode: 'return' } }) : SessionInputRequestV2Schema.parse({ v: 2,
+        producer: 'workflow', caller: { kind: 'host' }, permission: {},
+        workflow: { purpose: 'invocation', runId: 'workflow', invocationRecordId: `invocation-${index}` },
+        discussionAddressing, replyIntent: { mode: 'wait' } });
       const inputAdmissionReceipt = { v: 1 as const, issuer: 'authenticatedMachine' as const, discussionAddressing,
         admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' } };
-      const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+      const authority = request.v === 1 ? settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt })
+        : settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
       harness.emit({ role: 'user', content: { type: 'text', text }, localId: `input-${index}`, inputAdmissionReceipt,
-        meta: withSessionInputAuthorityV1({}, authority) });
+        meta: withSessionInputAuthority({}, authority) });
     }
     harness.emit({ role: 'user', content: { type: 'text', text: 'later-peer-answer' }, localId: 'later', meta: {} });
     const first = await queue.waitForMessagesAndGetAsString();
