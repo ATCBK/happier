@@ -87,6 +87,9 @@ export async function runObservedWorkflowSessionStartup(
         input: { creationKey: input.creationKey, directory: input.request.directory,
           machineId: host.machineId, agentTarget: input.request.agentTarget ?? null },
         actionRequestId: input.creationKey, rpcContext: host.rpcContext,
+        onOperation: operation => {
+          address = { key: 'startup', serverId: host.serverId, machineId: host.machineId, operationId: operation.operationId };
+        },
         execute: async operation => {
           const operationId = operation.operationAcceptance?.operationId;
           if (!operationId) return { ok: false, errorCode: 'workflow_session_startup_observation_unavailable', error: 'workflow_session_startup_observation_unavailable' };

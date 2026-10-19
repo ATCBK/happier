@@ -157,6 +157,7 @@ export function createHostActionOperationRuntime(deps: Readonly<{
     sessionId?: string;
     /** Already admitted receiving-host context, never a public Action input. */
     rpcContext?: ActionOperationRpcContext;
+    onOperation?: (operation: ActionOperationSnapshotV1) => void;
     execute: (context: Readonly<{
       actionRequestId?: string;
       resumeActionRequest?: true;
@@ -195,6 +196,7 @@ export function createHostActionOperationRuntime(deps: Readonly<{
       ...(attribution ? { requesterWorkAttributionV1: attribution } : {}),
       ...(requestId ? { requestId } : {}),
       input: request.input,
+      ...(request.onOperation ? { onOperation: request.onOperation } : {}),
       ...(domainRef ? { domainRef } : {}),
       cancellation: request.actionId === 'projects.script.run' || request.actionId === 'projects.compute.exec' || request.actionId === 'projects.prepare'
         || request.actionId === 'machines.managed.power.set' || request.actionId === 'machines.managed.delete'

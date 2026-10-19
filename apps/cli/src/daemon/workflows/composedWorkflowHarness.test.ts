@@ -888,7 +888,7 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
   }
 });
 
-it.each(['fresh', 'retained', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
+it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
   const directory = await projectDirectory();
   const runId = '41414141-4141-4141-8141-414141414143';
   const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
@@ -898,10 +898,13 @@ it.each(['fresh', 'retained', 'miswired'] as const)('settles a proven cold start
   const scope = { accountId, machineId };
   const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
     generateOperationId: () => 'failed-start' });
-  const refuse = () => { throw Object.assign(new Error('Requester Home is temporarily unavailable.'), {
-    code: 'project_requester_home_unavailable',
+  const refusalMessage = 'Request failed with status code 409';
+  const refuse = () => { throw Object.assign(new Error(refusalMessage), {
+    code: 'ERR_BAD_REQUEST', response: { status: 409, data: { error: 'currentness_conflict' } },
   }); };
   if (mode === 'retained') await operations.observeExecution({ actionId: 'session.spawn_new', input: {}, execute: async () => refuse() }).catch(() => undefined);
+  const creationKey = `workflow:${runId}:`;
+  let rejoined = false;
   let launches = 0;
   // Native launch is the substituted boundary; the operation producer, strict
   // operation reader, Session adapter and parent coordinator remain real.
@@ -912,7 +915,14 @@ it.each(['fresh', 'retained', 'miswired'] as const)('settles a proven cold start
   const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup({ ...input,
     ...(mode === 'retained' ? { retainedOperation: { key: 'startup', serverId: 'server-1', machineId, operationId: 'failed-start' } } : {}),
   }, {
-    serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
+    serverId: 'server-1', machineId, observeExecution: async request => {
+      expect(request.actionRequestId?.startsWith(creationKey)).toBe(true);
+      if (mode === 'rejoined' && !rejoined) {
+        rejoined = true;
+        await operations.observeExecution({ ...request, execute: async () => refuse() }).catch(() => undefined);
+      }
+      return operations.observeExecution(request);
+    }, rpcContext: {},
     transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
       resolveSpawnSessionByNonce: async () => { throw new Error('must_not_replace_startup'); } }),
     observeOperation: async (target, options) => operations.handlers.getV2({
@@ -922,16 +932,36 @@ it.each(['fresh', 'retained', 'miswired'] as const)('settles a proven cold start
     cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
   });
   const sessionInput = sessionInputBoundary();
-  const coordinating = workflowDaemonProcess({ storage: kit, sessionInput, directory, sessionStartup })({
-    runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope });
+  const interrupted = new AbortController();
+  let rejectCorrespondence = mode === 'lost-claim';
+  const coordinate = workflowDaemonProcess({ storage: { ...kit, execute: async (operation, options) => {
+    if (rejectCorrespondence && operation.operation === 'invocations.fact' && operation.lifecycle === 'running'
+      && operation.invocationId === rowFor(kit, 'launch')?.id) {
+      rejectCorrespondence = false;
+      interrupted.abort(new WorkflowRuntimeInterruption());
+      return refuse();
+    }
+    return kit.execute(operation, options);
+  } }, sessionInput, directory, sessionStartup });
+  if (mode === 'lost-claim') {
+    await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+      acceptedEnvelope, signal: interrupted.signal })).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe('pending');
+    expect(openRowProgress(kit, rowFor(kit, 'launch')!).execution).toBeUndefined();
+    expect(await operations.handlers.getV2({ operationId: 'failed-start' })).toMatchObject({ kind: 'found', operation: {
+      state: 'failed', error: { errorCode: 'ERR_BAD_REQUEST', error: refusalMessage },
+    } });
+  }
+  const coordinating = coordinate({
+    runId, attempt: 0, expectedRevision: kit.run().revision, accountCurrentness: currentness, acceptedEnvelope });
   if (mode === 'miswired') await expect(coordinating).rejects.toThrow('workflow_invocation_fact_conflict');
   else {
-    await expect(coordinating).resolves.toMatchObject({ state: 'interrupted', reason: 'project_requester_home_unavailable' });
+    await expect(coordinating).resolves.toMatchObject({ state: 'interrupted', reason: 'ERR_BAD_REQUEST' });
     const leaf = rowFor(kit, 'launch')!;
     expect(leaf.lifecycle).toBe('failed');
-    expect(openRowProgress(kit, leaf)).toMatchObject({ reason: { code: 'project_requester_home_unavailable' }, execution: {
+    expect(openRowProgress(kit, leaf)).toMatchObject({ reason: { code: 'ERR_BAD_REQUEST', message: refusalMessage }, execution: {
       kind: 'action', actionId: 'session.spawn_new', awaitedOperations: [{ operationId: 'failed-start', machineId }],
-      output: { operation: { state: 'failed', error: { errorCode: 'project_requester_home_unavailable' } } },
+      output: { operation: { state: 'failed', error: { errorCode: 'ERR_BAD_REQUEST' } } },
     } });
   }
   expect(sessionInput.enqueue).not.toHaveBeenCalled();
