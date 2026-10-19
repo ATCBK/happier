@@ -53,6 +53,22 @@ nonce and returns `pending`; callers retry with the same creation key to recover
 that launch. A proven refusal remains a definite error, and cancellation of a
 proven unsent request remains cancelled.
 
+Fresh daemon admission resolves an omitted connected-account choice through
+`resolveSessionSpawnConnectedServicesDefaultsPayload`, the same fresh Account
+purpose-catalog owner used by CLI and Workflow creators before they commit their
+Session rows. This covers direct UI Actions, Voice carriers and Agent-created
+children without requiring each caller to supply the saved default. Requester
+launches resolve under their captured Account invocation custody.
+
+An explicit bindings object, including native-only or empty bindings, remains
+the caller's choice. Existing Session and vendor resumes retain their recorded
+authentication rather than acquiring today's default. An admitted empty purpose
+catalog means native sign-in; unavailable default authority refuses the launch.
+Defaulted Team resources keep the existing current-recipient and Session-slot
+admission: the default and its slot intents are resolved together before Session
+creation, and explicit slot choices win. These are 0.3 development semantics;
+the wire retains its existing distinction between omitted and explicit bindings.
+
 ## Compose service prerequisites (0.3 development)
 
 Declared Compose Services use the native Compose lifecycle under the daemon's
@@ -85,6 +101,55 @@ association when available; an occupied port alone does not explain an unrelated
 process exit. The existing Services failure dialog and Details action consume
 this evidence. Start does not terminate the listener occupying the port.
 
+In 0.3 development, launcher `denied` results precede Service establishment;
+once the native starter runs, an unsuccessful result is `failed`. Service Move
+settles a pre-establishment refusal with its typed cause after the confirmed old
+Stop. A failed or unacknowledged establishment retains an unknown destination
+outcome until inspection or confirmed cleanup. Cancellation requests reach the
+active coordinator's existing abort owner; after that coordinator retires with
+an unknown outcome, its snapshot advertises cancellation as unsupported. The
+SOURCE and destination daemons need reload to consume these corrections.
+
+Move checks destination setup consent before saving placement or stopping the
+current Service. Its passive `projects.inspect` request asks for
+`reviewSetupConsent`; the ordinary setup admission owner supplies the result
+without executing setup or writing trust. Missing consent returns
+`project_setup_consent_required` (or `project_setup_effect_changed`). Review and
+run `projects.prepare` on the exact destination, then request a fresh Move. If
+the destination does not yet contain SOURCE's setup declaration, Move returns
+`project_setup_review_unavailable`; first bring that checkout current through
+its existing Sync relationship and review its setup. These refusals leave the
+current Service and saved placement untouched. The same preflight compares the
+setup reviewer's file digests on SOURCE and the destination: consent for retained
+bytes cannot authorize different setup inputs or native definitions arriving in
+the upcoming copy. Sync and review changed inputs before requesting a fresh Move.
+Clean copying and any admitted
+setup remain after confirmed Stop; the native starter rechecks the current
+effect before launch.
+
+Current Move snapshots retain their original qualified Source and selected
+destination separately from native custody. Services projects those received
+snapshots for the authenticated Account and checkout, including CLI-origin work
+and after navigation. Definitive Start denial publishes `stopped` with its typed
+cause; uncertain establishment remains unknown. The existing row and controls
+show progress, Inspect and native-corroborated stopped recovery without replaying
+Move. These are development semantics and require both daemons plus the UI to
+load the updated Protocol/source.
+
+A forwarded Move Start also consumes a permission from the SOURCE's existing
+Action-operation runner through `actionOperation.serviceMoveStart.claim.v1`.
+The Account-scoped claim checks the exact request, reviewed input, installation,
+active coordinator and `starting` phase, then admits one Start. Cancelled,
+settled or retired coordinators and a second Start are refused before the
+destination handler. A missing SOURCE or claim method fails closed. The claim
+lives only in the active invocation; it adds no durable replay ledger. The Home
+server must load the current RPC route policy alongside both daemons.
+An acknowledged refusal before destination establishment, including unavailable
+SOURCE claim transport, settles the original Move with that typed cause and
+retains the confirmed old Stop. An already-claimed response can follow an earlier
+admitted Start and therefore retains uncertainty, as do a lost destination Start
+acknowledgement, cancellation during establishment, or a malformed response.
+
 ## Session permission flags (0.3 development)
 
 `--auto` is an alias for `--permission-mode auto`, resolved by the common session
@@ -96,6 +161,18 @@ requests full access. The managed Session's permission policy takes precedence o
 the native Agent's defaults.
 
 ## High-level layout
+
+In 0.3 development, Linux daemons release glibc-retained free pages from the
+existing heartbeat after startup and at most once per ten minutes. Maintenance
+requires an idle decision from the canonical managed-activity inventory; busy,
+unknown and shutting-down daemons skip it. The existing Iroh Node addon runs
+`malloc_trim(0)` as a NAPI async task, leaving the JS event loop free and avoiding
+Iroh runtime startup in standard-only daemons.
+Failures are logged and do not stop heartbeat publication. Musl builds return a
+no-op result; macOS and Windows do not schedule this maintenance. This changes
+allocator residency, without forcing V8 garbage collection or changing live
+Session state.
+
 - **Entry point:** `src/index.ts` parses subcommands and routes execution.
 - **API client:** `src/api` handles HTTP + Socket.IO, encryption, and RPC.
 - **Daemon:** `src/daemon` runs in the background, spawns sessions, and maintains machine state.
@@ -130,6 +207,13 @@ declaration may instead select its active member's account home. Refresh, failed
 launch and cancellation must not replace or recursively remove that durable
 home. Other materializers and discovery probes retain their temporary/staged
 lifecycle; probes do not import into durable or shared history.
+
+The serialized native-home preparation (private directory, declared state,
+requested history import and sharing manifest) is one filesystem effect with
+fresh requester authority before and after it. Cancellation remains checked
+between its substeps. Credential release, credential writes and final promotion
+keep their separate authority checks; preparation does not retain an admission
+result for later effects.
 
 Execution Runs keep the native home separate from their disposable request-auth
 root. Fresh admission consumes the materializer's `requestAuthMaterializedRoot`;
@@ -243,6 +327,11 @@ equality. Saved-review filesystem access instead receives the active local profi
 after admission; retained directory and Session authorization checks still apply.
 
 Account Project listing and metadata keep the admitted Home in refs and row keys.
+Project Open and its source-host Sync phase resolve that Home through
+`server/serverProfiles.ts#resolveServerProfileHomeIdentityId`, even when the caller
+selects the local profile id. They refuse an unbound or ambiguous profile before
+checkout effects. Local and portable selectors read and edit the same Project rows;
+the local profile remains the credential and requester-custody scope.
 Sync reads recover that Home from the accepted endpoint row before topology checks;
 usage transport receives the admitted request Home. The private requester Artifact
 projection validates qualified refs through the same exact binding while its HTTP
@@ -766,6 +855,23 @@ Session/Run correspondence. An interrupted observation rejoins the original
 operation without another creator; an already-aborted fresh request admits no
 startup. Run setup observations likewise retain the existing Run id rather than
 starting a separate preparation Action.
+
+In 0.3 development source, saving startup correspondence may outlast the
+Workflow claim. The original Action operation's cancellation signal owns its
+admitted launch after that handoff; claim loss ends only Workflow observation.
+Explicit Run cancellation and authorization loss still request startup cancellation.
+If reclaim finds an admitting step without input correspondence, it snapshots
+the exact Session input before waiting. Missing materialization becomes visible
+`needs_attention` with `workflow_admission_ack_uncertain`, without replaying input
+or inventing an observation timeout. Proven input retains its authored lifetime.
+
+If a lost input-admission acknowledgement leaves only the startup receipt,
+Workflow recovery verifies its request, Machine and immutable Session birth
+identity, then observes the deterministic Workflow input in that Session. It
+uses the existing completion subscription for a later result; startup success
+alone cannot complete the step. Interrupted uncertainty remains in the recovery
+index until exact terminal evidence resolves the child. This observation leaves
+the interrupted parent and its explicit recovery controls unchanged.
 
 Environment-only setup uses the same environment body without inventing a
 command. The plugin request's launch is optional; an adapter that returns a
@@ -1528,6 +1634,17 @@ correspondence are retained; an unavailable frozen contract stays unresolved,
 and capturing a result never reopens a terminal parent. Integrated package and
 loaded-runtime validation of this development path remains pending.
 
+In development, a long-lived Execution Run publishes a failed input turn together
+with its classified Agent error. Workflow's exact-input observer can therefore
+retain an authentication or execution failure's code and message on its first
+terminal observation, before the Run finishes its remaining cleanup.
+If provisioning refuses a detached initial instruction before native admission,
+the start owner retains that instruction's failed identity in both its live
+controller and retained state, so the public projection does not hide the refusal.
+Existing-Run Actions preserve their admitted causal permission witness and current
+caller ceiling through the same private direct transport as start. That private
+context cannot fall through to a public Machine transport that cannot carry it.
+
 HB-4's development causal-loop work is partial, not a completed guarantee.
 The server's `automationTriggerCauseChain.ts` reads retained Run causes, exact
 Workflow turn origins and Session-birth origins before lifecycle trigger-budget
@@ -1644,6 +1761,14 @@ same Machine. A concurrent lease renewal prevents this transition. Historical
 claimed Runs whose cancellation was already requested need another user Stop;
 this is not an automatic orphan sweep or evidence that their children stopped.
 
+The successful claim grants the Automation executor its existing lease duration;
+renewals use the existing heartbeat endpoint and retain its server-returned expiry.
+Transient transport/server failures keep observation alive only within that
+confirmed lease; a successful renewal replaces the expiry. Definitive refusal,
+revocation, worker cancellation or expiry ends observation. The heartbeat's one
+cadence timer also observes expiry while a renewal request is pending, so a lost
+or late response cannot extend the lease or resurrect an expired claim.
+
 In 0.3 development, Automation-origin Workflow claims materialize the accepted
 snapshot only on first admission. Subsequent claims carry the Run-owned snapshot
 through the claim client and executor into the origin-neutral coordinator, so
@@ -1659,6 +1784,12 @@ advancing past nonmatching pages with the server's bound keyset cursor. The
 server never learns E2EE destination content. Definitions and Automation trigger
 sets derive their destinations through the same Protocol walker and authorized
 definition resolver; unresolved references remain explicit.
+
+Project-scoped `workflow.run.list` uses the same accepted-snapshot restriction as
+`workflow.run.get`. It returns only Runs whose private accepted Project matches
+the caller's target, including exact-id selections; unreadable snapshots cannot
+prove that match and are omitted. The existing private page filter advances past
+nonmatching pages without sending Project content to the server.
 
 The 0.3 development UI consumes this same relation for the Session Work tab's
 **Writes here** group. Upcoming rows and the global Work sidebar's **Scheduled**
@@ -1776,6 +1907,16 @@ exact-witness contract. Terminal failure and pre-start refusal compare Account
 mode/key identity under the exact Run claim/attempt/lease CAS, so unrelated
 publications cannot leave a deterministic refusal available for reclaim.
 
+In 0.3 development, a successful Run claim starts the existing lease-duration
+budget, and successful renewals supply the server's next expiry. The shared
+heartbeat owner retains that lease through transient request failures and retries
+on the existing heartbeat cadence, logging each failure. The HTTP request deadline
+does not independently revoke a valid lease, including on its first renewal.
+Server refusal or expiry of the last granted lease aborts the execution,
+including when a renewal request remains pending; a late response cannot revive
+it. Direct Workflows and Automation-origin Workflows, including Session-scoped
+triggers, use this same owner.
+
 Workflow review keeps one private result on the invocation. Publication through
 the Account Run Action owner validates against the frozen contract without
 completing the row. Human completion requires host-stamped `present_user`.
@@ -1816,6 +1957,16 @@ semantics. Generate retains its own live authority and continuation checks and
 pending; this describes current development ownership, not release readiness.
 
 ### Workflow loop decisions and context (0.3 development)
+
+Agent-step engines may bind a declared input or the current item value, with an
+optional field path. `resolveWorkflowStepSelectionV1` resolves those choices at
+the existing accepted-snapshot materializer. Finite item choices and repeated
+child inputs retain their concrete selections in the leaf's sealed
+`engineBindings`; invocation admission selects only a matching accepted value.
+Role changes after admission cannot replace that selection. Restart uses the
+existing loop source and frame inputs to recover the same item. Result text
+cannot introduce a new executable identity. Participant pickers and composed
+live Pattern validation remain separate, pending integration work.
 
 The coordinator reads the root checkpoint and each entered body, If, loop or
 inline Workflow cursor. It does not rebuild completed siblings to recover a
@@ -2355,8 +2506,10 @@ Action and `mcp.servers` feature gate are absent from current development source
 the compiled Action instead of running a second probe. A saved-server Test
 captures the row revision, initializes and lists all tool pages through the MCP
 SDK, then writes metadata and per-tool token estimates through the catalog CAS.
-The remote stdio bridge follows upstream `nextCursor` pages and forwards the
-upstream server identity, version and instructions to this same probe.
+The remote stdio bridge accepts initialization after connecting upstream, then
+forwards each `tools/list` request and cursor instead of discovering every tool
+before initialization. It preserves upstream pages, server identity, version
+and instructions; the probe follows `nextCursor` until discovery is complete.
 A conflict is reported, not retried against newer configuration. Draft Tests do
 not persist snapshots. OAuth Tests borrow the daemon's existing request-auth
 issuer with the captured Account and RPC lifetime, without fabricating a parent
@@ -2462,8 +2615,9 @@ the applied baseline and the newer desired policy stays pending. Daemon-committe
 this same writer; child environment variables do not provide a second selection
 writer. These are development-source contracts, not certification of the later
 composed live capability journey. `session.capabilities.set` uses this codec
-inside the captured Session metadata revision write, and returns the previous
-override for Undo. `session.capabilities.get` reaches the Session's Machine
+inside the fresh Session metadata tuple mutation, preserving runtime acknowledgments
+and refusing intervening desired-selection edits. It returns the previous override
+for Undo. `session.capabilities.get` reaches the Session's Machine
 preview producer even when the Session is stopped. The compiled CLI declarations
 provide `session capabilities <session> list|add|remove|reset` and `session preview`;
 they share Action approval and execution with the app.
@@ -2483,7 +2637,11 @@ return after current destination admission, including first-use activation;
 Account hydration owns optional retained Settings/history cleanup. Capability
 previews read skill rules through the same finite prompt-library reader and
 prepare independent Artifact, plugin and native inventories concurrently within
-the captured Account and caller lifetime. Active or deleted rows never reseed from the
+the captured Account and caller lifetime. Account catalog admission and exact
+Session reads overlap the read-only Artifact inventory. Selected preview skill
+bodies use the Artifact owner's existing batch reader; Off items remain in the
+complete header inventory. This path does not initialize or test MCP servers.
+Active or deleted rows never reseed from the
 retained root. Runtime readers use the admitted catalog and canonical materializer;
 mode conversion preserves the complete admitted stored payload and envelope metadata.
 These are development-source contracts, not completed package or live-stack certification.
@@ -3770,6 +3928,17 @@ contracts, not a claim of release availability.
 
 ## Daemon architecture
 
+In current development source, startup reattachment and resume of an already
+running session reconcile the daemon's session access key and the session's
+machine routing metadata together. The recovered-session machine-control owner
+uses the canonical metadata tuple writer, including owner-envelope encryption
+and version-conflict recovery. Routing changes only while the recorded host PID
+matches the locally adopted runner; matching workspace-location bindings follow
+the daemon identity. Provider identity, paths and unrelated metadata remain
+intact. This does not replace or retire the live publisher's old Machine
+identity, which must remain valid until its surviving publishers finish or
+migrate. A handoff that has published another runner's PID is left untouched.
+
 ### Plugin UI artifacts
 
 The daemon is the single Plugin UI build owner. Manifest artifact references
@@ -4050,6 +4219,10 @@ timeout or disconnect never proves physical termination.
 
 ### Session spawning
 
+In 0.3 development, the Claude plugin retains its effective native account directory in the existing native runtime descriptor. Its daemon environment hook restores that directory before the ambient daemon default; explicit profile and materialized credential selections still take precedence. No parallel host-owned native-environment metadata is introduced.
+
+Once persisted provider identity is resolved, spawn admission reuses `resolveExistingSessionSpawnPreGate` to check other tracked entries for the same canonical Agent target and provider resume id. The existing process-presence owner determines whether a sibling is absent, live, or unverified. A live or unverified sibling blocks a second launch; ordinary same-entry adoption remains governed by that same gate.
+
 ```mermaid
 flowchart LR
     subgraph "Session Sources"
@@ -4217,6 +4390,11 @@ its own process: session mode, configuration overrides and capability selection.
 launch refused before its runner starts archives a Session this call created.
 Creation refusals keep their exact terminal spawn detail, through the same
 classification the runner uses.
+In development source, a Session create/load HTTP 5xx retains its status through
+the API client and daemon launch classifier. A validated
+`database_transaction_conflict_exhausted` receipt also retains that code; arbitrary
+server response content is excluded. The existing endpoint classifier reports a
+server failure rather than treating a responding Home as unreachable.
 
 CLI-originated and workflow spawns that default to a durable Team target send
 that target's Session Team slot binding with the create request. The binding is
@@ -4388,18 +4566,47 @@ The sampler uses one unref'ed timer and the fastest held demand: wall-minute
 alignment at 60 seconds without a viewer, 15 seconds for summary demand, and
 2 seconds for live or Overview demand. In-process live demand does not request
 Overview extras. GPU, thermal and battery detail are Overview-only, cached for
-15 seconds. The base power fact still serves keep-awake and scheduled scans
-without a viewer. On macOS, the one Darwin reader observes `pmset -g batt` once
-per wall-clock minute, reusing the same result across summary/live reads and
-refreshing it at the existing Overview extras boundary. Thus Processes demand
-adds only the native helper per two-second tick, with one battery-tool read per
-minute; Overview shares that battery read with its extras. A failed power read
+15 seconds. The base power fact serves keep-awake **On power** and enabled
+scheduled scans without a viewer. The sampler reads their demand from the
+canonical resources policy; **On** and **Off** keep-awake modes need no AC facts.
+On macOS, the one Darwin reader runs `pmset -g batt` once per wall-clock minute
+while a power-dependent policy needs it, reusing that result across summary/live
+reads. Overview shares the same power reader at its existing extras boundary.
+With no Overview or power-dependent policy, idle, summary and Processes reads
+spawn no battery tool. A failed power read
 leaves the power fact unknown. Linux's always-on reader spawns zero processes. Its optional NVIDIA
 read first checks for an NVIDIA device and an executable `nvidia-smi` on PATH,
 then runs at most one system-tool call per extras read; a missing or failing tool
 does not hide the base sample. Non-Overview responses omit extras even when a
-concurrent Overview has populated that cache. Missing counters and stale/reset
-intervals remain unreported rather than becoming zero rates.
+concurrent Overview has populated that cache.
+
+[`createCounterRateReader`](../apps/cli/src/daemon/vitals/readers/counterRates.ts)
+owns counter validity for Linux and native CPU, cgroup CPU, network, swap/events
+and the sampler's minute-counter readers. Each rate uses the newest real
+observation at least half the current interval old and at most 120 seconds old
+(two always-on minute intervals), averaged over that actual span. This also
+applies across watch re-arms, cadence changes, minute frontiers and slow reads;
+the scheduler needs no counter-spacing exceptions. First readings, monotonic-clock
+regressions, counter decreases and changes to the counted interface set yield no
+rate. Excluded interfaces keep their inspectable detail but do not reset machine
+traffic rates. Missing or invalid counters remain unreported; no rate is carried
+forward or invented. Minute network history expresses the actual-span average in
+one minute's byte units, so timer jitter and late reads do not inflate the chart's
+per-second rate. A missing minute still leaves a history gap.
+
+Memory composition belongs to the reader's memory observation. Linux derives
+it from every existing `/proc/meminfo` read, and Windows includes it in the
+existing native memory call without an extra process or API read. While an RPC
+Overview watch is parked, macOS runs `vm_stat` with each two-second memory read
+and parses its composition against that read's used bytes (`total − available`).
+It retains no VM-stat output between reads and spawns no `vm_stat` for idle,
+summary, Processes or Guard demand. macOS `pmset` and `ioreg`, and optional
+`nvidia-smi` on supported platforms, keep their existing 15-second Overview
+extras cadence. Summary RPCs
+keep that detail with its totals. Neither the sampler's extras cache nor a
+sibling UI view supplies composition for a newer memory observation. Linux
+cgroup working sets omit the host-wide decomposition because it describes a
+different memory scope; the Overview already leaves absent composition out.
 
 An explicitly powered-off GPU is a quiet `powerState: 'off'` fact in the existing
 More-from slot, without utilization or memory readings. Linux recognizes the
