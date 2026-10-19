@@ -7,7 +7,8 @@ import {
   toHappierLocalDateTimeDraft,
   type HappierLocalDateTimeDraft,
 } from '@happier-dev/plugin-ui/presentation';
-import type { SessionMessageRefV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageRefV1';
+import type { CoordinationMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { MemoryDecisionSourceErrorCodeV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { LocalDateTimeEditor } from '@/components/ui/dateTime/LocalDateTimeEditor';
@@ -46,7 +47,7 @@ const INITIAL_EXPIRY_OFFSET_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** What opens the sheet: the exact committed message, and what to prefill from it. */
 export type SaveMemoryDecisionSeed = Readonly<{
-  sourceMessageRef: SessionMessageRefV1;
+  sourceMessageRef: CoordinationMessageRefV1;
   /** The decision as one line; the person edits it before saving. */
   text: string;
   reason?: string;
@@ -60,12 +61,18 @@ type FormProps = Readonly<{
   onCreatedMemory?: (receipt: MemoryCreationReceipt) => void;
 }>;
 
-type Notice = 'pending' | 'conflict' | 'refused' | null;
+type Notice =
+  | 'pending'
+  | 'conflict'
+  | 'refused'
+  | 'disclosure'
+  | 'sourceUnavailable'
+  | null;
 type Expiry = 'never' | 'date';
 
 /** First line of the answer as the decision, the rest as its reason; both stay editable. */
 export function seedMemoryDecisionFromMessage(
-  sourceMessageRef: SessionMessageRefV1,
+  sourceMessageRef: CoordinationMessageRefV1,
   message: string,
 ): SaveMemoryDecisionSeed {
   const trimmed = message.trim();
@@ -80,20 +87,36 @@ export function seedMemoryDecisionFromMessage(
   };
 }
 
+/** The server's own source refusals say why nothing was saved; any other refusal stays the generic one. */
+function readMemoryDecisionSourceRefusal(errorCode: unknown): 'disclosure' | 'sourceUnavailable' | null {
+  const code = MemoryDecisionSourceErrorCodeV1Schema.safeParse(errorCode);
+  if (!code.success) return null;
+  return code.data === 'memory_decision_disclosure_denied'
+    ? 'disclosure'
+    : code.data === 'memory_decision_source_unavailable'
+      ? 'sourceUnavailable'
+      : null;
+}
+
 /**
  * Save as decision (lab K2 `S`/`Sd`, C6 §5): the decision, its reason, the exact message it was decided
- * in and an expiry (Never or a date). It saves to the Session's own memory through `memory.decision.save`;
- * a person's save stamps their own approval. When that memory already has something similar, the same
+ * in and an expiry (Never or a date). It saves through `memory.decision.save`: a Session's message to that
+ * Session's own memory, a Discussion's message to the person's own memory; a person's save stamps their own approval. When that memory already has something similar, the same
  * form leads with it and asks Update / Replace / Keep both, keeping everything typed.
  */
 export function SaveMemoryDecisionForm(props: FormProps) {
   const { seed } = props;
-  const { serverId, sessionId } = seed.sourceMessageRef.session;
-  const metadataVersion = useSessionSelector(
+  const source = seed.sourceMessageRef;
+  const sessionSource = source.kind === 'session' ? source.session : null;
+  const serverId = sessionSource?.serverId ?? (source.kind === 'discussion' ? source.discussion.serverId : '');
+  const sessionId = sessionSource?.sessionId ?? '';
+  const sessionMetadataVersion = useSessionSelector(
     sessionId,
     serverId,
     (session) => session?.metadataVersion ?? null,
   );
+  // A Session's save needs its current metadata revision; a Discussion's goes to the person's memory.
+  const ready = source.kind === 'discussion' || sessionMetadataVersion !== null;
   const [text, setText] = React.useState(seed.text);
   const [reason, setReason] = React.useState(seed.reason ?? '');
   const [expiry, setExpiry] = React.useState<Expiry>('never');
@@ -120,23 +143,21 @@ export function SaveMemoryDecisionForm(props: FormProps) {
     notice !== 'pending' &&
     text.trim().length > 0 &&
     reason.trim().length > 0 &&
-    metadataVersion !== null &&
+    ready &&
     (expiry === 'never' || expiresAtMs !== null);
 
   const save = React.useCallback(async () => {
-    if (!canSave || metadataVersion === null) return;
+    if (!canSave) return;
     setBusy(true);
     setNotice(null);
     const choiceFactId = review
       ? (candidateId ?? leadingCandidateId(review))
       : null;
     try {
-      const result = await memoryDocumentActions.saveDecisionInSession(
-        { sessionId, serverId, expectedMetadataRevision: metadataVersion },
-        {
+      const draft = {
           text: text.trim(),
           reason: reason.trim(),
-          sourceMessageRef: seed.sourceMessageRef,
+          sourceMessageRef: source,
           ...(expiresAtMs !== null ? { expiresAtMs } : {}),
           ...(review
             ? {
@@ -157,9 +178,24 @@ export function SaveMemoryDecisionForm(props: FormProps) {
                       },
               }
             : {}),
-        },
-        controller.signal,
-      );
+      };
+      const result =
+        sessionSource !== null && sessionMetadataVersion !== null
+          ? await memoryDocumentActions.saveDecisionInSession(
+              {
+                sessionId: sessionSource.sessionId,
+                serverId: sessionSource.serverId,
+                expectedMetadataRevision: sessionMetadataVersion,
+              },
+              draft,
+              controller.signal,
+            )
+          : await memoryDocumentActions.saveDecisionInScope(
+              { scope: 'account' },
+              draft,
+              serverId,
+              controller.signal,
+            );
       if (controller.signal.aborted) return;
       const found = readMemoryDuplicateReview(result);
       if (found) {
@@ -168,6 +204,11 @@ export function SaveMemoryDecisionForm(props: FormProps) {
         return;
       }
       const outcome = readMemoryActionOutcome(result);
+      const sourceRefusal = result.ok ? null : readMemoryDecisionSourceRefusal(result.errorCode);
+      if (sourceRefusal) {
+        setNotice(sourceRefusal);
+        return;
+      }
       const receipt = readMemoryCreationReceipt(result);
       if (receipt) {
         setCreationReceipt(receipt);
@@ -175,8 +216,14 @@ export function SaveMemoryDecisionForm(props: FormProps) {
       }
       if (outcome === 'applied') props.onSaved();
       else setNotice(outcome === 'review' || outcome === 'saved_unattached' ? null : outcome);
-    } catch {
-      if (!controller.signal.aborted) setNotice('refused');
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setNotice(
+          readMemoryDecisionSourceRefusal(
+            typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
+          ) ?? 'refused',
+        );
+      }
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
@@ -186,13 +233,13 @@ export function SaveMemoryDecisionForm(props: FormProps) {
     choice,
     controller,
     expiresAtMs,
-    metadataVersion,
     props,
     reason,
     review,
-    seed.sourceMessageRef,
     serverId,
-    sessionId,
+    sessionMetadataVersion,
+    sessionSource,
+    source,
     text,
   ]);
 
@@ -219,7 +266,13 @@ export function SaveMemoryDecisionForm(props: FormProps) {
           <Text style={styles.heading} accessibilityRole="header">
             {t('memoryContext.memory.sheetTitle')}
           </Text>
-          <Text style={styles.meta}>{t('memoryContext.memory.sheetTarget')}</Text>
+          <Text style={styles.meta}>
+            {t(
+              sessionSource
+                ? 'memoryContext.memory.sheetTarget'
+                : 'memoryContext.memory.sheetTargetPerson',
+            )}
+          </Text>
         </View>
       </View>
       <ScrollView
@@ -238,6 +291,18 @@ export function SaveMemoryDecisionForm(props: FormProps) {
             testID="save-memory-decision.conflict"
             tone="warning"
             reason={t('memoryContext.memory.sheetConflict')}
+          />
+        ) : notice === 'disclosure' ? (
+          <SurfaceFreshnessLine
+            testID="save-memory-decision.disclosure"
+            tone="warning"
+            reason={t('memoryContext.memory.sheetDisclosureDenied')}
+          />
+        ) : notice === 'sourceUnavailable' ? (
+          <SurfaceFreshnessLine
+            testID="save-memory-decision.sourceUnavailable"
+            tone="warning"
+            reason={t('memoryContext.memory.sheetSourceUnavailable')}
           />
         ) : notice === 'refused' ? (
           <SurfaceFreshnessLine
@@ -281,7 +346,13 @@ export function SaveMemoryDecisionForm(props: FormProps) {
         </FieldItem>
         <View style={styles.source}>
           <Icon name="quotes" size={14} />
-          <Text style={styles.meta}>{t('memoryContext.memory.sheetSource')}</Text>
+          <Text style={styles.meta}>
+            {t(
+              sessionSource
+                ? 'memoryContext.memory.sheetSource'
+                : 'memoryContext.memory.sheetSourceMessage',
+            )}
+          </Text>
         </View>
         <SegmentedChoiceItem<Expiry>
           title={t('memoryContext.memory.sheetExpires')}
@@ -397,7 +468,7 @@ export function SaveMemoryDecisionSheet(
     >
       {({ maxHeight }) => (
         <FloatingOverlay surfaceChrome="theme" maxHeight={maxHeight}>
-          <View style={styles.popoverBody}>
+          <View style={[styles.popoverBody, { maxHeight }]}>
             <SaveMemoryDecisionForm
               seed={props.seed}
               onCreatedMemory={props.onCreatedMemory}
@@ -443,5 +514,8 @@ const styles = StyleSheet.create((theme) => ({
   popoverBody: {
     width: HAPPIER_PAGE_METRICS.dialogWidthPx.default,
     maxWidth: '100%',
+    // A taller review shrinks the form's scroll area; the footer actions stay inside the overlay.
+    flexShrink: 1,
+    minHeight: 0,
   },
 }));
