@@ -14,6 +14,7 @@ import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
 import { resolveSessionListRenderableMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListRenderableSorting';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { buildDiscussionInviteCandidates } from './discussionInviteCandidates';
+import { useSessionReadiness } from '@/components/sessions/model/useSessionReadiness';
 
 const NO_OPERATIONS: Readonly<Record<string, SessionAccessGrantOperationModel>> = Object.freeze({});
 const NO_TEAMS = Object.freeze([]);
@@ -38,6 +39,8 @@ export function useDiscussionInviteCandidates(input: Readonly<{
     roster?: DiscussionParticipantsListResponseV1 | null;
     teamAddress?: TeamAddress;
     modelOptions?: readonly ExecutableParticipantPickerOption[];
+    /** Only the opened/highlighted detail demands readiness, never every roster candidate. */
+    readinessSessionId?: string | null;
 }>) {
     const { accountLifetime, availability } = input;
     const { scope } = accountLifetime;
@@ -47,6 +50,9 @@ export function useDiscussionInviteCandidates(input: Readonly<{
     }, [accountLifetime]);
     const current = React.useSyncExternalStore(subscribe, accountLifetime.isCurrent, accountLifetime.isCurrent);
     const enabled = input.enabled && current && availability === 'available';
+    const readinessSessionId = input.readinessSessionId ?? '';
+    const readiness = useSessionReadiness({ accountLifetime, sessionId: readinessSessionId,
+        enabled: enabled && Boolean(readinessSessionId) });
     const teamMatches = !input.teamAddress || areServerProfileIdentifiersEquivalent(input.teamAddress.serverId, scope.serverId);
     const directory = useSessionAccessDirectory({ scope, availability, enabled: enabled && teamMatches,
         contextTeams: NO_TEAMS, operations: NO_OPERATIONS, revision: 0,
@@ -66,8 +72,10 @@ export function useDiscussionInviteCandidates(input: Readonly<{
         const row = rows?.[address.sessionId];
         return { address, label: labels[index] ?? null, contextLabel: contexts[index] ?? null,
             lastActivityAt: row ? resolveSessionListRenderableMeaningfulActivityAt(row) : null,
-            access: row?.access ?? null };
-    }), [addresses, contexts, labels, rows]);
+            access: row?.access ?? null,
+            readiness: address.sessionId === readinessSessionId ? readiness.readiness : null,
+            repair: address.sessionId === readinessSessionId ? readiness.repair : null };
+    }), [addresses, contexts, labels, readiness.readiness, readiness.repair, readinessSessionId, rows]);
     const modelOptions = input.modelOptions ?? NO_MODELS;
     const project = React.useCallback((people: readonly SessionAccessCandidateRowModel[]) => accountLifetime.isCurrent()
         ? buildDiscussionInviteCandidates({ scope, people, sessions, modelOptions, roster: input.roster }) : [],

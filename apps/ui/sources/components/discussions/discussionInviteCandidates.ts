@@ -7,6 +7,7 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { projectDiscussionInviteCandidatesV1 } from '@happier-dev/protocol/discussions/actions';
 import type { SessionEffectiveAccessV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import type { SessionReadinessRepairV1, SessionReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 
 export type DiscussionInviteCandidate =
     | Readonly<{
@@ -25,6 +26,8 @@ export type DiscussionInviteCandidate =
         lastActivityAt?: number | null;
         /** Invitation is not a claim that this Session is currently able to answer. */
         availability: Readonly<{ kind: 'existing_session' }>;
+        readiness: SessionReadinessV1 | null;
+        repair: SessionReadinessRepairV1 | null;
     }>
     | Readonly<{
         kind: 'model'; key: string;
@@ -32,6 +35,7 @@ export type DiscussionInviteCandidate =
         label: string;
         /** The ordinary authoring/readiness owner supplies this exact setup observation. */
         availability: ExecutableParticipantPickerOption['readiness'];
+        readiness: ExecutableParticipantPickerOption['readiness'];
         repair: ExecutableParticipantPickerOption['repair'];
     }>;
 
@@ -39,7 +43,8 @@ export type DiscussionInviteCandidatesInput = Readonly<{
     scope: ServerAccountScope;
     people: readonly SessionAccessCandidateRowModel[];
     sessions: readonly Readonly<{ address: SessionAddress; label: string | null; contextLabel?: string | null; lastActivityAt?: number | null;
-        access: Pick<SessionEffectiveAccessV1, 'capabilities'> | null }>[];
+        access: Pick<SessionEffectiveAccessV1, 'capabilities'> | null;
+        readiness?: SessionReadinessV1 | null; repair?: SessionReadinessRepairV1 | null }>[];
     modelOptions: readonly ExecutableParticipantPickerOption[];
     roster?: DiscussionParticipantsListResponseV1 | null;
 }>;
@@ -58,12 +63,13 @@ export function buildDiscussionInviteCandidates(input: DiscussionInviteCandidate
         candidates.push({ kind: 'session',
             selection: { kind: 'session', session: row.address }, label: row.label, contextLabel: row.contextLabel ?? null,
             lastActivityAt: row.lastActivityAt ?? null,
-            availability: { kind: 'existing_session' } });
+            availability: { kind: 'existing_session' }, readiness: row.readiness ?? null, repair: row.repair ?? null });
     }
     for (const option of input.modelOptions) {
         const selection = option.value;
         if (selection.kind !== 'model') continue;
-        candidates.push({ kind: 'model', selection, label: option.label, availability: option.readiness, repair: option.repair });
+        candidates.push({ kind: 'model', selection, label: option.label, availability: option.readiness,
+            readiness: option.readiness, repair: option.repair });
     }
     return projectDiscussionInviteCandidatesV1({ scope: input.scope, roster: input.roster, candidates,
         sessionAccess: new Map(input.sessions.filter(row => areServerProfileIdentifiersEquivalent(row.address.serverId, input.scope.serverId))

@@ -1,6 +1,6 @@
 import {
     composeSessionReadinessV1, isSessionReadinessNativeSelectionV1, type SessionCredentialReadinessV1, type SessionReadinessAgentV1,
-    type SessionReadinessFactsV1, type SessionReadinessRepairV1,
+    type SessionReadinessFactsV1, type SessionReadinessRepairV1, type SessionReadinessV1,
 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 import { resolveConnectedAccountPurposeSelectedAccountV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 import { isQualifiedConnectedAccountProfileUsableV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
@@ -41,6 +41,12 @@ export function readSessionPersonalCredentialReadiness(input: Parameters<typeof 
     }) : null : false;
     return { kind: 'personal', purpose: input.purpose, usable,
         repair: usable === false && input.mayRepair ? input.repair : null };
+}
+
+/** Projects the existing entitled repair without re-deciding credential or Agent readiness. */
+export function readSessionReadinessRepair(readiness: SessionReadinessV1): SessionReadinessRepairV1 | null {
+    return readiness.cause === 'agent' ? readiness.agent?.repair ?? null
+        : readiness.cause === 'credential' && readiness.credential.kind === 'personal' ? readiness.credential.repair : null;
 }
 
 /**
@@ -84,7 +90,6 @@ export function buildSessionReadinessViewModel(input: Readonly<{
             current: !selectedAgent.stale && input.inventory.status === 'ready',
             observedAtMs: input.inventory.lastCheckedAt, repair } : null,
         invocation: input.invocation, credential: input.credential ?? { kind: 'not_required' } });
-    return { readiness, repair: readiness.cause === 'agent' ? readiness.agent?.repair ?? null
-        : readiness.cause === 'credential' && readiness.credential.kind === 'personal' ? readiness.credential.repair : null,
+    return { readiness, repair: readSessionReadinessRepair(readiness),
         handoff: input.handoff ? resolveSessionHandoffStartReadiness(input.handoff) : null };
 }

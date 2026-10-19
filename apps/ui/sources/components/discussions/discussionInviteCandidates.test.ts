@@ -57,6 +57,8 @@ describe('Discussion Invite candidates', () => {
         expect(candidates.map(candidate => candidate.kind)).toEqual(['session', 'model']);
         const selected = candidates.find(candidate => candidate.kind === 'model');
         expect(selected?.availability).toBe(option.readiness);
+        expect(selected?.readiness).toBe(option.readiness);
+        expect(selected?.repair).toBe(option.repair);
         expect(selected?.selection).toBe(option.value);
         expect(option.readiness.status).toBe('unknown');
         expect(new Set(candidates.map(candidate => candidate.key)).size).toBe(2);

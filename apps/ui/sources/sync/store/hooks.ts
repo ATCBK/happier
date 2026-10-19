@@ -2448,8 +2448,9 @@ export function useMachineListByServerId(presented = true, purpose: 'full' | 'la
  * off the whole multi-Home map while preserving the list hook's tombstone
  * filtering and source-array identity for unchanged inventory.
  */
-export function useMachineListForServer(serverId: string): Machine[] | null {
+export function useMachineListForServer(serverId: string, enabled = true): Machine[] | null {
   const machines = getStorage()((state) => {
+    if (!enabled) return null;
     const inventory = state.machineListByServerId ?? EMPTY_MACHINE_LIST_BY_SERVER_ID;
     for (const key of resolveServerScopedMachineInventoryKeys({ serverId, machineListByServerId: inventory })) {
       const list = inventory[key];

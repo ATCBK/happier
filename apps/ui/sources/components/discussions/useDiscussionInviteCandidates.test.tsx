@@ -1,13 +1,14 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
-import { renderHook, standardCleanup, createDeferred } from '@/dev/testkit';
+import { renderHook, standardCleanup, createDeferred, createMachineFixture } from '@/dev/testkit';
 import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
 import type { DiscussionInviteCandidate } from './discussionInviteCandidates';
 import { useExecutableParticipantSections } from './useExecutableParticipantSections';
+import { buildExecutableParticipantPickerOption } from '@/components/sessions/authoring/executableParticipantPicker';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -29,6 +30,31 @@ async function captureHome(serverId: string) {
 }
 
 describe('Discussion Invite source composition', () => {
+    it('keeps an offline model target in the demanded picker with its readiness and repair data', async () => {
+        const home = boundary.serverIds[1]!;
+        const accountLifetime = await captureHome(home);
+        storage.setState({ machineListByServerId: { [home]: [createMachineFixture({ id: 'offline-target', active: false, activeAt: 0 })] } });
+        boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+        const selected = buildExecutableParticipantPickerOption({ label: 'Configured model',
+            selection: { kind: 'model', launch: { executionTarget: { serverId: home, machineId: 'offline-target' },
+                directory: { kind: 'path', path: '/work' },
+                agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } } },
+            readiness: { configured: true, machine: { selectedMachineId: 'offline-target', machine: null },
+                agent: null, selection: null, inventory: { status: 'idle', lastCheckedAt: null },
+                invocation: null, mayRepairAgent: false } });
+        if (!selected) throw new Error('Invalid selected model fixture');
+        const choose = vi.fn();
+        const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
+            modelOptions: [selected], sessionSubtitle: 'Answers with its own setup', onChoose: choose }));
+        const option = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+            .find(option => option.id === 'model:offline-target');
+        expect(option).toMatchObject({ readiness: { status: 'offline', machineId: 'offline-target' }, repair: null });
+        const configured = hook.getCurrent().flatMap(section => section.options).find(option => option.label === selected.label)!;
+        expect(configured.readiness).toBe(selected.readiness);
+        expect(configured.repair).toBe(selected.repair);
+        configured.onSelect?.();
+        expect(choose).toHaveBeenCalledWith(selected.value);
+    });
     it('carries the sidebar title and work context through the captured-Home participant presenter', async () => {
         const home = boundary.serverIds[1]!;
         const accountLifetime = await captureHome(home);
