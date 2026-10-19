@@ -1319,8 +1319,9 @@ type UiProtocolActionExecutor = Pick<ReturnType<typeof createActionExecutor>, 'p
           accountLifetime: accountContext.accountLifetime, ...(signal ? { signal } : {}),
         });
         accountContext.assertCurrent();
-        return !signal?.aborted && current.supported
-          && pluginSourceCustodyV1Equal(origin.caller.sourceCustody, current.targetedContributions.target.sourceCustody) || stale('plugin_source_changed');
+        if (signal?.aborted || !current.supported) return stale('currentness_read_failed');
+        return pluginSourceCustodyV1Equal(origin.caller.sourceCustody, current.targetedContributions.target.sourceCustody)
+          || stale('plugin_source_changed');
       }
       // Exact-daemon families verify their signed input at that daemon. For an
       // app-owned Account proposal, verify against the fresh Home installation

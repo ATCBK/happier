@@ -714,6 +714,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         </ItemGroup>
       ) : shownActionFields && !confidentialAction ? (
         <ActionApprovalFieldsCard presentation={shownActionFields} anatomy="page" serverId={approvalServerId}
+          homeIdentity={approvalHomeKnown ? undefined : approvalOriginHomeId || undefined}
           failureCode={failureCodeInDetails ? executionFailure?.code ?? undefined : undefined} />
       ) : null}
 
@@ -744,9 +745,9 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
         context={sessionContext}
         contextFacts={sessionContextFacts}
         homeName={approvalHomeName}
-        // A Home this device knows but that has no name is "This Home", never its address; only a
-        // Home it does not know (or can no longer route to) shows its exact identity.
-        homeDisplayId={approvalHomeKnown ? t('settingsAccount.thisHomeTitle') : approvalOriginHomeId}
+        // A Home this device knows but that has no name is "This Home", never its address. A Home it does
+        // not know (or can no longer route to) cannot be named, so its exact identity waits in Technical details.
+        homeDisplayId={approvalHomeKnown ? t('settingsAccount.thisHomeTitle') : null}
         requesterSessionId={sessionId}
         requesterStatus={requesterStatus}
         requesterAgentId={parsed.request.createdBy.agentId ?? null}

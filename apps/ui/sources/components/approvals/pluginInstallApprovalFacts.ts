@@ -25,6 +25,13 @@ function readReview(row: ApprovalFieldRow) {
 }
 
 /**
+ * The install's own arguments that say where the plugin comes from. The review's Identity section
+ * already states the source (and flags a development path), so these arguments are not a second,
+ * differently worded statement of it: they wait in Technical details.
+ */
+const PLUGIN_INSTALL_SOURCE_ARGUMENT_PATHS: ReadonlySet<string> = new Set(['path', 'kind', 'dev']);
+
+/**
  * A plugin-install approval reads as the same install-and-trust facts the Settings install review
  * shows (one presentation owner), one row per section. The evaluated structure itself stays one
  * disclosure away: every raw value moves to Technical details, keyed by where it sits.
@@ -40,6 +47,9 @@ export function presentPluginInstallApprovalRows(
   )
     return rows;
   return rows.flatMap((row): ApprovalFieldRow[] => {
+    if (row.kind === 'value' && PLUGIN_INSTALL_SOURCE_ARGUMENT_PATHS.has(row.path)) {
+      return [{ ...row, technical: true }];
+    }
     const review = readReview(row);
     if (!review || row.kind !== 'value') return [row];
     const sections = listPluginInstallationReviewFactSections(

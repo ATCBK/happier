@@ -32,16 +32,22 @@ export function useApprovalRequesterViewer(
 }
 
 /** One Account named as this viewer may see it: You, a known name, or a generic person. Never guessed. */
-function useAccountLabel(
+export function useApprovalAccountLabel(
   serverId: string,
   accountId: string | undefined,
+  /** The viewer named inside a sentence ("confirmed by you") instead of as a row value ("You"). */
+  form: 'value' | 'sentence' = 'value',
 ): string | null {
   const { viewerScope, actor } = useKnownAccountActor(serverId, accountId);
   if (!accountId) return null;
-  if (viewerScope?.accountId === accountId) return t('message.accountActorYou');
+  if (viewerScope?.accountId === accountId) {
+    return form === 'sentence' ? t('session.collaboration.discussion.attribution.you') : t('message.accountActorYou');
+  }
   return actor
     ? resolveAccountActorPresentation(actor, viewerScope).name
-    : t('detailPages.approval.requester.anotherPerson');
+    : form === 'sentence'
+      ? t('session.collaboration.discussion.attribution.anotherPerson')
+      : t('detailPages.approval.requester.anotherPerson');
 }
 
 /**
@@ -62,15 +68,15 @@ export const ApprovalRequesterConfirmationSection = React.memo(
   ) {
     const serverId = props.subject.personaSessionRef.serverId;
     const entitled = useApprovalRequesterViewer(props.subject);
-    const requester = useAccountLabel(
+    const requester = useApprovalAccountLabel(
       serverId,
       props.subject.requesterAccountId,
     );
-    const executor = useAccountLabel(
+    const executor = useApprovalAccountLabel(
       serverId,
       props.subject.executionAccountId,
     );
-    const decider = useAccountLabel(
+    const decider = useApprovalAccountLabel(
       serverId,
       props.decision?.decidingAccountId,
     );

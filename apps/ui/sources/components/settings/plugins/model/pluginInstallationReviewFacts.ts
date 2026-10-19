@@ -296,7 +296,31 @@ function sourceEvidence(review: PluginInstallationReview): readonly string[] {
   ];
 }
 
-function updateChannel(review: PluginInstallationReview): string {
+/** A path or archive channel that is the very locator the source line names says nothing more. */
+function channelRepeatsSource(review: PluginInstallationReview): boolean {
+  const channel = review.updateChannel;
+  return (
+    (channel.kind === 'path' || channel.kind === 'archive') &&
+    channel.locator === review.source.locator
+  );
+}
+
+/** The source, with a development path flagged on the same line rather than repeated beneath it. */
+function sourceLine(review: PluginInstallationReview): string {
+  const channel = review.updateChannel;
+  return t('settingsPlugins.installReviewSections.source', {
+    kind: sourceKindLabel(review.source.kind),
+    locator:
+      channel.kind === 'path' && channel.development && channelRepeatsSource(review)
+        ? t('settingsPlugins.installReviewSections.developmentPath', {
+            locator: review.source.locator,
+          })
+        : review.source.locator,
+  });
+}
+
+function updateChannel(review: PluginInstallationReview): string | null {
+  if (channelRepeatsSource(review)) return null;
   if (review.updateChannel.kind === 'path') {
     return review.updateChannel.development
       ? t('settingsPlugins.installReviewSections.developmentPath', {
@@ -404,11 +428,8 @@ export function describePluginInstallationReviewFacts(
       ...(isAuthorityExpansion && options.currentVersion
         ? [`${options.currentVersion} → ${review.version}`]
         : []),
-      t('settingsPlugins.installReviewSections.source', {
-        kind: sourceKindLabel(review.source.kind),
-        locator: review.source.locator,
-      }),
-      updateChannel(review),
+      sourceLine(review),
+      ...(updateChannel(review) ?? []),
       evidenceLine(
         'publisher',
         review.publisherIdentity.status === 'unavailable'

@@ -30,6 +30,8 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     anatomy?: 'card' | 'page';
     /** The approval's Home: a value that is one of its sessions (or a Home) reads by its name. */
     serverId?: string | null;
+    /** The exact identity of a Home this device cannot name; its own line never says it, so it waits here. */
+    homeIdentity?: string;
     /** A failure's code the page keeps behind this same disclosure, after the arguments' own lines. */
     failureCode?: string;
     /** The executor's own words for that failure, kept in the same disclosure ahead of its code. */
@@ -45,8 +47,9 @@ export const ActionApprovalFieldsCard = React.memo(function ActionApprovalFields
     const technical = React.useMemo(
         () => [...collectApprovalTechnicalLines(allRows),
             ...(props.failureMessage ? [{ key: 'failure-message', label: t('detailPages.approval.failureTitle'), value: props.failureMessage }] : []),
-            ...(props.failureCode ? [{ key: 'failure-code', label: t('common.error'), value: props.failureCode }] : [])],
-        [allRows, props.failureCode, props.failureMessage],
+            ...(props.failureCode ? [{ key: 'failure-code', label: t('common.error'), value: props.failureCode }] : []),
+            ...(props.homeIdentity ? [{ key: 'home-identity', label: t('common.home'), value: props.homeIdentity }] : [])],
+        [allRows, props.failureCode, props.failureMessage, props.homeIdentity],
     );
     if (allRows.length === 0 && technical.length === 0) return null;
     const serverId = props.serverId ?? null;
