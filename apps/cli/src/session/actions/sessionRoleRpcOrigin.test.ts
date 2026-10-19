@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { ActionExecutorContext } from '@happier-dev/protocol';
 
-import { resolveSessionRoleRpcOrigin } from './sessionRoleRpcOrigin';
+import { hasReceivedWorkflowSessionRoleAuthority, resolveSessionRoleRpcOrigin } from './sessionRoleRpcOrigin';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 const context: ActionExecutorContext = {
   authority: 'account_automation',
   actionCaller: { kind: 'session', sessionId: 'caller-session', starterDepth: 2, turnDepth: 3 },
-  sessionInputSource: { sourceSessionId: 'caller-session', sourceTurnId: 'original-turn' },
+  sessionInputSource: { sourceSessionId: 'caller-session', sourceTurnId: 'original-turn', sourceInputId: 'original-input' },
   actionRequestId: 'original-request', callerPermissionMode: 'default', workspaceWrites: 'deny',
 };
 
@@ -14,9 +17,31 @@ function expectOriginUnavailable(input: ActionExecutorContext) {
   let failure: unknown;
   try { resolveSessionRoleRpcOrigin(input); } catch (error) { failure = error; }
   expect(failure).toMatchObject({ code: 'role_rpc_origin_unavailable' });
+  expect(readRpcErrorCode(failure)).toBe('role_rpc_origin_unavailable');
 }
 
 describe('Session role RPC origin', () => {
+  it('consumes only the exact Home-admitted Run Session witness, without inventing source authority', () => {
+    const proof = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
+      accountId: 'owner', custodianAccountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
+      serverIdentityId: 'home', machineId: 'sender-machine', installationId: 'installed', actionId: 'session.notes.set',
+      requestId: 'note', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'session', sessionId: 'target' },
+      workflowActionOrigin: { runId: 'run', requestId: 'note', sessionAuthority: {
+        authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' }, runDepth: 0,
+        runOriginSessionId: 'target', directory: '/repo', workspaceWrites: 'allow',
+      } },
+    } });
+    const received = buildActionExecutorContextForRpc({ callerAuthority: 'account_automation', callerInputAuthorization: proof });
+    const accepts = (context: ActionExecutorContext, accountId = 'owner', sessionId = 'target') =>
+      hasReceivedWorkflowSessionRoleAuthority({ context, accountId, sessionId });
+    expect(accepts(received)).toBe(true);
+    expect(accepts(received, 'foreign-owner')).toBe(false);
+    expect(accepts(received, 'foreign-target')).toBe(false);
+    expect(accepts({ ...received, externalActionExecutionAuthorization: undefined })).toBe(false);
+    expect(accepts({ ...received, actionRequestId: 'other-request' })).toBe(false);
+    expect(accepts({ ...received, actionCaller: { kind: 'workflowRun', runId: 'run',
+      authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'yolo' } } })).toBe(false);
+  });
   it('fails closed with the typed origin denial for truthy primitive provenance', () => {
     for (const source of ['untrusted-origin', 1, true]) {
       expectOriginUnavailable({ ...context, sessionInputSource: source });
@@ -34,7 +59,7 @@ describe('Session role RPC origin', () => {
     expect(resolveSessionRoleRpcOrigin({ ...context, callerPermissionMode: 'acceptEdits' })).toEqual({
       v: 1, caller: { kind: 'session', sessionId: 'caller-session', starterDepth: 2, turnDepth: 3 },
       callerPermissionMode: 'safe-yolo', causalPermissionAuthority: null,
-      sourceTurnId: 'original-turn', requestId: 'original-request', workspaceWrites: 'deny',
+      sourceTurnId: 'original-turn', sourceInputId: 'original-input', requestId: 'original-request', workspaceWrites: 'deny',
     });
     expect(resolveSessionRoleRpcOrigin({ ...context, callerPermissionMode: undefined }))
       .toMatchObject({ callerPermissionMode: null });

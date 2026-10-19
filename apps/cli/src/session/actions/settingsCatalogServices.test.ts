@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import { delimiter, join } from 'node:path';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
@@ -14,11 +15,9 @@ import { encodeScmDiffSummaryModelOverride, scmDiffSummarySettingBinding, SCM_DI
 import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { probeAgentSignInStatus } from '@/capabilities/cliAuth/agentSignIn';
-import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, clearActiveAccountSettingsSnapshot,
-    commitActiveConnectedAccountCatalog, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { ConnectedAccountCatalogRecordV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRecordV1Schema, emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -26,6 +25,17 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ScmDiffSummaryModelCatalogObservationV1Schema, resolveScmDiffSummaryDefaultModelProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { createCliActionDeps } from './createCliActionDeps';
+// Native sign-in is exercised through the real plugin; compile its source
+// graph during collection rather than inside the catalog assertion's budget.
+import '@happier-dev/plugins-claude';
+
+// First-party declaration/schema preparation is fixture construction, not a
+// native sign-in or Account request. Keep that cold work in collection too.
+const nativeCatalogRawSettings = { backendEnabledByTargetKey: Object.fromEntries(
+    [...readCurrentContributionRegistry().agentDefinitionsById.values()].flatMap(entry => entry.identity
+        ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === 'claude']) : []),
+) };
+const nativeCatalogSettings = accountSettingsParse(nativeCatalogRawSettings);
 
 describe('exact remote Voice Agent catalog admission', () => {
     it('offers executable automatic models from native sign-in and the canonical connected default', async () => {
@@ -46,15 +56,28 @@ describe('exact remote Voice Agent catalog admission', () => {
             const services = createCliSettingsCatalogServices({});
             // Only Claude's native executable/auth is supplied by this OS
             // fixture; ambient worker Agent installations are not test input.
-            const settings = accountSettingsParse({ backendEnabledByTargetKey: Object.fromEntries(
-                [...readCurrentContributionRegistry().agentDefinitionsById.values()].flatMap(entry => entry.identity
-                    ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === 'claude']) : []),
-            ) });
+            const settings = nativeCatalogSettings;
             const isClaude = (profile: ScmDiffSummaryCatalogProfile) =>
                 profile.modelSelector?.backendTargetKey === 'agent:happier.agent.claude/claude';
             const credentials = { token: 'summary-connected-route-fixture', encryption: null };
-            setActiveAccountSettingsSnapshot({ source: 'network', settings, settingsVersion: 1, loadedAtMs: 1,
+            setActiveAccountSettingsSnapshot({ source: 'network', settings, rawSettings: nativeCatalogRawSettings, settingsVersion: 1, loadedAtMs: 1,
                 settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+            let purposeRecord = emptyConnectedAccountCatalogRecordV1('purposes');
+            let purposeRevision = 1;
+            // Every public Action has its Account HTTP boundary from its first
+            // observation; the connected default arrives later through this row.
+            vi.spyOn(axios, 'get').mockImplementation(async url => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/v2/account/settings') return { status: 200, data: {
+                    version: 1, content: { t: 'plain', v: nativeCatalogRawSettings },
+                } };
+                if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+                    settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+                if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) return { status: 200,
+                    data: { status: 'present', revision: purposeRevision, content: { t: 'plain', v: purposeRecord } } };
+                if (path.startsWith('/v1/account/entity-rows/')) return { status: 200, data: { status: 'absent' } };
+                throw new Error(`Unexpected fixture Account read: ${path}`);
+            });
             const observeActionCatalog = async (connected = false) => {
                 const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, ...(connected ? { credentials } : {}),
                     sessionId: 'cli-global', mode: 'plain', ctx: null, machineActionDirectTargetTransport: {
@@ -66,46 +89,40 @@ describe('exact remote Voice Agent catalog admission', () => {
                     { surface: 'cli', authority: 'present_user' });
                 expect(result.ok, JSON.stringify(result)).toBe(true);
                 if (!result.ok) throw new Error(JSON.stringify(result));
-                getActionSpec('agents.models.list').outputSchema.parse(result.result);
+                const outputSchema = getActionSpec('agents.models.list').outputSchema;
+                if (!outputSchema) throw new Error('Missing agents.models.list output schema');
+                outputSchema.parse(result.result);
                 if (!result.result || typeof result.result !== 'object' || !('scmDiffSummaryCatalog' in result.result)) throw new Error('Missing machine catalog');
-                return ScmDiffSummaryModelCatalogObservationV1Schema.parse(result.result.scmDiffSummaryCatalog).profiles;
+                return ScmDiffSummaryModelCatalogObservationV1Schema.parse(result.result.scmDiffSummaryCatalog);
             };
-            expect(await probeAgentSignInStatus('claude')).toMatchObject({ status: 'signedOut' });
-            const signedOut = await services.readScmDiffSummaryCatalog!(settings, '');
-            expect(signedOut?.profiles.filter(isClaude)).toEqual([]);
             const signedOutObservation = await observeActionCatalog();
-            expect(signedOutObservation).toEqual(signedOut?.profiles);
-            expect(resolveScmDiffSummaryDefaultModelProfile(signedOutObservation)).toBeNull();
+            expect(signedOutObservation.automaticProfiles.filter(isClaude)).toEqual([]);
+            expect(resolveScmDiffSummaryDefaultModelProfile(signedOutObservation.automaticProfiles)).toBeNull();
+            expect(signedOutObservation.profiles.some(isClaude)).toBe(true);
             const purpose = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'claude',
                 contributions: readCurrentContributionRegistry() })?.authorizedPurposes.find(declaration =>
                     declaration.serviceRefs.some(service => service.localId === 'claude-subscription'));
             if (!purpose?.serviceRefs[0]) throw new Error('Claude connected route declaration is unavailable');
-            expect(commitActiveConnectedAccountCatalog({ scopeKey: resolveAccountSettingsScopeKey(credentials),
-                lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'purposes', catalog: { status: 'ready', revision: 1,
-                    record: ConnectedAccountCatalogRecordV1Schema.parse({ key: 'purposes', value: { v: 1, bindings: [{
-                        purpose: purpose.purpose, target: { kind: 'account', account: { service: purpose.serviceRefs[0], accountId: 'connected-summary' } },
-                    }] } }) },
-            })).toBe(true);
-            const connected = await createCliSettingsCatalogServices({ credentials }).readScmDiffSummaryCatalog!(settings, '');
-            expect(connected?.profiles.some(profile => isClaude(profile) && profile.costTier === 'low'
-                && profile.structuredOutput === 'supported'), JSON.stringify({ profiles: connected?.profiles,
-                    current: connected?.isCurrent(settings), purposeStatus: getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog?.status })).toBe(true);
+            purposeRecord = ConnectedAccountCatalogRecordV1Schema.parse({ key: 'purposes', value: { v: 1, bindings: [{
+                purpose: purpose.purpose, target: { kind: 'account', account: { service: purpose.serviceRefs[0], accountId: 'connected-summary' } },
+            }] } });
+            purposeRevision += 1;
             const connectedObservation = await observeActionCatalog(true);
-            expect(connectedObservation).toEqual(connected?.profiles);
-            expect(resolveScmDiffSummaryDefaultModelProfile(connectedObservation)).toMatchObject({ costTier: 'low', structuredOutput: 'supported' });
-            vi.stubEnv('ANTHROPIC_API_KEY', 'fixture-api-key');
-            expect(await probeAgentSignInStatus('claude')).toMatchObject({ status: 'signedIn' });
-            const signedIn = await services.readScmDiffSummaryCatalog!(settings, '');
-            expect(signedIn?.profiles.some(profile => isClaude(profile) && profile.structuredOutput === 'supported')).toBe(true);
-            expect(signedIn?.profiles.some(profile => isClaude(profile) && profile.costTier === 'low'
+            expect(connectedObservation.automaticProfiles.some(profile => isClaude(profile) && profile.costTier === 'low'
                 && profile.structuredOutput === 'supported')).toBe(true);
-            expect(await observeActionCatalog()).toEqual(signedIn?.profiles);
-            const binding = scmDiffSummarySettingBinding(SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch);
+            expect(resolveScmDiffSummaryDefaultModelProfile(connectedObservation.automaticProfiles)).toMatchObject({ costTier: 'low', structuredOutput: 'supported' });
+            vi.stubEnv('ANTHROPIC_API_KEY', 'fixture-api-key');
+            const signedIn = await observeActionCatalog();
+            expect(signedIn.automaticProfiles.some(profile => isClaude(profile) && profile.structuredOutput === 'supported')).toBe(true);
+            expect(signedIn.automaticProfiles.some(profile => isClaude(profile) && profile.costTier === 'low'
+                && profile.structuredOutput === 'supported')).toBe(true);
+            const binding = scmDiffSummarySettingBinding<typeof settings>(SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch);
             const prepared = await binding.prepare(settings, true, services);
             expect(prepared?.(settings)).toEqual({ [SCM_DIFF_SUMMARY_SETTING_KEYS.prefetch]: true });
             expect(settings[SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]).toBe('');
         } finally {
             if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+            vi.restoreAllMocks();
             vi.unstubAllEnvs();
             removeTempDirSync(home);
         }

@@ -1,6 +1,7 @@
 import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { isBackendTargetDisabledByAccountSettings, type AccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
-import { decodeScmDiffSummaryModelOverride, encodeScmDiffSummaryModelOverride, type ScmDiffSummaryCatalogMutationServicesV1 } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { decodeScmDiffSummaryModelOverride, encodeScmDiffSummaryModelOverride, type ScmDiffSummaryCatalogMutationServicesV1,
+    type ScmDiffSummaryCatalogUnavailableTargetV1 } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { buildScmDiffSummaryModelProfiles } from '@happier-dev/protocol/actions/settings/scmDiffSummaryModels';
 import { readSettings, type StoredCredentials } from '@/persistence';
@@ -138,7 +139,7 @@ export function createCliSettingsCatalogServices(params: Readonly<{
         });
         params.signal?.throwIfAborted();
         const profiles = probe.source === 'unavailable' ? [] : buildScmDiffSummaryModelProfiles({ backendTarget: target, models: probe.availableModels,
-            catalogModels: parsedKey?.definition.modelConfig?.staticModels ?? getAgentStaticModels(agentId, { catalogOnly: true }),
+            catalogModels: getAgentStaticModels(agentId, { catalogOnly: true }),
             agentFormats: configured ? null : readAgentStructuredOutputCapabilities(parsedKey?.richDefinition?.definition)?.formats });
         return { profiles, ...(probe.spawnFailure ? { probeFailures: [{ backendTargetKey: buildBackendTargetKeyV2(target), spawnFailure: probe.spawnFailure }] } : {}),
             isCurrent: (current: AccountSettings) => !params.signal?.aborted
@@ -245,6 +246,16 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                     ? acpCatalog.record.definitions.flatMap(definition => listAgentExecutionTargetsV1(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, [definition.id]))
                         .filter(target => !isBackendTargetDisabledByAccountSettings(settings, target)).map(buildBackendTargetKeyV2) : [];
                 const discoveryTargetKeys = [...new Set([...(automatic.discoveryTargetKeys ?? []), ...configuredTargets])];
+                // Automatic authentication evidence ranks defaults; it does not
+                // withdraw explicit models for connected or attached selections.
+                // Authored model facts need no native launch. Dynamic evidence
+                // still uses the selected/discovery probe below.
+                const unavailableTargetKeys = new Set(automatic.unavailableTargets?.map(target => target.backendTargetKey));
+                const explicitProfiles = [...registry.agentDefinitionsById.values()].flatMap(entry => entry.identity
+                    ? listAgentExecutionTargetsV1(entry.identity).flatMap(target => unavailableTargetKeys.has(buildBackendTargetKeyV2(target))
+                        ? buildScmDiffSummaryModelProfiles({ backendTarget: target,
+                            models: getAgentStaticModels(entry.id, { catalogOnly: true }),
+                            agentFormats: readAgentStructuredOutputCapabilities(entry.richDefinition?.definition)?.formats }) : []) : []);
                 const requestedTargets = new Set(configuredTargets);
                 const selected = decodeScmDiffSummaryModelOverride(storedValue);
                 if (selected?.backendTargetKey && discoveryTargetKeys.includes(selected.backendTargetKey)) requestedTargets.add(selected.backendTargetKey);
@@ -252,7 +263,7 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                 const selectedCatalogs = await Promise.all([...requestedTargets].map(backendTargetKey => readSelectedSummaryCatalog(settings,
                     encodeScmDiffSummaryModelOverride({ backendTargetKey, modelId: selected?.backendTargetKey === backendTargetKey ? selected.modelId : 'default' }),
                     acpCatalog, backendTargetKey === options.discoveryTargetKey)));
-                const profiles = [...new Map([...automatic.profiles, ...selectedCatalogs.flatMap(catalog => catalog?.profiles ?? [])]
+                const profiles = [...new Map([...automatic.profiles, ...explicitProfiles, ...selectedCatalogs.flatMap(catalog => catalog?.profiles ?? [])]
                     .map(profile => [profile.catalogId, profile])).values()];
                 const failuresByTarget = new Map((automatic.probeFailures ?? []).map(failure => [failure.backendTargetKey, failure]));
                 [...requestedTargets].forEach((target, index) => {
@@ -263,6 +274,8 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                 });
                 const probeFailures = [...failuresByTarget.values()];
                 return { profiles, automaticProfiles: automatic.profiles, discoveryTargetKeys, ...(probeFailures.length ? { probeFailures } : {}),
+                    ...(automatic.unavailableReason ? { unavailableReason: automatic.unavailableReason } : {}),
+                    ...(automatic.unavailableTargets?.length ? { unavailableTargets: automatic.unavailableTargets } : {}),
                     isCurrent: current => automatic.isCurrent(current) && readCurrentContributionRegistry() === registry
                         && (!acpCatalog || readAccountSnapshot()?.acpCatalog === acpCatalog)
                         && selectedCatalogs.every(catalog => !catalog || catalog.isCurrent(current)) };
@@ -272,33 +285,42 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                 const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
                 const agents = [...registry.agentDefinitionsById.values()];
                 const discoveryTargetKeys = new Set<string>();
+                const unavailableTargets: ScmDiffSummaryCatalogUnavailableTargetV1[] = [];
                 const probeFailures: Array<{ backendTargetKey: string; spawnFailure: SpawnFailureV1 }> = [];
                 const routingIds = indexAgentRoutingIdsByContributionIdentity(agents);
                 const purposeCatalog = params.credentials ? await readActiveConnectedAccountCatalog({
                     credentials: params.credentials, key: 'purposes', signal: params.signal,
                     operationContext, authorizeRequest: params.authorizeConnectedAccountRequest,
+                    readMode: 'admitted',
                 }) : null;
                 const profiles = (await Promise.all(agents.map(async entry => {
-                    const targets = entry.identity ? listAgentExecutionTargetsV1(entry.identity) : [];
-                    const staticModels = entry.definition.modelConfig?.staticModels ?? getAgentStaticModels(entry.id, { catalogOnly: true });
+                    const targets = entry.identity ? listAgentExecutionTargetsV1(entry.identity)
+                        .filter(target => !isBackendTargetDisabledByAccountSettings(settings, target)) : [];
+                    const staticModels = getAgentStaticModels(entry.id, { catalogOnly: true });
                     if (targets.length === 0) return [];
-                    if (targets.every(target => isBackendTargetDisabledByAccountSettings(settings, target))) return [];
+                    const targetKeys = targets.map(buildBackendTargetKeyV2);
+                    for (const key of targetKeys) discoveryTargetKeys.add(key);
                     const defaultAuth = purposeCatalog ? resolveSpawnConnectedServicesDefaultDisposition({
                         accountSettings: settings, agentId: entry.id, purposeCatalog,
                     }) : null;
-                    if (defaultAuth?.kind === 'unavailable') return [];
                     const connected = defaultAuth?.kind === 'connected';
                     // Run admission consumes this same default-auth owner. A
                     // signed-out native CLI does not withdraw a connected route.
-                    const signIn = connected ? null : await probeAgentSignInStatus(entry.id);
+                    const signIn = connected || defaultAuth?.kind === 'unavailable' ? null : await probeAgentSignInStatus(entry.id);
                     params.signal?.throwIfAborted();
-                    if (!connected && signIn?.status !== 'signedIn') return [];
+                    const unavailableReason: ScmDiffSummaryCatalogUnavailableTargetV1['reason'] | null = defaultAuth?.kind === 'unavailable'
+                        ? defaultAuth.reason === 'connected_account_purpose_catalog_unavailable' ? 'account_metadata_unavailable' : 'connected_default_unavailable'
+                        : !connected && signIn?.status !== 'signedIn'
+                            ? signIn?.status === 'signedOut' ? 'native_sign_in_required' : 'native_auth_unavailable' : null;
+                    if (unavailableReason) {
+                        unavailableTargets.push(...targetKeys.map(backendTargetKey => ({ backendTargetKey, reason: unavailableReason })));
+                        return [];
+                    }
                     return (await Promise.all(targets.map(async executionTarget => {
                         const agentId = readAgentRoutingIdForContributionIdentity(routingIds, executionTarget.identity);
                         if (!agentId) return [];
                         const target = readBackendTargetRefV2({ kind: 'backend', backendId: agentId, sourceKind: 'built_in' });
                         if (isBackendTargetDisabledByAccountSettings(settings, target)) return [];
-                        discoveryTargetKeys.add(buildBackendTargetKeyV2(target));
                         const observation = staticModels.length ? null : await probeSummaryModels({
                             agentId, cwd: process.cwd(), accountSettings: settings,
                             catalogEntry: registry.catalogEntriesById[agentId], backendTarget: convertBackendTargetRefV2ToV1(target),
@@ -312,6 +334,8 @@ export function createCliSettingsCatalogServices(params: Readonly<{
                     }))).flat();
                 }))).flat();
                 return { profiles, discoveryTargetKeys: [...discoveryTargetKeys], ...(probeFailures.length ? { probeFailures } : {}),
+                    ...(unavailableTargets.length ? { unavailableTargets } : {}),
+                    ...(purposeCatalog && purposeCatalog.status !== 'ready' ? { unavailableReason: 'account_metadata_unavailable' as const } : {}),
                     isCurrent: current => !params.signal?.aborted
                     && readCurrentContributionRegistry() === registry
                     && accountIsCurrent(lifetime)

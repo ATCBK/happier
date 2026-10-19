@@ -76,6 +76,47 @@ describe('CLI declared Account settings', () => {
   const user = { surface: 'cli', authority: 'present_user', actionsSettings,
     presentUserConfirmation: { actionId: 'settings.set' } } as const;
 
+  it('changes exact Action policy headlessly and restores Default over a conflicting Account snapshot', async () => {
+    const prior = { v: 1, actions: {
+      'prompt_doc.update': { enabled: false, disabledSurfaces: ['agent', 'cli'], approvalRequiredSurfaces: ['mcp'],
+        enabledPlacements: ['agent_input_chips'], toolExposureModes: { agent: 'discoverable_only' } },
+      'future.action': { enabled: false, futurePreference: 'retained' },
+    } };
+    content = { t: 'plain', v: { favoriteMachines: ['neighbor'], actionsSettingsV1: prior } };
+    concurrentContent = { t: 'plain', v: { futureSetting: 'preserved', actionsSettingsV1: { ...prior,
+      actions: { ...prior.actions, 'prompt_doc.create': { disabledSurfaces: ['mcp'] } },
+    } } };
+    conflict = true;
+    const owner = executor();
+    const target = { actionId: 'prompt_doc.update', audience: 'agent' } as const;
+    const context = { ...user, presentUserConfirmation: { actionId: 'actions.policy.set' } } as const;
+    for (const mode of ['allowed', 'ask_first', 'off', 'default'] as const) {
+      const written = await owner.execute('actions.policy.set', { ...target, mode }, context);
+      expect(written, JSON.stringify(written)).toMatchObject({ ok: true, result: { ...target, mode, actionEnabled: false, enabled: false } });
+      expect(await owner.execute('actions.policy.get', target, context))
+        .toMatchObject({ ok: true, result: { ...target, mode, actionEnabled: false, enabled: false } });
+      expect(content).toMatchObject({ t: 'plain', v: { futureSetting: 'preserved', actionsSettingsV1: { actions: {
+        'prompt_doc.update': { enabled: false, enabledPlacements: ['agent_input_chips'], toolExposureModes: { agent: 'discoverable_only' },
+          approvalRequiredSurfaces: mode === 'ask_first' ? ['mcp', 'agent'] : ['mcp'],
+          disabledSurfaces: mode === 'off' ? ['cli', 'agent'] : ['cli'] },
+        'prompt_doc.create': { disabledSurfaces: ['mcp'] },
+        'future.action': { enabled: false, futurePreference: 'retained' },
+      } } } });
+    }
+    expect(content.t === 'plain' && accountSettingsParse(content.v).actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toBeUndefined();
+    expect(await owner.execute('actions.policy.set', { ...target, mode: 'off' }, context)).toMatchObject({ ok: true });
+    expect(await owner.execute('actions.policy.reset', target, { ...context, presentUserConfirmation: { actionId: 'actions.policy.reset' } }))
+      .toMatchObject({ ok: true, result: { ...target, mode: 'default', actionEnabled: false, enabled: false } });
+    expect(content).toMatchObject({ t: 'plain', v: { actionsSettingsV1: { actions: {
+      'prompt_doc.update': { enabled: false, disabledSurfaces: ['cli'], approvalRequiredSurfaces: ['mcp'] },
+      'future.action': { enabled: false, futurePreference: 'retained' },
+    } } } });
+    expect(await owner.execute('actions.policy.set', { ...target, mode: 'allowed', reversal: { kind: 'restore' } }, context))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(await owner.execute('settings.set', { anchor: 'actionsSettingsV1', value: { v: 1, actions: {} } }, user))
+      .toMatchObject({ ok: false, errorCode: 'setting_not_found' });
+  });
+
   it('discovers the shared Settings catalog without an answering client and reads Account declarations headlessly', async () => {
     const owner = executor();
     const listed = await owner.execute('settings.list', {}, user);

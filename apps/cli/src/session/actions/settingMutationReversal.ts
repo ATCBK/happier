@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { AccountSettingMutationV1 } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationValueV1Schema, type SettingsDeclarationResetExpectedV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import type { PortableSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';

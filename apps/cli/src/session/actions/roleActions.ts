@@ -1,16 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { createAccountRoleActionExecutorV1, RoleActionRefusalV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
 import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
-import { readSessionRolesV1, writeSessionRoleIdV1ToMetadata, writeSessionRoleConfigurationV1ToMetadata, SessionRoleConfigurationV1Schema, snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { readSessionRolesV1, writeSessionRoleIdV1ToMetadata, SessionRoleConfigurationV1Schema, snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { resolveRoleSelectionV1, readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import type { ActionExecutorDeps, PluginRoleContributionV1, SessionRoleConfigurationV1, ActionExecutorContext } from '@happier-dev/protocol';
 import type { AccountRoleOverridesReadV1, RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
-import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
+import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { logger } from '@/ui/logger';
+import { applySessionRoleEditToMetadata, SessionRoleEditSchema } from '@/session/roles/sessionRoleEdit';
 
 type RoleArtifactStore = Pick<ReturnType<typeof createAccountArtifactStore>,
   'read' | 'list' | 'create' | 'update' | 'delete' | 'accessGrants'>;
@@ -27,8 +28,10 @@ export function createRoleActionExecutor(params: Readonly<{
   sessionId: string;
   readSessionMetadata?: () => unknown;
   stageSessionStateMutation?: (mutation: RegisteredSessionStateFieldMutationV1) => Promise<void>;
+  /** The receiving host rechecks transported authority immediately before custody changes. */
+  beforeSessionMutation?: (context: ActionExecutorContext, sessionId: string) => Promise<void>;
   artifactStore?: RoleArtifactStore;
-  readSettingsOverrides?: () => AccountRoleOverridesReadV1 | Promise<AccountRoleOverridesReadV1>;
+  readSettingsOverrides?: (signal?: AbortSignal) => AccountRoleOverridesReadV1 | Promise<AccountRoleOverridesReadV1>;
   readPluginRoles?: () => readonly PluginRoleContributionV1[];
   accountId?: string;
   readRawAccountSettings?: () => Promise<Readonly<Record<string, unknown>>>;
@@ -40,13 +43,15 @@ export function createRoleActionExecutor(params: Readonly<{
   prepareWorkspaceWritesPolicy?: RoleWorkspaceWritesPolicyPreparer;
 }>): NonNullable<ActionExecutorDeps['roleActionExecute']> {
   const listEntries = params.readRoleSources ?? createRoleSourceReader(params);
-  const accountScope = getActiveAccountSettingsSnapshot()?.scopeKey;
-  const readOverrides = params.readSettingsOverrides ?? (accountScope
-    ? createActionSettingsProvider({ scopeKey: accountScope }).getAccountRoleOverrides
-    : () => ({ status: 'unavailable' as const, reason: 'source-unavailable' }));
-  const readSettingsOverrides = async () => {
-    const read = await readOverrides();
-    if (read.status !== 'ready') refuse('account_role_overrides_unavailable');
+  const readSettingsOverrides = async (signal?: AbortSignal) => {
+    const read = await params.readSettingsOverrides?.(signal) ?? { status: 'unavailable' as const, reason: 'source-unavailable' };
+    if (read.status !== 'ready') {
+      const error = Object.assign(new RoleActionRefusalV1('account_role_overrides_unavailable'), {
+        reason: read.reason, contextSource: 'account_lifetime',
+      });
+      logger.infoFile('[Session] Role Action refused', readSessionPreparationFailureDiagnostic(error));
+      throw error;
+    }
     return read.overrides;
   };
   const accountActions = createAccountRoleActionExecutorV1({ ...params, readRoleSources: listEntries, generateId: randomUUID });
@@ -62,15 +67,38 @@ export function createRoleActionExecutor(params: Readonly<{
       const request = RoleActionInputSchemasV1[actionId].parse(input);
       if (request.sessionId !== params.sessionId || !params.accountId || !params.readSessionMetadata
         || !params.listReportSessions || !params.writeReportSessionRoles) refuse('session_target_unavailable');
+      const { listReportSessions, writeReportSessionRoles } = params;
       const metadata = params.readSessionMetadata();
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
       // Validate authoritative owner data even when there is no existing role selection.
       writeSessionRoleIdV1ToMetadata(metadata as Record<string, unknown>, readSessionRolesV1(metadata)?.roleId ?? null);
+      const applyStartedAt = performance.now();
+      const measurePhase = async <T>(phase: string, operation: () => Promise<T>, reportSessionId?: string): Promise<T> => {
+        const startedAt = performance.now();
+        let outcome: 'ok' | 'failed' = 'failed';
+        try {
+          const result = await operation();
+          outcome = 'ok';
+          return result;
+        } finally {
+          logger.infoFile('[Session] Role Apply phase', { sessionId: request.sessionId,
+            ...(reportSessionId ? { reportSessionId } : {}),
+            phase, durationMs: Math.round(performance.now() - startedAt),
+            elapsedMs: Math.round(performance.now() - applyStartedAt),
+            outcome: outcome === 'failed' && context.signal?.aborted ? 'cancelled' : outcome });
+        }
+      };
+      const reports = (await measurePhase('reports', () => listReportSessions(request.sessionId, context)))
+        .filter(report => report.ownerAccountId === params.accountId && report.sessionId !== request.sessionId);
+      if (reports.length === 0) return { updatedSessionIds: [] };
       const current = readSessionRolesV1(metadata) ?? undefined;
-      const inventory = await listEntries(context.signal);
-      if (inventory.status !== 'ready') refuse('role_source_incomplete');
+      const inventory = await measurePhase('sources', async () => {
+        const inventory = await listEntries(context.signal);
+        if (inventory.status !== 'ready') refuse('role_source_incomplete');
+        return inventory;
+      });
       const entries = inventory.entries;
-      const settingsOverrides = await readSettingsOverrides();
+      const settingsOverrides = await measurePhase('settings', () => readSettingsOverrides(context.signal));
       const roles = Object.fromEntries([...new Set([...entries.map((entry) => entry.roleId), ...Object.keys(current?.sessionRoles ?? {}),
         ...Object.keys(current?.overrides ?? {})])].flatMap((roleId) => {
         const resolved = resolveRoleSelectionV1({ roleId, roleSourceInventory: inventory, settingsOverrides,
@@ -81,10 +109,9 @@ export function createRoleActionExecutor(params: Readonly<{
         leadSessionId: request.sessionId, roles, notes: current?.notes,
       }));
       const updatedSessionIds: string[] = [];
-      for (const report of await params.listReportSessions(request.sessionId, context)) {
-        if (report.ownerAccountId !== params.accountId || report.sessionId === request.sessionId) continue;
+      for (const report of reports) {
         context.signal?.throwIfAborted();
-        await params.writeReportSessionRoles(report.sessionId, configuration, context);
+        await measurePhase('recipient', () => writeReportSessionRoles(report.sessionId, configuration, context), report.sessionId);
         updatedSessionIds.push(report.sessionId);
       }
       return { updatedSessionIds };
@@ -93,106 +120,136 @@ export function createRoleActionExecutor(params: Readonly<{
       const request = RoleActionInputSchemasV1[actionId].parse(input);
       if (request.sessionId !== params.sessionId) refuse('session_target_unavailable');
       if (!params.stageSessionStateMutation || !params.readSessionMetadata) refuse('session_target_unavailable');
-      const metadata = params.readSessionMetadata();
+      const readSessionMetadata = params.readSessionMetadata;
+      const stageSessionStateMutation = params.stageSessionStateMutation;
+      const stageRoleEdit = async () => {
+        context.signal?.throwIfAborted();
+        const metadata = readSessionMetadata();
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
+        const edit = SessionRoleEditSchema.parse({ actionId, input: request });
+        const next = readSessionRolesV1(applySessionRoleEditToMetadata(metadata as Record<string, unknown>, edit));
+        if (!next) refuse('session_target_unavailable');
+        const { roleId: _roleId, ...configuration } = next;
+        await stageSessionStateMutation({ v: 1, sessionId: request.sessionId, mutationId: randomUUID(),
+          fieldId: 'intent.sessionRoles', deliveryClass: 'durable_required', op: { kind: 'set', value: configuration },
+          sessionRoleEdit: edit,
+          source: context.authority === 'present_user' ? 'ui' : 'runtime', observedAt: Date.now() });
+      };
+      const roleId = request.roleId;
+      if (roleId === undefined) {
+        await params.beforeSessionMutation?.(context, request.sessionId);
+        await stageRoleEdit();
+        return { updated: true };
+      }
+      const metadata = readSessionMetadata();
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
-      writeSessionRoleIdV1ToMetadata(metadata as Record<string, unknown>, request.roleId);
+      writeSessionRoleIdV1ToMetadata(metadata as Record<string, unknown>, roleId);
       const snapshot = readSessionRolesV1(metadata) ?? undefined;
-      const settingsOverrides = await readSettingsOverrides();
+      const settingsOverrides = await readSettingsOverrides(context.signal);
       // Built-ins and their Account/Session overrides are already authoritative
       // here. An external requested or current role still needs source inventory;
       // unrelated Artifact/legacy reads must not postpone a native-policy refusal.
-      const needsExternalSources = !Object.hasOwn(BUILT_IN_ROLES_V1, request.roleId)
+      const needsExternalSources = !Object.hasOwn(BUILT_IN_ROLES_V1, roleId)
         || (snapshot?.roleId != null && !Object.hasOwn(BUILT_IN_ROLES_V1, snapshot.roleId));
       const inventory = needsExternalSources ? await listEntries(context.signal) : undefined;
-      const resolve = (roleId: string) => resolveRoleSelectionV1({ roleId, roleSourceInventory: inventory,
-        settingsOverrides, sessionRoles: snapshot, pluginRoles: params.readPluginRoles?.() });
-      const selection = resolve(request.roleId);
-      if (!selection.ok) refuse(selection.refusal.code);
-      if (context.authority !== 'present_user') {
-        const current = snapshot?.roleId ? resolve(snapshot.roleId) : null;
-        // A role change cannot clear the target's hands-off or exceed the caller's ceiling.
-        if (selection.selection.workspaceWrites === 'allow'
-          && (context.workspaceWrites === 'deny' || (current?.ok && current.selection.workspaceWrites === 'deny'))) refuse('role_policy_denied');
-      }
-      context.signal?.throwIfAborted();
-      const previousWorkspaceWrites = readSessionWorkspaceWritesV1(metadata, { roleSourceInventory: inventory, settingsOverrides });
+      const readCandidate = () => {
+        const metadata = readSessionMetadata();
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
+        writeSessionRoleIdV1ToMetadata(metadata as Record<string, unknown>, roleId);
+        const selection = resolveRoleSelectionV1({ roleId, roleSourceInventory: inventory,
+          settingsOverrides, sessionRoles: readSessionRolesV1(metadata) ?? undefined, pluginRoles: params.readPluginRoles?.() });
+        if (!selection.ok) refuse(selection.refusal.code);
+        const previousWorkspaceWrites = readSessionWorkspaceWritesV1(metadata, { roleSourceInventory: inventory, settingsOverrides });
+        // The target's latest policy and the caller's ceiling both remain monotone.
+        if (context.authority !== 'present_user' && selection.selection.workspaceWrites === 'allow'
+          && (context.workspaceWrites === 'deny' || previousWorkspaceWrites === 'deny')) refuse('role_policy_denied');
+        context.signal?.throwIfAborted();
+        return { workspaceWrites: selection.selection.workspaceWrites, previousWorkspaceWrites };
+      };
+      let candidate = readCandidate();
+      let preparedDeny = false;
       // Relaxation is synchronized from accepted owner metadata, never before enqueue.
-      if (selection.selection.workspaceWrites === 'deny' && previousWorkspaceWrites !== 'deny' && params.prepareWorkspaceWritesPolicy) {
-        const prepared = await params.prepareWorkspaceWritesPolicy(selection.selection.workspaceWrites, context);
+      if (candidate.workspaceWrites === 'deny' && candidate.previousWorkspaceWrites !== 'deny' && params.prepareWorkspaceWritesPolicy) {
+        const prepared = await params.prepareWorkspaceWritesPolicy('deny', context);
         if (!prepared.ok) refuse(prepared.errorCode);
-      } else if (selection.selection.workspaceWrites === 'deny' && previousWorkspaceWrites !== 'deny') refuse('role_policy_unenforceable');
-      await params.stageSessionStateMutation({ v: 1, sessionId: request.sessionId, mutationId: randomUUID(),
-        fieldId: 'intent.role', deliveryClass: 'durable_required', op: { kind: 'set', value: request.roleId },
-        source: context.authority === 'present_user' ? 'ui' : 'runtime', observedAt: Date.now() });
+        preparedDeny = true;
+      } else if (candidate.workspaceWrites === 'deny' && candidate.previousWorkspaceWrites !== 'deny') refuse('role_policy_unenforceable');
+      await params.beforeSessionMutation?.(context, request.sessionId);
+      candidate = readCandidate();
+      // A concurrent edit may make the requested selection newly require native deny.
+      if (!preparedDeny && candidate.workspaceWrites === 'deny' && candidate.previousWorkspaceWrites !== 'deny') {
+        if (!params.prepareWorkspaceWritesPolicy) refuse('role_policy_unenforceable');
+        const prepared = await params.prepareWorkspaceWritesPolicy('deny', context);
+        if (!prepared.ok) refuse(prepared.errorCode);
+        await params.beforeSessionMutation?.(context, request.sessionId);
+        readCandidate();
+      }
+      if (request.answersWorkerQuestions === undefined) {
+        await stageSessionStateMutation({ v: 1, sessionId: request.sessionId, mutationId: randomUUID(),
+          fieldId: 'intent.role', deliveryClass: 'durable_required', op: { kind: 'set', value: roleId },
+          source: context.authority === 'present_user' ? 'ui' : 'runtime', observedAt: Date.now() });
+      } else {
+        await stageRoleEdit();
+      }
       return { updated: true };
     }
     if (actionId === 'session.roles.override.set' || actionId === 'session.roles.override.clear'
       || actionId === 'session.roles.add' || actionId === 'session.roles.remove' || actionId === 'session.notes.set') {
       if (!params.stageSessionStateMutation || !params.readSessionMetadata) refuse('session_target_unavailable');
+      const readSessionMetadata = params.readSessionMetadata;
       const request = RoleActionInputSchemasV1[actionId].parse(input);
       if (request.sessionId !== params.sessionId) refuse('session_target_unavailable');
-      const metadata = params.readSessionMetadata();
-      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
-      const current = readSessionRolesV1(metadata) ?? { overrides: {}, sessionRoles: {}, notes: '' };
-      let configuration = SessionRoleConfigurationV1Schema.parse({
-        overrides: current.overrides, sessionRoles: current.sessionRoles, notes: current.notes,
-        ...(current.inheritedFrom ? { inheritedFrom: current.inheritedFrom } : {}),
-      });
-      switch (actionId) {
-        case 'session.notes.set': {
-          const request = RoleActionInputSchemasV1[actionId].parse(input);
-          configuration.notes = request.notes;
-          break;
+      const edit = SessionRoleEditSchema.parse({ actionId, input: request });
+      const selectedRoleId = readSessionRolesV1(readSessionMetadata())?.roleId;
+      // These edits need the selected/edited roles' policy, not every unrelated
+      // document. Built-in policy and overrides are already held by the Session.
+      const needsExternalSources = (selectedRoleId != null && !Object.hasOwn(BUILT_IN_ROLES_V1, selectedRoleId))
+        || ('roleId' in request && !Object.hasOwn(BUILT_IN_ROLES_V1, request.roleId));
+      const inventory = needsExternalSources ? await listEntries(context.signal) : undefined;
+      const settingsOverrides = await readSettingsOverrides(context.signal);
+      const layers = { roleSourceInventory: inventory, settingsOverrides };
+      const readCandidate = () => {
+        const metadata = readSessionMetadata();
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) refuse('session_target_unavailable');
+        const current = readSessionRolesV1(metadata) ?? { overrides: {}, sessionRoles: {}, notes: '' };
+        const nextMetadata = applySessionRoleEditToMetadata(metadata as Record<string, unknown>, edit);
+        const next = readSessionRolesV1(nextMetadata);
+        if (!next) refuse('session_target_unavailable');
+        const { roleId: _roleId, ...configuration } = next;
+        if (context.authority !== 'present_user' && 'roleId' in request) {
+          const before = resolveRoleSelectionV1({ roleId: request.roleId, roleSourceInventory: inventory, settingsOverrides, sessionRoles: current });
+          const after = resolveRoleSelectionV1({ roleId: request.roleId, roleSourceInventory: inventory, settingsOverrides, sessionRoles: configuration });
+          if (after.ok && after.selection.workspaceWrites === 'allow'
+            && (context.workspaceWrites === 'deny' || (before.ok && before.selection.workspaceWrites === 'deny'))) refuse('role_policy_denied');
+          if (before.ok && before.selection.workspaceWrites === 'deny' && !after.ok) refuse('role_policy_denied');
         }
-        case 'session.roles.override.set': {
-          const { sessionId: _sessionId, ...override } = RoleActionInputSchemasV1[actionId].parse(input);
-          configuration.overrides[override.roleId] = { ...configuration.overrides[override.roleId], ...override };
-          break;
-        }
-        case 'session.roles.override.clear': {
-          const request = RoleActionInputSchemasV1[actionId].parse(input);
-          delete configuration.overrides[request.roleId];
-          break;
-        }
-        case 'session.roles.add': {
-          const request = RoleActionInputSchemasV1[actionId].parse(input);
-          configuration.sessionRoles[request.roleId] = { ...request.role, roleId: request.roleId };
-          break;
-        }
-        case 'session.roles.remove': {
-          const request = RoleActionInputSchemasV1[actionId].parse(input);
-          delete configuration.sessionRoles[request.roleId];
-          break;
-        }
-      }
-      if (context.authority !== 'present_user' && 'roleId' in request) {
-        const inventory = await listEntries(context.signal);
-        const settingsOverrides = await readSettingsOverrides();
-        const before = resolveRoleSelectionV1({ roleId: request.roleId, roleSourceInventory: inventory, settingsOverrides, sessionRoles: current });
-        const after = resolveRoleSelectionV1({ roleId: request.roleId, roleSourceInventory: inventory, settingsOverrides, sessionRoles: configuration });
-        if (after.ok && after.selection.workspaceWrites === 'allow'
-          && (context.workspaceWrites === 'deny' || (before.ok && before.selection.workspaceWrites === 'deny'))) refuse('role_policy_denied');
-        if (before.ok && before.selection.workspaceWrites === 'deny' && !after.ok) refuse('role_policy_denied');
-      }
-      configuration = SessionRoleConfigurationV1Schema.parse(configuration);
-      // Reject malformed authoritative data before acknowledging a queued edit, not only at replay.
-      const nextMetadata = writeSessionRoleConfigurationV1ToMetadata(metadata as Record<string, unknown>, configuration);
-      const inventory = await listEntries(context.signal);
-      const layers = {
-        roleSourceInventory: inventory,
-        settingsOverrides: await readSettingsOverrides(),
+        // Reject malformed authoritative data before acknowledging a queued edit, not only at replay.
+        const workspaceWrites = readSessionWorkspaceWritesV1(nextMetadata, layers);
+        const previousWorkspaceWrites = readSessionWorkspaceWritesV1(metadata, layers);
+        context.signal?.throwIfAborted();
+        return { configuration, workspaceWrites, previousWorkspaceWrites };
       };
-      const workspaceWrites = readSessionWorkspaceWritesV1(nextMetadata, layers);
-      const previousWorkspaceWrites = readSessionWorkspaceWritesV1(metadata, layers);
-      context.signal?.throwIfAborted();
+      let candidate = readCandidate();
+      let preparedDeny = false;
       // Tightening is safe before enqueue; relaxation waits for the durable owner
       // value to be observed by the host at its next prompt admission.
-      if (workspaceWrites === 'deny' && previousWorkspaceWrites !== 'deny' && params.prepareWorkspaceWritesPolicy) {
-        const prepared = await params.prepareWorkspaceWritesPolicy(workspaceWrites, context);
+      if (candidate.workspaceWrites === 'deny' && candidate.previousWorkspaceWrites !== 'deny' && params.prepareWorkspaceWritesPolicy) {
+        const prepared = await params.prepareWorkspaceWritesPolicy('deny', context);
         if (!prepared.ok) refuse(prepared.errorCode);
-      } else if (workspaceWrites === 'deny' && previousWorkspaceWrites !== 'deny') refuse('role_policy_unenforceable');
+        preparedDeny = true;
+      } else if (candidate.workspaceWrites === 'deny' && candidate.previousWorkspaceWrites !== 'deny') refuse('role_policy_unenforceable');
+      await params.beforeSessionMutation?.(context, request.sessionId);
+      candidate = readCandidate();
+      if (!preparedDeny && candidate.workspaceWrites === 'deny' && candidate.previousWorkspaceWrites !== 'deny') {
+        if (!params.prepareWorkspaceWritesPolicy) refuse('role_policy_unenforceable');
+        const prepared = await params.prepareWorkspaceWritesPolicy('deny', context);
+        if (!prepared.ok) refuse(prepared.errorCode);
+        await params.beforeSessionMutation?.(context, request.sessionId);
+        candidate = readCandidate();
+      }
       await params.stageSessionStateMutation({ v: 1, sessionId: request.sessionId, mutationId: randomUUID(),
-        fieldId: 'intent.sessionRoles', deliveryClass: 'durable_required', op: { kind: 'set', value: configuration },
+        fieldId: 'intent.sessionRoles', deliveryClass: 'durable_required', op: { kind: 'set', value: candidate.configuration },
+        sessionRoleEdit: edit,
         source: context.authority === 'present_user' ? 'ui' : 'runtime', observedAt: Date.now() });
       return { updated: true };
     }

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { accountSettingsParse, BUILT_IN_ROLES_V1, readSessionRoleIdV1, createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
-import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { accountSettingsParse, BUILT_IN_ROLES_V1, readSessionRoleIdV1, createActionExecutor } from '@happier-dev/protocol';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { Metadata } from '@/api/types';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
-import { createRoleActionExecutor } from './roleActions';
+import { createRoleActionExecutor as createOwnerRoleActionExecutor } from './roleActions';
 import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/session/client/transport/mutations/applyRegisteredSessionStateFieldMutation';
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
 import type { RoleOverrideMutationV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
@@ -11,8 +11,72 @@ import { createRpcCallError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcEr
 import { RoleActionOutputSchemasV1, SessionRolesV1Schema, createRoleSourceReaderV1 } from '@happier-dev/protocol';
 import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { writeSessionRoleConfigurationV1ToMetadata, writeSessionRoleIdV1ToMetadata } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+
+// Storage is the test boundary; production callers supply their retained reader.
+function createRoleActionExecutor(params: Parameters<typeof createOwnerRoleActionExecutor>[0]) {
+  return createOwnerRoleActionExecutor({ readSettingsOverrides: () => {
+    const snapshot = getActiveAccountSettingsSnapshot();
+    return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot) : { status: 'unavailable', reason: 'source-unavailable' };
+  }, ...params });
+}
 
 describe('role Action effects', () => {
+  it('changes worker-question answering through the role Action without replacing newer role configuration', async () => {
+    let metadata: Metadata = { ...createTestMetadata(), work: { sessionRolesV1: {
+      roleId: 'builder', inheritedFrom: 'lead', notes: 'Original notes',
+      overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } }, sessionRoles: {},
+    } } };
+    const queued: RegisteredSessionStateFieldMutationV1[] = [];
+    const roleActionExecute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => metadata,
+      prepareWorkspaceWritesPolicy: async () => ({ ok: true }),
+      stageSessionStateMutation: async mutation => { queued.push(mutation); },
+    });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute });
+    const context = { authority: 'present_user' as const, surface: 'ui' as const };
+    expect(await executor.execute('session.role.set', { sessionId: 'session-1', answersWorkerQuestions: false }, context))
+      .toEqual({ ok: true, result: { updated: true } });
+    expect(queued).toHaveLength(1);
+    const mutation = queued.shift();
+    if (!mutation) throw new Error('Expected durable question preference edit');
+    metadata = writeSessionRoleIdV1ToMetadata(metadata, 'reviewer');
+    metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, {
+      inheritedFrom: 'lead', notes: 'Newer notes', sessionRoles: {},
+      overrides: { scout: { roleId: 'scout', workspaceWrites: 'deny' } },
+    });
+    const beforeReplay = SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1);
+    metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation);
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1))
+      .toEqual({ ...beforeReplay, answersWorkerQuestions: false });
+    expect(await executor.execute('session.role.set', { sessionId: 'session-1', roleId: 'builder', answersWorkerQuestions: true }, context))
+      .toEqual({ ok: true, result: { updated: true } });
+    expect(queued).toHaveLength(1);
+    metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, queued.shift()!);
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1))
+      .toEqual({ ...beforeReplay, roleId: 'builder', answersWorkerQuestions: true });
+    expect(await executor.execute('session.role.set', { sessionId: 'session-1', roleId: 'reviewer' }, context))
+      .toEqual({ ok: true, result: { updated: true } });
+    metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, queued.shift()!);
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1))
+      .toEqual({ ...beforeReplay, roleId: 'reviewer', answersWorkerQuestions: true });
+    for (const input of [{ sessionId: 'session-1' }, { sessionId: 'session-1', answersWorkerQuestions: 'false' },
+      { sessionId: 'session-1', answersWorkerQuestions: false, configuration: {} }]) {
+      expect(await executor.execute('session.role.set', input, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    }
+    expect(queued).toEqual([]);
+  });
+  it.each(['loading', 'source-unavailable', 'scope-retired'])('retains the closed override refusal reason %s', async reason => {
+    const execute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => createTestMetadata(),
+      readRoleSources: createRoleSourceReaderV1({}),
+      readSettingsOverrides: () => ({ status: 'unavailable', reason }),
+      stageSessionStateMutation: async () => { throw new Error('Unavailable authority must not write'); },
+    });
+    await expect(execute({ actionId: 'session.roles.override.clear', input: { sessionId: 'session-1', roleId: 'builder' },
+      context: { authority: 'present_user', surface: 'rpc' } })).rejects.toMatchObject({
+        code: 'account_role_overrides_unavailable', reason,
+      });
+  });
   beforeEach(() => {
     resetActiveAccountSettingsSnapshotForTests();
     setActiveAccountSettingsSnapshot({ scopeKey: 'roles-test', source: 'network', settingsVersion: 1, settings: accountSettingsParse({}),
@@ -20,6 +84,98 @@ describe('role Action effects', () => {
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
   });
   afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+  it.each(['session.role.set', 'session.roles.override.clear'] as const)('refuses %s when the user tightens policy during final authority checking', async actionId => {
+    const currentRoleId = actionId === 'session.role.set' ? 'scout' : 'builder';
+    let metadata: Metadata = { ...createTestMetadata(), work: { sessionRolesV1: {
+      roleId: currentRoleId, overrides: { [currentRoleId]: { roleId: currentRoleId, workspaceWrites: 'allow' } }, sessionRoles: {}, notes: '',
+    } } };
+    const execute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => metadata,
+      readRoleSources: createRoleSourceReaderV1({}),
+      beforeSessionMutation: async () => {
+        metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, {
+          overrides: { [currentRoleId]: { roleId: currentRoleId, workspaceWrites: 'deny' } }, sessionRoles: {}, notes: 'User edit',
+        });
+        expect(readSessionWorkspaceWritesV1(metadata)).toBe('deny');
+      },
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); },
+    });
+    await expect(execute({ actionId, input: { sessionId: 'session-1', roleId: 'builder' },
+      context: { authority: 'account_automation', surface: 'rpc' } })).rejects.toMatchObject({ code: 'role_policy_denied' });
+    expect(readSessionWorkspaceWritesV1(metadata)).toBe('deny');
+  });
+  it('rebases notes on a user policy tightening accepted during final authority checking', async () => {
+    let metadata: Metadata = { ...createTestMetadata(), work: { sessionRolesV1: {
+      roleId: 'builder', answersWorkerQuestions: false, overrides: {}, sessionRoles: {}, notes: '',
+    } } };
+    const execute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => metadata,
+      readRoleSources: createRoleSourceReaderV1({}),
+      beforeSessionMutation: async () => {
+        metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, {
+          overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } }, sessionRoles: {}, notes: 'User edit',
+        });
+      },
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); },
+    });
+    expect(await execute({ actionId: 'session.notes.set', input: { sessionId: 'session-1', notes: 'New notes' },
+      context: { authority: 'account_automation', surface: 'rpc' } })).toEqual({ updated: true });
+    expect({ notes: metadata.work?.sessionRolesV1?.notes, answersWorkerQuestions: metadata.work?.sessionRolesV1?.answersWorkerQuestions,
+      workspaceWrites: readSessionWorkspaceWritesV1(metadata) })
+      .toEqual({ notes: 'New notes', answersWorkerQuestions: false, workspaceWrites: 'deny' });
+  });
+  it('preserves an unrelated user deny accepted while preparing a tighter native policy', async () => {
+    let metadata: Metadata = { ...createTestMetadata(), work: { sessionRolesV1: {
+      roleId: 'builder', answersWorkerQuestions: false, overrides: {}, sessionRoles: {}, notes: '',
+    } } };
+    const execute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => metadata,
+      readRoleSources: createRoleSourceReaderV1({}),
+      prepareWorkspaceWritesPolicy: async () => {
+        metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, {
+          overrides: { scout: { roleId: 'scout', workspaceWrites: 'deny' } }, sessionRoles: {}, notes: 'User edit',
+        });
+        return { ok: true };
+      },
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); },
+    });
+    expect(await execute({ actionId: 'session.roles.override.set', input: { sessionId: 'session-1', roleId: 'builder', workspaceWrites: 'deny' },
+      context: { authority: 'account_automation', surface: 'rpc' } })).toEqual({ updated: true });
+    expect(SessionRolesV1Schema.parse(metadata.work?.sessionRolesV1)).toMatchObject({ notes: 'User edit', answersWorkerQuestions: false, overrides: {
+      builder: { workspaceWrites: 'deny' }, scout: { workspaceWrites: 'deny' },
+    } });
+  });
+  it('prepares native deny when the requested Role is tightened during final authority checking', async () => {
+    let metadata = createTestMetadata();
+    let nativePolicy: 'allow' | 'deny' = 'allow';
+    const execute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => metadata,
+      beforeSessionMutation: async () => {
+        metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, {
+          overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } }, sessionRoles: {}, notes: 'User edit',
+        });
+      },
+      prepareWorkspaceWritesPolicy: async policy => { nativePolicy = policy; return { ok: true }; },
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); },
+    });
+    expect(await execute({ actionId: 'session.role.set', input: { sessionId: 'session-1', roleId: 'builder' },
+      context: { authority: 'account_automation', surface: 'rpc' } })).toEqual({ updated: true });
+    expect({ roleId: readSessionRoleIdV1(metadata), nativePolicy, workspaceWrites: readSessionWorkspaceWritesV1(metadata) })
+      .toEqual({ roleId: 'builder', nativePolicy: 'deny', workspaceWrites: 'deny' });
+  });
+  it.each([false, true])('preserves a newly selected external Role deny without initial source inventory (complete snapshot: %s)', async completeSnapshot => {
+    let metadata = createTestMetadata();
+    const roleId = 'plugin:remote/readonly';
+    const execute = createRoleActionExecutor({ sessionId: 'session-1', readSessionMetadata: () => metadata,
+      beforeSessionMutation: async () => {
+        metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, { overrides: {}, notes: '',
+          sessionRoles: completeSnapshot ? { [roleId]: { ...BUILT_IN_ROLES_V1.reviewer, roleId } } : {},
+        });
+        metadata = writeSessionRoleIdV1ToMetadata(metadata, roleId);
+        expect(readSessionWorkspaceWritesV1(metadata)).toBe('deny');
+      },
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); },
+    });
+    await expect(execute({ actionId: 'session.role.set', input: { sessionId: 'session-1', roleId: 'builder' },
+      context: { authority: 'account_automation', surface: 'rpc' } })).rejects.toMatchObject({ code: 'role_policy_denied' });
+    expect(readSessionRoleIdV1(metadata)).toBe(roleId);
+  });
   it('writes an originless Run’s role and notes through canonical admission and the durable Session owner', async () => {
     let metadata = createTestMetadata();
     const roleActionExecute = createRoleActionExecutor({ sessionId: 'origin',
@@ -64,7 +220,7 @@ describe('role Action effects', () => {
       readRawAccountSettings: () => settings,
       readSessionMetadata: () => createTestMetadata(), stageSessionStateMutation: async () => {},
     });
-    const executor = createActionExecutor({ roleActionExecute, isActionApprovalRequired: () => false } as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute, isActionApprovalRequired: () => false });
     let result: Awaited<ReturnType<typeof executor.execute>> | undefined;
     const pending = executor.execute('session.role.set', { sessionId: 'session-1', roleId: 'orchestrator' },
       { authority: 'present_user', surface: 'ui' }).then(value => { result = value; });
@@ -102,6 +258,24 @@ describe('role Action effects', () => {
     await expect(execute({ actionId: 'session.roles.apply_to_reports', input: { sessionId: 'lead' },
       context: { authority: 'present_user', surface: 'ui' } })).rejects.toMatchObject({ code: 'role_source_incomplete' });
     expect(writes).toEqual([]);
+  });
+
+  it('does not read the full Artifact inventory when no same-Account report can receive a snapshot', async () => {
+    const execute = createRoleActionExecutor({ sessionId: 'lead', accountId: 'account-1',
+      readSessionMetadata: () => ({ work: { sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: '' } } }),
+      artifactStore: { list: async () => { throw new Error('Unneeded Artifact inventory'); },
+        read: async () => null,
+        create: async () => { throw new Error('Unexpected Artifact create'); },
+        update: async () => { throw new Error('Unexpected Artifact update'); },
+        delete: async () => { throw new Error('Unexpected Artifact delete'); },
+        accessGrants: { list: async () => { throw new Error('Unexpected grants read'); },
+          set: async () => { throw new Error('Unexpected grant write'); }, remove: async () => { throw new Error('Unexpected grant removal'); } },
+      },
+      listReportSessions: async () => [{ sessionId: 'foreign', ownerAccountId: 'other-account' }],
+      writeReportSessionRoles: async () => { throw new Error('Foreign report must not be written'); },
+    });
+    expect(await execute({ actionId: 'session.roles.apply_to_reports', input: { sessionId: 'lead' },
+      context: { authority: 'present_user', surface: 'ui' } })).toEqual({ updatedSessionIds: [] });
   });
 
   it.each([
@@ -181,7 +355,7 @@ describe('role Action effects', () => {
       prepareWorkspaceWritesPolicy: async () => ({ ok: false, errorCode }),
     });
     // Other Action families are outside this test; Role resolution and failure mapping stay real.
-    const executor = createActionExecutor({ roleActionExecute, isActionApprovalRequired: () => false } as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute, isActionApprovalRequired: () => false });
     expect(await executor.execute('session.role.set', { sessionId: 'session-1', roleId: 'orchestrator' },
       { authority: 'present_user', surface: 'ui' })).toMatchObject({ ok: false, errorCode });
     expect(queued).toEqual([]);
@@ -201,14 +375,14 @@ describe('role Action effects', () => {
       if (kind === 'thrown') throw createRpcCallError({ error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
       return { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, error: 'RPC method not available' };
     } });
-    const executor = createActionExecutor({ roleActionExecute, isActionApprovalRequired: () => false } as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute, isActionApprovalRequired: () => false });
     expect(await executor.execute('session.role.set', { sessionId: 'child', roleId: 'orchestrator' },
       { authority: 'present_user', surface: kind === 'thrown' ? 'ui' : 'cli' })).toMatchObject({ ok: false, errorCode: 'session_role_runtime_unavailable' });
   });
   it('does not reinterpret a timed-out live Role write as an absent runtime', async () => {
     const failure = { ok: false, errorCode: 'session_rpc_failed', error: 'RPC call timeout' } as const;
     const roleActionExecute = createRoleActionExecutor({ sessionId: 'lead', forwardSessionRoleAction: async () => failure });
-    const executor = createActionExecutor({ roleActionExecute, isActionApprovalRequired: () => false } as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), roleActionExecute, isActionApprovalRequired: () => false });
     expect(await executor.execute('session.role.set', { sessionId: 'child', roleId: 'orchestrator' },
       { authority: 'present_user', surface: 'cli' })).toEqual(failure);
   });
