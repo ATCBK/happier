@@ -55,11 +55,13 @@ import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/acti
 import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { enrichCliActionApprovalContext } from './enrichCliActionApprovalContext';
+import { createCliApprovalsArtifactStore } from './approvals/artifactStore';
+import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { resolveActionSessionListAccessFailure } from '@happier-dev/protocol/actions/executor/sessionListAccess';
 import { readActionSessionTargetField, replaceActionSessionTargetField } from '@happier-dev/protocol/actions/executor/sessionTargets';
 import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { SessionListResultSchema } from '@happier-dev/protocol/sessions/control/listResult';
-import type { ApprovalExecutionOriginV1, ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps, RuntimeActionExecute } from '@happier-dev/protocol';
+import type { ApprovalExecutionOriginV1, ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps, RuntimeActionExecute, TargetActionApprovalRequestV1 } from '@happier-dev/protocol';
 import {
   connect,
   HappierActionError,
@@ -1077,7 +1079,52 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         : {}),
       ...(params.targetActionApprovalReplay
         ? { targetActionApprovalReplay: params.targetActionApprovalReplay }
-        : {}),
+        : !machineAdmissionTransport && params.pluginActionExecutionOwner !== 'current_process'
+          ? { targetActionApprovalReplay: (async ({ artifactId, decision, context, signal }) => {
+            // Standalone clients transport a decision to the admitting daemon;
+            // its existing replay owner retains input, policy and currentness.
+            const store = createCliApprovalsArtifactStore({ credentials, serverId: approvalServerId,
+              serverHttpBaseUrl: approvalServerApiUrl });
+            let request: TargetActionApprovalRequestV1 | null;
+            try { request = await runWithServerHttpBaseUrl(approvalServerApiUrl,
+              () => store.targetActionApprovalsGet({ artifactId })); }
+            catch { return actionFailure('approval_unavailable'); }
+            if (!request) return null;
+            if (!hasStoredSessionCredentialProvenance(credentials)
+              || context?.surface !== 'cli' || context.authority !== 'present_user'
+              || context.externalActionCredential || context.externalActionExecutionAuthorization
+              || context.rpcSessionAuthorization || context.actionCaller && context.actionCaller.kind !== 'host') {
+              return actionFailure('present_user_required');
+            }
+            const origin = request.executionOriginV1;
+            const machineId = request.replayPlacement?.machineId ?? origin?.machineId;
+            if (!origin?.serverIdentityId || !machineId) return actionFailure('approval_origin_unavailable');
+            if (signal?.aborted) return actionFailure('cancelled');
+            if (!sameStoredCredentials(credentials, await readCurrentCredentials())) return actionFailure('credential_scope_retired');
+            const snapshot = await resolveServerFeaturesSnapshot();
+            const currentHome = snapshot?.status === 'ready' && snapshot.provenance === 'authenticated'
+              ? normalizeServerIdentityIdCapability(snapshot.features.capabilities.serverIdentity?.serverIdentityId) : null;
+            if (!currentHome) return actionFailure('approval_origin_unavailable');
+            if (currentHome !== origin.serverIdentityId
+              || origin.accountId !== undefined && origin.accountId !== readAccountIdFromToken(credentials.token)) return actionFailure('approval_stale');
+            if (signal?.aborted) return actionFailure('cancelled');
+            if (!sameStoredCredentials(credentials, await readCurrentCredentials())) return actionFailure('credential_scope_retired');
+            const replay = await callExactMachineRpc({ credentials, serverUrl: approvalServerApiUrl, machineId,
+              method: RPC_METHODS.APPROVAL_REQUEST_DECIDE,
+              request: { artifactId, decision, serverIdentityId: origin.serverIdentityId, originServerId: origin.serverId },
+              ...(context.actionRequestId ? { requestId: context.actionRequestId } : {}),
+              requireCurrentMachine: true, timeoutMs: null,
+              ...buildTerminalAuthorityCeiling({ token: credentials.token, serverHttpBaseUrl: approvalServerApiUrl }),
+              ...(signal ? { signal } : {}) });
+            if (!sameStoredCredentials(credentials, await readCurrentCredentials())) return actionFailure('credential_scope_retired');
+            const failure = ActionExecuteFailureSchema.safeParse(replay);
+            if (failure.success) return failure.data;
+            const value = readRecord(replay);
+            const output = getActionSpec('approval.request.decide').outputSchema?.safeParse(
+              value?.ok === true && Object.hasOwn(value, 'result') ? value.result : replay);
+            return output?.success ? { ok: true, result: output.data } : actionFailure('invalid_action_transport_output');
+          }) satisfies NonNullable<ActionExecutorDeps['targetActionApprovalReplay']> }
+          : {}),
       approvalRequestApprovedReplay: async ({ artifactId, request, decision, context, requestId, signal }) => {
         if (decision) {
           const subject = 'requesterConfirmation' in request ? request.requesterConfirmation : undefined;
