@@ -8,6 +8,7 @@ import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs';
 
 import { useInputFieldOptions, type InputFieldOptionsRequest } from '@/components/sessions/actions/useInputFieldOptions';
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
@@ -124,6 +125,7 @@ export function WidgetSetupStep(props: Readonly<{
     const discoveryContext = React.useMemo(() => setup.optionsContext?.(draft), [draft, setup]);
     const consumer = discoveryContext?.consumer;
     const selectedSession = consumer?.kind === 'widget' ? consumer.selectedSession : undefined;
+    const appRuntime = useAppShellPluginUiProjection();
     const optionServerId = selectedSession?.serverId ?? props.serverId;
     const requests = React.useMemo<InputFieldOptionsRequest[]>(() => setup.fields.map(({ field, viewer }) => ({
         ...setup.optionsContext?.(draft, field),
@@ -137,6 +139,8 @@ export function WidgetSetupStep(props: Readonly<{
         enabled: true,
         ...(optionServerId ? { serverId: optionServerId } : {}),
         ...(selectedSession ? { sessionId: selectedSession.sessionId } : {}),
+        ...(!selectedSession ? { pluginUiMachineId: appRuntime.machineId, pluginUiProjection: appRuntime.pluginUiProjection,
+            accountLifetime: appRuntime.accountLifetime } : {}),
     });
 
     const change = React.useCallback((path: string, next: WidgetSetupFieldChange) => {

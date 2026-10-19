@@ -214,7 +214,10 @@ describe('qualified input field options scope', () => {
                 recordMachineRequestFailed({ serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'viewer', machineId: 'controller-a' });
             });
             await screen.update(body());
-            await vi.waitFor(() => expect(screen.findByTestId('mixed.options')?.props.accessibilityHint).toBe('controller-b'));
+            await vi.waitFor(() => expect(screen.findByTestId('mixed.options')?.props.accessibilityHint, JSON.stringify({
+                machines: Object.values(storage.getState().machines).map(machine => machine.id),
+                byHome: Object.fromEntries(Object.entries(storage.getState().machineListByServerId).map(([home, machines]) => [home, machines?.map(machine => machine.id)])),
+            })).toBe('controller-b'));
             expect(observations.slice(mark).every(state => state.status === 'ready' && state.options === settled.options)).toBe(true);
             expect(screen.getTextContent()).toContain('Last 30 days');
         } finally { await screen.unmount(); await connection.dispose(); }

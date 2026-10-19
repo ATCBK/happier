@@ -1,13 +1,19 @@
 import * as React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import type { ActionInputFieldHint } from '@happier-dev/protocol';
 import { projectInputOptionsDependencies } from '@happier-dev/protocol/inputs';
 
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { resolveMachineTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
 import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ResolveSessionActionFieldOptions, InputFieldOptionsContext } from './sessionActionFieldOptions';
+import type { InputTypePickerHostContext } from './InputTypePickerHostProvider';
 import {
     EMPTY_INPUT_OPTIONS, INPUT_OPTIONS_LOADING, readInputFieldOptionsState, subscribeInputFieldOptions,
     retryInputFieldOptions, refreshInputFieldOptions, type InputFieldOptionsState, type InputOptionsRead,
@@ -65,6 +71,10 @@ export function useInputFieldOptions(params: Readonly<{
     machineId?: string | null;
     sessionId?: string | null;
     serverId?: string | null;
+    /** Admitted type producers; a union has no single machine to lend to every field. */
+    pluginUiProjection?: PluginUiProjectionModel | null;
+    /** A single-machine projection's owner, absent for an Account union. */
+    pluginUiMachineId?: string | null;
     /** Inventory facts invalidate choices; they never implement a source locally. */
     refreshKey?: string;
     /** Explicit routed Account custody; null is unavailable, never ambient fallback. */
@@ -81,35 +91,71 @@ export function useInputFieldOptions(params: Readonly<{
         && areServerProfileIdentifiersEquivalent(optionServerId, accountScope.serverId)
         && params.requests.some(request => request.field.inputType && 'pluginId' in request.field.inputType)
         ? resolveUiAccountActionFallbackMachineId(accountScope) : null);
+    const sessionMachines = getStorage()(useShallow(state => params.requests.map(request => {
+        const selected = request.consumer?.kind === 'widget' ? request.consumer.selectedSession : undefined;
+        const sessionId = params.sessionId ?? selected?.sessionId;
+        const serverId = selected?.serverId ?? optionServerId;
+        return sessionId && serverId ? resolveMachineTargetForSessionFromState(state, { sessionId, serverId })?.machineId ?? null : undefined;
+    })));
+    const producerRoutes = params.requests.map((request, index) => {
+        if (params.machineId || !request.field.inputType || !('pluginId' in request.field.inputType)) return null;
+        if (sessionMachines[index] !== undefined) return sessionMachines[index]
+            ? { machineId: sessionMachines[index] } : { unavailableReasonCode: 'input_type_options_unavailable' };
+        if (params.pluginUiProjection === undefined) return null;
+        const type = params.pluginUiProjection?.inputTypesById[buildQualifiedPluginContributionKey(request.field.inputType)];
+        const origin = readPluginUiContributionOrigin(type);
+        return origin?.phase === 'current' && origin.interactionEnabled && origin.serverId && optionServerId
+            && areServerProfileIdentifiersEquivalent(origin.serverId, optionServerId)
+            ? { machineId: origin.machineId, occurrenceId: type?.occurrenceId, executionOrigin: origin.executionOrigin }
+            : !origin && params.pluginUiMachineId ? { machineId: params.pluginUiMachineId, occurrenceId: type?.occurrenceId }
+            : { unavailableReasonCode: 'input_type_options_unavailable' };
+    });
     const signature = JSON.stringify([accountScope?.accountId, params.accountLifetime?.revision, optionServerId, machineId,
-        params.sessionId, params.requests.map((request) => ({ ...request,
+        params.sessionId, producerRoutes, params.requests.map((request) => ({ ...request,
             draftInput: projectInputOptionsDependencies(request.draftInput ?? {}, request.consumer) }))]);
-    const { reads, keys, defaultContexts } = React.useMemo(() => {
+    const { reads, keys, defaultContexts, fieldTargets } = React.useMemo(() => {
         const keys = new Map<string, string>();
         const defaultContexts = new Map<string, InputFieldOptionsContext>();
         const reads = new Map<string, InputOptionsRead>();
-        for (const request of params.requests) {
+        const fieldTargets: Record<string, NonNullable<InputTypePickerHostContext['fieldTargets']>[string]> = {};
+        for (const [index, request] of params.requests.entries()) {
+            const requestSessionId = params.sessionId ?? (request.consumer?.kind === 'widget' ? request.consumer.selectedSession?.sessionId : undefined);
+            const serverId = params.serverId ?? accountScope?.serverId;
+            // Literal fields can still offer a custom picker while deliberately
+            // asking for no option inventory. Keep their exact Session context.
+            if (requestSessionId) fieldTargets[request.field.path] = {
+                machineId: params.machineId ?? sessionMachines[index] ?? null, sessionId: requestSessionId,
+                ...(serverId ? { serverId } : {}),
+                ...(!params.machineId && !sessionMachines[index] ? { unavailable: true } : {}),
+            };
             if ((!request.field.optionsSourceId && !request.field.inputType && !request.field.connectedAccountOptions) || hasLocalStaticOptions(request.field)) continue;
-            const requestMachineId = params.machineId ?? (request.field.inputType && 'pluginId' in request.field.inputType ? machineId : null);
+            const producer = producerRoutes[index];
+            const requestMachineId = params.machineId ?? producer?.machineId
+                ?? (!requestSessionId && request.field.inputType && 'pluginId' in request.field.inputType ? machineId : null);
             const input = { ...(request.field.optionsSourceId ? { optionsSourceId: request.field.optionsSourceId } : {}),
                 ...(request.actionId ? { actionId: request.actionId, fieldPath: request.field.path } : {}),
                 ...(request.consumer ? { consumer: request.consumer, fieldPath: request.field.path } : {}),
                 draftInput: { ...projectInputOptionsDependencies(request.draftInput ?? {}, request.consumer),
                     ...(requestMachineId ? { machineId: requestMachineId } : {}),
-                    ...(params.sessionId ? { sessionId: params.sessionId } : {}) },
+                    ...(requestSessionId ? { sessionId: requestSessionId } : {}) },
             };
-            const serverId = params.serverId ?? accountScope?.serverId;
+            if (request.field.inputType && 'pluginId' in request.field.inputType) fieldTargets[request.field.path] = {
+                machineId: requestMachineId ?? null, ...(serverId ? { serverId } : {}),
+                ...(requestSessionId ? { sessionId: requestSessionId } : {}),
+                ...(producer?.unavailableReasonCode ? { unavailable: true } : {}),
+            };
             const context = { ...(serverId ? { serverId } : {}),
                 ...(requestMachineId ? { externalActionTarget: { kind: 'machine' as const, machineId: requestMachineId } } : {}),
                 ...(accountScope?.accountId ? { runtimeAccountId: accountScope.accountId } : {}),
-                ...(params.sessionId ? { defaultSessionId: params.sessionId } : {}) };
-            const key = JSON.stringify([input, context, params.accountLifetime?.revision]);
+                ...(requestSessionId ? { defaultSessionId: requestSessionId } : {}) };
+            const key = JSON.stringify([input, context, params.accountLifetime?.revision, producer]);
             reads.set(key, { key, input, context, ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }),
+                ...(producer?.unavailableReasonCode ? { unavailableReasonCode: producer.unavailableReasonCode } : {}),
                 ...(params.retentionOwner ? { retention: { owner: params.retentionOwner, field: request.field.path, refreshKey: params.refreshKey } } : {}) });
             keys.set(fieldKey(request.field, request), key);
             defaultContexts.set(JSON.stringify([request.field.path, request.field.optionsSourceId, request.field.inputType]), request);
         }
-        return { reads: [...reads.values()], keys, defaultContexts };
+        return { reads: [...reads.values()], keys, defaultContexts, fieldTargets };
     }, [signature, params.accountLifetime, params.retentionOwner, params.refreshKey]);
     const enabled = params.enabled && (params.accountLifetime === undefined || params.accountLifetime?.isCurrent() === true);
     const accountReads = useInputOptionsReadGroup(reads.filter(read => !read.context.externalActionTarget), enabled, params.refreshKey, params.accountLifetime, params.retentionOwner);
@@ -130,10 +176,14 @@ export function useInputFieldOptions(params: Readonly<{
         return index === -1 ? INPUT_OPTIONS_LOADING : snapshot[index] ?? INPUT_OPTIONS_LOADING;
     }, [activeReads, keys, defaultContexts, snapshot]);
     const retry = React.useCallback(() => activeReads.forEach(retryInputFieldOptions), [activeReads]);
+    const pickerMachineId = params.pluginUiProjection === undefined ? machineId : params.machineId ?? params.pluginUiMachineId ?? null;
     const pickerContextKey = JSON.stringify([signature, snapshot, params.requests[0]?.draftInput]);
     const resolveOptions: ResolveSessionActionFieldOptions = React.useMemo(() => Object.assign(
         (field: Parameters<ResolveSessionActionFieldOptions>[0], context?: InputFieldOptionsContext) => state({ ...field, path: field.path ?? '' }, context).options,
-        { state, retry, pickerContext: { machineId, sessionId: params.sessionId,
+        { state, retry, pickerContext: { machineId: pickerMachineId, sessionId: params.sessionId,
+            fieldTargets,
+            ...(params.pluginUiProjection === undefined ? {} : { pluginUiProjection: params.pluginUiProjection,
+                pluginUiMachineId: params.pluginUiMachineId }),
             draftInput: params.requests[0]?.draftInput,
             ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}),
             serverId: params.serverId ?? accountScope?.serverId,

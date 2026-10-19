@@ -137,6 +137,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions, re
             && (builtin ? targetDeclaration.kind !== 'session' || selectedCanRead : executableRuntime.phase === 'current' && executableRuntime.interactionEnabled),
         serverId: input.scope.serverId,
         machineId: targetDeclaration.kind === 'session' ? selectedRuntime.machineId : input.appRuntime.machineId,
+        pluginUiProjection: executableRuntime.pluginUiProjection,
         sessionId: requested?.sessionId,
         accountLifetime: executableRuntime.accountLifetime,
         retentionOwner,

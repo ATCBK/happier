@@ -18,6 +18,8 @@ export type InputOptionsRead = Readonly<{
     input: Record<string, unknown>;
     context: Omit<ActionExecutorContext, 'surface' | 'signal'>;
     accountLifetime?: ServerAccountScopeLifetime | null;
+    /** Supplied projection has no admitted producer; never route its read to an ambient relay. */
+    unavailableReasonCode?: string;
     retention?: Readonly<{ owner: object; field: string; refreshKey?: string }>;
 }>;
 type ReadEntry = {
@@ -57,6 +59,12 @@ function retainEntry(read: InputOptionsRead, entry: ReadEntry): void {
 
 function load(read: InputOptionsRead, entry: ReadEntry): void {
     const controller = entry.controller;
+    if (read.unavailableReasonCode) {
+        entry.state = { status: 'failed', options: EMPTY_INPUT_OPTIONS, errorCode: read.unavailableReasonCode };
+        entry.projection.state = entry.state;
+        entry.listeners.forEach(listener => listener());
+        return;
+    }
     void callWorkflowAction({
         actionId: 'action.options.resolve', input: read.input, context: read.context, signal: controller.signal,
         ...(read.accountLifetime === undefined ? {} : { accountLifetime: read.accountLifetime }),
