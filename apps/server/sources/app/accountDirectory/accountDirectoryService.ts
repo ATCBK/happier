@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import tweetnacl from "tweetnacl";
 import { db } from "@/storage/db";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { getOrCreateServerIdentityId, initializeServerIdentityCache, readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 import { getPublicUrl } from "@/storage/blob/files";
@@ -281,26 +282,31 @@ export async function upsertAccountHomeDirectoryEntry(params: Readonly<{
     if (body.connectionDescriptor.homeServerIdentityId !== params.homeServerIdentityId) {
         throw new AccountDirectoryError("invalid_request", "Home identity does not match descriptor");
     }
-    return inTx((tx) => upsertAccountHomeDirectoryEntryInTx(tx, {
-        accountId: params.accountId,
-        homeServerIdentityId: params.homeServerIdentityId,
-        label: body.label,
-        connectionDescriptor: body.connectionDescriptor,
-    }), { isolationLevel: "Serializable" /* Descriptor revision comparison and preference admission span directory and Account rows. */ });
+    return inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
+        return upsertAccountHomeDirectoryEntryInTx(tx, {
+            accountId: params.accountId,
+            homeServerIdentityId: params.homeServerIdentityId,
+            label: body.label,
+            connectionDescriptor: body.connectionDescriptor,
+        });
+    });
 }
 
 export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ accountId: string; homeServerIdentityId: string }>): Promise<void> {
     await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         await tx.accountHomeDirectoryEntry.deleteMany({ where: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } });
         await tx.account.updateMany({
             where: { id: params.accountId, preferredHomeServerIdentityId: params.homeServerIdentityId },
             data: { preferredHomeServerIdentityId: null },
         });
-    }, { isolationLevel: "Serializable" /* Pair directory deletion with preference admission without leaving a dangling preferred Home. */ });
+    });
 }
 
 export async function setPreferredAccountHome(params: Readonly<{ accountId: string; homeServerIdentityId: string | null }>): ReturnType<typeof listAccountHomeDirectory> {
     await inTx(async (tx) => {
+        await acquireAccountChangePublicationLocksInTx(tx, [params.accountId], { includeSingleAccount: true });
         if (params.homeServerIdentityId !== null) {
             const exists = await tx.accountHomeDirectoryEntry.findUnique({
                 where: { accountId_homeServerIdentityId: { accountId: params.accountId, homeServerIdentityId: params.homeServerIdentityId } },
@@ -309,7 +315,7 @@ export async function setPreferredAccountHome(params: Readonly<{ accountId: stri
             if (!exists) throw new AccountDirectoryError("preferred_home_not_found", "Home is not present in the directory");
         }
         await tx.account.updateMany({ where: { id: params.accountId }, data: { preferredHomeServerIdentityId: params.homeServerIdentityId } });
-    }, { isolationLevel: "Serializable" /* The directory-entry existence check and Account preference write are one admission. */ });
+    });
     return listAccountHomeDirectory(params.accountId);
 }
 

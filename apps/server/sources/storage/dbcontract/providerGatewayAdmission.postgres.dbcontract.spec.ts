@@ -33,7 +33,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('G
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
 
-    it('commits a Gateway slot/hub update after one overlapping Account publisher releases its fence', async () => {
+    it.each([1, 20])('commits Gateway slot/hub publication with %s overlapping Account publishers', async publisherCount => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         const resourceId = randomUUID();
         expect(await inTx(tx => createSavedSecretResourceInTx(tx, { accountId: account.id, resourceId,
@@ -60,7 +60,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('G
             expect(created.statusCode, created.body).toBe(200);
             expect(ProviderConnectionsRowMutationResponseV1Schema.parse(created.json())).toMatchObject({ status: 'updated', revision: 0 });
             const attempts: Array<{ elapsedMs: number; fenceMs?: number; sqlState?: string; blocked?: boolean }> = [];
-            let interleaved = false;
+            const publishers: Promise<unknown>[] = [];
+            let committedPublications = 0;
             db.$transaction = new Proxy(originalTransaction, { apply(target, receiver, args: unknown[]) {
                 const callback = args[0];
                 if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
@@ -68,6 +69,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('G
                     const start = performance.now();
                     const measurement: (typeof attempts)[number] = { elapsedMs: 0 };
                     attempts.push(measurement);
+                    let interleaved = false;
                     const observed = new Proxy(tx, { get(inner, property, innerReceiver) {
                         const value = Reflect.get(inner, property, innerReceiver);
                         if (property !== '$queryRawUnsafe') return value;
@@ -89,13 +91,32 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('G
                             const fenceStarted = performance.now();
                             const fence = Promise.resolve(Reflect.apply(value, inner, queryArgs));
                             // Attach immediately; the real fence may fail as soon as the peer commits.
-                            const settled = fence.then(result => ({ result }), error => ({ error }));
+                            let fenceSettled = false;
+                            const settled = fence.then(result => ({ result }), error => ({ error }))
+                                .finally(() => { fenceSettled = true; });
                             try {
-                                for (;;) {
+                                while (!fenceSettled) {
                                     const [blocked] = await db.$queryRaw<Array<{ count: number }>>`
                                         SELECT count(*)::int AS count FROM pg_stat_activity
                                         WHERE ${peerPid} = ANY(pg_blocking_pids(pid))`;
-                                    if (blocked.count > 0) { measurement.blocked = true; break; }
+                                    if (blocked.count > 0) {
+                                        measurement.blocked = true;
+                                        // Twenty independent publishers each loop three times.
+                                        // Start while the real route is waiting; join after it commits.
+                                        if (publisherCount > 1 && publishers.length === 0) {
+                                            for (let publisher = 0; publisher < publisherCount; publisher++) {
+                                                publishers.push((async () => {
+                                                    for (let iteration = 0; iteration < 3; iteration++) {
+                                                        await Reflect.apply(originalTransaction, db, [(other: Tx) => markAccountChanged(other, {
+                                                            accountId: account.id, kind: 'account', entityId: `publisher-${publisher}`,
+                                                        }), { isolationLevel: 'ReadCommitted' }]);
+                                                        committedPublications++;
+                                                    }
+                                                })());
+                                            }
+                                        }
+                                        break;
+                                    }
                                     await new Promise(resolve => setTimeout(resolve, 1));
                                 }
                             } finally { release.resolve(); await peer; }
@@ -121,11 +142,14 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('G
                     purposeBindingDefaults: { 'openai-upstream': { kind: 'group', service, groupId: 'test-pool' } },
                 }] } } });
             const response = await post(update);
-            console.info('C33_GATEWAY_ADMISSION', JSON.stringify({ status: response.statusCode, attempts }));
+            await Promise.all(publishers);
+            console.info('C34_GATEWAY_ADMISSION', JSON.stringify({ publisherCount, committedPublications, status: response.statusCode, attempts }));
             expect(response.statusCode, response.body).toBe(200);
             expect(ProviderConnectionsRowMutationResponseV1Schema.parse(response.json())).toMatchObject({ status: 'updated', revision: 1 });
-            expect(attempts[0]).toMatchObject({ blocked: true, sqlState: '40001' });
-            expect(attempts).toHaveLength(2);
+            expect(attempts).toHaveLength(1);
+            expect(attempts[0]).toMatchObject({ blocked: true });
+            expect(attempts[0].sqlState).toBeUndefined();
+            expect(committedPublications).toBe(publisherCount > 1 ? publisherCount * 3 : 0);
             const read = await app.inject({ method: 'GET', url: PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, headers });
             expect(read.json()).toMatchObject({ status: 'present', revision: 1, content: update.content });
         } finally { db.$transaction = originalTransaction; await app.close(); }

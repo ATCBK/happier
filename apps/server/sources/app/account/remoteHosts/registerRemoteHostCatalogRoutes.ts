@@ -107,7 +107,12 @@ export function registerRemoteHostCatalogRoutes(app: Fastify): void {
       return reply.send(await inTx(tx => request.body.savedSecretResources?.length
         ? promoteRemoteHostPacketInTx(tx, { accountId: request.userId, authentication,
           mutation: request.body.mutation, resources: request.body.savedSecretResources, referenceCensus: request.body.referenceCensus })
-        : mutateRemoteHostCatalogRowInTx(tx, { accountId: request.userId, authentication, ...request.body.mutation }), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }));
+        : mutateRemoteHostCatalogRowInTx(tx, { accountId: request.userId, authentication, ...request.body.mutation }), {
+          // Reference-free catalogs are admitted behind their existing Account
+          // fence; promotion and shared resource captures retain SSI.
+          ...((request.body.savedSecretResources?.length ?? 0) > 0 || request.body.mutation.referencedSavedSecretRevisions.length > 0
+            ? { isolationLevel: "Serializable" as const } : {}),
+        }));
     } catch (error) {
       // The canonical batch abort must leave the transaction before mapping its result.
       if (!(error instanceof SavedSecretResourceTransactionAbort)) throw error;

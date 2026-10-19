@@ -10,6 +10,22 @@ import { mutateReservedAccountScopedKvRowInTx, readReservedAccountScopedKvRowInT
   type ReservedAccountScopedKvRowDomain } from '@/app/kv/reservedAccountScopedKvRow';
 import { validateSavedSecretResourceReferencesInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import type { TeamOperationAuthenticationContext } from '@/app/teams/actorContext';
+import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { db } from '@/storage/db';
+
+/** Isolation preflight only: authorization/revision/ownership are rechecked behind the Account fence. */
+export async function providerConnectionsHaveCrossAccountSecretReferences(accountId: string, references: readonly string[]): Promise<boolean> {
+  const resourceIds = references.flatMap(reference => {
+    try {
+      const parsed = parseSavedSecretRefV1(reference);
+      return parsed.kind === 'shared_resource' ? [parsed.resourceId] : [];
+    } catch { return []; } // The transactional validator refuses malformed references.
+  });
+  if (resourceIds.length === 0) return false;
+  return await db.savedSecretResource.findFirst({
+    where: { id: { in: resourceIds }, ownerAccountId: { not: accountId } }, select: { id: true },
+  }) !== null;
+}
 
 export const providerConnectionsRowDomain: ReservedAccountScopedKvRowDomain<StoredProviderConnectionsContentV1> = {
   label: 'Provider connections catalog',
@@ -32,7 +48,7 @@ export async function readProviderConnectionsRowInTx(tx: Tx, input: Readonly<{ a
 /** Mode, source CAS, references and catalog CAS remain inside the same existing transaction. */
 export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderConnectionsRowMutationV1 & Readonly<{
   accountId: string; authentication?: TeamOperationAuthenticationContext;
-}>) {
+}>, options?: Readonly<{ ownSecretReferencesOnly?: boolean }>) {
   const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, input.accountId);
   if (fence.status === 'account_not_found') return { status: 'account-not-found' as const };
   if (fence.status === 'account_inconsistent') return { status: 'account-inconsistent' as const, reason: fence.reason };
@@ -57,7 +73,8 @@ export async function mutateProviderConnectionsRowInTx(tx: Tx, input: ProviderCo
     if (actual.length !== declared.length || actual.some((ref, index) => ref !== declared[index])) return { status: 'invalid-reference' as const };
   } else if (input.content === null && declared.length > 0) return { status: 'invalid-reference' as const };
   if (!await validateSavedSecretResourceReferencesInTx(tx, { accountId: input.accountId, authentication: input.authentication,
-    references: declared, savedSecretRevisions: input.savedSecretRevisions })) return { status: 'invalid-reference' as const };
+    references: declared, savedSecretRevisions: input.savedSecretRevisions,
+    ownResourcesOnly: options?.ownSecretReferencesOnly })) return { status: 'invalid-reference' as const };
 
   return mutateReservedAccountScopedKvRowInTx(tx, { accountId: input.accountId, physicalKey: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
     expectedRevision: input.expectedRevision, envelope: input.content, domain: providerConnectionsRowDomain,

@@ -24,6 +24,18 @@ import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowMutationResponseV1Schema } from
 import { readHomeDomainConfirmedRollbackV1 } from "@happier-dev/protocol/actions/homeDomainHttpBinding";
 import { registerPromptLibraryRoutes } from "@/app/account/prompts/registerPromptLibraryRoutes";
 import { registerAccountSettingsHistoryRoutes } from "@/app/api/routes/account/registerAccountSettingsHistoryRoutes";
+import { registerSessionDraftRoutes } from "@/app/account/sessionDrafts/registerSessionDraftRoutes";
+import { registerNotificationChannelRoutes } from "@/app/account/notifications/registerNotificationChannelRoutes";
+import { registerRemoteHostCatalogRoutes } from "@/app/account/remoteHosts/registerRemoteHostCatalogRoutes";
+import { SessionDraftMutateResponseV1Schema, SessionDraftReadResponseV1Schema } from "@happier-dev/protocol/drafts/sessionDrafts";
+import { kvMutate } from "@/app/kv/kvMutate";
+import { kvGet } from "@/app/kv/kvGet";
+import { createPrismaAccountPetLibraryPersistence } from "@/app/pets/accountPetLibraryPersistence";
+import { registerProfileRowsRoutes } from "@/app/api/routes/account/registerProfileRowsRoutes";
+import { PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, ProfileProviderConversionMutationV1Schema } from "@happier-dev/protocol/profiles/profileRecordV1";
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from "@happier-dev/protocol/providers/connections/connectionRowsV1";
+import { upsertAccountHomeDirectoryEntry, deleteAccountHomeDirectoryEntry, setPreferredAccountHome, listAccountHomeDirectory } from "@/app/accountDirectory/accountDirectoryService";
+import { HomeConnectionDescriptorV1Schema } from "@happier-dev/protocol/auth/accountDirectory";
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, buildPromptLibraryPhysicalKeyV1, PromptLibraryRowMutationResponseV1Schema,
     PromptLibraryRowReadResponseV1Schema, PromptLibraryRowsListResponseV1Schema } from "@happier-dev/protocol/prompts/library/promptLibraryRowsV1";
 
@@ -204,16 +216,33 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
 
     it.each(["configuration", "mode-change", "archive", "archive-active", "unarchive", "credential", "credential-mode-change", "group", "acp", "acp-mode-change", "acp-reference", "prompt", "prompt-mode-change",
         "manager", "manager-cas", "manager-inactive", "follow", "follow-remove", "voice", "follow-preferences", "follow-source", "follow-source-remove", "read-mark-read", "read-mark-unread", "read-advance",
-        "delivery-mute", "delivery-mute-remove", "delivery-mute-inactive"] as const)(
+        "delivery-mute", "delivery-mute-remove", "delivery-mute-inactive", "draft-account", "draft-session", "draft-session-inactive", "draft-session-mode-change", "draft-session-shared-revoked",
+        "notification", "notification-mode-change", "remote-host", "remote-host-mode-change", "kv", "pet-remove", "profile", "profile-mode-change", "profile-conversion",
+        "directory-upsert", "directory-remove", "directory-preferred"] as const)(
         "settles %s after a held Account writer commits", async operation => {
             const account = await db.account.create({ data: { encryptionMode: "plain" } });
+            const pet = operation === "pet-remove" ? await db.accountPetPackage.create({ data: {
+                id: randomUUID(), accountId: account.id, packageFormat: "fixture", manifest: {}, digest: "fixture", sizeBytes: 0, origin: {},
+            } }) : null;
+            const descriptor = HomeConnectionDescriptorV1Schema.parse({ v: 1, homeServerIdentityId: "srv_r34_fixture",
+                canonicalServerUrl: "https://r34.test", revision: 1, endpoints: [{ kind: "https", url: "https://r34.test" }] });
+            if (operation === "directory-remove" || operation === "directory-preferred") {
+                await db.accountHomeDirectoryEntry.create({ data: { accountId: account.id, homeServerIdentityId: descriptor.homeServerIdentityId,
+                    label: "Fixture", canonicalServerUrl: descriptor.canonicalServerUrl, connectionDescriptor: descriptor } });
+            }
+            if (operation === "directory-remove") await db.account.update({ where: { id: account.id },
+                data: { preferredHomeServerIdentityId: descriptor.homeServerIdentityId } });
             const relationOperation = operation.startsWith("manager") || operation.startsWith("follow")
                 || operation === "voice" || operation.startsWith("read-") || operation.startsWith("delivery-mute");
+            const draftOwner = operation === "draft-session-shared-revoked" ? await db.account.create({ data: { encryptionMode: "plain" } }) : account;
             const session = operation === "archive" || operation === "archive-active" || operation === "unarchive"
-                || relationOperation
-                ? await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}",
+                || relationOperation || operation.startsWith("draft-session")
+                ? await db.session.create({ data: { accountId: draftOwner.id, tag: randomUUID(), metadata: "{}",
                     encryptionMode: "plain", active: false, seq: 10, archivedAt: operation === "unarchive" ? new Date(123) : null } })
                 : null;
+            if (operation === "draft-session-shared-revoked" && session) await db.sessionShare.create({ data: {
+                sessionId: session.id, sharedWithUserId: account.id, sharedByUserId: draftOwner.id, accessLevel: "view",
+            } });
             const lead = relationOperation ? await db.session.create({ data: { accountId: account.id,
                 tag: randomUUID(), metadata: "{}", encryptionMode: "plain", active: false } }) : null;
             if (session && operation === "manager-cas") await db.sessionFollowEdge.create({ data: {
@@ -251,12 +280,21 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         attempts++;
                         const locked = deferred(), release = deferred();
                         const peer = Reflect.apply(transaction, db, [async (peerTx: Tx) => {
-                            await peerTx.account.update({ where: { id: account.id }, data: operation === "mode-change" || operation.endsWith("-mode-change")
+                            await peerTx.account.update({ where: { id: account.id }, data: (operation === "mode-change" || operation.endsWith("-mode-change")) && operation !== "draft-session-mode-change"
                                 ? { encryptionMode: "e2ee", ...createSignedAccountContentBinding() }
                                 : operation === "manager-inactive" || operation === "delivery-mute-inactive" ? { status: "disabled", seq: { increment: 1 } }
                                 : { seq: { increment: 1 } } });
                             if (operation === "archive-active" && session) {
                                 await peerTx.session.update({ where: { id: session.id }, data: { active: true } });
+                            }
+                            if (operation === "draft-session-inactive") {
+                                await peerTx.account.update({ where: { id: account.id }, data: { status: "disabled" } });
+                            }
+                            if (operation === "draft-session-mode-change" && session) {
+                                await peerTx.session.update({ where: { id: session.id }, data: { encryptionMode: "e2ee" } });
+                            }
+                            if (operation === "draft-session-shared-revoked" && session) {
+                                await peerTx.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: account.id } });
                             }
                             locked.resolve();
                             await release.promise;
@@ -265,8 +303,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                         const waiting = Promise.resolve(run());
                         // Attach immediately while PostgreSQL's actual wait is observed.
                         void waiting.catch(() => undefined);
+                        let settled = false;
+                        void waiting.finally(() => { settled = true; }).catch(() => undefined);
                         try {
-                            for (;;) {
+                            while (!settled) {
                                 const [{ waiting: blocked }] = await db.$queryRawUnsafe<Array<{ waiting: boolean }>>(
                                     `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
                                         AND wait_event_type = 'Lock' AND query LIKE '%"Account"%') AS waiting`,
@@ -283,8 +323,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                     };
                     return callback(new Proxy(tx, { get(inner, property, innerReceiver) {
                         if (property === "account") return new Proxy(inner.account, { get(model, method, modelReceiver) {
-                            if (method !== "update") return Reflect.get(model, method, modelReceiver);
-                            return (...queryArgs: unknown[]) => interleave(() => Reflect.apply(model.update, model, queryArgs));
+                            if (method !== "update" && method !== "updateMany") return Reflect.get(model, method, modelReceiver);
+                            return (...queryArgs: unknown[]) => interleave(() => Reflect.apply(model[method], model, queryArgs));
                         } });
                         if (property !== "$queryRawUnsafe") return Reflect.get(inner, property, innerReceiver);
                         return (query: string, ...values: unknown[]) => {
@@ -304,8 +344,140 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("A
                     registerSessionFollowSourceRoutes(app);
                     registerConfiguredAgentRowsRoutes(app);
                     registerPromptLibraryRoutes(app);
+                    registerSessionDraftRoutes(app);
+                    registerNotificationChannelRoutes(app);
+                    registerRemoteHostCatalogRoutes(app);
+                    registerProfileRowsRoutes(app);
                 }, async app => {
                     const startedAt = Date.now();
+                    if (operation.startsWith("directory-")) {
+                        if (operation === "directory-upsert") {
+                            expect(await upsertAccountHomeDirectoryEntry({ accountId: account.id, homeServerIdentityId: descriptor.homeServerIdentityId,
+                                label: "Fixture", connectionDescriptor: descriptor })).toMatchObject({ preferred: true });
+                        } else if (operation === "directory-remove") {
+                            await deleteAccountHomeDirectoryEntry({ accountId: account.id, homeServerIdentityId: descriptor.homeServerIdentityId });
+                        } else {
+                            expect(await setPreferredAccountHome({ accountId: account.id, homeServerIdentityId: descriptor.homeServerIdentityId }))
+                                .toMatchObject({ preferredHomeServerIdentityId: descriptor.homeServerIdentityId });
+                        }
+                        expect(await listAccountHomeDirectory(account.id)).toMatchObject(operation === "directory-remove"
+                            ? { homes: [] } : { preferredHomeServerIdentityId: descriptor.homeServerIdentityId });
+                        expect(waits).toBeGreaterThan(0);
+                        expect(failures).toEqual([]);
+                        expect(attempts).toBe(1);
+                        return;
+                    }
+                    if (operation === "profile-conversion") {
+                        const response = await app.inject({ method: "POST", url: "/v1/account/entity-rows/profiles/provider-conversion",
+                            headers: { "x-test-user-id": account.id }, payload: ProfileProviderConversionMutationV1Schema.parse({
+                                operation: "provider-conversion", expectedAccountMode: "plain", expectedSettingsVersion: 0,
+                                expectedProfileTransferRevision: "absent", expectedReferenceGuardRevision: "absent", profileCensus: [], mutations: [],
+                                providerMutation: { expectedRevision: "absent", sourceSettingsVersion: 0,
+                                    content: { t: "plain", v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }, referencedSavedSecretIds: [], savedSecretRevisions: [] },
+                                nextSettings: { t: "plain", v: {} },
+                            }) });
+                        expect(response.statusCode).toBe(200);
+                        expect(response.json()).toMatchObject({ status: "updated", settingsVersion: 1, providerRevision: 0 });
+                        expect(waits).toBeGreaterThan(0);
+                        expect(failures).toEqual([]);
+                        expect(attempts).toBe(1);
+                        return;
+                    }
+                    if (operation.startsWith("profile")) {
+                        const id = randomUUID();
+                        const content = { t: "plain", v: { v: 1, id, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
+                            definition: { kind: "inline", profile: { v: 2, id, name: "Held-writer profile", extraEnvironmentVariables: [],
+                                defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {}, createdAt: 1, updatedAt: 1 } } } };
+                        const headers = { "x-test-user-id": account.id };
+                        const response = await app.inject({ method: "POST", url: PROFILE_RECORDS_ROUTE_V1, headers,
+                            payload: { operation: "create", id, expectedRevision: "absent", content, referencedSavedSecretIds: [] } });
+                        expect(response.statusCode).toBe(200);
+                        expect(response.json()).toMatchObject(operation.endsWith("-mode-change") ? { status: "account-mode-mismatch" } : { status: "updated", revision: 0 });
+                        db.$transaction = transaction;
+                        const read = await app.inject({ method: "POST", url: PROFILE_RECORD_READ_ROUTE_V1, headers, payload: { id } });
+                        expect(read.json()).toMatchObject(operation.endsWith("-mode-change") ? { status: "absent" } : { status: "present", content });
+                        expect(waits).toBeGreaterThan(0);
+                        expect(failures).toEqual([]);
+                        expect(attempts).toBe(1);
+                        return;
+                    }
+                    if (operation === "kv") {
+                        const key = `contention-${randomUUID()}`;
+                        const result = await kvMutate({ uid: account.id }, [{ key, value: "Zml4dHVyZQ==", version: -1 }]);
+                        expect(result.success).toBe(true);
+                        expect(await kvGet({ uid: account.id }, key)).toEqual({ key, value: "Zml4dHVyZQ==", version: 0 });
+                        expect(waits).toBeGreaterThan(0);
+                        expect(failures).toEqual([]);
+                        expect(attempts).toBe(1);
+                        db.$transaction = transaction;
+                        const contenders = await Promise.all([0, 1].map(() => kvMutate({ uid: account.id }, [{ key, value: null, version: 0 }])));
+                        expect(contenders.map(result => result.success).sort()).toEqual([false, true]);
+                        expect(await kvGet({ uid: account.id }, key)).toBeNull();
+                        expect((await db.userKVStore.findUniqueOrThrow({ where: { accountId_key: { accountId: account.id, key } } })).version).toBe(1);
+                        return;
+                    }
+                    if (operation === "pet-remove" && pet) {
+                        const persistence = createPrismaAccountPetLibraryPersistence();
+                        expect(await persistence.deleteAccountPet(account.id, pet.id)).toMatchObject({ ok: true });
+                        expect(await persistence.readAccountPet(account.id, pet.id)).toBeNull();
+                        expect((await db.accountPetPackage.findUniqueOrThrow({ where: { id: pet.id } })).deletedAt).not.toBeNull();
+                        expect(waits).toBeGreaterThan(0);
+                        expect(failures).toEqual([]);
+                        expect(attempts).toBe(1);
+                        return;
+                    }
+                    if (operation.startsWith("draft-")) {
+                        const address = session ? { kind: "session" as const, sessionId: session.id }
+                            : { kind: "newSession" as const, draftId: randomUUID() };
+                        const mutationId = randomUUID();
+                        const content = { t: "plain" as const, v: { v: 1, address, document: {
+                            v: 1, composer: { text: { mutationId, value: "held-writer draft" },
+                                mentions: { mutationId, value: [] }, attachments: { mutationId, value: [] } },
+                            target: address.kind === "newSession" ? { kind: "newSession", authoring: {} }
+                                : { kind: "session", routing: { recipient: { mutationId, value: null },
+                                    agentContinuation: { mutationId, value: null }, executionRunDelivery: { mutationId, value: null } } }, extensions: {},
+                        } } };
+                        const headers = { "x-test-user-id": account.id, "x-happier-account-stored-content-protocol": "4" };
+                        const response = await app.inject({ method: "POST", url: "/v1/account/session-drafts/mutate", headers,
+                            payload: { address, expectedRevision: "absent", content } });
+                        console.info("R34_DRAFT_PUBLICATION", { operation, attempts, waits, failures, status: response.statusCode });
+                        const unavailable = operation === "draft-session-inactive" || operation === "draft-session-shared-revoked";
+                        const refused = unavailable || operation === "draft-session-mode-change";
+                        expect(response.statusCode).toBe(unavailable ? 404 : operation === "draft-session-mode-change" ? 400 : 200);
+                        if (refused) {
+                            expect(response.json()).toEqual({ error: unavailable ? "session_unavailable" : "invalid_content_mode" });
+                            expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+                        } else {
+                            expect(SessionDraftMutateResponseV1Schema.parse(response.json())).toMatchObject({ status: "updated", record: { revision: 0, content } });
+                            // Only the mutation is interleaved; the real reader independently consumes its persisted result.
+                            db.$transaction = transaction;
+                            const read = await app.inject({ method: "POST", url: "/v1/account/session-drafts/read", headers, payload: { address } });
+                            expect(SessionDraftReadResponseV1Schema.parse(read.json())).toMatchObject({ status: "present", record: { revision: 0, content } });
+                        }
+                        expect(waits).toBeGreaterThan(0);
+                        // Shared access is outside the Account fence: its retained
+                        // Serializable replay must re-admit a revoked grant.
+                        expect(failures).toEqual(operation === "draft-session-shared-revoked" ? ["P2010"] : []);
+                        expect(attempts).toBe(1);
+                        return;
+                    }
+                    if (operation.startsWith("notification") || operation.startsWith("remote-host")) {
+                        const remote = operation.startsWith("remote-host");
+                        const mutation = { expectedRevision: "absent", sourceSettingsVersion: 0,
+                            content: { t: "plain", v: remote ? { v: 1, hosts: [] } : { v: 1, channels: [] } },
+                            ...(remote ? { referencedSavedSecretRevisions: [] } : { savedSecretRevisions: [] }) };
+                        const headers = { "x-test-user-id": account.id };
+                        const url = `/v1/account/entity-rows/${remote ? "remote-hosts" : "notification-channels"}`;
+                        const response = await app.inject({ method: "POST", url, headers, payload: remote ? { mutation } : mutation });
+                        console.info("R34_CATALOG_PUBLICATION", { operation, attempts, waits, failures, status: response.statusCode });
+                        expect(response.statusCode).toBe(200);
+                        expect(response.json()).toMatchObject(operation.endsWith("-mode-change") ? { status: "account-mode-mismatch" } : { status: "updated", revision: 0 });
+                        expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(operation.endsWith("-mode-change") ? 0 : 1);
+                        expect(waits).toBeGreaterThan(0);
+                        expect(failures).toEqual([]);
+                        expect(attempts).toBe(1);
+                        return;
+                    }
                     if (operation.startsWith("delivery-mute") && session) {
                         const scope = { kind: "sender_session", sessionId: session.id };
                         const removing = operation === "delivery-mute-remove";

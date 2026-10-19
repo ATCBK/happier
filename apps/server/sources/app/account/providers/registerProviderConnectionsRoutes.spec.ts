@@ -3,13 +3,14 @@ import { installDbModuleMock } from '@/app/api/testkit/dbMocks';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 const transaction = vi.fn();
+const foreignSecret = vi.fn();
 // The database boundary supplies isolation and rollback evidence; route/domain logic stays real.
-installDbModuleMock({ db: { $transaction: transaction } });
+installDbModuleMock({ db: { $transaction: transaction, savedSecretResource: { findFirst: foreignSecret } } });
 const { createAuthenticatedTestApp } = await import('@/app/api/testkit/sqliteFastify');
 const { registerProviderConnectionsRoutes } = await import('./registerProviderConnectionsRoutes');
 
 describe('Provider catalog transaction admission', () => {
-    afterEach(() => { transaction.mockReset(); vi.unstubAllEnvs(); });
+    afterEach(() => { transaction.mockReset(); foreignSecret.mockReset(); vi.unstubAllEnvs(); });
 
     it.each(['GET', 'POST'] as const)('preserves confirmed rollback as typed transient HTTP for %s', async method => {
         vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
@@ -30,11 +31,13 @@ describe('Provider catalog transaction admission', () => {
     });
 
     it.each([
-        { method: 'GET' as const, references: [], isolation: 'RepeatableRead' },
-        { method: 'POST' as const, references: [], isolation: 'ReadCommitted' },
-        { method: 'POST' as const, references: ['happier:shared-secret:v1:secret'], isolation: 'Serializable' },
-    ])('uses $isolation for $method with references $references', async ({ method, references, isolation }) => {
+        { method: 'GET' as const, references: [], foreign: false, isolation: 'RepeatableRead' },
+        { method: 'POST' as const, references: [], foreign: false, isolation: 'ReadCommitted' },
+        { method: 'POST' as const, references: ['happier:shared-secret:v1:secret'], foreign: false, isolation: 'ReadCommitted' },
+        { method: 'POST' as const, references: ['happier:shared-secret:v1:secret'], foreign: true, isolation: 'Serializable' },
+    ])('uses $isolation for $method with references $references (foreign: $foreign)', async ({ method, references, foreign, isolation }) => {
         vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+        foreignSecret.mockResolvedValue(foreign ? { id: 'secret' } : null);
         const isolationLevels: unknown[] = [];
         transaction.mockImplementation(async (callback, options) => {
             isolationLevels.push(options.isolationLevel);

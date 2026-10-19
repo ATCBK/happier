@@ -138,6 +138,10 @@ export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: Mutati
 }
 
 export async function mutateNotificationChannelCatalog(input: MutationInput): Promise<MutationResponse> {
-  try { return await inTx(tx => mutateNotificationChannelCatalogInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
+  try { return await inTx(tx => mutateNotificationChannelCatalogInTx(tx, input), {
+    // The existing Account fence covers an empty reference census. Shared
+    // Secret revisions and Team-derived access still require their SSI capture.
+    ...((input.savedSecretRevisions?.length ?? 0) > 0 ? { isolationLevel: "Serializable" as const } : {}),
+  }); }
   catch (error) { if (error instanceof NotificationChannelCatalogPairedMutationRejected) return error.result; throw error; }
 }

@@ -282,6 +282,7 @@ export function createPrismaAccountPetLibraryPersistence(
         async deleteAccountPet(accountId, petId) {
             try {
                 return await inTx(async (tx): Promise<DeletePersistedAccountPetResult> => {
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
                     const row = await tx.accountPetPackage.findFirst({
                         where: {
                             id: petId,
@@ -319,7 +320,7 @@ export function createPrismaAccountPetLibraryPersistence(
                         ok: true,
                         deletedAt,
                     };
-                }, { /* Pet deletion reads live state before an unconditional versioned retirement. */ isolationLevel: "Serializable" });
+                });
             } catch {
                 return { ok: false, error: "internal" };
             }

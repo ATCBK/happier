@@ -314,8 +314,16 @@ export async function mutateProfileRowsInTx(tx: Tx, input: ProfileRowsMutationIn
 }
 
 export async function mutateProfileRows(input: Parameters<typeof mutateProfileRowsInTx>[1]): Promise<ProfileRowsMutationResult> {
-    try { return await inTx(tx => mutateProfileRowsInTx(tx, input), { /* Shared Artifact and Secret revision/access captures precede profile writes. */ isolationLevel: "Serializable" }); }
+    try { return await inTx(tx => mutateProfileRowsInTx(tx, input), {
+        ...(profileMutationsCaptureSharedResources(input.mutations) ? { isolationLevel: "Serializable" as const } : {}),
+    }); }
     catch (error) { if (error instanceof ProfileRowTransactionAbort) return error.result; throw error; }
+}
+
+/** The Account fence covers local rows; declared shared resources retain SSI. */
+function profileMutationsCaptureSharedResources(mutations: readonly ProfileRowMutationV1[]): boolean {
+    return mutations.some(mutation => Boolean(mutation.artifactRevision || mutation.legacyCloneSource?.artifactRevision)
+        || mutation.referencedSavedSecretIds.length > 0 || (mutation.savedSecretRevisions?.length ?? 0) > 0);
 }
 
 class ProfileProviderConversionTransactionAbort extends Error {
@@ -368,6 +376,11 @@ export async function convertProfileProvidersInTx(tx: Tx, input: Readonly<{
 }
 
 export async function convertProfileProviders(input: Parameters<typeof convertProfileProvidersInTx>[1]): Promise<ProfileProviderConversionResponseV1> {
-    try { return await inTx(tx => convertProfileProvidersInTx(tx, input), { /* Shared Artifact and Secret revision/access captures precede profile writes. */ isolationLevel: "Serializable" }); }
+    try { return await inTx(tx => convertProfileProvidersInTx(tx, input), {
+        ...(profileMutationsCaptureSharedResources(input.mutation.mutations)
+            || input.mutation.providerMutation.referencedSavedSecretIds.length > 0
+            || (input.mutation.providerMutation.savedSecretRevisions?.length ?? 0) > 0
+            ? { isolationLevel: "Serializable" as const } : {}),
+    }); }
     catch (error) { if (error instanceof ProfileProviderConversionTransactionAbort) return error.result; throw error; }
 }

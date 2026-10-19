@@ -8,7 +8,8 @@ import {
 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { registerProviderConnectionsRoutes } from '@/app/account/providers/registerProviderConnectionsRoutes';
-import { createSavedSecretResourceInTx, listSavedSecretResourcesForAccountInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
+import { createSavedSecretResourceInTx, deleteSavedSecretResourceInTx, listSavedSecretResourcesForAccountInTx,
+    setSavedSecretResourceGrantsInTx, updateSavedSecretResourceInTx } from '@/app/account/savedSecrets/savedSecretResourceService';
 import { db, getDbProviderFromEnv, initDbPostgres, isPrismaErrorCode } from '@/storage/db';
 import { inTx, isTransactionConflictExhaustedError, type Tx } from '@/storage/inTx';
 import { initEncrypt } from '@/modules/encrypt';
@@ -54,17 +55,18 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
         vi.unstubAllEnvs();
     });
 
-    async function fixture() {
+    async function fixture(own = false) {
         const caller = await db.account.create({ data: { encryptionMode: 'plain' } });
-        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const owner = own ? caller : await db.account.create({ data: { encryptionMode: 'plain' } });
         const unrelatedOwner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        if (own) await db.userRelationship.create({ data: { fromUserId: caller.id, toUserId: unrelatedOwner.id, status: 'friend' } });
         const ids = { referenced: `a-${randomUUID()}`, unrelated: `z-${randomUUID()}` };
         for (const [resourceId, accountId] of [[ids.referenced, owner.id], [ids.unrelated, unrelatedOwner.id]]) {
-            await db.userRelationship.create({ data: { fromUserId: accountId, toUserId: caller.id, status: 'friend' } });
+            if (accountId !== caller.id) await db.userRelationship.create({ data: { fromUserId: accountId, toUserId: caller.id, status: 'friend' } });
             expect(await inTx(tx => createSavedSecretResourceInTx(tx, {
                 accountId, resourceId, displayName: 'Contract token', kind: 'token', encryptionMode: 'plain',
                 storedContent: { t: 'plain', v: { v: 1, name: 'Contract token', kind: 'token', value: 'fixture' } },
-                accountGrants: [caller.id],
+                accountGrants: accountId === caller.id ? [unrelatedOwner.id] : [caller.id],
             }))).toMatchObject({ ok: true });
         }
         const reference = formatSharedSavedSecretRefV1(ids.referenced);
@@ -82,6 +84,112 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
 
     type Fixture = Awaited<ReturnType<typeof fixture>>;
     type Mutation = 'rotation' | 'revocation' | 'deletion' | 'account';
+    type PeerStatus = 'not-run' | 'committed' | 'serialized';
+    function readPeerStatus(peer: Readonly<{ status: PeerStatus }>): PeerStatus { return peer.status; }
+
+    it('refuses a foreign replacement of an own resource after isolation preflight', async () => {
+        const f = await fixture(true);
+        const transaction = db.$transaction.bind(db);
+        let replaced = false;
+        db.$transaction = new Proxy(transaction, { async apply(target, receiver, args: unknown[]) {
+            if (!replaced) {
+                replaced = true;
+                await transaction(async other => {
+                    expect(await deleteSavedSecretResourceInTx(other, { accountId: f.caller.id, resourceId: f.ids.referenced,
+                        expectedRevision: 1, expectedSettingsVersion: 0,
+                        referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] } },
+                    })).toMatchObject({ ok: true });
+                    expect(await createSavedSecretResourceInTx(other, { accountId: f.unrelatedOwner.id, resourceId: f.ids.referenced,
+                        displayName: 'Replacement', kind: 'token', encryptionMode: 'plain', accountGrants: [f.caller.id],
+                        storedContent: { t: 'plain', v: { v: 1, name: 'Replacement', kind: 'token', value: 'fixture' } },
+                    })).toMatchObject({ ok: true });
+                }, { isolationLevel: 'Serializable' });
+            }
+            return Reflect.apply(target, receiver, args);
+        } });
+        const app = createAuthenticatedTestApp(); registerProviderConnectionsRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+                headers: { 'x-test-user-id': f.caller.id }, payload: f.payload });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(ProviderConnectionsRowMutationResponseV1Schema.parse(response.json())).toEqual({ status: 'invalid-reference' });
+            expect(await db.userKVStore.findUnique({ where: { accountId_key: {
+                accountId: f.caller.id, key: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
+            } } })).toBeNull();
+        } finally { db.$transaction = transaction; await app.close(); }
+    });
+
+    it.each(['rotation', 'revocation', 'deletion'] as const)('refuses an own Secret capture after a fenced %s', async mutation => {
+        const f = await fixture(true);
+        expect(await db.savedSecretAccountGrant.count({ where: { resourceId: f.ids.referenced, accountId: f.unrelatedOwner.id } })).toBe(1);
+        const transaction = db.$transaction.bind(db);
+        let interleaved = false;
+        let observedWait = false;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                const value = Reflect.get(inner, property, innerReceiver);
+                if (property !== '$queryRawUnsafe') return value;
+                return async (...queryArgs: unknown[]) => {
+                    if (interleaved || typeof queryArgs[0] !== 'string' || !queryArgs[0].includes('"Account"') || !queryArgs[0].includes('FOR UPDATE')) {
+                        return Reflect.apply(value, inner, queryArgs);
+                    }
+                    interleaved = true;
+                    let release!: () => void;
+                    let locked!: () => void;
+                    const held = new Promise<void>(resolve => { locked = resolve; });
+                    const released = new Promise<void>(resolve => { release = resolve; });
+                    let peerPid = 0;
+                    const peer = transaction(async other => {
+                        const [backend] = await other.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                        peerPid = backend.pid;
+                        const base = { accountId: f.caller.id, resourceId: f.ids.referenced, expectedRevision: 1 };
+                        const result = mutation === 'rotation' ? await updateSavedSecretResourceInTx(other, { ...base,
+                            displayName: 'Rotated', kind: 'token', storedContent: { t: 'plain', v: { v: 1, name: 'Rotated', kind: 'token', value: 'changed' } } })
+                            : mutation === 'revocation' ? await setSavedSecretResourceGrantsInTx(other, { ...base,
+                                accountGrants: [], teamGrants: [], groupGrants: [] })
+                                : await deleteSavedSecretResourceInTx(other, { ...base, expectedSettingsVersion: 0,
+                                    referenceCensus: { accountMode: 'plain', profiles: { referenceGuardRevision: 'absent', rows: [] } } });
+                        expect(result).toMatchObject({ ok: true });
+                        locked(); await released;
+                    }, { isolationLevel: 'Serializable' });
+                    // A failed peer must not strand the admission wait.
+                    void peer.catch(() => { locked(); });
+                    await held;
+                    let settled = false;
+                    const fence = Promise.resolve(Reflect.apply(value, inner, queryArgs))
+                        .then(result => ({ result }), error => ({ error })).finally(() => { settled = true; });
+                    try {
+                        while (!settled) {
+                            const [blocked] = await db.$queryRaw<Array<{ count: number }>>`
+                                SELECT count(*)::int AS count FROM pg_stat_activity WHERE ${peerPid} = ANY(pg_blocking_pids(pid))`;
+                            if (blocked.count > 0) { observedWait = true; break; }
+                            await new Promise(resolve => setTimeout(resolve, 1));
+                        }
+                    } finally { release(); await peer; }
+                    const outcome = await fence;
+                    if ('error' in outcome) throw outcome.error;
+                    return outcome.result;
+                };
+            } })), ...args.slice(1)]);
+        } });
+        const app = createAuthenticatedTestApp(); registerProviderConnectionsRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+                headers: { 'x-test-user-id': f.caller.id }, payload: f.payload });
+            expect(observedWait).toBe(true);
+            expect(response.statusCode, response.body).toBe(200);
+            expect(ProviderConnectionsRowMutationResponseV1Schema.parse(response.json())).toEqual({ status: 'invalid-reference' });
+            expect(await db.userKVStore.findUnique({ where: { accountId_key: {
+                accountId: f.caller.id, key: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
+            } } })).toBeNull();
+            const resource = await db.savedSecretResource.findUnique({ where: { id: f.ids.referenced }, select: { revision: true } });
+            if (mutation === 'deletion') expect(resource).toBeNull();
+            else expect(resource).toEqual({ revision: 2 });
+            if (mutation === 'revocation') expect(await db.savedSecretAccountGrant.count({ where: { resourceId: f.ids.referenced } })).toBe(0);
+        } finally { db.$transaction = transaction; await app.close(); }
+    });
 
     /** Raw peer writes isolate the SSI read dependency from Account-publication locks.
      * Both transactions use real PostgreSQL; route, validation, CAS and publication stay real.
@@ -132,7 +240,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
             const response = await app.inject({ method: 'POST', url: PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
                 headers: { 'x-test-user-id': f.caller.id }, payload: f.payload });
             console.info('C31_INTERLEAVE', JSON.stringify({ mutation, referenced, fullCatalogRead, peer: peer.status, status: response.statusCode }));
-            return { peer: peer.status, response };
+            return { peer: readPeerStatus(peer), response };
         } finally {
             db.$transaction = transaction;
             await app.close();
@@ -255,10 +363,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('P
                 }
                 return result;
             }, { isolationLevel: 'Serializable' });
-            return { peer: peer.status, result };
+            return { peer: readPeerStatus(peer), result };
         } catch (error) {
             if (!isPrismaErrorCode(error, 'P2034') && !isTransactionConflictExhaustedError(error)) throw error;
-            return { peer: peer.status, result: { status: 'serialized' } };
+            return { peer: readPeerStatus(peer), result: { status: 'serialized' } };
         }
     }
 

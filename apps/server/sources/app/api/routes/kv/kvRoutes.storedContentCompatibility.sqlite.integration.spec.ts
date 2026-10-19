@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
     signAccountContentKeyBindingV1,
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+    ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V2,
 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
 
@@ -11,23 +12,9 @@ import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/cl
 import { buildPluginAccountStoragePhysicalKey } from "@/app/kv/accountScopedKv";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { kvRoutes } from "./kvRoutes";
+import { eventRouter } from "@/app/events/eventRouter";
 
-const { emitUpdate, markAccountChanged } = vi.hoisted(() => ({
-    emitUpdate: vi.fn(),
-    markAccountChanged: vi.fn(async () => 900),
-}));
-
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildKVBatchUpdateUpdate: vi.fn((_changes: unknown, seq: number) => ({
-        id: "update-id",
-        seq,
-        body: { t: "kv-batch-update" },
-    })),
-}));
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked: vi.fn(() => "update-id") }));
-vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
+const emitUpdate = vi.fn();
 
 const CURRENT_HEADERS = {
     "x-happier-account-stored-content-protocol":
@@ -56,15 +43,19 @@ describe("kvRoutes Todo stored-content compatibility", () => {
     }, 120_000);
 
     afterAll(async () => {
+        eventRouter.clearIo();
         await harness.close();
     });
 
     beforeEach(() => {
         vi.clearAllMocks();
         harness.resetEnv();
+        // Socket.IO delivery is the boundary; KV and Account publication run unchanged.
+        eventRouter.setIo({ to: () => ({ emit: emitUpdate }) } as unknown as Parameters<typeof eventRouter.setIo>[0]);
     });
 
     afterEach(async () => {
+        eventRouter.clearIo();
         harness.resetEnv();
         await harness.resetDbTables([
             () => db.accountChange.deleteMany(),
@@ -170,10 +161,12 @@ describe("kvRoutes Todo stored-content compatibility", () => {
             }
         });
 
-        await expect(db.userKVStore.findUniqueOrThrow({
+        const preserved = await db.userKVStore.findUniqueOrThrow({
             where: { accountId_key: { accountId: account.id, key: physicalKey } },
-        })).resolves.toMatchObject({ value: persistedValue, version: 7 });
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        });
+        expect(preserved.version).toBe(7);
+        expect(new Uint8Array(preserved.value ?? [])).toEqual(new Uint8Array(persistedValue));
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
     });
 
     it("requires the current declaration for marked Todo single, list, and bulk reads", async () => {
@@ -216,7 +209,7 @@ describe("kvRoutes Todo stored-content compatibility", () => {
                         v: 1,
                         kind: "account-stored-content",
                         minimumProtocolVersion:
-                            CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                            ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION_V2,
                     },
                 });
                 expect(response.body).not.toContain(marker);
@@ -412,7 +405,7 @@ describe("kvRoutes Todo stored-content compatibility", () => {
         expect(stored?.version).toBe(4);
         expect(Buffer.from(stored?.value ?? []).toString("base64"))
             .toBe(storedValue);
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
         expect(emitUpdate).not.toHaveBeenCalled();
     });
 
@@ -563,7 +556,7 @@ describe("kvRoutes Todo stored-content compatibility", () => {
         });
         expect(stored?.version).toBe(7);
         expect(Buffer.from(stored?.value ?? []).toString("base64")).toBe(marker);
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
         expect(emitUpdate).not.toHaveBeenCalled();
     });
 
@@ -838,7 +831,7 @@ describe("kvRoutes Todo stored-content compatibility", () => {
         expect(stored?.version).toBe(4);
         expect(Buffer.from(stored?.value ?? []).toString("base64"))
             .toBe(storedValue);
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
         expect(emitUpdate).not.toHaveBeenCalled();
     });
 
@@ -910,7 +903,7 @@ describe("kvRoutes Todo stored-content compatibility", () => {
         expect(stored?.version).toBe(4);
         expect(Buffer.from(stored?.value ?? []).toString("base64"))
             .toBe(storedValue);
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
         expect(emitUpdate).not.toHaveBeenCalled();
     });
 
@@ -1033,7 +1026,7 @@ describe("kvRoutes Todo stored-content compatibility", () => {
             },
             { key: "todo.index", value: marker, version: 5 },
         ]);
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
         expect(emitUpdate).not.toHaveBeenCalled();
     });
 

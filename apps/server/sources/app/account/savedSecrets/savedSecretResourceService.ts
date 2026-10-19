@@ -130,6 +130,8 @@ export function validateSavedSecretResourceReferenceCapturesV1(
 
 export async function validateSavedSecretResourceReferencesInTx(tx: Tx, input: SavedSecretResourceReferenceCaptureInput & Readonly<{
     accountId: string; authentication?: TeamOperationAuthenticationContext;
+    /** Account-fenced writers cannot admit a foreign resource after own-only isolation preflight. */
+    ownResourcesOnly?: boolean;
 }>): Promise<boolean> {
     const resourceIds = new Set<string>();
     for (const reference of input.references) {
@@ -143,6 +145,7 @@ export async function validateSavedSecretResourceReferencesInTx(tx: Tx, input: S
     }
     const resources = resourceIds.size > 0
         ? await readSavedSecretResourcesForAccountInTx(tx, input.accountId, input.authentication, [...resourceIds]) : [];
+    if (input.ownResourcesOnly && resources.some(resource => resource.relationship !== 'owner')) return false;
     return validateSavedSecretResourceReferenceCapturesV1(resources, input);
 }
 

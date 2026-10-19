@@ -57,6 +57,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/storage/db", () => {
     const transaction = {
         $executeRaw: vi.fn(async () => 0),
+        $executeRawUnsafe: vi.fn(async () => 0),
+        $queryRaw: vi.fn(async () => [{ statement_timeout: "0" }]),
+        $queryRawUnsafe: vi.fn(async () => [{ id: "account-1" }]),
         repeatKey: { findUnique: mocks.repeatKeyFindUnique },
         account: {
             findUnique: mocks.txAccountFindUnique,

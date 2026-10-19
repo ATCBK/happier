@@ -3,7 +3,7 @@ import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { eventRouter, buildKVBatchUpdateUpdate } from "@/app/events/eventRouter";
 import * as privacyKit from "privacy-kit";
 import { z } from 'zod/mini';
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     assertAccountJsonKvAccountEncryptionTransitionStoredContent,
     assertAccountJsonKvMutationStoredContent,
@@ -189,12 +189,17 @@ export async function kvMutate(
         LEGACY_STORED_CONTENT_ADMISSION,
 ): Promise<KVMutateResult> {
     return await inTx(
-        async (tx) => await kvMutateInTx(
-            tx,
-            ctx,
-            mutations,
-            storedContentAdmission,
-        ), { /* Expected KV versions are checked before blind writes to the same keys. */ isolationLevel: "Serializable" }
+        async (tx) => {
+            // One Account fence protects the read/version/write CAS, including
+            // opaque keys that do not need the encryption-transition fence.
+            await acquireAccountChangePublicationLocksInTx(tx, [ctx.uid], { includeSingleAccount: true });
+            return await kvMutateInTx(
+                tx,
+                ctx,
+                mutations,
+                storedContentAdmission,
+            );
+        },
     );
 }
 

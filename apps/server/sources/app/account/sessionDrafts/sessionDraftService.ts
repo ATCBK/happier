@@ -13,6 +13,7 @@ import { applyUserKvMutationsInTx } from "@/app/kv/kvMutate";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { db } from "@/storage/db";
 
 import {
     ACCOUNT_SESSION_DRAFT_KV_PREFIX,
@@ -574,14 +575,23 @@ export async function mutateSessionDraft(params: Readonly<{
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionDraftMutationServiceResult> {
     const accountOwned = isAccountOwnedDraftAddressV2(params.address);
+    // This probe selects the transaction only. Ownership is admitted again
+    // behind the Account fence; shared access and runner authority retain SSI.
+    const sessionId = isAccountOwnedDraftAddressV2(params.address) ? null : params.address.sessionId;
+    const ownSession = sessionId !== null && !params.authentication.sessionRuntimePrincipal
+        && await db.session.findFirst({ where: { id: sessionId, accountId: params.accountId }, select: { id: true } }) !== null;
+    const accountLocal = accountOwned || ownSession;
     return await inTx(async (tx) => {
         if (params.epoch === "v1" && (!isSessionDraftAddressV1(params.address) || !isSessionDraftContentV1(params.content))) {
             return { status: "epochUnavailable" };
         }
-        if (accountOwned) {
+        if (accountLocal) {
             const account = await tx.account.findUnique({ where: { id: params.accountId }, select: { id: true } });
             if (!account) return { status: "sessionUnavailable" };
             await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            if (ownSession && sessionId !== null && !await tx.session.findFirst({ where: { id: sessionId, accountId: params.accountId }, select: { id: true } })) {
+                return { status: "sessionUnavailable" };
+            }
         }
         const mode = await resolveAddressMode(tx, params.accountId, params.address, params.authentication);
         if (!mode) return { status: "sessionUnavailable" };
@@ -632,12 +642,9 @@ export async function mutateSessionDraft(params: Readonly<{
         });
         return { status: "updated", record };
     }, {
-        // Account-owned drafts already hold the shared Account-first fence
-        // through mode admission, KV CAS and runner-activation cancellation.
-        // ReadCommitted lets that fence see peer cursor commits without SSI
-        // aborting the unrelated draft. Session-bound drafts also depend on
-        // access and lifecycle predicates, so retain their serial ordering.
-        isolationLevel: accountOwned ? "ReadCommitted" : "Serializable",
-        transactionClass: accountOwned ? "session-draft.account-mutate" : "session-draft.session-mutate",
+        // Own-Session admission uses the same Account-first lifecycle fence.
+        // Shared Session access and runner authority depend on other writers.
+        ...(accountLocal ? {} : { isolationLevel: "Serializable" as const }),
+        transactionClass: accountLocal ? "session-draft.account-mutate" : "session-draft.session-mutate",
     });
 }

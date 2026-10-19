@@ -14,21 +14,18 @@ const { createToken, linkFindUnique, linkFindFirst } = vi.hoisted(() => ({
     linkFindUnique: vi.fn(),
     linkFindFirst: vi.fn(),
 }));
-vi.mock("@/storage/db", () => ({
-    db: {
+vi.mock("@/storage/db", () => {
+    const transaction = {
+        $queryRaw: vi.fn(async () => [{ statement_timeout: "0" }]),
+        $executeRaw: vi.fn(async () => 0),
+        $executeRawUnsafe: vi.fn(async () => 0),
         repeatKey: { findUnique: vi.fn(async () => null) },
-        account: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+        account: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(async () => ({ status: "active" })), update: vi.fn(), updateMany: vi.fn() },
         accountDirectoryLink: { findUnique: linkFindUnique, findFirst: linkFindFirst },
         accountHomeDirectoryEntry: { findUnique: vi.fn() },
-    },
-}));
-vi.mock("@/storage/inTx", () => ({
-    inTx: async (fn: (tx: unknown) => Promise<unknown>) => fn({
-        repeatKey: { findUnique: vi.fn(async () => null) },
-        account: { findUniqueOrThrow: vi.fn(async () => ({ status: "active" })) },
-        accountDirectoryLink: { findUnique: linkFindUnique, findFirst: linkFindFirst },
-    }),
-}));
+    };
+    return { db: { ...transaction, $transaction: async (fn: (tx: typeof transaction) => Promise<unknown>) => fn(transaction) } };
+});
 vi.mock("@/app/auth/auth", () => ({ auth: { init: vi.fn(), createToken } }));
 vi.mock("@/app/serverIdentity/serverIdentity", () => ({
     getOrCreateServerIdentityId: vi.fn(async () => "srv_home"),

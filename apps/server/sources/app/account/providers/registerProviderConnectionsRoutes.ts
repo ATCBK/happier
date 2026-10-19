@@ -7,7 +7,7 @@ import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapte
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { inReadSnapshot, inTx, isTransactionConflictExhaustedError } from '@/storage/inTx';
-import { mutateProviderConnectionsRowInTx, readProviderConnectionsRowInTx } from './connectionRows';
+import { mutateProviderConnectionsRowInTx, providerConnectionsHaveCrossAccountSecretReferences, readProviderConnectionsRowInTx } from './connectionRows';
 
 const internal = z.strictObject({ error: z.literal('internal') });
 
@@ -28,14 +28,18 @@ export function registerProviderConnectionsRoutes(app: Fastify): void {
     schema: { body: asServerProtocolZod(ProviderConnectionsRowMutationV1Schema),
       response: { 200: asServerProtocolZod(ProviderConnectionsRowMutationResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
-    try { return reply.send(await inTx(tx => mutateProviderConnectionsRowInTx(tx, {
-      accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), ...request.body,
-    }), {
-      // The Account fence protects mode/source currentness and catalog CAS. Only
-      // shared Secret revisions/Team-derived access add cross-Account predicates.
-      isolationLevel: request.body.referencedSavedSecretIds.length > 0 ? 'Serializable' : 'ReadCommitted',
-      transactionClass: 'provider-catalog-write',
-    })); }
+    try {
+      const crossAccountSecrets = await providerConnectionsHaveCrossAccountSecretReferences(request.userId, request.body.referencedSavedSecretIds);
+      return reply.send(await inTx(tx => mutateProviderConnectionsRowInTx(tx, {
+        accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), ...request.body,
+      }, { ownSecretReferencesOnly: !crossAccountSecrets }), {
+        // Own Secret writers publish behind this same Account fence before commit.
+        // Foreign owners/grants require SSI; the fenced validator refuses ownership
+        // changes since preflight rather than admitting a new cross-Account predicate.
+        ...(crossAccountSecrets ? { isolationLevel: 'Serializable' as const } : {}),
+        transactionClass: 'provider-catalog-write',
+      }));
+    }
     catch (error) {
       if (isTransactionConflictExhaustedError(error)) throw error;
       return reply.code(500).send({ error: 'internal' });
