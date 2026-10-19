@@ -238,6 +238,16 @@ or navigation. These components do not read a source, grant access or turn a
 displayed Task reference into a Discussion reply target; the caller retains
 those decisions.
 
+The development `ExecutableParticipantPicker` component from the same public
+entrypoint renders the host's shared searchable choice list. Supply admitted
+display sections, a controlled single or multiple selection, `canConfirm`,
+labels and callbacks. Keep participant inventory, readiness, native model
+setup and committing the selection in your controller; the component does
+not discover or launch agents. Confirmation can be enabled for a configured
+model even when no Session row is marked. Native and same-realm React Native
+Web surfaces use the same presenter as core; a host without that presenter
+shows an explicit unavailable message rather than a different picker.
+
 ## Staged media
 
 `composer.content.pickMedia(...)` returns an opaque staged handle. Pass it

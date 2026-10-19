@@ -26,6 +26,15 @@ tools and retain the existing freshness checks.
 
 This is the standing reference for **0.3 development source / Developer Preview authoring**. Source availability is distinct from registry publication and loaded-platform verification. Exact public exports and capability facts come from the package-owned generated API and capability reports, not a hand-maintained list in this page.
 
+The development executable participant picker is a controlled Plugin UI
+presentation, not another participant catalog or setup service. Core's modal
+and installed same-realm native/RNW surfaces delegate through the existing
+presentation-host binding to one SelectionList presenter. Callers retain
+admitted display inventory, readiness, selection, confirmation eligibility,
+native setup and commit authority. Unsupported presentation hosts show an
+explicit unavailable state; they do not construct an alternate choice list.
+The external-author reference mounts the public component without host imports.
+
 ## Declaration, activation and projection
 
 In 0.3 development source, dynamic Resources and Composer References do not
