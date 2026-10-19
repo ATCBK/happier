@@ -40,6 +40,9 @@ const executor = createHappierJsonExecutorFromTextRunner(async (args, options) =
     cwd: resolve(root, 'apps/cli'), env: guestEnv, stdio: ['pipe', 'pipe', 'pipe'], signal: options?.signal,
   });
   const stdout: Buffer[] = [], stderr: Buffer[] = [];
+  if (args[1] === 'wait' && input.killWaitProcess === true) {
+    child.once('spawn', () => child.kill('SIGKILL'));
+  }
   child.stdout.on('data', chunk => stdout.push(Buffer.from(chunk)));
   child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
   child.on('error', reject);

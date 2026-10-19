@@ -29,6 +29,7 @@ import { assertCanonicalManagedStackName } from '../utils/stack/names.mjs';
 import { resolveStackServerEndpoint } from '../utils/server/urls.mjs';
 import { createListenerOwnershipObservationScope } from '../utils/server/listener_ownership.mjs';
 import { resolveSharedDatabaseSourceProvider } from '../utils/server/effective_db_provider.mjs';
+import { projectBorrowedExpoWebappEnv } from '../runtime/shared/borrowed_expo.mjs';
 
 const readExistingEnv = readTextOrEmpty;
 
@@ -204,6 +205,17 @@ export async function withStackEnv({
     if (runtimeState?.ephemeral) {
       env.HAPPIER_STACK_EPHEMERAL_PORTS = '1';
     }
+  }
+
+  // Subsequent commands consume the UI selection made by startup, including
+  // daemon preflight. The API origin is not the borrowed web-app origin.
+  if (runtimeState?.sourceUi === 'borrowed') {
+    env = await projectBorrowedExpoWebappEnv({
+      rootDir: getRepoDir(null, env),
+      consumerStackName: stackName,
+      producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK,
+      env,
+    });
   }
 
   return await fn({ env, envPath, stackEnv, runtimeStatePath, runtimeState });
