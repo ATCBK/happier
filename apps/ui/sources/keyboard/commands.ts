@@ -1,6 +1,14 @@
 import type { KeyboardCommand, KeyboardCommandId, KeyboardCommandSettingsTitleKey, KeybindingRule } from './types';
 
 export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
+    { id: 'inbox.item.next', settingsTitleKey: 'common.next', defaultBindings: [{ binding: 'ArrowDown' }, { binding: 'j' }],
+        when: context => !context.isEditableTarget && !context.isInteractiveTarget },
+    { id: 'inbox.item.previous', settingsTitleKey: 'common.previous', defaultBindings: [{ binding: 'ArrowUp' }, { binding: 'k' }],
+        when: context => !context.isEditableTarget && !context.isInteractiveTarget },
+    { id: 'inbox.item.open', settingsTitleKey: 'common.open', defaultBinding: { binding: 'Enter' },
+        when: context => !context.isEditableTarget && !context.isInteractiveTarget },
+    { id: 'inbox.item.close', settingsTitleKey: 'common.close', defaultBinding: { binding: 'Escape' },
+        when: context => !context.isEditableTarget },
     {
         id: 'appearance.theme.toggle',
         settingsTitleKey: 'settingsAppearance.glassControls.themeCommand',

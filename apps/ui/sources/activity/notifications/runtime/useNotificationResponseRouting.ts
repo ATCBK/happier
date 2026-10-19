@@ -1,5 +1,6 @@
 import { createActivitySurfaceSessionRoute } from '@/activity/actions/activitySurfaceTargets';
 import { router } from 'expo-router';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 import * as React from 'react';
 import { Platform } from 'react-native';
 
@@ -186,6 +187,7 @@ export function useNotificationResponseRouting(params: Readonly<{
         }
 
         if (Platform.OS === 'web') return;
+        const cancellation = new AbortController();
 
         // The permission response is a mutation on the exact Home the notification was
         // admitted for (L09B-I15). That Home is named before any await; the dispatch
@@ -200,6 +202,7 @@ export function useNotificationResponseRouting(params: Readonly<{
             const serverId = String(actionParams.serverId ?? '').trim();
             if (!serverId) return;
             const { sessionAllow, sessionDeny } = await import('@/sync/ops');
+            if (cancellation.signal.aborted) return;
             if (actionParams.action === 'allow') {
                 await sessionAllow(
                     actionParams.sessionId,
@@ -209,7 +212,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                     'approved',
                     undefined,
                     actionParams.turnId,
-                    { serverId },
+                    { serverId, signal: cancellation.signal },
                 );
             } else {
                 await sessionDeny(
@@ -220,7 +223,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                     'denied',
                     'Denied from notification',
                     actionParams.turnId,
-                    { serverId },
+                    { serverId, signal: cancellation.signal },
                 );
             }
         };
@@ -255,7 +258,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                     });
                     if (switched === 'blocked') return;
                     clearPendingNotificationNav();
-                    router.push(verifiedRoute);
+                    router.push(admitInternalRouteHref(verifiedRoute));
                 } catch (error) {
                     Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
                 }
@@ -279,9 +282,9 @@ export function useNotificationResponseRouting(params: Readonly<{
                     } catch {
                         // best-effort; navigation still proceeds
                     }
-                    router.push(createActivitySurfaceSessionRoute(pendingAction.sessionId, pendingAction.serverId));
+                    if (!cancellation.signal.aborted) router.push(createActivitySurfaceSessionRoute(pendingAction.sessionId, pendingAction.serverId));
                 })(), { tag: 'RootLayout.pendingNotificationAction' });
-                return;
+                return () => cancellation.abort();
             }
         }
 
@@ -289,7 +292,7 @@ export function useNotificationResponseRouting(params: Readonly<{
         if (pending) {
             if (isNotificationServerActive(pending)) {
                 clearPendingNotificationNav();
-                router.push(pending.route);
+                router.push(admitInternalRouteHref(pending.route));
                 return;
             }
         }
@@ -336,7 +339,7 @@ export function useNotificationResponseRouting(params: Readonly<{
             if (command.kind === 'executeAction' && permissionDecisionPayload) {
                 const { action, sessionId: actionSessionId, requestId: actionRequestId, turnId } = permissionDecisionPayload;
                 if (!serverUrl) {
-                    router.push(route);
+                    router.push(admitInternalRouteHref(route));
                     return;
                 }
 
@@ -344,7 +347,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                     const saved = findSavedServerProfile({ serverId, serverUrl });
                     if (!saved) {
                         if (isUnsafeNotificationServerUrl(serverUrl)) {
-                            router.push(route);
+                            router.push(admitInternalRouteHref(route));
                             return;
                         }
                         // If the app has no servers, we can auto-add/switch to restore a working deep link,
@@ -381,7 +384,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                             } catch {
                                 // best-effort
                             }
-                            router.push(savedRoute);
+                            if (!cancellation.signal.aborted) router.push(admitInternalRouteHref(savedRoute));
                         } catch {
                             // keep pending notification action as fallback
                         }
@@ -404,7 +407,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                                     refreshAuth: refreshAuthRef.current,
                                 });
                                 clearPendingNotificationNav();
-                                router.push(savedRoute);
+                                router.push(admitInternalRouteHref(savedRoute));
                             } catch {
                                 // keep pending notification nav as fallback
                             }
@@ -414,7 +417,7 @@ export function useNotificationResponseRouting(params: Readonly<{
 
                     if (isUnsafeNotificationServerUrl(serverUrl)) {
                         // Unsafe/mismatched server url: fail closed for actions; navigate only.
-                        router.push(route);
+                        router.push(admitInternalRouteHref(route));
                         return;
                     }
 
@@ -442,7 +445,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                     } catch {
                         // best-effort
                     }
-                    router.push(route);
+                    if (!cancellation.signal.aborted) router.push(admitInternalRouteHref(route));
                 })(), { tag: 'RootLayout.notificationAction.activeServer' });
                 return;
             }
@@ -455,7 +458,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                 || command.kind === 'openWorkflowRun'
                 || command.kind === 'openMachine'
             ) {
-                router.push(route);
+                router.push(admitInternalRouteHref(route));
             }
         };
 
@@ -484,6 +487,7 @@ export function useNotificationResponseRouting(params: Readonly<{
 
         return () => {
             disposed = true;
+            cancellation.abort();
             subscription?.remove();
         };
     }, [params.enabled]);

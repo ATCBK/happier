@@ -16,6 +16,7 @@ import {
 
 import type { SessionActivityAttention } from './activityAttentionTypes';
 import { isSessionAdmittedToPersonalActivity } from './isSessionAdmittedToPersonalActivity';
+import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 export function buildSessionActivityAttention(params: Readonly<{
     session: Session;
@@ -24,9 +25,10 @@ export function buildSessionActivityAttention(params: Readonly<{
     nowMs?: number;
     /** Count/status consumers use the same facts without private display details. */
     presentation?: 'detail' | 'summary';
+    followRulePolicies?: readonly FollowPolicyV1[];
 }>): SessionActivityAttention {
     const nowMs = params.nowMs ?? Date.now();
-    const personal = resolveSessionPersonalAttentionForViewer(params.session, nowMs, params.sessionMessages);
+    const personal = resolveSessionPersonalAttentionForViewer(params.session, nowMs, params.sessionMessages, params.followRulePolicies);
     const personalReasons = personal.reasons.filter((reason) => {
         if (reason === 'unread' || reason === 'unread_discussion' || reason === 'ready_after_read') return params.sessionOptions?.showUnread !== false;
         if (reason === 'permission_required') return params.sessionOptions?.showPendingPermissionRequests !== false;
@@ -42,7 +44,7 @@ export function buildSessionActivityAttention(params: Readonly<{
     // notification-preview ceiling (it sees no recipient envelope, so it cannot vouch); off-app
     // surfaces apply it themselves (`buildActivitySurfaceViewModel`).
     const mayShowPrivateContent = isSessionAwarenessContentReadableV1(awareness.encryption);
-    const admitted = isSessionAdmittedToPersonalActivity(params.session);
+    const admitted = isSessionAdmittedToPersonalActivity(params.session, params.followRulePolicies);
     const operational = admitted ? awareness.operational.primary : 'none';
     const operationalAttentionState = resolveSessionListAttentionState({
         operational,
@@ -76,6 +78,7 @@ export function buildSessionActivityAttention(params: Readonly<{
             needsAttention: personal.needsAttention && personalReasons.length > 0,
             primary: personalReasons[0] ?? null,
         },
+        ...(params.followRulePolicies?.length ? { followRulePolicies: params.followRulePolicies } : {}),
         hasAttention: personal.needsAttention && personalReasons.length > 0,
         priority: resolveSessionListAttentionRank(attentionState),
         lastTurnCompletedAt: params.session.lastTurnCompletedAt ?? null,

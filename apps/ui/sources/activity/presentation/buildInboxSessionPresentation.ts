@@ -9,6 +9,7 @@ import type {
 } from '@/activity/attention/activityAttentionTypes';
 import type { SessionBulkActionTarget } from '@/components/sessions/actions/sessionBulkActionTypes';
 import { buildServerScopedSessionKey } from '@/sync/domains/session/navigation/sessionNavigationOrder';
+import { isTranscriptPendingRequestAnswerable } from '@/utils/sessions/deriveTranscriptInteraction';
 import {
     listPendingPermissionRequests,
     listPendingUserActionRequests,
@@ -113,16 +114,19 @@ export function buildInboxSessionPresentation(params: Readonly<{
             const entry: InboxSessionAttentionEntry = {
                 candidate,
                 pendingPermissions: mayShowDetails && reasons.includes('permission_required')
-                    ? listPendingPermissionRequests(candidate.session, messages).sort(comparePendingRequestsByAge)
+                    ? listPendingPermissionRequests(candidate.session, messages)
+                        .filter(request => isTranscriptPendingRequestAnswerable(candidate.session, request)).sort(comparePendingRequestsByAge)
                     : [],
                 pendingUserActions: mayShowDetails && reasons.includes('user_action_required')
-                    ? listPendingUserActionRequests(candidate.session, messages).sort(comparePendingRequestsByAge)
+                    ? listPendingUserActionRequests(candidate.session, messages)
+                        .filter(request => isTranscriptPendingRequestAnswerable(candidate.session, request)).sort(comparePendingRequestsByAge)
                     : [],
             };
             sessionsNeedingAttention.push(entry);
             if (mayShowDetails && candidate.address && (
                 (reasons.includes('permission_required') && entry.pendingPermissions.length === 0)
-                || (reasons.includes('user_action_required') && entry.pendingUserActions.length === 0)
+                || (reasons.includes('user_action_required') && entry.pendingUserActions.length === 0
+                    && isTranscriptPendingRequestAnswerable(candidate.session, { kind: 'user_action' }))
             )) pendingRequestHydrationTargets.push(candidate.address);
             continue;
         }

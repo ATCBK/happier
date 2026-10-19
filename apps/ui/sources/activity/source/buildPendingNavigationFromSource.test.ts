@@ -5,6 +5,18 @@ import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
 import { buildPendingNavigationFromSource, isPendingNavigationRequestAnswerable, selectPendingNavigationTarget } from './buildPendingNavigationFromSource';
 
 describe('pending navigation projection', () => {
+    it('excludes inactive native dialogs from the summary count while retaining Action approval grants', () => {
+        const inactive = createSessionFixture({ id: 'inactive', serverId: 'a', active: false,
+            agentState: { requests: { dialog: { tool: 'AskUserQuestion', kind: 'user_action',
+                source: 'claude_unified_terminal_dialog_choice', arguments: {}, createdAt: 10 } } } });
+        expect(isPendingNavigationRequestAnswerable(inactive, { kind: 'user_action', source: 'claude_unified_terminal_dialog_choice' })).toBe(false);
+        expect(isPendingNavigationRequestAnswerable(inactive, { kind: 'user_action', source: 'happier_action' })).toBe(true);
+        const source: ActivityAttentionSource = { isDataReady: true, sessionsById: { inactive },
+            sessionListRowsByServerId: { a: { inactive: buildSessionListRenderableFromSession(inactive) } },
+            ordinarySessionListMembershipByServerId: { a: ['inactive'] },
+            sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {}, activeServerId: 'a' };
+        expect(buildPendingNavigationFromSource({ source, nowMs: 20 })).toEqual([]);
+    });
     it('uses the actual answer grant for Action confirmations rather than the question input grant', () => {
         const editor = createSessionFixture({ active: true,
             access: createSessionAccessFixture('edit', { submitAgentInput: true, approveRuntimePermissions: false }),

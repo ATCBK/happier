@@ -22,6 +22,10 @@ export type KeyboardCommandId =
     | 'mode.cycle'
     | 'permission.cycle'
     | 'shortcutsHelp.open'
+    | 'inbox.item.next'
+    | 'inbox.item.previous'
+    | 'inbox.item.open'
+    | 'inbox.item.close'
     | 'session.new'
     | 'session.pending.next'
     | 'session.mru.next'
@@ -74,6 +78,10 @@ export type KeyboardCommandId =
 export type KeyboardCommandSettingsTitleKey = Extract<
     TranslationKeyNoParams,
     | 'workflows.newWorkflow'
+    | 'common.next'
+    | 'common.previous'
+    | 'common.open'
+    | 'common.close'
     | 'workflows.authoring.create'
     | 'settingsAppearance.glassControls.themeCommand'
     | 'settingsKeyboard.commands.browserAddressFocus'
@@ -144,6 +152,7 @@ export type KeyboardCommandSettingsTitleKey = Extract<
 
 export type KeyboardContext = Readonly<{
     isEditableTarget: boolean;
+    isInteractiveTarget?: boolean;
     isComposing: boolean;
     findInputFocused?: boolean;
 }>;

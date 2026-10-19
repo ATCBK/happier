@@ -9,13 +9,13 @@ import { workflowRunRowFromAutomationRun, workflowRunRowFromSummary } from '@/sy
 import type { InboxSessionAttentionEntry } from './buildInboxSessionPresentation';
 import { buildInboxWorkGroups, resolveInboxWorkRoot, type InboxWorkGroup } from './buildInboxWorkGroups';
 
-function session(id: string, facts: Readonly<{ lead?: string; reports?: number }> = {}): Session {
+function session(id: string, facts: Readonly<{ lead?: string; managedSessions?: number }> = {}): Session {
     return {
         id,
         serverId: 'home-a',
         updatedAt: 1,
-        ...(facts.lead ? { reportsTo: { sessionId: facts.lead } } : {}),
-        ...(facts.reports ? { reports: { total: facts.reports, working: facts.reports, needsYou: 0, stalled: 0 } } : {}),
+        ...(facts.lead ? { manager: { sessionId: facts.lead } } : {}),
+        ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: facts.managedSessions, needsYou: 0, stalled: 0 } } : {}),
     } as Session;
 }
 
@@ -51,7 +51,7 @@ function shape(groups: readonly InboxWorkGroup[]) {
     }));
 }
 
-const lead = session('lead', { reports: 2 });
+const lead = session('lead', { managedSessions: 2 });
 const worker = session('worker', { lead: 'lead' });
 const grandchild = session('grandchild', { lead: 'worker' });
 const loose = session('loose');
@@ -81,7 +81,7 @@ describe('buildInboxWorkGroups (ORC R-10)', () => {
         const base = entry(session('passive'));
         const passive = { ...base, candidate: { ...base.candidate, personalAttention: { ...base.candidate.personalAttention, reasons: ['manual' as const] } }, pendingPermissions: [], pendingUserActions: [] };
         const decision = entry(loose);
-        const approval: DecryptedArtifact = { id: 'approval', title: 'Review', sessions: [], header: '', body: '',
+        const approval: DecryptedArtifact = { id: 'approval', title: 'Review', sessions: [], header: { title: 'Review' }, body: '',
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true };
         const groups = buildInboxWorkGroups({ ...EMPTY, sessionEntries: [passive, decision], workflowRuns: [],
             openApprovals: [approval], resolveSession, resolveOriginRunId: readOrigin });
@@ -132,7 +132,7 @@ describe('buildInboxWorkGroups (ORC R-10)', () => {
         ]);
     });
 
-    it('groups a whole reportsTo tree under its work root and puts loose sessions last under Other', () => {
+    it('groups a whole manager tree under its work root and puts loose sessions last under Other', () => {
         const groups = buildInboxWorkGroups({
             ...EMPTY,
             sessionEntries: [entry(loose), entry(grandchild), entry(worker)],

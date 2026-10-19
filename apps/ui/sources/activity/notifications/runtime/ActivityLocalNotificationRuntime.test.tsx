@@ -10,6 +10,9 @@ import { getActiveServerSnapshot, removeServerProfile, setActiveServerId, setSer
 import { markSessionSurfaceVisible, resetSessionSurfaceVisibilityForTests } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
@@ -32,6 +35,8 @@ let localSettingsValue: Record<string, unknown> = {
     localNotificationsShowPendingUserActionRequests: true,
 };
 let accountSettingsValue = settingsParse({});
+let mutedScopes: unknown = [];
+let restoredHome: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 type NotificationSessionFixture = Partial<Omit<Session, 'metadata'>> & {
     metadata?: Partial<NonNullable<Session['metadata']>>;
 };
@@ -134,7 +139,8 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 });
 
 
-vi.mock('@/utils/platform/desktopHost', () => ({
+vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/utils/platform/desktopHost')>()),
     isDesktopHost: () => reactNativeRuntime.isDesktopHost,
 }));
 
@@ -142,12 +148,17 @@ vi.mock('../channels/sendExpoLocalNotification', () => ({
     sendExpoLocalNotification,
 }));
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+await loadSyncSingletonForTests();
+
 vi.mock('../channels/sendTauriLocalNotification', () => ({
     sendTauriLocalNotification,
 }));
 
 describe('ActivityLocalNotificationRuntime', () => {
     beforeEach(async () => {
+        mutedScopes = [];
         storage.setState(initialState, true);
         for (const [serverId, serverUrl, name] of [
             ['srv_home_a', 'https://stack.example.test', 'Home A'],
@@ -161,9 +172,15 @@ describe('ActivityLocalNotificationRuntime', () => {
         const { saveAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
         saveAccountSettings({ serverId: 'srv_home_a', accountId: 'account-a' }, settingsParse({}), 1);
         saveAccountSettings({ serverId: 'srv_home_b', accountId: 'account-b' }, settingsParse({}), 1);
+        restoredHome = await restoreServerAccountForTest({ serverUrl: 'https://stack.example.test', serverIdentityId: 'srv_home_a', accountId: 'account-a' });
+        storage.getState().activateProfileScope({ serverId: 'srv_home_a', accountId: 'account-a' });
+        setRuntimeFetch(async url => new URL(String(url)).pathname === '/v2/account/session-delivery-mutes'
+            ? Response.json({ scopes: mutedScopes }) : new Response('{}', { status: 200 }));
     });
 
     afterEach(async () => {
+        await restoredHome?.dispose(); restoredHome = null;
+        vi.restoreAllMocks();
         resetSessionSurfaceVisibilityForTests();
         storage.setState(initialState, true);
         for (const id of savedProfileIds) await removeServerProfile(id);
@@ -206,6 +223,17 @@ describe('ActivityLocalNotificationRuntime', () => {
         resetActivityLocalNotificationRuntimeForTests();
         const { resetActivityAlertPresentationNotesForTests } = await import('../remoteAlerts/activityAlertPresentationNotes');
         resetActivityAlertPresentationNotesForTests();
+    });
+
+    it('does not schedule an OS alert for a muted source and preserves its source row', async () => {
+        mutedScopes = [{ kind: 'sender_session', sessionId: 'session-1' }];
+        const { ActivityLocalNotificationRuntime } = await import('./ActivityLocalNotificationRuntime');
+        const { notifyActivityReady } = await import('./activityLocalNotificationBus');
+        const screen = await renderScreen(<ActivityLocalNotificationRuntime />);
+        await act(async () => { notifyActivityReady({ serverId: 'srv_home_a', sessionId: 'session-1' }, []); });
+        expect(sendExpoLocalNotification).not.toHaveBeenCalled();
+        expect(storage.getState().sessions['session-1']).toBeDefined();
+        await screen.unmount();
     });
 
     it('does not notify an accessible but unfollowed Team reader', async () => {

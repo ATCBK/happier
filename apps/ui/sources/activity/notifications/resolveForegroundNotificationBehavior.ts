@@ -8,6 +8,8 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import type { ActivityAttentionDeliveryChannel, ActivityAttentionDeliveryEventKind } from '../delivery/activityAttentionDeliveryPlanTypes';
 import { readExactHomeAccountSettings } from '../delivery/useExactHomeAccountSettings';
+import { readAccountSessionDeliveryMutedScopes } from '@/sync/api/session/sessionFollowApi';
+import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { resolveActivityAttentionDeliveryPlan } from '../delivery/resolveActivityAttentionDeliveryPlan';
 import { consumeOtherLegActivityAlertPresentation, noteActivityAlertPresented } from './remoteAlerts/activityAlertPresentationNotes';
 import { REMOTE_ALERT_EVENT_KIND, type ActivityAlertEventKind } from './remoteAlerts/activityRemoteAlertRouting';
@@ -137,10 +139,20 @@ export async function resolveForegroundNotificationBehavior(params: Readonly<{
     // A Home alert names its recipient Account. When this device now holds a
     // different Account for that Home, the alert is not this Account's to present.
     if (target && resolution.kind === 'bound' && resolution.scope.accountId !== target.alert.accountId) return 'off';
-    const accountSettings = resolution.kind === 'bound'
+    let accountSettings = resolution.kind === 'bound'
         ? readExactHomeAccountSettings(resolution.scope)
         : null;
     if (!accountSettings || resolution.kind !== 'bound') return 'off';
+    if (arrival.sessionId) {
+        const scopes = await readAccountSessionDeliveryMutedScopes(resolution.scope);
+        if (scopes === null || isFollowDeliveryMutedV1(scopes, {
+            senderSessionId: arrival.sessionId, source: { kind: 'session', sessionId: arrival.sessionId },
+        })) return 'off';
+        // The HTTP read may overlap a privacy/settings edit. Use its current
+        // exact-Home policy rather than the pre-read snapshot for presentation.
+        accountSettings = readExactHomeAccountSettings(resolution.scope);
+        if (!accountSettings) return 'off';
+    }
 
     const plan = resolveActivityAttentionDeliveryPlan({
         localSettings: localSettingsParse(params.localSettings ?? {}),

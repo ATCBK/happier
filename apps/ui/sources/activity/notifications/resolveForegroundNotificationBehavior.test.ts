@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PUSH_NOTIFICATION_CATEGORY_IDS } from '@happier-dev/protocol';
 
@@ -9,12 +9,17 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 import { installLocalStorageMock, installWebLockManagerMock, type LocalStorageMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 import { consumeOtherLegActivityAlertPresentation, noteActivityAlertPresented, resetActivityAlertPresentationNotesForTests } from './remoteAlerts/activityAlertPresentationNotes';
 
 // Browser storage and locking are the device credential boundary. TokenStorage,
 // saved-Home normalization, Account binding and notification policy stay real.
 installTokenStorageWebPlatformMocks();
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 const serverProfiles = await import('@/sync/domains/server/serverProfiles');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -62,6 +67,7 @@ function readyAlert(home: Home) {
 
 const NOON = new Date('2026-09-23T12:00:00.000Z');
 const nothingVisible = () => false;
+let mutedScopes: unknown = [];
 
 const QUIET_HOURS_NIGHTLY_UTC = {
     enabled: true,
@@ -70,16 +76,25 @@ const QUIET_HOURS_NIGHTLY_UTC = {
 } as const;
 
 describe('resolveForegroundNotificationBehavior', () => {
+    let activeHome: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
     let localStorage: LocalStorageMockHandle | null = null;
     let restoreWebLocks: (() => void) | null = null;
     beforeAll(() => { restoreWebLocks = installWebLockManagerMock().restore; });
     beforeEach(async () => {
+        mutedScopes = [];
         localStorage = installLocalStorageMock();
         resetActivityAlertPresentationNotesForTests();
         await clearProfiles();
+        activeHome = await restoreServerAccountForTest({ serverUrl: 'https://notification-active.example.test', accountId: 'notification-active' });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.getState().activateProfileScope({ serverId: activeHome.serverId, accountId: 'notification-active' });
+        setRuntimeFetch(async url => new URL(String(url)).pathname === '/v2/account/session-delivery-mutes'
+            ? Response.json({ scopes: mutedScopes }) : new Response('{}', { status: 200 }));
     });
 
     afterEach(async () => {
+        vi.restoreAllMocks();
+        await activeHome?.dispose(); activeHome = null;
         for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
         await clearProfiles();
         resetActivityAlertPresentationNotesForTests();
@@ -87,6 +102,17 @@ describe('resolveForegroundNotificationBehavior', () => {
         localStorage = null;
     });
     afterAll(() => { restoreWebLocks?.(); });
+
+    it('suppresses a source muted by its exact Account without borrowing another Home or treating unavailable as unmuted', async () => {
+        const home = await enrollHome('mute-home', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } });
+        const arrival = { content: { data: readyAlert(home) }, localSettings: {}, isSessionVisible: nothingVisible, now: NOON };
+        mutedScopes = [{ kind: 'source', source: { kind: 'session', sessionId: 'session-1' } }];
+        expect(await resolveForegroundNotificationBehavior(arrival)).toBe('off');
+        mutedScopes = [{ kind: 'source', source: { kind: 'session', sessionId: 'another-session' } }];
+        expect(await resolveForegroundNotificationBehavior(arrival)).toBe('full');
+        mutedScopes = null;
+        expect(await resolveForegroundNotificationBehavior(arrival)).toBe('off');
+    });
 
     it('answers with the incoming alert Home policy, not the other enrolled Home', async () => {
         const homeA = await enrollHome('alpha', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'off' } });

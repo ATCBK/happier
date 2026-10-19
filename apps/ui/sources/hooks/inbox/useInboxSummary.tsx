@@ -4,7 +4,7 @@ import { useActivityOverviewSummary } from '@/activity/source/useActivityOvervie
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
 import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
-import { readOpenUsageNoticeArtifactHeader } from '@/sync/domains/artifacts/usageNoticeArtifacts';
+import { readAccountNoticeArtifactHeader, isUnreadAccountNotice } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { useInboxActionOperationSummary } from '@/sync/domains/actionOperations/useActionOperations';
 import { useFriendRequestCount } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -35,8 +35,9 @@ export function createOpenApprovalInboxCountSelector(): (state: StorageState) =>
         previousCount = 0;
         if (!state.isDataReady) return previousCount;
         for (const artifact of Object.values(state.artifacts)) {
+            const notice = readAccountNoticeArtifactHeader(artifact, previousAccountId);
             if (isOpenApprovalInboxArtifact(artifact)
-                || (artifact.draft !== true && readOpenUsageNoticeArtifactHeader(artifact, previousAccountId))) previousCount += 1;
+                || (notice && isUnreadAccountNotice(notice))) previousCount += 1;
         }
         return previousCount;
     };

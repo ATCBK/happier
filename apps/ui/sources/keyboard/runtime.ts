@@ -357,6 +357,8 @@ export function readKeyboardContextFromEventTarget(target: EventTarget | null): 
         || element?.closest?.('[contenteditable="true"], [data-keyboard-shortcuts-owned="true"]') != null;
     return {
         isEditableTarget,
+        isInteractiveTarget: tagName === 'button' || tagName === 'a'
+            || element?.closest?.('[role="button"],[role="slider"],[role="menuitem"]') != null,
         isComposing: false,
     };
 }

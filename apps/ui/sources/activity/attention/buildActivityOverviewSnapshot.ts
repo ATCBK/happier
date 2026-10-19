@@ -3,6 +3,7 @@ import { resolveSessionListRenderableMeaningfulActivityAt } from '@/sync/domains
 import type { ActivityOverviewSnapshot, BuildActivityOverviewSnapshotParams, SessionActivityAttention } from './activityAttentionTypes';
 import { buildSessionActivityAttention } from './buildSessionActivityAttention';
 import { isSessionAdmittedToPersonalActivity } from './isSessionAdmittedToPersonalActivity';
+import { serializeFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 function sortCandidates(left: SessionActivityAttention, right: SessionActivityAttention): number {
     if (left.priority !== right.priority) {
@@ -27,7 +28,7 @@ function sortCandidates(left: SessionActivityAttention, right: SessionActivityAt
 
 export function buildActivityOverviewSnapshot(params: BuildActivityOverviewSnapshotParams): ActivityOverviewSnapshot {
     const candidates = params.sessions
-        .filter(isSessionAdmittedToPersonalActivity)
+        .filter(session => isSessionAdmittedToPersonalActivity(session))
         .map((session) => buildSessionActivityAttention({
             session,
             sessionOptions: params.sessionOptions,
@@ -38,7 +39,8 @@ export function buildActivityOverviewSnapshot(params: BuildActivityOverviewSnaps
 }
 
 export function buildActivityOverviewFromCandidates(input: readonly SessionActivityAttention[]): ActivityOverviewSnapshot {
-    const candidates = input.filter((candidate) => isSessionAdmittedToPersonalActivity(candidate.session)).sort(sortCandidates);
+    // Callers supply candidates admitted by the source/attention owner, including its private rule interest.
+    const candidates = [...input].sort(sortCandidates);
 
     let unread = 0;
     let permissionRequired = 0;
@@ -83,6 +85,8 @@ export function buildStableActivityOverviewFingerprint(overview: ActivityOvervie
             surfaceTiming: candidate.surfaceTiming ?? null,
             attentionState: candidate.attentionState,
             personalAttention: candidate.personalAttention,
+            follow: candidate.session.viewer?.follow ?? null,
+            followRulePolicies: candidate.followRulePolicies?.map(serializeFollowPolicyV1).sort() ?? [],
             hasAttention: candidate.hasAttention,
             title: candidate.title,
             subtitle: candidate.subtitle,

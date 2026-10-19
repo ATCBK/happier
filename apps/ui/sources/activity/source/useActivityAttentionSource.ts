@@ -19,12 +19,14 @@ import { useActivityPersonalSessionMembership } from './activityPersonalSessionM
 
 function useActivityAttentionStoreSource(includeSessionMessages: boolean): ActivityAttentionSource {
     const personalMembership = useActivityPersonalSessionMembership();
+    const includeFollowRuleFacts = Object.values(personalMembership.followRulesByServerId ?? {}).some(snapshot =>
+        snapshot.status === 'ready' && snapshot.rules.some(rule => rule.receiver.kind === 'account' && rule.definition.enabled));
     const storeSourceSelector = React.useMemo(
         () => createActivityAttentionStoreSourceSelector(
             personalMembership.membershipByServerId,
-            { includeSessionMessages },
+            { includeSessionMessages, includeFollowRuleFacts },
         ),
-        [includeSessionMessages, personalMembership.membershipByServerId],
+        [includeSessionMessages, includeFollowRuleFacts, personalMembership.membershipByServerId],
     );
     const activeServer = React.useSyncExternalStore(
         React.useCallback((listener) => {
@@ -41,6 +43,8 @@ function useActivityAttentionStoreSource(includeSessionMessages: boolean): Activ
         personalSessionListMembershipByServerId: personalMembership.membershipByServerId,
         personalSessionListQueryStatesByServerId: personalMembership.statesByServerId,
         personalSessionListCoverageComplete: personalMembership.coverageComplete,
+        personalFollowRulesByServerId: personalMembership.followRulesByServerId,
+        accountDeliveryMutesByServerId: personalMembership.accountDeliveryMutesByServerId,
         sessionListHomeObservationByServerId: buildSessionListHomeObservations({
             concurrentSessionListCacheByServerId: storeSource.concurrentSessionListCacheByServerId,
             queryStatesByServerId: personalMembership.statesByServerId,

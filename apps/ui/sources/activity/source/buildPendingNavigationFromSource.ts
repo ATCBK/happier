@@ -1,9 +1,8 @@
 import { comparePendingRequestsByAge, type SessionPendingRequest } from '@happier-dev/session-core/pending';
-import { isPendingRequestAnswerableV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { areSessionAddressesEqual, sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
-import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
+import { isTranscriptPendingRequestAnswerable as isPendingNavigationRequestAnswerable } from '@/utils/sessions/deriveTranscriptInteraction';
 import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
 import { collectSourceSessions } from './buildActivityOverviewFromSource';
@@ -19,12 +18,7 @@ export type PendingNavigationTarget = Readonly<{
     createdAt: number | null;
 }>;
 
-export function isPendingNavigationRequestAnswerable(session: Session, request: Pick<SessionPendingRequest, 'kind' | 'source'>): boolean {
-    const interaction = deriveTranscriptInteractionFromSession(session);
-    return isPendingRequestAnswerableV1(request, {
-        canSubmitAgentInput: interaction.canSendMessages, canApprovePermissions: interaction.canApprovePermissions,
-    });
-}
+export { isPendingNavigationRequestAnswerable };
 
 /** Viewer admission and access stay with their existing owners, never the broad Inbox count. */
 export function buildPendingNavigationFromSource(params: Readonly<{
@@ -38,7 +32,13 @@ export function buildPendingNavigationFromSource(params: Readonly<{
         // Explicit messages avoid borrowing an active Home's same-ID transcript. This
         // summary-only projection must never hydrate or scan messages just to count.
         const attention = resolveSessionPersonalAttentionForViewer(session, params.nowMs, []);
-        const permission = attention.reasons.includes('permission_required') && isPendingNavigationRequestAnswerable(session, { kind: 'permission' });
+        // The list producer suppresses inactive native prompts, retaining only
+        // shared-metadata Action confirmations in its permission summary.
+        const inactiveAction = session.active !== true
+            && params.source.sessionListRowsByServerId[address.serverId]?.[address.sessionId]?.hasPendingPermissionRequests === true;
+        const permission = attention.reasons.includes('permission_required') && isPendingNavigationRequestAnswerable(session, {
+            kind: 'permission', ...(inactiveAction ? { source: 'happier_action' } : {}),
+        });
         const input = attention.reasons.includes('user_action_required') && isPendingNavigationRequestAnswerable(session, { kind: 'user_action' });
         if (!permission && !input) return [];
         if (attention.presentation === 'status_only') return [];

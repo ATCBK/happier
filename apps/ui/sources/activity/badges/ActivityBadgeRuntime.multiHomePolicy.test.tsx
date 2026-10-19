@@ -185,6 +185,9 @@ function readLastAppliedBadgeCount(): number | undefined {
 
 describe('ActivityBadgeRuntime multi-Home policy identity', () => {
     beforeEach(async () => {
+        // The Home testkit may load the SDK port before this suite's mock options are installed.
+        const { Platform } = await import('react-native');
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
         activeHome.serverId = 'server-1';
         corpusReadiness.isDataReady = true;
         corpusReadiness.coverageComplete = true;

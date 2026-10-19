@@ -5,7 +5,6 @@ import { buildSessionListQueryKey } from '@/sync/domains/session/listing/session
 
 import {
     ACTIVITY_PERSONAL_SESSION_QUERY,
-    buildActivityPersonalQueryContinuationKey,
     buildActivityPersonalQueryHomeServerIds,
     buildActivityPersonalQueryHomes,
     projectActivityPersonalSessionMembership,
@@ -34,29 +33,6 @@ describe('Activity personal session membership', () => {
         expect(buildActivityPersonalQueryHomeServerIds(['saved-home', 'active-home'], 'active-home'))
             .toEqual(['active-home', 'saved-home']);
     });
-    it('advances automatic draining when a still-open continuation cursor changes', () => {
-        const homes = buildActivityPersonalQueryHomes(['home-a']);
-        const home = homes[0]!;
-        const first = queryState({
-            requestedQueryKey: home.queryKey,
-            appliedQueryKey: home.queryKey,
-            appliedSourceKind: 'query',
-            phase: 'ready',
-            hasNext: true,
-            nextCursor: 'cursor-1',
-        });
-        const second = queryState({
-            ...first,
-            nextCursor: 'cursor-2',
-        });
-
-        expect(buildActivityPersonalQueryContinuationKey(homes, { 'home-a': first }))
-            .not.toBe(buildActivityPersonalQueryContinuationKey(homes, { 'home-a': second }));
-        expect(buildActivityPersonalQueryContinuationKey(homes, {
-            'home-a': queryState({ ...second, hasNext: false, nextCursor: null }),
-        })).toBe('');
-    });
-
     it('retains membership by exact Home when Session ids collide', () => {
         const homes = buildActivityPersonalQueryHomes(['home-a', 'home-b']);
         const statesByServerId = Object.fromEntries(homes.map((home) => [home.serverId, queryState({

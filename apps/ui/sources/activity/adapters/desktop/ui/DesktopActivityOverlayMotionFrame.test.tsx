@@ -17,20 +17,14 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
-vi.mock('react-native-reanimated', () => ({
-    default: {
-        View: (props: React.PropsWithChildren<Record<string, unknown>>) =>
-            React.createElement('AnimatedView', props, props.children),
-    },
-    Easing: {
-        out: (value: unknown) => value,
-        cubic: 'cubic',
-    },
-    useAnimatedStyle: <T,>(factory: () => T) => factory(),
-    useSharedValue: <T,>(initial: T) => ({ value: initial }),
-    withSpring: withSpringSpy,
-    withTiming: withTimingSpy,
-}));
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return {
+        ...createReanimatedModuleMock(),
+        withSpring: withSpringSpy,
+        withTiming: withTimingSpy,
+    };
+});
 
 vi.mock('@/hooks/ui/useReducedMotionPreference', () => ({
     useReducedMotionPreference: () => reduceMotionSpy(),
@@ -68,7 +62,7 @@ describe('DesktopActivityOverlayMotionFrame', () => {
         withSpringSpy.mockClear();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <DesktopActivityOverlayMotionFrame visible={false} expanded={false}>
                     <div />
                 </DesktopActivityOverlayMotionFrame>,
@@ -94,7 +88,7 @@ describe('DesktopActivityOverlayMotionFrame', () => {
         withTimingSpy.mockClear();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <DesktopActivityOverlayMotionFrame visible={false} expanded={false}>
                     <div />
                 </DesktopActivityOverlayMotionFrame>,
@@ -115,7 +109,7 @@ describe('DesktopActivityOverlayMotionFrame', () => {
             </DesktopActivityOverlayMotionFrame>,
         );
 
-        const animatedView = screen.tree.root.findByType('AnimatedView' as never);
+        const animatedView = screen.tree.root.findByType('Animated.View' as never);
         const style = Object.assign({}, ...animatedView.props.style);
 
         expect(style).toEqual(expect.objectContaining({ opacity: 1 }));
@@ -140,7 +134,7 @@ describe('DesktopActivityOverlayMotionFrame', () => {
         expect(screen.tree.root.findByType('ProbeView' as never).props.progress).toBe(0);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <DesktopActivityOverlayMotionFrame visible expanded>
                     <Probe />
                 </DesktopActivityOverlayMotionFrame>,

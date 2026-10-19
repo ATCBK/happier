@@ -23,6 +23,8 @@ data class ActivityRemoteAlert(
   val turnId: String?,
   val requestId: String?,
   val version: Int,
+  val stalledTurnId: String? = null,
+  val stalledPublisherFence: Long? = null,
 ) {
   /**
    * The platform replacement identity. Committed events with an exact reference
@@ -42,6 +44,7 @@ data class ActivityRemoteAlert(
    */
   val eventIdentity: String?
     get() = when {
+      stalledTurnId != null && stalledPublisherFence != null -> "stalled:$stalledTurnId:$stalledPublisherFence"
       turnId != null -> "turn:$turnId"
       requestId != null -> "request:$requestId"
       version != 2 || messageSeq == null -> null
@@ -97,6 +100,8 @@ data class ActivityRemoteAlert(
       var discussionId: String? = null
       var turnId: String? = null
       var requestId: String? = null
+      var stalledTurnId: String? = null
+      var stalledPublisherFence: Long? = null
       val messageSeq = if (eventType in SEQUENCED_EVENT_TYPES) {
         if (version == 1) {
           if (!event.hasExactly("type", "messageSeq")) return null
@@ -124,11 +129,20 @@ data class ActivityRemoteAlert(
           requestId = event.requiredBoundedIdentifier("requestId") ?: return null
         } else if (!event.hasExactly("type")) return null
         null
+      } else if (version == 2 && eventType == "source_unavailable" && event.has("stalledOccurrence")) {
+        if (!event.hasExactly("type", "stalledOccurrence")) return null
+        val occurrence = event.opt("stalledOccurrence") as? JSONObject ?: return null
+        if (!occurrence.hasExactly("turnId", "publisherFence")) return null
+        stalledTurnId = occurrence.requiredBoundedIdentifier("turnId") ?: return null
+        val fence = (occurrence.opt("publisherFence") as? Number)?.toDouble() ?: return null
+        if (!fence.isFinite() || fence % 1.0 != 0.0 || fence < 0 || fence > 9_007_199_254_740_991.0) return null
+        stalledPublisherFence = fence.toLong()
+        null
       } else if (!event.hasExactly("type")) return null
       else null
       return ActivityRemoteAlert(
         serverId, sessionId, accountId, eventType, previewBehavior,
-        messageSeq, sequenceDomain, discussionId, turnId, requestId, version,
+        messageSeq, sequenceDomain, discussionId, turnId, requestId, version, stalledTurnId, stalledPublisherFence,
       )
     }
 

@@ -38,6 +38,7 @@ describe('deriveTranscriptInteraction', () => {
         expect(deriveTranscriptInteraction({ kind: 'session', access: access('owner') })).toEqual({
             canSendMessages: true,
             canApprovePermissions: true,
+            canApproveActions: true,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -55,6 +56,7 @@ describe('deriveTranscriptInteraction', () => {
         ).toEqual({
             canSendMessages: true,
             canApprovePermissions: false,
+            canApproveActions: true,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -66,6 +68,7 @@ describe('deriveTranscriptInteraction', () => {
         expect(deriveTranscriptInteraction({ kind: 'session', access: access('view', false) })).toEqual({
             canSendMessages: false,
             canApprovePermissions: false,
+            canApproveActions: false,
             canFork: false,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -83,6 +86,7 @@ describe('deriveTranscriptInteraction', () => {
         ).toEqual({
             canSendMessages: false,
             canApprovePermissions: false,
+            canApproveActions: false,
             canFork: false,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -94,6 +98,7 @@ describe('deriveTranscriptInteraction', () => {
         expect(deriveTranscriptInteraction({ kind: 'session', access: access('edit', false) })).toEqual({
             canSendMessages: true,
             canApprovePermissions: false,
+            canApproveActions: false,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -105,6 +110,7 @@ describe('deriveTranscriptInteraction', () => {
         expect(deriveTranscriptInteraction({ kind: 'session', access: access('edit', true) })).toEqual({
             canSendMessages: true,
             canApprovePermissions: true,
+            canApproveActions: true,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -122,6 +128,7 @@ describe('deriveTranscriptInteraction', () => {
         ).toEqual({
             canSendMessages: true,
             canApprovePermissions: false,
+            canApproveActions: true,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -133,6 +140,7 @@ describe('deriveTranscriptInteraction', () => {
         expect(deriveTranscriptInteraction({ kind: 'public' })).toEqual({
             canSendMessages: false,
             canApprovePermissions: false,
+            canApproveActions: false,
             canFork: false,
             canOpenFiles: false,
             canPreviewMedia: false,
@@ -152,6 +160,7 @@ describe('deriveTranscriptInteractionFromSession', () => {
         ).toEqual({
             canSendMessages: true,
             canApprovePermissions: false,
+            canApproveActions: true,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,
@@ -169,6 +178,7 @@ describe('deriveTranscriptInteractionFromSession', () => {
         ).toEqual({
             canSendMessages: true,
             canApprovePermissions: false,
+            canApproveActions: true,
             canFork: true,
             canOpenFiles: true,
             canPreviewMedia: true,

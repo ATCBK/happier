@@ -1,4 +1,20 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { isPendingRequestAnswerableV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { isSessionActionConfirmationRequest } from '@happier-dev/protocol/sessions/metadata/sessionActionConfirmationsV1';
+
+/** Native prompts need a live runtime; host Action decisions retain their approval grant. */
+export function isTranscriptPendingRequestAnswerable(
+    session: Session,
+    request: Readonly<{ kind: 'permission' | 'user_action'; source?: string }>,
+): boolean {
+    const interaction = deriveTranscriptInteractionFromSession(session);
+    if (isSessionActionConfirmationRequest(request)) return interaction.canApproveActions === true;
+    if (session.active !== true) return false;
+    return isPendingRequestAnswerableV1(request, {
+        canSubmitAgentInput: interaction.canSendMessages,
+        canApprovePermissions: interaction.canApprovePermissions,
+    });
+}
 
 /**
  * Why this presentation cannot answer a prompt. `openSession` is the embedded read-only view: the
@@ -9,6 +25,8 @@ export type TranscriptPermissionDisabledReason = 'public' | 'readOnly' | 'notGra
 export type TranscriptInteraction = Readonly<{
     canSendMessages: boolean;
     canApprovePermissions: boolean;
+    /** Artifact decisions retain the access grant when the agent process is inactive. */
+    canApproveActions?: boolean;
     /** Action grant for creating a fork from this transcript surface. Missing grants fail closed. */
     canFork?: boolean;
     /** Grant for opening session/workspace file surfaces. Missing grants fail closed. */
@@ -69,6 +87,7 @@ export function deriveTranscriptInteraction(
         return {
             canSendMessages: false,
             canApprovePermissions: false,
+            canApproveActions: false,
             canFork: false,
             canOpenFiles: false,
             canPreviewMedia: false,
@@ -91,6 +110,7 @@ export function deriveTranscriptInteraction(
     return {
         canSendMessages,
         canApprovePermissions,
+        canApproveActions: baseCanApprovePermissions,
         canFork: canSendMessages,
         canOpenFiles: input.access?.capabilities.readTranscript === true,
         canPreviewMedia: input.access?.capabilities.readTranscript === true,

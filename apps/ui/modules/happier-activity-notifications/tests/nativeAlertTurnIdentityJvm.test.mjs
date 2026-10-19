@@ -39,6 +39,8 @@ function wireBody(version, event) {
 // turns plus the neighboring sequence/category references whose identities
 // this lane must not change.
 const scenarios = [
+  { id: 'v2_stalled_turnA', body: wireBody(2, { type: 'source_unavailable', stalledOccurrence: { turnId: 'turn-AAA', publisherFence: 123 } }) },
+  { id: 'v2_stalled_turnA_restall', body: wireBody(2, { type: 'source_unavailable', stalledOccurrence: { turnId: 'turn-AAA', publisherFence: 124 } }) },
   { id: 'v2_failed_turnA', body: wireBody(2, { type: 'failed', turnId: 'turn-AAA' }) },
   { id: 'v2_failed_turnB', body: wireBody(2, { type: 'failed', turnId: 'turn-BBB' }) },
   { id: 'v2_cancelled_turnC', body: wireBody(2, { type: 'cancelled', turnId: 'turn-CCC' }) },
@@ -424,7 +426,7 @@ private fun sortedWakeScenarioKeys(input: JSONObject): List<String> =
   }.sorted()
 `;
 
-test('Android Machine enrichment shares presentation for offline and requested return, with quiet ordinary recovery', (t) => {
+test('Android Machine entrypoint preserves foreground presentation, closed-app fallback and quiet recovery', (t) => {
   const toolchain = discoverKotlinToolchain();
   if (!toolchain) { t.skip('Kotlin toolchain unavailable; Machine enrichment requires the JVM gate'); return; }
   const work = mkdtempSync(join(tmpdir(), 'happier-machine-enrichment-'));
@@ -504,26 +506,127 @@ fun main(args: Array<String>) {
         check(ExpoPresentationDelegate.notifications.isEmpty())
       }
     }
-  } finally { server.stop(0) }
+    // Exercise the real Firebase entrypoint, ordered handoff and presenter.
+    // Expo is the external SDK boundary: its loaded handler supplies Off or
+    // Silent; the isolated presenter has no foreground behavior to supply.
+    ActivityNotificationMainProcessHandoff.register(context)
+    val service = ActivityFirebaseMessagingService()
+    fun deliver(phase: String, visible: Boolean = true) {
+      val extras = android.os.Bundle().apply {
+        putString("body", """{"type":"machine_alert","v":1,"serverId":"srv-1","accountId":"acc-1","machineId":"machine-1","phase":"$phase","previewBehavior":"title_only"}""")
+        if (visible) {
+          putString("gcm.n.e", "1"); putString("gcm.n.title", "Happier")
+          putString("gcm.n.body", "Generic machine status")
+        }
+      }
+      service.handleIntent(android.content.Intent().replaceExtras(extras))
+    }
+    for (behavior in listOf("off", "silent", "full")) {
+      ExpoPresentationDelegate.notifications = emptyList()
+      ExpoPresentationDelegate.presented = 0
+      ExpoPresentationDelegate.behaviors = emptyList()
+      expo.modules.notifications.service.delegates.FirebaseMessagingDelegate.foregroundBehavior = behavior
+      deliver("recovered")
+      check(ExpoPresentationDelegate.presented == if (behavior == "off") 0 else 1) { "recovered ignored foreground $behavior" }
+      if (behavior != "off") check(ExpoPresentationDelegate.behaviors == listOf(behavior)) { "recovered bypassed loaded handler $behavior" }
+    }
+    // A content-free recovery clears the matching offline notice even when
+    // the foreground handler suppresses all visible notifications.
+    expo.modules.notifications.service.delegates.FirebaseMessagingDelegate.foregroundBehavior = "full"
+    deliver("offline")
+    expo.modules.notifications.service.delegates.FirebaseMessagingDelegate.foregroundBehavior = "off"
+    val beforeQuiet = ExpoPresentationDelegate.presented
+    deliver("recovered", visible = false)
+    check(ExpoPresentationDelegate.notifications.isEmpty()) { "quiet recovery retained offline notification" }
+    check(ExpoPresentationDelegate.presented == beforeQuiet) { "quiet recovery presented content" }
+    ActivityNotificationMainProcessHandoff.unregister()
+    ExpoPresentationDelegate.behaviors = emptyList()
+    deliver("recovered")
+    check(ExpoPresentationDelegate.behaviors == listOf("default")) { "closed app lost native fallback" }
+    check(ExpoPresentationDelegate.notifications.single().notificationRequest.content.body?.opt("phase") == "recovered")
+  } finally { ActivityNotificationMainProcessHandoff.unregister(); server.stop(0) }
 }`;
   try {
     const sources = [
       ['OrgJson.kt', jsonRuntimeStub],
-      ['Context.kt', 'package android.content\nimport java.io.File\nclass Context(val filesDir: File) { val packageName = "dev.happier" }'],
+      ['Context.kt', `package android.content
+import java.io.File
+import java.util.concurrent.CountDownLatch
+open class Context(val filesDir: File) {
+  companion object { lateinit var current: Context; const val ACTIVITY_SERVICE = "activity" }
+  init { current = this }
+  val packageName = "dev.happier"
+  val applicationContext get() = this
+  val packageManager = android.content.pm.PackageManager()
+  var receiver: BroadcastReceiver? = null
+  fun getSystemService(name: String): Any? = null
+  fun unregisterReceiver(value: BroadcastReceiver) { receiver = null }
+  fun sendBroadcast(intent: Intent) {}
+  fun sendOrderedBroadcast(intent: Intent, permission: String?) { receiver?.onReceive(this, intent) }
+  fun sendOrderedBroadcast(intent: Intent, permission: String?, result: BroadcastReceiver, handler: android.os.Handler, code: Int, data: String?, extras: android.os.Bundle?) {
+    val pending = receiver?.let { it.onReceive(this, intent); it.pending }
+    pending?.done?.await()
+    result.resultCode = pending?.code ?: code
+    result.onReceive(this, intent)
+  }
+}
+abstract class BroadcastReceiver {
+  var resultCode = 0
+  var pending: PendingResult? = null
+  fun goAsync() = PendingResult().also { pending = it }
+  abstract fun onReceive(context: Context, intent: Intent)
+  class PendingResult { val done = CountDownLatch(1); var code = 0; fun setResultCode(value: Int) { code = value }; fun finish() { done.countDown() } }
+}
+class Intent(var action: String? = null) {
+  constructor(other: Intent): this(other.action) { extras = other.extras }
+  var extras: android.os.Bundle? = null
+  var \`package\`: String? = null
+  fun replaceExtras(value: android.os.Bundle): Intent { extras = value; return this }
+  fun setPackage(value: String): Intent { \`package\` = value; return this }
+  fun setComponent(value: ComponentName) = this
+  fun putExtra(key: String, value: String): Intent { if (extras == null) extras = android.os.Bundle(); extras!!.putString(key, value); return this }
+  fun getStringExtra(key: String) = extras?.values?.get(key) as? String
+}
+class IntentFilter(action: String)
+class ComponentName(context: Context, type: Class<*>)
+`],
+      ['PackageManager.kt', 'package android.content.pm\nclass PackageManager { fun getServiceInfo(component: android.content.ComponentName, flags: Int) = ServiceInfo() }; class ServiceInfo { val enabled = true; val processName = "dev.happier" }'],
+      ['App.kt', 'package android.app\nobject Activity { const val RESULT_FIRST_USER = 1; const val RESULT_CANCELED = 0 }; object Application { fun getProcessName() = "dev.happier" }; class ActivityManager { val runningAppProcesses = emptyList<ProcessInfo>(); class ProcessInfo { val pid = 1; val processName = "dev.happier" } }'],
+      ['AndroidOs.kt', 'package android.os\nclass Bundle(other: Bundle? = null) { val values: MutableMap<String, Any> = other?.values?.toMutableMap() ?: mutableMapOf(); fun keySet() = values.keys; fun remove(key: String) { values.remove(key) }; fun putString(key: String, value: String) { values[key] = value } }; class HandlerThread(name: String) { val looper = Any(); fun start() {} }; class Handler(looper: Any); object Build { object VERSION { const val SDK_INT = 35 }; object VERSION_CODES { const val P = 28 } }; object Process { fun myPid() = 1 }'],
+      ['ContextCompat.kt', 'package androidx.core.content\nobject ContextCompat { const val RECEIVER_NOT_EXPORTED = 0; fun registerReceiver(context: android.content.Context, receiver: android.content.BroadcastReceiver, filter: android.content.IntentFilter, flags: Int) { context.receiver = receiver } }'],
       ['Uri.kt', 'package android.net\nobject Uri { fun encode(value: String) = java.net.URLEncoder.encode(value, "UTF-8") }'],
       ['Os.kt', 'package android.system\nobject Os { fun rename(from: String, to: String) { java.io.File(from).renameTo(java.io.File(to)) } }'],
       ['Base64.kt', 'package android.util\nobject Base64 { const val DEFAULT = 0; const val NO_WRAP = 2; fun decode(value: String, flags: Int) = java.util.Base64.getDecoder().decode(value); fun encodeToString(value: ByteArray, flags: Int) = java.util.Base64.getEncoder().encodeToString(value) }'],
       // The JNI envelope-opening boundary is unavailable on a host JVM. Keep
       // the canonical envelope adapter and real AES-GCM worker beneath it.
       ['NativeCrypto.kt', 'package dev.happier.cryptoworker\nobject HappierCryptoWorkerNative { fun openDataKeyEnvelopeV1(envelope: ByteArray, recipient: ByteArray): ByteArray? = if (envelope.contentEquals(byteArrayOf(1)) && recipient.contentEquals(byteArrayOf(9))) ByteArray(32) { 7 } else null; fun openSecretboxJson(ciphertext: ByteArray, key: ByteArray): ByteArray? = null }'],
-      ['Firebase.kt', 'package com.google.firebase.messaging\nclass RemoteMessage(val data: Map<String, String>) { val from: String? = null; val messageId: String? = null; val sentTime: Long = 1; class Builder(from: String) { var data = emptyMap<String, String>(); fun setMessageId(id: String) = this; fun setData(value: Map<String, String>): Builder { data=value; return this }; fun build() = RemoteMessage(data) } }'],
+      ['Firebase.kt', `package com.google.firebase.messaging
+class RemoteMessage(val data: Map<String, String>) {
+  constructor(extras: android.os.Bundle): this(extras.values.filterKeys { !it.startsWith("gcm.n.") }.mapValues { it.value as String }) { if (extras.values["gcm.n.e"] == "1") notification = Notification(extras) }
+  var notification: Notification? = null
+  class Notification(extras: android.os.Bundle) { val title = extras.values["gcm.n.title"] as? String; val body = extras.values["gcm.n.body"] as? String; val sound = extras.values["gcm.n.sound"] as? String; val channelId = extras.values["gcm.n.android_channel_id"] as? String }
+  val from: String? = null; val messageId: String? = null; val sentTime: Long = 1
+  class Builder(from: String) { var data = emptyMap<String, String>(); fun setMessageId(id: String) = this; fun setData(value: Map<String, String>): Builder { data=value; return this }; fun build() = RemoteMessage(data) }
+}`],
+      ['FirebaseApp.kt', 'package com.google.firebase\nobject FirebaseApp { fun initializeApp(context: android.content.Context) {} }'],
+      ['ExpoService.kt', 'package expo.modules.notifications.service\nopen class ExpoFirebaseMessagingService { val applicationContext get() = android.content.Context.current; open fun onCreate() {}; open fun onNewToken(token: String) {}; open fun onMessageReceived(message: com.google.firebase.messaging.RemoteMessage) {}; open fun handleIntent(intent: android.content.Intent) { onMessageReceived(com.google.firebase.messaging.RemoteMessage(intent.extras!!)) } }'],
+      ['Serializer.kt', 'package expo.modules.notifications.notifications\nobject RemoteMessageSerializer { fun toBundle(message: com.google.firebase.messaging.RemoteMessage) = android.os.Bundle() }'],
+      ['FirebaseDelegate.kt', `package expo.modules.notifications.service.delegates
+class FirebaseMessagingDelegate(val context: android.content.Context) {
+  companion object { var foregroundBehavior = "full"; fun runTaskManagerTasks(context: android.content.Context, bundle: android.os.Bundle) {} }
+  fun onNewToken(token: String) {}
+  fun onMessageReceived(message: com.google.firebase.messaging.RemoteMessage) {
+    val request = expo.modules.notifications.notifications.model.NotificationRequest(message.data["tag"]!!, expo.modules.notifications.notifications.model.RemoteNotificationContent(message), Any())
+    ExpoPresentationDelegate(context).presentNotification(expo.modules.notifications.notifications.model.Notification(request, java.util.Date()), foregroundBehavior)
+  }
+}`],
       ['Models.kt', 'package expo.modules.notifications.notifications.model\nclass RemoteNotificationContent(message: com.google.firebase.messaging.RemoteMessage) { val body = message.data["body"]?.let { org.json.JSONObject(it) } }\nclass NotificationRequest(val identifier: String, val content: RemoteNotificationContent, trigger: Any)\nclass Notification(val notificationRequest: NotificationRequest, date: java.util.Date)'],
       ['Trigger.kt', 'package expo.modules.notifications.notifications.model.triggers\nclass FirebaseNotificationTrigger(message: com.google.firebase.messaging.RemoteMessage)'],
-      ['Presentation.kt', 'package expo.modules.notifications.service.delegates\nclass ExpoPresentationDelegate(context: android.content.Context) { companion object { var dismissed = emptyList<String>(); var presented = 0; var notifications = emptyList<expo.modules.notifications.notifications.model.Notification>() }; fun getAllPresentedNotifications() = notifications; fun dismissNotifications(ids: Collection<String>) { dismissed = ids.toList(); notifications = notifications.filter { it.notificationRequest.identifier !in ids } }; fun presentNotification(notification: expo.modules.notifications.notifications.model.Notification, behavior: Any?) { presented += 1; notifications = notifications.filter { it.notificationRequest.identifier != notification.notificationRequest.identifier } + notification } }'],
+      ['Presentation.kt', 'package expo.modules.notifications.service.delegates\nclass ExpoPresentationDelegate(context: android.content.Context) { companion object { var dismissed = emptyList<String>(); var presented = 0; var behaviors = emptyList<String>(); var notifications = emptyList<expo.modules.notifications.notifications.model.Notification>() }; fun getAllPresentedNotifications() = notifications; fun dismissNotifications(ids: Collection<String>) { dismissed = ids.toList(); notifications = notifications.filter { it.notificationRequest.identifier !in ids } }; fun presentNotification(notification: expo.modules.notifications.notifications.model.Notification, behavior: Any?) { if (behavior == "off") return; presented += 1; behaviors = behaviors + (behavior as? String ?: "default"); notifications = notifications.filter { it.notificationRequest.identifier != notification.notificationRequest.identifier } + notification } }'],
       ['Probe.kt', probe],
     ].map(([name, source]) => { const path = join(work, name); writeFileSync(path, source); return path; });
     const classes = join(work, 'classes');
-    const realSources = ['ActivityRemoteAlert.kt', 'MachineRemoteAlert.kt', 'ActivityPreparedContext.kt', 'ActivityNotificationEnricher.kt', 'ActivityNotificationPresenter.kt'].map((name) => join(androidDir, name));
+    const realSources = ['ActivityRemoteAlert.kt', 'MachineRemoteAlert.kt', 'ActivityPreparedContext.kt', 'ActivityNotificationEnricher.kt', 'ActivityNotificationPresenter.kt', 'ActivityFirebaseMessagingService.kt', 'ActivityNotificationMainProcessHandoff.kt', 'ActivityRemoteAlertIntent.kt', 'ActivityNotificationProcess.kt', 'ActivityNotificationTokenBridge.kt', 'SessionChangedWake.kt'].map((name) => join(androidDir, name));
     const cryptoSources = ['HappierCryptoWorker.kt', 'HappierCryptoWorkerBase64.kt', 'HappierCryptoWorkerTypes.kt', 'HappierCryptoWorkerSessionCrypto.kt'].map((name) => join(cryptoDir, name));
     try {
       execFileSync('java', ['-cp', toolchain.compilerJars.join(delimiter), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-classpath', toolchain.runtimeJars.join(delimiter), '-no-stdlib', '-d', classes, '-nowarn', ...realSources, ...cryptoSources, ...sources], { stdio: ['ignore', 'pipe', 'pipe'] });

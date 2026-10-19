@@ -1,9 +1,26 @@
 import * as React from 'react';
+import 'fake-indexeddb/auto';
+import { IDBObjectStore } from 'fake-indexeddb';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { renderScreen as renderActivityScreen, standardCleanup } from '@/dev/testkit';
+import { ActivityPersonalSessionMembershipProvider } from '@/activity/source/activityPersonalSessionMembership';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { AuthProvider, setCurrentAuth } from '@/auth/context/AuthContext';
+import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
+import { createSessionFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { storage } from '@/sync/domains/state/storage';
+import type { Session } from '@/sync/domains/state/storageTypes';
+import type { StorageState } from '@/sync/store/types';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { localSettingsParse } from '@/sync/domains/settings/localSettings';
+import { scopedSessionLocalStateKey } from '@/sync/domains/state/sessionLocalStateKeys';
+import * as actionExecutor from '@/sync/ops/actions/defaultActionExecutor';
 import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
 
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -12,14 +29,6 @@ import { settingsParse } from '@/sync/domains/settings/settings';
 // own Home's persisted Account policy. These Homes stay bound to a stable Account
 // identity so the suite exercises the real admission path.
 const DESKTOP_OVERLAY_TEST_HOME_SERVER_IDS = ['server-1', 'server-2'] as const;
-const desktopOverlayAudienceScopes = vi.hoisted(() => ({
-    value: new Map(
-        (['server-1', 'server-2'] as const).map((serverId) => [
-            serverId,
-            { serverId, accountId: `account-${serverId}` },
-        ]),
-    ),
-}));
 
 async function persistDesktopOverlayHomeAccountSettings(): Promise<void> {
     const { saveAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
@@ -28,8 +37,6 @@ async function persistDesktopOverlayHomeAccountSettings(): Promise<void> {
     }
 }
 
-const isDesktopHostMock = vi.hoisted(() => vi.fn(() => true));
-const isDesktopOverlayWindowContextMock = vi.hoisted(() => vi.fn(() => false));
 const sessionsState = vi.hoisted(() => ({
     value: [
         {
@@ -85,7 +92,7 @@ const sessionListIndexState = vi.hoisted(() => ({
                 serverId: 'server-1',
             },
         ],
-    } as Record<string, ReadonlyArray<{ type: 'session'; sessionId: string; serverId: string }>>,
+    } as Record<string, Array<{ type: 'session'; sessionId: string; serverId: string }>>,
 }));
 const concurrentSessionListCacheState = vi.hoisted(() => ({
     value: {} as Record<string, unknown>,
@@ -141,142 +148,159 @@ const emitDesktopActivityOverlayInteractionResultMock = vi.hoisted(
     () => vi.fn<(payload: { requestId: string; ok: boolean; errorCode?: string; error?: string }) => Promise<void>>(async () => {}),
 );
 const actionExecutorExecuteMock = vi.hoisted(
-    () => vi.fn<(actionId: string, input: unknown, context: unknown) => Promise<{ ok: boolean; result?: unknown; errorCode?: string; error?: string }>>(async () => ({ ok: true, result: { ok: true } })),
+    () => vi.fn<(actionId: string, input: unknown, context: unknown) => void>(),
 );
 const desktopActivityOverlayQaSyncOverrideKey = '__HAPPIER_DESKTOP_ACTIVITY_OVERLAY_QA_SYNC_OVERRIDE__';
 
-const expoRouterMock = createExpoRouterMock({
-    router: {
-        push: (value: unknown) => routerPushMock(value),
+// The real desktop bridge runs above the Tauri event SDK and native IPC ports.
+vi.mock('@tauri-apps/api/event', () => ({
+    listen: async (event: string, handler: (event: { payload: unknown }) => void) => {
+        if (event !== 'activityOverlay://interaction') return () => {};
+        return listenDesktopActivityOverlayInteractionMock((payload) => handler({ payload }));
     },
-});
-
-vi.mock('@/utils/platform/desktopHost', () => ({
-    isDesktopHost: () => isDesktopHostMock(),
 }));
 
-vi.mock('./isDesktopActivityOverlayWindowContext', () => ({
-    isDesktopActivityOverlayWindowContext: () => isDesktopOverlayWindowContextMock(),
-}));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    const storageState = () => ({
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative'))
+    .createReactNativeWebMock({ Platform: { OS: 'web' } }));
+
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router'))
+    .createExpoRouterMock({ router: { push: (value: unknown) => routerPushMock(value) } }).module);
+
+const desktopHomes = createHomeGovernanceHarness();
+let restoreDesktopBridge = () => {};
+let desktopCredentials: AuthCredentials | null = null;
+
+function DesktopAuthFixture({ children }: React.PropsWithChildren): React.ReactElement {
+    return <AuthProvider initialCredentials={desktopCredentials}><ActivityPersonalSessionMembershipProvider enabled={false}>
+        {children}</ActivityPersonalSessionMembershipProvider></AuthProvider>;
+}
+
+function renderScreen(element: Parameters<typeof renderActivityScreen>[0]) {
+    return renderActivityScreen(element, { wrapper: DesktopAuthFixture });
+}
+
+async function renderSessionHydration(element: Parameters<typeof renderActivityScreen>[0]) {
+    const sessions = sessionsState.value;
+    const rows = sessionListRowsState.value;
+    // Keep the real Home membership while its row bodies hydrate. Account
+    // admission can initially publish a withheld snapshot; that bootstrap is
+    // outside the fingerprint keeper's one content-publication observation.
+    sessionsState.value = [];
+    sessionListRowsState.value = {};
+    const screen = await renderScreen(element);
+    expect(syncDesktopActivityOverlayMock).toHaveBeenCalledWith(expect.objectContaining({ visible: false }));
+    syncDesktopActivityOverlayMock.mockClear();
+    await act(async () => {
+        sessionsState.value = sessions;
+        sessionListRowsState.value = rows;
+    });
+    await screen.update(element);
+    await waitForHomeGovernance(() => expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0])
+        .toMatchObject({ visible: true }));
+    return screen;
+}
+
+function canonicalSession(input: Record<string, unknown>): Session {
+    // Historical test inputs are untyped boundary fixtures. The canonical fixture
+    // supplies the actual owner access contract; the viewer producer derives facts.
+    const session = createSessionFixture({
+        ...input,
+        metadata: { machineId: 'machine-1', ...(input.metadata as Session['metadata']) },
+    } as Partial<Session>);
+    return { ...session, viewer: createSessionOwnerViewerFixture(session) };
+}
+
+function publishDesktopFixture(): void {
+    const sessions = sessionsState.value.map(canonicalSession);
+    const rows: Record<string, Record<string, ReturnType<typeof buildSessionListRenderableFromSession>>> = {};
+    for (const [serverId, byId] of Object.entries(sessionListRowsState.value)) {
+        rows[serverId] = Object.fromEntries(Object.entries(byId).map(([id, row]) =>
+            [id, buildSessionListRenderableFromSession(canonicalSession({ ...row, serverId }))]));
+    }
+    for (const session of sessions) {
+        if (session.serverId) installSessionActionFixture({ homes: desktopHomes, storage, serverId: session.serverId, session });
+    }
+    storage.setState({
         isDataReady: true,
-        sessions: Object.fromEntries(
-            sessionsState.value.map((session) => [session.id, session]),
-        ),
+        sessions: Object.fromEntries(sessions.map((session) => [session.id, session])),
+        settings: settingsParse(settingsState.value),
+        localSettings: localSettingsParse(localSettingsState.value),
         sessionMessages: {},
-        sessionListRowsByServerId: sessionListRowsState.value,
+        sessionListRowsByServerId: rows,
         ordinarySessionListMembershipByServerId: ordinarySessionListMembershipState.value,
         sessionListIndexByServerId: sessionListIndexState.value,
-        concurrentSessionListCacheByServerId: concurrentSessionListCacheState.value,
-        localSettings: localSettingsState.value,
-        settings: settingsState.value,
+        concurrentSessionListCacheByServerId: concurrentSessionListCacheState.value as StorageState['concurrentSessionListCacheByServerId'],
     });
-    const storage = Object.assign(
-        ((selector?: (state: ReturnType<typeof storageState>) => unknown) =>
-            typeof selector === 'function' ? selector(storageState()) : storageState()),
-        {
-            getState: () => storageState(),
-            getInitialState: () => storageState(),
-            setState: () => undefined,
-            subscribe: () => () => undefined,
-            destroy: () => undefined,
-        },
-    );
-    return createStorageModuleStub({
-        storage,
-        useAllSessions: () => {
-            throw new Error('DesktopActivityOverlayRuntime should not use useAllSessions');
-        },
-        useLocalSettings: () => localSettingsState.value,
-        useSettings: () => settingsState.value,
+}
+
+// All mounted fixture updates go through the actual Zustand owner and selectors.
+for (const fixture of [sessionsState, sessionListRowsState, ordinarySessionListMembershipState,
+    sessionListIndexState, concurrentSessionListCacheState, localSettingsState, settingsState]) {
+    let value = fixture.value;
+    Object.defineProperty(fixture, 'value', {
+        get: () => value,
+        set: (next: typeof value) => { value = next; publishDesktopFixture(); },
     });
-});
+}
 
-vi.mock('./useDesktopActivityOverlaySource', () => ({
-    useDesktopActivityOverlaySource: () => ({
-        isDataReady: true,
-        audienceScopes: desktopOverlayAudienceScopes.value,
-        sessionsById: Object.fromEntries(
-            sessionsState.value.map((session) => [session.id, session]),
-        ),
-        sessionListRowsByServerId: sessionListRowsState.value,
-        ordinarySessionListMembershipByServerId: ordinarySessionListMembershipState.value,
-        sessionListIndexByServerId: sessionListIndexState.value,
-        concurrentSessionListCacheByServerId: concurrentSessionListCacheState.value,
-        sessionMessagesById: {},
-        serverProfilesById: {
-            'server-1': {
-                id: 'server-1',
-                name: 'Server 1',
-                serverUrl: 'https://server.example.test',
-                createdAt: 1,
-                updatedAt: 1,
-                lastUsedAt: 1,
-                source: 'manual',
-            },
-            'server-2': {
-                id: 'server-2',
-                name: 'Server 2',
-                serverUrl: 'https://server-two.example.test',
-                createdAt: 1,
-                updatedAt: 1,
-                lastUsedAt: 1,
-                source: 'manual',
-            },
-        },
-        activeServer: {
-            serverId: 'server-1',
-            serverUrl: 'https://server.example.test',
-            generation: 1,
-        },
-        quotaSummaries: [],
-    }),
-}));
-
-vi.mock('./desktopActivityOverlayBridge', async () => {
-    const actual = await vi.importActual<typeof import('./desktopActivityOverlayBridge')>('./desktopActivityOverlayBridge');
-    return {
-        ...actual,
-        syncDesktopActivityOverlay: (payload: unknown) => syncDesktopActivityOverlayMock(payload),
-        listenDesktopActivityOverlayInteraction: (handler: (payload: unknown) => void) => listenDesktopActivityOverlayInteractionMock(handler),
-        setDesktopActivityOverlayExpanded: (expanded: boolean) => setDesktopActivityOverlayExpandedMock(expanded),
-        showDesktopMainWindow: () => showDesktopMainWindowMock(),
-        emitDesktopActivityOverlayInteractionResult: (payload: { requestId: string; ok: boolean; errorCode?: string; error?: string }) =>
-            emitDesktopActivityOverlayInteractionResultMock(payload),
-    };
-});
-
-vi.mock('expo-router', () => expoRouterMock.module);
-
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-    createDefaultActionExecutor: () => ({
-        execute: (actionId: string, input: unknown, context: unknown) => actionExecutorExecuteMock(actionId, input, context),
-    }),
-}));
-
-vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries', () => ({
-    useConnectedServiceQuotaSummaries: () => ({
-        summaries: [],
-        isRefreshing: false,
-        hasConnectedProfiles: false,
-    }),
-}));
-
+await loadSyncSingletonForTests();
 describe('DesktopActivityOverlayRuntime', () => {
     beforeEach(async () => {
+        const secureStorage = createDesktopSecureStorageBoundary();
+        vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string, args?: Record<string, unknown>) => {
+            if (command.startsWith('desktop_secure_storage_')) return secureStorage.invoke(command, args);
+            if (command === 'desktop_activity_overlay_sync') return syncDesktopActivityOverlayMock(args?.payload);
+            if (command === 'desktop_activity_overlay_set_expanded') return setDesktopActivityOverlayExpandedMock(args?.expanded === true);
+            if (command === 'desktop_show_main_window') return showDesktopMainWindowMock();
+            if (command === 'desktop_activity_overlay_emit_interaction_result') {
+                return emitDesktopActivityOverlayInteractionResultMock(args?.payload as Parameters<typeof emitDesktopActivityOverlayInteractionResultMock>[0]);
+            }
+            throw new Error(`Unexpected desktop IPC command: ${command}`);
+        } });
+        const desktopBridge = (globalThis as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+        restoreDesktopBridge = () => vi.stubGlobal('__TAURI_INTERNALS__', desktopBridge);
+        const windowEvents = new EventTarget();
+        vi.stubGlobal('window', {
+            location: { href: 'https://app.example.test/' },
+            addEventListener: windowEvents.addEventListener.bind(windowEvents),
+            removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+            dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
+            localStorage: globalThis.localStorage,
+        });
+        for (const serverId of DESKTOP_OVERLAY_TEST_HOME_SERVER_IDS) {
+            await desktopHomes.addHome({ name: serverId, serverUrl: `https://${serverId}`,
+                accountId: `account-${serverId}`, currentAccount: true, active: serverId === 'server-1' });
+            desktopHomes.answer(serverId, '/v2/account/session-delivery-mutes', { body: { scopes: [] } });
+        }
+        desktopCredentials = await TokenStorage.getCredentialsForServerUrl('https://server-1', { serverId: 'server-1' });
+        if (!desktopCredentials) throw new Error('Desktop fixture Home did not persist its Account credential');
+        installHomeGovernanceBoundaries(desktopHomes);
+        installSessionActionRpcBoundary(() => undefined);
+        const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+        // Wait for this restore's readiness, rather than the prior case's bit.
+        storage.setState({ isDataReady: false });
+        await restoreConnectionToActiveServer(desktopCredentials);
+        storage.getState().activateProfileScope({ serverId: 'server-1', accountId: 'account-server-1' });
+        await waitForHomeGovernance(() => expect(storage.getState().isDataReady).toBe(true));
+        const createExecutor = actionExecutor.createDefaultActionExecutor;
+        vi.spyOn(actionExecutor, 'createDefaultActionExecutor').mockImplementation((options) => {
+            const executor = createExecutor(options);
+            return { ...executor, execute: (...args) => {
+                // Call-through observation; no Action result or decision is replaced.
+                actionExecutorExecuteMock(...args);
+                return executor.execute(...args);
+            } };
+        });
         await persistDesktopOverlayHomeAccountSettings();
         const now = Date.now();
-        isDesktopHostMock.mockReturnValue(true);
-        isDesktopOverlayWindowContextMock.mockReturnValue(false);
         syncDesktopActivityOverlayMock.mockImplementation(async () => {});
         listenDesktopActivityOverlayInteractionMock.mockImplementation(async () => () => {});
         setDesktopActivityOverlayExpandedMock.mockImplementation(async () => {});
         showDesktopMainWindowMock.mockImplementation(async () => {});
         emitDesktopActivityOverlayInteractionResultMock.mockImplementation(async () => {});
-        actionExecutorExecuteMock.mockImplementation(async () => ({ ok: true, result: { ok: true } }));
 
         sessionsState.value = [
             {
@@ -350,10 +374,15 @@ describe('DesktopActivityOverlayRuntime', () => {
         };
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        standardCleanup();
+        const { stopConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        stopConcurrentSessionCacheSync();
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
+        setCurrentAuth(null);
+        desktopCredentials = null;
         delete (globalThis as unknown as Record<string, unknown>)[desktopActivityOverlayQaSyncOverrideKey];
-        isDesktopHostMock.mockReset();
-        isDesktopOverlayWindowContextMock.mockReset();
         sessionsState.value = [];
         sessionListIndexState.value = {
             'server-1': [],
@@ -377,6 +406,12 @@ describe('DesktopActivityOverlayRuntime', () => {
         routerPushMock.mockReset();
         actionExecutorExecuteMock.mockReset();
         vi.useRealTimers();
+        vi.restoreAllMocks();
+        // The non-desktop case hides this port only for the render; credential
+        // rollback must use the same device store that accepted the writes.
+        restoreDesktopBridge();
+        await desktopHomes.reset();
+        vi.unstubAllGlobals();
     });
 
     it('synchronizes overlay state when running on tauri desktop', async () => {
@@ -397,11 +432,27 @@ describe('DesktopActivityOverlayRuntime', () => {
         expect(listenDesktopActivityOverlayInteractionMock).toHaveBeenCalledTimes(1);
     }, 120_000);
 
+    it('consumes the captured Account mute and Undo through the existing census without deleting Work', async () => {
+        const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
+        const screen = await renderScreen(<DesktopActivityOverlayRuntime />);
+        await waitForHomeGovernance(() => expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0]).toMatchObject({ visible: true }));
+        desktopHomes.answer('server-1', '/v2/account/session-delivery-mutes', {
+            body: { scopes: [{ kind: 'source', source: { kind: 'session', sessionId: 'session-1' } }] },
+        });
+        await act(async () => publishHomeAccountChange('server-1', ['session-follows']));
+        await waitForHomeGovernance(() => expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0]).toMatchObject({ visible: false }));
+        expect(storage.getState().sessions['session-1']).toBeDefined();
+        desktopHomes.answer('server-1', '/v2/account/session-delivery-mutes', { body: { scopes: [] } });
+        await act(async () => publishHomeAccountChange('server-1', ['session-follows']));
+        await waitForHomeGovernance(() => expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0]).toMatchObject({ visible: true }));
+        await screen.unmount();
+    });
+
     it('skips native sync when the stable activity overview fingerprint is unchanged', async () => {
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
-        const screen = await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
+        const screen = await renderSessionHydration(React.createElement(DesktopActivityOverlayRuntime));
 
-        expect(syncDesktopActivityOverlayMock).toHaveBeenCalledTimes(1);
+        expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0]).toMatchObject({ visible: true });
 
         syncDesktopActivityOverlayMock.mockClear();
         localSettingsState.value = {
@@ -409,7 +460,7 @@ describe('DesktopActivityOverlayRuntime', () => {
         };
 
         await act(async () => {
-            screen.tree.update(React.createElement(DesktopActivityOverlayRuntime));
+            await screen.update(React.createElement(DesktopActivityOverlayRuntime));
         });
 
         expect(syncDesktopActivityOverlayMock).not.toHaveBeenCalled();
@@ -417,7 +468,7 @@ describe('DesktopActivityOverlayRuntime', () => {
 
     it('synchronizes disabled desktop overlay policy even when the stable overview fingerprint is unchanged', async () => {
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
-        const screen = await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
+        const screen = await renderSessionHydration(React.createElement(DesktopActivityOverlayRuntime));
 
         expect(syncDesktopActivityOverlayMock).toHaveBeenCalledTimes(1);
 
@@ -428,7 +479,7 @@ describe('DesktopActivityOverlayRuntime', () => {
         };
 
         await act(async () => {
-            screen.tree.update(React.createElement(DesktopActivityOverlayRuntime));
+            await screen.update(React.createElement(DesktopActivityOverlayRuntime));
         });
 
         expect(syncDesktopActivityOverlayMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -598,7 +649,7 @@ describe('DesktopActivityOverlayRuntime', () => {
     });
 
     it('does not synchronize when not running on tauri', async () => {
-        isDesktopHostMock.mockReturnValue(false);
+        vi.stubGlobal('__TAURI_INTERNALS__', undefined);
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
         await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
 
@@ -607,7 +658,7 @@ describe('DesktopActivityOverlayRuntime', () => {
     });
 
     it('does not synchronize when rendering inside the overlay window context', async () => {
-        isDesktopOverlayWindowContextMock.mockReturnValue(true);
+        window.location.href = 'https://app.example.test/desktop/activity-overlay';
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
         await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
 
@@ -763,6 +814,16 @@ describe('DesktopActivityOverlayRuntime', () => {
     });
 
     it('does not open an unqualified session when two Homes use the same session id', async () => {
+        // The real list runtime retires unselected Home membership. Admit both
+        // Homes before seeding their retained rows and awaiting channel policy.
+        await desktopHomes.selectHomes(['server-1', 'server-2']);
+        const { startConcurrentSessionCacheSync } = await import('@/sync/runtime/orchestration/concurrentSessionCache');
+        startConcurrentSessionCacheSync();
+        await waitForHomeGovernance(() => expect(storage.getState().concurrentSessionListCacheByServerId['server-2']).toBeDefined());
+        const { saveAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        saveAccountSettings({ serverId: 'server-1', accountId: 'account-server-1' }, settingsParse({
+            attentionDeliveryPolicyV1: { v: 1, channels: { desktop_overlay: { enabled: false } } },
+        }), 2);
         const secondarySession = {
             ...sessionsState.value[0],
             serverId: 'server-2',
@@ -798,13 +859,15 @@ describe('DesktopActivityOverlayRuntime', () => {
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
         await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
 
+        await waitForHomeGovernance(() => expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0]).toMatchObject({
+            model: { expanded: { rows: [expect.objectContaining({ sessionId: 'session-1', serverId: 'server-2' })] } },
+        }));
         const syncedModel = syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0] as {
             model?: { expanded?: { rows?: Array<{ sessionId: string; serverId: string | null }> } };
         } | undefined;
-        // Surface selection currently projects only the higher-priority Home into this
-        // snapshot. The interaction boundary must still resolve legacy bare ids against
-        // the complete qualified source, rather than treating that filtered projection as
-        // proof that the selected row is unique.
+        // The first Home opted out of this channel, but its row remains in the
+        // qualified source. An admitted snapshot is not proof that a bare id is
+        // unique across the complete source used by the interaction boundary.
         expect(syncedModel?.model?.expanded?.rows).toEqual([
             expect.objectContaining({ sessionId: 'session-1', serverId: 'server-2' }),
         ]);
@@ -854,10 +917,16 @@ describe('DesktopActivityOverlayRuntime', () => {
     });
 
     it('acknowledges downstream direct action failure back to the overlay request', async () => {
-        actionExecutorExecuteMock.mockResolvedValueOnce({
-            ok: false,
-            errorCode: 'action_failed',
-            error: 'action_failed',
+        // A definitive pre-dispatch device-storage failure must reach the overlay.
+        // A lost Pending HTTP response is not equivalent: durable outbox custody
+        // deliberately reports uncertainty instead of manufacturing a failed send.
+        const outboxKey = scopedSessionLocalStateKey('session-pending-outbox-v1', {
+            serverId: 'server-1', accountId: 'account-server-1',
+        });
+        const getRecord = IDBObjectStore.prototype.get;
+        vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(function (this: IDBObjectStore, key) {
+            if (key === outboxKey) throw new Error('action_failed');
+            return getRecord.call(this, key);
         });
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
         await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
@@ -894,12 +963,12 @@ describe('DesktopActivityOverlayRuntime', () => {
             }),
         );
         expect(actionExecutorExecuteMock.mock.calls[0]?.[1]).not.toHaveProperty('serverId');
-        expect(emitDesktopActivityOverlayInteractionResultMock).toHaveBeenCalledWith({
+        await waitForHomeGovernance(() => expect(emitDesktopActivityOverlayInteractionResultMock).toHaveBeenCalledWith({
             requestId: 'quick-reply-request-1',
             ok: false,
             errorCode: 'action_failed',
             error: 'action_failed',
-        });
+        }));
     });
 
     it('uses the canonical shared default target when the interaction has no explicit action identifier', async () => {
@@ -940,7 +1009,7 @@ describe('DesktopActivityOverlayRuntime', () => {
         };
 
         await act(async () => {
-            screen.tree.update(React.createElement(DesktopActivityOverlayRuntime));
+            await screen.update(React.createElement(DesktopActivityOverlayRuntime));
         });
 
         const handler = listenDesktopActivityOverlayInteractionMock.mock.calls.at(-1)?.[0] as
@@ -1022,7 +1091,7 @@ describe('DesktopActivityOverlayRuntime', () => {
         };
 
         await act(async () => {
-            screen.tree.update(React.createElement(DesktopActivityOverlayRuntime));
+            await screen.update(React.createElement(DesktopActivityOverlayRuntime));
         });
 
         const handler = listenDesktopActivityOverlayInteractionMock.mock.calls.at(-1)?.[0] as
@@ -1130,6 +1199,8 @@ describe('DesktopActivityOverlayRuntime', () => {
 
         const { DesktopActivityOverlayRuntime } = await import('./DesktopActivityOverlayRuntime');
         await renderScreen(React.createElement(DesktopActivityOverlayRuntime));
+        await waitForHomeGovernance(() => expect(syncDesktopActivityOverlayMock.mock.calls.at(-1)?.[0])
+            .toMatchObject({ visible: true }));
 
         const handler = listenDesktopActivityOverlayInteractionMock.mock.calls[0]?.[0] as
             | ((payload: { actionIdentifier: string; data?: Record<string, unknown> }) => void)

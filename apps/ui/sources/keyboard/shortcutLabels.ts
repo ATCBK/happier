@@ -32,3 +32,17 @@ export function splitKeybindingLabel(label: string): readonly string[] {
     }
     return keys.length > 0 ? keys : [label];
 }
+
+const KEYCAP_GLYPHS: Readonly<Record<string, string>> = {
+    ArrowUp: '↑',
+    ArrowDown: '↓',
+    ArrowLeft: '←',
+    ArrowRight: '→',
+    Enter: '↵',
+    Escape: 'Esc',
+};
+
+/** One keycap's face for a quiet hint row: arrows and Return as their glyphs ("ArrowDown" → "↓"). */
+export function formatKeycapLabel(key: string): string {
+    return KEYCAP_GLYPHS[key] ?? key;
+}
