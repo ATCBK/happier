@@ -5,6 +5,8 @@ import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppR
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import { AcpBackendDefinitionV1Schema, type AcpCatalogSettingsV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import {
     createExpoRouterMock,
@@ -133,6 +135,9 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
         const seam = pickerCommonModuleMocksState.options.projectionSeam;
         const profile = (seam?.serverProfiles ?? PICKER_PROJECTION_SEAM_SERVER_PROFILES).find(candidate => candidate.id === serverId);
         if (!profile || !homes) throw new Error('Picker Home boundary unavailable');
+        homes.answer(serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+        }) });
         await account?.dispose();
         const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
         account = await restoreServerAccountForTest({ serverUrl: profile.serverUrl,
@@ -150,6 +155,8 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
                 }
                 return homes.request(input, init);
             } });
+        const { refreshAcpCatalog } = await import('@/sync/engine/settings/acpCatalogEngine');
+        await refreshAcpCatalog({ serverId: account.serverId, accountId: `account:${account.serverId}` });
     }
     // These factories consume caller configuration, so register them after that
     // configuration exists. Hoisting can resolve a default Web/router fixture
@@ -162,10 +169,10 @@ export function installPickerCommonModuleMocks(options: PickerCommonModuleMocksO
     }
 
     beforeEach(async () => {
-        const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
-        await loadSyncSingletonForTests();
         const seam = pickerCommonModuleMocksState.options.projectionSeam;
         if (seam) {
+            const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+            await loadSyncSingletonForTests();
             installDisconnectedServerSocketBoundary((socket, serverUrl) => {
                 vi.mocked(socket.connect).mockImplementation(() => {
                     socket.connected = true;
@@ -468,17 +475,15 @@ export function createConfiguredAgentRouteParams(definitionId: string) {
  * The `acpCatalogSettingsV1` entry a suite stores to make a configured backend
  * id resolvable (or, by omission, stale) for `resolvePreferredBackendTarget`.
  */
-export function createConfiguredAcpBackendCatalogSettings(configuredBackendId: string) {
+export function createConfiguredAcpBackendCatalogSettings(configuredBackendId: string): AcpCatalogSettingsV1 {
     return {
         v: 2,
-        backends: [{
+        backends: [AcpBackendDefinitionV1Schema.parse({
             id: configuredBackendId,
             name: configuredBackendId,
             title: 'Review Bot',
-            command: configuredBackendId,
-            args: [],
+            launch: { kind: 'command', command: configuredBackendId, args: [] },
             env: {},
-            transportProfile: 'generic',
             capabilities: {
                 supportsLoadSession: false,
                 supportsModes: 'unknown',
@@ -488,8 +493,8 @@ export function createConfiguredAcpBackendCatalogSettings(configuredBackendId: s
             },
             createdAt: 1,
             updatedAt: 1,
-        }],
-    } as const;
+        })],
+    };
 }
 
 /**
@@ -575,17 +580,16 @@ export function createSupportedClaudeProjection(params: Readonly<{
 }
 
 /**
- * The `plugin:review-bot` Agent with its settings-backed carrier that a plugin
- * case adds to `createSupportedClaudeProjection`: the projection is the
- * only authority that proves which qualified contribution owns the
- * settings-backed plugin backend, and its `externalSessions` block is what
- * makes the real browse resolver pick that carrier over the bundled one.
+ * The qualified Review Bot Agent a plugin case adds to
+ * `createSupportedClaudeProjection`. The projection proves the contribution
+ * is installed, and its `externalSessions` block makes the real browse
+ * resolver pick that Agent over the bundled one.
  */
 export function createReviewBotPluginProjectionContributions() {
     return {
         additionalAgentsById: {
-            'plugin:review-bot': {
-                id: 'plugin:review-bot',
+            'acme.review-bot/review-bot': {
+                id: 'acme.review-bot/review-bot',
                 title: 'Review Bot Plugin',
                 subtitle: 'plugin provider',
                 channel: 'plugin',
@@ -625,7 +629,6 @@ export function createReviewBotPluginProjectionContributions() {
                         instances: [{ kind: 'default', constants: {} }],
                     }],
                 },
-                settingsBackendId: 'plugin-review-bot',
             },
         },
     } as const;

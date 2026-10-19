@@ -1,6 +1,11 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { RunnerArtifactAvailabilityProjectionV1Schema } from '@happier-dev/protocol/ephemeralRunner/runnerArtifact';
+import { EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1 } from '@happier-dev/protocol/ephemeralRunner/routes';
+import { machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
+import { MachinePoolListOutputV1Schema, MachinePoolResolveInputV1Schema, MachinePoolResolveResultV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import {
     renderHook,
     renderScreen,
@@ -13,7 +18,11 @@ import {
     enableReactActEnvironment,
     installPickerCommonModuleMocks,
 } from './testHarness';
-import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import type { HomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 enableReactActEnvironment();
 
@@ -23,47 +32,22 @@ const stackOptionsCapture = createStackOptionsCapture();
 const pickerRouteBoundary = vi.hoisted(() => ({
     params: { selectedId: 'm1' } as Record<string, string | undefined>,
 }));
-const temporaryComputerBoundary = vi.hoisted(() => ({
-    cancelPendingSelection: vi.fn(),
-    selectPool: vi.fn(),
-    selectionParams: null as null | Readonly<{
-        requestKey: string;
-        requestKeyAlreadyConsumed?: boolean;
-    }>,
-}));
-const machinePickerDataBoundary = vi.hoisted(() => ({
-    machineGroups: [] as Array<{
-        serverId: string;
-        serverName: string;
-        loading: boolean;
-        signedOut: boolean;
-        error?: boolean;
-        machines: never[];
-    }>,
-    poolGroups: [] as Array<{
-        serverId: string;
-        accountId: string | null;
-        serverName: string;
-        status: 'idle' | 'loading' | 'error';
-        projectionReady: boolean;
-        pools: Array<{
-            pool: {
-                id: string;
-                name: string;
-                description: null;
-                revision: number;
-                createdAt: number;
-                updatedAt: number;
-                members: never[];
-            };
-            availability: { state: 'unknown' };
-        }>;
-    }>,
-}));
-const machineRefreshBoundary = vi.hoisted(() => ({
-    refreshMachinesThrottled: vi.fn(async () => undefined),
-    invalidateMachinePoolProjection: vi.fn(async () => undefined),
-}));
+const HOME_ID = 'srv_machine_presentation';
+const HOME_URL = 'https://machine-presentation.example.test';
+const ACCOUNT_ID = 'machine-presentation-account';
+const POOL_ID = '3a948f0c-bc30-491c-b764-37f0e6744d1f';
+const poolList = MachinePoolListOutputV1Schema.parse({ pools: [{
+    pool: {
+        id: POOL_ID, name: 'Development', description: null,
+        revision: 1, createdAt: 1, updatedAt: 1,
+        members: [{ machineId: 'machine-from-pool', priorityTier: 0, enabled: true, state: 'connected' }],
+    },
+    availability: { state: 'known', connectedCount: 1, enabledCount: 1 },
+}] });
+let homes: HomeGovernanceHarness;
+let homeRecordId: string;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let waitForHomeGovernance: typeof import('@/dev/testkit/harness/homeGovernanceHarness').waitForHomeGovernance;
 
 installPickerCommonModuleMocks({
     reactNative: async () =>
@@ -91,116 +75,21 @@ installPickerCommonModuleMocks({
             useLocalSearchParams: () => pickerRouteBoundary.params,
         };
     },
-    storage: async (importOriginal) =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useAllMachines: () => [],
-                useAllSessionListRenderables: () => [],
-                useSetting: createUseSettingMock({ fallback: () => false }),
-                useSettingMutable: createUseSettingMutableMockFromReader(() => [[], vi.fn()]),
-            },
-        }),
 });
 
-vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
-    MachineSelector: () => null,
-}));
-
-vi.mock('@/utils/sessions/recentMachines', () => ({
-    getRecentMachinesFromSessions: () => [],
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: { refreshMachinesThrottled: machineRefreshBoundary.refreshMachinesThrottled },
-}));
-
-vi.mock('@/sync/engine/machines/machinePoolProjection', () => ({
-    invalidateMachinePoolProjection: machineRefreshBoundary.invalidateMachinePoolProjection,
-}));
-
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    prefetchMachineCapabilities: vi.fn(),
-}));
-
-vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
-    invalidateMachineEnvPresence: vi.fn(),
-}));
-
-vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState', () => ({
-    useNewSessionServerTargetState: () => ({
-        allowedTargetServerIds: ['server-a'],
-        resolvedSettingsTarget: { allowedServerIds: ['server-a'] },
-        targetServerId: 'server-a',
-        targetServerProfile: {
-            id: 'server-a',
-            name: 'Home A',
-            serverUrl: 'https://home-a.example.test',
-            homeConnectionDescriptor: { homeServerIdentityId: 'home-a' },
-        },
-    }),
-}));
-
-vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionActiveServerSource', () => ({
-    useNewSessionActiveServerSource: () => ({
-        activeServerId: 'server-a',
-        serverProfiles: [],
-        serverProfilesSignature: 'server-a',
-    }),
-}));
-
-vi.mock('@/components/sessions/new/hooks/machines/useServerScopedMachineOptions', () => ({
-    useServerScopedMachineOptions: () => machinePickerDataBoundary.machineGroups,
-}));
-
-vi.mock('@/components/sessions/new/hooks/machines/useMachinePoolGroups', () => ({
-    useMachinePoolGroups: () => machinePickerDataBoundary.poolGroups,
-}));
-
-vi.mock('@/components/sessions/new/hooks/machines/useMachinePoolSelection', () => ({
-    useMachinePoolSelection: (params: Readonly<{
-        requestKey: string;
-        requestKeyAlreadyConsumed?: boolean;
-    }>) => {
-        temporaryComputerBoundary.selectionParams = params;
-        return ({
-            status: { kind: 'idle' },
-            selectPool: temporaryComputerBoundary.selectPool,
-            cancelPendingSelection: temporaryComputerBoundary.cancelPendingSelection,
-        });
-    },
-}));
-
-vi.mock('@/components/sessions/new/hooks/useTemporaryComputerAvailability', () => ({
-    resolveTemporaryComputerDestinationProjectionState: () => 'available',
-    shouldOfferTemporaryComputerDestination: () => true,
-    useTemporaryComputerAvailability: () => ({
-        status: 'available',
-        artifacts: [{
-            identity: {
-                product: 'happier-runner',
-                version: '1.0.0-test',
-                target: 'linux-x64',
-                sha256: 'a'.repeat(64),
-            },
-            channel: 'test',
-            url: 'https://example.test/runner',
-            checksumsUrl: 'https://example.test/checksums',
-            checksumsSignatureUrl: 'https://example.test/checksums.sig',
-            sizeBytes: 123,
-            entries: [{ path: 'happier-runner', kind: 'file', sizeBytes: 100, mode: 0o755 }],
-        }],
-        client: {},
-        retry: vi.fn(),
-    }),
-}));
-
 describe('MachinePickerScreen (iOS presentation)', () => {
-    afterEach(() => {
-        standardCleanup();
+    beforeAll(async () => {
+        await initializeRealAppRuntimeForTests();
     });
 
-    beforeEach(() => {
+    afterEach(async () => {
+        standardCleanup();
+        await connection?.dispose();
+        connection = undefined;
+        await homes.reset();
+    });
+
+    beforeEach(async () => {
         pickerRouteBoundary.params = { selectedId: 'm1' };
         stackOptionsCapture.reset();
         routerMock.push.mockClear();
@@ -210,13 +99,49 @@ describe('MachinePickerScreen (iOS presentation)', () => {
         navigationMock.dispatch.mockClear();
         navigationMock.goBack.mockClear();
         navigationMock.setParams.mockClear();
-        temporaryComputerBoundary.cancelPendingSelection.mockClear();
-        temporaryComputerBoundary.selectPool.mockClear();
-        temporaryComputerBoundary.selectionParams = null;
-        machinePickerDataBoundary.machineGroups = [];
-        machinePickerDataBoundary.poolGroups = [];
-        machineRefreshBoundary.refreshMachinesThrottled.mockClear();
-        machineRefreshBoundary.invalidateMachinePoolProjection.mockClear();
+        const homeHarness = await import(
+            '@/dev/testkit/harness/homeGovernanceHarness'
+        );
+        waitForHomeGovernance = homeHarness.waitForHomeGovernance;
+        homes = homeHarness.createHomeGovernanceHarness();
+        homeHarness.installHomeGovernanceBoundaries(homes);
+        await homes.reset();
+        homeRecordId = await homes.addHome({ name: 'Home A', serverUrl: HOME_URL,
+            serverIdentityId: HOME_ID, accountId: ACCOUNT_ID, machinePoolsEnabled: true });
+        const { HomeConnectionDescriptorV1Schema } = await import('@happier-dev/protocol/auth/accountDirectory');
+        const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
+        await adoptHomeProfile({
+            descriptor: HomeConnectionDescriptorV1Schema.parse({
+                v: 1, homeServerIdentityId: HOME_ID, canonicalServerUrl: HOME_URL,
+                revision: 1, endpoints: [{ kind: 'https', url: HOME_URL }],
+            }),
+            source: 'manual', suggestedName: 'Home A',
+        });
+        const features = createRootLayoutFeaturesResponse({ capabilities: {
+            serverIdentity: { serverIdentityId: HOME_ID },
+        } });
+        for (const feature of ['sessions', 'machines', 'sessions.drafts', 'sessions.ephemeralRunner', 'machines.pools'] as const) {
+            if (!tryWriteServerEnabledBitInPlace(features, feature, true)) {
+                throw new Error(`Could not seed the Home feature ${feature}`);
+            }
+        }
+        homes.answer(homeRecordId, '/v1/features', { body: features });
+        homes.answer(homeRecordId, '/v1/features/authenticated', { body: features });
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        primeServerFeaturesSnapshot({ serverId: HOME_ID, snapshot: { status: 'ready', features } });
+        homes.answer(homeRecordId, '/v1/machines', { body: [] });
+        homes.answer(homeRecordId, machinePoolActionEndpointPathV1('machines.pools.list'), { body: poolList });
+        homes.answer(homeRecordId, EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1, {
+            body: RunnerArtifactAvailabilityProjectionV1Schema.parse({ status: 'available', artifacts: [{
+                identity: { product: 'happier-runner', version: '1.0.0-test', target: 'linux-x64', sha256: 'a'.repeat(64) },
+                channel: 'test', url: 'https://example.test/runner',
+                checksumsUrl: 'https://example.test/checksums', checksumsSignatureUrl: 'https://example.test/checksums.sig',
+                sizeBytes: 123, entries: [{ path: 'happier-runner', kind: 'file', sizeBytes: 100, mode: 0o755 }],
+            }] }),
+        });
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        connection = await restoreServerAccountForTest({ serverUrl: HOME_URL,
+            serverIdentityId: HOME_ID, accountId: ACCOUNT_ID, request: homes.request });
     });
 
     it('presents as containedModal on iOS and provides an explicit header back button', async () => {
@@ -252,23 +177,29 @@ describe('MachinePickerScreen (iOS presentation)', () => {
             prompt: 'Keep this draft',
             executionTarget: {
                 kind: 'temporary_computer',
-                serverId: 'server-a',
+                serverId: HOME_ID,
                 artifactTarget: 'linux-x64',
                 workspace: { kind: 'choose_on_endpoint' },
             },
         });
-        pickerRouteBoundary.params = { dataId, spawnServerId: 'server-a' };
+        pickerRouteBoundary.params = { dataId, spawnServerId: HOME_ID };
 
         const { useMachinePickerScreenModel } = await import(
             '@/components/sessions/new/hooks/machines/useMachinePickerScreenModel'
         );
         const hook = await renderHook(() => useMachinePickerScreenModel());
+        await waitForHomeGovernance(() => {
+            expect(hook.getCurrent().content.props.temporaryComputers).toEqual([
+                expect.objectContaining({ artifactTarget: 'linux-x64' }),
+            ]);
+            expect(hook.getCurrent().content.props.temporaryComputers[0]?.disabled).not.toBe(true);
+        });
         const content = hook.getCurrent().content;
         const temporaryComputers = content.props.temporaryComputers;
 
         expect(temporaryComputers).toEqual([
             expect.objectContaining({
-                serverId: 'server-a',
+                serverId: HOME_ID,
                 artifactTarget: 'linux-x64',
                 selected: true,
                 workspace: { kind: 'choose_on_endpoint' },
@@ -289,7 +220,7 @@ describe('MachinePickerScreen (iOS presentation)', () => {
             pathname: '/new',
             params: expect.objectContaining({
                 dataId: expect.any(String),
-                spawnServerId: 'server-a',
+                spawnServerId: HOME_ID,
             }),
         });
         const returnedRoute = routerMock.replace.mock.calls.at(-1)?.[0];
@@ -306,9 +237,12 @@ describe('MachinePickerScreen (iOS presentation)', () => {
         }
         expect(peekTempData(returnedDataId)).toEqual({
             prompt: 'Keep this draft',
+            machineId: undefined,
+            managedMachineSelection: null,
+            temporaryComputerActivationRef: null,
             executionTarget: {
                 kind: 'temporary_computer',
-                serverId: 'server-a',
+                serverId: HOME_ID,
                 artifactTarget: 'linux-x64',
                 workspace: { kind: 'choose_on_endpoint' },
             },
@@ -324,19 +258,21 @@ describe('MachinePickerScreen (iOS presentation)', () => {
         const dataId = storeTempData({
             executionTarget: {
                 kind: 'temporary_computer',
-                serverId: 'server-a',
+                serverId: HOME_ID,
                 artifactTarget: 'linux-x64',
                 workspace: { kind: 'choose_on_endpoint' },
             },
         });
-        pickerRouteBoundary.params = { dataId, selectedId: 'machine-explicit', spawnServerId: 'server-a' };
+        pickerRouteBoundary.params = { dataId, selectedId: 'machine-explicit', spawnServerId: HOME_ID };
 
         const { useMachinePickerScreenModel } = await import(
             '@/components/sessions/new/hooks/machines/useMachinePickerScreenModel'
         );
         const hook = await renderHook(() => useMachinePickerScreenModel());
 
-        expect(hook.getCurrent().content.props.temporaryComputers[0]?.selected).toBe(false);
+        await waitForHomeGovernance(() => expect(hook.getCurrent().content.props.temporaryComputers).toEqual([
+            expect.objectContaining({ artifactTarget: 'linux-x64', selected: false }),
+        ]));
 
         await hook.unmount();
         clearTempData();
@@ -346,69 +282,73 @@ describe('MachinePickerScreen (iOS presentation)', () => {
         pickerRouteBoundary.params = {
             draftId: 'stable-draft',
             selectedId: 'machine-from-pool',
-            machinePoolId: 'pool-a',
-            spawnServerId: 'server-a',
+            machinePoolId: POOL_ID,
+            spawnServerId: HOME_ID,
         };
+        const resolvePath = machinePoolActionEndpointPathV1('machines.pools.resolve');
+        homes.answer(homeRecordId, resolvePath, { body: MachinePoolResolveResultV1Schema.parse({
+            kind: 'resolved', poolId: POOL_ID, machineId: 'machine-new-choice', priorityTier: 0,
+        }) });
 
         const { useMachinePickerScreenModel } = await import(
             '@/components/sessions/new/hooks/machines/useMachinePickerScreenModel'
         );
         const hook = await renderHook(() => useMachinePickerScreenModel());
 
-        expect(temporaryComputerBoundary.selectionParams).toMatchObject({
-            requestKey: 'stable-draft',
-            requestKeyAlreadyConsumed: true,
+        await waitForHomeGovernance(() => expect(hook.getCurrent().content.props.poolGroups[0]).toMatchObject({
+            serverId: HOME_ID, accountId: ACCOUNT_ID, projectionReady: true,
+        }));
+        const group = hook.getCurrent().content.props.poolGroups[0];
+        await act(async () => {
+            await hook.getCurrent().content.props.onSelectPool({ serverId: group.serverId,
+                accountId: group.accountId, pool: group.pools[0] });
         });
+        const resolveRequest = homes.requestsFor(resolvePath).at(-1);
+        const input = MachinePoolResolveInputV1Schema.parse(resolveRequest?.input);
+        expect(input.poolId).toBe(POOL_ID);
+        expect(input.requestKey).toBeTruthy();
+        expect(input.requestKey).not.toBe('stable-draft');
+        expect(routerMock.replace).toHaveBeenCalledWith({ pathname: '/new', params: expect.objectContaining({
+            machineId: 'machine-new-choice', machinePoolId: POOL_ID, spawnServerId: HOME_ID,
+        }) });
+        expect(resolveRequest?.serverId).toBe(homeRecordId);
 
         await hook.unmount();
     });
 
-    it('routes a failed Home retry through the existing Machine refresh owner only', async () => {
-        machinePickerDataBoundary.machineGroups = [{
-            serverId: 'server-a',
-            serverName: 'Home A',
-            loading: false,
-            signedOut: false,
-            error: true,
-            machines: [],
-        }];
-        machinePickerDataBoundary.poolGroups = [{
-            serverId: 'server-a',
-            accountId: 'account-a',
-            serverName: 'Home A',
-            status: 'idle',
-            projectionReady: true,
-            pools: [{
-                pool: {
-                    id: '3a948f0c-bc30-491c-b764-37f0e6744d1f',
-                    name: 'Development',
-                    description: null,
-                    revision: 1,
-                    createdAt: 1,
-                    updatedAt: 1,
-                    members: [],
-                },
-                availability: { state: 'unknown' },
-            }],
-        }];
+    it('recovers a failed Home Machine census without refreshing its retained Pool projection', async () => {
+        const { sync } = await import('@/sync/sync');
+        const { storage } = await import('@/sync/domains/state/storage');
+        pickerRouteBoundary.params = { spawnServerId: HOME_ID };
+        const machineRows = [createPlainMachineRowFixture({ id: 'machine-recovered', accountId: ACCOUNT_ID })];
+        homes.answer(homeRecordId, '/v1/machines', { body: machineRows });
+        await sync.refreshMachinesThrottled({ staleMs: 0, force: true });
+        homes.answer(homeRecordId, '/v1/machines', { status: 503, body: { error: 'unavailable' } });
+        await sync.refreshMachinesThrottled({ staleMs: 0, force: true }).catch(() => undefined);
 
-        const { useMachinePickerScreenModel } = await import(
-            '@/components/sessions/new/hooks/machines/useMachinePickerScreenModel'
-        );
-        const hook = await renderHook(() => useMachinePickerScreenModel());
-        const screen = await renderScreen(hook.getCurrent().content);
-
-        // Ignore the route's normal initial Machine refresh. The recovery action below is the
-        // behavior under test and must not be confused with Pool-projection recovery.
-        machineRefreshBoundary.refreshMachinesThrottled.mockClear();
-        machineRefreshBoundary.invalidateMachinePoolProjection.mockClear();
-
-        await screen.pressByTestIdAsync('new-session-machine-pool-refresh:server-a');
-        await vi.waitFor(() => {
-            expect(machineRefreshBoundary.refreshMachinesThrottled).toHaveBeenCalledOnce();
+        const MachinePickerScreen = (await import('@/app/(app)/new/pick/machine')).default;
+        const screen = await renderScreen(React.createElement(MachinePickerScreen));
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().machineListStatusByServerId[HOME_ID]).toBe('error');
+            expect(storage.getState().machinePoolListByServerId[HOME_ID]).toEqual(poolList.pools);
+            expect(storage.getState().machinePoolListStatusByServerId[HOME_ID]).toBe('idle');
+            expect(screen.findByTestId(`new-session-machine-pool-refresh:${HOME_ID}`)).toBeTruthy();
         });
-        expect(machineRefreshBoundary.invalidateMachinePoolProjection).not.toHaveBeenCalled();
+        // The real Home answers differently after recovery; keep its hydrated
+        // Pool list as the continuity baseline instead of observing internal calls.
+        const retainedPools = storage.getState().machinePoolListByServerId[HOME_ID];
+        const listPath = machinePoolActionEndpointPathV1('machines.pools.list');
+        const poolReadsBeforeRetry = homes.requestsFor(listPath).length;
+        homes.answer(homeRecordId, '/v1/machines', { body: machineRows });
 
-        await hook.unmount();
+        await screen.pressByTestIdAsync(`new-session-machine-pool-refresh:${HOME_ID}`);
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().machineListStatusByServerId[HOME_ID]).toBe('idle');
+            expect(storage.getState().machineListByServerId[HOME_ID]).toEqual([
+                expect.objectContaining({ id: 'machine-recovered', availability: { kind: 'available' } }),
+            ]);
+        });
+        expect(storage.getState().machinePoolListByServerId[HOME_ID]).toBe(retainedPools);
+        expect(homes.requestsFor(listPath)).toHaveLength(poolReadsBeforeRetry);
     });
 });
