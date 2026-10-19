@@ -74,7 +74,16 @@ test('checked-in voice fixtures match their manifest and PCM contract', async ()
       assert.match(fixture.provenance.sourceUrl ?? '', /^https:\/\//, `${fixture.id}: synthesis source URL required`);
       assert.ok(fixture.provenance.sourceVersion, `${fixture.id}: pinned synthesis version required`);
       assert.match(fixture.provenance.sourceArchiveSha256 ?? '', /^[a-f0-9]{64}$/, `${fixture.id}: synthesis archive digest required`);
-      assert.ok(fixture.provenance.engineLicense, `${fixture.id}: synthesis engine license required`);
+      if (fixture.provenance.speechEngine === 'human recording') {
+        assert.match(fixture.provenance.sourceFileSha256, /^[a-f0-9]{64}$/, `${fixture.id}: original recording digest required`);
+        assert.ok(fixture.provenance.attribution, `${fixture.id}: recording attribution required`);
+        assert.equal(fixture.provenance.license, 'CC-BY-4.0');
+        assert.equal(fixture.expectedTranscript, fixture.sourceText, `${fixture.id}: complete reference transcript required`);
+        assert.ok(fixture.acceptanceGates.includes('recognition-accuracy'));
+      } else {
+        assert.ok(fixture.provenance.engineLicense, `${fixture.id}: synthesis engine license required`);
+        assert.ok(!fixture.acceptanceGates?.includes('recognition-accuracy'), `${fixture.id}: synthetic speech cannot certify acoustic accuracy`);
+      }
       assert.match(fixture.provenance.outputLicenseEvidence ?? '', /^https:\/\//, `${fixture.id}: output license evidence required`);
     } else {
       assert.ok(fixture.provenance.algorithmVersion, `${fixture.id}: deterministic algorithm version required`);
@@ -143,6 +152,7 @@ test('checked-in voice fixtures match their manifest and PCM contract', async ()
     'silence-5s',
     'low-noise',
     'transient-cough-like',
+    'natural-librispeech-61-70968-0000-16k',
   ]) {
     assert.ok(ids.has(requiredId), `missing required fixture ${requiredId}`);
   }
