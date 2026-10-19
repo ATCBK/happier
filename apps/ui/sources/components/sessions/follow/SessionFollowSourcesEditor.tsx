@@ -2,14 +2,18 @@ import * as React from 'react';
 import { editFollowPolicyV1, projectFollowPolicyEditorV1 } from '@happier-dev/protocol/sessions/follow/followPolicyEditorV1';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import type { SessionFollowSourceKeyPreparationWaitingReasonV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
-import type { SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import type { FollowSourceRelationV1, SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
+import { useDiscussionTitleProjections } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
+import { useWorkflowRunRows } from '@/sync/store/hooks';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
@@ -67,8 +71,35 @@ function sourcePreparationKey(preparationTargetKey: string, sourceSessionId: str
 
 type SessionFollowSourceMutationRequest = Readonly<{
     targetKey: string;
-    sourceSessionId: string;
+    sourceKey: string;
 }>;
+
+/**
+ * One row's identity across every source kind: a Session source keeps its id (the phone route's `source` and the
+ * row test ids), the other kinds (Discussion, Execution Run, Workflow Run) a kind-qualified key of their exact ref.
+ */
+export function followSourceKey(source: FollowSourceRefV1): string {
+    switch (source.kind) {
+        case 'session': return source.sessionId;
+        case 'discussion': return `discussion:${source.discussionId}`;
+        case 'execution_run': return `execution_run:${source.sessionId}:${source.runId}`;
+        case 'workflow_run': return `workflow_run:${source.runId}`;
+        case 'rule': return `rule:${source.ruleId}`;
+    }
+}
+
+function readFollowSourceRef(source: FollowSourceRelationV1): FollowSourceRefV1 {
+    return 'sourceSessionId' in source ? { kind: 'session', sessionId: source.sourceSessionId } : source.source;
+}
+
+/** A Session source is addressed by its id; every other kind by its exact ref. */
+function sourcePair(source: FollowSourceRefV1) {
+    return source.kind === 'session' ? { sourceSessionId: source.sessionId } : { source };
+}
+
+function isSessionSource(source: FollowSourceRelationV1): source is SessionFollowSourceV1 {
+    return 'sourceSessionId' in source;
+}
 
 /**
  * The exact operation a failed Stop-following or policy change owes: reloading the list is not a
@@ -76,8 +107,8 @@ type SessionFollowSourceMutationRequest = Readonly<{
  * is still active and still supplying updates.
  */
 type SessionFollowSourceIntent =
-    | Readonly<{ kind: 'remove'; sourceSessionId: string }>
-    | Readonly<{ kind: 'policy'; sourceSessionId: string; policy: FollowPolicyV1 }>;
+    | Readonly<{ kind: 'remove'; source: FollowSourceRefV1 }>
+    | Readonly<{ kind: 'policy'; source: FollowSourceRefV1; policy: FollowPolicyV1 }>;
 
 function reduceSourceMutation(
     state: SessionFollowMutationIntentState<SessionFollowSourceIntent>,
@@ -129,7 +160,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     serverId: string | null;
     destinationMachineId: string | null;
     page?: Readonly<{
-        sourceSessionId: string;
+        /** The source's row key (`followSourceKey`): a Session source's id, or another kind's qualified key. */
+        sourceKey: string;
         frame(parts: FollowSourcePanelParts): React.ReactNode;
         onClose(): void;
     }>;
@@ -151,7 +183,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const { binding } = useServerCredentialAccountScopeBinding(currentScope ? null : props.serverId);
     const accountScope = currentScope ?? (binding?.isCurrent() ? binding.scope : null);
     const reachabilityRevision = useMachineReachabilityRevision();
-    const [sources, setSources] = React.useState<readonly SessionFollowSourceV1[]>([]);
+    const [sources, setSources] = React.useState<readonly FollowSourceRelationV1[]>([]);
     const [loading, setLoading] = React.useState(false);
     const [savingId, setSavingId] = React.useState<string | null>(null);
     const [openSourceId, setOpenSourceId] = React.useState<string | null>(null);
@@ -181,8 +213,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         const result = await listSessionFollowSources({ serverId, sessionId: props.destination.id });
         if (targetKeyRef.current !== targetKey) return;
         if (result.kind === 'ok') {
-            // This list draws Session sources; the Home's other source kinds share the read and are not rows here yet.
-            const sessionSources = result.value.sources.filter((source): source is SessionFollowSourceV1 => 'sourceSessionId' in source);
+            // Every source kind is a row; source-key preparation and wake filtering concern Session sources only.
+            const sessionSources = result.value.sources.filter(isSessionSource);
             const committedSourceIds = new Set(sessionSources.map((source) => source.sourceSessionId));
             const previousCommittedSourceIds = committedSourceIdsRef.current;
             for (const sourceSessionId of new Set([
@@ -207,7 +239,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             const committedPreparationKeys = new Set([...committedSourceIds].map((sourceSessionId) => (
                 sourcePreparationKey(preparationTargetKeyRef.current, sourceSessionId)
             )));
-            setSources(sessionSources);
+            setSources(result.value.sources);
             setPreparedSourceKeys((current) => {
                 const next = new Set([...current].filter((key) => committedPreparationKeys.has(key)));
                 return next.size === current.size ? current : next;
@@ -300,17 +332,16 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         });
     }, [enabled, props.destination.id, props.serverId, refresh]);
 
-    const remove = React.useCallback(async (sourceSessionId: string) => {
+    const remove = React.useCallback(async (source: FollowSourceRefV1) => {
         if (!online || !props.serverId || savingId) return;
         const request: SessionFollowSourceMutationRequest = {
             targetKey: preparationTargetKey,
-            sourceSessionId,
+            sourceKey: followSourceKey(source),
         };
         activeMutationRequestRef.current = request;
-        setSavingId(sourceSessionId);
-        dispatchMutation({ kind: 'started', intent: { kind: 'remove', sourceSessionId } });
-        const input = { serverId: props.serverId, destinationSessionId: props.destination.id, sourceSessionId };
-        const result = await removeSessionFollowSource(input);
+        setSavingId(request.sourceKey);
+        dispatchMutation({ kind: 'started', intent: { kind: 'remove', source } });
+        const result = await removeSessionFollowSource({ serverId: props.serverId, destinationSessionId: props.destination.id, ...sourcePair(source) });
         if (
             preparationTargetKeyRef.current !== request.targetKey
             || activeMutationRequestRef.current !== request
@@ -332,19 +363,19 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         setSavingId(null);
     }, [online, preparationTargetKey, props.destination.id, props.page, props.serverId, refresh, savingId]);
 
-    const updatePolicy = React.useCallback(async (sourceSessionId: string, policy: FollowPolicyV1) => {
+    const updatePolicy = React.useCallback(async (source: FollowSourceRefV1, policy: FollowPolicyV1) => {
         if (!online || !props.serverId || savingId) return;
         const request: SessionFollowSourceMutationRequest = {
             targetKey: preparationTargetKey,
-            sourceSessionId,
+            sourceKey: followSourceKey(source),
         };
         activeMutationRequestRef.current = request;
-        setSavingId(sourceSessionId);
-        dispatchMutation({ kind: 'started', intent: { kind: 'policy', sourceSessionId, policy } });
+        setSavingId(request.sourceKey);
+        dispatchMutation({ kind: 'started', intent: { kind: 'policy', source, policy } });
         const result = await setSessionFollowSource({
             serverId: props.serverId,
             destinationSessionId: props.destination.id,
-            sourceSessionId,
+            ...sourcePair(source),
             policy,
         });
         if (
@@ -435,7 +466,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         destinationMachine?.active === true ? 'active' : 'inactive',
         String(destinationMachine?.activeAt ?? ''),
         String(destinationMachine?.operationProtocolCapabilitiesRevision ?? ''),
-        ...sources.map((source) => {
+        ...sources.filter(isSessionSource).map((source) => {
             const session = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
             return `${source.sourceSessionId}:${source.deliveryState}:${session?.encryptionMode ?? 'unknown'}`;
         }),
@@ -445,7 +476,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         if (lastPreparationReadinessSignatureRef.current === preparationReadinessSignature) return;
         lastPreparationReadinessSignatureRef.current = preparationReadinessSignature;
         if (!online || !destinationReachable) return;
-        for (const source of sources) {
+        for (const source of sources.filter(isSessionSource)) {
             const sourceSession = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
             const runtimeState = resolveSessionFollowSourceRuntimeState({
                 accountScope,
@@ -462,6 +493,17 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             }
         }
     }, [destinationMachine, destinationReachable, homeSessions, online, preparationReadinessSignature, preparationTargetKey, prepareSource, preparedSourceKeys, preparingFlightKeys, sources, accountScope, nowMs, reachabilityRevision]);
+
+    // Non-Session sources are named by their own owners' projections: a Discussion's title, a Workflow Run's
+    // Account-private name, and an Execution Run by the Session it runs in.
+    const discussionAddresses = React.useMemo(() => sources.flatMap((source) => (
+        !isSessionSource(source) && source.source.kind === 'discussion' ? [{ serverId, discussionId: source.source.discussionId }] : []
+    )), [serverId, sources]);
+    const discussionTitles = useDiscussionTitleProjections(discussionAddresses);
+    const workflowRunIds = React.useMemo(() => sources.flatMap((source) => (
+        !isSessionSource(source) && source.source.kind === 'workflow_run' ? [source.source.runId] : []
+    )), [sources]);
+    const workflowRuns = useWorkflowRunRows(workflowRunIds, accountScope);
 
     if (!enabled || !serverId) return null;
 
@@ -497,13 +539,43 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         await refresh();
     });
 
-    const sourceIdentity = (source: SessionFollowSourceV1) => {
-        const session = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
-        return { session, sourceTitle: session ? getSessionName(session, serverId) : source.sourceSessionId };
+    const sessionTitle = (sessionId: string) => {
+        const session = homeSessions.find((candidate) => candidate.id === sessionId);
+        return { session, title: session ? getSessionName(session, serverId) : sessionId };
+    };
+    const sourceIdentity = (source: FollowSourceRelationV1): Readonly<{
+        key: string; ref: FollowSourceRefV1; sourceTitle: string; mark: React.ReactNode; icon: IconName;
+        session: ReturnType<typeof sessionTitle>['session'];
+    }> => {
+        const ref = readFollowSourceRef(source);
+        const key = followSourceKey(ref);
+        const glyph = (name: IconName) => <Icon name={name} size={18} color={theme.colors.text.secondary} />;
+        switch (ref.kind) {
+            case 'session': {
+                const { session, title } = sessionTitle(ref.sessionId);
+                return { key, ref, session, sourceTitle: title, icon: 'stack',
+                    mark: <FollowSessionMark metadata={session?.metadata} serverId={serverId} /> };
+            }
+            case 'discussion': {
+                const index = discussionAddresses.findIndex((address) => address.discussionId === ref.discussionId);
+                return { key, ref, session: undefined, icon: 'chats-circle', mark: glyph('chats-circle'),
+                    sourceTitle: discussionTitles[index] ?? t('session.follow.sources.kindDiscussion') };
+            }
+            case 'execution_run':
+                return { key, ref, session: undefined, icon: 'play', mark: glyph('play'),
+                    sourceTitle: t('session.follow.sources.executionRun', { title: sessionTitle(ref.sessionId).title }) };
+            case 'workflow_run': {
+                const run = workflowRuns.find((row) => row.id === ref.runId);
+                return { key, ref, session: undefined, icon: 'tree-structure', mark: glyph('tree-structure'),
+                    sourceTitle: run ? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(run.metadata)) : t('session.follow.sources.kindWorkflowRun') };
+            }
+            case 'rule':
+                return { key, ref, session: undefined, icon: 'stack', mark: glyph('stack'), sourceTitle: ref.ruleId };
+        }
     };
     const policyDisabled = !online || savingId !== null;
     // A panel is open while its source is still listed; a mutation error belongs to that panel then, not to the list.
-    const panelOpen = anchored && sources.some((source) => source.sourceSessionId === openSourceId);
+    const panelOpen = anchored && sources.some((source) => followSourceKey(readFollowSourceRef(source)) === openSourceId);
     const closePanel = () => {
         setOpenSourceId(null);
         props.page?.onClose();
@@ -512,8 +584,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const retryFailed = () => {
         const intent = mutation.failed;
         if (!intent) { void refresh(); return; }
-        if (intent.kind === 'remove') { void remove(intent.sourceSessionId); return; }
-        void updatePolicy(intent.sourceSessionId, intent.policy);
+        if (intent.kind === 'remove') { void remove(intent.source); return; }
+        void updatePolicy(intent.source, intent.policy);
     };
     const errorRow = (look: typeof rowLook | Record<string, never>) => <Item
         {...look}
@@ -525,58 +597,101 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     />;
 
     // One source's panel (lab P2-S): who it hears from and how much, Stop updates quiet at the left, Done.
-    const panelPartsFor = (source: SessionFollowSourceV1): FollowSourcePanelParts => {
-        const { session, sourceTitle } = sourceIdentity(source);
+    const panelPartsFor = (source: FollowSourceRelationV1): FollowSourcePanelParts => {
+        const { key, ref, sourceTitle, mark } = sourceIdentity(source);
         const draft = mutation.pending ?? mutation.failed;
-        const policy = draft?.kind === 'policy' && draft.sourceSessionId === source.sourceSessionId
+        const policy = draft?.kind === 'policy' && followSourceKey(draft.source) === key
             ? draft.policy : source.policy;
         return {
             title: t('session.follow.sources.row', { title: sourceTitle }),
             subtitle: t('session.follow.sources.panelSubtitle'),
-            mark: <FollowSessionMark metadata={session?.metadata} serverId={serverId} />,
+            mark,
             body: <>
                 {mutation.error !== null ? <ItemGroup>{errorRow({})}</ItemGroup> : null}
                 <FollowPolicySection>
                     <FollowPolicyEditorBinding
-                        testID={`session-follow-source-${source.sourceSessionId}-policy`}
+                        testID={`session-follow-source-${key}-policy`}
                         receiver="session"
                         model={projectFollowPolicyEditorV1(policy)}
                         disabled={policyDisabled}
-                        onEditPolicy={(edit) => { void updatePolicy(source.sourceSessionId, editFollowPolicyV1(policy, edit)); }}
+                        onEditPolicy={(edit) => { void updatePolicy(ref, editFollowPolicyV1(policy, edit)); }}
                     />
                 </FollowPolicySection>
             </>,
             footer: <SectionButtonRow
-                trailing={<RoundButton testID={`session-follow-source-${source.sourceSessionId}-done`} title={t('common.done')} onPress={closePanel} />}
+                trailing={<RoundButton testID={`session-follow-source-${key}-done`} title={t('common.done')} onPress={closePanel} />}
             >
                 <RoundButton
-                    testID={`session-follow-source-${source.sourceSessionId}-remove`}
+                    testID={`session-follow-source-${key}-remove`}
                     display="inverted"
                     title={t('session.follow.sources.stop')}
                     accessibilityLabel={t('session.follow.sources.stopForSource', { title: sourceTitle })}
                     disabled={policyDisabled}
-                    onPress={() => { void remove(source.sourceSessionId); }}
+                    onPress={() => { void remove(ref); }}
                 />
             </SectionButtonRow>,
         };
     };
 
     // A wide window anchors the panel to the row; a phone pushes the page, which mounts this editor for that source.
-    const openSource = (sourceSessionId: string) => {
-        if (anchored) { setOpenSourceId(sourceSessionId); return; }
+    const openSource = (sourceKey: string) => {
+        if (anchored) { setOpenSourceId(sourceKey); return; }
         router.push(buildScopedSessionRouteHref({
             sessionId: props.destination.id,
             serverId,
             suffix: '/follow-source',
-            query: { source: sourceSessionId },
+            query: { source: sourceKey },
         }) as Href);
     };
 
     if (props.page) {
-        const source = sources.find((candidate) => candidate.sourceSessionId === props.page?.sourceSessionId);
-        if (!source) return loading ? <Item title={t('common.loading')} loading showChevron={false} mode="info" /> : null;
+        // A pair can carry a manager relation beside the ordinary follow; the panel edits the ordinary one.
+        const matching = sources.filter((candidate) => followSourceKey(readFollowSourceRef(candidate)) === props.page?.sourceKey);
+        const source = matching.find((candidate) => candidate.relation !== 'manager') ?? matching[0];
+        // While the list loads, the frame already stands (its header, a loading line, Done) so nothing jumps in later.
+        if (!source) return loading ? <>{props.page.frame({
+            title: t('session.follow.sources.title'),
+            subtitle: t('session.follow.sources.panelSubtitle'),
+            mark: null,
+            body: <Item title={t('common.loading')} loading showChevron={false} mode="info" />,
+            footer: <SectionButtonRow trailing={<RoundButton title={t('common.done')} onPress={closePanel} />}>{null}</SectionButtonRow>,
+        })}</> : null;
         return <>{props.page.frame(panelPartsFor(source))}</>;
     }
+
+    const levelText = (preset: FollowPolicyV1['preset']) => (pane ? describeSessionFollowLevel(preset) : t(`session.follow.policy.${preset}`));
+    // A Session source's line: its level once delivery is ready, else what its encrypted access is waiting for.
+    const sessionSourceStatus = (source: SessionFollowSourceV1) => {
+        const { session } = sessionTitle(source.sourceSessionId);
+        const runtimeState = resolveSessionFollowSourceRuntimeState({
+            accountScope,
+            nowMs,
+            deliveryState: source.deliveryState,
+            machine: destinationMachine,
+            sourceEncryptionMode: session?.encryptionMode ?? null,
+            preparedInUiLifetime: preparedSourceKeys.has(sourcePreparationKey(preparationTargetKey, source.sourceSessionId)),
+            hasPendingUpdates: source.hasPendingUpdates,
+        });
+        const preparationSourceKey = sourcePreparationKey(preparationTargetKey, source.sourceSessionId);
+        const currentFlightKey = `${preparationSourceKey}\u0000${edgeVersionBySourceIdRef.current.get(source.sourceSessionId) ?? 0}`;
+        const preparing = preparingFlightKeys.has(currentFlightKey);
+        const preparationWaitingReason = preparationWaitingReasons.get(preparationSourceKey);
+        const presentedRuntimeState = refineSessionFollowSourceStateWithPreparationReason(runtimeState, preparationWaitingReason);
+        // An unavailable SOURCE key can still become available (the Session is unlocked
+        // in this client), so it keeps its retry; only an unavailable Runner key cannot.
+        const canRetryPreparation = presentedRuntimeState === 'waiting_for_source_key'
+            || presentedRuntimeState === 'waiting_for_runtime'
+            || presentedRuntimeState === 'source_key_unavailable'
+            || preparationWaitingReason === 'runner_unreachable';
+        return {
+            text: presentedRuntimeState === 'eligible' ? levelText(source.policy.preset) : sessionFollowSourceRuntimeStateLabel(presentedRuntimeState),
+            preparing,
+            retry: canRetryPreparation ? {
+                disabled: !canPrepareSource || savingId !== null || preparing,
+                onPress: () => { void prepareSource(source.sourceSessionId, 'retry'); },
+            } : null,
+        };
+    };
 
     const sourceRows = <>
             {!online ? <Item
@@ -593,64 +708,49 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 ? <View style={styles.paneEmpty}><EmptyState testID="session-follow-sources-empty" layout="line" title={t('session.follow.sources.empty')} /></View>
                 : <Item {...rowLook} testID="session-follow-sources-empty" title={t('session.follow.sources.empty')} showChevron={false} mode="info" />) : null}
             {sources.map((source) => {
-                const { session, sourceTitle } = sourceIdentity(source);
-                const runtimeState = resolveSessionFollowSourceRuntimeState({
-                    accountScope,
-                    nowMs,
-                    deliveryState: source.deliveryState,
-                    machine: destinationMachine,
-                    sourceEncryptionMode: session?.encryptionMode ?? null,
-                    preparedInUiLifetime: preparedSourceKeys.has(sourcePreparationKey(preparationTargetKey, source.sourceSessionId)),
-                    hasPendingUpdates: source.hasPendingUpdates,
-                });
-                const preparationSourceKey = sourcePreparationKey(preparationTargetKey, source.sourceSessionId);
-                const currentFlightKey = `${preparationSourceKey}\u0000${edgeVersionBySourceIdRef.current.get(source.sourceSessionId) ?? 0}`;
-                const preparing = preparingFlightKeys.has(currentFlightKey);
-                const preparationWaitingReason = preparationWaitingReasons.get(preparationSourceKey);
-                const presentedRuntimeState = refineSessionFollowSourceStateWithPreparationReason(runtimeState, preparationWaitingReason);
-                // An unavailable SOURCE key can still become available (the Session is unlocked
-                // in this client), so it keeps its retry; only an unavailable Runner key cannot.
-                const canRetryPreparation = presentedRuntimeState === 'waiting_for_source_key'
-                    || presentedRuntimeState === 'waiting_for_runtime'
-                    || presentedRuntimeState === 'source_key_unavailable'
-                    || preparationWaitingReason === 'runner_unreachable';
-                const statusText = presentedRuntimeState === 'eligible'
-                    ? (pane ? describeSessionFollowLevel(source.policy.preset) : t(`session.follow.policy.${source.policy.preset}`))
-                    : sessionFollowSourceRuntimeStateLabel(presentedRuntimeState);
-                const open = panelOpen && openSourceId === source.sourceSessionId;
+                const { key, sourceTitle, icon } = sourceIdentity(source);
+                const status = isSessionSource(source) ? sessionSourceStatus(source) : {
+                    // Another source kind has no key to prepare: it is current, paused while archived, or gone.
+                    text: source.sourceAvailability === 'unavailable' ? t('session.follow.sources.sourceUnavailable')
+                        : source.deliveryState === 'paused_archived' ? sessionFollowSourceRuntimeStateLabel('paused_archived')
+                            : levelText(source.policy.preset),
+                    preparing: false,
+                    retry: null,
+                };
+                const open = panelOpen && openSourceId === key;
                 return <SourceRowAnchor
-                    key={source.sourceSessionId}
+                    key={key}
                     row={(triggerRef) => <Item
                         {...rowLook}
-                        {...(pane ? { icon: <Icon name="stack" size={18} color={theme.colors.text.secondary} /> } : {})}
+                        {...(pane ? { icon: <Icon name={icon} size={18} color={theme.colors.text.secondary} /> } : {})}
                         pressableRef={triggerRef}
-                        testID={`session-follow-source-${source.sourceSessionId}`}
+                        testID={`session-follow-source-${key}`}
                         accessibilityLabel={[
                             t('session.follow.sources.row', { title: sourceTitle }),
-                            statusText,
+                            status.text,
                         ].join('. ')}
                         title={pane ? sourceTitle : t('session.follow.sources.row', { title: sourceTitle })}
                         titleLines={0}
-                        subtitle={preparing ? t('session.follow.sources.sourceKeyPreparing') : statusText}
+                        subtitle={status.preparing ? t('session.follow.sources.sourceKeyPreparing') : status.text}
                         subtitleLines={0}
                         accessoryLayout="adaptive"
-                        onPress={() => openSource(source.sourceSessionId)}
+                        onPress={() => openSource(key)}
                         rightElementOutsidePressable
                         keepChevronWithRightElement
-                        rightElement={canRetryPreparation ? <RoundButton
-                            testID={`session-follow-source-${source.sourceSessionId}-retry`}
+                        rightElement={status.retry ? <RoundButton
+                            testID={`session-follow-source-${key}-retry`}
                             title={t('common.retry')}
                             size="small"
                             display="secondary"
                             accessibilityLabel={`${t('common.retry')}. ${t('session.follow.sources.row', { title: sourceTitle })}`}
-                            disabled={!canPrepareSource || savingId !== null || preparing}
-                            onPress={() => { void prepareSource(source.sourceSessionId, 'retry'); }}
+                            disabled={status.retry.disabled}
+                            onPress={status.retry.onPress}
                         /> : undefined}
                     />}
                     panel={open ? ({ anchorRef, triggerRef }) => {
                         const parts = panelPartsFor(source);
                         return <FollowEditorPanel anchorRef={anchorRef} focusReturnRef={triggerRef} onRequestClose={closePanel}
-                            testID={`session-follow-source-${source.sourceSessionId}-panel`}
+                            testID={`session-follow-source-${key}-panel`}
                             accessibilityLabel={parts.title}
                             title={parts.title} subtitle={parts.subtitle} mark={parts.mark} footer={parts.footer}>
                             {parts.body}
