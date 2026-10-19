@@ -130,6 +130,10 @@ second settings model or renderer.
 The normal current-source authoring loop, from this directory. Nothing here is packed, published, or
 installed from an archive.
 
+This plain-JavaScript author root selects `src/index.mjs` through `package.json.main`.
+Run the directory loop so managed dependency and settings UI preparation retain
+the real package root; the generated manifest needs no development entrypoint.
+
 ```bash
 hdev plugins dev                       # trusts this source root once, then watches it
 # or, with no present user to answer the trust prompt:

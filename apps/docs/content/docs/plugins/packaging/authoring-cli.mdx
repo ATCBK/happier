@@ -44,6 +44,14 @@ command for a package tree, not a prerequisite. Pass
 `--sdk-registry <origin>` only when the selected SDK must resolve from an
 approved registry origin.
 
+A project folder uses `src/index.ts` or `index.ts` (having both is an error).
+When neither exists, set `package.json`'s `main` to the author module: an exact
+`.ts`, `.mts`, `.js`, or `.mjs` file exporting `manifest` and `activate`. For
+example, a plain-JavaScript package can use `"main": "./src/index.mjs"`.
+The conventional TypeScript source takes precedence over a package's built
+`main`; conditional `exports` do not select the development entry. Folder
+development keeps dependency and UI-artifact preparation rooted at that package.
+
 Use `hdev plugins status [--json]` from another terminal to read the canonical
 roots, phases, current occurrences, UI digests, and bounded diagnostics.
 

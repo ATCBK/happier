@@ -23,7 +23,7 @@ import {
 } from '@/plugins/runtime/loadPluginModule';
 import type { PluginRelativeModuleResolution } from '@/plugins/runtime/activationSources';
 import type { DevelopmentPluginSourceCustody, PluginRuntimeSourceAuthority } from '@/plugins/runtime/sourceAuthority';
-import { preparePluginSingleFileDevelopmentLoad } from './hostSdkResolution';
+import { preparePluginSingleFileDevelopmentLoad, readPackageJsonRecord } from './hostSdkResolution';
 import {
   type PreparedPluginActivationGraph,
 } from '@/plugins/runtime/types';
@@ -164,11 +164,22 @@ export async function resolvePluginAuthorSourceEntrypoint(
       `Plugin author source is ambiguous because both src/index.ts and index.ts exist: ${packageRoot}`,
     );
   }
-  const entryPath = hasSrcEntry ? srcEntryPath : hasRootEntry ? rootEntryPath : null;
+  let entryPath = hasSrcEntry ? srcEntryPath : hasRootEntry ? rootEntryPath : null;
+  // Conventional author source wins over a package's built entry. JavaScript
+  // packages can select their source explicitly without a development manifest.
+  const packageJsonPath = join(packageRoot, 'package.json');
+  if (!entryPath && await regularFileExists(packageJsonPath)) {
+    const packageJson = readPackageJsonRecord(packageJsonPath, 'The plugin author package manifest');
+    if (typeof packageJson.main === 'string' && packageJson.main.trim()) {
+      const declaredEntryPath = resolve(packageRoot, packageJson.main.trim());
+      assertAuthorEntryExtension(declaredEntryPath);
+      if (await regularFileExists(declaredEntryPath)) entryPath = declaredEntryPath;
+    }
+  }
   if (!entryPath) {
     throw new PluginAuthorSourceError(
       'plugin_author_entry_missing',
-      `Plugin author directory must contain exactly one of src/index.ts or index.ts: ${packageRoot}`,
+      `Plugin author directory must contain exactly one of src/index.ts or index.ts, or declare an existing .ts, .mts, .js, or .mjs module in package.json main: ${packageRoot}`,
     );
   }
   return Object.freeze({

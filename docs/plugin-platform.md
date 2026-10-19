@@ -3502,6 +3502,15 @@ schema used by the daemon and Settings; capability snapshots retain status as a
 read projection. The retired development mutation methods are no longer served
 through `tool.plugins`.
 
+In 0.3 development source, the authoring source-module owner selects a folder's
+`src/index.ts` or `index.ts`, rejecting roots containing both. If neither exists,
+the folder's explicit `package.json.main` selects a `.ts`, `.mts`, `.js`, or
+`.mjs` author module. Conventional TypeScript source takes precedence over a
+built package main; package `exports` remain package-import declarations.
+The selected directory retains its real package root for dependency and UI
+preparation. Explicit descriptor locators and folders without an author entry
+retain static manifest discovery; generated manifests do not override source.
+
 In 0.3 development, daemon preparation evaluates a code-defined plugin once and
 passes that canonical manifest to the managed UI compiler through a temporary
 manifest input. The author root needs no emitted `plugin.json`; artifact paths

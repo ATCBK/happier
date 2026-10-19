@@ -231,6 +231,8 @@ function createPluginAuthoringSkillSource(invokerName: string, ui?: PluginScaffo
     '',
     '## Normal author loop',
     '',
+    'A project folder uses `src/index.ts` or `index.ts` (not both). If neither exists, set `package.json.main` to an exact `.ts`, `.mts`, `.js`, or `.mjs` module exporting `manifest` and `activate`, for example `"main": "./src/index.mjs"`. Conventional TypeScript source takes precedence over a built package main; package `exports` do not select the development entry. Keep directory development for package dependencies and UI-artifact preparation.',
+    '',
     'Work in a normal Happier Agent Session rooted at this source directory. Use the same public lifecycle as a human author:',
     '',
     `1. Start or continue live development with \`${invokerName} plugins dev\`. It prepares declared dependencies automatically; do not run \`${invokerName} plugins dev install .\` first. Explicit registration trusts this exact source root without a separate code-trust prompt. Automatic workspace discovery still requires its remembered project-trust decision. Optional host resources and secrets require their separate authority decisions.`,
