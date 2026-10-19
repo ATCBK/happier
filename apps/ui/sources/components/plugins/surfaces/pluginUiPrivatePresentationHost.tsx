@@ -79,6 +79,8 @@ import { useSetting } from '@/sync/domains/state/storage';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { resolveAppLocalDateTimePicker } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
+import { ExecutableParticipantPickerPresentation } from '@/components/sessions/authoring/ExecutableParticipantPickerPresentation';
+import type { ExecutableParticipantPickerProps } from '@happier-dev/plugin-ui/components';
 import type { PluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
 import {
     useInstalledPluginBrandPresentation,
@@ -349,6 +351,9 @@ function PluginUiPrivateQRCode(props: Readonly<{ data: string; size: number; tes
 
 function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDirection) {
     return Object.freeze({
+    renderExecutableParticipantPicker(input: ExecutableParticipantPickerProps) {
+        return <ExecutableParticipantPickerPresentation {...input} />;
+    },
     renderVoiceMarkArt(input: Omit<VoiceMarkArtProps, 'fallback'>) {
         // Only explicit art props: no live energy acquisition or attempt data.
         return <VoiceMarkArt {...input} still={input.still ?? true} presentationOnly />;
