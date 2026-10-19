@@ -78,7 +78,7 @@ export type AccountWidgetAddInput = Readonly<{
 const BUILTIN_WIDGET_FAMILIES = [
     { id: 'machines', ids: new Set<string>(MACHINE_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('machines.widgets.machine_fleet') },
     { id: 'usage', ids: new Set<string>(USAGE_BUILTIN_WIDGET_IDS_V1), pageId: 'usage', title: () => t('usage.board.page.title') },
-    { id: 'projects', ids: new Set<string>(PROJECT_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('sections.projects') },
+    { id: 'projects', ids: new Set<string>(PROJECT_BUILTIN_WIDGET_IDS_V1), pageId: null, title: () => t('tabs.projects') },
 ] as const;
 type BuiltinWidgetFamily = (typeof BUILTIN_WIDGET_FAMILIES)[number];
 function builtinWidgetFamilyOf(candidate: WidgetCandidate): BuiltinWidgetFamily | null {
