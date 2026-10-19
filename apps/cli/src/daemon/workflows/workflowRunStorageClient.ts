@@ -1,6 +1,9 @@
 import axios from 'axios';
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol/plugins/installations/manifests';
 import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
+import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { notifyDaemonSessionActivityChanged } from '@/daemon/controlClient';
+import { logger } from '@/ui/logger';
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -75,6 +78,16 @@ export function createWorkflowRunStorageClient(params: Readonly<{
           // verbatim; never resolve a mutable source again here.
           return await request();
         });
+        if (operation.operation === 'transition') {
+          const run = WorkflowRunSummaryV1Schema.safeParse(response.data);
+          if (run.success && run.data.revision > 0 && run.data.workflowCustodyState !== null
+            && ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(run.data.state)) {
+            void notifyDaemonSessionActivityChanged(run.data.origin.originSessionId ?? null, {
+              original: { source: { kind: 'workflow_run', runId: run.data.id }, revision: run.data.revision },
+              event: { kind: run.data.state === 'succeeded' ? 'finished' : 'failed_or_stopped' },
+            }).catch(error => logger.debug('[workflowRunStorage] Follow occurrence remains in Run custody', error));
+          }
+        }
         return response.data;
       } catch (error) {
         throw Object.assign(error instanceof Error ? error : new Error('workflow_storage_operation_failed', { cause: error }), {

@@ -31,6 +31,7 @@ import type { LiveWorkItemV1, LiveWorkProducerV1 } from './lifecycle/managedActi
 import { resolveExecutionRunLifecycle } from '@/agent/runtime/bridges/executionRun/resolveExecutionRunLifecycle';
 import { projectExecutionRunPublicState } from '@/agent/runtime/bridges/executionRun/publicState';
 import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from './lifecycle/requesterWorkAttribution';
+import { notifyDaemonSessionActivityChanged } from './controlClient';
 
 const liveWorkListeners = new Set<() => void>();
 function notifyExecutionRunLiveWorkChanged(): void {
@@ -259,6 +260,17 @@ async function writeRetainedExecutionRunRecord(record: RetainedExecutionRunRecor
     purpose: 'execution_run_state', value: RetainedExecutionRunRecordSchema.parse(record),
   }), { authority: 'owned' });
   notifyExecutionRunLiveWorkChanged();
+  const state = record.state;
+  if (state.sessionId && state.terminalOccurrenceId
+    && (state.status === 'succeeded' || state.status === 'failed' || state.status === 'cancelled')) {
+    // A hint never owns delivery or terminal state. Read-after-write routing
+    // re-enters the retained original, current Follow and Pending owners.
+    void notifyDaemonSessionActivityChanged(state.sessionId, {
+      original: { source: { kind: 'execution_run', sessionId: state.sessionId, runId: state.runId },
+        terminalEventId: state.terminalOccurrenceId },
+      event: { kind: state.status === 'succeeded' ? 'finished' : 'failed_or_stopped' },
+    }).catch(error => logger.debug('[executionRunRegistry] Follow occurrence remains in retained Run custody', error));
+  }
 }
 
 async function acknowledgeRetainedRunTerminal(input: RetainedExecutionRunWorkerUpdate): Promise<void> {

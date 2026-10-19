@@ -1,5 +1,18 @@
 import { z } from 'zod/mini';
 import { FollowPolicyV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { SessionFollowRuleSourceOccurrenceV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+
+/** Source-original hint only. The dispatcher re-reads retained source and relation authority. */
+export const SessionFollowRunOccurrenceSchema = z.strictObject({
+    original: z.union([ExecutionRunFollowOriginalV1Schema, WorkflowRunFollowOriginalV1Schema]),
+    event: z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }),
+});
+export type SessionFollowRunOccurrence = z.infer<typeof SessionFollowRunOccurrenceSchema>;
+export const SessionFollowOccurrenceNotificationSchema = z.union([
+    SessionFollowRuleSourceOccurrenceV1Schema, SessionFollowRunOccurrenceSchema,
+]);
+export type SessionFollowOccurrenceNotification = z.infer<typeof SessionFollowOccurrenceNotificationSchema>;
 
 /** Private source-to-original-owner contribution. Rule definitions and identities never leave the evaluator. */
 export const SessionActivityChangedResultSchema = z.strictObject({

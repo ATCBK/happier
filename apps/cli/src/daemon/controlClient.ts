@@ -4,7 +4,7 @@
  */
 
 import { isPidPresent, isPidProvablyAbsent } from '@happier-dev/cli-common/process';
-import type { SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import type { SessionFollowOccurrenceNotification } from './sessions/sessionActivityChangedContract';
 import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 export type { SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import {
@@ -888,7 +888,7 @@ export async function notifyDaemonConnectedServiceTurnLifecycle(
 }
 
 /** Invalidation only: the daemon re-reads the current host and never trusts a reported idle Boolean. */
-export async function notifyDaemonSessionActivityChanged(sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1): Promise<SessionActivityChangedResult> {
+export async function notifyDaemonSessionActivityChanged(sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification): Promise<SessionActivityChangedResult> {
   const response: unknown = await daemonPost('/session-activity-changed', { sessionId, ...(followOccurrence ? { followOccurrence } : {}) });
   const parsed = SessionActivityChangedResponseSchema.safeParse(response);
   if (!parsed.success || (parsed.data.personalFollow && parsed.data.personalFollow.sourceSessionId !== sessionId)) {

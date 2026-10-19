@@ -16718,7 +16718,9 @@ export async function startDaemonSessionControlRuntime(
   const dispatchSessionFollowOccurrence = async (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch): Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | SessionActivityChangedResult | void> => {
     if (isRuntimePublicationQuiescing()) return;
     const sessionId = 'sourceSessionIdChanged' in request ? null : 'observations' in request ? request.destinationSessionId
-      : request.destinationSessionId ?? request.occurrence.sourceSessionId;
+      : request.destinationSessionId ?? ('original' in request.occurrence
+        ? request.occurrence.original.source.kind === 'execution_run' ? request.occurrence.original.source.sessionId : request.contextSessionId ?? null
+        : request.occurrence.sourceSessionId);
     return await withSessionAccountContext(sessionId, async requester => {
       const machine = params.getApiMachineForSessions();
       const installation = readInstallationIdentityIfExistsSync();
@@ -16804,10 +16806,10 @@ export async function startDaemonSessionControlRuntime(
     await startDaemonControlServer({
       skillStore: params.skillStore,
       skillUsageRecorder: params.skillUsageRecorder,
-      onSessionActivityChanged: async (_sessionId, occurrence) => {
+      onSessionActivityChanged: async (sessionId, occurrence) => {
         sessionLiveWorkProducer.notifyChanged();
         if (occurrence) {
-          const result = await dispatchSessionFollowOccurrence({ occurrence });
+          const result = await dispatchSessionFollowOccurrence({ occurrence, ...(sessionId ? { contextSessionId: sessionId } : {}) });
           return result && !('coveredEvents' in result) ? result : undefined;
         }
       },

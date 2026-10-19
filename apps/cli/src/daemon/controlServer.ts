@@ -6,7 +6,7 @@
 import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/mini';
-import { SessionFollowRuleSourceOccurrenceV1Schema, type SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import { SessionFollowOccurrenceNotificationSchema, type SessionFollowOccurrenceNotification } from './sessions/sessionActivityChangedContract';
 import { SessionActivityChangedResponseSchema, type SessionActivityChangedResult } from './sessions/sessionActivityChangedContract';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 import { configuration } from '@/configuration';
@@ -741,7 +741,7 @@ export function createDaemonControlApp({
     reconcileCanonicalReadiness?: (tracked: TrackedSession) => Promise<void>,
     sessionCreationOutcome?: SessionCreationOutcome,
   ) => void | Promise<void>;
-  onSessionActivityChanged?: (sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
+  onSessionActivityChanged?: (sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
   /**
    * Settles the existing PID-correlated spawn waiter for a strict terminal
    * creation failure. It is intentionally separate from ordinary Session
@@ -1859,7 +1859,7 @@ export function createDaemonControlApp({
   // Session reports itself after creation
   typed.post('/session-activity-changed', {
     schema: {
-      body: z.strictObject({ sessionId: z.string().check(z.minLength(1)), followOccurrence: z.optional(SessionFollowRuleSourceOccurrenceV1Schema) }),
+      body: z.strictObject({ sessionId: z.nullable(z.string().check(z.minLength(1))), followOccurrence: z.optional(SessionFollowOccurrenceNotificationSchema) }),
       response: { 200: SessionActivityChangedResponseSchema, 401: authSchema401,
         503: daemonShuttingDownRouteResponseSchema },
     },
@@ -1869,8 +1869,11 @@ export function createDaemonControlApp({
       reply.code(503);
       return daemonShuttingDownResponse();
     }
-    if (getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
-      if (!request.body.followOccurrence || request.body.followOccurrence.sourceSessionId === request.body.sessionId) {
+    const occurrence = request.body.followOccurrence;
+    const runOriginal = occurrence && 'original' in occurrence ? occurrence.original : undefined;
+    if (runOriginal || getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
+      if (runOriginal ? runOriginal.source.kind === 'workflow_run' || runOriginal.source.sessionId === request.body.sessionId
+        : !occurrence || 'sourceSessionId' in occurrence && occurrence.sourceSessionId === request.body.sessionId) {
         const result = await onSessionActivityChanged?.(request.body.sessionId, request.body.followOccurrence);
         if (result?.personalFollow?.sourceSessionId === request.body.sessionId) {
           return { ok: true as const, personalFollow: result.personalFollow };
@@ -4233,7 +4236,7 @@ export function startDaemonControlServer({
     reconcileCanonicalReadiness?: (tracked: TrackedSession) => Promise<void>,
     sessionCreationOutcome?: SessionCreationOutcome,
   ) => void | Promise<void>;
-  onSessionActivityChanged?: (sessionId: string, followOccurrence?: SessionFollowRuleSourceOccurrenceV1) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
+  onSessionActivityChanged?: (sessionId: string | null, followOccurrence?: SessionFollowOccurrenceNotification) => void | SessionActivityChangedResult | Promise<void | SessionActivityChangedResult>;
   onSessionStartupFailure?: (input: Readonly<{
     spawnNonce: string;
     errorDetail: SessionCreationTerminalSpawnErrorDetail;
