@@ -1,6 +1,9 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { BaseNavigationContainer, createNavigatorFactory, StackRouter, useNavigationBuilder } from '@react-navigation/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Href } from 'expo-router';
+import { resolveHref } from 'expo-router/build/link/href';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -68,8 +71,8 @@ const routeRuntime = vi.hoisted(() => ({
     setParams: vi.fn((params: Readonly<{ serverId?: string }>) => {
         routeParams.value = { ...routeParams.value, ...params };
     }),
-    replace: vi.fn((href: string) => {
-        const url = new URL(href, 'https://app.example');
+    replace: vi.fn((href: Href) => {
+        const url = new URL(resolveHref(href), 'https://app.example');
         routeParams.value = { id: 'session-1', serverId: url.searchParams.get('serverId') ?? undefined };
     }),
 }));
@@ -171,12 +174,40 @@ describe('ordinary session route layout', () => {
         expect(routeRuntime.childHydrationServerIds).toEqual(['home-b']);
     });
 
+    it.each(['/new', '/session/session-10'])('does not let a retained legacy Session replace the active %s route when its Home resolves', async (pathname) => {
+        seedHomes(['home-a', 'home-b']);
+        routeRuntime.pathname = pathname;
+        const { default: Layout } = await import('@/app/(app)/session/[id]/_layout');
+        const screen = await renderScreen(layoutTree(Layout));
+        expect(routeRuntime.replace).not.toHaveBeenCalled();
+
+        // Expo retains this layout's local params underneath another route. A later
+        // store update can resolve its Home without granting it the current URL.
+        await act(async () => {
+            storage.setState({
+                sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: 'home-b' }) },
+            });
+        });
+
+        expect(routeRuntime.replace).not.toHaveBeenCalled();
+        expect(routeParams.value).toEqual({ id: 'session-1' });
+        expect(routeRuntime.childHydrationServerIds).toEqual([]);
+
+        routeRuntime.pathname = '/session/session-1';
+        await screen.update(layoutTree(Layout));
+        expect(routeRuntime.replace).toHaveBeenCalledWith('/session/session-1?serverId=home-b');
+        await screen.update(layoutTree(Layout));
+        expect(routeRuntime.childHydrationServerIds).toEqual(['home-b']);
+    });
+
     it('qualifies the retained destination through its navigation owner instead of Expo params', async () => {
         seedHomes(['home-b']);
         sessionState.current = createSessionFixture({ id: 'session-1', serverId: 'home-b' });
         const { default: Layout } = await import('@/app/(app)/session/[id]/_layout');
         function HostedLayout() {
-            return <DestinationInstanceHost tabId="cold-session" ref={{ kind: 'session', params: routeParams.value }}
+            const params = Object.fromEntries<string>(Object.entries(routeParams.value)
+                .filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+            return <DestinationInstanceHost tabId="cold-session" ref={{ kind: 'session', params }}
                 pathname="/session/session-1" focused visible navigation={{ push: vi.fn(), replace: routeRuntime.replace, back: vi.fn() }}>
                 <WorkspaceRouteOutlet.Provider value={<SessionAddress />}><Layout /></WorkspaceRouteOutlet.Provider>
             </DestinationInstanceHost>;

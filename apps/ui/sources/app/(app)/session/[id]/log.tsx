@@ -56,8 +56,12 @@ export function SessionLogScreen() {
     const [truncated, setTruncated] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [loading, setLoading] = React.useState(false);
+    const activeRequest = React.useRef<AbortController | null>(null);
 
     const refreshTail = React.useCallback(async () => {
+        activeRequest.current?.abort();
+        activeRequest.current = null;
+        setLoading(false);
         if (!session?.id) return;
         if (!sessionHydrated) return;
         if (!metadataLogPath) return;
@@ -67,11 +71,14 @@ export function SessionLogScreen() {
         }
         setLoading(true);
         setError(null);
+        const request = new AbortController();
+        activeRequest.current = request;
         try {
             const response = await machineReadSessionLogTail(resolvedMachineId, {
                 path: metadataLogPath,
                 maxBytes: LOG_TAIL_MAX_BYTES,
-            });
+            }, { serverId: routeScope.hydrationOptions?.serverId, signal: request.signal });
+            if (request.signal.aborted) return;
             if (!response.success) {
                 setError(response.error || t('sessionLog.readFailed'));
                 setTailText('');
@@ -83,15 +90,23 @@ export function SessionLogScreen() {
             setTailText(response.tail || '');
             setTruncated(response.truncated === true);
         } finally {
-            setLoading(false);
+            if (activeRequest.current === request) {
+                activeRequest.current = null;
+                setLoading(false);
+            }
         }
-    }, [metadataLogPath, resolvedMachineId, session?.id, sessionHydrated]);
+    }, [metadataLogPath, resolvedMachineId, routeScope.hydrationOptions?.serverId, session?.id, sessionHydrated]);
 
     React.useEffect(() => {
         if (!session?.id) return;
         if (!sessionHydrated) return;
         if (!metadataLogPath) return;
         void refreshTail();
+        return () => {
+            activeRequest.current?.abort();
+            activeRequest.current = null;
+            setLoading(false);
+        };
     }, [metadataLogPath, refreshTail, session?.id, sessionHydrated]);
 
     if (!sessionId || isSessionRouteHydrationMissing(routeHydrationState)) {

@@ -30,14 +30,11 @@ import { serverFetch } from '@/sync/http/client';
 import type { TranscriptOlderPageLoadResult } from "@happier-dev/session-core/messages";
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { AgentState } from '@happier-dev/session-core/state';
-import { reducePublicShareTranscript } from '@/components/sessions/sharing/publicShareTranscript';
+import { createPublicSharePresentationAgentState, reducePublicShareTranscript } from '@/components/sessions/sharing/publicShareTranscript';
 import {
     parseDecryptedSessionMetadata,
     parsePlainSessionMetadata,
 } from '@/sync/engine/sessions/parsePlainSessionPayload';
-import {
-    readSharedMetadataPresentationCompletedRequests,
-} from '@happier-dev/session-core/pending';
 import { readStoredSessionRawRecord } from '@/sync/runtime/readStoredSessionContent';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
@@ -157,17 +154,6 @@ function normalizePublicShareRawInputs(inputs: RawMessageNormalizationInput[]): 
     return normalizeRawMessages(inputs);
 }
 
-function createPublicSharePresentationAgentState(
-    metadata: Metadata | null,
-    metadataLayoutVersion: unknown,
-): AgentState {
-    return {
-        completedRequests: readSharedMetadataPresentationCompletedRequests(
-            metadata,
-            metadataLayoutVersion,
-        ),
-    } as AgentState;
-}
 
 async function normalizePlainPublicShareMessages(messages: ReadonlyArray<SessionMessageV1>): Promise<NormalizedMessage[]> {
     const inputs: RawMessageNormalizationInput[] = [];

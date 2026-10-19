@@ -1,5 +1,10 @@
 import * as React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+
+// Static route/store imports reach the SDK before the runtime fixture's setup hook.
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import type { ParticipantRecipientV1 } from '@happier-dev/protocol';
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 import type { DeferredPromise } from './testUtils/deferredPromise';
@@ -7,7 +12,12 @@ import { createDeferredPromise } from './testUtils/deferredPromise';
 import { measureScreenContentBottom, PublishBottomChromeHeight } from './testUtils/bottomChromeViewport';
 import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { storage } from '@/sync/domains/state/storageStore';
 import {
+  createSessionFixture,
+  createSessionMessagesFixture,
   flushHookEffects,
   renderScreen,
   standardCleanup,
@@ -21,10 +31,8 @@ vi.mock('react-native-reanimated', async () => {
 });
 
 let mockSession: any = null;
-let mockMessagesLoaded = false;
 let mockMessage: any = null;
 let mockMessagesById: Record<string, any> = {};
-let mockResolvedRouteMessageId: string | null = null;
 let mockCommittedMessages: any[] = [];
 const toolFullViewSpy = vi.fn();
 const deriveSessionParticipantTargetsMock = vi.fn<(..._args: unknown[]) => ReadonlyArray<SessionParticipantTarget>>(() => []);
@@ -32,16 +40,13 @@ const deriveAutoRecipientFromFocusedToolTranscriptMock = vi.fn<(..._args: unknow
 const routerBackSpy = vi.fn();
 const routerReplaceSpy = vi.fn();
 const routerCanGoBackSpy = vi.fn(() => false);
-const syncOnSessionVisibleSpy = vi.fn();
+let sync: typeof import('@/sync/sync').sync;
+let syncOnSessionVisibleSpy: MockInstance<typeof sync.onSessionVisible>;
+let syncLoadOlderMessagesSpy: MockInstance<typeof sync.loadOlderMessages>;
 let mockSearchParams: any = { id: 'session-1', messageId: 'message-1' };
-let loadOlderDeferred: DeferredPromise<{ loaded: number; hasMore: boolean; status: 'loaded' | 'no_more' | 'not_ready' | 'in_flight' }> | null = null;
-const syncLoadOlderMessagesSpy = vi.fn(async (_sessionId: string) => {
-  if (loadOlderDeferred) {
-    return await loadOlderDeferred.promise;
-  }
-  return { loaded: 0, hasMore: false, status: 'no_more' as const };
-});
-let ensureSessionVisibleDeferred: DeferredPromise<void> | null = null;
+let loadOlderDeferred: DeferredPromise<Response> | null = null;
+let initialMessagesDeferred: DeferredPromise<Response> | null = null;
+let olderHistoryAvailable = false;
 const mockTheme = {
   colors: {
     chrome: { header: { background: '#000', foreground: '#fff' } },
@@ -79,51 +84,18 @@ installSessionRouteCommonModuleMocks({
       theme: mockTheme as any,
     });
   },
-  storageModule: async (importOriginal) => {
-    const { createStorageModuleMock, createUseLocalSettingMock, createUseLocalSettingMutableMock } = await import('@/dev/testkit/mocks/storage');
-    const useLocalSetting = createUseLocalSettingMock();
-    return createStorageModuleMock({
-      importOriginal,
-      overrides: {
-        storage: {
-          getState: () => ({
-            sessions: {},
-            concurrentSessionListCacheByServerId: {},
-            sessionListIndexByServerId: {},
-            sessionListRowsByServerId: {},
-          }),
-        } as any,
-        useSession: () => mockSession,
-        useSessionTranscriptIds: () => ({ ids: [], isLoaded: mockMessagesLoaded }),
-        useMessage: (_sessionId: string, messageId: string) => mockMessagesById[messageId] ?? mockMessage,
-        useResolvedSessionMessageRouteId: (_sessionId: string, _routeMessageId: string) => mockResolvedRouteMessageId,
-        useLocalSetting,
-        useLocalSettingMutable: createUseLocalSettingMutableMock(useLocalSetting),
-      },
-    });
-  },
 });
 
-vi.mock('@/sync/store/hooks', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/sync/store/hooks')>()),
-  useSessionMessages: () => ({ messages: mockCommittedMessages, isLoaded: mockMessagesLoaded }),
-  useSessionServerId: () => null,
-}));
-
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    onSessionVisible: (sessionId: string) => syncOnSessionVisibleSpy(sessionId),
-    ensureSessionVisibleForMessageRoute: async () => {
-      if (!ensureSessionVisibleDeferred) {
-        ensureSessionVisibleDeferred = createDeferredPromise<void>();
-      }
-      await ensureSessionVisibleDeferred.promise;
-    },
-    loadOlderMessages: (sessionId: string) => syncLoadOlderMessagesSpy(sessionId),
-    getAcceptedExternalSessionTailCursor: () => null,
-    subscribeAcceptedExternalSessionTailCursor: () => () => {},
+const runtime = installSessionPaneRuntimeTestHarness({
+  sessionId: 'session-1',
+  request: async (url, init) => {
+    const address = new URL(String(url));
+    if ((init?.method ?? 'GET') !== 'GET' || address.pathname !== '/v1/sessions/session-1/messages') return null;
+    if (address.searchParams.has('beforeSeq') && loadOlderDeferred) return (await loadOlderDeferred.promise).clone();
+    if (initialMessagesDeferred) return (await initialMessagesDeferred.promise).clone();
+    return Response.json({ messages: [], hasMore: olderHistoryAvailable, nextBeforeSeq: olderHistoryAvailable ? 2 : null });
   },
-}));
+});
 
 vi.mock('@/components/ui/forms/Deferred', () => ({ Deferred: ({ children }: any) => React.createElement(React.Fragment, null, children) }));
 vi.mock('@/components/tools/shell/views/ToolFullView', () => ({
@@ -159,7 +131,6 @@ vi.mock('@/components/sessions/agentInput', () => ({
     ),
 }));
 vi.mock('@/components/autocomplete/suggestions', () => ({ getSuggestions: () => [] }));
-vi.mock('@/utils/system/fireAndForget', () => ({ fireAndForget: (fn: Promise<any>) => void fn }));
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({ useFeatureEnabled: () => false }));
 vi.mock('@/sync/domains/session/participants/deriveSessionParticipantTargets', () => ({
   deriveAutoRecipientFromFocusedToolTranscript: deriveAutoRecipientFromFocusedToolTranscriptMock,
@@ -189,15 +160,18 @@ const {
 } = await import('@/app/(app)/session/[id]/message/[messageId]');
 
 describe('Session message route hydration', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ sync } = await import('@/sync/sync'));
+    // Observe the real owner without replacing its admission, paging or attachment logic.
+    syncOnSessionVisibleSpy = vi.spyOn(sync, 'onSessionVisible');
+    syncLoadOlderMessagesSpy = vi.spyOn(sync, 'loadOlderMessages');
     mockSession = { id: 'session-1', accessLevel: 'edit', canApprovePermissions: false };
-    mockMessagesLoaded = true;
     mockMessage = null;
     mockMessagesById = {};
-    mockResolvedRouteMessageId = null;
     mockCommittedMessages = [];
     loadOlderDeferred = null;
-    ensureSessionVisibleDeferred = null;
+    initialMessagesDeferred = null;
+    olderHistoryAvailable = false;
     mockSearchParams = { id: 'session-1', messageId: 'message-1' };
     routerBackSpy.mockClear();
     routerReplaceSpy.mockClear();
@@ -211,29 +185,60 @@ describe('Session message route hydration', () => {
     deriveAutoRecipientFromFocusedToolTranscriptMock.mockReturnValue(null);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (typeof vi.isFakeTimers === 'function' && vi.isFakeTimers()) {
       vi.clearAllTimers();
     }
-    standardCleanup();
+    await standardCleanup();
+    loadOlderDeferred?.resolve(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
+    initialMessagesDeferred?.resolve(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
+    syncOnSessionVisibleSpy.mockRestore();
+    syncLoadOlderMessagesSpy.mockRestore();
     vi.useRealTimers();
   });
 
+  function applyMessageFixtures() {
+    const defaults = createSessionFixture();
+    storage.getState().applySessions([createSessionFixture({
+      ...mockSession,
+      serverId: runtime.serverId,
+      metadata: { ...defaults.metadata, ...mockSession.metadata },
+    })]);
+    const messagesById = { ...mockMessagesById };
+    for (const message of mockCommittedMessages) messagesById[message.id] = message;
+    if (mockMessage) messagesById[mockMessage.id] = mockMessage;
+    const messages = mockCommittedMessages.length > 0 ? mockCommittedMessages : Object.values(messagesById);
+    const transcript = createSessionMessagesFixture({
+      messagesById,
+      messageIdsOldestFirst: messages.map(message => message.id),
+      isLoaded: true,
+      messagesVersion: (storage.getState().sessionMessages['session-1']?.messagesVersion ?? 0) + 1,
+    });
+    for (const message of Object.values(messagesById)) {
+      if (message.kind === 'tool-call' && typeof message.tool.id === 'string') {
+        transcript.reducerState.toolIdToMessageId.set(message.tool.id, message.id);
+      }
+    }
+    storage.setState(state => ({ sessionMessages: { ...state.sessionMessages, 'session-1': transcript } }));
+  }
+
   async function renderMessageScreen(Screen: React.ComponentType<any>) {
-    return renderScreen(React.createElement(Screen));
+    applyMessageFixtures();
+    return renderScreen(<runtime.Wrapper><Screen /></runtime.Wrapper>);
   }
 
   it('keeps the focused transcript viewport above measured bottom chrome as its height changes', async () => {
     mockMessage = {
-      kind: 'tool-call', id: 'm1', localId: null, createdAt: 1,
+      kind: 'tool-call', id: 'message-1', localId: null, createdAt: 1,
       tool: { id: 'task-1', name: 'Task', input: {}, result: null, state: 'completed' }, children: [],
     };
     const render = (height: number) => (
-      <SessionCockpitChromeRegistryProvider>
+      <runtime.Wrapper><SessionCockpitChromeRegistryProvider>
         <PublishBottomChromeHeight height={height} />
         <MessageScreen />
-      </SessionCockpitChromeRegistryProvider>
+      </SessionCockpitChromeRegistryProvider></runtime.Wrapper>
     );
+    applyMessageFixtures();
     const screen = await renderScreen(render(94));
     for (const height of [94, 121, 0]) {
       await screen.update(render(height));
@@ -253,9 +258,12 @@ describe('Session message route hydration', () => {
 
   it('does not navigate back until message backfill completes', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-    loadOlderDeferred = createDeferredPromise();
+    applyMessageFixtures();
+    olderHistoryAvailable = true;
+    // Seed the real pagination owner through a completed Home response, then hold
+    // its next older HTTP page until the case releases it.
+    await sync.loadOlderMessagesFromCursor('session-1', 2);
+    loadOlderDeferred = createDeferredPromise<Response>();
 
     const screen = await renderMessageScreen(MessageScreen);
     await flushHookEffects({ cycles: 1, turns: 1 });
@@ -264,18 +272,15 @@ describe('Session message route hydration', () => {
     expect(syncLoadOlderMessagesSpy).toHaveBeenCalledWith('session-1');
     expect(routerBackSpy).not.toHaveBeenCalled();
 
-    loadOlderDeferred!.resolve({ loaded: 0, hasMore: false, status: 'no_more' });
-    await flushHookEffects({ cycles: 1, turns: 1 });
-
-    expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+    loadOlderDeferred!.resolve(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
+    await waitForHomeGovernance(() => {
+      expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+    });
   });
 
   it('keeps a stable tool route open when the route id resolves to a hydrated internal tool message id', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
     mockSearchParams = { id: 'session-1', messageId: 'tool:call_1' };
-    mockResolvedRouteMessageId = 'resolved-tool-message';
     mockMessagesById = {
       'resolved-tool-message': {
         kind: 'tool-call',
@@ -295,10 +300,9 @@ describe('Session message route hydration', () => {
 
   it('filters ignored Claude teammate lifecycle events from the focused transcript route', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
     mockSearchParams = { id: 'session-1', messageId: 'tool-msg-1' };
-    mockSession = { id: 'session-1', accessLevel: 'edit', canApprovePermissions: false, metadata: { flavor: 'claude' } };
+    // Agent behavior reads private owner metadata after the real Home hydration.
+    mockSession = { id: 'session-1', accessLevel: 'owner', canApprovePermissions: false, metadata: { flavor: 'claude' } };
     mockMessage = {
       kind: 'tool-call',
       id: 'tool-msg-1',
@@ -383,25 +387,23 @@ describe('Session message route hydration', () => {
 
   it('keeps waiting when older paging is not ready instead of redirecting away from the deep link', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-    syncLoadOlderMessagesSpy.mockImplementation(async () => ({ loaded: 0, hasMore: true, status: 'not_ready' as const }));
+    // A retained transcript can be loaded before this Account's initial HTTP
+    // page establishes the real older cursor. Keep that network read pending.
+    initialMessagesDeferred = createDeferredPromise<Response>();
 
     await renderMessageScreen(MessageScreen);
     await flushHookEffects({ cycles: 1, turns: 1 });
 
+    expect(await sync.loadOlderMessages('session-1')).toMatchObject({ status: 'not_ready' });
     expect(routerReplaceSpy).not.toHaveBeenCalled();
     expect(routerBackSpy).not.toHaveBeenCalled();
   });
 
   it('does not crash when message kind changes between renders', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-
     mockMessage = {
       kind: 'user-text',
-      id: 'm1',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       text: 'hello',
@@ -412,25 +414,23 @@ describe('Session message route hydration', () => {
 
     mockMessage = {
       kind: 'tool-call',
-      id: 'm1',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       tool: { name: 'Task' },
       children: [],
     };
 
-    await screen.update(React.createElement(MessageScreen));
+    applyMessageFixtures();
+    await screen.update(<runtime.Wrapper><MessageScreen /></runtime.Wrapper>);
     await flushHookEffects({ cycles: 1, turns: 1 });
   });
 
   it('does not render the focused-tool composer when there are no participant targets', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-
     mockMessage = {
       kind: 'tool-call',
-      id: 'm1',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       tool: { name: 'Task', input: {}, result: null, state: 'success' },
@@ -462,12 +462,9 @@ describe('Session message route hydration', () => {
 
   it('includes focused execution run target when auto-recipient resolves to execution run', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-
     mockMessage = {
       kind: 'tool-call',
-      id: 'm-run',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       tool: { name: 'SubAgentRun', input: { runId: 'run_auto_1' }, result: null, state: 'completed' },
@@ -492,12 +489,9 @@ describe('Session message route hydration', () => {
 
   it('includes focused broadcast target when auto-recipient resolves to agent-team broadcast', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-
     mockMessage = {
       kind: 'tool-call',
-      id: 'm-broadcast',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       tool: { name: 'Task', input: {}, result: null, state: 'success' },
@@ -523,12 +517,9 @@ describe('Session message route hydration', () => {
 
   it('includes focused teammate target when auto-recipient resolves to agent-team member', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-
     mockMessage = {
       kind: 'tool-call',
-      id: 'm-agent',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       tool: { name: 'Task', input: {}, result: null, state: 'success' },
@@ -561,12 +552,9 @@ describe('Session message route hydration', () => {
 
   it('does not render the focused-tool composer when the focused tool has no auto-recipient, even if other participant targets exist', async () => {
 
-    ensureSessionVisibleDeferred = createDeferredPromise<void>();
-    ensureSessionVisibleDeferred.resolve();
-
     mockMessage = {
       kind: 'tool-call',
-      id: 'm-tool',
+      id: 'message-1',
       localId: null,
       createdAt: 1,
       tool: { name: 'SubAgentRun', input: { runId: 'run_ended_1' }, result: { status: 'succeeded' }, state: 'completed' },

@@ -6,9 +6,15 @@ import { ToolView } from '@/components/tools/shell/views/ToolView';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { StyleSheet } from 'react-native-unistyles';
+import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { useDemoMessages } from '@/hooks/session/useDemoMessages';
+
+// Tool views render inside a transcript source; this specimen has no messages of its own.
+const NO_MESSAGES: never[] = [];
 
 export default function Tools2Screen() {
     const [selectedExample, setSelectedExample] = useState<string>('all');
+    const transcriptSource = useDemoMessages(NO_MESSAGES);
 
     // Example tool calls data - matching ToolCall interface
     const examples = {
@@ -419,7 +425,7 @@ export function formatTime(date: Date): string {
     }, []);
 
     return (
-        <>
+        <SessionTranscriptSourceProvider source={transcriptSource}>
             <Stack.Screen
                 options={screenOptions}
             />
@@ -569,7 +575,7 @@ export function formatTime(date: Date): string {
                     </View>
                 </View>
             </ScrollView>
-        </>
+        </SessionTranscriptSourceProvider>
     );
 }
 

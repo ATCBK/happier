@@ -15,6 +15,7 @@ import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGen
 import { listServerProfiles, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
 import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { isSessionRoutePathActive } from '@/sync/domains/session/sessionSurfaceVisibility';
 
 function useSessionLayoutParams() {
     const layoutParams = useLocalSearchParams<Record<string, string | string[] | undefined>>();
@@ -58,7 +59,9 @@ export default function OrdinarySessionRouteLayout() {
     const session = useSession(sessionId);
     const explicitServerId = readSessionRouteServerId(params);
     const promotedServerId = explicitServerId === null ? resolvedServerId : null;
-    const qualifiedHref = promotedServerId ? buildScopedSessionRouteHref({
+    // Expo retains local Session params beneath overlays and other routes. Only
+    // qualify this Session's current route; another route still owns its URL.
+    const qualifiedHref = promotedServerId && isSessionRoutePathActive(pathname, sessionId) ? buildScopedSessionRouteHref({
         sessionId,
         serverId: promotedServerId,
         suffix: pathname.slice(`/session/${encodeURIComponent(sessionId)}`.length),

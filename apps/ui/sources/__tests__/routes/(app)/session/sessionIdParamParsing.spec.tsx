@@ -17,6 +17,8 @@ installSessionRouteCommonModuleMocks({
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
         params: () => searchParams,
     }).module,
+    nativeNavigation: async () => (await import('@/dev/testkit/mocks/reactNavigation'))
+        .createReactNavigationNativeMock({ renderInitialNavigatorScreen: true }),
 });
 async function sessionResponse() {
     const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol');
@@ -47,11 +49,7 @@ beforeEach(() => {
     storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'classic' });
 });
 function makeSessionCold() {
-    storage.setState((state) => {
-        const { ['session-123']: removed, ...sessions } = state.sessions;
-        void removed;
-        return { sessions };
-    });
+    storage.setState({ sessions: {}, sessionListRowsByServerId: {}, sessionListIndexByServerId: {} });
 }
 async function renderSessionScreenTree() {
     const Screen = (await import('@/app/(app)/session/[id]')).default;
