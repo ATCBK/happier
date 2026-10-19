@@ -8,7 +8,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolRequestSchema, CallToolResultSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { FeaturesResponseSchema, accountSettingsParse } from '@happier-dev/protocol';
+import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { McpServerCatalogV1Schema, sealMcpServerCatalogContentV1, MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { QualifiedConnectedAccountCredentialSnapshotV4Schema, QualifiedConnectedAccountConfigurationSnapshotV4Schema,
   QualifiedConnectedAccountListResponseV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
@@ -194,6 +195,8 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   let catalogReadable = true;
   let grantAvailable = true;
   let grantTransportFails = false;
+  let credentialSnapshotUnavailable = false;
+  let missingCredentialReads = 0;
   let nextRequesterProfileDelayMs = 0;
   let revokeRequesterWhenStaged = false;
   const accountHeaders: unknown[] = [];
@@ -217,6 +220,7 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
         revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: 'config-1', scopes: ['read'] }] : [] }) };
     if (path === '/v4/connect/qualified/credential') {
       if (grantTransportFails) throw new Error(`private-auth-failure fixture-bearer ${resource}\n    at /private/private_failure_marker.js:1:1`);
+      if (credentialSnapshotUnavailable) { missingCredentialReads++; return { status: 404, data: {} }; }
       // Revoke at the Home boundary after the actual registry has staged a
       // capability, while its final grant proof is still in flight.
       if (revokeRequesterWhenStaged && (await readdir(requester.connectedServicesMaterializationBaseDir)).some(name => name.startsWith('mcp-'))) {
@@ -367,6 +371,42 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
       expect(JSON.stringify(traceDiagnostics.mock.calls)).not.toContain(privateValue);
     }
     grantTransportFails = false;
+    // A listed account may have no credential snapshot. Exercise the actual
+    // recovered requester, Home reader, issuer and runner materializer together:
+    // capability refusal is not Session startup refusal under optional policy.
+    credentialSnapshotUnavailable = true;
+    for (const strictMode of [false, true]) {
+      const missingReadsBefore = missingCredentialReads;
+      const settings = accountSettingsParse({ ...runnerSnapshot.settings, mcpServersStrictMode: strictMode });
+      const notices: unknown[] = [];
+      const prepare = () => runWithServerHttpBaseUrl('https://session-home.test', () => resolveRunnerMcpServers({
+        session: { sessionId: h.sessionId, getServerBinding: () => ({ serverId: 'session-home', serverUrl: 'https://session-home.test' }),
+          rpcHandlerManager: new RpcHandlerManager({ scopePrefix: h.sessionId, encryptionMode: 'plain' }), updateMetadata() {},
+          getMcpRequestAuthPort: () => port,
+          enqueueSessionEventCommitted: async event => { notices.push(event); return { persisted: true, delivered: true }; } },
+        credentials: requester.bootstrap.credentials, accountCredentials: requester.bootstrap.credentials,
+        accountSettings: settings, accountSettingsSnapshot: { ...runnerSnapshot, settings },
+        machineId: 'machine', directory: h.cwd, tmpDir: h.f.directory, includeHappierMcpServer: false,
+      }));
+      if (strictMode) {
+        await expect(prepare()).rejects.toThrow(/^mcp_request_auth_unavailable$/);
+        expect(notices).toEqual([]);
+      } else {
+        for (let startup = 0; startup < 2; startup++) {
+          const optional = await prepare();
+          try { expect(optional.mcpServers).toEqual({}); }
+          finally { optional.happierMcpServer.stop(); }
+        }
+        expect(notices).toHaveLength(2);
+        expect(notices.map(readSessionCapabilityNoticeV1)).toEqual(Array.from({ length: 2 }, () => ({
+          v: 1, items: [{ kind: 'mcp_server', name: 'oauth_fixture', itemId: 'oauth-server',
+            code: 'invalid_server', detail: 'mcp_request_auth_unavailable' }],
+        })));
+      }
+      expect(missingCredentialReads).toBeGreaterThan(missingReadsBefore);
+      expect(issuanceFailure).toBe('mcp_request_auth_unavailable');
+    }
+    credentialSnapshotUnavailable = false;
   } finally {
     resolved.happierMcpServer.stop();
     await port.close({ materializationId: 'unreadable' });

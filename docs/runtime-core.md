@@ -977,6 +977,16 @@ owner. Required prompt, Role and admitted-context failures use the host's typed
 private Account or document facts. Loaded-runtime verification remains a
 separate boundary from these source contracts.
 
+OAuth capability issuance refuses an unavailable Connected Account credential
+snapshot without fabricating material or borrowing another Account or Home.
+That per-server `initial_admission` failure is not itself a Session startup
+failure. `materializeMcpServerConfigRecord` owns strict refusal versus optional
+server omission for ordinary, Agent-spawned and recovered Session startup;
+the runner passes safe request-auth failure codes to that owner. Non-strict
+startup skips the server and publishes the existing capability notice. Strict
+MCP policy still refuses startup, and explicitly selected Saved Secrets retain
+their typed refusal even under non-strict policy.
+
 Coding prompt preparation may omit unavailable optional Account library,
 Artifact and automatic plugin-asset augmentation, publishing one private-safe
 Prompt Library notice from the full-plan producer. A remembered required

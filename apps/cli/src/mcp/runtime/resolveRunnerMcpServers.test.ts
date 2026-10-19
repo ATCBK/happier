@@ -204,6 +204,21 @@ describe('resolveRunnerMcpServers catalog admission', () => {
       expect(JSON.stringify(warnings.mock.calls)).not.toContain('private connection details');
     } finally { result.happierMcpServer.stop(); }
   });
+  it('uses the materializer refusal for strict OAuth admission without exposing the port exception', async () => {
+    const captured = snapshot([{ id: 'oauth', name: 'oauth', transport: 'http', remote: {
+      url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' },
+    }, env: {}, createdAt: 1, updatedAt: 1 }]);
+    const notices: unknown[] = [];
+    await expect(resolveRunnerMcpServers({ session: { ...session(),
+      enqueueSessionEventCommitted: async event => { notices.push(event); return { persisted: true, delivered: true }; },
+      getMcpRequestAuthPort: () => ({
+        open: async () => { throw Object.assign(new Error('private credential transport response'), { code: 'mcp_request_auth_unavailable' }); },
+        close: async () => {},
+      }),
+    }, credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+    machineId: 'machine-1', directory: '/repo', includeHappierMcpServer: false })).rejects.toThrow(/^mcp_request_auth_unavailable$/);
+    expect(notices).toEqual([]);
+  });
   it('opens a per-server OAuth capability through the admitted Session port and closes it with the MCP profile', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     let elapsedMs = 0;

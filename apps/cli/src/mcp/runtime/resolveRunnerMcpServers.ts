@@ -494,14 +494,14 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
         materializationIds.add(materializationId);
         requestAuthByServerId[server.id] = capability;
       } catch (error) {
-        if (mcpSettings.strictMode) throw error;
         requestAuthFailuresByServerId[server.id] = readMcpRequestAuthFailureCode(error);
         requestAuthDiagnosticsByServerId[server.id] = readMcpRequestAuthFailureDiagnostic(error);
-        // The materializer owns the canonical unavailable-server warning/notice.
+        // The materializer owns strict refusal versus optional omission, using
+        // the safe failure code rather than the port's private exception text.
       }
     }));
-    // Every open owns a distinct capability. Join before cleanup on a strict
-    // refusal so a late successful sibling cannot escape the profile lifetime.
+    // Every open owns a distinct capability. Join before materialization or
+    // cleanup so a late successful sibling cannot escape the profile lifetime.
     for (const issuance of authIssuances) if (issuance.status === 'rejected') throw issuance.reason;
     recordStartupPhase('request_auth');
     materialized = await materializeMcpServerConfigRecord({
