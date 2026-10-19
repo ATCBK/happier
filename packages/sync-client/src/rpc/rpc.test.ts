@@ -196,7 +196,8 @@ it('records an acknowledgement before delayed result decoding completes', async 
   } finally { release(); }
   await expect(pending).resolves.toEqual({ accepted: true });
 });
-it('preserves explicit Session Action authorization rather than projecting it to a human write', async () => {
+it.each(['session.notes.set', 'session.user_action.answer', 'session.needs_you.raise'])(
+  'preserves explicit Session Action authorization for %s rather than projecting it to a human write', async (method) => {
   const socket = await setup();
   const authorization = { kind: 'session.action' as const, sessionId: 's', origin: {
     v: 1 as const, caller: { kind: 'session' as const, sessionId: 'lead', starterDepth: 2, turnDepth: 4 },
@@ -206,7 +207,7 @@ it('preserves explicit Session Action authorization rather than projecting it to
     resolve(payload.authorization);
     ack({ ok: true, result: { updated: true } });
   })));
-  await callSocketRpc({ socket, target: { kind: 'session', id: 's' }, method: 'session.notes.set',
+  await callSocketRpc({ socket, target: { kind: 'session', id: 's' }, method,
     params: { sessionId: 's', notes: 'private' }, content: { mode: 'plain' },
     authorization,
   });
